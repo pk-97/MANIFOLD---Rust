@@ -1275,6 +1275,14 @@ pub struct FusionRegion<'a> {
     /// fetches. Empty for every non-stencil region (and for the buffer path,
     /// which never carries one).
     pub virtual_chains: Vec<FusedVirtualChain>,
+    /// CROSS-RESOLUTION externals (workstream 4): external slots whose producer
+    /// lives at a different element space than the region grid and are read
+    /// `Coincident`. cs_main pre-reads these via `textureSampleLevel(src_e, samp,
+    /// uv, 0.0)` (the resolution-robust standalone read) instead of `textureLoad`
+    /// at its own canvas coord — a half-res producer would misread the latter.
+    /// Forces the shared `samp` to exist. Empty ⇒ every external textureLoad'd,
+    /// byte-identical to the v1 codegen.
+    pub sampled_externals: Vec<usize>,
 }
 
 /// Result of fusing a region: the kernel + the ordered uniform field list
@@ -2005,6 +2013,12 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
             }
         }
     }
+    // CROSS-RESOLUTION externals (workstream 4): a space-mismatched coincident
+    // external is pre-read through the shared sampler at uv (the resolution-robust
+    // standalone read), so the region needs a sampler even with no gather member.
+    if !region.sampled_externals.is_empty() {
+        needs_sampler = true;
+    }
 
     // --- bindings: uniform(0), external input textures(1..), [sampler], output. ---
     out.push_str("@group(0) @binding(0) var<uniform> params: Params;\n");
@@ -2212,7 +2226,17 @@ pub fn generate_fused(region: &FusionRegion<'_>) -> Result<GeneratedFusion, Code
     // its inputs (matches the standalone wrapper). `dims` is already bound above.
     out.push_str("    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);\n");
     for &e in &coincident_ext {
-        writeln!(out, "    let ext_{e} = textureLoad(src_{e}, coord, 0);").unwrap();
+        // A same-space external is read texel-exact at the kernel's own coord
+        // (byte-identical to v1). A CROSS-RESOLUTION external (its producer lives
+        // at a different element space — e.g. Watercolor's half-res mask field)
+        // is sampled through the shared sampler at the fragment UV, exactly the
+        // resolution-robust read the unfused atom makes; a textureLoad here would
+        // misread the wrong texel. The body receives `ext_{e}` either way.
+        if region.sampled_externals.contains(&e) {
+            writeln!(out, "    let ext_{e} = textureSampleLevel(src_{e}, samp, uv, 0.0);").unwrap();
+        } else {
+            writeln!(out, "    let ext_{e} = textureLoad(src_{e}, coord, 0);").unwrap();
+        }
     }
     for (i, node) in region.nodes.iter().enumerate() {
         if virtual_nodes.contains(&i) {
@@ -2615,6 +2639,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
         };
         let g = generate_fused(&region).expect("a region whose body declares a const fuses");
         assert_eq!(
@@ -2624,6 +2649,84 @@ mod gpu_tests {
         );
         assert!(g.wgsl.contains("fn n0_body"), "first body namespaced");
         assert!(g.wgsl.contains("fn n1_body"), "second body namespaced");
+    }
+
+    /// CROSS-RESOLUTION externals (workstream 4 — the Watercolor/Bloom unlock).
+    /// A coincident external whose producer lives at a different element space is
+    /// listed in `sampled_externals`. cs_main must read it through the shared
+    /// sampler at the fragment UV (`textureSampleLevel`), exactly the unfused
+    /// atom's resolution-robust read — a `textureLoad` at the kernel's own canvas
+    /// coord would misread a half-res producer. A same-space external stays
+    /// `textureLoad`. The body sees `ext_<e>` either way, so the only difference
+    /// is the pre-read line + the now-mandatory sampler binding.
+    #[test]
+    fn cross_resolution_external_sampled_at_uv() {
+        use crate::node_graph::freeze::classify::FusionKind;
+        // A 2-input coincident mix: in0 is a same-space external (textureLoad),
+        // in1 is a cross-res external (sampled). Chained into a second pointwise.
+        let mix = "fn body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {\n    return mix(a, b, 0.5);\n}\n";
+        let gain = "fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {\n    return c * 2.0;\n}\n";
+        let id = NodeInstanceId;
+        let region = FusionRegion {
+            nodes: vec![
+                RegionNode {
+                    node_id: id(0),
+                    fusion_kind: FusionKind::MultiInputCoincident,
+                    body: mix,
+                    params: &[],
+                    inputs: vec![InputSource::External(0), InputSource::External(1)],
+                    input_access: vec![],
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: &[],
+                    derived_uniforms: &[],
+                    output_storage: "rgba16float",
+                    stencil_fetch: false,
+                    quantize_f16: false,
+                },
+                RegionNode {
+                    node_id: id(1),
+                    fusion_kind: FusionKind::Pointwise,
+                    body: gain,
+                    params: &[],
+                    inputs: vec![InputSource::Node(id(0))],
+                    input_access: vec![],
+                    node_inputs: &[],
+                    node_outputs: &[],
+                    node_includes: &[],
+                    derived_uniforms: &[],
+                    output_storage: "rgba16float",
+                    stencil_fetch: false,
+                    quantize_f16: false,
+                },
+            ],
+            num_external_inputs: 2,
+            outputs: vec![id(1)],
+            in_place_alias: None,
+            sampler_address_mode: "clamp",
+            dispatch_count_field: None,
+            virtual_chains: Vec::new(),
+            sampled_externals: vec![1],
+        };
+        let g = generate_fused(&region).expect("cross-res region fuses");
+        assert!(
+            naga::front::wgsl::parse_str(&g.wgsl).is_ok(),
+            "cross-res fused kernel parses:\n{}",
+            g.wgsl
+        );
+        // The cross-res external is sampled at uv; the same-space one is loaded.
+        assert!(
+            g.wgsl.contains("let ext_1 = textureSampleLevel(src_1, samp, uv, 0.0);"),
+            "cross-res external sampled at uv:\n{}",
+            g.wgsl
+        );
+        assert!(
+            g.wgsl.contains("let ext_0 = textureLoad(src_0, coord, 0);"),
+            "same-space external still textureLoad'd:\n{}",
+            g.wgsl
+        );
+        // The sampler must exist even with no gather member.
+        assert!(g.wgsl.contains("var samp: sampler;"), "shared sampler bound:\n{}", g.wgsl);
     }
 
     /// Buffer-domain multi-atom fusion: a chain of two per-element instance atoms
@@ -2665,6 +2768,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
         };
         let g = generate_fused(&region).expect("buffer region fuses");
         assert!(
@@ -2748,6 +2852,7 @@ mod gpu_tests {
                 members: vec![1],
                 output: 1,
             }],
+            sampled_externals: Vec::new(),
         };
         let g = generate_fused(&region).expect("virtual-chain region fuses");
         assert!(
@@ -2818,6 +2923,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
         };
         let g = generate_fused(&region).expect("gather region fuses");
         assert!(g.wgsl.contains("var samp: sampler"), "a sampler is bound for the gather");
@@ -2896,6 +3002,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
         };
         let g = generate_fused(&region).expect("fan-out region fuses");
         assert!(g.wgsl.contains("var dst_0:"), "first output binding");
@@ -3099,6 +3206,7 @@ mod gpu_tests {
             sampler_address_mode: "clamp",
             dispatch_count_field: None,
             virtual_chains: Vec::new(),
+            sampled_externals: Vec::new(),
         };
         let fused = generate_fused(&region).expect("fuse ColorGrade region");
 

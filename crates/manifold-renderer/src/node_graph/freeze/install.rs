@@ -1327,6 +1327,7 @@ pub(crate) fn fuse_canonical_def_masked(
             sampler_address_mode,
             dispatch_count_field,
             virtual_chains,
+            sampled_externals: region.sampled_externals.clone(),
         };
         let generated = codegen::generate_fused(&fusion_region).ok()?;
         // Defense in depth: the fused kernel must parse through the plain pipeline

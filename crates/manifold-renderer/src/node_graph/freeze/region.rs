@@ -181,6 +181,17 @@ pub struct Region {
     /// build-check verifies the fused def resolves back to this space.
     /// `None` for buffer (Array) regions, which have no texture grid.
     pub space: Option<ElementSpace>,
+    /// CROSS-RESOLUTION externals (workstream 4): external slots whose producer
+    /// resolved to a DIFFERENT element space than the region's own grid and are
+    /// read `Coincident` (resolution-robust). The fused kernel can't `textureLoad`
+    /// these at its own canvas coord — a half-res producer would misread — so the
+    /// codegen samples them through the shared `samp` at the fragment UV
+    /// (`textureSampleLevel`), exactly the read the unfused atom makes. Same-space
+    /// coincident externals stay textureLoad (byte-identical to the v1 codegen);
+    /// `CoincidentTexel` externals are never admitted off-space (they'd corrupt a
+    /// texel-exact pattern under rescale) — the region drops instead. Empty for
+    /// every same-space region (and buffer regions). Sorted, deduped.
+    pub sampled_externals: Vec<usize>,
     /// STENCIL tier: producer chains absorbed into a stencil member's gather
     /// read (recomputed per tap corner instead of round-tripped through a
     /// canvas texture). Empty for every non-stencil region.
@@ -1463,6 +1474,7 @@ fn build_region(
     // is resolution-independent by construction. Any mismatch drops the whole
     // region (renders unfused, always correct). Buffer regions have no
     // texture grid; their space is `None`. ──
+    let mut sampled_externals: Vec<usize> = Vec::new();
     let space = if is_buffer {
         None
     } else {
@@ -1472,17 +1484,31 @@ fn build_region(
                 return Err("member off the region's element space");
             }
         }
-        // This gate — not convexity — is what splits Watercolor's tail
-        // (luma_blur_v → dilute → guard → wet_dry): the component unions
-        // cleanly across the feedback loop (the guard → feedback state-capture
-        // wire IS correctly excluded as a back edge), but `dilute.mask` reads
-        // `mask_map` — the half-res flow field, rescaled — as a COINCIDENT
-        // external, and a coincident read is a `textureLoad` at the fused
-        // kernel's own canvas coordinate, which on a half-res texture reads
-        // the wrong texel (or out of bounds). Diagnosed 2026-06-11; the split
-        // is correct. The unlock is cross-resolution externals (sample
-        // space-mismatched coincident externals at normalized UV like gathers
-        // do — workstream 4, same machinery Bloom needs), not a convexity fix.
+        // CROSS-RESOLUTION externals (workstream 4 — the Watercolor/Bloom unlock).
+        // This gate — not convexity — is what split Watercolor's tail
+        // (luma_blur_v → dilute → guard → wet_dry): the component unions cleanly
+        // across the feedback loop (the guard → feedback state-capture wire IS
+        // correctly excluded as a back edge), but `dilute.mask` reads `mask_map`
+        // — the half-res flow field, rescaled — as a COINCIDENT external. A
+        // coincident read used to be a `textureLoad` at the fused kernel's own
+        // canvas coordinate, which on a half-res texture reads the wrong texel
+        // (or out of bounds), so the region dropped here.
+        //
+        // The fix mirrors the unfused graph exactly: a plain `Coincident` input
+        // is resolution-ROBUST by contract — the standalone atom reads it through
+        // a sampler at the fragment UV, and a sampler rescales across the seam
+        // (the stencil session proved sampler-based chain reads bit-exact). So a
+        // space-MISMATCHED `Coincident` external is now ADMITTED and its slot
+        // marked SAMPLED: the codegen reads it via `textureSampleLevel(src_e,
+        // samp, uv, 0.0)` — the identical standalone read — instead of the
+        // same-res textureLoad pre-read. Same-space externals stay textureLoad
+        // (byte-identical to v1). Scope guards: a `CoincidentTexel` external is
+        // texel-EXACT (dither's ordered-threshold pattern) and a rescaled sample
+        // would blend neighbours into garbage, so it stays same-res-gated — drop
+        // the region. Gathers are already exempt (they sample at a body-computed
+        // UV regardless of space). Resampling ATOMS (`output_canvas_scale` ≠ 1:1)
+        // never reach here — classify keeps them boundaries; we unlock cross-res
+        // READS into a region, not folding a resampler in.
         for member in &members {
             for (input, access) in member.inputs.iter().zip(&member.input_access) {
                 if access.is_gather() {
@@ -1491,15 +1517,21 @@ fn build_region(
                 if let RegionInput::External(slot) = input {
                     let ext = &externals[*slot];
                     if space_of(spaces, ext.from_node, &ext.from_port) != region_space {
-                        return Err("coincident external off the region's element space");
+                        if *access == InputAccess::CoincidentTexel {
+                            return Err("texel-exact external off the region's element space");
+                        }
+                        if !sampled_externals.contains(slot) {
+                            sampled_externals.push(*slot);
+                        }
                     }
                 }
             }
         }
+        sampled_externals.sort_unstable();
         Some(region_space)
     };
 
-    Ok(Region { members, externals, outputs, space, virtual_chains: Vec::new() })
+    Ok(Region { members, externals, outputs, space, sampled_externals, virtual_chains: Vec::new() })
 }
 
 /// The element space of `id`'s (single) texture output in the unfused plan —
