@@ -1529,6 +1529,23 @@ impl PresetRuntime {
         if prior.width != self.width || prior.height != self.height {
             return;
         }
+        // Harvest only when the chain is the SAME SET of active cards —
+        // reorders, value edits, editor open/close, fused-segment swap-ins.
+        // A membership change (card added / removed / enabled / disabled /
+        // skip-flipped) resets everything, exactly as before the harvest
+        // existed: a feedback trail accumulated through a card that was just
+        // toggled off holds that card's look — and latching blends (Screen /
+        // Additive at full amount) would hold it FOREVER, leaving stale
+        // blown-out frames rotating in the loop with no escape. Toggling is
+        // an intentional look change; the reset is the escape hatch.
+        let same_card_set = self.effect_nodes.len() == prior.effect_nodes.len()
+            && self
+                .effect_nodes
+                .iter()
+                .all(|s| prior.effect_nodes.iter().any(|p| p.effect_id == s.effect_id));
+        if !same_card_set {
+            return;
+        }
         // new instance → old instance, for every node whose impl was carried
         // over. Drives the persistent-texture pass below.
         let mut harvested: ahash::AHashMap<NodeInstanceId, NodeInstanceId> =
@@ -5239,6 +5256,66 @@ mod chain_fusion_tests {
             wiped.over_count > 0,
             "sensitivity: a donor-less rebuild must visibly reset the trail \
              (otherwise this test proves nothing)"
+        );
+    }
+
+    /// Membership gate: a rebuild whose ACTIVE CARD SET changed (a card
+    /// toggled off) must NOT harvest — the trail holds the removed card's
+    /// look, and latching blends would freeze it on screen with no escape
+    /// (the on-stage artifact class from 2026-06-11). Same-set rebuilds keep
+    /// carrying.
+    #[test]
+    fn toggle_rebuild_resets_state_same_set_rebuild_carries() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (256u32, 256u32);
+        let input = gradient_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        let fb = make_default(PresetTypeId::STYLIZED_FEEDBACK);
+        let mut cg = make_default(PresetTypeId::COLOR_GRADE);
+        set_param(&mut cg, "amount", 1.0);
+        set_param(&mut cg, "gain", 1.1);
+        let both = vec![fb.clone(), cg.clone()];
+        // The toggled chain: ColorGrade disabled → not an active card.
+        let mut cg_off = cg.clone();
+        cg_off.enabled = false;
+        let toggled = vec![fb.clone(), cg_off];
+
+        let build = |effects: &[PresetInstance], prior: Option<&mut PresetRuntime>| {
+            PresetRuntime::try_build(
+                effects, &[], &primitives, &device, None, w, h, None, prior,
+            )
+            .expect("chain builds")
+        };
+
+        const WARM: usize = 6;
+        // Donor accumulates a trail through BOTH cards, then the chain
+        // rebuilds with ColorGrade toggled off.
+        let mut donor = build(&both, None);
+        for _ in 0..WARM {
+            run_once(&mut donor, &device, &input, &both, &pc);
+        }
+        let mut after_toggle = build(&toggled, Some(&mut donor));
+        run_once(&mut after_toggle, &device, &input, &toggled, &pc);
+
+        // Oracle: the toggled chain built fresh (what a reset looks like).
+        let mut fresh = build(&toggled, None);
+        run_once(&mut fresh, &device, &input, &toggled, &pc);
+
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(
+            &device,
+            fresh.output_texture().unwrap(),
+            after_toggle.output_texture().unwrap(),
+            1.0e-3,
+            1.0e-3,
+        );
+        assert_eq!(
+            r.over_count, 0,
+            "a toggle rebuild must reset state (match a fresh build), not \
+             carry the old trail: max_abs={}, over={}/{}",
+            r.max_abs, r.over_count, r.total
         );
     }
 }

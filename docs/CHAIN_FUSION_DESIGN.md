@@ -174,6 +174,16 @@ must rebuild); intentional resets (seek, load, idle clear, card deletion, editin
 card's own graph) are untouched. Proof: a chain rebuilt mid-trail with the prior as donor
 continues bit-for-bit like a never-rebuilt chain; a donor-less rebuild visibly resets.
 
+**Membership gate (added 2026-06-11 after on-stage testing):** the harvest runs only when
+the rebuild keeps the SAME SET of active cards — reorders, value edits, editor
+open/close, fused-segment swap-ins. A membership change (card added / removed / enabled /
+disabled / skip-flipped) resets everything, as before the harvest existed. Reason: a
+feedback trail accumulated through a card that was just toggled off holds that card's
+look, and latching blends (Screen / Additive at full amount) hold it FOREVER — Peter hit
+exactly this: blown-white quad-mirrored frames frozen in the loop after toggling Quad
+Mirror / Infrared off, with no escape. Toggling is an intentional look change; the reset
+is the escape hatch.
+
 **The swap-in rebuild is user-invisible, so it must be state-invisible.** Rebuilds today
 recreate every primitive instance and a fresh `StateStore` — acceptable when the user
 caused the rebuild, not when the compiler did. `try_build` gains a `prior` runtime:
