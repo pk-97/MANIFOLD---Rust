@@ -5298,6 +5298,64 @@ mod chain_fusion_tests {
         );
     }
 
+    /// Repro harness for the 2026-06-11 on-stage report: Infrared →
+    /// QuadMirror fused as a segment washed the frame to the palette's dark
+    /// end. Fused segment vs per-card build of the same chain, real GPU.
+    #[test]
+    fn infrared_quadmirror_segment_matches_per_card() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (256u32, 256u32);
+        let input = gradient_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        let mut ir = make_default(PresetTypeId::INFRARED);
+        set_param(&mut ir, "amount", 1.0);
+        let mut qm = make_default(PresetTypeId::QUAD_MIRROR);
+        set_param(&mut qm, "amount", 1.0);
+        let effects = vec![ir, qm];
+
+        let mut per_card = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("per-card chain builds");
+
+        let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
+        let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
+        let cards = [
+            (view1.canonical_def, view1),
+            (view2.canonical_def, view2),
+        ];
+        let seeded = freeze_install::seed_segment_cache_for_test(&cards, &primitives);
+        if seeded.is_none() {
+            // No seam-spanning region — nothing fused, nothing to prove.
+            return;
+        }
+        let mut fused = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("fused chain builds");
+
+        run_once(&mut per_card, &device, &input, &effects, &pc);
+        run_once(&mut fused, &device, &input, &effects, &pc);
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(
+            &device,
+            per_card.output_texture().unwrap(),
+            fused.output_texture().unwrap(),
+            1.0e-2,
+            3.0e-2,
+        );
+        assert!(
+            r.passes(0.005) && r.over_count < 64,
+            "fused Infrared→QuadMirror segment must match per-card: \
+             max_abs={}, over={}/{}",
+            r.max_abs,
+            r.over_count,
+            r.total
+        );
+    }
+
     /// Membership gate: a rebuild whose ACTIVE CARD SET changed (a card
     /// toggled off) must NOT harvest — the trail holds the removed card's
     /// look, and latching blends would freeze it on screen with no escape
