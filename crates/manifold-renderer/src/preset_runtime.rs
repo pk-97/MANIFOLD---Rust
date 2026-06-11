@@ -60,7 +60,8 @@ use crate::node_graph::primitives::Mix;
 use crate::node_graph::{
     BindingSource, BoundGraph, EffectGraphDefExt, ExecutionPlan, Executor, FINAL_OUTPUT_TYPE_ID,
     FinalOutput, FrameTime, GENERATOR_INPUT_TYPE_ID, Graph, GraphError, LoadError, LoadedPresetView,
-    MetalBackend, NodeInstanceId, ParamValue, PrimitiveRegistry, ResolvedBinding, ResolvedTarget,
+    MetalBackend, NodeInstanceId, ParamBinding, ParamValue, PrimitiveRegistry, ResolvedBinding,
+    ResolvedTarget,
     ResourceId, Slot, Source, SpliceResult, StateStore, apply_binding_defaults, compile,
     splice_def_into_chain,
 };
@@ -1259,6 +1260,27 @@ impl PresetRuntime {
             // `user_param_bindings()` synthesizes the runtime view (routing
             // from the binding + range from its reshape note).
             let user_bindings = fx.user_param_bindings();
+            // Per-instance reshape override. A reshape on a STOCK binding
+            // (`scale`/`offset` on the card binding) lives on the EFFECTIVE def
+            // — the user's edited `fx.graph` — not on the canonical
+            // `view.bindings` the static prefix iterates (and a fused view's
+            // bindings were retargeted from the CANONICAL def, so they'd drop
+            // it too). Read the effective scale/offset per binding id here so
+            // the reshape reaches the inner node on BOTH the fused and unfused
+            // paths, keyed by id (the fuse retarget preserves binding ids).
+            // Empty — no clone, no override, byte-identical — for an un-edited
+            // instance, which is the overwhelming majority.
+            let reshape_override: ahash::AHashMap<&str, (f32, f32)> = fx
+                .graph
+                .as_ref()
+                .and_then(|g| g.preset_metadata.as_ref())
+                .map(|m| {
+                    m.bindings
+                        .iter()
+                        .map(|b| (b.id.as_str(), (b.scale, b.offset)))
+                        .collect()
+                })
+                .unwrap_or_default();
             let mut bindings: Vec<ResolvedBinding> =
                 Vec::with_capacity(view.bindings.len() + user_bindings.len());
             for b in view.bindings.iter() {
@@ -1267,7 +1289,22 @@ impl PresetRuntime {
                     .copied()
                     .unwrap_or(0);
                 // Reshape (range/curve/invert + scale/offset) is read from the
-                // preset spec carried on `b` (ParamBinding) — single source.
+                // preset spec carried on `b` (ParamBinding), with the
+                // effective def's scale/offset patched in when this instance
+                // carries a per-instance reshape. The clone reuses `b`'s
+                // `&'static` label/param pointers, so the override never leaks.
+                let patched;
+                let b = match reshape_override.get(b.id.as_ref()) {
+                    Some(&(scale, offset)) if (scale, offset) != (b.scale, b.offset) => {
+                        patched = ParamBinding {
+                            scale,
+                            offset,
+                            ..b.clone()
+                        };
+                        &patched
+                    }
+                    _ => b,
+                };
                 match ResolvedBinding::from_static(b, &node_map, source_index) {
                     Some(rb) => {
                         bindings.push(rb);
@@ -5353,6 +5390,460 @@ mod chain_fusion_tests {
             r.max_abs,
             r.over_count,
             r.total
+        );
+    }
+
+    /// Repro for the 2026-06-11 follow-up report: same Infrared → QuadMirror
+    /// chain, but with a NON-DEFAULT palette (Arctic, selector 6 — the setting
+    /// in the on-stage screenshots). The shipped guard only proves palette 0;
+    /// this drives the build-time value and a live palette switch.
+    #[test]
+    fn infrared_quadmirror_segment_nondefault_palette() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (256u32, 256u32);
+        let input = gradient_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        let mut ir = make_default(PresetTypeId::INFRARED);
+        set_param(&mut ir, "amount", 1.0);
+        set_param(&mut ir, "palette", 6.0); // Arctic
+        let mut qm = make_default(PresetTypeId::QUAD_MIRROR);
+        set_param(&mut qm, "amount", 1.0);
+        let effects = vec![ir, qm];
+
+        let mut per_card = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("per-card chain builds");
+
+        let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
+        let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
+        let cards = [
+            (view1.canonical_def, view1),
+            (view2.canonical_def, view2),
+        ];
+        let seeded = freeze_install::seed_segment_cache_for_test(&cards, &primitives);
+        if seeded.is_none() {
+            return;
+        }
+        let mut fused = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("fused chain builds");
+
+        run_once(&mut per_card, &device, &input, &effects, &pc);
+        run_once(&mut fused, &device, &input, &effects, &pc);
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(
+            &device,
+            per_card.output_texture().unwrap(),
+            fused.output_texture().unwrap(),
+            1.0e-2,
+            3.0e-2,
+        );
+        assert!(
+            r.passes(0.005) && r.over_count < 64,
+            "fused Infrared(Arctic)→QuadMirror must match per-card: \
+             max_abs={}, over={}/{}",
+            r.max_abs,
+            r.over_count,
+            r.total
+        );
+
+        // Live palette switch on the fused chain: 6 → 2 (Green NV) must both
+        // visibly change the output and still match per-card.
+        let mut effects2 = effects.clone();
+        set_param(&mut effects2[0], "palette", 2.0);
+        let before = snapshot_output(&fused, &device, w, h);
+        run_once(&mut fused, &device, &input, &effects2, &pc);
+        let moved = differ.compare(
+            &device,
+            &before.texture,
+            fused.output_texture().unwrap(),
+            1.0e-3,
+            1.0e-3,
+        );
+        assert!(
+            moved.over_count > 0,
+            "a live palette switch must visibly drive the fused chain"
+        );
+        run_once(&mut per_card, &device, &input, &effects2, &pc);
+        let r2 = differ.compare(
+            &device,
+            per_card.output_texture().unwrap(),
+            fused.output_texture().unwrap(),
+            1.0e-2,
+            3.0e-2,
+        );
+        assert!(
+            r2.passes(0.005) && r2.over_count < 64,
+            "after a live palette switch the fused chain must match per-card: \
+             max_abs={}, over={}/{}",
+            r2.max_abs,
+            r2.over_count,
+            r2.total
+        );
+    }
+
+    /// Wireframe-like input: transparent black background (alpha 0), thin
+    /// opaque white lines — the content class from the 2026-06-11 screenshots
+    /// (generator wireframes), where Infrared→QuadMirror killed the frame but
+    /// QuadMirror→Infrared rendered. The gradient repro (alpha 1 everywhere)
+    /// passes, so alpha across the fused seam is the variable under test.
+    fn wireframe_input(
+        device: &manifold_gpu::GpuDevice,
+        w: u32,
+        h: u32,
+    ) -> manifold_gpu::GpuTexture {
+        let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let on_line = x % 32 < 2 || y % 32 < 2;
+                let v = if on_line { 1.0 } else { 0.0 };
+                px[i] = f16::from_f32(v);
+                px[i + 1] = f16::from_f32(v);
+                px[i + 2] = f16::from_f32(v);
+                px[i + 3] = f16::from_f32(v); // alpha 0 off-line, like a generator
+            }
+        }
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_SRC,
+            label: "chain-fusion-wireframe-input",
+            mip_levels: 1,
+        });
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                px.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(px.as_slice()),
+            )
+        };
+        device.upload_texture(&tex, bytes);
+        tex
+    }
+
+    /// Same fused-vs-per-card proof on the wireframe-like (alpha-0 background)
+    /// input, both chain orders.
+    #[test]
+    fn infrared_quadmirror_segment_alpha_zero_background() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        // Deliberately NOT 256x256: the gradient_ramp LUT strip is 256 wide,
+        // and a 256 canvas can mask cross-resolution sampling bugs by making
+        // strip texels and canvas texels coincide.
+        let (w, h) = (640u32, 360u32);
+        let input = wireframe_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        for order in ["ir_qm", "qm_ir"] {
+            let mut ir = make_default(PresetTypeId::INFRARED);
+            set_param(&mut ir, "amount", 1.0);
+            set_param(&mut ir, "palette", 6.0); // Arctic
+            let mut qm = make_default(PresetTypeId::QUAD_MIRROR);
+            set_param(&mut qm, "amount", 1.0);
+            let effects = if order == "ir_qm" {
+                vec![ir, qm]
+            } else {
+                vec![qm, ir]
+            };
+
+            let mut per_card = PresetRuntime::try_build(
+                &effects, &[], &primitives, &device, None, w, h, None, None,
+            )
+            .expect("per-card chain builds");
+
+            let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
+            let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
+            let cards = [
+                (view1.canonical_def, view1),
+                (view2.canonical_def, view2),
+            ];
+            if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
+                continue;
+            }
+            let mut fused = PresetRuntime::try_build(
+                &effects, &[], &primitives, &device, None, w, h, None, None,
+            )
+            .expect("fused chain builds");
+
+            // Several STABLE frames: static-param specialization compiles a
+            // baked variant once the value-key holds a frame and dispatches it
+            // from then on — the steady-state path a live show actually runs.
+            // One frame would only ever prove the generic kernel.
+            for _ in 0..4 {
+                run_once(&mut per_card, &device, &input, &effects, &pc);
+                run_once(&mut fused, &device, &input, &effects, &pc);
+            }
+            let differ = TextureDiff::new(&device);
+            let r = differ.compare(
+                &device,
+                per_card.output_texture().unwrap(),
+                fused.output_texture().unwrap(),
+                1.0e-2,
+                3.0e-2,
+            );
+            assert!(
+                r.passes(0.005) && r.over_count < 64,
+                "[{order}] fused must match per-card on alpha-0 background: \
+                 max_abs={}, over={}/{}",
+                r.max_abs,
+                r.over_count,
+                r.total
+            );
+        }
+    }
+
+    /// The PRODUCTION swap sequence, end-to-end: build per-card (cold segment
+    /// cache), render frames, the background compile lands, rebuild WITH the
+    /// running chain as harvest donor, fused segment swaps in, keep rendering.
+    /// The shipped guards seed the cache BEFORE the first build, so the
+    /// mid-show swap-in (the path the app actually takes) was never proven.
+    #[test]
+    fn infrared_quadmirror_mid_show_swap_matches_per_card() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (256u32, 256u32);
+        let input = wireframe_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        let mut ir = make_default(PresetTypeId::INFRARED);
+        set_param(&mut ir, "amount", 1.0);
+        set_param(&mut ir, "palette", 6.0); // Arctic
+        let mut qm = make_default(PresetTypeId::QUAD_MIRROR);
+        set_param(&mut qm, "amount", 1.0);
+        let effects = vec![ir, qm];
+
+        let build = |prior: Option<&mut PresetRuntime>| {
+            PresetRuntime::try_build(
+                &effects, &[], &primitives, &device, None, w, h, None, prior,
+            )
+            .expect("chain builds")
+        };
+
+        // Per-card reference, never swapped.
+        let mut reference = build(None);
+        for _ in 0..6 {
+            run_once(&mut reference, &device, &input, &effects, &pc);
+        }
+
+        // Production path: per-card frames, then the segment compile lands
+        // and the chain rebuilds with the outgoing runtime as donor.
+        let mut donor = build(None);
+        for _ in 0..3 {
+            run_once(&mut donor, &device, &input, &effects, &pc);
+        }
+        let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
+        let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
+        let cards = [
+            (view1.canonical_def, view1),
+            (view2.canonical_def, view2),
+        ];
+        if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
+            return;
+        }
+        let mut swapped = build(Some(&mut donor));
+        for _ in 0..3 {
+            run_once(&mut swapped, &device, &input, &effects, &pc);
+        }
+
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(
+            &device,
+            reference.output_texture().unwrap(),
+            swapped.output_texture().unwrap(),
+            1.0e-2,
+            3.0e-2,
+        );
+        assert!(
+            r.passes(0.005) && r.over_count < 64,
+            "mid-show fused swap must match the per-card chain: \
+             max_abs={}, over={}/{}",
+            r.max_abs,
+            r.over_count,
+            r.total
+        );
+    }
+
+    /// The GraphTestsV4 layer-1 shape: a DISABLED card sits between the two
+    /// enabled cards that fuse (Infrared ON → EdgeStretch OFF → QuadMirror ON).
+    /// Segment fusion concatenates enabled cards across the gap; anything that
+    /// indexes params by raw chain position would hand the fused kernel the
+    /// disabled card's uniforms.
+    #[test]
+    fn fused_segment_spans_disabled_card_matches_per_card() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (640u32, 360u32);
+        let input = wireframe_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        let mut ir = make_default(PresetTypeId::INFRARED);
+        set_param(&mut ir, "amount", 1.0);
+        set_param(&mut ir, "palette", 6.0); // Arctic
+        let mut es = make_default(PresetTypeId::EDGE_STRETCH);
+        es.enabled = false;
+        let mut qm = make_default(PresetTypeId::QUAD_MIRROR);
+        set_param(&mut qm, "amount", 1.0);
+        let effects = vec![ir, es, qm];
+
+        let mut per_card = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("per-card chain builds");
+
+        let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
+        let view2 = loaded_preset_view_by_id(effects[2].effect_type()).unwrap();
+        let cards = [
+            (view1.canonical_def, view1),
+            (view2.canonical_def, view2),
+        ];
+        if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
+            return;
+        }
+        let mut fused = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("fused chain builds");
+
+        for _ in 0..4 {
+            run_once(&mut per_card, &device, &input, &effects, &pc);
+            run_once(&mut fused, &device, &input, &effects, &pc);
+        }
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(
+            &device,
+            per_card.output_texture().unwrap(),
+            fused.output_texture().unwrap(),
+            1.0e-2,
+            3.0e-2,
+        );
+        assert!(
+            r.passes(0.005) && r.over_count < 64,
+            "fused segment spanning a disabled card must match per-card: \
+             max_abs={}, over={}/{}",
+            r.max_abs,
+            r.over_count,
+            r.total
+        );
+    }
+
+    /// Chain input at a DIFFERENT resolution than the canvas — the app feeds
+    /// the chain a generator render target, which the resolution workstream
+    /// can size below canvas. The fused kernel reads the chain source as an
+    /// external (the cross-resolution sampling path); per-card resamples it
+    /// node by node. An unfused QuadMirror in front normalizes resolution and
+    /// would mask exactly this class, matching the order dependence reported.
+    #[test]
+    fn fused_segment_with_half_res_chain_input_matches_per_card() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (640u32, 360u32);
+        let input = wireframe_input(&device, w / 2, h / 2);
+        let pc = ctx(w, h);
+
+        let mut ir = make_default(PresetTypeId::INFRARED);
+        set_param(&mut ir, "amount", 1.0);
+        set_param(&mut ir, "palette", 6.0); // Arctic
+        let mut qm = make_default(PresetTypeId::QUAD_MIRROR);
+        set_param(&mut qm, "amount", 1.0);
+        let effects = vec![ir, qm];
+
+        let mut per_card = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("per-card chain builds");
+
+        let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
+        let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
+        let cards = [
+            (view1.canonical_def, view1),
+            (view2.canonical_def, view2),
+        ];
+        if freeze_install::seed_segment_cache_for_test(&cards, &primitives).is_none() {
+            return;
+        }
+        let mut fused = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("fused chain builds");
+
+        for _ in 0..4 {
+            run_once(&mut per_card, &device, &input, &effects, &pc);
+            run_once(&mut fused, &device, &input, &effects, &pc);
+        }
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(
+            &device,
+            per_card.output_texture().unwrap(),
+            fused.output_texture().unwrap(),
+            1.0e-2,
+            3.0e-2,
+        );
+        assert!(
+            r.passes(0.005) && r.over_count < 64,
+            "fused segment with half-res chain input must match per-card: \
+             max_abs={}, over={}/{}",
+            r.max_abs,
+            r.over_count,
+            r.total
+        );
+    }
+
+    /// "Flash for a few frames then black" repro (2026-06-12, fusion OFF):
+    /// Infrared ALONE on a STATIC input must produce a byte-identical frame
+    /// every frame — it has no time dependence. The memo/hoisting path
+    /// (gradient_ramp/mux/lut1d are pure+sticky) serves held LUT slots after
+    /// the first frame; if a held slot is recycled/evicted/cleared the late
+    /// frames go black while frame 0 was correct. Snapshot frame 0, run many
+    /// frames, require the late frame to still match.
+    #[test]
+    fn infrared_alone_static_input_stays_stable_across_frames() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (640u32, 360u32);
+        let input = wireframe_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        let mut ir = make_default(PresetTypeId::INFRARED);
+        set_param(&mut ir, "amount", 1.0);
+        set_param(&mut ir, "palette", 6.0); // Arctic
+        let effects = vec![ir];
+
+        let mut cg = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("chain builds");
+
+        // Frame 0 — the "flash" that looks correct.
+        run_once(&mut cg, &device, &input, &effects, &pc);
+        let frame0 = snapshot_output(&cg, &device, w, h);
+
+        // Many more frames — the memo/sticky path is now serving held slots.
+        for _ in 0..15 {
+            run_once(&mut cg, &device, &input, &effects, &pc);
+        }
+        let differ = TextureDiff::new(&device);
+        let drift = differ.compare(
+            &device,
+            &frame0.texture,
+            cg.output_texture().unwrap(),
+            1.0e-3,
+            1.0e-3,
+        );
+        assert_eq!(
+            drift.over_count, 0,
+            "Infrared on a static input must be frame-stable; a late frame \
+             diverging from frame 0 is the flash-then-black bug: \
+             max_abs={}, over={}/{}",
+            drift.max_abs, drift.over_count, drift.total
         );
     }
 
