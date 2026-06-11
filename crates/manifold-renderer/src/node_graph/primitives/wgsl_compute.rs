@@ -186,6 +186,66 @@ pub struct WgslCompute {
     /// MANIFOLD_WGSL_COMPUTE_TRACE diagnostic. Keyed by member name.
     /// Populated only when the env var is set; otherwise stays empty.
     last_logged_uniforms: AHashMap<String, f32>,
+
+    // ── Static-param specialization (roadmap 4) ──────────────────────────
+    /// Uniform member names (`n{i}_<param>`) the freeze install marked
+    /// `// @static_param:` — params with no in-graph control wire, eligible to
+    /// bake into a `const` variant. Empty for hand-authored / buffer / non-fused
+    /// kernels, which makes the whole specialization path inert (zero behaviour
+    /// change). Correctness never rests on this set: the runtime value-key compare
+    /// below serves the generic kernel whenever a "static" field's live value
+    /// doesn't match a baked variant, so a mis-classified (actually-dynamic) field
+    /// is always rendered correctly, just via the fallback.
+    static_param_fields: Vec<String>,
+    /// Bounded LRU of specialized kernel variants, keyed by the baked value-set.
+    /// Front = most-recently-used. `SPEC_CACHE_CAP` deep so a swept slider can't
+    /// accumulate pipelines.
+    spec_variants: Vec<SpecVariant>,
+    /// The static value-key seen last frame + how many consecutive frames it has
+    /// held. The stability gate compiles a variant only once a key has held for
+    /// `SPEC_STABLE_FRAMES` frames, so a slider being swept (key changes every
+    /// frame) never triggers a single one-shot compile — it just rides the
+    /// generic kernel until it settles.
+    last_spec_key: Option<Vec<String>>,
+    spec_stable: u32,
+}
+
+/// Kill switch for static-param specialization. `MANIFOLD_WGSL_SPECIALIZE=0`
+/// renders every fused kernel through its generic (all-uniform) variant — the
+/// permanent fallback — so a show can fall back instantly if a specialized kernel
+/// ever misbehaves, and the parity suite can isolate specialization. Mirrors
+/// `MANIFOLD_FREEZE` / `MANIFOLD_CHAIN_FUSION`.
+fn specialization_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| match std::env::var("MANIFOLD_WGSL_SPECIALIZE") {
+        Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no"),
+        Err(_) => true,
+    })
+}
+
+/// Cap on cached specialized variants per node (LRU). Small: a settled show uses
+/// one value-set per node, a knob sweep settles on one — 4 covers A/B/C/last.
+const SPEC_CACHE_CAP: usize = 4;
+/// Frames a static value-key must hold before its variant is compiled. 1 means
+/// "compile on the 2nd identical frame", so a per-frame-changing sweep never
+/// compiles and a settle pays exactly one compile one frame later.
+const SPEC_STABLE_FRAMES: u32 = 1;
+
+/// A compiled specialized kernel: the generic kernel with its static params baked
+/// to module-scope `const`s for the exact `key` value-set. Valid ONLY for that
+/// value-set — the dispatch value-key compare guarantees it's never used for any
+/// other values. Carries its own (smaller) uniform layout + reused scratch so the
+/// dispatch packs only the surviving dynamic members.
+struct SpecVariant {
+    /// Baked value-set: the const literal per static field, in
+    /// `static_param_fields` order. Two frames with the same key share a variant.
+    key: Vec<String>,
+    /// Uniform layout of the specialized kernel (dynamic members only + pad).
+    layout: Option<UniformLayout>,
+    /// Reused uniform scratch sized to `layout.span`. Owned so the hot path packs
+    /// without a per-frame allocation.
+    scratch: Vec<u8>,
+    pipeline: GpuComputePipeline,
 }
 
 #[derive(Clone, Debug)]
@@ -311,6 +371,10 @@ impl WgslCompute {
             compile_failed: false,
             uniform_scratch: Vec::new(),
             last_logged_uniforms: AHashMap::new(),
+            static_param_fields: Vec::new(),
+            spec_variants: Vec::new(),
+            last_spec_key: None,
+            spec_stable: 0,
         };
         node.reparse(DEFAULT_WGSL.to_string());
         node
@@ -396,6 +460,13 @@ impl WgslCompute {
         self.sampler_address_mode = parsed.sampler_address_mode;
         self.reset_gated = parsed.reset_gated;
         self.dispatch_count_param = parsed.dispatch_count_param;
+        // A new source invalidates every baked variant (different kernel, different
+        // value-keys). Drop them and the stability tracker so specialization
+        // re-derives from the new kernel.
+        self.static_param_fields = parsed.static_param_fields;
+        self.spec_variants.clear();
+        self.last_spec_key = None;
+        self.spec_stable = 0;
 
         // Rebuild leaked &'static views.
         self._leaked_strings.clear();
@@ -513,6 +584,9 @@ struct ParsedShader {
     sampler_address_mode: GpuAddressMode,
     reset_gated: bool,
     dispatch_count_param: Option<String>,
+    /// Uniform member names tagged `// @static_param:` by the freeze install —
+    /// the param fields eligible to bake into a specialized `const` variant.
+    static_param_fields: Vec<String>,
 }
 
 /// The synthetic input port a `// @reset_gated` kernel exposes to receive its
@@ -843,7 +917,46 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         sampler_address_mode: parse_sampler_address_mode(source),
         reset_gated,
         dispatch_count_param,
+        static_param_fields: extract_static_params(source),
     })
+}
+
+/// Scan for `// @static_param: <field>` markers (emitted by the freeze install on
+/// a texture fused kernel's uniform param fields that have no control wire). Each
+/// names a `n{i}_<param>` uniform member whose live value may be baked into a
+/// module-scope `const` variant. Same comment conventions as the other markers
+/// (block comments stripped first, own-line or trailing, exact prefix).
+fn extract_static_params(source: &str) -> Vec<String> {
+    let stripped = strip_block_comments(source);
+    let mut fields = Vec::new();
+    for line in stripped.lines() {
+        if let (_, Some(c)) = split_line_comment(line)
+            && let Some(rest) = c.trim().strip_prefix("@static_param:")
+        {
+            let name = rest.trim();
+            if !name.is_empty() && !fields.iter().any(|f| f == name) {
+                fields.push(name.to_string());
+            }
+        }
+    }
+    fields
+}
+
+/// WGSL `const` declaration for a baked static member. The value MUST equal the
+/// bytes [`UniformMemberType::write_to`] would pack for the same `f`, so the
+/// specialized kernel is bit-identical to the generic one — only now the value is
+/// a compile-time constant. F32 uses Rust's shortest round-trippable `Debug`
+/// formatting (always has a `.` or exponent, parses back to the same f32); I32 /
+/// U32 replicate `write_to`'s saturating `as i32` / `.max(0) as u32` casts.
+fn spec_const_decl(name: &str, ty: UniformMemberType, f: f32) -> String {
+    match ty {
+        UniformMemberType::F32 => format!("const {name}: f32 = {f:?};"),
+        UniformMemberType::I32 => format!("const {name}: i32 = {};", f as i32),
+        UniformMemberType::U32 => format!("const {name}: u32 = {};", f.max(0.0) as u32),
+        // A Bool member never reaches a fused kernel (Bool/Enum params lay out as
+        // u32 — freeze codegen `param_wgsl_type`), but stay correct if one does.
+        UniformMemberType::Bool => format!("const {name}: bool = {};", f >= 0.5),
+    }
 }
 
 fn parse_uniform(
@@ -1767,31 +1880,66 @@ impl EffectNode for WgslCompute {
         // into Float — feedback_eliminate_bug_class_at_storage_layer).
         let trace = std::env::var_os("MANIFOLD_WGSL_COMPUTE_TRACE").is_some();
         let node_id = ctx.node_id;
-        if let Some(layout) = &self.uniform_layout {
-            for byte in self.uniform_scratch.iter_mut() {
-                *byte = 0;
+
+        // STATIC-PARAM SPECIALIZATION: pick the kernel variant for this frame. The
+        // generic kernel (all params as uniforms) is the permanent fallback; a
+        // specialized variant bakes the no-control-wire params to module-scope
+        // consts for an exact value-set. `select_spec_variant` value-keys against
+        // the live param reads and never blocks the render path — a key it hasn't
+        // compiled (a tweaked knob, a swept slider) serves generic this frame.
+        let spec_idx = self.select_spec_variant(ctx);
+
+        // Pack the active variant's uniform. The generic kernel packs every member;
+        // a specialized kernel packs only its surviving dynamic members (the static
+        // ones live in the kernel as consts), so its smaller layout/scratch are used.
+        match spec_idx {
+            None => {
+                if let Some(layout) = &self.uniform_layout {
+                    for byte in self.uniform_scratch.iter_mut() {
+                        *byte = 0;
+                    }
+                    for m in &layout.members {
+                        if m.name.starts_with("_pad") {
+                            continue;
+                        }
+                        let f = ctx.scalar_or_param(&m.name, 0.0);
+                        if trace && self.last_logged_uniforms.get(&m.name).copied() != Some(f) {
+                            eprintln!(
+                                "[wgsl_compute node={:?}] uniform '{}' = {} (was {:?})",
+                                node_id,
+                                m.name,
+                                f,
+                                self.last_logged_uniforms.get(&m.name).copied(),
+                            );
+                            self.last_logged_uniforms.insert(m.name.clone(), f);
+                        }
+                        let val = ParamValue::Float(f);
+                        let size = 4;
+                        let start = m.offset as usize;
+                        let end = start + size;
+                        if end <= self.uniform_scratch.len() {
+                            m.ty.write_to(&mut self.uniform_scratch[start..end], &val);
+                        }
+                    }
+                }
             }
-            for m in &layout.members {
-                if m.name.starts_with("_pad") {
-                    continue;
-                }
-                let f = ctx.scalar_or_param(&m.name, 0.0);
-                if trace && self.last_logged_uniforms.get(&m.name).copied() != Some(f) {
-                    eprintln!(
-                        "[wgsl_compute node={:?}] uniform '{}' = {} (was {:?})",
-                        node_id,
-                        m.name,
-                        f,
-                        self.last_logged_uniforms.get(&m.name).copied(),
-                    );
-                    self.last_logged_uniforms.insert(m.name.clone(), f);
-                }
-                let val = ParamValue::Float(f);
-                let size = 4;
-                let start = m.offset as usize;
-                let end = start + size;
-                if end <= self.uniform_scratch.len() {
-                    m.ty.write_to(&mut self.uniform_scratch[start..end], &val);
+            Some(i) => {
+                let v = &mut self.spec_variants[i];
+                if let Some(layout) = &v.layout {
+                    for byte in v.scratch.iter_mut() {
+                        *byte = 0;
+                    }
+                    for m in &layout.members {
+                        if m.name.starts_with("_pad") {
+                            continue;
+                        }
+                        let f = ctx.scalar_or_param(&m.name, 0.0);
+                        let start = m.offset as usize;
+                        let end = start + 4;
+                        if end <= v.scratch.len() {
+                            m.ty.write_to(&mut v.scratch[start..end], &ParamValue::Float(f));
+                        }
+                    }
                 }
             }
         }
@@ -1887,15 +2035,20 @@ impl EffectNode for WgslCompute {
             }
         }
 
-        // Now assemble the GpuBinding slice. Uniform Bytes points
-        // into uniform_scratch.
+        // Now assemble the GpuBinding slice. Uniform Bytes points into the active
+        // variant's scratch (generic = self.uniform_scratch; specialized = the
+        // variant's smaller scratch).
+        let active_scratch: &[u8] = match spec_idx {
+            None => &self.uniform_scratch,
+            Some(i) => &self.spec_variants[i].scratch,
+        };
         let mut gpu_bindings: Vec<GpuBinding> = Vec::with_capacity(self.bindings.len());
         for slot in &self.bindings {
             match &slot.kind {
                 BindingKind::Uniform => {
                     gpu_bindings.push(GpuBinding::Bytes {
                         binding: slot.binding,
-                        data: &self.uniform_scratch,
+                        data: active_scratch,
                     });
                 }
                 BindingKind::SampledTexture { .. } | BindingKind::StorageTexture { .. } => {
@@ -1935,7 +2088,10 @@ impl EffectNode for WgslCompute {
             }
         }
 
-        let pipeline = self.pipeline.as_ref().expect("pipeline compiled above");
+        let pipeline = match spec_idx {
+            None => self.pipeline.as_ref().expect("pipeline compiled above"),
+            Some(i) => &self.spec_variants[i].pipeline,
+        };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc
             .dispatch_compute(pipeline, &gpu_bindings, [dx, dy, dz], TYPE_ID);
@@ -1943,6 +2099,184 @@ impl EffectNode for WgslCompute {
 }
 
 impl WgslCompute {
+    /// Choose the kernel variant to dispatch this frame. `None` → use the generic
+    /// kernel (the permanent, always-correct fallback). `Some(0)` → dispatch
+    /// `spec_variants[0]`, a kernel with the no-control-wire params baked to
+    /// module-scope consts for the live value-set.
+    ///
+    /// Correctness is the value-key compare, never the install-time classification:
+    /// the baked variant is used ONLY when every static field's live value matches
+    /// the value-set it was baked with. A tweaked knob or a binding written after
+    /// the build makes the values diverge → the generic kernel serves the new
+    /// values immediately (no stale frame). Never blocks the render path: a key the
+    /// node hasn't compiled serves generic, and a new variant is compiled only once
+    /// a key has held [`SPEC_STABLE_FRAMES`] frames (so a swept slider compiles
+    /// nothing, a settle pays one compile). The device-level pipeline cache makes a
+    /// previously-seen value-set's compile near-instant.
+    fn select_spec_variant(&mut self, ctx: &mut EffectNodeContext<'_, '_>) -> Option<usize> {
+        if self.static_param_fields.is_empty() || !specialization_enabled() {
+            return None;
+        }
+        // Texture kernels only. A buffer / particle kernel's uniform also carries
+        // live element counts and derived frame values; keep specialization off it
+        // entirely (belt-and-suspenders beyond install's texture-only markers).
+        let texture_only = self.bindings.iter().all(|b| {
+            matches!(
+                b.kind,
+                BindingKind::Uniform
+                    | BindingKind::SampledTexture { .. }
+                    | BindingKind::Sampler
+                    | BindingKind::StorageTexture { .. }
+            )
+        });
+        if !texture_only || self.dispatch_count_param.is_some() {
+            return None;
+        }
+
+        // Live value + member type per static field → the const literal. The
+        // literal vec IS the value-key (two frames with identical literals share a
+        // variant). A non-finite value can't be a WGSL literal — bail to generic.
+        let statics: Vec<(&str, UniformMemberType, f32)> = {
+            let layout = self.uniform_layout.as_ref()?;
+            let mut v = Vec::with_capacity(self.static_param_fields.len());
+            for field in &self.static_param_fields {
+                let Some(m) = layout.members.iter().find(|m| &m.name == field) else {
+                    return None; // a marker named a field that isn't in the layout
+                };
+                let f = ctx.scalar_or_param(field, 0.0);
+                if !f.is_finite() {
+                    return None;
+                }
+                v.push((field.as_str(), m.ty, f));
+            }
+            v
+        };
+        let key: Vec<String> =
+            statics.iter().map(|(n, ty, f)| spec_const_decl(n, *ty, *f)).collect();
+
+        // Hit: dispatch the cached variant, move it to the LRU front.
+        if let Some(pos) = self.spec_variants.iter().position(|v| v.key == key) {
+            if pos != 0 {
+                let v = self.spec_variants.remove(pos);
+                self.spec_variants.insert(0, v);
+            }
+            self.last_spec_key = Some(key);
+            return Some(0);
+        }
+
+        // Miss: stability gate — only compile once the key has held a frame, so a
+        // sweep (key changes every frame) never triggers a one-shot compile.
+        let stable = self.last_spec_key.as_ref() == Some(&key);
+        self.spec_stable = if stable { self.spec_stable + 1 } else { 0 };
+        self.last_spec_key = Some(key.clone());
+        if self.spec_stable < SPEC_STABLE_FRAMES {
+            return None;
+        }
+
+        // Compile the variant. Parse-guard first so a transform bug degrades to
+        // generic instead of hitting create_compute_pipeline's panic-on-error.
+        let spec_src = self.specialize_source(&statics)?;
+        let entry = match naga::front::wgsl::parse_str(&spec_src) {
+            Ok(m) => m.entry_points.into_iter().next().map(|e| e.name)?,
+            Err(e) => {
+                log::warn!(
+                    "[node.wgsl_compute] specialized kernel failed to parse, using generic: {e:?}"
+                );
+                return None;
+            }
+        };
+        let spec_layout = introspect(&spec_src).ok()?.uniform_layout;
+        let span = spec_layout.as_ref().map(|l| l.span as usize).unwrap_or(0);
+        if std::env::var_os("MANIFOLD_WGSL_COMPUTE_TRACE").is_some() {
+            eprintln!(
+                "[wgsl_compute node={:?}] specialized {} static field(s): {:?}",
+                ctx.node_id,
+                statics.len(),
+                key
+            );
+        }
+        let pipeline =
+            ctx.gpu_encoder()
+                .device
+                .create_compute_pipeline(&spec_src, &entry, TYPE_ID);
+        self.spec_variants.insert(
+            0,
+            SpecVariant {
+                key,
+                layout: spec_layout,
+                scratch: vec![0u8; span],
+                pipeline,
+            },
+        );
+        self.spec_variants.truncate(SPEC_CACHE_CAP);
+        Some(0)
+    }
+
+    /// Build the specialized kernel for one static value-set: lift each
+    /// `// @static_param` member out of `struct Params` into a module-scope `const`
+    /// carrying its baked value, re-pad the struct, and rewrite `params.<field>` →
+    /// `<field>` in the body. A pure textual transform of the generic kernel using
+    /// values that equal the packed uniform bytes — so the kernel is arithmetically
+    /// identical, only now the optimizer sees the values as constants and its
+    /// CCP/DCE can strip the dead mode/quality branches. `statics` = (field, type,
+    /// baked value) for every static member. `None` (→ generic) if the generic
+    /// source has no `struct Params` to rewrite (never happens for a fused kernel).
+    fn specialize_source(&self, statics: &[(&str, UniformMemberType, f32)]) -> Option<String> {
+        let layout = self.uniform_layout.as_ref()?;
+        let static_set: std::collections::HashSet<&str> =
+            statics.iter().map(|(n, ..)| *n).collect();
+
+        // Rebuild struct Params from the layout: keep dynamic (non-static, non-pad)
+        // members verbatim, drop static + old pads, re-pad to a multiple of 4 fields
+        // (matching the freeze codegen's 16-byte uniform alignment).
+        let mut struct_body = String::new();
+        let mut dyn_count = 0usize;
+        for m in &layout.members {
+            if m.name.starts_with("_pad") || static_set.contains(m.name.as_str()) {
+                continue;
+            }
+            let ty = match m.ty {
+                UniformMemberType::F32 => "f32",
+                UniformMemberType::I32 => "i32",
+                UniformMemberType::U32 | UniformMemberType::Bool => "u32",
+            };
+            struct_body.push_str(&format!("    {}: {ty},\n", m.name));
+            dyn_count += 1;
+        }
+        if dyn_count == 0 {
+            struct_body
+                .push_str("    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n    _pad3: u32,\n");
+        } else {
+            for k in 0..((4 - (dyn_count % 4)) % 4) {
+                struct_body.push_str(&format!("    _pad{k}: u32,\n"));
+            }
+        }
+
+        let mut consts = String::new();
+        for (name, ty, f) in statics {
+            consts.push_str(&spec_const_decl(name, *ty, *f));
+            consts.push('\n');
+        }
+
+        // Splice: replace the generic `struct Params { ... }` block with the const
+        // block + the rebuilt struct. The block has no inner braces (only scalar
+        // member lines), so the first `\n}\n` after the opener is its close.
+        let src = &self.source;
+        let start = src.find("struct Params {")?;
+        let close = src[start..].find("\n}\n")? + start;
+        let head = &src[..start];
+        let tail = &src[close + 3..];
+        let mut out = format!("{head}{consts}struct Params {{\n{struct_body}}}\n{tail}");
+        for (name, ..) in statics {
+            out = crate::node_graph::freeze::codegen::rename_ident(
+                &out,
+                &format!("params.{name}"),
+                name,
+            );
+        }
+        Some(out)
+    }
+
     /// Resolve dispatch geometry from the dispatch port + workgroup
     /// size. For a texture output: dims / workgroup. For an array
     /// output: capacity / workgroup.x along X.
@@ -2771,5 +3105,276 @@ mod gpu_tests {
                 "pixel {i}: expected ~(0.5,0.5,0.5,1.0), got ({r},{g},{b},{a})"
             );
         }
+    }
+
+    // ── Static-param specialization: checkpoint (rule 4) ─────────────────
+    // A fused-shaped texture kernel rendered through the GENERIC kernel (params as
+    // uniforms) vs the SPECIALIZED kernel (static params baked to module consts)
+    // must be BIT-exact — not within a tolerance. Baking a uniform read as a const
+    // with the identical value cannot change the arithmetic; if any texel differs,
+    // the baking is wrong. The kernel below exercises an f32 multiply, an i32
+    // mode-branch (the kind of dead branch spirv-opt's CCP/DCE strips once the
+    // selector is a const), and a SURVIVING dynamic param so the shrunk uniform
+    // path is covered too.
+    const SPEC_KERNEL: &str = "\
+// @static_param: n0_k
+// @static_param: n0_mode
+struct Params {
+    n0_k: f32,
+    n0_mode: i32,
+    n0_gain: f32,
+    _pad0: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var dst: texture_storage_2d<rgba16float, write>;
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y { return; }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let c = textureLoad(src_0, coord, 0);
+    var r: vec4<f32>;
+    if (params.n0_mode == 0) {
+        r = c * params.n0_k;
+    } else {
+        r = vec4<f32>(1.0) - c * params.n0_k;
+    }
+    r = r * params.n0_gain;
+    textureStore(dst, coord, r);
+}
+";
+
+    fn spec_gradient(device: &manifold_gpu::GpuDevice, w: u32, h: u32) -> manifold_gpu::GpuTexture {
+        let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                px[i] = f16::from_f32(x as f32 / w as f32);
+                px[i + 1] = f16::from_f32(y as f32 / h as f32);
+                px[i + 2] = f16::from_f32(0.37);
+                px[i + 3] = f16::from_f32(1.0);
+            }
+        }
+        let tex = device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::CPU_UPLOAD
+                | manifold_gpu::GpuTextureUsage::SHADER_READ
+                | manifold_gpu::GpuTextureUsage::COPY_SRC,
+            label: "spec-input",
+            mip_levels: 1,
+        });
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                px.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(px.as_slice()),
+            )
+        };
+        device.upload_texture(&tex, bytes);
+        tex
+    }
+
+    /// Pack a uniform scratch from a source's introspected layout (named float
+    /// values; unspecified members stay zero) — mirrors evaluate()'s packing.
+    fn spec_pack(source: &str, values: &[(&str, f32)]) -> Vec<u8> {
+        let layout = super::introspect(source).unwrap().uniform_layout.unwrap();
+        let mut scratch = vec![0u8; layout.span as usize];
+        for m in &layout.members {
+            if let Some((_, f)) = values.iter().find(|(n, _)| *n == m.name) {
+                let s = m.offset as usize;
+                m.ty.write_to(&mut scratch[s..s + 4], &super::ParamValue::Float(*f));
+            }
+        }
+        scratch
+    }
+
+    fn spec_dispatch(
+        device: &manifold_gpu::GpuDevice,
+        wgsl: &str,
+        src: &manifold_gpu::GpuTexture,
+        uniform: &[u8],
+    ) -> Vec<u16> {
+        use manifold_gpu::GpuBinding;
+        let (w, h) = (src.width, src.height);
+        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "spec-test");
+        let out = crate::render_target::RenderTarget::new(
+            device,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            "spec-out",
+        );
+        let mut enc = device.create_encoder("spec-test");
+        enc.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: uniform },
+                GpuBinding::Texture { binding: 1, texture: src },
+                GpuBinding::Texture { binding: 2, texture: &out.texture },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "spec-test",
+        );
+        enc.commit_and_wait_completed();
+        let bytes_per_row = w * 8;
+        let readback = device.create_buffer_shared(u64::from(h * bytes_per_row));
+        let mut rb = device.create_encoder("spec-readback");
+        rb.copy_texture_to_buffer(&out.texture, &readback, w, h, bytes_per_row);
+        rb.commit_and_wait_completed();
+        let ptr = readback.mapped_ptr().expect("shared buffer pointer");
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) }.to_vec()
+    }
+
+    #[test]
+    fn specialized_kernel_is_bit_exact_with_generic() {
+        let device = crate::test_device();
+        let (w, h) = (64u32, 64u32);
+
+        // Parse the kernel through the node so static_param_fields + uniform_layout
+        // come from the real introspection path.
+        let mut node = WgslCompute::new();
+        node.reparse(SPEC_KERNEL.to_string());
+        assert_eq!(
+            node.static_param_fields,
+            vec!["n0_k".to_string(), "n0_mode".to_string()],
+            "markers must parse to the two static fields"
+        );
+
+        let (k, mode, gain) = (0.75_f32, 1.0_f32, 1.3_f32);
+        let statics: Vec<(&str, super::UniformMemberType, f32)> = vec![
+            ("n0_k", super::UniformMemberType::F32, k),
+            ("n0_mode", super::UniformMemberType::I32, mode),
+        ];
+        let spec_src = node.specialize_source(&statics).expect("specialize");
+        // The specialized kernel must not carry the static fields in its uniform
+        // struct (the `    name: ty,` member form), must rewrite their reads, and
+        // must declare them as module consts.
+        assert!(!spec_src.contains("    n0_k: f32,"), "n0_k must leave the struct");
+        assert!(!spec_src.contains("    n0_mode: i32,"), "n0_mode must leave the struct");
+        assert!(!spec_src.contains("params.n0_k"), "params.n0_k must be rewritten");
+        assert!(!spec_src.contains("params.n0_mode"), "params.n0_mode must be rewritten");
+        assert!(spec_src.contains("    n0_gain: f32,"), "dynamic n0_gain stays in struct");
+        assert!(spec_src.contains("params.n0_gain"), "dynamic n0_gain stays a uniform read");
+        assert!(spec_src.contains("const n0_k: f32 = 0.75"));
+        assert!(spec_src.contains("const n0_mode: i32 = 1"));
+
+        let src = spec_gradient(&device, w, h);
+        let generic = spec_dispatch(
+            &device,
+            &node.source,
+            &src,
+            &spec_pack(&node.source, &[("n0_k", k), ("n0_mode", mode), ("n0_gain", gain)]),
+        );
+        let specialized =
+            spec_dispatch(&device, &spec_src, &src, &spec_pack(&spec_src, &[("n0_gain", gain)]));
+
+        let differing = generic
+            .iter()
+            .zip(specialized.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(
+            differing, 0,
+            "generic vs specialized must be bit-exact, {differing} of {} halves differ",
+            generic.len()
+        );
+    }
+
+    // ── Static-param specialization: checkpoint (rule 6, knob-tweak) ──────
+    // A baked param changed mid-run must reflect on the VERY NEXT frame through the
+    // generic fallback — no stale frame, no black frame — while the node settles
+    // and recompiles a fresh variant. Drives a Source kernel (output = n0_k*n0_gain)
+    // through the real chain runtime so the node persists its spec cache across
+    // frames, exactly as on stage.
+    const SPEC_SOURCE_KERNEL: &str = "\
+// @static_param: n0_k
+struct Params {
+    n0_k: f32,
+    n0_gain: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y { return; }
+    let v = params.n0_k * params.n0_gain;
+    textureStore(dst, vec2<i32>(i32(id.x), i32(id.y)), vec4<f32>(v, v, v, 1.0));
+}
+";
+
+    #[test]
+    fn knob_tweak_reflects_next_frame_via_generic_fallback() {
+        use super::ParamValue;
+        use crate::node_graph::bindings::Slot;
+
+        let device = crate::test_device();
+        let (w, h) = (32u32, 32u32);
+        let format = GpuTextureFormat::Rgba16Float;
+
+        let mut node = WgslCompute::new();
+        node.reparse(SPEC_SOURCE_KERNEL.to_string());
+        assert_eq!(node.static_param_fields, vec!["n0_k".to_string()]);
+
+        let mut g = Graph::new();
+        let comp = g.add_node(Box::new(node));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.connect((comp, "dst"), (out, "in")).unwrap();
+        g.set_param(comp, "n0_gain", ParamValue::Float(1.0)).unwrap();
+        g.set_param(comp, "n0_k", ParamValue::Float(0.5)).unwrap();
+        let plan = compile(&g).unwrap();
+
+        let backend = MetalBackend::new(&device, w, h, format);
+        let out_slot = Slot(backend.slot_count());
+        let mut exec = Executor::new(Box::new(backend));
+
+        let render = |exec: &mut Executor, g: &mut Graph| -> f32 {
+            let mut native_enc = device.create_encoder("spec-knob");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
+                exec.execute_frame_with_gpu(g, &plan, frame_time(), &mut gpu);
+            }
+            native_enc.commit_and_wait_completed();
+            let tex = exec.backend().texture_2d(out_slot).expect("output retained");
+            let bytes_per_row = w * 8;
+            let rb = device.create_buffer_shared(u64::from(h * bytes_per_row));
+            let mut e = device.create_encoder("spec-knob-rb");
+            e.copy_texture_to_buffer(tex, &rb, w, h, bytes_per_row);
+            e.commit_and_wait_completed();
+            let ptr = rb.mapped_ptr().expect("ptr");
+            let center = ((h / 2) * w + w / 2) as usize * 4;
+            let halves = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
+            f16::from_bits(halves[center]).to_f32()
+        };
+
+        // Frames 0..2 settle and specialize on n0_k = 0.5.
+        let f0 = render(&mut exec, &mut g);
+        let f1 = render(&mut exec, &mut g);
+        assert!((f0 - 0.5).abs() < 0.01, "frame 0 should be 0.5, got {f0}");
+        assert!((f1 - 0.5).abs() < 0.01, "frame 1 (specialized) should be 0.5, got {f1}");
+
+        // Tweak the baked knob. The VERY NEXT frame must reflect 0.8 (generic
+        // serves the live value while the new variant is still uncompiled) — not a
+        // stale 0.5, not a black 0.0.
+        g.set_param(comp, "n0_k", ParamValue::Float(0.8)).unwrap();
+        let f2 = render(&mut exec, &mut g);
+        assert!(
+            (f2 - 0.8).abs() < 0.01,
+            "frame after tweak must reflect 0.8 immediately (no stale/black), got {f2}"
+        );
+
+        // It settles again and recompiles a variant for 0.8 — output unchanged.
+        let f3 = render(&mut exec, &mut g);
+        assert!((f3 - 0.8).abs() < 0.01, "frame 3 (re-specialized) should be 0.8, got {f3}");
     }
 }

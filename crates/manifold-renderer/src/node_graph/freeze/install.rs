@@ -1435,6 +1435,42 @@ pub(crate) fn fuse_canonical_def_masked(
             }
         }
 
+        // STATIC-PARAM SPECIALIZATION (roadmap 4). A texture fused kernel carries
+        // every param as a uniform field, so the compiled kernel keeps a runtime
+        // branch for every mode/quality/count even though most params never move
+        // during a show. Tag each param field that has NO control wire driving it
+        // (graph-internal LFOs + frame-derived uniforms are the only in-graph
+        // dynamic sources, and both land in `control_wires`) with a
+        // `// @static_param:` marker. `node.wgsl_compute` reads the markers and, at
+        // dispatch, bakes those fields' LIVE values into a module-scope `const`
+        // variant so spirv-opt's CCP + DCE strip the dead branches — value-keyed,
+        // with the generic kernel as the permanent fallback (correctness is the
+        // runtime value-key compare, NOT this classification, so a binding written
+        // after the build, or a knob tweak, is always served correctly). Buffer /
+        // particle kernels are out of v1 scope (their uniform also carries derived
+        // counts) — detect them by the `var<storage` they always declare and the
+        // pure-texture kernels never do, and emit no markers there.
+        let fused_wgsl = if generated.wgsl.contains("var<storage") {
+            generated.wgsl
+        } else {
+            let controlled: std::collections::HashSet<&str> = control_wires
+                .iter()
+                .filter(|(doc, ..)| *doc == fused_doc)
+                .map(|(.., field)| field.as_str())
+                .collect();
+            let mut markers = String::new();
+            for field in fused_params.keys() {
+                if !controlled.contains(field.as_str()) {
+                    markers.push_str(&format!("// @static_param: {field}\n"));
+                }
+            }
+            if markers.is_empty() {
+                generated.wgsl
+            } else {
+                format!("{markers}{}", generated.wgsl)
+            }
+        };
+
         new_nodes.push(EffectGraphNode {
             id: fused_doc,
             node_id: fused_id,
@@ -1445,7 +1481,7 @@ pub(crate) fn fuse_canonical_def_masked(
             params: fused_params,
             exposed_params: Default::default(),
             editor_pos: None,
-            wgsl_source: Some(generated.wgsl),
+            wgsl_source: Some(fused_wgsl),
             title: Some(format!("Fused Region {i}")),
             output_formats: Default::default(),
             output_canvas_scales,
