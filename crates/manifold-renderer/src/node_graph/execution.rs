@@ -223,6 +223,16 @@ pub struct StepProfile {
 }
 
 impl Executor {
+    /// Mark a persistent resource as already initialized, so the first-frame
+    /// clear-to-black at acquisition is skipped. Called by the state harvest
+    /// (docs/CHAIN_FUSION_DESIGN.md §5) after installing a carried-over
+    /// texture into the resource's slot — without this, the rebuilt
+    /// executor's fresh `initialized_persistent` set would wipe the migrated
+    /// trail on its first frame.
+    pub fn mark_persistent_initialized(&mut self, res_id: ResourceId) {
+        self.initialized_persistent.insert(res_id);
+    }
+
     /// Construct an executor with the given backend.
     pub fn new(backend: Box<dyn Backend>) -> Self {
         Self {

@@ -101,6 +101,33 @@ impl StateStore {
         }
     }
 
+    /// Move every `(node, *)` bucket out of this store into `dst`, re-keyed
+    /// to `new_node` — the state harvest across a chain rebuild
+    /// (docs/CHAIN_FUSION_DESIGN.md §5). Contents move untouched (no
+    /// `cleanup`, no drop): a Feedback trail or sim buffer carries across
+    /// the rebuild bit-for-bit. Any pre-existing entry in `dst` under the
+    /// new key is replaced (its `cleanup` fires).
+    pub fn migrate_node(
+        &mut self,
+        node: NodeInstanceId,
+        new_node: NodeInstanceId,
+        dst: &mut StateStore,
+    ) {
+        let keys: Vec<(NodeInstanceId, OwnerKey)> = self
+            .buckets
+            .keys()
+            .filter(|(n, _)| *n == node)
+            .copied()
+            .collect();
+        for key in keys {
+            if let Some(state) = self.buckets.remove(&key)
+                && let Some(mut prev) = dst.buckets.insert((new_node, key.1), state)
+            {
+                prev.cleanup();
+            }
+        }
+    }
+
     /// Drop all state for a specific owner. Called when a clip / layer is
     /// destroyed or stops playback — mirrors the legacy
     /// `cleanup_owner_state(owner_key)` hook.

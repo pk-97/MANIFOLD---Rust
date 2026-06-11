@@ -158,6 +158,22 @@ Live-edit sequence (reorder / insert / delete / bypass / skip flip / editor open
    `needs_rebuild` adds `cg.has_pending_segments() && generation_advanced`. The next
    dispatch rebuilds, hits the cache, splices fused.
 
+**Status: BUILT (2026-06-11), and broader than first scoped — the harvest runs on EVERY
+chain rebuild, not just the swap-in.** Reordering, adding, removing, or bypassing a card
+no longer resets the other cards' sims and trails at all (the pre-existing wipe-on-rebuild
+wart is gone, per Peter's direction while dialing in chains). Three pieces, because state
+lives in three places: (1) node *impls* (`Box<dyn EffectNode>` — Watercolor RTs, DNN
+workers) swap from the prior graph into the new one, matched by `(EffectId,
+def_content_key)` per card then stable `NodeId` + type per node; (2) StateStore buckets
+re-key old→new instance ids (`StateStore::migrate_node`); (3) the cross-frame *pixels* —
+feedback's ping-pong pair — live in backend persistent slots, so each harvested node's
+persistent textures install into the new backend's slots (one retain, no GPU copy) and
+`Executor::mark_persistent_initialized` suppresses the first-frame clear-to-black that
+would otherwise wipe them. Harvest skips on dimension change (resolution-dependent state
+must rebuild); intentional resets (seek, load, idle clear, card deletion, editing the
+card's own graph) are untouched. Proof: a chain rebuilt mid-trail with the prior as donor
+continues bit-for-bit like a never-rebuilt chain; a donor-less rebuild visibly resets.
+
 **The swap-in rebuild is user-invisible, so it must be state-invisible.** Rebuilds today
 recreate every primitive instance and a fresh `StateStore` — acceptable when the user
 caused the rebuild, not when the compiler did. `try_build` gains a `prior` runtime:

@@ -215,7 +215,7 @@ fn fuse_view_parts(
 /// differ only in live modulation share one key, and the fused kernel keeps
 /// exposed params as uniforms (never baked). Computed on cache miss / chain
 /// rebuild, an editing-time event, never per frame.
-fn def_content_key(def: &EffectGraphDef) -> u64 {
+pub(crate) fn def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
     match serde_json::to_vec(def) {

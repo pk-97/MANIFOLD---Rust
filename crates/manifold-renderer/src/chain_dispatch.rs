@@ -180,6 +180,10 @@ pub fn dispatch_chain<'a>(
             eprintln!("[rebuild] curr={curr}");
         }
         let t0 = std::time::Instant::now();
+        // Hand the outgoing runtime to the build as the state-harvest donor:
+        // unchanged cards carry their sims / trails / workers across the
+        // rebuild instead of resetting (docs/CHAIN_FUSION_DESIGN.md §5).
+        let mut prior = cache.take();
         *cache = PresetRuntime::try_build(
             effects,
             groups,
@@ -189,6 +193,7 @@ pub fn dispatch_chain<'a>(
             ctx.width,
             ctx.height,
             preview_effect,
+            prior.as_mut(),
         );
         CHAIN_REBUILD_COUNT.fetch_add(1, Ordering::Relaxed);
         CHAIN_REBUILD_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);

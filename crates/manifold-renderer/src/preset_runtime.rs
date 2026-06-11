@@ -495,7 +495,6 @@ fn record_chain_error(errors: &mut Vec<ChainError>, err: ChainError) {
 }
 
 struct EffectSlot {
-    #[allow(dead_code)]
     effect_id: EffectId,
     effect_type: PresetTypeId,
     /// Index into the chain's `effects` slice at the time this slot
@@ -581,6 +580,17 @@ struct EffectSlot {
     /// of [`Self::bindings`] from the synthesized binding list before
     /// applying.
     user_bindings_version: u32,
+    /// Content key of the card's EFFECTIVE def (edited graph or canonical) at
+    /// build time — the state-harvest match key (docs/CHAIN_FUSION_DESIGN.md
+    /// §5). A rebuild harvests a card's node state from the prior runtime
+    /// only when `(effect_id, def_content_key)` match: same card, same inner
+    /// content, so the old impls' baked configuration (ports, WGSL source,
+    /// pipelines) is exactly what the new build constructed. Independent of
+    /// fusion state — the same card fused and unfused shares one key, so
+    /// closing the editor (unfused → fused rebuild) harvests too. `0` for
+    /// cards inside a fused segment (stateless by eligibility, nothing to
+    /// harvest).
+    def_content_key: u64,
     /// Effect-side `system.generator_input` node id, if the preset
     /// included one. Effects with a generator_input get per-frame
     /// scalars (time / beat / aspect / output dims) pushed to this
@@ -629,6 +639,14 @@ impl PresetRuntime {
         // (no editor / not watching) leaves the freeze gate untouched — zero
         // effect on the live render path.
         preview_effect: Option<&EffectId>,
+        // The runtime this build replaces, when the dispatcher is rebuilding
+        // an existing chain. Cards whose content is unchanged harvest their
+        // node state (impl instances + StateStore buckets) from it, so a
+        // reorder / add / bypass / editor-close / fused-segment swap-in never
+        // resets a sim or a feedback trail — state identity is the card, not
+        // the chain position (docs/CHAIN_FUSION_DESIGN.md §5). `None` on
+        // first build; skipped automatically when dimensions changed.
+        prior: Option<&mut Self>,
     ) -> Option<Self> {
         // Indexed so we can capture each active effect's original
         // position in `effects` — used as a per-frame O(1) lookup key
@@ -981,6 +999,7 @@ impl PresetRuntime {
                             n_static,
                             n_static_slots,
                             user_bindings_version: fx.graph_version,
+                            def_content_key: 0,
                             generator_input_node,
                         });
                     }
@@ -1327,6 +1346,9 @@ impl PresetRuntime {
                 n_static,
                 n_static_slots,
                 user_bindings_version,
+                def_content_key: crate::node_graph::freeze::install::def_content_key(
+                    effective_def,
+                ),
                 generator_input_node: generator_input_id,
             });
             prev_node = output.0;
@@ -1482,7 +1504,155 @@ impl PresetRuntime {
         // same one-shot the generator path does at construction (a no-op when
         // no effect in the chain declares any).
         runtime.apply_string_defaults();
+        if let Some(prior) = prior {
+            runtime.harvest_state_from(prior);
+        }
         Some(runtime)
+    }
+
+    /// State harvest across a rebuild (docs/CHAIN_FUSION_DESIGN.md §5): for
+    /// every card whose `(effect_id, def_content_key)` matches a card in the
+    /// prior runtime, move the prior node *impls* (the `Box<dyn EffectNode>`
+    /// holding sim buffers, trail textures, DNN workers) and their StateStore
+    /// buckets into this runtime, matched per node by stable `NodeId` + type.
+    ///
+    /// Safe because a matching content key means the prior impl's baked
+    /// configuration (ports, WGSL source, pipelines — all derived from the
+    /// def) is identical to what this build just constructed; params and
+    /// bindings live on `NodeInstance` / the binding apply path and are this
+    /// build's own. Skipped when dimensions changed — resolution-dependent
+    /// state must rebuild, exactly as today. Cards that were edited (key
+    /// mismatch) or removed keep fresh instances; intentional resets (seek,
+    /// project load, idle clear, card deletion) run through `clear_state` /
+    /// pool eviction, untouched by this path.
+    fn harvest_state_from(&mut self, prior: &mut Self) {
+        if prior.width != self.width || prior.height != self.height {
+            return;
+        }
+        // new instance → old instance, for every node whose impl was carried
+        // over. Drives the persistent-texture pass below.
+        let mut harvested: ahash::AHashMap<NodeInstanceId, NodeInstanceId> =
+            ahash::AHashMap::default();
+        for slot in &self.effect_nodes {
+            if slot.def_content_key == 0 {
+                continue;
+            }
+            let Some(old_slot) = prior.effect_nodes.iter().find(|s| {
+                s.effect_id == slot.effect_id
+                    && s.effect_type == slot.effect_type
+                    && s.def_content_key == slot.def_content_key
+            }) else {
+                continue;
+            };
+            for (node_id, new_inst) in &slot.node_map {
+                let Some((_, old_inst)) =
+                    old_slot.node_map.iter().find(|(nid, _)| nid == node_id)
+                else {
+                    continue;
+                };
+                let Some(old_node) = prior.graph.get_node_mut(*old_inst) else {
+                    continue;
+                };
+                let Some(new_node) = self.graph.get_node_mut(*new_inst) else {
+                    continue;
+                };
+                if old_node.node.type_id() != new_node.node.type_id() {
+                    continue;
+                }
+                std::mem::swap(&mut old_node.node, &mut new_node.node);
+                prior
+                    .state_store
+                    .migrate_node(*old_inst, *new_inst, &mut self.state_store);
+                harvested.insert(*new_inst, *old_inst);
+            }
+        }
+        if std::env::var("MANIFOLD_LOG_HARVEST").is_ok() {
+            eprintln!(
+                "[harvest] slots new={} prior={} nodes_carried={} persistent_new={}",
+                self.effect_nodes.len(),
+                prior.effect_nodes.len(),
+                harvested.len(),
+                self.plan.persistent_resources().len(),
+            );
+        }
+        if harvested.is_empty() {
+            return;
+        }
+
+        // Cross-frame PIXELS live in backend persistent slots, not in the
+        // impls or the StateStore — feedback's trail is its persistent `out`
+        // texture, and the back-edge producer's slot is the other half of
+        // the zero-copy ping-pong (`FeedbackState` tracks only dims + mode).
+        // Install each harvested node's persistent textures into the new
+        // backend's slots: one atomic retain per texture, no GPU copy. The
+        // migrated `FeedbackState` then correctly skips its first-frame
+        // re-seed, reading the carried trail. (Array-buffer state —
+        // `aliased_array_io` — is not migrated; no chain effect uses it.)
+        let producer_of = |plan: &ExecutionPlan, node: NodeInstanceId, port: &str| {
+            plan.steps().iter().find(|s| s.node == node).and_then(|s| {
+                s.outputs
+                    .iter()
+                    .find(|(name, _)| *name == port)
+                    .map(|(_, id)| *id)
+            })
+        };
+        let mut moves: Vec<(ResourceId, GpuTexture)> = Vec::new();
+        for &res in self.plan.persistent_resources() {
+            // Producing (node, port) of this persistent resource in the new plan.
+            let Some((n_inst, port)) = self.plan.steps().iter().find_map(|s| {
+                s.outputs
+                    .iter()
+                    .find(|(_, id)| *id == res)
+                    .map(|(name, _)| (s.node, *name))
+            }) else {
+                continue;
+            };
+            let Some(&o_inst) = harvested.get(&n_inst) else {
+                continue;
+            };
+            let Some(o_res) = producer_of(&prior.plan, o_inst, port) else {
+                continue;
+            };
+            let old_backend = prior.executor.backend();
+            let Some(tex) = old_backend
+                .slot_for(o_res)
+                .and_then(|s| old_backend.texture_2d(s))
+                .cloned()
+            else {
+                continue;
+            };
+            moves.push((res, tex));
+        }
+        if moves.is_empty() {
+            return;
+        }
+        let Some(metal) = self
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<MetalBackend>())
+        else {
+            return; // mock backend — nothing to install
+        };
+        let mut installed = 0usize;
+        let total = moves.len();
+        let mut installed_res: Vec<ResourceId> = Vec::with_capacity(total);
+        for (res, tex) in moves {
+            if let Some(slot) = crate::node_graph::Backend::slot_for(metal, res)
+                && metal.replace_texture_2d(slot, tex)
+            {
+                installed += 1;
+                installed_res.push(res);
+            }
+        }
+        // The fresh executor would clear-to-black each persistent slot on
+        // first acquisition — mark the carried ones initialized instead.
+        for res in installed_res {
+            self.executor.mark_persistent_initialized(res);
+        }
+        if std::env::var("MANIFOLD_LOG_HARVEST").is_ok() {
+            eprintln!("[harvest] persistent textures installed {installed}/{total}");
+        }
     }
 
     /// Structured errors produced by `try_build` and per-frame `run`.
@@ -2219,6 +2389,9 @@ impl PresetRuntime {
             n_static,
             n_static_slots,
             user_bindings_version: 0,
+            // Generators rebuild through their own registry lifecycle, not the
+            // chain dispatcher's prior-runtime handoff — no harvest key.
+            def_content_key: 0,
             generator_input_node: Some(generator_input_id),
         };
 
@@ -3012,7 +3185,7 @@ mod multi_segment_tests {
         };
 
         let result =
-            PresetRuntime::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None);
+            PresetRuntime::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None, None);
 
         let cg = result.expect(
             "PresetRuntime should build for a non-contiguous wet/dry group \
@@ -3055,7 +3228,7 @@ mod multi_segment_tests {
         };
 
         let result =
-            PresetRuntime::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None);
+            PresetRuntime::try_build(&[e1, e2, e3], &[g1], &primitives, &device, None, 256, 256, None, None);
 
         let cg = result.expect("PresetRuntime should build for contiguous group");
         assert_eq!(cg.group_mix_nodes.len(), 1);
@@ -3096,6 +3269,7 @@ mod multi_segment_tests {
             256,
             256,
             None,
+            None,
         );
 
         let cg = result.expect("PresetRuntime should build for three-segment group");
@@ -3131,7 +3305,7 @@ mod binding_seed_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = make_default(PresetTypeId::SOFT_FOCUS_GRAPH);
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
             .expect("SoftFocus chain should build");
 
         let slot = cg
@@ -3252,7 +3426,7 @@ mod topology_hash_tests {
         assert!(fx.enabled, "PresetInstance::new defaults enabled = true");
 
         let hash_on = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
-        let cg_on = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None)
+        let cg_on = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None, None)
             .expect("Mirror chain builds at enabled = true");
         assert_eq!(
             cg_on.effect_nodes.len(),
@@ -3270,7 +3444,7 @@ mod topology_hash_tests {
 
         // With this as the only effect, the chain should refuse to build
         // (no active effects → None) — equivalent to "the chain becomes empty".
-        let cg_off = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None);
+        let cg_off = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None);
         assert!(
             cg_off.is_none(),
             "Disabled effect must be filtered out of active_effects — got a chain with effects when it should be empty",
@@ -3425,7 +3599,7 @@ mod user_binding_tests {
         let mut control = make_default(PresetTypeId::STYLIZED_FEEDBACK);
         control.param_values[1] = ParamSlot::exposed(0.3); // zoom is static slot 1
         let mut cg0 =
-            PresetRuntime::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256, None)
+            PresetRuntime::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256, None, None)
                 .expect("control chain builds");
         apply(&mut cg0, &control.param_values);
         let slot0 = &cg0.effect_nodes[0];
@@ -3447,7 +3621,7 @@ mod user_binding_tests {
         fx.graph_version = fx.graph_version.wrapping_add(1);
         fx.graph_structure_version = fx.graph_structure_version.wrapping_add(1);
         let mut cg =
-            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None)
+            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None, None)
                 .expect("reshaped chain builds");
         apply(&mut cg, &fx.param_values);
         let slot = &cg.effect_nodes[0];
@@ -3512,7 +3686,7 @@ mod user_binding_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = stylized_with_translate_exposed(0.48);
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
             .expect("StylizedFeedback chain with one user binding builds");
 
         let slot = cg
@@ -3551,6 +3725,7 @@ mod user_binding_tests {
             None,
             256,
             256,
+            None,
             None,
         )
         .expect("StylizedFeedback chain with one user binding builds");
@@ -3625,7 +3800,7 @@ mod user_binding_tests {
         assert_eq!(fx.param_values.len(), 4);
         fx.param_values[slot_index] = ParamSlot::exposed(0.42);
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
             .expect("StylizedFeedback chain with one user binding builds");
         let slot = cg
             .effect_nodes
@@ -3831,7 +4006,7 @@ mod generator_input_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = invert_with_generator_input();
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
             .expect("chain builds with a divergent def including system.generator_input");
 
         let slot = cg
@@ -3858,7 +4033,7 @@ mod generator_input_tests {
         // Canonical Invert preset has no system.generator_input.
         let fx = make_default(PresetTypeId::INVERT_COLORS);
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
             .expect("Invert chain builds without divergent def");
 
         let slot = cg
@@ -3889,7 +4064,7 @@ mod generator_input_tests {
         let fx = invert_with_generator_input();
 
         let mut cg =
-            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None)
+            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None, None)
                 .expect("chain builds");
 
         let gi_id = cg
@@ -3978,6 +4153,7 @@ mod generator_input_tests {
             None,
             256,
             256,
+            None,
             None,
         )
         .expect("ColorGrade chain builds");
@@ -4081,7 +4257,7 @@ mod chain_error_tests {
             offset: 0.0,
         });
 
-        let cg = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None, None)
             .expect("Invert chain still builds; the binding just fails to resolve");
 
         let errors = cg.errors();
@@ -4113,7 +4289,7 @@ mod chain_error_tests {
         let primitives = PrimitiveRegistry::with_builtin();
         let fx = make_default(PresetTypeId::INVERT_COLORS);
 
-        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None)
+        let cg = PresetRuntime::try_build(&[fx], &[], &primitives, &device, None, 256, 256, None, None)
             .expect("clean Invert chain builds");
 
         assert!(
@@ -4894,7 +5070,7 @@ mod chain_fusion_tests {
         // Pending (tests never enqueue the worker), and the chain splices
         // per-card — today's production path, our oracle. ──
         let mut per_card = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None,
+            &effects, &[], &primitives, &device, None, w, h, None, None,
         )
         .expect("per-card chain builds");
         assert_eq!(per_card.effect_nodes.len(), 2);
@@ -4919,7 +5095,7 @@ mod chain_fusion_tests {
             .expect("two pointwise ColorGrades fuse across the seam");
 
         let mut fused = PresetRuntime::try_build(
-            &effects, &[], &primitives, &device, None, w, h, None,
+            &effects, &[], &primitives, &device, None, w, h, None, None,
         )
         .expect("fused-segment chain builds");
         assert_eq!(fused.effect_nodes.len(), 2, "one EffectSlot per card survives");
@@ -4984,6 +5160,85 @@ mod chain_fusion_tests {
             r2.max_abs,
             r2.over_count,
             r2.total
+        );
+    }
+
+    /// State harvest (docs/CHAIN_FUSION_DESIGN.md §5): rebuilding a chain
+    /// with the prior runtime as donor must carry a feedback trail across the
+    /// rebuild — the rebuilt chain continues exactly like a chain that never
+    /// rebuilt. A rebuild WITHOUT the donor must visibly reset (sensitivity
+    /// check: the trail actually accumulated something worth preserving).
+    #[test]
+    fn rebuild_with_prior_carries_feedback_trail_across() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (256u32, 256u32);
+        let input = gradient_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        // StylizedFeedback (node.feedback trail in the StateStore) followed
+        // by a ColorGrade — a realistic dial-in chain.
+        let fb = make_default(PresetTypeId::STYLIZED_FEEDBACK);
+        let mut cg = make_default(PresetTypeId::COLOR_GRADE);
+        set_param(&mut cg, "amount", 1.0);
+        set_param(&mut cg, "gain", 1.1);
+        let effects = vec![fb, cg];
+
+        let build = |prior: Option<&mut PresetRuntime>| {
+            PresetRuntime::try_build(
+                &effects, &[], &primitives, &device, None, w, h, None, prior,
+            )
+            .expect("chain builds")
+        };
+
+        const WARM: usize = 6;
+        // Reference: never rebuilt, runs WARM+1 frames.
+        let mut reference = build(None);
+        for _ in 0..=WARM {
+            run_once(&mut reference, &device, &input, &effects, &pc);
+        }
+
+        // Harvested: WARM frames, rebuild WITH the prior, one more frame.
+        let mut donor = build(None);
+        for _ in 0..WARM {
+            run_once(&mut donor, &device, &input, &effects, &pc);
+        }
+        let mut harvested = build(Some(&mut donor));
+        run_once(&mut harvested, &device, &input, &effects, &pc);
+
+        // Reset: WARM frames, rebuild WITHOUT the prior, one more frame.
+        let mut fresh_donor = build(None);
+        for _ in 0..WARM {
+            run_once(&mut fresh_donor, &device, &input, &effects, &pc);
+        }
+        let mut reset = build(None);
+        run_once(&mut reset, &device, &input, &effects, &pc);
+
+        let differ = TextureDiff::new(&device);
+        let carried = differ.compare(
+            &device,
+            reference.output_texture().unwrap(),
+            harvested.output_texture().unwrap(),
+            1.0e-3,
+            1.0e-3,
+        );
+        assert_eq!(
+            carried.over_count, 0,
+            "harvested rebuild must continue the trail exactly like an \
+             un-rebuilt chain: max_abs={}, over={}/{}",
+            carried.max_abs, carried.over_count, carried.total
+        );
+        let wiped = differ.compare(
+            &device,
+            reference.output_texture().unwrap(),
+            reset.output_texture().unwrap(),
+            1.0e-3,
+            1.0e-3,
+        );
+        assert!(
+            wiped.over_count > 0,
+            "sensitivity: a donor-less rebuild must visibly reset the trail \
+             (otherwise this test proves nothing)"
         );
     }
 }
