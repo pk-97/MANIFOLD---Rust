@@ -27,6 +27,18 @@ use crate::node_graph::primitive::Primitive;
 /// finely-broken ramps (e.g. a procedural rainbow laid out as breakpoints).
 const MAX_STOPS: usize = 16;
 
+/// Strip width for the LUT-shaped output (workstream 4 — right-sized outputs).
+/// A gradient ramp is a 1D luminance LUT, constant in y; its natural size is a
+/// W×1 strip, NOT the full canvas. 256 is the industry-standard LUT width — a
+/// smooth ramp is visually indistinguishable from a canvas-wide one at this
+/// resolution, while a canvas-wide ramp regenerates a multi-MB texture per
+/// palette (Infrared bakes 10 of them, ~330 MB of pool at 4K). Every shipped
+/// consumer reads the ramp resolution-independently — Infrared wires it through
+/// `node.mux_texture` (samples at uv) into `node.color_lut`'s `lut` Gather input
+/// (sampled at a normalized luminance coord) — so the strip is correct, never
+/// texel-exact-read. See the `output_dims` override below.
+const LUT_WIDTH: u32 = 256;
+
 // Standalone-codegen uniform layout: the generated `Params` struct lays out the
 // scalar params (domain) first, then one `_count` word per Table param, pads the
 // header to 16 bytes, then appends each table's `array<vec4<f32>, 16>`. So the
@@ -89,6 +101,25 @@ crate::primitive! {
 }
 
 impl Primitive for GradientRamp {
+    /// Right-sized LUT output (workstream 4): a fixed `LUT_WIDTH × 1` strip
+    /// regardless of canvas. The body recovers `t` from `uv.x` (there is no width
+    /// field), so the gradient is identical at any width — only the texel
+    /// quantization changes, and 256 is the industry LUT width. Constant in y, so
+    /// height 1. LOOK-affecting in principle (256-step vs canvas-step
+    /// quantization); smooth thermal palettes are indistinguishable, but this is
+    /// the visual-verification class — flagged for Peter's pass on Infrared. Every
+    /// shipped consumer samples it at a normalized coord (see `LUT_WIDTH`), so the
+    /// strip is read resolution-independently, never texel-exact.
+    fn output_dims(
+        &self,
+        _port: &str,
+        _canvas_dims: (u32, u32),
+        _input_dims: &[(&str, (u32, u32))],
+        _params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(u32, u32)> {
+        Some((LUT_WIDTH, 1))
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let domain = ctx.scalar_or_param("domain", 1.0);
 
