@@ -761,6 +761,7 @@ impl Executor {
             // non-empty frame's). Its outputs are marked empty too, so the
             // skip propagates through a declaring chain. Diagnostic modes
             // force-dirty, same as the memo skip above.
+            let mut data_skip = false;
             if !force_dirty
                 && let Some(inst) = graph.get_node(step.node)
             {
@@ -774,10 +775,24 @@ impl Executor {
                         })
                     })
                 {
-                    for &(_, res) in &step.outputs {
-                        self.empty_resources.insert(res);
+                    // A node that composites onto a source texture can't
+                    // just be skipped — its held output would be a STALE
+                    // copy of the source, freezing the video underneath.
+                    // When it declares `skip_passthrough_ports`, fall
+                    // through to the evaluate section, which aliases the
+                    // live input texture onto the output slot (zero GPU
+                    // work) instead of evaluating. Pure data-shapers
+                    // (no passthrough declaration) keep the zero-cost
+                    // early skip: their held outputs already carry the
+                    // empty content from the first empty frame.
+                    if inst.node.skip_passthrough_ports().is_some() {
+                        data_skip = true;
+                    } else {
+                        for &(_, res) in &step.outputs {
+                            self.empty_resources.insert(res);
+                        }
+                        continue;
                     }
-                    continue;
                 }
             }
 
@@ -841,7 +856,15 @@ impl Executor {
                 // — and skip evaluate. Matches the legacy chain
                 // dispatch's "skip + don't swap" semantic without the
                 // per-skip blit a naive fix would require.
-                let skip_alias = inst.node.skip_passthrough(&inst.params);
+                // A data-skipped draw node aliases unconditionally via its
+                // STATIC port declaration (the live source flows through at
+                // zero cost); otherwise the node's per-frame param-driven
+                // declaration decides.
+                let skip_alias = if data_skip {
+                    inst.node.skip_passthrough_ports()
+                } else {
+                    inst.node.skip_passthrough(&inst.params)
+                };
                 let mut performed_alias = false;
                 if let Some((in_port, out_port)) = skip_alias {
                     let in_slot = self
@@ -858,6 +881,13 @@ impl Executor {
                         && self.backend.alias_2d(i, o)
                     {
                         performed_alias = true;
+                        // Propagate the empty mark through a data-skip alias
+                        // so a chain of declaring draw nodes each skips.
+                        if data_skip {
+                            for &(_, res) in &step.outputs {
+                                self.empty_resources.insert(res);
+                            }
+                        }
                     }
                 }
 
@@ -2568,6 +2598,121 @@ mod tests {
             *b_evals.lock().unwrap(),
             2,
             "second declarer sees emptiness one frame later (a's frame-2 skip marks it)"
+        );
+    }
+
+    /// Draw-shaped fixture for the data-skip PASSTHROUGH path: declares
+    /// `empty_skip_input_ports` AND `skip_passthrough_ports`, plus a
+    /// separate texture `src` it composites over. A plain data-skip would
+    /// freeze a stale copy of `src`; the executor must alias `src` → `out`
+    /// instead (zero work, live video flows through).
+    struct DrawShapedNode {
+        type_id: EffectNodeType,
+        evals: Arc<Mutex<u32>>,
+    }
+
+    impl EffectNode for DrawShapedNode {
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            static INPUTS: [NodeInput; 2] = [
+                NodePort {
+                    name: "src",
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Input,
+                    required: false,
+                },
+                NodePort {
+                    name: "detections",
+                    ty: PortType::Texture2D,
+                    kind: PortKind::Input,
+                    required: false,
+                },
+            ];
+            &INPUTS
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            static OUTPUTS: [NodeOutput; 1] = [NodePort {
+                name: "out",
+                ty: PortType::Texture2D,
+                kind: PortKind::Output,
+                required: false,
+            }];
+            &OUTPUTS
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn empty_skip_input_ports(&self) -> &'static [&'static str] {
+            &["detections"]
+        }
+        fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
+            Some(("src", "out"))
+        }
+        fn evaluate(&mut self, _: &mut EffectNodeContext<'_, '_>) {
+            *self.evals.lock().unwrap() += 1;
+        }
+    }
+
+    /// Data-skip on a passthrough-declaring node ALIASES instead of
+    /// holding: the node evaluates the first empty frame (one-frame
+    /// guard), then every later empty frame installs the src → out alias
+    /// (observed on the mock backend) without evaluating — and the frame
+    /// data returns it evaluates again immediately.
+    #[test]
+    fn data_skip_aliases_passthrough_declaring_draw_node() {
+        let empty = Arc::new(Mutex::new(true));
+        let r_evals = Arc::new(Mutex::new(0));
+        let d_evals = Arc::new(Mutex::new(0));
+        let mut g = Graph::new();
+        let reporter = g.add_node(Box::new(EmptyDrivenNode::reporter(
+            empty.clone(),
+            r_evals,
+        )));
+        // A second source standing in for the live video the draw node
+        // composites over (the reporter plays the detections producer).
+        let video = g.add_node(Box::new(EmptyDrivenNode::reporter(
+            Arc::new(Mutex::new(false)),
+            Arc::new(Mutex::new(0)),
+        )));
+        let draw = g.add_node(Box::new(DrawShapedNode {
+            type_id: EffectNodeType::new("test.draw_shaped"),
+            evals: d_evals.clone(),
+        }));
+        g.connect((video, "out"), (draw, "src")).unwrap();
+        g.connect((reporter, "out"), (draw, "detections")).unwrap();
+        // A downstream reader keeps draw's output allocated — without a
+        // consumer the planner drops the dead output slot and the alias
+        // has nothing to install onto (production draw stacks always
+        // feed the next layer / final_output).
+        let sink = g.add_node(Box::new(EmptyDrivenNode::consumer(
+            false,
+            Arc::new(Mutex::new(0)),
+        )));
+        g.connect((draw, "out"), (sink, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+
+        for _ in 0..4 {
+            exec.execute_frame(&mut g, &plan, frame_time());
+        }
+        // Eval count 1 PROVES the alias path: with the mock's alias_2d
+        // returning true, a passthrough-declaring node only avoids
+        // evaluate via the installed alias (an alias failure falls
+        // through to evaluate, which would count 4 here).
+        assert_eq!(
+            *d_evals.lock().unwrap(),
+            1,
+            "draw node evaluates the first empty frame, then alias-skips"
+        );
+
+        *empty.lock().unwrap() = false;
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(
+            *d_evals.lock().unwrap(),
+            2,
+            "draw node evaluates again the frame detections return"
         );
     }
 }

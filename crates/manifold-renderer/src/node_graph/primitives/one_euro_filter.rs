@@ -73,10 +73,19 @@ crate::primitive! {
         prev: Vec<f32> = Vec::new(),
         dx: Vec<f32> = Vec::new(),
         initialized: bool = false,
+        last_output_all_zero: Option<bool> = None,
     },
 }
 
 impl Primitive for OneEuroFilter {
+    // Data-driven skip, reporter side: all-zero output is the upstream
+    // sentinel for "nothing detected" (track_persist zero-fills empty
+    // slots), so downstream `empty_skip_input_ports` declarers (the Draw
+    // HUD atoms) can skip while the tracker reports nothing.
+    fn reports_empty_output(&self) -> bool {
+        self.last_output_all_zero == Some(true)
+    }
+
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -94,6 +103,7 @@ impl Primitive for OneEuroFilter {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        self.last_output_all_zero = None;
         let min_cutoff = ctx.scalar_or_param("min_cutoff", 1.0).max(0.001);
         let beta = ctx.scalar_or_param("beta", 0.5).max(0.0);
         let d_cutoff = match ctx.params.get("d_cutoff") {
@@ -139,6 +149,7 @@ impl Primitive for OneEuroFilter {
             self.dx.resize(n_floats, 0.0);
             self.initialized = true;
             out_slice.copy_from_slice(in_slice);
+            self.last_output_all_zero = Some(out_slice.iter().all(|v| *v == 0.0));
             return;
         }
 
@@ -172,6 +183,7 @@ impl Primitive for OneEuroFilter {
             self.prev[i] = smoothed;
             out_slice[i] = smoothed;
         }
+        self.last_output_all_zero = Some(out_slice.iter().all(|v| *v == 0.0));
     }
 }
 

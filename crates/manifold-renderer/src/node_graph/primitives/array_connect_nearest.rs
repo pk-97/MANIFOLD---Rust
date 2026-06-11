@@ -52,9 +52,20 @@ crate::primitive! {
     category: MathAndConvert,
     role: Control,
     aliases: ["connect nearest", "nearest neighbour", "constellation"],
+    extra_fields: {
+        last_edge_count: Option<usize> = None,
+    },
 }
 
 impl Primitive for ArrayConnectNearest {
+    // Data-driven skip, reporter side: a frame that emitted zero edges
+    // (fewer than two live detections, or none within range) reports
+    // empty so downstream `empty_skip_input_ports` declarers (the Draw
+    // connection atoms) can skip.
+    fn reports_empty_output(&self) -> bool {
+        self.last_edge_count == Some(0)
+    }
+
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -73,6 +84,7 @@ impl Primitive for ArrayConnectNearest {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        self.last_edge_count = None;
         let max_distance = ctx.scalar_or_param("max_distance", 0.59);
         let threshold_sq = max_distance * max_distance;
         let max_edges = match ctx.params.get("max_edges") {
@@ -165,6 +177,7 @@ impl Primitive for ArrayConnectNearest {
         for slot in &mut out_edges[edge_count..out_capacity] {
             *slot = EdgePair::SENTINEL;
         }
+        self.last_edge_count = Some(edge_count);
     }
 }
 

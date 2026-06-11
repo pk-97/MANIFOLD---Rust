@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 205 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 211 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -85,11 +85,12 @@ _Generated from the node registry. Do not hand-edit. 205 nodes registered, group
 | Remap | `node.remap` | Filter | Resamples the image through a coordinate map, reading each pixel from wherever the map points. This is the node that turns a Mirror, Kaleidoscope, or any coord… |
 | Edge Stretch | `node.uv_strip_clamp` | Map | Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap. |
 
-### Stylize (7)
+### Stylize (8)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Dither Pattern | `node.dither_pattern` | Source | Generates the threshold grid that the Dither node uses to decide where pixels flip, with a choice of Bayer, halftone, and other patterns. Feed its output into … |
+| Draw Scanlines | `node.draw_scanlines` | Filter | Adds faint monitor-style scanlines across the whole image. |
 | — | `node.edge_detect` | Filter | Finds the edges in the image and draws them as bright lines on dark, a Sobel outline. Crossfade it back over the source for a sketch look. |
 | Film Grain | `node.film_grain` | Filter | Lays fine film-style grain over the image, heavier in the bright areas like real photographic stock. Dial the amount for a subtle texture or heavy noise. |
 | Flash | `node.flash` | Filter | Pulses the whole image brighter, toward white, or toward black from a single amount. Wire a beat gate or envelope into the amount for strobes and hits. |
@@ -248,7 +249,7 @@ _Generated from the node registry. Do not hand-edit. 205 nodes registered, group
 | Trigger Gate | `node.trigger_gate` | Control | Passes a trigger stream through only while it is enabled, so you can switch a clip-trigger source on and off. |
 | Value | `node.value` | Source | Outputs a single fixed number you set by hand. Wire it into any knob as a constant, or expose it to drive from outside. |
 
-### Detection & Sampling (9)
+### Detection & Sampling (14)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -256,6 +257,11 @@ _Generated from the node registry. Do not hand-edit. 205 nodes registered, group
 | Blob Overlay | `node.blob_overlay_render` | Filter | Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking. |
 | Color Sample | `node.color_sample` | Control | Reads the colour at a single point in the image and outputs its RGB and brightness. An eyedropper you can drive an effect from. |
 | Depth Map | `node.depth_estimate_midas` | Filter | Estimates a depth map from any flat image with an AI model, so nearer things read bright and far things dark. Feed it into a blur or displace to fake 3D from 2… |
+| Draw Connections | `node.draw_connections` | Filter | Draws dashed lines linking tracked objects that are near each other, with an optional dot at the middle of each link. |
+| Draw Dots | `node.draw_dots` | Filter | Draws a small glowing dot at the centre of every tracked object. |
+| Draw Gauge | `node.draw_gauge` | Filter | Draws a small readout bar under every tracked object that fills up as the object gets bigger. |
+| Draw Markers | `node.draw_markers` | Filter | Draws a marker on every tracked object: corner brackets around it or a crosshair at its centre. The building block for tracking overlays. |
+| Draw Ticks | `node.draw_ticks` | Filter | Draws small measurement-style tick marks beside every tracked object. |
 | Luminance | `node.luminance` | Control | Measures the average brightness of the image and outputs it as a single number. Wire it into a knob to make an effect react to how bright the picture is. |
 | Optical Flow | `node.optical_flow_estimate` | Filter | Measures how the image is moving between frames and outputs that motion as a flow field. Drive a displace or advect with it to push pixels along the motion. |
 | Peak | `node.peak` | Control | Measures the brightest point in the image and outputs it as a single number. Reacts to the highlights rather than the overall brightness. |

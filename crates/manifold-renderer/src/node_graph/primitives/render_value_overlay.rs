@@ -314,6 +314,17 @@ fn fs_main(v: VsOut) -> @location(0) vec4<f32> {
 "#;
 
 impl Primitive for RenderValueOverlay {
+    // Data-driven skip: zero detections means zero labels — the executor
+    // aliases `in` → `out` (live source flows through at zero GPU cost)
+    // while the wired positions array stays empty.
+    fn empty_skip_input_ports(&self) -> &'static [&'static str] {
+        &["positions"]
+    }
+
+    fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
+        Some(("in", "out"))
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let format_idx = match ctx.params.get("format") {
             Some(ParamValue::Enum(v)) => *v,

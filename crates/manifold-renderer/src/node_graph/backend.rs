@@ -265,6 +265,11 @@ pub struct MockBackend {
     lights: AHashMap<Slot, Light>,
     /// Material values written via [`Backend::set_material`] — same shape.
     materials: AHashMap<Slot, Material>,
+    /// Skip-passthrough aliases installed this frame via
+    /// [`Backend::alias_2d`]. Mock has no textures to re-point; recording
+    /// the pairs (and returning `true`) lets executor tests observe the
+    /// alias path the way `MetalBackend` takes it.
+    skip_aliases: Vec<(Slot, Slot)>,
 }
 
 impl MockBackend {
@@ -277,7 +282,13 @@ impl MockBackend {
             cameras: AHashMap::default(),
             lights: AHashMap::default(),
             materials: AHashMap::default(),
+            skip_aliases: Vec::new(),
         }
+    }
+
+    /// Skip-passthrough aliases installed this frame (test observation).
+    pub fn skip_aliases(&self) -> &[(Slot, Slot)] {
+        &self.skip_aliases
     }
 }
 
@@ -374,6 +385,15 @@ impl Backend for MockBackend {
 
     fn set_material(&mut self, slot: Slot, value: Material) {
         self.materials.insert(slot, value);
+    }
+
+    fn alias_2d(&mut self, src_slot: Slot, dst_slot: Slot) -> bool {
+        self.skip_aliases.push((src_slot, dst_slot));
+        true
+    }
+
+    fn clear_skip_aliases(&mut self) {
+        self.skip_aliases.clear();
     }
 }
 

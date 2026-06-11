@@ -386,6 +386,26 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::skip_passthrough_ports`](crate::node_graph::effect_node::EffectNode::skip_passthrough_ports).
+    /// Draw/overlay primitives that composite onto a source texture
+    /// declare `Some((in_port, out_port))` so the executor's data-driven
+    /// skip can alias the live source through instead of freezing a stale
+    /// copy. Default: `None`.
+    fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+
+    /// Mirror of
+    /// [`EffectNode::skip_passthrough`](crate::node_graph::effect_node::EffectNode::skip_passthrough).
+    /// Per-frame param-driven no-op declaration. Default: `None`.
+    fn skip_passthrough(
+        &self,
+        _params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(&'static str, &'static str)> {
+        None
+    }
+
+    /// Mirror of
     /// [`EffectNode::selected_input_branch`](crate::node_graph::effect_node::EffectNode::selected_input_branch).
     /// Mux-family primitives override to return the selected input
     /// port name (e.g. `"in_2"` for mux selector=2). See the
@@ -612,6 +632,15 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn empty_skip_input_ports(&self) -> &'static [&'static str] {
         Primitive::empty_skip_input_ports(self)
+    }
+    fn skip_passthrough_ports(&self) -> Option<(&'static str, &'static str)> {
+        Primitive::skip_passthrough_ports(self)
+    }
+    fn skip_passthrough(
+        &self,
+        params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(&'static str, &'static str)> {
+        Primitive::skip_passthrough(self, params)
     }
     fn wgsl_body(&self) -> Option<&'static str> {
         P::WGSL_BODY

@@ -73,10 +73,19 @@ crate::primitive! {
     extra_fields: {
         tracked: Vec<TrackedItem> = Vec::new(),
         tracked_count: usize = 0,
+        ran_once: bool = false,
     },
 }
 
 impl Primitive for TrackPersist {
+    // Data-driven skip, reporter side: zero live tracks (grace frames
+    // included — a track in grace still counts) reports empty, so
+    // downstream `empty_skip_input_ports` declarers can skip. The
+    // tracker itself always runs (aging is its job).
+    fn reports_empty_output(&self) -> bool {
+        self.ran_once && self.tracked_count == 0
+    }
+
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -226,6 +235,7 @@ impl Primitive for TrackPersist {
             out_floats[i * 4 + 2] = 0.0;
             out_floats[i * 4 + 3] = 0.0;
         }
+        self.ran_once = true;
     }
 }
 
