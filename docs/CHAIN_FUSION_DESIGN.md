@@ -184,6 +184,13 @@ exactly this: blown-white quad-mirrored frames frozen in the loop after toggling
 Mirror / Infrared off, with no escape. Toggling is an intentional look change; the reset
 is the escape hatch.
 
+**Upstream-prefix gate (same day, second on-stage repro):** per card, the harvest also
+requires the ordered sequence of cards *before* this one to be unchanged — a stateful
+card's state is a picture of its upstream chain, so an upstream reorder resets exactly
+that card while downstream reorders carry. Identity is EffectId (not content key), so
+upstream value edits carry and the trail evolves with the tweak. Net semantics: carry =
+same card set + same upstream order + own content unchanged + same dimensions.
+
 **The swap-in rebuild is user-invisible, so it must be state-invisible.** Rebuilds today
 recreate every primitive instance and a fresh `StateStore` — acceptable when the user
 caused the rebuild, not when the compiler did. `try_build` gains a `prior` runtime:
