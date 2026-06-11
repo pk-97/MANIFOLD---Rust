@@ -395,7 +395,13 @@ fn cs_dnn_depth_post(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= u32(dims.x) || id.y >= u32(dims.y) { return; }
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
 
-    let depth_current = textureSampleLevel(main_tex, samp, uv, 0.0).r;
+    // The DNN delivers MiDaS nearness (near = 1, far = 0); every
+    // consumer pass downstream (near_band, depth_fade, semantic body
+    // evidence, perspective z) is written for DISTANCE (near = 0).
+    // Flip once here, where DNN depth enters the pipeline. The Unity
+    // original had the same mismatch but no model was ever installed
+    // on the Rust rigs, so it went unobserved until 2026-06-11.
+    let depth_current = 1.0 - textureSampleLevel(main_tex, samp, uv, 0.0).r;
     let depth_prev = textureSampleLevel(prev_depth_tex, samp, uv, 0.0).r;
     let depth_smoothed = mix(depth_current, depth_prev, u.temporal_smooth * 0.85);
     let depth_value = clamp(depth_smoothed, 0.0, 1.0);

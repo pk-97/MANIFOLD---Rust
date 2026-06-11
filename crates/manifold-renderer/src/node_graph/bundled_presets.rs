@@ -662,4 +662,297 @@ mod tests {
             "smoothing_y output ({value}) too small to produce visible drift",
         );
     }
+
+    /// Manual diagnostic, never run in CI. Pumps real photo frames
+    /// through WireframeDepthGraph with the live DNN plugin and dumps
+    /// every node output to /tmp/wd_diag/ as BMP plus channel stats,
+    /// so graph-vs-legacy drift can be inspected without driving the
+    /// full app.
+    ///
+    /// Setup: put a 24/32-bit BMP at /tmp/wd_diag/source.bmp, e.g.
+    ///   sips -s format bmp -z 540 960 photo.heic --out /tmp/wd_diag/source.bmp
+    /// Run:
+    ///   cargo test -p manifold-renderer --lib \
+    ///     wireframe_depth_graph_dump_intermediates -- --ignored --nocapture
+    #[test]
+    #[ignore = "manual diagnostic: needs DNN plugin + /tmp/wd_diag/source.bmp"]
+    fn wireframe_depth_graph_dump_intermediates() {
+        use crate::node_graph::boundary_nodes::{FinalOutput, Source};
+        use crate::node_graph::chain_spec::splice_def_into_chain;
+        use crate::node_graph::effect_node::FrameTime;
+        use crate::node_graph::execution::Executor;
+        use crate::node_graph::execution_plan::ResourceId;
+        use crate::node_graph::graph::Graph;
+        use crate::node_graph::metal_backend::MetalBackend;
+        use crate::node_graph::ports::PortType;
+        use crate::node_graph::state_store::StateStore;
+        use crate::render_target::RenderTarget;
+        use manifold_core::{Beats, Seconds};
+        use manifold_gpu::GpuTextureFormat;
+
+        // Minimal 24/32-bit uncompressed BMP decode → RGBA8 top-down.
+        fn parse_bmp(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
+            assert!(bytes.len() > 54 && &bytes[0..2] == b"BM", "not a BMP");
+            let u32le = |o: usize| u32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
+            let i32le = |o: usize| i32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
+            let off = u32le(10) as usize;
+            let w = i32le(18).unsigned_abs();
+            let h_raw = i32le(22);
+            let h = h_raw.unsigned_abs();
+            let bpp = u16::from_le_bytes(bytes[28..30].try_into().unwrap()) as usize;
+            assert!(bpp == 24 || bpp == 32, "unsupported BMP bpp {bpp}");
+            let row_bytes = (w as usize * (bpp / 8) + 3) & !3;
+            let mut rgba = vec![0u8; (w * h) as usize * 4];
+            for y in 0..h as usize {
+                let src_y = if h_raw > 0 { h as usize - 1 - y } else { y };
+                let row = off + src_y * row_bytes;
+                for x in 0..w as usize {
+                    let p = row + x * (bpp / 8);
+                    let d = (y * w as usize + x) * 4;
+                    rgba[d] = bytes[p + 2];
+                    rgba[d + 1] = bytes[p + 1];
+                    rgba[d + 2] = bytes[p];
+                    rgba[d + 3] = 255;
+                }
+            }
+            (w, h, rgba)
+        }
+
+        // RGBA8 top-down → 24-bit BMP file.
+        fn write_bmp(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) {
+            let row_bytes = (w as usize * 3 + 3) & !3;
+            let data_size = row_bytes * h as usize;
+            let mut out = Vec::with_capacity(54 + data_size);
+            out.extend_from_slice(b"BM");
+            out.extend_from_slice(&(54u32 + data_size as u32).to_le_bytes());
+            out.extend_from_slice(&[0; 4]);
+            out.extend_from_slice(&54u32.to_le_bytes());
+            out.extend_from_slice(&40u32.to_le_bytes());
+            out.extend_from_slice(&(w as i32).to_le_bytes());
+            out.extend_from_slice(&(h as i32).to_le_bytes());
+            out.extend_from_slice(&1u16.to_le_bytes());
+            out.extend_from_slice(&24u16.to_le_bytes());
+            out.extend_from_slice(&[0; 24]);
+            for y in (0..h as usize).rev() {
+                let start = out.len();
+                for x in 0..w as usize {
+                    let s = (y * w as usize + x) * 4;
+                    out.push(rgba[s + 2]);
+                    out.push(rgba[s + 1]);
+                    out.push(rgba[s]);
+                }
+                out.resize(start + row_bytes, 0);
+            }
+            std::fs::write(path, out).unwrap();
+        }
+
+        let dump_dir = std::path::Path::new("/tmp/wd_diag");
+        let bmp_bytes = std::fs::read(dump_dir.join("source.bmp"))
+            .expect("place a BMP at /tmp/wd_diag/source.bmp (see doc comment)");
+        let (w, h, src_rgba) = parse_bmp(&bmp_bytes);
+        eprintln!("source: {w}x{h}");
+
+        // Point the FFI loader at the repo's plugin bundle — the
+        // exe-relative search doesn't find it from a test binary.
+        let plugin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/plugins/DepthEstimator.bundle/Contents/MacOS/DepthEstimator");
+        if plugin.exists() {
+            unsafe { std::env::set_var("MANIFOLD_DEPTHESTIMATOR_PLUGIN", &plugin) };
+        } else {
+            eprintln!("WARNING: no plugin at {plugin:?} — DNN outputs will stay black");
+        }
+        let depth_model = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/plugins/DepthEstimator/models/midas_small.onnx");
+        if depth_model.exists() {
+            unsafe { std::env::set_var("MANIFOLD_DEPTH_MODEL", &depth_model) };
+        } else {
+            eprintln!("WARNING: no depth model at {depth_model:?} — depth will stay black");
+        }
+
+        let device = crate::test_device();
+        let registry = PrimitiveRegistry::with_builtin();
+        let canvas_format = GpuTextureFormat::Rgba16Float;
+
+        let type_id = bundled_preset_type_ids(PresetKind::Effect)
+            .into_iter()
+            .find(|t| t.as_str() == "WireframeDepthGraph")
+            .expect("WireframeDepthGraph bundled");
+        let def = bundled_preset_def(&type_id).expect("def loads");
+
+        let mut chain = Graph::new();
+        let src = chain.add_node(Box::new(Source::new()));
+        let result = splice_def_into_chain(&mut chain, (src, "out"), def, &registry)
+            .expect("splice");
+        let final_out = chain.add_node(Box::new(FinalOutput::new()));
+        chain.connect(result.output, (final_out, "in")).unwrap();
+        let plan = compile(&chain).expect("compile");
+
+        // node label per instance: doc node_id when present, else type.
+        let labels: std::collections::HashMap<_, String> = chain
+            .nodes()
+            .map(|n| {
+                let doc = n.node_id.as_str();
+                let label = if doc.is_empty() {
+                    n.node.type_id().as_str().replace("node.", "")
+                } else {
+                    doc.to_string()
+                };
+                (n.id, label)
+            })
+            .collect();
+
+        let r_src = plan
+            .steps()
+            .iter()
+            .find(|s| s.node == src)
+            .and_then(|s| s.outputs.iter().find(|(n, _)| *n == "out"))
+            .map(|(_, id)| *id)
+            .expect("source resource");
+
+        let mut backend = MetalBackend::new(&device, w, h, canvas_format);
+
+        // Source: photo → CPU_UPLOAD staging (replaceRegion needs
+        // host-visible storage; RenderTarget::new allocates private),
+        // then one blit into the pre-bound source target.
+        let src_upload = device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba8Unorm,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
+                | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
+            label: "wd-diag-src-upload",
+            mip_levels: 1,
+        });
+        device.upload_texture(&src_upload, &src_rgba);
+        let src_target =
+            RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba8Unorm, "wd-diag-src");
+        {
+            let mut enc = device.create_encoder("wd-diag-src-blit");
+            {
+                let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut enc, &device);
+                gpu.copy_texture_to_texture(&src_upload, &src_target.texture, w, h);
+            }
+            enc.commit_and_wait_completed();
+        }
+        backend.pre_bind_texture_2d(r_src, src_target);
+
+        // Pre-bind EVERY other Texture2D resource at its plan-resolved
+        // dims/format. Pinned slots are never released or recycled, so
+        // after the last frame each node's final output is still
+        // readable via slot_for. Mirrors execution::resolve_dims.
+        let mut dump_slots: Vec<(ResourceId, crate::node_graph::bindings::Slot, (u32, u32))> =
+            Vec::new();
+        for i in 0..plan.resource_count() {
+            let rid = ResourceId(i as u32);
+            if rid == r_src || plan.resource_type(rid) != Some(PortType::Texture2D) {
+                continue;
+            }
+            let dims = plan.resource_dims(rid).unwrap_or_else(|| {
+                if let Some((num, den)) = plan.resource_canvas_scale(rid)
+                    && den != 0
+                {
+                    (
+                        ((w as u64 * num as u64 / den as u64).max(1)) as u32,
+                        ((h as u64 * num as u64 / den as u64).max(1)) as u32,
+                    )
+                } else {
+                    (w, h)
+                }
+            });
+            let format = plan.resource_format(rid).unwrap_or(canvas_format);
+            let rt = RenderTarget::new(&device, dims.0, dims.1, format, "wd-diag-dump");
+            let slot = backend.pre_bind_texture_2d(rid, rt);
+            if format == GpuTextureFormat::Rgba16Float {
+                dump_slots.push((rid, slot, dims));
+            }
+        }
+
+        let mut exec = Executor::new(Box::new(backend));
+        let mut state = StateStore::new();
+
+        // Pump frames with wall-clock gaps so readbacks complete and
+        // the background DNN workers get inference turns.
+        let frames = 300i64;
+        for i in 0..frames {
+            let frame_time = FrameTime {
+                beats: Beats(i as f64 * 2.0 / 60.0),
+                seconds: Seconds(i as f64 / 60.0),
+                delta: Seconds(1.0 / 60.0),
+                frame_count: i,
+            };
+            let mut native_enc = device.create_encoder("wd-diag-frame");
+            {
+                let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut native_enc, &device);
+                exec.execute_frame_with_state(&mut chain, &plan, frame_time, &mut gpu, &mut state, 0);
+            }
+            native_enc.commit_and_wait_completed();
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+
+        // Dump every step's Texture2D outputs: stats + BMP.
+        let mut step_idx = 0usize;
+        for step in plan.steps() {
+            for &(port, rid) in &step.outputs {
+                let Some((_, slot, dims)) =
+                    dump_slots.iter().find(|(r, _, _)| *r == rid).copied()
+                else {
+                    continue;
+                };
+                let Some(tex) = exec.backend().texture_2d(slot) else {
+                    continue;
+                };
+                let (dw, dh) = dims;
+                let bytes_per_row = dw * 8;
+                let total = u64::from(dh * bytes_per_row);
+                let buf = device.create_buffer_shared(total);
+                let mut enc = device.create_encoder("wd-diag-read");
+                enc.copy_texture_to_buffer(tex, &buf, dw, dh, bytes_per_row);
+                enc.commit_and_wait_completed();
+                let ptr = buf.mapped_ptr().expect("shared buffer");
+                let halves: &[u16] = unsafe {
+                    std::slice::from_raw_parts(ptr.cast::<u16>(), (dw * dh * 4) as usize)
+                };
+
+                let mut mins = [f32::INFINITY; 4];
+                let mut maxs = [f32::NEG_INFINITY; 4];
+                let mut sums = [0f64; 4];
+                let mut nans = 0usize;
+                let mut rgba = vec![0u8; (dw * dh * 4) as usize];
+                for px in 0..(dw * dh) as usize {
+                    for c in 0..4 {
+                        let v = half::f16::from_bits(halves[px * 4 + c]).to_f32();
+                        if v.is_finite() {
+                            mins[c] = mins[c].min(v);
+                            maxs[c] = maxs[c].max(v);
+                            sums[c] += v as f64;
+                        } else {
+                            nans += 1;
+                        }
+                        rgba[px * 4 + c] = (v.clamp(0.0, 1.0) * 255.0) as u8;
+                    }
+                }
+                let n = (dw * dh) as f64;
+                let label = labels.get(&step.node).cloned().unwrap_or_default();
+                eprintln!(
+                    "[{step_idx:02}] {label}.{port} {dw}x{dh}  \
+                     R[{:.3},{:.3}]m{:.3} G[{:.3},{:.3}]m{:.3} \
+                     B[{:.3},{:.3}]m{:.3} A[{:.3},{:.3}]m{:.3} nan={nans}",
+                    mins[0], maxs[0], sums[0] / n,
+                    mins[1], maxs[1], sums[1] / n,
+                    mins[2], maxs[2], sums[2] / n,
+                    mins[3], maxs[3], sums[3] / n,
+                );
+                write_bmp(
+                    &dump_dir.join(format!("{step_idx:02}_{label}_{port}.bmp")),
+                    dw,
+                    dh,
+                    &rgba,
+                );
+            }
+            step_idx += 1;
+        }
+        eprintln!("dumps written to /tmp/wd_diag/");
+    }
 }
