@@ -1632,7 +1632,8 @@ impl PresetRuntime {
                     .map(|(_, id)| *id)
             })
         };
-        let mut moves: Vec<(ResourceId, GpuTexture)> = Vec::new();
+        // (new persistent resource, old persistent resource) pairs.
+        let mut moves: Vec<(ResourceId, ResourceId)> = Vec::new();
         for &res in self.plan.persistent_resources() {
             // Producing (node, port) of this persistent resource in the new plan.
             let Some((n_inst, port)) = self.plan.steps().iter().find_map(|s| {
@@ -1649,37 +1650,50 @@ impl PresetRuntime {
             let Some(o_res) = producer_of(&prior.plan, o_inst, port) else {
                 continue;
             };
-            let old_backend = prior.executor.backend();
-            let Some(tex) = old_backend
-                .slot_for(o_res)
-                .and_then(|s| old_backend.texture_2d(s))
-                .cloned()
-            else {
-                continue;
-            };
-            moves.push((res, tex));
+            moves.push((res, o_res));
         }
         if moves.is_empty() {
             return;
         }
-        let Some(metal) = self
+        // MOVE the owned RenderTargets across backends. Ownership (and pool
+        // bookkeeping) transfers with the target; the prior runtime is being
+        // dropped, so its emptied slots never render again. NEVER install via
+        // `replace_texture_2d` here — that records a borrowed SHADOW over the
+        // slot, and the feedback ping-pong's `swap_texture_2d` refuses
+        // shadowed slots, freezing the trail with per-frame swap errors.
+        let Some(old_metal) = prior
             .executor
             .backend_mut()
             .as_any_mut()
             .and_then(|a| a.downcast_mut::<MetalBackend>())
         else {
-            return; // mock backend — nothing to install
+            return; // mock backend — nothing to move
+        };
+        let Some(new_metal) = self
+            .executor
+            .backend_mut()
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<MetalBackend>())
+        else {
+            return;
         };
         let mut installed = 0usize;
         let total = moves.len();
         let mut installed_res: Vec<ResourceId> = Vec::with_capacity(total);
-        for (res, tex) in moves {
-            if let Some(slot) = crate::node_graph::Backend::slot_for(metal, res)
-                && metal.replace_texture_2d(slot, tex)
-            {
-                installed += 1;
-                installed_res.push(res);
-            }
+        for (res, o_res) in moves {
+            let Some(old_slot) = crate::node_graph::Backend::slot_for(old_metal, o_res) else {
+                continue;
+            };
+            let Some(new_slot) = crate::node_graph::Backend::slot_for(new_metal, res) else {
+                continue;
+            };
+            let Some(rt) = old_metal.take_render_target(old_slot) else {
+                continue;
+            };
+            // The displaced fresh target drops here (pooled → returns to pool).
+            let _fresh = new_metal.swap_texture_2d(new_slot, rt);
+            installed += 1;
+            installed_res.push(res);
         }
         // The fresh executor would clear-to-black each persistent slot on
         // first acquisition — mark the carried ones initialized instead.
@@ -1687,7 +1701,7 @@ impl PresetRuntime {
             self.executor.mark_persistent_initialized(res);
         }
         if std::env::var("MANIFOLD_LOG_HARVEST").is_ok() {
-            eprintln!("[harvest] persistent textures installed {installed}/{total}");
+            eprintln!("[harvest] persistent targets moved {installed}/{total}");
         }
     }
 
@@ -5228,19 +5242,25 @@ mod chain_fusion_tests {
         };
 
         const WARM: usize = 6;
-        // Reference: never rebuilt, runs WARM+1 frames.
+        // Three post-rebuild frames, not one: a frozen ping-pong (the
+        // shadowed-slot swap-failure class) still shows the carried trail on
+        // frame 1 and only diverges once the state should have ADVANCED.
+        const TAIL: usize = 3;
+        // Reference: never rebuilt, runs WARM+TAIL frames.
         let mut reference = build(None);
-        for _ in 0..=WARM {
+        for _ in 0..WARM + TAIL {
             run_once(&mut reference, &device, &input, &effects, &pc);
         }
 
-        // Harvested: WARM frames, rebuild WITH the prior, one more frame.
+        // Harvested: WARM frames, rebuild WITH the prior, TAIL more frames.
         let mut donor = build(None);
         for _ in 0..WARM {
             run_once(&mut donor, &device, &input, &effects, &pc);
         }
         let mut harvested = build(Some(&mut donor));
-        run_once(&mut harvested, &device, &input, &effects, &pc);
+        for _ in 0..TAIL {
+            run_once(&mut harvested, &device, &input, &effects, &pc);
+        }
 
         // Reset: WARM frames, rebuild WITHOUT the prior, one more frame.
         let mut fresh_donor = build(None);

@@ -302,6 +302,18 @@ impl MetalBackend {
         self.textures_2d.insert(slot, new)
     }
 
+    /// Remove and return the owned `RenderTarget` at a slot, leaving the
+    /// slot empty. Used by the state harvest to MOVE a persistent target (a
+    /// feedback trail) out of a dying runtime's backend into the rebuilt
+    /// one — ownership and pool bookkeeping transfer, and crucially the
+    /// destination slot stays an OWNED target. (A `replace_texture_2d`
+    /// borrow would shadow the slot, making the feedback ping-pong's
+    /// `Backend::swap_texture_2d` refuse every frame — the frozen-trail /
+    /// "swap failed" spam class.)
+    pub fn take_render_target(&mut self, slot: Slot) -> Option<RenderTarget> {
+        self.textures_2d.remove(&slot)
+    }
+
     /// Allocate a fresh slot with the supplied `target`. Unlike
     /// [`Self::pre_bind_texture_2d`] this does **not** bind any
     /// `ResourceId` to the slot — callers wire resources up
