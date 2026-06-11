@@ -10,8 +10,11 @@
 //!
 //! Output: Rgba16Float texture where R = G = B = person probability
 //! (0 = background, 1 = person; bilinear-upsampled from analysis
-//! resolution), A = 1. Same channel layout as `depth_estimate_midas`
-//! so they compose interchangeably as mask inputs.
+//! resolution). A is the availability gate: 0 until the first
+//! inference completes, 1 afterwards — consumers check it to tell a
+//! real "no person" mask apart from "no mask yet". R/G/B layout
+//! matches `depth_estimate_midas` so they compose interchangeably
+//! as mask inputs.
 //!
 //! Temporal blending (worker-side, α = 0.55 by default matching the
 //! legacy WireframeDepth contract) reduces noise *before* the GPU
@@ -32,6 +35,7 @@ use manifold_gpu::{
 use manifold_native::depth_estimator::DepthEstimator;
 
 use crate::background_worker::BackgroundWorker;
+use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -72,7 +76,7 @@ struct MaskState {
 crate::primitive! {
     name: PersonSegment,
     type_id: "node.person_segment",
-    purpose: "Person / human segmentation via the native plugin's process_subject_mask API. Detects PEOPLE specifically (selfie / human / person model variants), not generic salient objects. Input: any Texture2D frame. Output: Rgba16Float mask where R = G = B = person probability ∈ [0, 1] (0 = background, 1 = person), A = 1. Inference runs on a background worker with ~2-3 frame latency. Temporal blending (α = 0.55 default) reduces noise worker-side before upload — matches the legacy WireframeDepth contract. Same channel pack as depth_estimate_midas so they compose interchangeably as mask inputs.",
+    purpose: "Person / human segmentation via the native plugin's process_subject_mask API. Detects PEOPLE specifically (selfie / human / person model variants), not generic salient objects. Input: any Texture2D frame. Output: Rgba16Float mask where R = G = B = person probability ∈ [0, 1] (0 = background, 1 = person); A = 0 until the first inference completes, 1 afterwards (availability gate). Inference runs on a background worker with ~2-3 frame latency. Temporal blending (α = 0.55 default) reduces noise worker-side before upload — matches the legacy WireframeDepth contract. Same channel pack as depth_estimate_midas so they compose interchangeably as mask inputs.",
     inputs: {
         in: Texture2D required,
     },
@@ -180,11 +184,12 @@ impl PersonSegment {
 
     fn ensure_mask_state(
         &mut self,
-        device: &manifold_gpu::GpuDevice,
+        gpu: &mut GpuEncoder,
         width: u32,
         height: u32,
         analysis_max_dim: u32,
     ) {
+        let device = gpu.device;
         let max_dim = width.max(height);
         let scale = if max_dim == 0 {
             1.0
@@ -202,16 +207,23 @@ impl PersonSegment {
             return;
         }
         let pixel_count = (aw * ah) as usize;
+        // Rgba8Unorm to match the u8 scalar pack in run(). upload_texture
+        // derives bytesPerRow from the texture FORMAT, so a wider format
+        // here makes Metal reinterpret the u8 rows as f16 garbage.
         let mask_texture = device.create_texture(&GpuTextureDesc {
             width: aw,
             height: ah,
             depth: 1,
-            format: GpuTextureFormat::Rgba16Float,
+            format: GpuTextureFormat::Rgba8Unorm,
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
             label: "node.person_segment.mask",
             mip_levels: 1,
         });
+        // Clear so alpha reads 0 until the first real mask upload — the
+        // upsample pass forwards this alpha as the "DNN mask available"
+        // gate consumers like WireframeDepthGraph's wire pass rely on.
+        gpu.clear_texture(&mask_texture, 0.0, 0.0, 0.0, 0.0);
         let staging_texture = device.create_texture(&GpuTextureDesc {
             width: aw,
             height: ah,
@@ -266,7 +278,7 @@ impl Primitive for PersonSegment {
 
         let gpu = ctx.gpu_encoder();
         self.ensure_mask_worker();
-        self.ensure_mask_state(gpu.device, source.width, source.height, analysis_max_dim);
+        self.ensure_mask_state(gpu, source.width, source.height, analysis_max_dim);
 
         if let (Some(ms), Some(mw)) = (self.mask_state.as_mut(), self.mask_worker.as_mut()) {
             // Poll readback → submit to worker.

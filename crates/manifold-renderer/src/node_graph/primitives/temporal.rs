@@ -52,6 +52,14 @@ crate::primitive! {
     aliases: ["feedback", "frame delay", "trails", "Feedback TOP"],
     extra_fields: {
         output_format_override: Option<GpuTextureFormat> = None,
+        // `outputCanvasScales` from the preset JSON. Feedback state for
+        // an analysis-tier loop (WireframeDepthGraph's prev_depth /
+        // prev_mesh_coord / etc.) must live at the producer's reduced
+        // resolution — a canvas-sized state slot both wastes memory and
+        // breaks the first-allocation seed copy, which is a same-size
+        // blit. Matching dims also lets late_capture take the zero-copy
+        // swap path instead of the bridge dispatch.
+        output_canvas_scale_out: Option<(u32, u32)> = None,
         // Phase 3c cross-format copy pipeline (one variant per dst
         // format; lazy-compiled on first use). Used when the wire
         // entering `in` carries a different pixel format than the
@@ -117,6 +125,24 @@ impl Primitive for Feedback {
     fn set_output_format(&mut self, port: &str, format: GpuTextureFormat) {
         if port == "out" {
             self.output_format_override = Some(format);
+        }
+    }
+
+    fn output_canvas_scale(
+        &self,
+        port: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(u32, u32)> {
+        if port == "out" {
+            self.output_canvas_scale_out
+        } else {
+            None
+        }
+    }
+
+    fn set_output_canvas_scale(&mut self, port: &str, scale: (u32, u32)) {
+        if port == "out" {
+            self.output_canvas_scale_out = Some(scale);
         }
     }
 
