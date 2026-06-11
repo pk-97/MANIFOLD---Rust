@@ -143,6 +143,33 @@ pub fn concat_defs(cards: &[&EffectGraphDef]) -> Option<EffectGraphDef> {
     })
 }
 
+/// Segment eligibility: a card may join a segment only when its (flattened)
+/// def carries NO cross-frame state — no state-capture loop, no aliased
+/// in-place buffer IO. Stateful cards stay segment boundaries because segment
+/// node-id prefixes are positional: prefixing a feedback node's `NodeId` would
+/// key its state by chain position, and moving a neighbouring card would then
+/// perturb it (the exact thing the design forbids). Unknown node types fail
+/// closed.
+pub(crate) fn def_is_segment_stateless(
+    def: &EffectGraphDef,
+    registry: &crate::node_graph::PrimitiveRegistry,
+) -> bool {
+    let Ok(flat) = manifold_core::flatten::flatten_groups(def) else {
+        return false;
+    };
+    flat.nodes.iter().all(|n| {
+        if n.type_id == SOURCE_TYPE_ID || n.type_id == FINAL_OUTPUT_TYPE_ID {
+            return true;
+        }
+        match crate::node_graph::freeze::region::configured_construct(registry, n) {
+            Some(node) => {
+                node.state_capture_input_ports().is_empty() && node.aliased_array_io().is_empty()
+            }
+            None => false,
+        }
+    })
+}
+
 fn single_node_of_type(def: &EffectGraphDef, type_id: &str) -> Option<u32> {
     let mut it = def.nodes.iter().filter(|n| n.type_id == type_id);
     let id = it.next()?.id;

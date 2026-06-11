@@ -381,6 +381,340 @@ pub fn fused_generator_def_for(def: &EffectGraphDef) -> Option<&'static EffectGr
 }
 
 // ===========================================================================
+// Cross-card chain fusion (docs/CHAIN_FUSION_DESIGN.md).
+//
+// A chain is already ONE runtime graph; fusion just ran per card def, so every
+// card seam paid a full-canvas round-trip. A SEGMENT is a maximal run of ≥2
+// adjacent eligible cards; its defs concatenate (freeze::segment) into one
+// namespaced def that the EXISTING pipeline fuses — a region spanning a seam
+// is just a region. Compilation + gate measurement run on a background worker:
+// the chain renders per-card (today's path, byte-identical) the moment a
+// segment is requested, and swaps to the fused segment on a later rebuild once
+// the worker delivers a measured win. Fail-closed everywhere: any refusal —
+// malformed card, stranded binding, no seam-spanning region, gate loss, build
+// failure — negative-caches and the chain stays per-card forever (never-worse).
+// ===========================================================================
+
+/// Fused view of one chain segment. Leaked `&'static` like every fused
+/// artifact (bounded by [`FUSED_CACHE_CAP`]).
+pub struct SegmentView {
+    /// The fused concatenated def — an ordinary Source→…→FinalOutput effect
+    /// def, spliced into the chain ONCE in place of the member cards' splices.
+    pub def: &'static EffectGraphDef,
+    /// Per-card static bindings (same order as the segment's cards), already
+    /// namespaced (`c{i}.`) and retargeted onto the fused nodes. Each card's
+    /// `EffectSlot` resolves its own slice against the segment splice, so
+    /// every slider / MIDI map / envelope keeps its own card's
+    /// `param_values` lane.
+    pub card_bindings: Vec<Vec<ParamBinding>>,
+    /// `(prefixed node_id, param) → (fused node id, uniform field)` — the
+    /// user-binding repoint map. Chain build prefixes a user binding's target
+    /// with its card's namespace before the lookup.
+    pub retarget: AHashMap<(String, String), (NodeId, String)>,
+}
+
+/// Lookup outcome for a segment this frame.
+pub enum SegmentLookup {
+    /// Compiled, measured, won its gate — splice it.
+    Ready(&'static SegmentView),
+    /// Compile/measure in flight on the worker — render per-card, a later
+    /// rebuild swaps in.
+    Pending,
+    /// Refused (no seam-spanning region, stranded binding, build failure, or
+    /// measured loss) — render per-card, permanently for this content.
+    Refused,
+}
+
+/// Chain-fusion kill switch, layered on the master [`freeze_enabled`] switch.
+/// `MANIFOLD_CHAIN_FUSION=0` renders every chain per-card while leaving
+/// per-card fusion intact.
+pub fn chain_fusion_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    freeze_enabled()
+        && *ENABLED.get_or_init(|| match std::env::var("MANIFOLD_CHAIN_FUSION") {
+            Ok(v) => {
+                !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no")
+            }
+            Err(_) => true,
+        })
+}
+
+/// Segment identity: positional hash of the member cards' def content keys.
+/// Equivalent discriminative power to hashing the concatenated def (the
+/// namespacing is positional), without building the concat on every lookup.
+pub fn segment_key(cards: &[(&EffectGraphDef, &'static LoadedPresetView)]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = ahash::AHasher::default();
+    cards.len().hash(&mut h);
+    for (def, _) in cards {
+        def_content_key(def).hash(&mut h);
+    }
+    h.finish()
+}
+
+thread_local! {
+    /// Content-keyed segment cache (content thread). `Some` = ready winner,
+    /// `None` = refused (negative cache).
+    static SEGMENT_CACHE: std::cell::RefCell<AHashMap<u64, Option<&'static SegmentView>>> =
+        std::cell::RefCell::new(AHashMap::default());
+    /// Keys currently in flight on the worker — dedupes enqueues across the
+    /// rebuilds that happen while a compile is pending.
+    static SEGMENT_PENDING: std::cell::RefCell<AHashSet<u64>> =
+        std::cell::RefCell::new(AHashSet::default());
+}
+
+/// Bumped once per worker result landed by [`pump_segment_results`]. A runtime
+/// built while any of its segments were `Pending` records the generation it
+/// saw; the dispatcher rebuilds it when this advances (the swap-in trigger).
+static SEGMENT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn segment_generation() -> u64 {
+    SEGMENT_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+struct SegmentJob {
+    key: u64,
+    /// Owned def clones — the live defs can mutate under editing while the
+    /// worker runs.
+    cards: Vec<(EffectGraphDef, &'static LoadedPresetView)>,
+}
+
+struct SegmentResult {
+    key: u64,
+    view: Option<&'static SegmentView>,
+}
+
+struct SegmentWorker {
+    tx: std::sync::mpsc::Sender<SegmentJob>,
+    /// Drained only by the content thread ([`pump_segment_results`]); the
+    /// Mutex exists solely because `OnceLock` requires `Sync` — it is never
+    /// contended.
+    rx: std::sync::Mutex<std::sync::mpsc::Receiver<SegmentResult>>,
+}
+
+/// Set once the worker thread exists, so [`pump_segment_results`] (called
+/// every chain dispatch) is a single relaxed load until the first segment is
+/// actually enqueued.
+static WORKER_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn segment_worker() -> &'static SegmentWorker {
+    static WORKER: OnceLock<SegmentWorker> = OnceLock::new();
+    WORKER.get_or_init(|| {
+        WORKER_STARTED.store(true, std::sync::atomic::Ordering::Release);
+        let (tx_job, rx_job) = std::sync::mpsc::channel::<SegmentJob>();
+        let (tx_res, rx_res) = std::sync::mpsc::channel::<SegmentResult>();
+        std::thread::Builder::new()
+            .name("chain-fusion-worker".into())
+            .spawn(move || {
+                // Worker-owned registry + device: codegen is pure CPU; the
+                // gate measurement renders on this device's own queue so a
+                // live frame is never stalled (it may briefly share GPU time
+                // — bounded, one-off per novel segment, while the chain is
+                // already at per-card fallback performance).
+                let registry = PrimitiveRegistry::with_builtin();
+                let device = manifold_gpu::GpuDevice::new();
+                while let Ok(job) = rx_job.recv() {
+                    let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
+                        job.cards.iter().map(|(d, v)| (d, *v)).collect();
+                    let view = compile_segment_view(&card_refs, &registry, Some(&device));
+                    if tx_res.send(SegmentResult { key: job.key, view }).is_err() {
+                        return;
+                    }
+                }
+            })
+            .expect("spawn chain-fusion worker");
+        SegmentWorker {
+            tx: tx_job,
+            rx: std::sync::Mutex::new(rx_res),
+        }
+    })
+}
+
+/// Drain finished segment compiles into the content-thread cache. Call at
+/// chain-dispatch entry, before any rebuild decision. Each landed result bumps
+/// the generation so runtimes holding per-card fallbacks rebuild and pick the
+/// winner up.
+pub fn pump_segment_results() {
+    if !WORKER_STARTED.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    let worker = segment_worker();
+    let rx = worker.rx.lock().expect("segment worker rx poisoned");
+    while let Ok(res) = rx.try_recv() {
+        SEGMENT_CACHE.with(|c| {
+            let mut m = c.borrow_mut();
+            if m.len() < FUSED_CACHE_CAP {
+                m.insert(res.key, res.view);
+            }
+        });
+        SEGMENT_PENDING.with(|p| {
+            p.borrow_mut().remove(&res.key);
+        });
+        SEGMENT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(v) = res.view {
+            eprintln!(
+                "[freeze] chain segment ready: {} cards fused into {} nodes",
+                v.card_bindings.len(),
+                v.def.nodes.len(),
+            );
+        }
+    }
+}
+
+/// Segment lookup for the chain builder. Hit → `Ready`/`Refused`; miss →
+/// enqueue on the worker and report `Pending` (the chain splices per-card this
+/// build). Content thread only.
+pub fn fused_segment_view_for(
+    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+) -> SegmentLookup {
+    let key = segment_key(cards);
+    if let Some(cached) = SEGMENT_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return match cached {
+            Some(view) => SegmentLookup::Ready(view),
+            None => SegmentLookup::Refused,
+        };
+    }
+    let newly_queued = SEGMENT_PENDING.with(|p| p.borrow_mut().insert(key));
+    // Tests must stay deterministic: no worker thread, no 4K gate measurement
+    // contending with the GPU-bound suite. Un-seeded segments stay Pending
+    // forever (per-card render — today's path); fused paths are exercised via
+    // `seed_segment_cache_for_test`.
+    #[cfg(test)]
+    {
+        let _ = newly_queued;
+        return SegmentLookup::Pending;
+    }
+    #[cfg(not(test))]
+    if newly_queued {
+        let job = SegmentJob {
+            key,
+            cards: cards.iter().map(|(d, v)| ((*d).clone(), *v)).collect(),
+        };
+        if segment_worker().tx.send(job).is_err() {
+            // Worker died (startup panic) — refuse rather than wedge Pending.
+            SEGMENT_PENDING.with(|p| {
+                p.borrow_mut().remove(&key);
+            });
+            SEGMENT_CACHE.with(|c| {
+                c.borrow_mut().insert(key, None);
+            });
+            return SegmentLookup::Refused;
+        }
+    }
+    SegmentLookup::Pending
+}
+
+/// Compile (and, when a device is supplied, gate-measure) one segment. Pure
+/// codegen + an isolated measurement — runs on the worker in production and
+/// synchronously in tests (`device: None` skips the gate).
+pub(crate) fn compile_segment_view(
+    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+    registry: &PrimitiveRegistry,
+    gate_device: Option<&manifold_gpu::GpuDevice>,
+) -> Option<&'static SegmentView> {
+    let defs: Vec<&EffectGraphDef> = cards.iter().map(|(d, _)| *d).collect();
+    let concat = super::segment::concat_defs(&defs)?;
+
+    // Require at least one region that actually spans a seam. Without one the
+    // segment buys nothing over the per-card fused views (and would discard
+    // their per-card tuned region masks).
+    let spans_seam = {
+        let regions = partition_regions(&concat, registry);
+        let prefix_of = |doc_id: u32| -> Option<&str> {
+            let nid = concat.nodes.iter().find(|n| n.id == doc_id)?.node_id.as_str();
+            nid.split_once('.').map(|(p, _)| p)
+        };
+        regions.iter().any(|r| {
+            let mut prefixes = AHashSet::default();
+            for m in &r.members {
+                if let Some(p) = prefix_of(m.doc_id) {
+                    prefixes.insert(p);
+                }
+            }
+            prefixes.len() >= 2
+        })
+    };
+    if !spans_seam {
+        return None;
+    }
+
+    let fused = fuse_canonical_def_masked(&concat, registry, None)?;
+    let surviving: AHashSet<String> = fused
+        .def
+        .nodes
+        .iter()
+        .map(|n| resolve_node_id(n).as_str().to_string())
+        .collect();
+
+    // Per-card binding retarget: prefix each card's spec-binding targets into
+    // the segment namespace, then run the standard retarget (strand → refuse).
+    let mut card_bindings: Vec<Vec<ParamBinding>> = Vec::with_capacity(cards.len());
+    for (i, (_, view)) in cards.iter().enumerate() {
+        let prefix = super::segment::card_prefix(i);
+        let prefixed: Vec<ParamBinding> = view
+            .bindings
+            .iter()
+            .map(|b| {
+                let mut nb = b.clone();
+                if let ParamTarget::Node { node_id, param } = &b.target {
+                    nb.target = ParamTarget::Node {
+                        node_id: NodeId::new(format!("{prefix}{}", node_id.as_str())),
+                        param,
+                    };
+                }
+                nb
+            })
+            .collect();
+        // Composite / Custom targets resolve through per-splice handle maps
+        // that don't exist for a segment splice — refuse, render per-card.
+        if prefixed
+            .iter()
+            .any(|b| !matches!(b.target, ParamTarget::Node { .. }))
+        {
+            return None;
+        }
+        card_bindings.push(retarget_bindings(&prefixed, &fused.retarget, &surviving)?);
+    }
+
+    if !fused_def_builds(&fused.def, registry, &fused.expected_spaces) {
+        return None;
+    }
+
+    // Per-region gate, segment edition: fused-all vs the unfused concatenation
+    // (identical dispatches to the per-card chain). Measured on the supplied
+    // device; same margins as every card verdict.
+    if let Some(device) = gate_device {
+        let win = super::perf_gate::measure_segment(device, registry, &concat, &fused.def);
+        if !win {
+            return None;
+        }
+    }
+
+    let FusedDef { def, retarget, .. } = fused;
+    Some(Box::leak(Box::new(SegmentView {
+        def: Box::leak(Box::new(def)),
+        card_bindings,
+        retarget,
+    })))
+}
+
+/// Test/tooling hook: compile a segment synchronously (no gate) and seed the
+/// content-thread cache, so integration tests exercise the Ready path without
+/// the worker's asynchrony.
+#[cfg(test)]
+pub(crate) fn seed_segment_cache_for_test(
+    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
+    registry: &PrimitiveRegistry,
+) -> Option<&'static SegmentView> {
+    let view = compile_segment_view(cards, registry, None);
+    let key = segment_key(cards);
+    SEGMENT_CACHE.with(|c| {
+        c.borrow_mut().insert(key, view);
+    });
+    view
+}
+
+// ===========================================================================
 // Generator fusion. A generator preset is the SAME `EffectGraphDef` as an
 // effect, but its live render path ([`JsonGraphGenerator::from_def`]) reads its
 // modulation bindings straight from the def's `preset_metadata.bindings`

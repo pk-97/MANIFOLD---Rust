@@ -201,6 +201,32 @@ fn decides_fuse(unfused_ms: f64, fused_ms: f64) -> bool {
     (unfused_ms / fused_ms) >= MIN_SPEEDUP && (unfused_ms - fused_ms) >= MIN_SAVING_MS
 }
 
+/// Chain-segment gate (docs/CHAIN_FUSION_DESIGN.md §4): fused segment def vs
+/// the unfused concatenation (whose dispatches are identical to the per-card
+/// chain). Same measurement harness and margins as every card verdict. Runs on
+/// the chain-fusion worker's own device, never the render thread. `false` on
+/// any failed measurement — keep per-card, never-worse.
+pub(crate) fn measure_segment(
+    device: &GpuDevice,
+    registry: &PrimitiveRegistry,
+    unfused: &EffectGraphDef,
+    fused: &EffectGraphDef,
+) -> bool {
+    let Some(u) = measure_def(device, registry, unfused, SOURCE_TYPE_ID) else {
+        return false;
+    };
+    let Some(f) = measure_def(device, registry, fused, SOURCE_TYPE_ID) else {
+        return false;
+    };
+    let verdict = decides_fuse(u, f);
+    log::info!(
+        "[freeze] segment gate on {}: unfused {u:.3}ms fused {f:.3}ms -> {}",
+        device.device_name(),
+        if verdict { "FUSE" } else { "keep per-card" },
+    );
+    verdict
+}
+
 /// Minimum measured drop (ms/frame) for the greedy mask search to accept
 /// disabling a region — a noise guard on the leave-one-out comparisons, well
 /// under [`MIN_SAVING_MS`] because each step compares two FUSED variants of

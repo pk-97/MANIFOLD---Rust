@@ -37,10 +37,17 @@ A **segment** is a maximal run of ≥2 consecutive cards that are all fusion-eli
 - not in any enabled group — `needs_mix` emits a Mix sub-graph around grouped cards
   regardless of the current `wet_dry` value (state-preservation across the 1.0 crossing),
   so *any* grouped card is a v1 boundary. This subsumes "mix < 1.0 is a boundary";
-- `SkipMode::Never` — a skip-capable card (`OnZero`) is a boundary. Skip state is already
-  in `compute_topology_hash`, so a flip rebuilds the chain today; keeping skip-capable
-  cards out of segments means a flip never changes a *segment's* content, only which
-  per-card splices surround it;
+- skip — **amended during build** (the original "skip-capable card is a boundary" rule
+  would have excluded nearly the whole shipped library: ColorGrade, Invert, HdrBoost,
+  Dither all declare `OnZero`, nullifying the ColorGrade → Kaleidoscope → Bloom target).
+  The amended rule rests on a runtime fact: skip is **static per build** — `is_skipped_for`
+  is in `compute_topology_hash`, a flip rebuilds the chain, and a skipped card is never
+  spliced at all. So no fused kernel ever contains skip logic, which is the constraint's
+  intent. Concretely: a currently-skipped card is *transparent* (excluded from the segment
+  without breaking the run — the exact adjacency the per-card path produces); a
+  currently-active `OnZero` card is an ordinary member; each skip state is its own segment
+  content key, and a flip rides the existing rebuild → fallback → background-compile path.
+  Flip churn is absorbed by the cache after the first crossing in each direction;
 - def contains no stateful primitive (checked on the flattened effective def). Stateful
   cards splice per-card exactly as today, byte-identical, and their state identity
   (`StateStore` keys, primitive-instance state) is untouched by fusion;

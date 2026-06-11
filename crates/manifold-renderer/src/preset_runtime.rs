@@ -171,6 +171,16 @@ pub struct PresetRuntime {
     /// new defs. At rest the generation never moves, so the comparison is a
     /// single atomic load that always matches — no perform-path cost.
     built_generation: u64,
+    /// True when at least one segment of this chain was Pending (background
+    /// compile in flight) at build time, so the chain spliced those cards
+    /// per-card. The dispatcher rebuilds when the segment generation advances,
+    /// picking up the fused winner (or the cached refusal) — the swap-in
+    /// trigger. False once every segment resolved either way.
+    pending_segments: bool,
+    /// [`crate::node_graph::freeze::install::segment_generation`] observed at
+    /// build time. Compared by the dispatcher only while
+    /// [`Self::pending_segments`] is set.
+    built_segment_generation: u64,
     /// State store for stateful primitives that key per-owner state
     /// off `(node_id, owner_key)` rather than carrying it on the
     /// node instance directly. Today that's only `temporal::Feedback`,
@@ -692,7 +702,294 @@ impl PresetRuntime {
         // first effect (the dry path's fan-out source).
         let mut open_group: Option<OpenGroup> = None;
 
-        for (legacy_index, fx) in &active_effects {
+        // ── Chain fusion (docs/CHAIN_FUSION_DESIGN.md): plan splice units. ──
+        // A maximal run of ≥2 adjacent eligible cards becomes a SEGMENT when a
+        // compiled + gate-approved fused view exists in the content-keyed
+        // cache. A miss enqueues a background compile and the run splices
+        // per-card this build — byte-identical to the no-fusion path — then a
+        // later rebuild (the dispatcher's segment-generation check) swaps the
+        // fused segment in. Eligibility (v1 boundaries): watched card, any
+        // grouped card (wet/dry Mix seams), skip-capable cards, stateful cards
+        // (positional namespacing must never key state by chain position),
+        // string-bound cards.
+        use crate::node_graph::freeze::install as freeze_install;
+        enum SpliceUnit {
+            Card(usize),
+            Segment {
+                /// Indices into `active_effects` of the fused member cards, in
+                /// chain order (currently-skipped cards excluded — they splice
+                /// nothing on the per-card path either).
+                cards: Vec<usize>,
+                view: &'static freeze_install::SegmentView,
+            },
+        }
+        // Skip note: `OnZero` skip in this runtime is STATIC per build — the
+        // predicate is in `compute_topology_hash`, a flip rebuilds the chain,
+        // and a skipped card isn't spliced at all. So a fused segment never
+        // contains skip logic: a currently-skipped card is TRANSPARENT
+        // (excluded from the segment without breaking the run — exactly the
+        // adjacency the per-card path produces), a currently-active OnZero
+        // card is an ordinary member, and each skip state is its own segment
+        // content key. Skip semantics ride the existing rebuild mechanism,
+        // identically to the per-card path.
+        #[derive(Clone, Copy, PartialEq)]
+        enum Member {
+            /// Never joins or spans a segment (watched / grouped / stateful /
+            /// string-bound / no view).
+            Boundary,
+            /// Fusable segment member.
+            Fuse,
+            /// Currently skipped — splices nothing; transparent to a run.
+            Transparent,
+        }
+        let mut pending_segments = false;
+        let mut units: Vec<SpliceUnit> = Vec::with_capacity(active_effects.len());
+        if freeze_install::chain_fusion_enabled() {
+            let members: Vec<Member> = active_effects
+                .iter()
+                .map(|(_, fx)| {
+                    if preview_effect == Some(&fx.id) || fx.group_id.is_some() {
+                        return Member::Boundary;
+                    }
+                    let Some(view) = loaded_preset_view_by_id(fx.effect_type()) else {
+                        return Member::Boundary;
+                    };
+                    if is_skipped_for(view.skip_mode, &view.type_id, fx) {
+                        return Member::Transparent;
+                    }
+                    if view
+                        .canonical_def
+                        .preset_metadata
+                        .as_ref()
+                        .is_some_and(|m| !m.string_bindings.is_empty())
+                    {
+                        return Member::Boundary;
+                    }
+                    let effective = fx.graph.as_ref().unwrap_or(view.canonical_def);
+                    if crate::node_graph::freeze::segment::def_is_segment_stateless(
+                        effective, primitives,
+                    ) {
+                        Member::Fuse
+                    } else {
+                        Member::Boundary
+                    }
+                })
+                .collect();
+            let mut i = 0;
+            while i < active_effects.len() {
+                if members[i] != Member::Fuse {
+                    units.push(SpliceUnit::Card(i));
+                    i += 1;
+                    continue;
+                }
+                let mut j = i;
+                while j < active_effects.len() && members[j] != Member::Boundary {
+                    j += 1;
+                }
+                // Trim trailing transparents back into plain cards.
+                while j > i && members[j - 1] == Member::Transparent {
+                    j -= 1;
+                }
+                let fuse_idxs: Vec<usize> =
+                    (i..j).filter(|&k| members[k] == Member::Fuse).collect();
+                if fuse_idxs.len() < 2 {
+                    units.extend((i..j).map(SpliceUnit::Card));
+                    i = j;
+                    continue;
+                }
+                let cards: Vec<(&EffectGraphDef, &'static LoadedPresetView)> = fuse_idxs
+                    .iter()
+                    .map(|&k| {
+                        let fx = active_effects[k].1;
+                        let view = loaded_preset_view_by_id(fx.effect_type())
+                            .expect("eligibility implies view");
+                        (fx.graph.as_ref().unwrap_or(view.canonical_def), view)
+                    })
+                    .collect();
+                match freeze_install::fused_segment_view_for(&cards) {
+                    freeze_install::SegmentLookup::Ready(view) => {
+                        // Skipped (transparent) cards inside the run splice
+                        // nothing — emit them as plain cards so any future
+                        // skip-state bookkeeping sees them, then the segment.
+                        units.extend(
+                            (i..j)
+                                .filter(|&k| members[k] == Member::Transparent)
+                                .map(SpliceUnit::Card),
+                        );
+                        units.push(SpliceUnit::Segment { cards: fuse_idxs, view });
+                    }
+                    freeze_install::SegmentLookup::Pending => {
+                        pending_segments = true;
+                        units.extend((i..j).map(SpliceUnit::Card));
+                    }
+                    freeze_install::SegmentLookup::Refused => {
+                        units.extend((i..j).map(SpliceUnit::Card));
+                    }
+                }
+                i = j;
+            }
+        } else {
+            units.extend((0..active_effects.len()).map(SpliceUnit::Card));
+        }
+
+        for unit in &units {
+            let (legacy_index, fx) = match unit {
+                SpliceUnit::Segment { cards: seg_cards, view } => {
+                    // Segment cards are ungrouped — close any open wet/dry
+                    // group exactly as an ungrouped card would.
+                    if let Some(closing) = open_group.take() {
+                        let Some((mix_id, mix_out)) =
+                            close_mix_group(&mut graph, &closing, (prev_node, prev_out_port))
+                        else {
+                            eprintln!(
+                                "[chain-build-fail] close_mix_group failed before segment \
+                                 for group_id={:?}",
+                                closing.group_id,
+                            );
+                            return None;
+                        };
+                        group_mix_nodes.push((closing.group_id.clone(), mix_id));
+                        prev_node = mix_id;
+                        prev_out_port = mix_out;
+                    }
+                    eprintln!(
+                        "[freeze] chain segment → FUSED ({} cards, one splice)",
+                        seg_cards.len()
+                    );
+                    let Some(SpliceResult { output, handles, generator_input_id: _ }) =
+                        splice_def_into_chain(
+                            &mut graph,
+                            (prev_node, prev_out_port),
+                            view.def,
+                            primitives,
+                        )
+                    else {
+                        // Near-unreachable: compile_segment_view verified the def
+                        // builds. Follow the canonical-splice-failure precedent
+                        // (None → passthrough this frame; the next rebuild
+                        // renders per-card).
+                        eprintln!("[chain-build-fail] fused segment splice failed");
+                        return None;
+                    };
+                    let node_map: Vec<(NodeId, NodeInstanceId)> = handles
+                        .iter()
+                        .filter_map(|(_, id)| {
+                            graph.get_node(*id).map(|inst| (inst.node_id.clone(), *id))
+                        })
+                        .collect();
+                    for (seg_idx, k) in seg_cards.iter().enumerate() {
+                        let (legacy_index, fx) = &active_effects[*k];
+                        let base_view = loaded_preset_view_by_id(fx.effect_type())
+                            .expect("preflight guarantees view");
+                        let prefix = crate::node_graph::freeze::segment::card_prefix(seg_idx);
+                        let outer_param_index: ahash::AHashMap<&str, usize> = base_view
+                            .canonical_def
+                            .preset_metadata
+                            .as_ref()
+                            .map(|m| {
+                                m.params
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(idx, p)| (p.id.as_str(), idx))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let n_static_slots = base_view
+                            .canonical_def
+                            .preset_metadata
+                            .as_ref()
+                            .map(|m| m.params.len())
+                            .unwrap_or(base_view.bindings.len());
+                        let card_static = &view.card_bindings[seg_idx];
+                        let user_bindings = fx.user_param_bindings();
+                        let mut bindings: Vec<ResolvedBinding> =
+                            Vec::with_capacity(card_static.len() + user_bindings.len());
+                        for b in card_static.iter() {
+                            let source_index =
+                                outer_param_index.get(b.id.as_ref()).copied().unwrap_or(0);
+                            match ResolvedBinding::from_static(b, &node_map, source_index) {
+                                Some(rb) => bindings.push(rb),
+                                None => record_chain_error(
+                                    &mut errors,
+                                    ChainError::StaticBindingHandleMissing {
+                                        effect_type: base_view.type_id.clone(),
+                                        binding_id: b.id.to_string(),
+                                    },
+                                ),
+                            }
+                        }
+                        let n_static = bindings.len();
+                        for (user_slot, core) in user_bindings.iter().enumerate() {
+                            let source_index = n_static_slots + user_slot;
+                            // Repoint into the segment namespace: a fused-away
+                            // target goes through the segment retarget map; a
+                            // surviving target resolves by prefixing its stable
+                            // node id.
+                            let prefixed_key = (
+                                format!("{prefix}{}", core.node_id.as_str()),
+                                core.inner_param.clone(),
+                            );
+                            let mut c = core.clone();
+                            if let Some((fused_id, field)) = view.retarget.get(&prefixed_key) {
+                                c.node_id = fused_id.clone();
+                                c.inner_param = field.clone();
+                                c.convert = freeze_install::convert_for_fused_field(c.convert);
+                            } else {
+                                c.node_id = NodeId::new(prefixed_key.0.clone());
+                            }
+                            match ResolvedBinding::from_user(&c, &graph, &node_map, source_index)
+                            {
+                                Some(rb) => bindings.push(rb),
+                                None => record_chain_error(
+                                    &mut errors,
+                                    ChainError::UserBindingResolveFailed {
+                                        effect_id: fx.id.clone(),
+                                        effect_type: fx.effect_type().clone(),
+                                        binding_id: core.id.clone(),
+                                        node_id: core.node_id.to_string(),
+                                        inner_param: core.inner_param.clone(),
+                                        rehydrate: false,
+                                    },
+                                ),
+                            }
+                        }
+                        let bound = BoundGraph::new(bindings, &mut graph);
+                        let generator_input_node = node_map.iter().find_map(|(nid, inst)| {
+                            (nid.as_str().starts_with(prefix.as_str())
+                                && graph.get_node(*inst).is_some_and(|n| {
+                                    n.node.type_id().as_str()
+                                        == GENERATOR_INPUT_TYPE_ID
+                                }))
+                            .then_some(*inst)
+                        });
+                        let card_handles: Vec<(std::borrow::Cow<'static, str>, NodeInstanceId)> =
+                            handles
+                                .iter()
+                                .filter(|(name, _)| name.starts_with(prefix.as_str()))
+                                .cloned()
+                                .collect();
+                        effect_nodes.push(EffectSlot {
+                            effect_id: fx.id.clone(),
+                            effect_type: fx.effect_type().clone(),
+                            legacy_index: *legacy_index,
+                            handles: card_handles,
+                            node_map: node_map.clone(),
+                            group_preview_map: Vec::new(),
+                            preview_kinds: Default::default(),
+                            applied_graph_version: fx.graph_version,
+                            bound,
+                            n_static,
+                            n_static_slots,
+                            user_bindings_version: fx.graph_version,
+                            generator_input_node,
+                        });
+                    }
+                    prev_node = output.0;
+                    prev_out_port = output.1;
+                    continue;
+                }
+                SpliceUnit::Card(k) => &active_effects[*k],
+            };
             let fx_group_id = fx.group_id.as_deref();
             let fx_group: Option<&EffectGroup> =
                 fx_group_id.and_then(|gid| groups.iter().find(|g| g.id.as_str() == gid));
@@ -1171,6 +1468,8 @@ impl PresetRuntime {
             height,
             topology_hash,
             built_generation: crate::preset_loader::catalog_generation(),
+            pending_segments,
+            built_segment_generation: crate::node_graph::freeze::install::segment_generation(),
             state_store: StateStore::new(),
             errors,
             preview_encoding: crate::node_graph::PreviewEncoding::default(),
@@ -1199,6 +1498,16 @@ impl PresetRuntime {
     /// whether a hot-reloaded preset edit requires a rebuild.
     pub fn built_generation(&self) -> u64 {
         self.built_generation
+    }
+
+    /// Whether this chain is waiting on a background segment compile, and the
+    /// segment generation it was built at. The dispatcher rebuilds a waiting
+    /// chain when the live generation has advanced (a worker result landed) —
+    /// the fused-segment swap-in. Both no-ops once every segment resolved.
+    pub fn awaiting_segment_swap(&self) -> bool {
+        self.pending_segments
+            && crate::node_graph::freeze::install::segment_generation()
+                != self.built_segment_generation
     }
 
     /// Compare a cached graph's topology hash to the current chain's.
@@ -1928,6 +2237,8 @@ impl PresetRuntime {
             height: 0,
             topology_hash: 0,
             built_generation: 0,
+            pending_segments: false,
+            built_segment_generation: 0,
             state_store: StateStore::new(),
             errors: Vec::new(),
             preview_encoding: crate::node_graph::PreviewEncoding::default(),
@@ -4432,6 +4743,247 @@ mod generator_runtime_tests {
         assert!(
             g.graph.instance_by_node_id(&producer).is_some(),
             "the resolved producer must be a real runtime node"
+        );
+    }
+}
+
+#[cfg(test)]
+mod chain_fusion_tests {
+    //! Cross-card chain fusion integration (docs/CHAIN_FUSION_DESIGN.md):
+    //! the per-card build and the fused-segment build of the SAME two-card
+    //! chain must render within the pointwise fusion budget of each other,
+    //! and the cards' `param_values` must keep driving the fused chain
+    //! through the retargeted bindings.
+
+    use super::*;
+    use crate::gpu_encoder::GpuEncoder;
+    use crate::node_graph::freeze::TextureDiff;
+    use crate::node_graph::freeze::install as freeze_install;
+    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use half::f16;
+    use manifold_core::PresetTypeId;
+    use manifold_core::effects::PresetInstance;
+    use manifold_gpu::{
+        GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    };
+
+    fn make_default(ty: PresetTypeId) -> PresetInstance {
+        manifold_core::preset_definition_registry::create_default(&ty)
+    }
+
+    fn set_param(fx: &mut PresetInstance, id: &str, v: f32) {
+        let idx = manifold_core::preset_definition_registry::param_id_to_index(
+            fx.effect_type(),
+            id,
+        )
+        .unwrap_or_else(|| panic!("param id `{id}` on {:?}", fx.effect_type()));
+        fx.param_values[idx].value = v;
+        fx.param_values[idx].base = v;
+    }
+
+    fn ctx(w: u32, h: u32) -> PresetContext {
+        PresetContext {
+            time: 0.5,
+            beat: 1.0,
+            dt: 1.0 / 60.0,
+            width: w,
+            height: h,
+            output_width: w,
+            output_height: h,
+            aspect: w as f32 / h as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+            params: [0.0; MAX_GEN_PARAMS],
+            param_count: 0,
+        }
+    }
+
+    fn gradient_input(device: &manifold_gpu::GpuDevice, w: u32, h: u32) -> manifold_gpu::GpuTexture {
+        let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                px[i] = f16::from_f32(x as f32 / w as f32);
+                px[i + 1] = f16::from_f32(y as f32 / h as f32);
+                px[i + 2] = f16::from_f32(0.5);
+                px[i + 3] = f16::from_f32(1.0);
+            }
+        }
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: GpuTextureFormat::Rgba16Float,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_SRC,
+            label: "chain-fusion-test-input",
+            mip_levels: 1,
+        });
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                px.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(px.as_slice()),
+            )
+        };
+        device.upload_texture(&tex, bytes);
+        tex
+    }
+
+    fn run_once(
+        cg: &mut PresetRuntime,
+        device: &manifold_gpu::GpuDevice,
+        input: &manifold_gpu::GpuTexture,
+        effects: &[PresetInstance],
+        pc: &PresetContext,
+    ) {
+        let mut enc = device.create_encoder("chain-fusion-test");
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, device);
+            cg.run(&mut gpu, input, effects, &[], pc);
+        }
+        enc.commit_and_wait_completed();
+    }
+
+    /// Copy a runtime's current output into a standalone target so a later
+    /// run can't overwrite it.
+    fn snapshot_output(
+        cg: &PresetRuntime,
+        device: &manifold_gpu::GpuDevice,
+        w: u32,
+        h: u32,
+    ) -> crate::render_target::RenderTarget {
+        let out = cg.output_texture().expect("chain produced output");
+        let rt = crate::render_target::RenderTarget::new(
+            device,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            "chain-fusion-test-snap",
+        );
+        let mut enc = device.create_encoder("chain-fusion-snap");
+        enc.copy_texture_to_texture(out, &rt.texture, w, h, 1);
+        enc.commit_and_wait_completed();
+        rt
+    }
+
+    #[test]
+    fn fused_segment_build_matches_per_card_build_and_stays_param_driven() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (256u32, 256u32);
+        let input = gradient_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        // Two adjacent ColorGrades with distinct, non-trivial params — the
+        // same type twice exercises the segment namespacing on real presets.
+        let mut e1 = make_default(PresetTypeId::COLOR_GRADE);
+        set_param(&mut e1, "amount", 1.0);
+        set_param(&mut e1, "gain", 1.2);
+        let mut e2 = make_default(PresetTypeId::COLOR_GRADE);
+        set_param(&mut e2, "amount", 1.0);
+        set_param(&mut e2, "gain", 0.85);
+        set_param(&mut e2, "saturation", 0.6);
+        let effects = vec![e1, e2];
+
+        // ── Per-card build first: the segment cache is cold, the lookup goes
+        // Pending (tests never enqueue the worker), and the chain splices
+        // per-card — today's production path, our oracle. ──
+        let mut per_card = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None,
+        )
+        .expect("per-card chain builds");
+        assert_eq!(per_card.effect_nodes.len(), 2);
+        assert!(
+            per_card.pending_segments,
+            "cold cache must leave the chain waiting on the segment compile"
+        );
+        assert!(
+            !per_card.awaiting_segment_swap(),
+            "no swap signal until a worker result lands"
+        );
+
+        // ── Compile the segment synchronously (the worker's job, minus the
+        // gate) and seed the cache, then rebuild: the Ready path. ──
+        let view1 = loaded_preset_view_by_id(effects[0].effect_type()).unwrap();
+        let view2 = loaded_preset_view_by_id(effects[1].effect_type()).unwrap();
+        let cards = [
+            (view1.canonical_def, view1),
+            (view2.canonical_def, view2),
+        ];
+        freeze_install::seed_segment_cache_for_test(&cards, &primitives)
+            .expect("two pointwise ColorGrades fuse across the seam");
+
+        let mut fused = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None,
+        )
+        .expect("fused-segment chain builds");
+        assert_eq!(fused.effect_nodes.len(), 2, "one EffectSlot per card survives");
+        assert!(!fused.pending_segments);
+        let fused_kernels = fused
+            .graph
+            .nodes()
+            .filter(|n| n.node.type_id().as_str() == "node.wgsl_compute")
+            .count();
+        assert_eq!(
+            fused_kernels, 1,
+            "both cards must collapse into ONE cross-card kernel"
+        );
+
+        // ── Parity at build params. ──
+        run_once(&mut per_card, &device, &input, &effects, &pc);
+        run_once(&mut fused, &device, &input, &effects, &pc);
+        let differ = TextureDiff::new(&device);
+        let r = differ.compare(
+            &device,
+            per_card.output_texture().unwrap(),
+            fused.output_texture().unwrap(),
+            1.0e-2,
+            3.0e-2,
+        );
+        assert!(
+            r.passes(0.005) && r.over_count < 64,
+            "fused segment must match per-card chain: max_abs={}, over={}/{}",
+            r.max_abs,
+            r.over_count,
+            r.total
+        );
+
+        // ── Live param drive: move card 2's gain on the host slice only. The
+        // binding apply path must push it into the fused kernel's uniform. ──
+        let before = snapshot_output(&fused, &device, w, h);
+        let mut effects2 = effects.clone();
+        set_param(&mut effects2[1], "gain", 1.6);
+        run_once(&mut fused, &device, &input, &effects2, &pc);
+        let moved = differ.compare(
+            &device,
+            &before.texture,
+            fused.output_texture().unwrap(),
+            1.0e-3,
+            1.0e-3,
+        );
+        assert!(
+            moved.over_count > 0,
+            "a card slider move must visibly drive the fused segment"
+        );
+        run_once(&mut per_card, &device, &input, &effects2, &pc);
+        let r2 = differ.compare(
+            &device,
+            per_card.output_texture().unwrap(),
+            fused.output_texture().unwrap(),
+            1.0e-2,
+            3.0e-2,
+        );
+        assert!(
+            r2.passes(0.005) && r2.over_count < 64,
+            "after the slider move the two builds must still agree: max_abs={}, over={}/{}",
+            r2.max_abs,
+            r2.over_count,
+            r2.total
         );
     }
 }

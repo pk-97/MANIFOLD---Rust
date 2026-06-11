@@ -159,11 +159,18 @@ pub fn dispatch_chain<'a>(
     // When a preset `.json` is edited on disk the watcher bumps the
     // generation, and any chain built against the old generation is forced
     // to rebuild from the freshly-loaded defs on the next frame.
+    // Chain fusion: land any finished background segment compiles before the
+    // rebuild decision, then rebuild chains that were waiting on one (the
+    // fused-segment swap-in — docs/CHAIN_FUSION_DESIGN.md §5). At rest both
+    // checks are a relaxed atomic load each.
+    crate::node_graph::freeze::install::pump_segment_results();
+
     let catalog_generation = crate::preset_loader::catalog_generation();
     let needs_rebuild = match cache.as_ref() {
         None => true,
         Some(cg) => {
             cg.built_generation() != catalog_generation
+                || cg.awaiting_segment_swap()
                 || !cg.is_compatible(effects, groups, ctx.width, ctx.height, preview_effect)
         }
     };
