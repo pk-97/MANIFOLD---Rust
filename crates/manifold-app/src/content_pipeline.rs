@@ -819,6 +819,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // the frame; the readback runs after the compositor CB commits.
         let pending_dump = self.pending_graph_dump.take();
         let native_device = self.native_device.as_ref().unwrap();
+        // Xcode capture boundary: one content frame. The device capture scope
+        // brackets everything committed below (generators + compositor) so the
+        // camera button grabs the full content workload, not just the UI pass.
+        native_device.capture_scope_begin();
         // Reset the node-preview inspector info; the active preview path below
         // repopulates it for this frame.
         self.last_node_preview_info = None;
@@ -1226,6 +1230,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.native_signal_value = native_event.current_value();
         native_enc.add_completed_handler_with_status("Compositor");
         native_enc.commit();
+        native_device.capture_scope_end();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
         // One-shot graph dump readback. Runs AFTER the compositor CB commits so

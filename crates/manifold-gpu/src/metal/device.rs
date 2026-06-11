@@ -111,6 +111,10 @@ pub struct GpuDevice {
     /// `MTLSamplerState` per frame. Mirrors the `clear_pipelines`
     /// lazy-cache pattern.
     linear_sampler: std::sync::OnceLock<GpuSampler>,
+    /// Device-level Xcode capture scope. A scope only defines capture
+    /// boundaries through begin/end calls, so it must be retained and
+    /// driven per frame — see `capture_scope_begin`/`capture_scope_end`.
+    capture_scope: std::sync::OnceLock<Retained<ProtocolObject<dyn objc2_metal::MTLCaptureScope>>>,
 }
 
 // Safety: MTLDevice and MTLCommandQueue are thread-safe (Metal guarantee).
@@ -141,6 +145,7 @@ impl GpuDevice {
             msl_cache: std::sync::Mutex::new(None),
             clear_pipelines: std::sync::OnceLock::new(),
             linear_sampler: std::sync::OnceLock::new(),
+            capture_scope: std::sync::OnceLock::new(),
         }
     }
 
@@ -169,13 +174,37 @@ impl GpuDevice {
     }
 
     /// Set the default Metal capture scope to the device so that Xcode's
-    /// GPU frame capture grabs command buffers from ALL threads.
+    /// GPU frame capture grabs command buffers from ALL threads. The scope
+    /// is retained so the content thread can drive its begin/end boundary
+    /// each frame — without that, Xcode's camera button silently falls back
+    /// to the focused CAMetalLayer's present boundary, which dependency-
+    /// tracks only the UI drawable and misses the content queue entirely.
     pub fn install_device_capture_scope(&self) {
-        use objc2_metal::MTLCaptureManager;
+        use objc2_metal::{MTLCaptureManager, MTLCaptureScope};
         let manager = unsafe { MTLCaptureManager::sharedCaptureManager() };
         let scope = unsafe { manager.newCaptureScopeWithDevice(&self.device) };
+        unsafe { scope.setLabel(Some(&objc2_foundation::NSString::from_str("Content Frame"))) };
         let scope_proto = ProtocolObject::from_ref(&*scope);
         unsafe { manager.setDefaultCaptureScope(Some(scope_proto)) };
+        let _ = self.capture_scope.set(scope);
+    }
+
+    /// Mark the start of one content frame for Xcode GPU capture. No-op
+    /// unless `install_device_capture_scope` ran and Xcode is attached
+    /// (begin/end on an idle scope costs nothing measurable).
+    pub fn capture_scope_begin(&self) {
+        use objc2_metal::MTLCaptureScope;
+        if let Some(scope) = self.capture_scope.get() {
+            scope.beginScope();
+        }
+    }
+
+    /// Mark the end of one content frame for Xcode GPU capture.
+    pub fn capture_scope_end(&self) {
+        use objc2_metal::MTLCaptureScope;
+        if let Some(scope) = self.capture_scope.get() {
+            scope.endScope();
+        }
     }
 
     /// Raw Metal device reference (for advanced interop).
