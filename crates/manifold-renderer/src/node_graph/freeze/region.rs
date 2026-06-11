@@ -1200,10 +1200,11 @@ fn classify_buffer_node(
     // buffer-domain analogue of the texture path's sampler-Gather. The fused
     // codegen binds each as a `src_<slot>` texture + the shared `samp`, exactly
     // like the standalone buffer kernel, so the sample is bit-identical. Gates:
-    //   - plain `Texture2D` only: `node.wgsl_compute` (the fused node) rejects
-    //     sampled 3D textures at introspection, so a 3D sampler
-    //     (sample_texture_3d_at_particles) staying a boundary keeps the rest of
-    //     its pipeline fusable instead of failing the whole card's build;
+    //   - sampled `Texture2D` / `Texture3D` only: both bind through the fused
+    //     node (`node.wgsl_compute` introspects sampled 2D and 3D). 3D is what
+    //     lets the FluidSim3D integrator fuse whole — its force sampler
+    //     (sample_texture_3d_at_particles) reads the vector volume inline,
+    //     like the original fused `fluid_simulate_3d` kernel did;
     //   - WIRED only: the fused node's texture port is required, and an unwired
     //     port would silently kill its whole dispatch. The standalone atom binds
     //     a dummy texture for an unwired optional; the fused path has no node to
@@ -1212,7 +1213,7 @@ fn classify_buffer_node(
         return NodeClass::Boundary;
     }
     for i in n.inputs().iter().filter(|i| is_texture_port(&i.ty)) {
-        if i.ty != PortType::Texture2D {
+        if !matches!(i.ty, PortType::Texture2D | PortType::Texture3D) {
             return NodeClass::Boundary;
         }
         if !def
@@ -1382,13 +1383,13 @@ fn build_region(
         // Gather (the body samples the bound texture at an element-computed
         // coord). Array entries stay first so array-port indexing (the in-place
         // alias trace, the codegen's element registers) is untouched. Classify
-        // admitted only WIRED plain-Texture2D inputs; a member can never produce
-        // a texture (buffer atoms with texture outputs are boundaries), so the
-        // producer is always external — bail defensively if either is violated.
+        // admitted only WIRED sampled 2D/3D texture inputs; a member can never
+        // produce a texture (buffer atoms with texture outputs are boundaries),
+        // so the producer is always external — bail defensively if violated.
         if is_buffer {
             for port in constructed.inputs().iter().filter(|i| is_texture_port(&i.ty)) {
-                if port.ty != PortType::Texture2D {
-                    return Err("buffer member samples a non-2D texture");
+                if !matches!(port.ty, PortType::Texture2D | PortType::Texture3D) {
+                    return Err("buffer member samples a non-2D/3D texture");
                 }
                 let wire = def
                     .wires

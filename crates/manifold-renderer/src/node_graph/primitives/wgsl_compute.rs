@@ -257,7 +257,11 @@ struct BindingSlot {
 #[derive(Clone, Debug)]
 enum BindingKind {
     Uniform,
-    SampledTexture { port: String },
+    /// Sampled texture input. `is_3d` distinguishes `texture_3d<f32>`
+    /// (a `Texture3D` port, bound from `ctx.inputs.texture_3d`) from the
+    /// common `texture_2d<f32>` — the fused buffer kernels sample volumes
+    /// (3D force fields) through the same carrier.
+    SampledTexture { port: String, is_3d: bool },
     Sampler,
     StorageTexture { port: String, _format: GpuTextureFormat, _write_only: bool },
     /// `var<storage, read>` of `array<T>` — read-only input.
@@ -535,7 +539,7 @@ impl WgslCompute {
                 }
                 for b in &mut self.bindings {
                     match &mut b.kind {
-                        BindingKind::SampledTexture { port } => {
+                        BindingKind::SampledTexture { port, .. } => {
                             if let Some(s) = port.strip_prefix("tex_") {
                                 *port = s.to_string();
                             }
@@ -679,22 +683,32 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
                     if *arrayed {
                         return Err(format!("texture '{name}' is arrayed (unsupported)"));
                     }
-                    if !matches!(dim, naga::ImageDimension::D2) {
+                    // Sampled textures may be 2D or 3D (volume sampling — the
+                    // fused buffer kernels read 3D force fields). Storage
+                    // textures stay 2D-only: every storage-output code path
+                    // (dispatch sizing, output allocation) assumes 2D.
+                    let is_3d = matches!(dim, naga::ImageDimension::D3);
+                    if !matches!(dim, naga::ImageDimension::D2 | naga::ImageDimension::D3) {
                         return Err(format!(
-                            "texture '{name}' is not 2D (only Texture2D supported)"
+                            "texture '{name}' has unsupported dimension (2D/3D only)"
+                        ));
+                    }
+                    if is_3d && !matches!(class, naga::ImageClass::Sampled { .. }) {
+                        return Err(format!(
+                            "texture '{name}' is 3D but not sampled (3D storage unsupported)"
                         ));
                     }
                     match class {
                         naga::ImageClass::Sampled { .. } => {
                             inputs.push(NodePort {
                                 name: leak_str(&name),
-                                ty: PortType::Texture2D,
+                                ty: if is_3d { PortType::Texture3D } else { PortType::Texture2D },
                                 kind: PortKind::Input,
                                 required: true,
                             });
                             bindings.push(BindingSlot {
                                 binding: binding.binding,
-                                kind: BindingKind::SampledTexture { port: name },
+                                kind: BindingKind::SampledTexture { port: name, is_3d },
                             });
                         }
                         naga::ImageClass::Storage { format, access } => {
@@ -1966,8 +1980,13 @@ impl EffectNode for WgslCompute {
         for slot in &self.bindings {
             match &slot.kind {
                 BindingKind::Uniform => { /* handled below as Bytes */ }
-                BindingKind::SampledTexture { port } => {
-                    let Some(tex) = ctx.inputs.texture_2d(port) else {
+                BindingKind::SampledTexture { port, is_3d } => {
+                    let tex = if *is_3d {
+                        ctx.inputs.texture_3d(port)
+                    } else {
+                        ctx.inputs.texture_2d(port)
+                    };
+                    let Some(tex) = tex else {
                         log::warn!(
                             "[node.wgsl_compute] required input texture '{port}' unwired"
                         );

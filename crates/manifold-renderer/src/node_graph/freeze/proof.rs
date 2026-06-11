@@ -2037,6 +2037,101 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     );
 }
 
+/// FluidSim3D's integrator must fuse WHOLE — including the 3D force sampler.
+/// `sample_texture_3d_at_particles` was a deliberate fusion boundary while
+/// `node.wgsl_compute` rejected sampled 3D textures at introspection; that
+/// fragmented the 8-atom integrator and the fused build measured SLOWER than
+/// unfused (0.84x on M4 Max — vetoed by the perf gate), while the original
+/// fused `fluid_simulate_3d` kernel proved a single integrate kernel wins on
+/// this hardware. With texture_3d introspection + the 3D external declaration
+/// in the buffer codegen, the sampler joins its region: assert it's absorbed
+/// (no standalone node survives in the fused def) and that a fused kernel
+/// actually binds a `texture_3d<f32>` external — then prove render
+/// equivalence frame-for-frame against the unfused preset, same oracle as
+/// `fluidsim_buffer_fusion_renders_like_unfused` (f32 element registers
+/// thread the force values the unfused chain stores in an f32 array, so the
+/// chaotic sim only stays locked if the fused sample is the same sample).
+#[test]
+fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
+    use super::install::fuse_generator_def;
+    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_runtime::PresetRuntime;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(
+        &manifold_core::PresetTypeId::new("FluidSimulation3D"),
+    )
+    .expect("FluidSimulation3D preset bundled");
+    let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    let fused_def = fuse_generator_def(&canonical, &registry)
+        .expect("FluidSimulation3D fuses + builds (3D-sampler buffer region)");
+
+    assert!(
+        !fused_def.nodes.iter().any(|n| n.type_id == "node.sample_texture_3d_at_particles"),
+        "the 3D force sampler must be absorbed into a fused region — a surviving \
+         standalone node means the Texture3D gate regressed and the integrator \
+         is fragmented again"
+    );
+    assert!(
+        fused_def.nodes.iter().any(|n| {
+            n.type_id == "node.wgsl_compute"
+                && n.wgsl_source.as_deref().is_some_and(|s| s.contains("texture_3d<f32>"))
+        }),
+        "a fused kernel must declare a texture_3d<f32> external (the volume \
+         force field the integrator samples inline)"
+    );
+
+    let ctx = |t: f64| PresetContext {
+        time: t,
+        beat: t * 2.0,
+        dt: 1.0 / 60.0,
+        width: w,
+        height: h,
+        output_width: w,
+        output_height: h,
+        aspect: w as f32 / h as f32,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
+        anim_progress: 0.0,
+        trigger_count: 0,
+        params: [0.0; MAX_GEN_PARAMS],
+        param_count: 0,
+    };
+    let render = |def: EffectGraphDef| -> RenderTarget {
+        let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
+            .expect("FluidSimulation3D builds");
+        let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid3d-fusion");
+        for i in 0..8u32 {
+            let mut enc = device.create_encoder("freeze-fluid3d-fusion");
+            {
+                let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+                g.render(&mut gpu, &target.texture, &ctx(i as f64 / 60.0));
+            }
+            enc.commit_and_wait_completed();
+        }
+        target
+    };
+
+    let unfused = render(canonical);
+    let fused = render(fused_def);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-3, 1.0e-2);
+    assert!(
+        r.passes(0.002) && r.over_count < 64,
+        "fused FluidSimulation3D must render like unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Determinism guard for the FluidSimulation feedback sim. Rendering the SAME
 /// canonical preset twice from fresh state, with an identical frame sequence,
 /// must produce the SAME final image. It did NOT before the storage-layer

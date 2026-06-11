@@ -1418,6 +1418,10 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     struct MemberIo {
         in_specs: Vec<&'static [ChannelSpec]>,
         out_specs: &'static [ChannelSpec],
+        /// Per texture input (in port order, after the array entries):
+        /// whether it is a `Texture3D` — drives the fused kernel's
+        /// `texture_3d<f32>` vs `texture_2d<f32>` external declaration.
+        tex_3d: Vec<bool>,
     }
     let mut member_io: Vec<MemberIo> = Vec::with_capacity(region.nodes.len());
     let mut includes: Vec<&'static str> = Vec::new(); // deduped shared WGSL libs (noise_common, …)
@@ -1458,9 +1462,9 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
                 return Err(CodegenError::BadInput);
             }
         }
-        // Only plain 2D sampled textures: `node.wgsl_compute` rejects sampled 3D
-        // textures at introspection, so emitting one would fail the whole build.
-        if tex_in.iter().any(|p| p.ty != PortType::Texture2D) {
+        // Sampled 2D / 3D textures only (`node.wgsl_compute` introspects both;
+        // 3D is the volume force-field read the integrator chains need).
+        if tex_in.iter().any(|p| !matches!(p.ty, PortType::Texture2D | PortType::Texture3D)) {
             return Err(CodegenError::BadInput);
         }
         let arr_out: Vec<&NodeOutput> =
@@ -1471,7 +1475,8 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
         let in_specs: Vec<&'static [ChannelSpec]> =
             arr_in.iter().map(|p| specs_of(&p.ty)).collect::<Option<_>>().ok_or(CodegenError::BadInput)?;
         let out_specs = specs_of(&arr_out[0].ty).ok_or(CodegenError::BadInput)?;
-        member_io.push(MemberIo { in_specs, out_specs });
+        let tex_3d: Vec<bool> = tex_in.iter().map(|p| p.ty == PortType::Texture3D).collect();
+        member_io.push(MemberIo { in_specs, out_specs, tex_3d });
     }
     // v1: single output region (fan-out buffer regions are a follow-on).
     if region.outputs.len() != 1 {
@@ -1487,7 +1492,7 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     #[derive(Clone, Copy, PartialEq)]
     enum ExtKind {
         Array(&'static [ChannelSpec]),
-        Texture,
+        Texture { is_3d: bool },
     }
     let mut ext_kinds: Vec<Option<ExtKind>> = vec![None; region.num_external_inputs];
     for (mi, node) in region.nodes.iter().enumerate() {
@@ -1500,7 +1505,14 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
                 let kind = if k < arr_count {
                     ExtKind::Array(member_io[mi].in_specs[k])
                 } else {
-                    ExtKind::Texture
+                    // Texture entries follow the array entries in node.inputs
+                    // order, so `k - arr_count` indexes the member's texture
+                    // ports. Dimensionality must agree across consumers of one
+                    // external (one producer port, one type) — the PartialEq
+                    // mismatch check below fails closed if it doesn't.
+                    let is_3d =
+                        member_io[mi].tex_3d.get(k - arr_count).copied().ok_or(CodegenError::BadInput)?;
+                    ExtKind::Texture { is_3d }
                 };
                 match ext_kinds[*e] {
                     Some(existing) if existing != kind => return Err(CodegenError::BadInput),
@@ -1521,7 +1533,7 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
         .iter()
         .map(|k| match k {
             ExtKind::Array(specs) => Some(buffer_element_type(specs, &mut structs)),
-            ExtKind::Texture => None,
+            ExtKind::Texture { .. } => None,
         })
         .collect();
     let out_member = index_of(region.outputs[0]).ok_or(CodegenError::BadInput)?;
@@ -1680,9 +1692,14 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
             }
             // A gathered texture external: bound + sampled by the consuming
             // bodies at element-computed coords, via the shared `samp` below.
+            // 3D externals (volume force fields) declare texture_3d — the
+            // body's own signature already expects that handle type.
             None => {
-                writeln!(out, "@group(0) @binding({binding}) var src_{e}: texture_2d<f32>;")
-                    .unwrap();
+                let tex_ty = match ext_kinds[e] {
+                    ExtKind::Texture { is_3d: true } => "texture_3d<f32>",
+                    _ => "texture_2d<f32>",
+                };
+                writeln!(out, "@group(0) @binding({binding}) var src_{e}: {tex_ty};").unwrap();
             }
         }
         binding += 1;
@@ -1691,7 +1708,7 @@ fn generate_fused_buffer(region: &FusionRegion<'_>) -> Result<GeneratedFusion, C
     // "clamp" emits no marker — byte-identical to the standalone buffer atoms'
     // default sampler; a non-default mode rides the same side-channel marker the
     // texture path uses (`node.wgsl_compute` reads it at sampler creation).
-    if ext_kinds.contains(&ExtKind::Texture) {
+    if ext_kinds.iter().any(|k| matches!(k, ExtKind::Texture { .. })) {
         if region.sampler_address_mode == "clamp" {
             writeln!(out, "@group(0) @binding({binding}) var samp: sampler;").unwrap();
         } else {
