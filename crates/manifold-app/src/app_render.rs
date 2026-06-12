@@ -2810,7 +2810,6 @@ impl Application {
             // The mapping drawer floats over the composited canvas + sidebar:
             // it draws inline on the Overlay layer, unclipped.
             if self.editor_mapping_popover.is_open() {
-                ui.clear_immediate_clip();
                 ui.push_layer(Layer::Overlay);
                 self.editor_mapping_popover.set_live_value(popover_live_value);
                 self.editor_mapping_popover.render(ui);

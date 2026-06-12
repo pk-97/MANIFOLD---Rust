@@ -221,6 +221,9 @@ pub struct UIRenderer {
     // over them. `None` (the default, reset every `begin_frame`) keeps the legacy
     // full-viewport behaviour for every other caller.
     immediate_clip: Option<Rect>,
+    // Stack backing the immediate clip — entries are pre-intersected with
+    // their enclosing clip, so the top IS the effective clip.
+    immediate_clip_stack: Vec<Rect>,
     // Layer stack for z-ordered drawing. Empty = Base. Pushing/popping
     // flushes the pending immediate-mode run so commands on either side
     // land in batches tagged with the correct layer.
@@ -311,6 +314,7 @@ impl UIRenderer {
             prepared_globals: [0.0; 4],
             clip_stack: Vec::with_capacity(8),
             immediate_clip: None,
+            immediate_clip_stack: Vec::with_capacity(4),
             layer_stack: Vec::with_capacity(4),
             scissor_batches: Vec::with_capacity(8),
             current_batch_start: 0,
@@ -323,19 +327,31 @@ impl UIRenderer {
 
     // ── Immediate-mode draw API ─────────────────────────────────────
 
-    /// Clip every immediate-mode draw queued this frame (rects AND lines) to
-    /// `(x, y, w, h)` in logical coordinates. Set by the graph canvas to its
-    /// lane so nodes and wires can't bleed under the side panels. Reset to
-    /// unclipped on the next `begin_frame`.
-    pub fn set_immediate_clip(&mut self, x: f32, y: f32, w: f32, h: f32) {
+    /// Clip subsequent immediate-mode draws (rects, lines, AND text) to
+    /// `(x, y, w, h)` in logical coordinates, intersected with any enclosing
+    /// immediate clip, until the matching [`Self::pop_immediate_clip`]. The
+    /// graph canvas pushes its lane so nodes and wires can't bleed under the
+    /// side panels. Must be balanced before `prepare` runs.
+    pub fn push_immediate_clip(&mut self, x: f32, y: f32, w: f32, h: f32) {
         self.flush_immediate_run();
-        self.immediate_clip = Some(Rect::new(x, y, w, h));
+        let rect = Rect::new(x, y, w, h);
+        let clipped = match self.immediate_clip_stack.last() {
+            Some(outer) => intersect_rects(*outer, rect),
+            None => rect,
+        };
+        self.immediate_clip_stack.push(clipped);
+        self.immediate_clip = Some(clipped);
     }
 
-    /// Drop any immediate-mode clip set this frame (back to full viewport).
-    pub fn clear_immediate_clip(&mut self) {
+    /// Restore the immediate clip that was active before the matching push.
+    pub fn pop_immediate_clip(&mut self) {
+        debug_assert!(
+            !self.immediate_clip_stack.is_empty(),
+            "pop_immediate_clip without push"
+        );
         self.flush_immediate_run();
-        self.immediate_clip = None;
+        self.immediate_clip_stack.pop();
+        self.immediate_clip = self.immediate_clip_stack.last().copied();
     }
 
     // ── Layers ──────────────────────────────────────────────────────
@@ -791,6 +807,7 @@ impl UIRenderer {
         // Each frame starts unclipped on the Base layer; a caller (the graph
         // canvas) re-arms its lane clip after this, before queuing draws.
         self.immediate_clip = None;
+        self.immediate_clip_stack.clear();
         self.layer_stack.clear();
         #[cfg(target_os = "macos")]
         self.text_renderer.begin_frame();
@@ -825,6 +842,10 @@ impl UIRenderer {
         debug_assert!(
             self.layer_stack.is_empty(),
             "unbalanced push_layer at prepare — everything after the push floats"
+        );
+        debug_assert!(
+            self.immediate_clip_stack.is_empty(),
+            "unbalanced push_immediate_clip at prepare — the clip leaks into later draws"
         );
         // Cover any trailing immediate-mode rects (e.g. a floating widget
         // drawn after the last tree traversal) so they reach the GPU.

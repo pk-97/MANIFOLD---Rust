@@ -2103,7 +2103,7 @@ impl GraphCanvas {
         // Clip every node, wire, and label this canvas draws to its own lane so
         // nothing bleeds under the left palette or right sidebar. The panels
         // build their own scissored batches on top via `render_tree_range`.
-        ui.set_immediate_clip(viewport.x, viewport.y, viewport.w, viewport.h);
+        ui.push_immediate_clip(viewport.x, viewport.y, viewport.w, viewport.h);
         ui.draw_rect(viewport.x, viewport.y, viewport.w, viewport.h, BG_COLOR);
 
         ui.draw_rect(viewport.x, viewport.y, viewport.w, HEADER_HEIGHT, HEADER_BG);
@@ -2169,6 +2169,7 @@ impl GraphCanvas {
             h: (viewport.h - HEADER_HEIGHT).max(0.0),
         };
         if canvas.w <= 0.0 || canvas.h <= 0.0 {
+            ui.pop_immediate_clip();
             return;
         }
 
@@ -2243,11 +2244,11 @@ impl GraphCanvas {
         // buttons are never buried under a node it overlaps. It draws
         // unclipped (it may extend past the canvas lane) on the Overlay
         // layer; the lane clip is re-armed afterwards.
-        ui.clear_immediate_clip();
+        ui.pop_immediate_clip();
         ui.push_layer(Layer::Overlay);
         self.mapping_popover.render(ui);
         ui.pop_layer();
-        ui.set_immediate_clip(viewport.x, viewport.y, viewport.w, viewport.h);
+        ui.push_immediate_clip(viewport.x, viewport.y, viewport.w, viewport.h);
 
         // Debug overlay last, on top of everything — it's a diagnostic HUD.
         if self.debug_overlay {
@@ -2255,6 +2256,8 @@ impl GraphCanvas {
             self.draw_debug_overlay(ui, canvas);
             ui.pop_layer();
         }
+
+        ui.pop_immediate_clip();
     }
 
     /// Floating help card near the cursor: a param's help line when the
