@@ -531,7 +531,7 @@ impl UIRenderer {
 
     /// Render a UITree. When `skip_from` is `Some(n)`, nodes with
     /// `id >= n` are skipped (used to exclude dropdown overlay nodes
-    /// that render in a separate pass via `render_overlay`).
+    /// that render separately via `render_tree_range`).
     pub fn render_tree(&mut self, tree: &UITree, skip_from: Option<usize>) {
         self.begin_scissor_tracking();
 
@@ -551,16 +551,12 @@ impl UIRenderer {
         self.flush_scissor_batch();
     }
 
-    /// Render only the overlay/dropdown nodes (from `start_node` onwards).
-    /// Call this AFTER layer bitmaps and playhead so the dropdown sits on top.
-    pub fn render_overlay(&mut self, tree: &UITree, start_node: usize) {
-        self.render_overlay_range(tree, start_node, usize::MAX);
-    }
-
-    /// Render nodes in range [start_node, end_node).
-    /// Uses `traverse_range` to only walk root nodes in the given range,
-    /// avoiding a full-tree traversal for each overlay section.
-    pub fn render_overlay_range(&mut self, tree: &UITree, start_node: usize, end_node: usize) {
+    /// Render tree nodes in range [start_node, end_node) on the current
+    /// layer. Uses `traverse_range` to only walk root nodes in the given
+    /// range, avoiding a full-tree traversal per section. Traversals are
+    /// additive within a prepare cycle: earlier batches (including pending
+    /// immediate-mode draws, which get covered first) are preserved.
+    pub fn render_tree_range(&mut self, tree: &UITree, start_node: usize, end_node: usize) {
         self.begin_scissor_tracking();
 
         tree.traverse_range(start_node, end_node, |event| match event {
@@ -570,16 +566,6 @@ impl UIRenderer {
         });
 
         self.flush_scissor_batch();
-    }
-
-    /// Render a UITree on top of immediate-mode primitives that were
-    /// already emitted via the `draw_*` API in the same prepare cycle.
-    ///
-    /// With the unified flush protocol every traversal preserves earlier
-    /// batches and covers pending immediate-mode rects, so this is now just
-    /// [`Self::render_overlay`] under its historical name.
-    pub fn render_overlay_additive(&mut self, tree: &UITree, start_node: usize) {
-        self.render_overlay_range(tree, start_node, usize::MAX);
     }
 
     /// Render a sub-region using flat sequential traversal.
@@ -808,12 +794,6 @@ impl UIRenderer {
         self.layer_stack.clear();
         #[cfg(target_os = "macos")]
         self.text_renderer.begin_frame();
-    }
-
-    /// Render a range of tree nodes to draw commands.
-    /// Equivalent to `render_overlay_range` but named for panel cache usage.
-    pub fn render_tree_range(&mut self, tree: &UITree, start: usize, end: usize) {
-        self.render_overlay_range(tree, start, end);
     }
 
     /// Prepare vertex/index buffers and text for drawing. Call before `render()`.

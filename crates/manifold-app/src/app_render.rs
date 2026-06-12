@@ -2806,7 +2806,7 @@ impl Application {
             );
             // Layer the sidebar UITree on top of the canvas's immediate-mode
             // draws (the flush protocol covers them with their own batches).
-            ui.render_overlay_additive(&ws.ui_root.tree, 0);
+            ui.render_tree_range(&ws.ui_root.tree, 0, usize::MAX);
             // The mapping drawer floats over the composited canvas + sidebar:
             // it draws inline on the Overlay layer, unclipped.
             if self.editor_mapping_popover.is_open() {
@@ -3178,7 +3178,7 @@ impl Application {
                 None
             };
             if let Some(start) = overlay_start {
-                ui.render_overlay_range(&self.ws.ui_root.tree, start, overlay_end);
+                ui.render_tree_range(&self.ws.ui_root.tree, start, overlay_end);
             }
 
             // Playhead line
@@ -3212,31 +3212,34 @@ impl Application {
                     usize::MAX
                 };
                 ui.push_layer(Layer::Overlay);
-                ui.render_overlay_range(&self.ws.ui_root.tree, hud_start, hud_end);
+                ui.render_tree_range(&self.ws.ui_root.tree, hud_start, hud_end);
                 ui.pop_layer();
             }
 
-            // Popups
+            // Popups — Overlay layer, after the HUD so an open popup sits on
+            // top of it (insertion order within a layer is z-order).
+            ui.push_layer(Layer::Overlay);
             if self.ws.ui_root.dropdown.is_open() {
                 let start = self.ws.ui_root.dropdown.first_node();
-                ui.render_overlay(&self.ws.ui_root.tree, start);
+                ui.render_tree_range(&self.ws.ui_root.tree, start, usize::MAX);
             } else if self.ws.ui_root.browser_popup.is_open() {
                 let start = self.ws.ui_root.browser_popup.first_node();
-                ui.render_overlay(&self.ws.ui_root.tree, start);
+                ui.render_tree_range(&self.ws.ui_root.tree, start, usize::MAX);
             } else if self.ws.ui_root.ableton_picker.is_open() {
                 let start = self.ws.ui_root.ableton_picker.first_node();
-                ui.render_overlay(&self.ws.ui_root.tree, start);
+                ui.render_tree_range(&self.ws.ui_root.tree, start, usize::MAX);
             }
 
             // Effect card drag ghost
             if let Some(start) = self.ws.ui_root.inspector.card_drag_first_node() {
-                ui.render_overlay(&self.ws.ui_root.tree, start);
+                ui.render_tree_range(&self.ws.ui_root.tree, start, usize::MAX);
             }
 
-            // Text input overlay
+            // Text input overlay — last on Overlay, so it tops everything.
             if self.text_input.active {
                 render_text_input_overlay(&self.text_input, &self.frame_timer, ui);
             }
+            ui.pop_layer();
 
             // Flush all overlay commands
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
