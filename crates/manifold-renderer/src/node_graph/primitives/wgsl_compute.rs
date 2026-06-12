@@ -175,6 +175,13 @@ pub struct WgslCompute {
     /// integrators, which dispatch only live particles. The kernel carries the
     /// matching in-bounds guard, so this is purely a perf cap.
     dispatch_count_param: Option<String>,
+    /// `true` when the source carries a `// @pure` marker: the author asserts
+    /// the kernel's output depends only on its params + wired inputs (no time,
+    /// no frame counter, no carried state), so the executor's memoizer may
+    /// hold its output while those are unchanged (BlackHole's param-driven
+    /// deflection bake). Author-asserted, like the fusion markers — a kernel
+    /// that reads `time` or aliases a persistent array must NOT carry it.
+    source_pure: bool,
 
     // Runtime / GPU caches:
     pipeline: Option<GpuComputePipeline>,
@@ -367,6 +374,7 @@ impl WgslCompute {
             dispatch_port: None,
             sampler_address_mode: GpuAddressMode::ClampToEdge,
             reset_gated: false,
+            source_pure: false,
             last_reset_trigger: None,
             dispatch_count_param: None,
             pipeline: None,
@@ -463,6 +471,7 @@ impl WgslCompute {
         }
         self.sampler_address_mode = parsed.sampler_address_mode;
         self.reset_gated = parsed.reset_gated;
+        self.source_pure = parsed.source_pure;
         self.dispatch_count_param = parsed.dispatch_count_param;
         // A new source invalidates every baked variant (different kernel, different
         // value-keys). Drop them and the stability tracker so specialization
@@ -587,6 +596,7 @@ struct ParsedShader {
     default_dispatch_port: Option<String>,
     sampler_address_mode: GpuAddressMode,
     reset_gated: bool,
+    source_pure: bool,
     dispatch_count_param: Option<String>,
     /// Uniform member names tagged `// @static_param:` by the freeze install —
     /// the param fields eligible to bake into a specialized `const` variant.
@@ -626,6 +636,8 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
     let fused_outputs = extract_fused_outputs(source);
     // `// @reset_gated`: the kernel re-dispatches only on a `reset_trigger` edge.
     let reset_gated = source_has_reset_gated_marker(source);
+    // `// @pure`: author-asserted memoizable kernel (params + inputs only).
+    let source_pure = source_has_pure_marker(source);
     // `// @dispatch_count_param: <field>`: the named uniform param caps the
     // array dispatch grid at the live element count (fused buffer codegen).
     let dispatch_count_param = extract_dispatch_count_param(source);
@@ -930,6 +942,7 @@ fn introspect(source: &str) -> Result<ParsedShader, String> {
         default_dispatch_port,
         sampler_address_mode: parse_sampler_address_mode(source),
         reset_gated,
+        source_pure,
         dispatch_count_param,
         static_param_fields: extract_static_params(source),
     })
@@ -1446,6 +1459,17 @@ fn source_has_reset_gated_marker(source: &str) -> bool {
         .any(|line| matches!(split_line_comment(line).1, Some(c) if c.trim() == "@reset_gated"))
 }
 
+/// Whether the source carries a `// @pure` line-comment marker — the author's
+/// assertion that the kernel is memoizable (output depends only on params +
+/// wired inputs; no time uniform, no frame counter, no persistent/aliased
+/// state). Same own-line comment convention as `@reset_gated`.
+fn source_has_pure_marker(source: &str) -> bool {
+    let stripped = strip_block_comments(source);
+    stripped
+        .lines()
+        .any(|line| matches!(split_line_comment(line).1, Some(c) if c.trim() == "@pure"))
+}
+
 fn extract_fused_outputs(source: &str) -> std::collections::HashSet<String> {
     let stripped = strip_block_comments(source);
     let mut set = std::collections::HashSet::new();
@@ -1738,6 +1762,14 @@ impl EffectNode for WgslCompute {
 
     fn fusion_kind(&self) -> FusionKind {
         self.fusion_kind
+    }
+
+    // `// @pure` marker: author-asserted memoizable kernel. The memoizer's own
+    // input/param dirty-checks do the rest — a kernel whose inputs change every
+    // frame gains nothing, a param-only kernel (BlackHole's deflection bake)
+    // dispatches once per edit.
+    fn is_pure(&self) -> bool {
+        self.source_pure
     }
 
     fn wgsl_body(&self) -> Option<&'static str> {
@@ -2466,6 +2498,15 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             !plain.inputs.iter().any(|p| p.name == "reset_trigger"),
             "no marker ⇒ no reset_trigger port"
         );
+
+        // `// @pure` (same own-line marker convention): author-asserted
+        // memoizable kernel. Marked ⇒ is_pure; unmarked ⇒ not.
+        let pure_src = format!("// @pure\n{ungated}");
+        let mut pure_node = WgslCompute::new();
+        pure_node.set_wgsl_source(&pure_src);
+        assert!(!pure_node.compile_failed, "pure shader must parse");
+        assert!(EffectNode::is_pure(&pure_node), "@pure marker sets is_pure");
+        assert!(!EffectNode::is_pure(&plain), "no marker ⇒ not pure");
     }
 
     #[test]

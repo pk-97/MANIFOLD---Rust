@@ -117,6 +117,11 @@ crate::primitive! {
     category: BlurAndSharpen,
     role: Filter,
     aliases: ["gaussian blur", "blur", "soft", "Blur TOP"],
+    // Pure: run() reads only params + wired inputs (step/radius port-shadows);
+    // the pipeline/sampler fields are caches. Lets the memoizer hold a static
+    // blur (BlackHole's param-driven sky chain) instead of re-dispatching it
+    // every frame.
+    pure: true,
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/separable_gaussian_body.wgsl"),
     input_access: [Gather],
