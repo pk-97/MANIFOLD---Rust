@@ -10696,7 +10696,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Person / human segmentation via the native plugin's process_subject_mask API. Detects PEOPLE specifically (selfie / human / person model variants), not generic salient objects. Input: any Texture2D frame. Output: Rgba16Float mask where R = G = B = person probability ∈ [0, 1] (0 = background, 1 = person), A = 1. Inference runs on a background worker with ~2-3 frame latency. Temporal blending (α = 0.55 default) reduces noise worker-side before upload — matches the legacy WireframeDepth contract. Same channel pack as depth_estimate_midas so they compose interchangeably as mask inputs.",
+      "purpose": "Person / human segmentation via the native plugin's process_subject_mask API. Detects PEOPLE specifically (selfie / human / person model variants), not generic salient objects. Input: any Texture2D frame. Output: Rgba16Float mask where R = G = B = person probability ∈ [0, 1] (0 = background, 1 = person); A = 0 until the first inference completes, 1 afterwards (availability gate). Inference runs on a background worker with ~2-3 frame latency. Temporal blending (α = 0.55 default) reduces noise worker-side before upload — matches the legacy WireframeDepth contract. Same channel pack as depth_estimate_midas so they compose interchangeably as mask inputs.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them.",

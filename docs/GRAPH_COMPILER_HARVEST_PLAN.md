@@ -1,5 +1,26 @@
 # Graph Compiler — Harvest Sprint Plan
 
+> **STATUS 2026-06-12: SPRINT EXECUTED.** All six items landed (one commit
+> each). Scope deltas from the plan, with reasons:
+> - Vocabulary batch: affine_transform + threshold + lambert_directional
+>   converted. fresnel_rim / blinn_specular / matcap_two_tone / channel_mix
+>   are BLOCKED on the same gap as brightness — the fused uniform path is
+>   scalar-only (`param_wgsl_type` rejects Color/Vec3/Vec4), so a body alone
+>   would leave them boundaries. Vector-param fused uniforms are a separate
+>   design item; do not convert these without it.
+> - Freeze fixtures that used `node.threshold` as a guaranteed boundary now
+>   use `node.multi_blend` (a permanent by-design boundary — self-synth
+>   router), so future vocabulary conversions can't silently break them.
+> - Mux: wired selectors prune via a one-frame LATCH (selector edge lands one
+>   frame later — flagged for Peter; never renders a pruned branch). The
+>   passthrough alias fires only for inline selectors and only when slot
+>   dims+format match.
+> - Chain-fusion: prewarm (project load enqueues every chain's segments) +
+>   greedy region-mask segment gate landed. Leg 2 (per-card mask seeding) is
+>   subsumed by the segment-partition greedy search; leg 4 (generator→first-
+>   card seam) hit the cut line — crosses runtimes, its own session.
+> Re-measure results + Peter's visual pass: see end of this doc.
+
 Six measured, mechanical items that close out the graph compiler perf campaign.
 Combined expected reclaim ~5–8 ms of the ~22 ms Liveschool 4K frame → locked 4K60
 with headroom. After this sprint the compiler is "done" for the current goal; the
@@ -204,6 +225,30 @@ first-dispatch test asserting the segment cache is warm.
    attribute` on FluidSimulation, ParticleText, OilyFluid, BasicShapes,
    BlackHole, FluidSim3D
 5. Record before/after per-card table in this doc.
+
+## Sprint re-measure (2026-06-12, M4 Max)
+
+Attribute (1080p, ms/frame GPU; audit baseline in parentheses):
+- FluidSimulation fused **1.481** (was 2.222) — radial-burst dispatch GONE
+  from the idle frame; affine_transform display_zoom now fuses.
+- ParticleText fused **1.924** (was 2.638) — same two reclaims.
+- BlackHole: attribute runs force-dirty so the memo doesn't show there; the
+  deflection bake (0.67 ms) + its blurs go quiet after frame 1 in live render
+  (mechanism unit-tested; confirm in the visual pass).
+
+Tune (4K) highlights:
+- **FluidSimulation3D 0.89x keep-unfused → 1.61x FUSE** (6.543 → 4.068 ms) —
+  the 3D dispatch-cap leg, exactly the 2D capacity-dispatch artifact.
+- FluidSimulation 1.85x, OilyFluid 2.35x, StarField 3.14x, Watercolor 1.33x
+  [regions 1101], MetallicGlass 1.60x. Only DigitalPlants keeps unfused
+  (1.04x — genuine; 92% of its cost is the render monolith, a decomposition
+  target, not a fusion gap).
+
+Battery: workspace clippy clean; full renderer lib 1169 passed / 6 failed =
+3 documented pre-existing (temporal frame-1 seed, plugin_prewarm DoF,
+user_binding reshape) + catalog drift (another session's person_segment
+doc-string; regenerated) + the 2 stencil proofs (suite-parallelism flake,
+both pass isolated). check-presets 46/46.
 
 ## Peter's visual pass (one batch, end of sprint)
 
