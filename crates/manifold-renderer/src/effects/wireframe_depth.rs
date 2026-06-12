@@ -1116,17 +1116,13 @@ impl WireframeDepthFX {
             return;
         }
 
-        // WireframeDepthFX.cs line 483-494: blit source → dnnInputTex, then readback
-        // Copy source → dnn_input_tex via blit (both Rgba8Unorm)
-        let copy_aw = state.analysis_width;
-        let copy_ah = state.analysis_height;
-        Self::encode_copy(
-            gpu,
-            source_tex,
-            &state.dnn_input_tex.texture,
-            copy_aw,
-            copy_ah,
-        );
+        // WireframeDepthFX.cs line 483-494: blit source → dnnInputTex, then
+        // readback. The legacy Graphics.Blit SCALES implicitly — source is
+        // full canvas, dnn_input_tex is analysis-res (MAX_ANALYSIS_DIM cap) —
+        // so this must be a sampling resize, not a same-size copy blit (the
+        // encoder guard panics on the mismatch; a raw blit would crop the
+        // top-left corner into the DNN).
+        gpu.resize_sample(source_tex, &state.dnn_input_tex.texture);
 
         state.native_request_wants_depth = true;
         state.native_request_wants_flow = true;
