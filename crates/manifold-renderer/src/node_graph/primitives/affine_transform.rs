@@ -76,6 +76,9 @@ crate::primitive! {
     category: DistortAndWarp,
     role: Filter,
     aliases: ["transform", "move scale rotate", "Transform TOP"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/affine_transform_body.wgsl"),
+    input_access: [Gather],
 }
 
 #[repr(C)]

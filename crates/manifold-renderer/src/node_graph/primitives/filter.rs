@@ -98,6 +98,16 @@ impl EffectNode for Threshold {
     fn parameters(&self) -> &[ParamDef] {
         &THRESHOLD_PARAMS
     }
+    // Hand-written node (no `primitive!` macro), so the fusion contract is
+    // declared directly. The body is a verbatim port of threshold.wgsl's
+    // response curve; the hand kernel stays authoritative for the standalone
+    // dispatch.
+    fn fusion_kind(&self) -> crate::node_graph::freeze::classify::FusionKind {
+        crate::node_graph::freeze::classify::FusionKind::Pointwise
+    }
+    fn wgsl_body(&self) -> Option<&'static str> {
+        Some(include_str!("shaders/threshold_body.wgsl"))
+    }
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let level = match ctx.params.get("level") {
             Some(ParamValue::Float(f)) => *f,

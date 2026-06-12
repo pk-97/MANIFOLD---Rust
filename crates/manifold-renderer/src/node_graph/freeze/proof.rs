@@ -3517,16 +3517,16 @@ fn fused_fanout_region_matches_unfused() {
             { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
             { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
             { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
-            { "id": 4, "typeId": "node.threshold", "nodeId": "thr_a" },
-            { "id": 5, "typeId": "node.threshold", "nodeId": "thr_b" },
+            { "id": 4, "typeId": "node.multi_blend", "nodeId": "thr_a" },
+            { "id": 5, "typeId": "node.multi_blend", "nodeId": "thr_b" },
             { "id": 6, "typeId": "node.mix", "nodeId": "mix" },
             { "id": 7, "typeId": "system.final_output", "nodeId": "final_output" }
         ], "wires": [
             { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
             { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
             { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
-            { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "source" },
-            { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "source" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in_0" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "in_0" },
             { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "a" },
             { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "b" },
             { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" }

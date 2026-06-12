@@ -2084,9 +2084,11 @@ mod tests {
 
     /// Fan-out — a region with two escaping members fuses to ONE node exposing
     /// two output ports (`dst_0`, `dst_1`), each wired to the boundary its member
-    /// fed. gain forks into invert and contrast; each runs into its own threshold,
-    /// which re-merge at a mix. The rewrite keeps both thresholds + the mix as
-    /// surviving nodes and routes `dst_0 → thr_a`, `dst_1 → thr_b`.
+    /// fed. gain forks into invert and contrast; each runs into its own
+    /// multi_blend (a permanent by-design boundary — a self-synthesizing router
+    /// that never gains a `wgsl_body`), which re-merge at a mix. The rewrite
+    /// keeps both boundaries + the mix as surviving nodes and routes
+    /// `dst_0 → thr_a`, `dst_1 → thr_b`.
     #[test]
     fn fanout_region_wires_two_dst_ports() {
         let json = r#"{
@@ -2095,16 +2097,16 @@ mod tests {
                 { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
-                { "id": 4, "typeId": "node.threshold", "nodeId": "thr_a" },
-                { "id": 5, "typeId": "node.threshold", "nodeId": "thr_b" },
+                { "id": 4, "typeId": "node.multi_blend", "nodeId": "thr_a" },
+                { "id": 5, "typeId": "node.multi_blend", "nodeId": "thr_b" },
                 { "id": 6, "typeId": "node.mix", "nodeId": "mix" },
                 { "id": 7, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
-                { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "source" },
-                { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "source" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in_0" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "in_0" },
                 { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "a" },
                 { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "b" },
                 { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" }
@@ -2120,9 +2122,9 @@ mod tests {
         assert_eq!(wgsl_nodes.len(), 1, "the fork is one fused node");
         let fused_doc = wgsl_nodes[0].id;
         assert_eq!(
-            fused.def.nodes.iter().filter(|n| n.type_id == "node.threshold").count(),
+            fused.def.nodes.iter().filter(|n| n.type_id == "node.multi_blend").count(),
             2,
-            "both threshold boundaries survive"
+            "both router boundaries survive"
         );
 
         // The fused node exposes two outputs, each routed to its member's boundary.

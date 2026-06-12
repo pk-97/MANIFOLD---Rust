@@ -99,6 +99,8 @@ crate::primitive! {
     category: MaterialsAndLighting,
     role: Filter,
     aliases: ["lambert", "diffuse", "matte", "basic light"],
+    fusion_kind: Pointwise,
+    wgsl_body: include_str!("shaders/lambert_directional_body.wgsl"),
 }
 
 impl Primitive for LambertDirectional {

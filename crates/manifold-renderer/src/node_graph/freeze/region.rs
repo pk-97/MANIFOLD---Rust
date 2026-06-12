@@ -1994,12 +1994,13 @@ mod tests {
     }
 
     /// A true boundary in the middle splits the graph into TWO regions — the
-    /// headline generalisation. source → gain → contrast → threshold(boundary) →
-    /// saturation → clamp → final yields {gain, contrast} feeding the threshold,
-    /// then {saturation, clamp} reading the threshold's output. (`node.threshold`
-    /// is unconverted, so it has no `wgsl_body` and stays a boundary — unlike a
-    /// gather such as `gaussian_blur`, which tier 3 folds IN; see the gather
-    /// tests below.)
+    /// headline generalisation. source → gain → contrast → multi_blend(boundary)
+    /// → saturation → clamp → final yields {gain, contrast} feeding the blend,
+    /// then {saturation, clamp} reading the blend's output. (`node.multi_blend`
+    /// is a self-synthesizing router — a PERMANENT boundary by design, so this
+    /// fixture can't silently start fusing when vocabulary atoms gain bodies —
+    /// unlike a gather such as `gaussian_blur`, which tier 3 folds IN; see the
+    /// gather tests below.)
     #[test]
     fn boundary_splits_into_two_regions() {
         let json = r#"{
@@ -2007,14 +2008,14 @@ mod tests {
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
                 { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
-                { "id": 3, "typeId": "node.threshold", "nodeId": "thresh" },
+                { "id": 3, "typeId": "node.multi_blend", "nodeId": "thresh" },
                 { "id": 4, "typeId": "node.saturation", "nodeId": "sat" },
                 { "id": 5, "typeId": "node.clamp_texture", "nodeId": "clamp" },
                 { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
-                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in_0" },
                 { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
                 { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },
                 { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
@@ -2216,16 +2217,16 @@ mod tests {
                 { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
-                { "id": 4, "typeId": "node.threshold", "nodeId": "thr_a" },
-                { "id": 5, "typeId": "node.threshold", "nodeId": "thr_b" },
+                { "id": 4, "typeId": "node.multi_blend", "nodeId": "thr_a" },
+                { "id": 5, "typeId": "node.multi_blend", "nodeId": "thr_b" },
                 { "id": 6, "typeId": "node.mix", "nodeId": "mix" },
                 { "id": 7, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
-                { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "source" },
-                { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "source" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in_0" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "in_0" },
                 { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "a" },
                 { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "b" },
                 { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" }
@@ -2266,14 +2267,14 @@ mod tests {
                 { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
-                { "id": 4, "typeId": "node.threshold", "nodeId": "dead" },
+                { "id": 4, "typeId": "node.multi_blend", "nodeId": "dead" },
                 { "id": 5, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
                 { "fromNode": 2, "fromPort": "out", "toNode": 5, "toPort": "in" },
-                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "source" }
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in_0" }
             ]
         }"#;
         let def: EffectGraphDef = serde_json::from_str(json).unwrap();
@@ -2299,14 +2300,14 @@ mod tests {
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
                 { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
-                { "id": 3, "typeId": "node.threshold", "nodeId": "thr" },
+                { "id": 3, "typeId": "node.multi_blend", "nodeId": "thr" },
                 { "id": 4, "typeId": "node.contrast", "nodeId": "contrast" },
                 { "id": 5, "typeId": "node.mix", "nodeId": "mix" },
                 { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
-                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "source" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in_0" },
                 { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "a" },
                 { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
