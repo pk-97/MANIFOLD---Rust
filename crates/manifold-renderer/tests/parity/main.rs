@@ -30,4 +30,3 @@ mod lut1d;
 mod sanity;
 mod smoke;
 mod watercolor;
-mod wireframe_depth;

@@ -753,12 +753,10 @@ fn every_fused_preset_executes_one_frame() {
 
     for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
         let preset_id = type_id.as_str().to_string();
-        // WireframeDepthGraph carries a documented, fusion-unrelated pre-existing
-        // bug (a 42×42 vs 256×256 same-size-blit panic in its depth path); it
-        // would panic with or without fusion, so testing it here measures noise.
-        if preset_id == "WireframeDepthGraph" {
-            continue;
-        }
+        // (The long-standing WireframeDepth skip is gone: the 42×42 same-size-
+        // blit panic in its depth path was fixed 2026-06-12 — the source →
+        // analysis copy is a sampling resize now — and the graph decomposition
+        // replaced the legacy impl under the WireframeDepth type id.)
         let Some(base) = crate::node_graph::loaded_preset_view_by_id(&type_id) else {
             continue;
         };

@@ -50,7 +50,33 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.6.0".to_string());
     }
 
+    if is_version_less_than(&version, "1.7.0") {
+        migrate_v160_to_v170(&mut root);
+        root["projectVersion"] = Value::String("1.7.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
+}
+
+/// v1.6.0 → v1.7.0: the WireframeDepth graph decomposition replaced the legacy
+/// Rust impl, and the interim side-by-side type id `WireframeDepthGraph` was
+/// retired — both names now mean the one surviving JSON preset, whose type id
+/// is `WireframeDepth`. Rewrites `effectType` on every preset instance
+/// (master / layer / clip). Param ids are shared between the two surfaces
+/// (`amount`, `density`, …), and the preset's own `paramAliases` redirect the
+/// retired legacy-only params, so instance `paramValues` carry over untouched.
+/// Idempotent: no instance carries the retired id after one pass.
+fn migrate_v160_to_v170(root: &mut Value) {
+    for_each_preset_instance(root, |fx| {
+        if fx.get("effectType").and_then(|v| v.as_str()) == Some("WireframeDepthGraph")
+            && let Some(obj) = fx.as_object_mut()
+        {
+            obj.insert(
+                "effectType".to_string(),
+                Value::String("WireframeDepth".to_string()),
+            );
+        }
+    });
 }
 
 /// v1.5.0 → v1.6.0: envelope-home unification. Effect envelopes used to live on
@@ -584,7 +610,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.6.0")
+            Some("1.7.0")
         );
     }
 
@@ -600,7 +626,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.6.0")
+            Some("1.7.0")
         );
     }
 
@@ -614,7 +640,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.6.0")
+            Some("1.7.0")
         );
     }
 
@@ -629,7 +655,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.6.0")
+            Some("1.7.0")
         );
     }
 
@@ -673,7 +699,7 @@ mod tests {
         // The "Ghost" envelope had no matching effect → dropped.
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.6.0")
+            Some("1.7.0")
         );
     }
 
@@ -896,6 +922,53 @@ mod tests {
         assert!(
             spec.get("invert").is_none() && spec.get("curve").is_none(),
             "identity reshape skips invert/curve on the spec",
+        );
+    }
+
+    /// v1.7.0: the retired side-by-side type id `WireframeDepthGraph` rewrites
+    /// to `WireframeDepth` (the surviving JSON preset) everywhere a preset
+    /// instance lives; param values ride along untouched. Other type ids are
+    /// untouched.
+    #[test]
+    fn test_v170_renames_wireframe_depth_graph_type() {
+        let json = r#"{
+            "projectVersion": "1.6.0",
+            "settings": {
+                "masterEffects": [
+                    { "effectType": "WireframeDepthGraph", "enabled": true,
+                      "paramValues": [ { "id": "density", "value": 120.0 } ] },
+                    { "effectType": "ColorGrade", "enabled": true }
+                ]
+            },
+            "timeline": { "layers": [ {
+                "effects": [ { "effectType": "WireframeDepthGraph", "enabled": false } ],
+                "clips": [ { "effects": [ { "effectType": "WireframeDepthGraph" } ] } ]
+            } ] }
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(v["projectVersion"].as_str(), Some("1.7.0"));
+        assert_eq!(
+            v["settings"]["masterEffects"][0]["effectType"].as_str(),
+            Some("WireframeDepth")
+        );
+        assert_eq!(
+            v["settings"]["masterEffects"][0]["paramValues"][0]["value"].as_f64(),
+            Some(120.0),
+            "param values carry over untouched"
+        );
+        assert_eq!(
+            v["settings"]["masterEffects"][1]["effectType"].as_str(),
+            Some("ColorGrade"),
+            "other type ids untouched"
+        );
+        assert_eq!(
+            v["timeline"]["layers"][0]["effects"][0]["effectType"].as_str(),
+            Some("WireframeDepth")
+        );
+        assert_eq!(
+            v["timeline"]["layers"][0]["clips"][0]["effects"][0]["effectType"].as_str(),
+            Some("WireframeDepth")
         );
     }
 }

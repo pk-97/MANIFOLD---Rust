@@ -845,7 +845,6 @@ mod tests {
             primitives::FEEDBACK_TYPE_ID,
             primitives::WET_DRY_TYPE_ID,
             primitives::WATERCOLOR_TYPE_ID,
-            primitives::WIREFRAME_DEPTH_TYPE_ID,
         ];
         for id in expected {
             assert!(

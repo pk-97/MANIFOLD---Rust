@@ -411,14 +411,6 @@ hand_descriptor!(
     role: Filter,
     aliases: ["watercolor", "paint", "bleed", "wet"],
 );
-hand_descriptor!(
-    "node.wireframe_depth",
-    "Wraps the legacy WireframeDepthFX 15-pass pipeline (MiDaS depth DNN + optional optical flow + mesh pyramid) as a monolithic primitive, too tightly state-coupled to decompose yet. WireframeDepthGraph decomposition in flight.",
-    summary: "A wireframe overlay driven by AI depth, drawing a mesh that follows the shape of whatever is in frame. A legacy bundle still being decomposed.",
-    category: Stylize,
-    role: Filter,
-    aliases: ["wireframe depth", "depth wireframe", "mesh overlay"],
-);
 
 // Boundary nodes (boundary_nodes.rs)
 hand_descriptor!(

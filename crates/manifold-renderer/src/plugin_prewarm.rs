@@ -72,15 +72,13 @@ mod tests {
     /// Adding a new plugin-using effect = add an
     /// `inventory::submit!(PluginPrewarm { ... })` in its file;
     /// this test catches forgetting it. (BlobTracking decomposed —
-    /// its worker is in node.blob_detect_ffi, no prewarm needed.)
+    /// its worker is in node.blob_detect_ffi; WireframeDepth decomposed —
+    /// its workers are in the DNN atoms; neither needs a prewarm.)
     #[test]
     fn plugin_using_effects_all_have_prewarm_submissions() {
         let registered: std::collections::HashSet<PresetTypeId> =
             prewarm_ids().cloned().collect();
-        let expected = [
-            PresetTypeId::DEPTH_OF_FIELD,
-            PresetTypeId::WIREFRAME_DEPTH,
-        ];
+        let expected = [PresetTypeId::DEPTH_OF_FIELD];
         for id in expected {
             assert!(
                 registered.contains(&id),

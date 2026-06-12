@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 211 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 210 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -85,7 +85,7 @@ _Generated from the node registry. Do not hand-edit. 211 nodes registered, group
 | Remap | `node.remap` | Filter | Resamples the image through a coordinate map, reading each pixel from wherever the map points. This is the node that turns a Mirror, Kaleidoscope, or any coord… |
 | Edge Stretch | `node.uv_strip_clamp` | Map | Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap. |
 
-### Stylize (8)
+### Stylize (7)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -96,7 +96,6 @@ _Generated from the node registry. Do not hand-edit. 211 nodes registered, group
 | Flash | `node.flash` | Filter | Pulses the whole image brighter, toward white, or toward black from a single amount. Wire a beat gate or envelope into the amount for strobes and hits. |
 | Vignette | `node.vignette` | Filter | Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade. |
 | — | `node.watercolor` | Filter | A watercolor look built from a seven-pass feedback simulation, with grain, flow, diffusion, and soft bleeding edges. A legacy bundle still waiting to be decomp… |
-| — | `node.wireframe_depth` | Filter | A wireframe overlay driven by AI depth, drawing a mesh that follows the shape of whatever is in frame. A legacy bundle still being decomposed. |
 
 ### Generate (9)
 
@@ -341,7 +340,7 @@ _Generated from the node registry. Do not hand-edit. 211 nodes registered, group
 | — | `node.perlin_noise_2d` | — | — |
 | — | `node.simplex_noise_2d` | — | — |
 
-### Effect & generator presets (45)
+### Effect & generator presets (44)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -387,8 +386,7 @@ _Generated from the node registry. Do not hand-edit. 211 nodes registered, group
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Stylize | 3 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
-| `WireframeDepth` | Wireframe Depth | effect | Diagnostic | 12 |
-| `WireframeDepthGraph` | Wireframe Depth (Graph) | effect | Diagnostic | 8 |
+| `WireframeDepth` | Wireframe Depth | effect | Diagnostic | 8 |
 | `WireframeZoo` | Wireframe | generator | Procedural | 9 |
 
 <!-- END GENERATED: registered-node-index -->

@@ -108,7 +108,6 @@ mod sample_texture_at_particles;
 mod wrap_particles_torus;
 mod invert;
 mod lambert_directional;
-mod legacy_bridge;
 mod length_vec2;
 mod lerp_instance_fields;
 mod levels;
@@ -208,7 +207,6 @@ mod voronoi_2d;
 pub(crate) mod wgsl_compute;
 mod watercolor;
 mod wet_dry_mix;
-mod wireframe_depth;
 
 pub use abs_texture::AbsTexture;
 pub use affine_transform::AffineTransform;
@@ -418,10 +416,6 @@ pub use voronoi_2d::Voronoi2D;
 pub use wgsl_compute::{DEFAULT_WGSL as DEFAULT_WGSL_COMPUTE, WgslCompute};
 pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
 pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
-pub use wireframe_depth::{
-    WIREFRAME_DEPTH_BLEND_MODES, WIREFRAME_DEPTH_MESH_RATES, WIREFRAME_DEPTH_ONOFF,
-    WIREFRAME_DEPTH_TYPE_ID, WireframeDepth,
-};
 
 #[cfg(test)]
 mod tests {

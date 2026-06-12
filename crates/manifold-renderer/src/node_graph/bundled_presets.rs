@@ -775,8 +775,8 @@ mod tests {
 
         let type_id = bundled_preset_type_ids(PresetKind::Effect)
             .into_iter()
-            .find(|t| t.as_str() == "WireframeDepthGraph")
-            .expect("WireframeDepthGraph bundled");
+            .find(|t| t.as_str() == "WireframeDepth")
+            .expect("WireframeDepth bundled");
         let def = bundled_preset_def(&type_id).expect("def loads");
 
         let mut chain = Graph::new();
