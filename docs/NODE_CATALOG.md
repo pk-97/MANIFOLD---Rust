@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 210 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 211 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -248,10 +248,11 @@ _Generated from the node registry. Do not hand-edit. 210 nodes registered, group
 | Trigger Gate | `node.trigger_gate` | Control | Passes a trigger stream through only while it is enabled, so you can switch a clip-trigger source on and off. |
 | Value | `node.value` | Source | Outputs a single fixed number you set by hand. Wire it into any knob as a constant, or expose it to drive from outside. |
 
-### Detection & Sampling (14)
+### Detection & Sampling (15)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
+| Filter Detections | `node.array_filter_detections` | Filter | Drops junk detections that are too small, too stretched, or cover too much of the frame, before they reach the tracker. Stops a HUD from locking onto the horiz… |
 | Blob Tracker | `node.blob_detect_ffi` | Filter | Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals. |
 | Blob Overlay | `node.blob_overlay_render` | Filter | Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking. |
 | Color Sample | `node.color_sample` | Control | Reads the colour at a single point in the image and outputs its RGB and brightness. An eyedropper you can drive an effect from. |

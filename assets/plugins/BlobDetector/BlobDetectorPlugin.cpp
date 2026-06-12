@@ -89,6 +89,14 @@ int BlobDetector_Process(
     // Convert to grayscale
     cv::cvtColor(rgba, state->gray, cv::COLOR_RGBA2GRAY);
 
+    // Normalize global contrast before edge detection. The Canny
+    // thresholds below are absolute gradient magnitudes, so without
+    // this a given `threshold` setting means something different on
+    // every clip — permissive on hard-edged generative content,
+    // brutal on soft low-contrast camera footage. Equalizing the
+    // histogram makes the knob behave consistently across sources.
+    cv::equalizeHist(state->gray, state->gray);
+
     // Gaussian blur — reduce noise before edge detection
     // sensitivity 0 → kernel 11 (heavy blur, smoother edges)
     // sensitivity 1 → kernel 3 (light blur, more detail)
@@ -146,10 +154,11 @@ int BlobDetector_Process(
               [](const std::pair<double, int>& a, const std::pair<double, int>& b)
               { return a.first > b.first; });
 
-    // Maximum bounding rect area — reject blobs whose bounding box covers
-    // too much of the frame. Contour area can be small for complex shapes
-    // whose bounding rect still spans most of the image.
-    double maxBBoxArea = imageArea * 0.50;
+    // Frame-coverage rejection (bbox covering too much of the frame)
+    // and aspect/size culling now live in the graph as
+    // node.array_filter_detections, where they are visible and tunable
+    // per preset rather than hardcoded here. This plugin emits every
+    // qualifying contour and lets the graph decide what is garbage.
 
     // Output top N blobs as normalized [cx, cy, w, h]
     int blobCount = 0;
@@ -160,10 +169,6 @@ int BlobDetector_Process(
     {
         int contourIdx = state->areaIndex[i].second;
         cv::Rect rect = cv::boundingRect(state->contours[contourIdx]);
-
-        // Reject if bounding box covers more than 50% of the frame
-        if ((double)rect.width * rect.height > maxBBoxArea)
-            continue;
 
         float cx = (rect.x + rect.width * 0.5f) * invW;
         float cy = 1.0f - (rect.y + rect.height * 0.5f) * invH; // Flip Y for UV space

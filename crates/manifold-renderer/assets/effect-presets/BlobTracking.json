@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "BlobTracking",
-  "description": "Decomposed Blob Track: FFI detection → NN identity tracking → 1€ temporal smoothing → composed HUD overlay built from the native Draw atoms (Draw Markers ×2, Draw Dots, Draw Gauge, Draw Ticks, Draw Connections, two value labels, Draw Scanlines). Every layer is an ordinary node — restyle it with params or swap it out in the graph editor. The whole HUD stack skips to a zero-cost passthrough while no blobs are detected.",
+  "description": "Decomposed Blob Track: FFI detection → detection filter (size/aspect/coverage cull) → NN identity tracking → 1€ temporal smoothing → composed HUD overlay built from the native Draw atoms (Draw Markers ×2, Draw Dots, Draw Gauge, Draw Ticks, Draw Connections, two value labels, Draw Scanlines). The filter stage drops frame-wide horizon strips and slivers before they reach the tracker — tune its bounds in the graph editor. Every layer is an ordinary node — restyle it with params or swap it out. The whole HUD stack skips to a zero-cost passthrough while no blobs are detected.",
   "presetMetadata": {
     "id": "BlobTracking",
     "displayName": "Blob Track",
@@ -121,6 +121,20 @@
         "max_capacity": { "type": "Float", "value": 8.0 },
         "analysis_max_dim": { "type": "Float", "value": 320.0 },
         "update_interval": { "type": "Float", "value": 3.0 }
+      }
+    },
+    {
+      "id": 18,
+      "typeId": "node.array_filter_detections",
+      "handle": "filter", "nodeId": "filter",
+      "params": {
+        "min_width": { "type": "Float", "value": 0.02 },
+        "max_width": { "type": "Float", "value": 1.0 },
+        "min_height": { "type": "Float", "value": 0.02 },
+        "max_height": { "type": "Float", "value": 1.0 },
+        "min_aspect": { "type": "Float", "value": 0.167 },
+        "max_aspect": { "type": "Float", "value": 6.0 },
+        "max_area_frac": { "type": "Float", "value": 0.5 }
       }
     },
     {
@@ -297,7 +311,8 @@
   ],
   "wires": [
     { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
-    { "fromNode": 1, "fromPort": "blobs", "toNode": 2, "toPort": "in" },
+    { "fromNode": 1, "fromPort": "blobs", "toNode": 18, "toPort": "in" },
+    { "fromNode": 18, "fromPort": "out", "toNode": 2, "toPort": "in" },
     { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in" },
     { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "min_cutoff" },
     { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" },

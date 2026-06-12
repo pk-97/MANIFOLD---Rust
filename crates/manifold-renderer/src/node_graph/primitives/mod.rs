@@ -12,6 +12,7 @@ mod anti_clump_particles;
 mod apply_radial_burst_to_particles;
 mod array_connect_nearest;
 mod array_diffuse_particles;
+mod array_filter_detections;
 mod array_feedback;
 mod array_math;
 mod array_replicate_polyline_rings;
@@ -214,6 +215,7 @@ pub use anti_clump_particles::AntiClumpParticles;
 pub use apply_radial_burst_to_particles::ApplyRadialBurstToParticles;
 pub use array_connect_nearest::ArrayConnectNearest;
 pub use array_diffuse_particles::ArrayDiffuseParticles;
+pub use array_filter_detections::ArrayFilterDetections;
 pub use array_feedback::ArrayFeedback;
 pub use array_math::{ARRAY_MATH_OPS, ArrayMath};
 pub use array_replicate_polyline_rings::{
