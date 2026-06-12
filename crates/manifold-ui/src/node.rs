@@ -151,6 +151,46 @@ impl Color32 {
     }
 }
 
+/// Color parameter for the UI geometry pipeline (rects, lines): linear-space
+/// RGBA floats. Accepts raw `[f32; 4]` (already linear, passed through
+/// unchanged) or a [`Color32`] (sRGB bytes, converted via
+/// [`Color32::to_f32`]) — so palette constants work directly at draw calls.
+///
+/// Deliberately distinct from [`TextColor`]: the text pipeline consumes sRGB
+/// bytes end-to-end, so a single color type would have to re-encode one of
+/// the two paths and shift rendered output.
+#[derive(Clone, Copy, Debug)]
+pub struct LinearColor(pub [f32; 4]);
+
+impl From<[f32; 4]> for LinearColor {
+    fn from(rgba: [f32; 4]) -> Self {
+        Self(rgba)
+    }
+}
+
+impl From<Color32> for LinearColor {
+    fn from(c: Color32) -> Self {
+        Self(c.to_f32())
+    }
+}
+
+/// Color parameter for the text/icon pipeline: sRGB RGBA bytes. Accepts raw
+/// `[u8; 4]` or a [`Color32`] unchanged.
+#[derive(Clone, Copy, Debug)]
+pub struct TextColor(pub [u8; 4]);
+
+impl From<[u8; 4]> for TextColor {
+    fn from(rgba: [u8; 4]) -> Self {
+        Self(rgba)
+    }
+}
+
+impl From<Color32> for TextColor {
+    fn from(c: Color32) -> Self {
+        Self([c.r, c.g, c.b, c.a])
+    }
+}
+
 /// Convert an sRGB component (0.0-1.0) to linear light.
 /// Uses the standard sRGB transfer function (IEC 61966-2-1).
 fn srgb_to_linear(s: f32) -> f32 {

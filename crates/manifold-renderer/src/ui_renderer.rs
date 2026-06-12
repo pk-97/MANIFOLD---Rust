@@ -377,13 +377,13 @@ impl UIRenderer {
     }
 
     /// Queue a filled rectangle.
-    pub fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
+    pub fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: impl Into<LinearColor>) {
         self.rect_commands.push(RectCommand {
             x,
             y,
             w,
             h,
-            color,
+            color: color.into().0,
             corner_radius: 0.0,
             border_width: 0.0,
             border_color: [0.0; 4],
@@ -397,7 +397,7 @@ impl UIRenderer {
         y: f32,
         w: f32,
         h: f32,
-        color: [f32; 4],
+        color: impl Into<LinearColor>,
         corner_radius: f32,
     ) {
         self.rect_commands.push(RectCommand {
@@ -405,7 +405,7 @@ impl UIRenderer {
             y,
             w,
             h,
-            color,
+            color: color.into().0,
             corner_radius,
             border_width: 0.0,
             border_color: [0.0; 4],
@@ -420,20 +420,20 @@ impl UIRenderer {
         y: f32,
         w: f32,
         h: f32,
-        color: [f32; 4],
+        color: impl Into<LinearColor>,
         corner_radius: f32,
         border_width: f32,
-        border_color: [f32; 4],
+        border_color: impl Into<LinearColor>,
     ) {
         self.rect_commands.push(RectCommand {
             x,
             y,
             w,
             h,
-            color,
+            color: color.into().0,
             corner_radius,
             border_width,
-            border_color,
+            border_color: border_color.into().0,
         });
     }
 
@@ -447,7 +447,7 @@ impl UIRenderer {
         x1: f32,
         y1: f32,
         thickness: f32,
-        color: [f32; 4],
+        color: impl Into<LinearColor>,
     ) {
         self.line_commands.push(LineCommand {
             x0,
@@ -455,16 +455,24 @@ impl UIRenderer {
             x1,
             y1,
             thickness,
-            color,
+            color: color.into().0,
             layer: self.current_layer(),
             clip: self.immediate_clip,
         });
     }
 
     /// Queue text at a position.
-    pub fn draw_text(&mut self, x: f32, y: f32, text: &str, font_size: f32, color: [u8; 4]) {
+    pub fn draw_text(
+        &mut self,
+        x: f32,
+        y: f32,
+        text: &str,
+        font_size: f32,
+        color: impl Into<TextColor>,
+    ) {
         #[cfg(target_os = "macos")]
         {
+            let color = color.into().0;
             // Honour the immediate-mode clip so canvas labels stay in their lane
             // alongside the clipped nodes/wires (None = unclipped, as before).
             let clip = self
@@ -774,12 +782,12 @@ impl UIRenderer {
         y: f32,
         w: f32,
         h: f32,
-        color: [u8; 4],
+        color: impl Into<TextColor>,
         clip_bounds: Option<[f32; 4]>,
     ) {
         let layer = self.current_layer();
         self.text_renderer
-            .draw_icon(icon_id, x, y, w, h, color, clip_bounds, layer);
+            .draw_icon(icon_id, x, y, w, h, color.into().0, clip_bounds, layer);
     }
 
     /// Text measurement using NativeTextRenderer's cached measurement.
