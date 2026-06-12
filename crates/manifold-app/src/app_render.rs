@@ -4,7 +4,7 @@
 //! overlay rendering helper. All methods are `impl Application` blocks that
 //! operate on the struct defined in app.rs.
 
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_renderer::ui_renderer::{Layer, UIRenderer};
 
 use manifold_ui::node::FontWeight;
 use manifold_ui::panels::PanelAction;
@@ -2811,7 +2811,7 @@ impl Application {
             // it draws inline on the Overlay layer, unclipped.
             if self.editor_mapping_popover.is_open() {
                 ui.clear_immediate_clip();
-                ui.push_layer(manifold_renderer::ui_renderer::Layer::Overlay);
+                ui.push_layer(Layer::Overlay);
                 self.editor_mapping_popover.set_live_value(popover_live_value);
                 self.editor_mapping_popover.render(ui);
                 ui.pop_layer();
@@ -3196,7 +3196,10 @@ impl Application {
                 );
             }
 
-            // Perf HUD
+            // Perf HUD — floats over timeline content including the playhead.
+            // (Before the layer system, rendering it here silently dropped
+            // the playhead rect and the waveform-lane batches above: each
+            // traversal cleared the previous one's scissor batches.)
             if self.ws.ui_root.perf_hud.is_visible() {
                 let hud_start = self.ws.ui_root.perf_hud.first_node();
                 let hud_end = if self.ws.ui_root.dropdown.is_open() {
@@ -3208,7 +3211,9 @@ impl Application {
                 } else {
                     usize::MAX
                 };
+                ui.push_layer(Layer::Overlay);
                 ui.render_overlay_range(&self.ws.ui_root.tree, hud_start, hud_end);
+                ui.pop_layer();
             }
 
             // Popups
