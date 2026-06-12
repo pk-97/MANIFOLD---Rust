@@ -110,6 +110,12 @@ impl Primitive for SimplexNoiseForce3DAtParticles {
         &[("in", "out")]
     }
 
+    // run() dispatches `active_count` threads, not pool capacity — a fused
+    // region containing this atom caps its dispatch the same way.
+    fn fused_dispatch_count_param(&self) -> Option<&'static str> {
+        Some("active_count")
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let turbulence = ctx.scalar_or_param("turbulence", 0.001);
         let anti_clump = ctx.scalar_or_param("anti_clump", 20.0);

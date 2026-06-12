@@ -98,6 +98,12 @@ impl Primitive for ArrayDiffuseParticles {
         &[("in", "out")]
     }
 
+    // run() dispatches `active_count` threads, not pool capacity — a fused
+    // region containing this atom caps its dispatch the same way.
+    fn fused_dispatch_count_param(&self) -> Option<&'static str> {
+        Some("active_count")
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let diffusion = ctx.scalar_or_param("diffusion", 0.0);
         let active_count = ctx.scalar_or_param("active_count", 500_000.0).round().max(0.0) as u32;
