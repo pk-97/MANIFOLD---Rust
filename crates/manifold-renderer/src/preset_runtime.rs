@@ -1448,7 +1448,7 @@ impl PresetRuntime {
         // wet/dry groups bump it to 3 (the pre-group texture must stay
         // alive across the group's effects so the closing `Mix.a`
         // input can read it).
-        let assignment = assign_texture2d_slots(&plan, source_resource);
+        let assignment = assign_texture2d_slots(&plan, source_resource, (width, height));
 
         // Allocate exactly one RenderTarget per physical slot. Pool
         // the allocation when a pool is available — `MTLHeap`
@@ -1466,10 +1466,11 @@ impl PresetRuntime {
             } else {
                 "chain-graph-pingpong"
             };
+            let (slot_w, slot_h) = assignment.slot_dims[slot_idx as usize];
             let rt = if let Some(p) = pool {
-                RenderTarget::new_pooled(p, width, height, GRAPH_FORMAT, label)
+                RenderTarget::new_pooled(p, slot_w, slot_h, GRAPH_FORMAT, label)
             } else {
-                RenderTarget::new(device, width, height, GRAPH_FORMAT, label)
+                RenderTarget::new(device, slot_w, slot_h, GRAPH_FORMAT, label)
             };
             slot_handles.push(backend.allocate_slot(rt));
         }
@@ -3097,6 +3098,11 @@ struct SlotAssignment {
     source_slot: Slot,
     /// Total physical slots needed = slots actually allocated.
     slot_count: u32,
+    /// Allocation dims per slot, indexed by `Slot.0`. Canvas-sized for the
+    /// shared ping-pong slots; dedicated slots for held/persistent
+    /// resources take the resource's resolved dims (a 256×1 LUT strip must
+    /// not pin a canvas-sized texture for the chain's lifetime).
+    slot_dims: Vec<(u32, u32)>,
 }
 
 /// Walk the plan in topological order, mirroring the executor's
@@ -3120,30 +3126,47 @@ struct SlotAssignment {
 ///
 /// The simulator's slot ids are dense `0..K`. The caller maps them to
 /// real backend slots 1:1 via `allocate_slot`.
-fn assign_texture2d_slots(plan: &ExecutionPlan, source_resource: ResourceId) -> SlotAssignment {
+fn assign_texture2d_slots(
+    plan: &ExecutionPlan,
+    source_resource: ResourceId,
+    canvas_dims: (u32, u32),
+) -> SlotAssignment {
     let mut resource_to_slot: AHashMap<ResourceId, Slot> = AHashMap::default();
     let source_slot = Slot(0);
     resource_to_slot.insert(source_resource, source_slot);
     let mut next_slot: u32 = 1;
+    let mut slot_dims: Vec<(u32, u32)> = vec![canvas_dims];
 
-    // Pre-allocate dedicated slots for every persistent Texture2D
-    // resource BEFORE the topological walk. These slots stay out of
-    // the free pool for the rest of the simulation, guaranteeing the
-    // feedback loop's producer/consumer share the carry-over texture
-    // without any intermediate write aliasing it.
-    let persistent_set: std::collections::HashSet<ResourceId> = plan
+    // Pre-allocate dedicated slots for every persistent AND held
+    // Texture2D resource BEFORE the topological walk. These slots stay
+    // out of the free pool for the rest of the simulation. Persistent:
+    // the feedback loop's producer/consumer must share the carry-over
+    // texture without any intermediate write aliasing it. Held (memo-
+    // latched LUTs etc.): the executor serves the latched write on
+    // every later frame while upstream transient steps keep re-running
+    // — a shared slot would be stomped each frame (the 2026-06 Infrared
+    // → QuadMirror blackout). Dedicated slots are allocated at the
+    // resource's RESOLVED dims, so a 256×1 LUT strip costs 256×1, not
+    // a canvas-sized texture.
+    let dedicated_set: std::collections::HashSet<ResourceId> = plan
         .persistent_resources()
         .iter()
+        .chain(plan.held_resources())
         .filter(|&&res_id| {
-            plan.resource_type(res_id)
-                .map(|ty| ty.is_texture_2d())
-                .unwrap_or(false)
+            res_id != source_resource
+                && plan
+                    .resource_type(res_id)
+                    .map(|ty| ty.is_texture_2d())
+                    .unwrap_or(false)
         })
         .copied()
         .collect();
-    for &res_id in &persistent_set {
+    for &res_id in &dedicated_set {
         let slot = Slot(next_slot);
         next_slot += 1;
+        slot_dims.push(crate::node_graph::execution::resolve_dims(
+            plan, res_id, canvas_dims,
+        ));
         resource_to_slot.insert(res_id, slot);
     }
 
@@ -3155,7 +3178,7 @@ fn assign_texture2d_slots(plan: &ExecutionPlan, source_resource: ResourceId) -> 
             if res_id == source_resource {
                 continue;
             }
-            if persistent_set.contains(&res_id) {
+            if dedicated_set.contains(&res_id) {
                 // Dedicated slot pre-allocated above. The producer's
                 // write goes through `resource_to_slot[res_id]` at
                 // runtime; nothing to do in the simulator.
@@ -3171,6 +3194,7 @@ fn assign_texture2d_slots(plan: &ExecutionPlan, source_resource: ResourceId) -> 
             let slot = free_pool.pop().unwrap_or_else(|| {
                 let s = Slot(next_slot);
                 next_slot += 1;
+                slot_dims.push(canvas_dims);
                 s
             });
             resource_to_slot.insert(res_id, slot);
@@ -3181,11 +3205,10 @@ fn assign_texture2d_slots(plan: &ExecutionPlan, source_resource: ResourceId) -> 
                 // Source slot is dedicated. Never recycled.
                 continue;
             }
-            if persistent_set.contains(&res_id) {
-                // Persistent slots never enter the free pool.
-                // (Compile-time invariant: persistent resources never
-                // appear in any step's `free_after` — this guard is
-                // defensive.)
+            if dedicated_set.contains(&res_id) {
+                // Dedicated (persistent/held) slots never enter the free
+                // pool. (Compile-time invariant: neither kind appears in
+                // any step's `free_after` — this guard is defensive.)
                 continue;
             }
             if !plan
@@ -3201,10 +3224,12 @@ fn assign_texture2d_slots(plan: &ExecutionPlan, source_resource: ResourceId) -> 
         }
     }
 
+    debug_assert_eq!(slot_dims.len(), next_slot as usize);
     SlotAssignment {
         resource_to_slot,
         source_slot,
         slot_count: next_slot,
+        slot_dims,
     }
 }
 
@@ -3976,7 +4001,7 @@ mod persistent_slot_tests {
             .find(|s| s.node == src)
             .and_then(|s| s.outputs.iter().find(|(p, _)| *p == "out").map(|(_, r)| *r))
             .expect("source produces an out resource");
-        let assignment = assign_texture2d_slots(&plan, src_res);
+        let assignment = assign_texture2d_slots(&plan, src_res, (64, 64));
 
         let mix_out_res = plan
             .steps()
@@ -5842,6 +5867,56 @@ mod chain_fusion_tests {
             drift.over_count, 0,
             "Infrared on a static input must be frame-stable; a late frame \
              diverging from frame 0 is the flash-then-black bug: \
+             max_abs={}, over={}/{}",
+            drift.max_abs, drift.over_count, drift.total
+        );
+    }
+
+    /// The on-stage blackout (2026-06-12): Infrared FOLLOWED BY another card,
+    /// fusion off, static input. The chain plan's slot planner returns the
+    /// sticky LUT resources' slots to its free pool at `free_after` (it only
+    /// exempts persistent resources), so QuadMirror's intermediates share the
+    /// LUT's physical texture and stomp it every frame — while the executor's
+    /// memo skip keeps serving the latched slot. Infrared LAST works by
+    /// accident (nothing runs after it to reuse the slot); this ordering is
+    /// the one that goes black.
+    #[test]
+    fn infrared_before_quadmirror_stays_stable_across_frames() {
+        let device = crate::test_device();
+        let primitives = PrimitiveRegistry::with_builtin();
+        let (w, h) = (640u32, 360u32);
+        let input = wireframe_input(&device, w, h);
+        let pc = ctx(w, h);
+
+        let mut ir = make_default(PresetTypeId::INFRARED);
+        set_param(&mut ir, "amount", 1.0);
+        set_param(&mut ir, "palette", 6.0); // Arctic
+        let qm = make_default(PresetTypeId::QUAD_MIRROR);
+        let effects = vec![ir, qm];
+
+        let mut cg = PresetRuntime::try_build(
+            &effects, &[], &primitives, &device, None, w, h, None, None,
+        )
+        .expect("chain builds");
+
+        run_once(&mut cg, &device, &input, &effects, &pc);
+        let frame0 = snapshot_output(&cg, &device, w, h);
+
+        for _ in 0..15 {
+            run_once(&mut cg, &device, &input, &effects, &pc);
+        }
+        let differ = TextureDiff::new(&device);
+        let drift = differ.compare(
+            &device,
+            &frame0.texture,
+            cg.output_texture().unwrap(),
+            1.0e-3,
+            1.0e-3,
+        );
+        assert_eq!(
+            drift.over_count, 0,
+            "Infrared before QuadMirror on a static input must be frame-stable; \
+             late-frame divergence is the on-stage flash-then-black bug: \
              max_abs={}, over={}/{}",
             drift.max_abs, drift.over_count, drift.total
         );

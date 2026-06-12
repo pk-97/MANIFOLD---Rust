@@ -23,7 +23,7 @@ pub mod composites;
 pub mod descriptor;
 pub mod preview_encoding;
 mod effect_node;
-mod execution;
+pub(crate) mod execution;
 mod execution_plan;
 pub mod freeze;
 mod graph;

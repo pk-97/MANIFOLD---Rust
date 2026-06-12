@@ -39,7 +39,11 @@ use crate::node_graph::state_store::{OwnerKey, StateStore};
 /// resolution policy lives in one place — the `acquire` / `release`
 /// pair MUST agree on dims (the backend's pool keys on dims), so a
 /// single helper here prevents the two sites from drifting.
-fn resolve_dims(plan: &ExecutionPlan, res_id: ResourceId, canvas_dims: (u32, u32)) -> (u32, u32) {
+pub(crate) fn resolve_dims(
+    plan: &ExecutionPlan,
+    res_id: ResourceId,
+    canvas_dims: (u32, u32),
+) -> (u32, u32) {
     if let Some(dims) = plan.resource_dims(res_id) {
         return dims;
     }
@@ -167,22 +171,13 @@ pub struct Executor {
     /// which conservatively keeps their consumers dirty.
     resource_epoch: ahash::AHashMap<ResourceId, u64>,
     /// Per-step HOISTABLE bit: the step's node is pure AND every input is
-    /// produced by a hoistable step (transitively-static closure, computed in
-    /// topo order at memo build). Purity alone is not enough for two reasons:
-    /// a pure node fed by dynamic content (color_lut reading the live source)
-    /// can never go clean, so holding its output out of the pool would be
-    /// pure memory cost; and an input with NO producing step (a host-prebound
-    /// resource mutated via `replace_texture_2d`) carries no epoch, so caching
-    /// across it would serve stale content. Only hoistable steps get a memo,
-    /// the clean-skip check, and sticky outputs.
-    hoistable_steps: Vec<bool>,
-    /// Outputs of hoistable steps — exempt from `free_after` release so the
-    /// held texture/scalar survives the frame for the memo skip to serve.
-    /// Without this, the consumer's `free_after` returns the LUT's slot to
-    /// the pool every frame and nothing can ever cache. Built once per plan
-    /// shape.
-    sticky_resources: ahash::AHashSet<ResourceId>,
-    /// Step count the memo/sticky structures were built for; rebuilt when it
+    /// produced by a hoistable step. The closure itself is classified at
+    /// plan compile time ([`ExecutionPlan::step_hoistable`] /
+    /// [`ExecutionPlan::held_resources`]) — lifetimes are decided once, in
+    /// the plan, so every consumer (this executor's pool release, the chain
+    /// runtime's slot planner) agrees. Held resources never appear in
+    /// `free_after`, so no runtime exemption exists here.
+    /// Step count the memo structures were built for; rebuilt when it
     /// differs (defensive — a live executor's plan does not change shape).
     memo_steps_len: Option<usize>,
 
@@ -260,8 +255,6 @@ impl Executor {
             step_profiles: Vec::new(),
             step_memo: Vec::new(),
             resource_epoch: ahash::AHashMap::default(),
-            hoistable_steps: Vec::new(),
-            sticky_resources: ahash::AHashSet::default(),
             memo_steps_len: None,
             empty_resources: ahash::AHashSet::default(),
             empty_resources_prev: ahash::AHashSet::default(),
@@ -601,39 +594,13 @@ impl Executor {
 
         // Build the memoized-dataflow structures on first frame (or if the
         // plan shape ever changed — defensive; live executors keep one plan).
-        // Sticky = outputs of pure steps, exempted from `free_after` below so
-        // the held slot survives for the clean-skip to serve.
+        // The hoistable closure and the held (sticky) resource set are
+        // classified at plan compile time — see ExecutionPlan::held_resources.
         if self.memo_steps_len != Some(plan.steps().len()) {
             self.memo_steps_len = Some(plan.steps().len());
             self.step_memo.clear();
             self.step_memo.resize_with(plan.steps().len(), || None);
             self.resource_epoch.clear();
-            self.sticky_resources.clear();
-            self.hoistable_steps.clear();
-            self.hoistable_steps.resize(plan.steps().len(), false);
-            // Hoistable closure, in plan (topo) order: pure node AND every
-            // input produced by an already-hoistable step. An input with no
-            // producing step (host-prebound) breaks the chain — it has no
-            // epoch, so caching across it would serve stale content.
-            let mut res_hoistable: ahash::AHashMap<ResourceId, bool> =
-                ahash::AHashMap::with_capacity(plan.resource_count());
-            for (idx, step) in plan.steps().iter().enumerate() {
-                let pure = graph
-                    .get_node(step.node)
-                    .is_some_and(|inst| inst.node.is_pure());
-                let hoistable = pure
-                    && step
-                        .inputs
-                        .iter()
-                        .all(|&(_, res)| res_hoistable.get(&res).copied().unwrap_or(false));
-                self.hoistable_steps[idx] = hoistable;
-                for &(_, res) in &step.outputs {
-                    res_hoistable.insert(res, hoistable);
-                    if hoistable {
-                        self.sticky_resources.insert(res);
-                    }
-                }
-            }
         }
 
         // Reset preview capture for this frame. Re-resolved below if the
@@ -731,7 +698,7 @@ impl Executor {
                 || self.dump_all
                 || self.preview_target == Some(step.node);
             if !force_dirty
-                && self.hoistable_steps[idx]
+                && plan.step_hoistable(idx)
                 && let Some(inst) = graph.get_node(step.node)
                 && inst.node.skip_passthrough(&inst.params).is_none()
                 && let Some(memo) = &self.step_memo[idx]
@@ -847,7 +814,7 @@ impl Executor {
             // hoistable or missing node).
             let mut executed_pure_epoch: Option<u64> = None;
             if let Some(inst) = graph.get_node_mut(step.node) {
-                if self.hoistable_steps[idx] {
+                if plan.step_hoistable(idx) {
                     executed_pure_epoch = Some(inst.param_epoch);
                 }
                 // Query skip-passthrough BEFORE building the full context.
@@ -1104,12 +1071,9 @@ impl Executor {
                 if self.dump_all || self.preview_resource == Some(res_id) {
                     continue;
                 }
-                // Pure steps' outputs are held past the frame so the memo
-                // skip can serve them — without this, the consumer returns
-                // the LUT's slot to the pool every frame and nothing caches.
-                if self.sticky_resources.contains(&res_id) {
-                    continue;
-                }
+                // Held (memo-latched) resources never appear in `free_after`
+                // — excluded at plan compile time, see
+                // ExecutionPlan::held_resources — so no exemption is needed.
                 let ty = plan
                     .resource_type(res_id)
                     .expect("resource type known from compile()");

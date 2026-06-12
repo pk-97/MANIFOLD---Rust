@@ -125,6 +125,25 @@ pub struct ExecutionPlan {
     /// frame. The executor walks this list and calls `Backend::acquire`
     /// (idempotent on existing bindings) before the step loop.
     persistent_resources: Vec<ResourceId>,
+    /// Resources held across frames by the memoized-dataflow (constant-
+    /// subgraph hoisting) path: every output of a hoistable step. The
+    /// executor serves these from their latched slots on memo-skip frames
+    /// instead of re-running the producer, so their lifetime is the
+    /// executor's lifetime, NOT their last reader's step. Like
+    /// [`persistent_resources`](Self::persistent_resources) they are
+    /// excluded from every step's `free_after` at compile time — lifetime
+    /// is decided ONCE here, and every plan consumer (the executor's pool
+    /// release, the chain runtime's slot planner) inherits it. The 2026-06
+    /// Infrared blackout was exactly this invariant living in the executor
+    /// only: the chain slot planner trusted `free_after`, recycled a
+    /// memo-held LUT's physical slot into the downstream card, and the
+    /// latched read went black.
+    held_resources: Vec<ResourceId>,
+    /// `hoistable_steps[i]` — step `i` is a pure node whose inputs are all
+    /// produced by hoistable steps (the memoizable closure). Parallel to
+    /// [`steps`](Self::steps). Outputs of these steps make up
+    /// [`held_resources`](Self::held_resources).
+    hoistable_steps: Vec<bool>,
     /// Indices into [`steps`] of nodes that declare non-empty
     /// [`state_capture_input_ports`](crate::node_graph::effect_node::EffectNode::state_capture_input_ports).
     /// The executor invokes
@@ -197,6 +216,18 @@ impl ExecutionPlan {
         &self.persistent_resources
     }
 
+    /// Resources latched by the memo/hoisting path — excluded from
+    /// `free_after`, must never be aliased or recycled while the plan's
+    /// executor lives. See the field docstring.
+    pub fn held_resources(&self) -> &[ResourceId] {
+        &self.held_resources
+    }
+
+    /// Whether step `idx` is in the memoizable (hoistable) closure.
+    pub fn step_hoistable(&self, idx: usize) -> bool {
+        self.hoistable_steps.get(idx).copied().unwrap_or(false)
+    }
+
     /// Step indices that need a post-frame `late_capture` invocation —
     /// see [`late_capture_steps`](Self::late_capture_steps) field docs.
     pub fn late_capture_step_indices(&self) -> &[usize] {
@@ -222,6 +253,7 @@ impl ExecutionPlan {
         let k = k.min(self.steps.len());
         let mut p = self.clone();
         p.steps.truncate(k);
+        p.hoistable_steps.truncate(k);
         p.late_capture_steps.retain(|&i| i < k);
         p
     }
@@ -618,6 +650,43 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         }
     }
 
+    // Third pass — Part A2: the memoizable (hoistable) closure, in topo
+    // order: a step is hoistable when its node is pure AND every input is
+    // produced by an already-hoistable step. An input with no producing
+    // step (host-prebound, e.g. the chain `source`) breaks the chain — it
+    // has no change-epoch, so caching across it would serve stale content.
+    // Outputs of hoistable steps are HELD: the executor's memo skip serves
+    // their latched slots on later frames without re-running the producer,
+    // so they must outlive their last reader. Classify them here — the one
+    // place lifetimes are decided — so `free_after` (below) never frees
+    // them and downstream slot planners can't alias them.
+    let mut held: Vec<ResourceId> = Vec::new();
+    let mut hoistable_steps: Vec<bool> = vec![false; steps.len()];
+    {
+        let mut res_hoistable: AHashMap<ResourceId, bool> =
+            AHashMap::with_capacity(resource_types.len());
+        for (idx, step) in steps.iter().enumerate() {
+            let pure = graph
+                .get_node(step.node)
+                .is_some_and(|inst| inst.node.is_pure());
+            let hoistable = pure
+                && step
+                    .inputs
+                    .iter()
+                    .all(|&(_, res)| res_hoistable.get(&res).copied().unwrap_or(false));
+            hoistable_steps[idx] = hoistable;
+            for &(_, res) in &step.outputs {
+                res_hoistable.insert(res, hoistable);
+                if hoistable && !persistent_seen.contains(&res) {
+                    held.push(res);
+                }
+            }
+        }
+    }
+    for res_id in &held {
+        last_reader.remove(res_id);
+    }
+
     // Third pass — Part B: bucket resources by their last_reader
     // step (now reflecting any skip-passthrough extensions) and
     // attach to the corresponding step's free_after list. Sort
@@ -650,6 +719,8 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     });
 
     persistent.sort();
+    held.sort();
+    held.dedup();
     Ok(ExecutionPlan {
         steps,
         resource_types,
@@ -658,6 +729,8 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         resource_canvas_scales,
         requires,
         persistent_resources: persistent,
+        held_resources: held,
+        hoistable_steps,
         late_capture_steps,
     })
 }
