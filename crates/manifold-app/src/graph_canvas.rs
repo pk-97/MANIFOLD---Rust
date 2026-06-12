@@ -18,7 +18,7 @@
 //! wheel, hover highlights. No editing yet.
 
 use manifold_renderer::node_graph::{GraphSnapshot, NodeSnapshot, PortKindSnapshot, WireSnapshot};
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_renderer::ui_renderer::{Layer, UIRenderer};
 use manifold_ui::PanelAction;
 
 use manifold_core::effect_graph_def::GROUP_TYPE_ID;
@@ -2234,16 +2234,26 @@ impl GraphCanvas {
         // below the popover, and only when the canvas is idle (a tooltip
         // chasing the cursor mid-drag would be noise).
         if matches!(self.drag_mode, DragMode::None) && !self.mapping_popover.is_open() {
+            ui.push_layer(Layer::Tooltip);
             self.draw_hover_tooltip(ui, viewport, canvas);
+            ui.pop_layer();
         }
 
         // Mapping popover floats above everything else so its handles and
-        // buttons are never buried under a node it overlaps.
+        // buttons are never buried under a node it overlaps. It draws
+        // unclipped (it may extend past the canvas lane) on the Overlay
+        // layer; the lane clip is re-armed afterwards.
+        ui.clear_immediate_clip();
+        ui.push_layer(Layer::Overlay);
         self.mapping_popover.render(ui);
+        ui.pop_layer();
+        ui.set_immediate_clip(viewport.x, viewport.y, viewport.w, viewport.h);
 
         // Debug overlay last, on top of everything — it's a diagnostic HUD.
         if self.debug_overlay {
+            ui.push_layer(Layer::Tooltip);
             self.draw_debug_overlay(ui, canvas);
+            ui.pop_layer();
         }
     }
 

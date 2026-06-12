@@ -34,6 +34,8 @@ use manifold_ui::{
 };
 use std::sync::Arc;
 
+use crate::ui_renderer::Layer;
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 /// Atlas texture dimensions (1024×1024 R8Unorm = 1 MiB).
@@ -564,6 +566,7 @@ struct TextCommand {
     color: [u8; 4],
     font_weight: FontWeight,
     clip_bounds: Option<[f32; 4]>,
+    layer: Layer,
 }
 
 /// Command to draw an icon from the atlas.
@@ -575,6 +578,7 @@ struct IconCommand {
     icon_id: u8,
     color: [u8; 4],
     clip_bounds: Option<[f32; 4]>,
+    layer: Layer,
 }
 
 // ─── TextVertex ──────────────────────────────────────────────────────────────
@@ -647,6 +651,13 @@ pub struct NativeTextRenderer {
     vertices: Vec<TextVertex>,
     indices: Vec<u32>,
 
+    /// Per-layer (first_index, index_count) ranges into the prepared index
+    /// buffer, for text quads and icon quads respectively. Commands are
+    /// stable-sorted by layer during prepare so each layer's quads are
+    /// contiguous; `render_layer_in_pass` draws just one layer's ranges.
+    text_layer_ranges: [(u32, u32); 3],
+    icon_layer_ranges: [(u32, u32); 3],
+
     /// Measurement cache: u64 hash of (text, font_size, weight) → Vec2.
     /// Uses hash keys to avoid String allocations on cache hits.
     measure_cache: AHashMap<u64, Vec2>,
@@ -716,6 +727,8 @@ impl NativeTextRenderer {
             prepared_globals: [0.0; 4],
             vertices: Vec::new(),
             indices: Vec::new(),
+            text_layer_ranges: [(0, 0); 3],
+            icon_layer_ranges: [(0, 0); 3],
             measure_cache: AHashMap::new(),
             frame_generation: 0,
         }
@@ -732,6 +745,7 @@ impl NativeTextRenderer {
         color: [u8; 4],
         font_weight: FontWeight,
         clip_bounds: Option<[f32; 4]>,
+        layer: Layer,
     ) {
         if text.is_empty() {
             return;
@@ -748,6 +762,7 @@ impl NativeTextRenderer {
             color,
             font_weight,
             clip_bounds,
+            layer,
         });
     }
 
@@ -801,6 +816,7 @@ impl NativeTextRenderer {
         h: f32,
         color: [u8; 4],
         clip_bounds: Option<[f32; 4]>,
+        layer: Layer,
     ) {
         if (icon_id as usize) < ICON_COUNT && self.icon_infos[icon_id as usize].is_some() {
             self.icon_commands.push(IconCommand {
@@ -811,6 +827,7 @@ impl NativeTextRenderer {
                 icon_id,
                 color,
                 clip_bounds,
+                layer,
             });
         }
     }
@@ -836,6 +853,8 @@ impl NativeTextRenderer {
         self.vertices.clear();
         self.indices.clear();
         self.prepared_index_count = 0;
+        self.text_layer_ranges = [(0, 0); 3];
+        self.icon_layer_ranges = [(0, 0); 3];
 
         if self.commands.is_empty() && self.icon_commands.is_empty() {
             return false;
@@ -844,10 +863,15 @@ impl NativeTextRenderer {
         self.prepared_globals = [viewport_w as f32, viewport_h as f32, offset_x, offset_y];
         let scale = scale_factor as f32;
 
-        let commands: Vec<TextCommand> = std::mem::take(&mut self.commands);
+        let mut commands: Vec<TextCommand> = std::mem::take(&mut self.commands);
         let arena = std::mem::take(&mut self.text_arena);
+        // Stable sort: within a layer, insertion order is preserved, so a
+        // single-layer frame builds the identical buffer to the pre-layer
+        // renderer.
+        commands.sort_by_key(|c| c.layer);
 
         for cmd in &commands {
+            let range_start = self.indices.len() as u32;
             let text = &arena
                 [cmd.text_offset as usize..(cmd.text_offset as usize + cmd.text_len as usize)];
             let physical_size = cmd.font_size * scale;
@@ -962,6 +986,14 @@ impl NativeTextRenderer {
                     base + 3,
                 ]);
             }
+
+            // Extend this layer's text range (commands are layer-sorted, so
+            // the range stays contiguous).
+            let range = &mut self.text_layer_ranges[cmd.layer.index()];
+            if range.1 == 0 {
+                range.0 = range_start;
+            }
+            range.1 = self.indices.len() as u32 - range.0;
         }
 
         // Restore arena capacity for next frame (contents will be cleared in clear_commands).
@@ -977,9 +1009,11 @@ impl NativeTextRenderer {
             self.atlas.was_cleared = false;
         }
 
-        // Emit quads for icon commands.
-        let icon_cmds: Vec<IconCommand> = std::mem::take(&mut self.icon_commands);
+        // Emit quads for icon commands (layer-sorted, like text above).
+        let mut icon_cmds: Vec<IconCommand> = std::mem::take(&mut self.icon_commands);
+        icon_cmds.sort_by_key(|c| c.layer);
         for cmd in &icon_cmds {
+            let range_start = self.indices.len() as u32;
             let Some(info) = self.icon_infos[cmd.icon_id as usize] else {
                 continue;
             };
@@ -1042,6 +1076,12 @@ impl NativeTextRenderer {
             });
             self.indices
                 .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+
+            let range = &mut self.icon_layer_ranges[cmd.layer.index()];
+            if range.1 == 0 {
+                range.0 = range_start;
+            }
+            range.1 = self.indices.len() as u32 - range.0;
         }
 
         if self.vertices.is_empty() {
@@ -1121,6 +1161,53 @@ impl NativeTextRenderer {
             load_action,
             "TextRenderer",
         );
+    }
+
+    /// Draw one layer's text + icon quads into an already-active render pass.
+    pub fn render_layer_in_pass(&self, encoder: &mut GpuEncoder, layer: Layer) {
+        if self.prepared_index_count == 0 {
+            return;
+        }
+        let Some(ref atlas_texture) = self.atlas.texture else {
+            return;
+        };
+        let text_range = self.text_layer_ranges[layer.index()];
+        let icon_range = self.icon_layer_ranges[layer.index()];
+        if text_range.1 == 0 && icon_range.1 == 0 {
+            return;
+        }
+        let vbuf = self.vbuf_ring[self.prepared_slot].as_ref().unwrap();
+        let ibuf = self.ibuf_ring[self.prepared_slot].as_ref().unwrap();
+        let bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::cast_slice(&self.prepared_globals),
+            },
+            GpuBinding::Texture {
+                binding: 1,
+                texture: atlas_texture,
+            },
+            GpuBinding::Sampler {
+                binding: 2,
+                sampler: &self.sampler,
+            },
+        ];
+        for (first, count) in [text_range, icon_range] {
+            if count == 0 {
+                continue;
+            }
+            encoder.draw_in_render_pass(
+                &self.pipeline,
+                &bindings,
+                vbuf,
+                0,
+                ibuf,
+                count,
+                (first as usize * std::mem::size_of::<u32>()) as u64,
+                None,
+                "TextRenderer",
+            );
+        }
     }
 
     /// Draw text into an already-active render pass.

@@ -100,6 +100,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Z-order layer for draw commands. Within a frame, all Base geometry
+/// renders first (rects, lines, then text), then Overlay, then Tooltip.
+/// Within a layer, insertion order is preserved — so a frame that only
+/// touches Base renders identically to the pre-layer renderer.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+pub enum Layer {
+    #[default]
+    Base,
+    Overlay,
+    Tooltip,
+}
+
+impl Layer {
+    pub const ALL: [Layer; 3] = [Layer::Base, Layer::Overlay, Layer::Tooltip];
+
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+}
+
 /// Queued draw command.
 struct RectCommand {
     x: f32,
@@ -123,6 +143,10 @@ struct LineCommand {
     y1: f32,
     thickness: f32,
     color: [f32; 4],
+    layer: Layer,
+    /// Immediate clip captured at draw time (lines are only ever emitted via
+    /// the immediate API; trees draw rects and text only).
+    clip: Option<Rect>,
 }
 
 /// A batch of rects sharing the same scissor state.
@@ -134,6 +158,8 @@ struct ScissorBatch {
     rect_start: usize,
     /// Number of rects in this batch.
     rect_count: usize,
+    /// Z-order layer the batch draws on.
+    layer: Layer,
 }
 
 /// GPU-ready batch with physical pixel scissor coordinates.
@@ -144,6 +170,8 @@ struct PreparedBatch {
     index_offset: u64,
     /// Number of indices to draw.
     index_count: u32,
+    /// Z-order layer the batch draws on.
+    layer: Layer,
 }
 
 /// Initial vertex/index buffer capacities (vertices / indices).
@@ -193,12 +221,19 @@ pub struct UIRenderer {
     // over them. `None` (the default, reset every `begin_frame`) keeps the legacy
     // full-viewport behaviour for every other caller.
     immediate_clip: Option<Rect>,
+    // Layer stack for z-ordered drawing. Empty = Base. Pushing/popping
+    // flushes the pending immediate-mode run so commands on either side
+    // land in batches tagged with the correct layer.
+    layer_stack: Vec<Layer>,
     // Scissor batches accumulated during tree traversal.
     scissor_batches: Vec<ScissorBatch>,
     // Index into rect_commands where the current batch started.
     current_batch_start: usize,
     // GPU-ready batches produced by prepare().
     prepared_batches: Vec<PreparedBatch>,
+    // Scratch for grouping line quads into batches during prepare():
+    // (layer, clip at draw time, index buffer byte offset, index count).
+    line_batch_scratch: Vec<(Layer, Option<Rect>, u64, u32)>,
     // Physical dimensions of the render target (for full-viewport scissor reset).
     prepared_physical_w: u32,
     prepared_physical_h: u32,
@@ -276,9 +311,11 @@ impl UIRenderer {
             prepared_globals: [0.0; 4],
             clip_stack: Vec::with_capacity(8),
             immediate_clip: None,
+            layer_stack: Vec::with_capacity(4),
             scissor_batches: Vec::with_capacity(8),
             current_batch_start: 0,
             prepared_batches: Vec::with_capacity(8),
+            line_batch_scratch: Vec::with_capacity(8),
             prepared_physical_w: 0,
             prepared_physical_h: 0,
         }
@@ -291,12 +328,36 @@ impl UIRenderer {
     /// lane so nodes and wires can't bleed under the side panels. Reset to
     /// unclipped on the next `begin_frame`.
     pub fn set_immediate_clip(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.flush_immediate_run();
         self.immediate_clip = Some(Rect::new(x, y, w, h));
     }
 
     /// Drop any immediate-mode clip set this frame (back to full viewport).
     pub fn clear_immediate_clip(&mut self) {
+        self.flush_immediate_run();
         self.immediate_clip = None;
+    }
+
+    // ── Layers ──────────────────────────────────────────────────────
+
+    /// The layer subsequent draw commands land on.
+    pub fn current_layer(&self) -> Layer {
+        self.layer_stack.last().copied().unwrap_or(Layer::Base)
+    }
+
+    /// Draw subsequent commands on `layer` until the matching [`Self::pop_layer`].
+    /// Must be balanced before `prepare` runs; an unbalanced push would
+    /// silently float everything after it.
+    pub fn push_layer(&mut self, layer: Layer) {
+        self.flush_immediate_run();
+        self.layer_stack.push(layer);
+    }
+
+    /// Return to the layer that was active before the matching push.
+    pub fn pop_layer(&mut self) {
+        debug_assert!(!self.layer_stack.is_empty(), "pop_layer without push");
+        self.flush_immediate_run();
+        self.layer_stack.pop();
     }
 
     /// Queue a filled rectangle.
@@ -379,6 +440,8 @@ impl UIRenderer {
             y1,
             thickness,
             color,
+            layer: self.current_layer(),
+            clip: self.immediate_clip,
         });
     }
 
@@ -391,26 +454,46 @@ impl UIRenderer {
             let clip = self
                 .immediate_clip
                 .map(|r| [r.x, r.y, r.x + r.width, r.y + r.height]);
+            let layer = self.current_layer();
             self.text_renderer
-                .draw_text(x, y, text, font_size, color, FontWeight::Medium, clip);
+                .draw_text(x, y, text, font_size, color, FontWeight::Medium, clip, layer);
         }
     }
 
     // ── Scissor batch helpers ───────────────────────────────────────
+    //
+    // Every rect command must be covered by exactly one ScissorBatch by the
+    // time `prepare` runs — an uncovered rect sits in the index buffer but is
+    // silently skipped. The protocol: `current_batch_start` marks where the
+    // pending (not yet batched) run begins. Tree traversals flush the pending
+    // immediate-mode run before they start, batch their own emissions on clip
+    // boundaries, and flush at the end. Immediate-mode runs are flushed on
+    // layer push/pop, on immediate-clip changes, and once at the top of
+    // `prepare`. `prepare` resets the marker to 0 after draining the queues,
+    // so a stale marker can never underflow a later flush.
 
-    /// Begin scissor batch tracking for a new traversal.
-    fn begin_scissor_tracking(&mut self) {
-        self.clip_stack.clear();
-        self.scissor_batches.clear();
+    /// Wrap any pending immediate-mode rects (emitted via `draw_*` outside a
+    /// tree traversal) into a batch carrying the current immediate clip and
+    /// layer.
+    fn flush_immediate_run(&mut self) {
+        let count = self.rect_commands.len() - self.current_batch_start;
+        if count > 0 {
+            self.scissor_batches.push(ScissorBatch {
+                scissor: self.immediate_clip,
+                rect_start: self.current_batch_start,
+                rect_count: count,
+                layer: self.current_layer(),
+            });
+        }
         self.current_batch_start = self.rect_commands.len();
     }
 
-    /// Begin scissor tracking for an additional sub-region within the same
-    /// prepare/draw cycle. Resets clip context without discarding scissor
-    /// batches accumulated by previous sub-regions.
-    fn begin_scissor_tracking_additive(&mut self) {
+    /// Begin scissor batch tracking for a tree traversal: cover any pending
+    /// immediate-mode rects first, then reset the clip context. Batches from
+    /// earlier traversals in the same prepare cycle are preserved.
+    fn begin_scissor_tracking(&mut self) {
+        self.flush_immediate_run();
         self.clip_stack.clear();
-        self.current_batch_start = self.rect_commands.len();
     }
 
     /// Flush the current scissor batch (if it has any rects).
@@ -421,6 +504,7 @@ impl UIRenderer {
                 scissor: self.clip_stack.last().copied(),
                 rect_start: self.current_batch_start,
                 rect_count: count,
+                layer: self.current_layer(),
             });
         }
         self.current_batch_start = self.rect_commands.len();
@@ -491,80 +575,11 @@ impl UIRenderer {
     /// Render a UITree on top of immediate-mode primitives that were
     /// already emitted via the `draw_*` API in the same prepare cycle.
     ///
-    /// Use this in the graph-editor present path: the canvas emits its
-    /// nodes/wires/grid via `draw_*` first (no scissor management),
-    /// then this layers the right-sidebar UITree on top. The vanilla
-    /// [`Self::render_overlay`] would clear the canvas's prepared
-    /// batches by calling `begin_scissor_tracking` first.
-    ///
-    /// Implementation note: we manually push a covering batch for the
-    /// caller's existing rect commands (rather than calling
-    /// `flush_scissor_batch` + `begin_scissor_tracking_additive`), so
-    /// that we don't read `current_batch_start` — which can hold a
-    /// stale value from the previous frame, since `prepare` clears
-    /// `rect_commands` and `scissor_batches` but not the index. A stale
-    /// `current_batch_start` makes `flush_scissor_batch` underflow on
-    /// `len - start`, producing a malformed batch with a huge
-    /// `rect_count`. That manifests as GPU reads past the end of the
-    /// index buffer (pink flashes + `kIOGPUCommandBufferCallbackErrorInnocentVictim`
-    /// on adjacent command buffers).
+    /// With the unified flush protocol every traversal preserves earlier
+    /// batches and covers pending immediate-mode rects, so this is now just
+    /// [`Self::render_overlay`] under its historical name.
     pub fn render_overlay_additive(&mut self, tree: &UITree, start_node: usize) {
-        let pre_existing = self.rect_commands.len();
-
-        // Cover the caller's immediate-mode rects with a batch. Without this
-        // they'd be present in the index buffer but missing from
-        // `prepared_batches`, and `prepare`'s loop would skip them entirely.
-        // Carries `immediate_clip` so the graph canvas's nodes stay scissored
-        // to its lane (None = full viewport for every other caller).
-        if pre_existing > 0 {
-            self.scissor_batches.push(ScissorBatch {
-                scissor: self.immediate_clip,
-                rect_start: 0,
-                rect_count: pre_existing,
-            });
-        }
-
-        // Set up batch tracking for the tree's emissions, starting at
-        // the current end of `rect_commands`.
-        self.clip_stack.clear();
-        self.current_batch_start = pre_existing;
-
-        tree.traverse_range(start_node, usize::MAX, |event| match event {
-            TraversalEvent::Node(node) => self.draw_node(node),
-            TraversalEvent::PushClip(rect) => self.handle_push_clip(rect),
-            TraversalEvent::PopClip => self.handle_pop_clip(),
-        });
-
-        self.flush_scissor_batch();
-    }
-
-    /// Cover immediate-mode rects emitted AFTER [`Self::render_overlay_additive`]
-    /// — a floating widget like the mapping popover drawn last — with their own
-    /// scissor batch so they actually reach the GPU.
-    ///
-    /// `prepare` builds GPU batches only from `scissor_batches`; any rect not
-    /// inside one is left in the index buffer but referenced by no
-    /// `prepared_batch`, so it's silently skipped. Lines and text take a
-    /// separate, always-drawn path — which is why an un-covered popover shows
-    /// its curve and labels but its panel fill and buttons vanish (a fully
-    /// transparent panel). Call this once after the floating widget renders.
-    /// `scissor` clips the batch; `None` is the full viewport, correct for a
-    /// popover that floats over everything.
-    pub fn cover_trailing_rects(&mut self, scissor: Option<Rect>) {
-        let covered = self
-            .scissor_batches
-            .iter()
-            .map(|b| b.rect_start + b.rect_count)
-            .max()
-            .unwrap_or(0);
-        let end = self.rect_commands.len();
-        if end > covered {
-            self.scissor_batches.push(ScissorBatch {
-                scissor,
-                rect_start: covered,
-                rect_count: end - covered,
-            });
-        }
+        self.render_overlay_range(tree, start_node, usize::MAX);
     }
 
     /// Render a sub-region using flat sequential traversal.
@@ -575,12 +590,7 @@ impl UIRenderer {
     /// contains previous content via LoadOp::Load, so non-dirty nodes are
     /// preserved. Clip events are always processed for correctness.
     pub fn render_sub_region(&mut self, tree: &UITree, start: usize, end: usize, dirty_only: bool) {
-        // Use additive tracking to preserve scissor batches accumulated by
-        // previous sub-regions in the same prepare/draw cycle. The caller
-        // (ui_cache_manager) may render multiple sub-regions before a single
-        // prepare_and_draw(); clearing scissor_batches here would discard
-        // earlier sub-regions' rect geometry, causing text ghosting.
-        self.begin_scissor_tracking_additive();
+        self.begin_scissor_tracking();
 
         tree.traverse_flat_range(start, end, dirty_only, |event| match event {
             TraversalEvent::Node(node) => self.draw_node(node),
@@ -703,6 +713,7 @@ impl UIRenderer {
                 ]
             };
 
+            let layer = self.current_layer();
             let first_char = text.chars().next().unwrap();
             if ('\u{E000}'..='\u{E004}').contains(&first_char) {
                 // Icon: square aspect ratio, centered in bounds
@@ -721,6 +732,7 @@ impl UIRenderer {
                     icon_h,
                     text_color,
                     clip_bounds,
+                    layer,
                 );
             } else {
                 let text_size = self.text_renderer.measure_text_cached(
@@ -744,6 +756,7 @@ impl UIRenderer {
                     text_color,
                     style.font_weight,
                     clip_bounds,
+                    layer,
                 );
             }
         }
@@ -762,8 +775,9 @@ impl UIRenderer {
         color: [u8; 4],
         clip_bounds: Option<[f32; 4]>,
     ) {
+        let layer = self.current_layer();
         self.text_renderer
-            .draw_icon(icon_id, x, y, w, h, color, clip_bounds);
+            .draw_icon(icon_id, x, y, w, h, color, clip_bounds, layer);
     }
 
     /// Text measurement using NativeTextRenderer's cached measurement.
@@ -788,9 +802,10 @@ impl UIRenderer {
 
     /// Advance text renderer frame counter (call once per frame).
     pub fn begin_frame(&mut self) {
-        // Each frame starts unclipped; a caller (the graph canvas) re-arms its
-        // lane clip after this, before queuing draws.
+        // Each frame starts unclipped on the Base layer; a caller (the graph
+        // canvas) re-arms its lane clip after this, before queuing draws.
         self.immediate_clip = None;
+        self.layer_stack.clear();
         #[cfg(target_os = "macos")]
         self.text_renderer.begin_frame();
     }
@@ -827,6 +842,14 @@ impl UIRenderer {
         offset_y: f32,
         scale_factor: f64,
     ) -> bool {
+        debug_assert!(
+            self.layer_stack.is_empty(),
+            "unbalanced push_layer at prepare — everything after the push floats"
+        );
+        // Cover any trailing immediate-mode rects (e.g. a floating widget
+        // drawn after the last tree traversal) so they reach the GPU.
+        self.flush_immediate_run();
+
         self.prepared_globals = [viewport_w as f32, viewport_h as f32, offset_x, offset_y];
         let sf = scale_factor as f32;
         self.prepared_physical_w = (viewport_w as f32 * sf).ceil() as u32;
@@ -875,121 +898,111 @@ impl UIRenderer {
                 .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
 
-        // Emit lines after rects. Each line is an oriented quad — four
-        // corners offset by ±(perpendicular * half_thickness). The
-        // fragment shader's fast path (rect_params zeroed) returns a
-        // flat fill, so we don't need a separate pipeline.
-        let line_idx_offset_after_rects = self.indices.len();
-        for cmd in &self.line_commands {
-            let dx = cmd.x1 - cmd.x0;
-            let dy = cmd.y1 - cmd.y0;
-            let len_sq = dx * dx + dy * dy;
-            if len_sq <= f32::EPSILON {
-                continue;
-            }
-            let inv_len = len_sq.sqrt().recip();
-            let half = cmd.thickness * 0.5;
-            let nx = -dy * inv_len * half;
-            let ny = dx * inv_len * half;
-            let zero_params = [0.0; 4];
-            let zero_border = [0.0; 4];
-            let base = self.vertices.len() as u32;
-            self.vertices.push(UIVertex {
-                position: [cmd.x0 + nx, cmd.y0 + ny],
-                uv: [0.0, 0.0],
-                color: cmd.color,
-                rect_params: zero_params,
-                border_color: zero_border,
-            });
-            self.vertices.push(UIVertex {
-                position: [cmd.x1 + nx, cmd.y1 + ny],
-                uv: [1.0, 0.0],
-                color: cmd.color,
-                rect_params: zero_params,
-                border_color: zero_border,
-            });
-            self.vertices.push(UIVertex {
-                position: [cmd.x1 - nx, cmd.y1 - ny],
-                uv: [1.0, 1.0],
-                color: cmd.color,
-                rect_params: zero_params,
-                border_color: zero_border,
-            });
-            self.vertices.push(UIVertex {
-                position: [cmd.x0 - nx, cmd.y0 - ny],
-                uv: [0.0, 1.0],
-                color: cmd.color,
-                rect_params: zero_params,
-                border_color: zero_border,
-            });
-            self.indices
-                .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-        }
-        let line_index_count = self.indices.len() - line_idx_offset_after_rects;
-
-        // Build prepared batches from scissor batches.
-        // Each rect generates 6 indices (2 triangles, u32 each = 24 bytes).
-        self.prepared_batches.clear();
-        if self.scissor_batches.is_empty() {
-            // No scissor tracking (immediate-mode draws like playhead).
-            // Single batch covering all rects + lines, no scissor.
-            if !self.indices.is_empty() {
-                self.prepared_batches.push(PreparedBatch {
-                    scissor: None,
-                    index_offset: 0,
-                    index_count: self.indices.len() as u32,
+        // Emit lines after rects, grouped by layer so each layer's lines form
+        // a contiguous index range. Each line is an oriented quad — four
+        // corners offset by ±(perpendicular * half_thickness). The fragment
+        // shader's fast path (rect_params zeroed) returns a flat fill, so we
+        // don't need a separate pipeline. Within a layer, runs of lines
+        // sharing a clip become one batch (clip is captured at draw time).
+        let mut line_batches = std::mem::take(&mut self.line_batch_scratch);
+        line_batches.clear();
+        for layer in Layer::ALL {
+            for cmd in self.line_commands.iter().filter(|c| c.layer == layer) {
+                let dx = cmd.x1 - cmd.x0;
+                let dy = cmd.y1 - cmd.y0;
+                let len_sq = dx * dx + dy * dy;
+                if len_sq <= f32::EPSILON {
+                    continue;
+                }
+                let inv_len = len_sq.sqrt().recip();
+                let half = cmd.thickness * 0.5;
+                let nx = -dy * inv_len * half;
+                let ny = dx * inv_len * half;
+                let zero_params = [0.0; 4];
+                let zero_border = [0.0; 4];
+                let base = self.vertices.len() as u32;
+                self.vertices.push(UIVertex {
+                    position: [cmd.x0 + nx, cmd.y0 + ny],
+                    uv: [0.0, 0.0],
+                    color: cmd.color,
+                    rect_params: zero_params,
+                    border_color: zero_border,
                 });
+                self.vertices.push(UIVertex {
+                    position: [cmd.x1 + nx, cmd.y1 + ny],
+                    uv: [1.0, 0.0],
+                    color: cmd.color,
+                    rect_params: zero_params,
+                    border_color: zero_border,
+                });
+                self.vertices.push(UIVertex {
+                    position: [cmd.x1 - nx, cmd.y1 - ny],
+                    uv: [1.0, 1.0],
+                    color: cmd.color,
+                    rect_params: zero_params,
+                    border_color: zero_border,
+                });
+                self.vertices.push(UIVertex {
+                    position: [cmd.x0 - nx, cmd.y0 - ny],
+                    uv: [0.0, 1.0],
+                    color: cmd.color,
+                    rect_params: zero_params,
+                    border_color: zero_border,
+                });
+                let idx_offset = (self.indices.len() * std::mem::size_of::<u32>()) as u64;
+                self.indices
+                    .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+
+                match line_batches.last_mut() {
+                    Some((l, clip, _, count)) if *l == layer && *clip == cmd.clip => {
+                        *count += 6;
+                    }
+                    _ => line_batches.push((layer, cmd.clip, idx_offset, 6)),
+                }
             }
-        } else {
-            let pw = self.prepared_physical_w;
-            let ph = self.prepared_physical_h;
-            for batch in &self.scissor_batches {
+        }
+
+        // Build prepared batches: for each layer, that layer's rect batches
+        // (insertion order) then its line batches — so within a layer, lines
+        // draw over rects exactly as they always have globally, and a
+        // Base-only frame issues the identical sequence to the pre-layer
+        // renderer.
+        let pw = self.prepared_physical_w;
+        let ph = self.prepared_physical_h;
+        let to_physical = |r: Rect| {
+            let x0 = ((r.x - offset_x) * sf).floor().max(0.0) as u32;
+            let y0 = ((r.y - offset_y) * sf).floor().max(0.0) as u32;
+            let x1 = ((r.x + r.width - offset_x) * sf).ceil() as u32;
+            let y1 = ((r.y + r.height - offset_y) * sf).ceil() as u32;
+            [
+                x0.min(pw),
+                y0.min(ph),
+                (x1 - x0).min(pw - x0.min(pw)),
+                (y1 - y0).min(ph - y0.min(ph)),
+            ]
+        };
+        self.prepared_batches.clear();
+        for layer in Layer::ALL {
+            for batch in self.scissor_batches.iter().filter(|b| b.layer == layer) {
                 if batch.rect_count == 0 {
                     continue;
                 }
-                let idx_start = batch.rect_start * 6;
-                let idx_count = batch.rect_count * 6;
-                let scissor = batch.scissor.map(|r| {
-                    // Convert logical clip rect to physical pixels.
-                    let x0 = ((r.x - offset_x) * sf).floor().max(0.0) as u32;
-                    let y0 = ((r.y - offset_y) * sf).floor().max(0.0) as u32;
-                    let x1 = ((r.x + r.width - offset_x) * sf).ceil() as u32;
-                    let y1 = ((r.y + r.height - offset_y) * sf).ceil() as u32;
-                    [
-                        x0.min(pw),
-                        y0.min(ph),
-                        (x1 - x0).min(pw - x0.min(pw)),
-                        (y1 - y0).min(ph - y0.min(ph)),
-                    ]
-                });
                 self.prepared_batches.push(PreparedBatch {
-                    scissor,
-                    index_offset: (idx_start * std::mem::size_of::<u32>()) as u64,
-                    index_count: idx_count as u32,
+                    scissor: batch.scissor.map(to_physical),
+                    index_offset: (batch.rect_start * 6 * std::mem::size_of::<u32>()) as u64,
+                    index_count: (batch.rect_count * 6) as u32,
+                    layer,
                 });
             }
-            // Lines are appended to a final batch so they don't inherit the
-            // last rect's scissor. They DO honour `immediate_clip` when set,
-            // so the graph canvas's wires stay clipped to its lane instead of
-            // bleeding over the side panels (the case the old `None` missed —
-            // canvas lines and panel scissor batches now coexist every frame).
-            if line_index_count > 0 {
-                let line_scissor = self.immediate_clip.map(|r| {
-                    let x0 = ((r.x - offset_x) * sf).floor().max(0.0) as u32;
-                    let y0 = ((r.y - offset_y) * sf).floor().max(0.0) as u32;
-                    let x1 = ((r.x + r.width - offset_x) * sf).ceil() as u32;
-                    let y1 = ((r.y + r.height - offset_y) * sf).ceil() as u32;
-                    [
-                        x0.min(pw),
-                        y0.min(ph),
-                        (x1 - x0).min(pw - x0.min(pw)),
-                        (y1 - y0).min(ph - y0.min(ph)),
-                    ]
-                });
+            for &(l, clip, index_offset, index_count) in &line_batches {
+                if l != layer {
+                    continue;
+                }
                 self.prepared_batches.push(PreparedBatch {
-                    scissor: line_scissor,
-                    index_offset: (line_idx_offset_after_rects * std::mem::size_of::<u32>()) as u64,
-                    index_count: line_index_count as u32,
+                    scissor: clip.map(to_physical),
+                    index_offset,
+                    index_count,
+                    layer,
                 });
             }
         }
@@ -1044,6 +1057,11 @@ impl UIRenderer {
         self.rect_commands.clear();
         self.line_commands.clear();
         self.scissor_batches.clear();
+        // Reset the pending-run marker alongside the queues it indexes into —
+        // a stale marker would make the next flush underflow into a malformed
+        // batch (GPU reads past the index buffer).
+        self.current_batch_start = 0;
+        self.line_batch_scratch = line_batches;
 
         self.prepared_index_count > 0 || has_text
     }
@@ -1067,32 +1085,20 @@ impl UIRenderer {
     /// Used when the caller manages the render pass lifetime (e.g. batching
     /// UI draws with layer bitmap draws into a single pass).
     pub fn render_in_pass(&self, encoder: &mut GpuEncoder) {
-        if self.prepared_index_count > 0 {
-            let vbuf = self.vbuf_ring[self.prepared_slot].as_ref().unwrap();
-            let ibuf = self.ibuf_ring[self.prepared_slot].as_ref().unwrap();
-            let globals = &[GpuBinding::Bytes {
-                binding: 0,
-                data: bytemuck::bytes_of(&self.prepared_globals),
-            }];
-
-            if self.prepared_batches.is_empty() {
-                // Fallback: no batches, draw everything in one call.
-                encoder.draw_in_render_pass(
-                    &self.pipeline,
-                    globals,
-                    vbuf,
-                    0,
-                    ibuf,
-                    self.prepared_index_count,
-                    0,
-                    None,
-                    "UI Rects",
-                );
-            } else {
+        // Issue draws layer by layer: a layer's rects + lines, then its text,
+        // so geometry on a higher layer covers text on a lower one.
+        for layer in Layer::ALL {
+            if self.prepared_index_count > 0 {
+                let vbuf = self.vbuf_ring[self.prepared_slot].as_ref().unwrap();
+                let ibuf = self.ibuf_ring[self.prepared_slot].as_ref().unwrap();
+                let globals = &[GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&self.prepared_globals),
+                }];
                 let pw = self.prepared_physical_w;
                 let ph = self.prepared_physical_h;
-                for batch in &self.prepared_batches {
-                    // Set scissor rect for this batch.
+                let mut drew = false;
+                for batch in self.prepared_batches.iter().filter(|b| b.layer == layer) {
                     if let Some([x, y, w, h]) = batch.scissor {
                         encoder.set_scissor_rect(x, y, w, h);
                     } else {
@@ -1109,14 +1115,17 @@ impl UIRenderer {
                         None,
                         "UI Rects",
                     );
+                    drew = true;
                 }
-                // Reset scissor to full viewport after batched draws.
-                encoder.set_scissor_rect(0, 0, pw, ph);
+                // Reset scissor to full viewport so text draws unclipped.
+                if drew {
+                    encoder.set_scissor_rect(0, 0, pw, ph);
+                }
             }
-        }
 
-        #[cfg(target_os = "macos")]
-        self.text_renderer.render_in_pass(encoder);
+            #[cfg(target_os = "macos")]
+            self.text_renderer.render_layer_in_pass(encoder, layer);
+        }
     }
 }
 

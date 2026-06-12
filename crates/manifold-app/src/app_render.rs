@@ -2804,27 +2804,20 @@ impl Application {
                 ui,
                 crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, logical_h as f32),
             );
-            // Layer the sidebar UITree on top. Use the *additive*
-            // variant — `render_overlay` would clear the canvas's
-            // scissor batches and the canvas's nodes/wires/grid would
-            // never reach the GPU.
+            // Layer the sidebar UITree on top of the canvas's immediate-mode
+            // draws (the flush protocol covers them with their own batches).
             ui.render_overlay_additive(&ws.ui_root.tree, 0);
-            if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
-                ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
-            }
-            // The mapping drawer renders in its OWN second pass, on top of the
-            // fully-composited canvas + sidebar. Text is a global last pass, so
-            // a single-pass popover can't occlude the canvas node labels behind
-            // it (they'd bleed through the solid panel). A separate pass draws
-            // the panel — background, then its own text — over everything.
+            // The mapping drawer floats over the composited canvas + sidebar:
+            // it draws inline on the Overlay layer, unclipped.
             if self.editor_mapping_popover.is_open() {
-                ui.begin_frame();
+                ui.clear_immediate_clip();
+                ui.push_layer(manifold_renderer::ui_renderer::Layer::Overlay);
                 self.editor_mapping_popover.set_live_value(popover_live_value);
                 self.editor_mapping_popover.render(ui);
-                ui.cover_trailing_rects(None);
-                if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
-                    ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
-                }
+                ui.pop_layer();
+            }
+            if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
+                ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
             }
         }
 
