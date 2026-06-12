@@ -135,7 +135,12 @@ impl Primitive for ApplyRadialBurst3DToParticles {
         let particle_size = std::mem::size_of::<Particle>() as u64;
         let capacity = (particles.size / particle_size) as u32;
         let active_count = active_count.min(capacity);
-        if active_count == 0 {
+        // Idle skip: a negative zone index disables the burst and the push scales
+        // by inject_force, so either makes every thread a no-op write-back — skip
+        // the dispatch. The in/out alias means the executor's stale-output guard
+        // must be told the buffer is intentionally retained.
+        if active_count == 0 || inject_index < 0 || inject_force == 0.0 {
+            ctx.mark_gpu_accessed();
             return;
         }
 

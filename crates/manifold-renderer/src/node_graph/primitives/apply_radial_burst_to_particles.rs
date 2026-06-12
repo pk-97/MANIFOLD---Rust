@@ -111,7 +111,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Aliased in/out — mutates the particle buffer in place. Typical wiring: `node.inject_burst` produces (active, phase, point_x, point_y); wire point_x/point_y straight in, envelope from `active * envelope_decay(phase)` or compose attack/decay externally. When `amplitude * envelope ≈ 0` the kernel early-outs, cheap when idle. `dt = delta × 60` is baked in (frame-rate-normalised like `euler_step_particles`). Time uses ctx.time.seconds for the per-particle noise perturbation phase.",
+    composition_notes: "Aliased in/out — mutates the particle buffer in place. Typical wiring: `node.inject_burst` produces (active, phase, point_x, point_y); wire point_x/point_y straight in, envelope from `active * envelope_decay(phase)` or compose attack/decay externally. When `amplitude * envelope == 0` the dispatch is skipped entirely, free when idle. `dt = delta × 60` is baked in (frame-rate-normalised like `euler_step_particles`). Time uses ctx.time.seconds for the per-particle noise perturbation phase.",
     examples: [],
     picker: { label: "Add Burst (radial)", category: Atom },
     summary: "Pushes particles outward from a point in a burst, like an explosion or shockwave on a hit.",
@@ -147,7 +147,7 @@ impl Primitive for ApplyRadialBurstToParticles {
     // The bespoke inlined `arb_simplex_noise_2d` makes this body register-heavy:
     // fused into FluidSimulation's euler+wrap chain the combined kernel measured
     // 3.05 ms vs 2.43 ms for the three standalone dispatches (occupancy cliff).
-    // Standalone it costs ~0.69 ms and early-outs when the burst envelope is ~0.
+    // Standalone it costs ~0.69 ms when firing and skips its dispatch when idle.
     fn fusion_register_heavy(&self) -> bool {
         true
     }
@@ -171,7 +171,13 @@ impl Primitive for ApplyRadialBurstToParticles {
         let particle_size = std::mem::size_of::<Particle>() as u64;
         let capacity = (particles.size / particle_size) as u32;
         let active_count = active_count.min(capacity);
-        if active_count == 0 {
+        // Idle skip: the kernel's own first guard returns the particle unchanged
+        // when `amplitude * envelope < 1e-4`, so the whole dispatch is a no-op —
+        // skip it CPU-side with the identical threshold. The in/out alias means
+        // the executor's stale-output guard must be told the buffer is
+        // intentionally retained.
+        if active_count == 0 || amplitude * envelope < 1.0e-4 {
+            ctx.mark_gpu_accessed();
             return;
         }
 
