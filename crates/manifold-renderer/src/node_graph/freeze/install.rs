@@ -638,7 +638,50 @@ pub(crate) fn compile_segment_view(
         return None;
     }
 
-    let fused = fuse_canonical_def_masked(&concat, registry, None)?;
+    let mut fused = fuse_canonical_def_masked(&concat, registry, None)?;
+    if !fused_def_builds(&fused.def, registry, &fused.expected_spaces) {
+        return None;
+    }
+
+    // Per-region gate, segment edition. The honest baseline is the PRODUCTION
+    // fallback — each card through its per-card FUSED kernel (gate verdicts
+    // respected), concatenated — not the raw atom dispatches, which would let
+    // a segment win against a strawman. Same margins as every card verdict.
+    // The gate explores region MASKS over the segment partition (the same
+    // greedy leave-one-out card tuning uses), so one net-loss region — often
+    // a per-card-tuned-off region now living inside the concat — can't drag
+    // the whole segment to refused. The winning partial mask becomes the
+    // segment's def, so the live path renders exactly the measured winner.
+    if let Some(device) = gate_device {
+        let baseline = segment_baseline_def(cards).unwrap_or_else(|| concat.clone());
+        let n = canonical_region_count(&concat, registry);
+        let mut fused_for_mask = |mask: &[bool]| -> Option<EffectGraphDef> {
+            if mask.iter().all(|&on| on) {
+                return Some(fused.def.clone());
+            }
+            let cand = fuse_canonical_def_masked(&concat, registry, Some(mask))?;
+            if !fused_def_builds(&cand.def, registry, &cand.expected_spaces) {
+                return None;
+            }
+            Some(cand.def.clone())
+        };
+        let win_mask = super::perf_gate::measure_segment_masked(
+            device,
+            registry,
+            &baseline,
+            n,
+            &mut fused_for_mask,
+        )?;
+        if !win_mask.iter().all(|&on| on) {
+            // Partial winner: rebuild the final FusedDef from the mask so the
+            // retarget map below matches the def that actually splices.
+            fused = fuse_canonical_def_masked(&concat, registry, Some(&win_mask))?;
+            if !fused_def_builds(&fused.def, registry, &fused.expected_spaces) {
+                return None;
+            }
+        }
+    }
+
     let surviving: AHashSet<String> = fused
         .def
         .nodes
@@ -674,22 +717,6 @@ pub(crate) fn compile_segment_view(
             return None;
         }
         card_bindings.push(retarget_bindings(&prefixed, &fused.retarget, &surviving)?);
-    }
-
-    if !fused_def_builds(&fused.def, registry, &fused.expected_spaces) {
-        return None;
-    }
-
-    // Per-region gate, segment edition. The honest baseline is the PRODUCTION
-    // fallback — each card through its per-card FUSED kernel (gate verdicts
-    // respected), concatenated — not the raw atom dispatches, which would let
-    // a segment win against a strawman. Same margins as every card verdict.
-    if let Some(device) = gate_device {
-        let baseline = segment_baseline_def(cards).unwrap_or_else(|| concat.clone());
-        let win = super::perf_gate::measure_segment(device, registry, &baseline, &fused.def);
-        if !win {
-            return None;
-        }
     }
 
     let FusedDef { def, retarget, .. } = fused;

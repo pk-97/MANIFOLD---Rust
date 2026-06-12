@@ -608,6 +608,164 @@ struct EffectSlot {
     generator_input_node: Option<NodeInstanceId>,
 }
 
+/// The active (enabled, group-enabled) effects of a chain, with their original
+/// indices into `effects`. Shared between the chain build and the project-load
+/// segment prewarm so both walk the identical card list.
+fn chain_active_effects<'a>(
+    effects: &'a [PresetInstance],
+    groups: &[EffectGroup],
+) -> Vec<(usize, &'a PresetInstance)> {
+    effects
+        .iter()
+        .enumerate()
+        .filter(|(_, fx)| {
+            if !fx.enabled {
+                return false;
+            }
+            if let Some(gid) = fx.group_id.as_deref()
+                && let Some(group) = groups.iter().find(|g| g.id.as_str() == gid)
+                && !group.enabled
+            {
+                return false;
+            }
+            true
+        })
+        .collect()
+}
+
+/// Chain-fusion segment eligibility for one card (docs/CHAIN_FUSION_DESIGN.md).
+/// Shared between the chain build and the project-load prewarm so the two can
+/// never disagree about what forms a segment.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum SegmentMember {
+    /// Never joins or spans a segment (watched / grouped / stateful /
+    /// string-bound / no view).
+    Boundary,
+    /// Fusable segment member.
+    Fuse,
+    /// Currently skipped — splices nothing; transparent to a run.
+    Transparent,
+}
+
+fn classify_segment_member(
+    fx: &PresetInstance,
+    preview_effect: Option<&EffectId>,
+    primitives: &PrimitiveRegistry,
+) -> SegmentMember {
+    if preview_effect == Some(&fx.id) || fx.group_id.is_some() {
+        return SegmentMember::Boundary;
+    }
+    let Some(view) = loaded_preset_view_by_id(fx.effect_type()) else {
+        return SegmentMember::Boundary;
+    };
+    if is_skipped_for(view.skip_mode, &view.type_id, fx) {
+        return SegmentMember::Transparent;
+    }
+    if view
+        .canonical_def
+        .preset_metadata
+        .as_ref()
+        .is_some_and(|m| !m.string_bindings.is_empty())
+    {
+        return SegmentMember::Boundary;
+    }
+    let effective = fx.graph.as_ref().unwrap_or(view.canonical_def);
+    if crate::node_graph::freeze::segment::def_is_segment_stateless(effective, primitives) {
+        SegmentMember::Fuse
+    } else {
+        SegmentMember::Boundary
+    }
+}
+
+/// Scan one maximal segment run starting at `i` (caller guarantees
+/// `members[i] == Fuse`): returns `(j, fuse_idxs)` — the exclusive end after
+/// trimming trailing transparents, and the fusable indices within `[i, j)`.
+fn segment_run(members: &[SegmentMember], i: usize) -> (usize, Vec<usize>) {
+    let mut j = i;
+    while j < members.len() && members[j] != SegmentMember::Boundary {
+        j += 1;
+    }
+    // Trim trailing transparents back into plain cards.
+    while j > i && members[j - 1] == SegmentMember::Transparent {
+        j -= 1;
+    }
+    let fuse_idxs = (i..j).filter(|&k| members[k] == SegmentMember::Fuse).collect();
+    (j, fuse_idxs)
+}
+
+/// Project-load PREWARM (chain fusion): walk one chain's effect list with the
+/// exact build-time segmentation and enqueue the background compile for every
+/// segment that would form — so the first dispatch of a scene finds its fused
+/// view Ready instead of rendering the opening seconds of the show per-card.
+/// Enqueue-only and content-keyed: results land through the normal worker →
+/// pump → generation-bump → rebuild path, duplicates dedupe in the pending
+/// set, and an already-cached segment is a no-op. `preview_effect` is `None` —
+/// nothing is watched at load.
+pub fn prewarm_chain_segments(
+    effects: &[PresetInstance],
+    groups: &[EffectGroup],
+    primitives: &PrimitiveRegistry,
+) {
+    use crate::node_graph::freeze::install as freeze_install;
+    if !freeze_install::chain_fusion_enabled() {
+        return;
+    }
+    let active = chain_active_effects(effects, groups);
+    let members: Vec<SegmentMember> = active
+        .iter()
+        .map(|(_, fx)| classify_segment_member(fx, None, primitives))
+        .collect();
+    let mut i = 0;
+    while i < active.len() {
+        if members[i] != SegmentMember::Fuse {
+            i += 1;
+            continue;
+        }
+        let (j, fuse_idxs) = segment_run(&members, i);
+        if fuse_idxs.len() >= 2 {
+            let cards: Vec<(&EffectGraphDef, &'static LoadedPresetView)> = fuse_idxs
+                .iter()
+                .map(|&k| {
+                    let fx = active[k].1;
+                    let view = loaded_preset_view_by_id(fx.effect_type())
+                        .expect("eligibility implies view");
+                    (fx.graph.as_ref().unwrap_or(view.canonical_def), view)
+                })
+                .collect();
+            let _ = freeze_install::fused_segment_view_for(&cards);
+        }
+        i = j.max(i + 1);
+    }
+}
+
+/// Project-wide segment prewarm: enqueue background segment compiles for the
+/// master chain and every layer chain in `project`. Call once at project load
+/// (content thread) — by the time a scene's chain first dispatches, its fused
+/// segments are compiled and gate-measured instead of the show opening
+/// per-card. Builds its own registry (load-time, off the hot path).
+pub fn prewarm_project_chain_segments(project: &manifold_core::project::Project) {
+    use crate::node_graph::freeze::install as freeze_install;
+    if !freeze_install::chain_fusion_enabled() {
+        return;
+    }
+    let primitives = PrimitiveRegistry::with_builtin();
+    static EMPTY_GROUPS: Vec<EffectGroup> = Vec::new();
+    prewarm_chain_segments(
+        &project.settings.master_effects,
+        project.settings.master_effect_groups.as_ref().unwrap_or(&EMPTY_GROUPS),
+        &primitives,
+    );
+    for layer in &project.timeline.layers {
+        if let Some(effects) = layer.effects.as_ref() {
+            prewarm_chain_segments(
+                effects,
+                layer.effect_groups.as_ref().unwrap_or(&EMPTY_GROUPS),
+                &primitives,
+            );
+        }
+    }
+}
+
 impl PresetRuntime {
     /// Construct a chain graph from `effects` + `groups`. Groups
     /// with `wet_dry < 1.0` become `Mix` sub-graphs (the
@@ -654,22 +812,7 @@ impl PresetRuntime {
         // (replaces the previous AHashMap<EffectId, &PresetInstance>
         // rebuild). Topology changes rebuild this graph, so the
         // captured indices stay valid for the cache's lifetime.
-        let active_effects: Vec<(usize, &PresetInstance)> = effects
-            .iter()
-            .enumerate()
-            .filter(|(_, fx)| {
-                if !fx.enabled {
-                    return false;
-                }
-                if let Some(gid) = fx.group_id.as_deref()
-                    && let Some(group) = groups.iter().find(|g| g.id.as_str() == gid)
-                    && !group.enabled
-                {
-                    return false;
-                }
-                true
-            })
-            .collect();
+        let active_effects: Vec<(usize, &PresetInstance)> = chain_active_effects(effects, groups);
 
         if active_effects.is_empty() {
             return None;
@@ -751,66 +894,25 @@ impl PresetRuntime {
         // card is an ordinary member, and each skip state is its own segment
         // content key. Skip semantics ride the existing rebuild mechanism,
         // identically to the per-card path.
-        #[derive(Clone, Copy, PartialEq)]
-        enum Member {
-            /// Never joins or spans a segment (watched / grouped / stateful /
-            /// string-bound / no view).
-            Boundary,
-            /// Fusable segment member.
-            Fuse,
-            /// Currently skipped — splices nothing; transparent to a run.
-            Transparent,
-        }
+        //
+        // Eligibility + run-scan live in `classify_segment_member` /
+        // `segment_run` (module scope) — shared with the project-load
+        // prewarm so the two can never disagree about what forms a segment.
         let mut pending_segments = false;
         let mut units: Vec<SpliceUnit> = Vec::with_capacity(active_effects.len());
         if freeze_install::chain_fusion_enabled() {
-            let members: Vec<Member> = active_effects
+            let members: Vec<SegmentMember> = active_effects
                 .iter()
-                .map(|(_, fx)| {
-                    if preview_effect == Some(&fx.id) || fx.group_id.is_some() {
-                        return Member::Boundary;
-                    }
-                    let Some(view) = loaded_preset_view_by_id(fx.effect_type()) else {
-                        return Member::Boundary;
-                    };
-                    if is_skipped_for(view.skip_mode, &view.type_id, fx) {
-                        return Member::Transparent;
-                    }
-                    if view
-                        .canonical_def
-                        .preset_metadata
-                        .as_ref()
-                        .is_some_and(|m| !m.string_bindings.is_empty())
-                    {
-                        return Member::Boundary;
-                    }
-                    let effective = fx.graph.as_ref().unwrap_or(view.canonical_def);
-                    if crate::node_graph::freeze::segment::def_is_segment_stateless(
-                        effective, primitives,
-                    ) {
-                        Member::Fuse
-                    } else {
-                        Member::Boundary
-                    }
-                })
+                .map(|(_, fx)| classify_segment_member(fx, preview_effect, primitives))
                 .collect();
             let mut i = 0;
             while i < active_effects.len() {
-                if members[i] != Member::Fuse {
+                if members[i] != SegmentMember::Fuse {
                     units.push(SpliceUnit::Card(i));
                     i += 1;
                     continue;
                 }
-                let mut j = i;
-                while j < active_effects.len() && members[j] != Member::Boundary {
-                    j += 1;
-                }
-                // Trim trailing transparents back into plain cards.
-                while j > i && members[j - 1] == Member::Transparent {
-                    j -= 1;
-                }
-                let fuse_idxs: Vec<usize> =
-                    (i..j).filter(|&k| members[k] == Member::Fuse).collect();
+                let (j, fuse_idxs) = segment_run(&members, i);
                 if fuse_idxs.len() < 2 {
                     units.extend((i..j).map(SpliceUnit::Card));
                     i = j;
@@ -832,7 +934,7 @@ impl PresetRuntime {
                         // skip-state bookkeeping sees them, then the segment.
                         units.extend(
                             (i..j)
-                                .filter(|&k| members[k] == Member::Transparent)
+                                .filter(|&k| members[k] == SegmentMember::Transparent)
                                 .map(SpliceUnit::Card),
                         );
                         units.push(SpliceUnit::Segment { cards: fuse_idxs, view });
@@ -6034,5 +6136,51 @@ mod chain_fusion_tests {
              build): max_abs={}, over={}/{}",
             r.max_abs, r.over_count, r.total
         );
+    }
+}
+
+#[cfg(test)]
+mod segment_prewarm_tests {
+    //! Project-load segment prewarm shares `classify_segment_member` /
+    //! `segment_run` with the chain build — these lock the shared pieces.
+    use super::*;
+    use manifold_core::PresetTypeId;
+    use manifold_core::effects::PresetInstance;
+
+    fn make_default(ty: PresetTypeId) -> PresetInstance {
+        manifold_core::preset_definition_registry::create_default(&ty)
+    }
+
+    #[test]
+    fn segment_run_trims_transparents_and_collects_fuse_indices() {
+        use SegmentMember::{Boundary, Fuse, Transparent};
+        // Fuse, Transparent, Fuse, Transparent, Boundary: run ends at the
+        // boundary, the trailing transparent is trimmed, fuse idxs = [0, 2].
+        let members = [Fuse, Transparent, Fuse, Transparent, Boundary];
+        let (j, fuse) = segment_run(&members, 0);
+        assert_eq!(j, 3, "trailing transparent trimmed back to a plain card");
+        assert_eq!(fuse, vec![0, 2]);
+    }
+
+    #[test]
+    fn prewarm_classifies_stateless_cards_fuse_and_enqueues_without_panicking() {
+        let primitives = PrimitiveRegistry::with_builtin();
+        let a = make_default(PresetTypeId::COLOR_GRADE);
+        let b = make_default(PresetTypeId::INVERT_COLORS);
+        assert_eq!(
+            classify_segment_member(&a, None, &primitives),
+            SegmentMember::Fuse,
+            "ColorGrade is a stateless ungrouped card — segment member"
+        );
+        // A watched card is a boundary — prewarm passes None so nothing is
+        // watched at load, but the build-time exclusion must hold.
+        assert_eq!(
+            classify_segment_member(&a, Some(&a.id), &primitives),
+            SegmentMember::Boundary
+        );
+        // Enqueue-only walk; in cfg(test) the segment lookup stays Pending
+        // (no worker) — this locks that the walk itself is panic-free and
+        // exercises the same card-list construction as the build.
+        prewarm_chain_segments(&[a, b], &[], &primitives);
     }
 }

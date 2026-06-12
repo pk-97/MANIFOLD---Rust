@@ -201,30 +201,48 @@ fn decides_fuse(unfused_ms: f64, fused_ms: f64) -> bool {
     (unfused_ms / fused_ms) >= MIN_SPEEDUP && (unfused_ms - fused_ms) >= MIN_SAVING_MS
 }
 
-/// Chain-segment gate (docs/CHAIN_FUSION_DESIGN.md §4): fused segment def vs
-/// the unfused concatenation (whose dispatches are identical to the per-card
-/// chain). Same measurement harness and margins as every card verdict. Runs on
-/// the chain-fusion worker's own device, never the render thread. `false` on
-/// any failed measurement — keep per-card, never-worse.
-pub(crate) fn measure_segment(
+/// Chain-segment gate WITH greedy region-mask exploration (the segment
+/// edition of card tuning's leave-one-out): measure the per-card baseline
+/// once, then greedily disable one segment region at a time — same
+/// [`GREEDY_MIN_DROP_MS`] / [`GREEDY_MIN_UNFUSED_MS`] guards — so one
+/// net-loss region (often one a per-card tune had already masked off) can't
+/// drag the whole segment to refused. `fused_for_mask` builds + validates the
+/// def for a candidate mask (`None` = that variant doesn't build, never
+/// chosen). Returns the winning mask when the best variant clears the
+/// standard [`decides_fuse`] margins, `None` to keep per-card.
+pub(crate) fn measure_segment_masked(
     device: &GpuDevice,
     registry: &PrimitiveRegistry,
-    unfused: &EffectGraphDef,
-    fused: &EffectGraphDef,
-) -> bool {
-    let Some(u) = measure_def(device, registry, unfused, SOURCE_TYPE_ID) else {
-        return false;
+    baseline: &EffectGraphDef,
+    n_regions: usize,
+    fused_for_mask: &mut dyn FnMut(&[bool]) -> Option<EffectGraphDef>,
+) -> Option<Vec<bool>> {
+    let u = measure_def(device, registry, baseline, SOURCE_TYPE_ID)?;
+    let explore = n_regions > 1 && u >= GREEDY_MIN_UNFUSED_MS;
+    let mut measure = |mask: &[bool]| -> Option<f64> {
+        let def = fused_for_mask(mask)?;
+        measure_def(device, registry, &def, SOURCE_TYPE_ID)
     };
-    let Some(f) = measure_def(device, registry, fused, SOURCE_TYPE_ID) else {
-        return false;
+    let (mask, fused_ms) = if explore {
+        greedy_region_mask(n_regions, &mut measure)
+    } else {
+        let all = vec![true; n_regions.max(1)];
+        let t = measure(&all);
+        (all, t)
     };
+    let f = fused_ms?;
     let verdict = decides_fuse(u, f);
+    let mask_note = if mask.iter().all(|&on| on) {
+        String::new()
+    } else {
+        format!(" [regions {}]", mask_str(&mask))
+    };
     log::info!(
-        "[freeze] segment gate on {}: unfused {u:.3}ms fused {f:.3}ms -> {}",
+        "[freeze] segment gate on {}: per-card {u:.3}ms fused {f:.3}ms{mask_note} -> {}",
         device.device_name(),
         if verdict { "FUSE" } else { "keep per-card" },
     );
-    verdict
+    verdict.then_some(mask)
 }
 
 /// Raw segment measurement for the freeze-profile `chain` subcommand:

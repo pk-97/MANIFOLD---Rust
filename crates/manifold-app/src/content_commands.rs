@@ -332,6 +332,12 @@ impl ContentThread {
                 if let Some(p) = self.engine.project() {
                     self.timer.set_target_fps(p.settings.frame_rate as f64);
                 }
+                // Prewarm chain-fusion segments for every chain in the project
+                // (background worker; enqueue-only) so the show's first scenes
+                // dispatch fused instead of per-card while compiles trickle in.
+                if let Some(p) = self.engine.project() {
+                    manifold_renderer::preset_runtime::prewarm_project_chain_segments(p);
+                }
                 // Update MIDI mapping config from the newly loaded project.
                 // Port of C# PlaybackController.OnProjectLoaded → midiInputController.SetMidiConfig().
                 if let Some(p) = self.engine.project() {
