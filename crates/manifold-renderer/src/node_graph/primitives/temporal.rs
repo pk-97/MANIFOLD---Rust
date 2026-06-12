@@ -377,9 +377,35 @@ impl Feedback {
         cross_format_copy_fp32: &mut Option<manifold_gpu::GpuComputePipeline>,
     ) {
         if src.format == dst.format {
-            gpu.copy_texture_to_texture(src, dst, width, height);
+            if src.width == dst.width && src.height == dst.height {
+                gpu.copy_texture_to_texture(src, dst, width, height);
+            } else {
+                // Same format, different dims — analysis-tier feedback:
+                // the state texture runs at a reduced resolution (the
+                // WireframeDepth `prev_analysis` loop lands at the
+                // lighter analysis tier) while the producer chain feeding
+                // `in` is full-res. A same-size blit would crop the
+                // top-left corner (the DNN-analysis bug class — see
+                // `GpuEncoder::resize_sample`); bilinear sample-resize
+                // covers the whole frame. `resize_sample` supports the
+                // rgba16float / rgba8unorm feedback-state formats; an
+                // fp32-state size mismatch would panic there with a clear
+                // message (no preset exercises that combination).
+                gpu.resize_sample(src, dst);
+            }
             return;
         }
+        // Cross-format path below is same-size only (the bridge shader
+        // does a `textureLoad` at the dst coord). No preset mixes a
+        // format override with a dims mismatch; fail loudly if one ever
+        // does instead of silently sampling the wrong region.
+        assert!(
+            src.width == dst.width && src.height == dst.height,
+            "node.feedback cross-format copy requires matching dims — \
+             src {}×{} != dst {}×{}. A cross-format AND cross-size \
+             feedback would need a sample-resize bridge shader variant.",
+            src.width, src.height, dst.width, dst.height,
+        );
         // Currently only fp32 dst is supported. Add sibling shader
         // variants + pipeline fields if a future preset needs fp16
         // dst with non-fp16 src (or any other dst format).
