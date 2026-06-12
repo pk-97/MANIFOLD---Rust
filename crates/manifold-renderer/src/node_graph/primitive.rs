@@ -401,7 +401,15 @@ pub trait Primitive: PrimitiveSpec {
     fn skip_passthrough(
         &self,
         _params: &crate::node_graph::effect_node::ParamValues,
+        _wired_inputs: &[&str],
     ) -> Option<(&'static str, &'static str)> {
+        None
+    }
+
+    /// Mirror of
+    /// [`EffectNode::variadic_skip_passthrough_out`](crate::node_graph::effect_node::EffectNode::variadic_skip_passthrough_out).
+    /// Default: `None`.
+    fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
         None
     }
 
@@ -639,8 +647,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn skip_passthrough(
         &self,
         params: &crate::node_graph::effect_node::ParamValues,
+        wired_inputs: &[&str],
     ) -> Option<(&'static str, &'static str)> {
-        Primitive::skip_passthrough(self, params)
+        Primitive::skip_passthrough(self, params, wired_inputs)
+    }
+    fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
+        Primitive::variadic_skip_passthrough_out(self)
     }
     fn wgsl_body(&self) -> Option<&'static str> {
         P::WGSL_BODY

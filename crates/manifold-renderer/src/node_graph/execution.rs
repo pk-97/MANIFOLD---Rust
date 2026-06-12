@@ -530,10 +530,26 @@ impl Executor {
             }
             let selected =
                 inst.node.selected_input_branch(&inst.params, &self.wired_scratch);
+            // Branch pruning applies only to the chosen port's SIBLINGS — the
+            // ports of the same type (the mux's other `in_N` branches). A
+            // control input of a different type (a WIRED selector, whose
+            // latched value produced this hint) must stay live or the
+            // selector chain itself would be pruned and the latch frozen.
+            let chosen_ty = selected.and_then(|chosen| {
+                inst.node.inputs().iter().find(|p| p.name == chosen).map(|p| p.ty)
+            });
 
             for &(port_name, res_id) in &step.inputs {
                 if let Some(chosen) = selected
                     && port_name != chosen
+                    && chosen_ty.as_ref().is_some_and(|ct| {
+                        inst.node
+                            .inputs()
+                            .iter()
+                            .find(|p| p.name == port_name)
+                            .map(|p| &p.ty)
+                            == Some(ct)
+                    })
                 {
                     continue;
                 }
@@ -697,10 +713,14 @@ impl Executor {
                 || self.profiling
                 || self.dump_all
                 || self.preview_target == Some(step.node);
+            self.wired_scratch.clear();
+            for &(port_name, _) in &step.inputs {
+                self.wired_scratch.push(port_name);
+            }
             if !force_dirty
                 && plan.step_hoistable(idx)
                 && let Some(inst) = graph.get_node(step.node)
-                && inst.node.skip_passthrough(&inst.params).is_none()
+                && inst.node.skip_passthrough(&inst.params, &self.wired_scratch).is_none()
                 && let Some(memo) = &self.step_memo[idx]
                 && memo.param_epoch == inst.param_epoch
                 && memo.input_epochs.len() == step.inputs.len()
@@ -830,7 +850,11 @@ impl Executor {
                 let skip_alias = if data_skip {
                     inst.node.skip_passthrough_ports()
                 } else {
-                    inst.node.skip_passthrough(&inst.params)
+                    self.wired_scratch.clear();
+                    for &(port_name, _) in &step.inputs {
+                        self.wired_scratch.push(port_name);
+                    }
+                    inst.node.skip_passthrough(&inst.params, &self.wired_scratch)
                 };
                 let mut performed_alias = false;
                 if let Some((in_port, out_port)) = skip_alias {
@@ -844,7 +868,31 @@ impl Executor {
                         .iter()
                         .find(|(name, _)| *name == out_port)
                         .map(|(_, s)| *s);
+                    // The alias makes downstream readers see the INPUT texture
+                    // verbatim, so the dynamic (param-driven) path is only
+                    // legal when the output slot would have matched it exactly
+                    // — same dims, same format. A mismatch (mux resampling a
+                    // 256×1 LUT up to canvas) falls through to evaluate, which
+                    // performs the real resample. The data-skip path keeps its
+                    // established declaration-only contract (draw atoms
+                    // composite onto their source at identical shape).
+                    let compatible = || {
+                        if data_skip {
+                            return true;
+                        }
+                        let res_of = |list: &[(&'static str, ResourceId)], port: &str| {
+                            list.iter().find(|&&(n, _)| n == port).map(|&(_, r)| r)
+                        };
+                        let (Some(r_in), Some(r_out)) =
+                            (res_of(&step.inputs, in_port), res_of(&step.outputs, out_port))
+                        else {
+                            return false;
+                        };
+                        resolve_dims(plan, r_in, canvas_dims) == resolve_dims(plan, r_out, canvas_dims)
+                            && plan.resource_format(r_in) == plan.resource_format(r_out)
+                    };
                     if let (Some(i), Some(o)) = (in_slot, out_slot)
+                        && compatible()
                         && self.backend.alias_2d(i, o)
                     {
                         performed_alias = true;

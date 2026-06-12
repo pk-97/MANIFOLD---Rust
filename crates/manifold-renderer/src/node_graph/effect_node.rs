@@ -465,12 +465,34 @@ pub trait EffectNode: Send {
     /// Aliases auto-clear at the start of each frame so a non-skip
     /// frame's real write isn't shadowed.
     ///
-    /// **Must match [`skip_passthrough_ports`]'s declaration** —
-    /// the runtime uses this for the dynamic decision, the planner
-    /// uses `skip_passthrough_ports` for static lifetime extension.
-    /// Returning a different port pair than declared is a programmer
-    /// error and may corrupt downstream reads in fan-out topologies.
-    fn skip_passthrough(&self, _params: &ParamValues) -> Option<(&'static str, &'static str)> {
+    /// **Must match [`skip_passthrough_ports`]'s declaration** (or, for a
+    /// variadic router, [`variadic_skip_passthrough_out`]'s) — the runtime
+    /// uses this for the dynamic decision, the planner uses the static
+    /// declaration for lifetime extension. Returning a port pair outside the
+    /// declared set is a programmer error and may corrupt downstream reads
+    /// in fan-out topologies.
+    ///
+    /// `wired_inputs` lists the input ports that have wires this build —
+    /// a router whose selection depends on a wired control (mux's wired
+    /// selector) uses it to decline the alias when the inline param isn't
+    /// authoritative.
+    ///
+    /// [`variadic_skip_passthrough_out`]: Self::variadic_skip_passthrough_out
+    fn skip_passthrough(
+        &self,
+        _params: &ParamValues,
+        _wired_inputs: &[&str],
+    ) -> Option<(&'static str, &'static str)> {
+        None
+    }
+
+    /// Variadic-router passthrough declaration: the OUTPUT port this node's
+    /// [`skip_passthrough`](Self::skip_passthrough) may alias ANY of its wired
+    /// texture inputs onto (mux's selected `in_N → out`). The planner extends
+    /// every wired texture input's lifetime to the output's last reader, since
+    /// it can't know statically which input the runtime will pick. Default
+    /// `None` — fixed-pair nodes use [`skip_passthrough_ports`](Self::skip_passthrough_ports).
+    fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
         None
     }
 

@@ -624,6 +624,34 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         let inst = graph
             .get_node(node_id)
             .expect("topo order references existing node");
+
+        // Variadic router (mux): the runtime may alias ANY wired texture
+        // input onto the declared output, so every one of them gets the
+        // extension — the planner can't know which `in_N` the selector
+        // picks at runtime.
+        if let Some(out_port) = inst.node.variadic_skip_passthrough_out() {
+            let Some(&r_out) = output_resources.get(&(node_id, out_port)) else {
+                continue;
+            };
+            let r_out_last = *last_reader.get(&r_out).unwrap_or(&step_idx);
+            for input in inst.node.inputs() {
+                if !matches!(input.ty, PortType::Texture2D) {
+                    continue;
+                }
+                let r_in = wire_by_target
+                    .get(&(node_id, input.name))
+                    .and_then(|w| output_resources.get(&w.from).copied());
+                let Some(r_in) = r_in else {
+                    continue;
+                };
+                let entry = last_reader.entry(r_in).or_insert(step_idx);
+                if *entry < r_out_last {
+                    *entry = r_out_last;
+                }
+            }
+            continue;
+        }
+
         let Some((in_port, out_port)) = inst.node.skip_passthrough_ports() else {
             continue;
         };

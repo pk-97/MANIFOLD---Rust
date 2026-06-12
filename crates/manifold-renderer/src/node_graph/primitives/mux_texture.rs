@@ -110,6 +110,22 @@ pub struct MuxTexture {
     /// Live input ports: `[selector, in_0, …, in_{num_inputs-1}]`. Rebuilt by
     /// `reconfigure` whenever `num_inputs` changes.
     inputs: Vec<NodeInput>,
+    /// Wired-selector LATCH: the selector value `evaluate` resolved last
+    /// frame. `selected_input_branch` runs during liveness — before any node
+    /// evaluates — so a wired selector's current-frame value is unknowable
+    /// there. Pruning AND the texture pick both use this latched value, which
+    /// keeps them consistent: a selector edge lands one frame later instead
+    /// of ever reading a branch whose producer was pruned (a stale or unbound
+    /// texture on stage). `None` until the first wired evaluate — that frame
+    /// every branch stays live.
+    ///
+    /// Memo interaction: the latch makes a wired mux's output depend on LAST
+    /// frame's wire value, which would poison a memo hold — but a wired
+    /// selector's producer chain (trigger logic, LFOs) is never pure, so the
+    /// hoistable closure never includes a wired-selector mux and the memoizer
+    /// never holds one. The `is_pure` declaration below is only ever
+    /// exercised on the inline-selector shape, where the latch is `None`.
+    latched_selector: Option<f32>,
     pipeline: Option<GpuComputePipeline>,
     sampler: Option<GpuSampler>,
 }
@@ -118,6 +134,7 @@ impl MuxTexture {
     pub fn new() -> Self {
         let mut m = Self {
             inputs: Vec::new(),
+            latched_selector: None,
             pipeline: None,
             sampler: None,
         };
@@ -222,10 +239,15 @@ impl EffectNode for MuxTexture {
         params: &ParamValues,
         wired_inputs: &[&str],
     ) -> Option<&'static str> {
-        // Wire-driven selector: can't pre-resolve. Every branch must run so
-        // whichever the wire eventually resolves to is ready.
+        // Wire-driven selector: its current-frame value can't be known at
+        // liveness time, but the LATCHED value (last frame's resolved wire,
+        // which `evaluate` will also render with this frame) can prune the
+        // other branches — BasicShapes' trigger-wired selector stops paying
+        // for all three shapes. First frame (no latch yet): every branch
+        // runs.
         if wired_inputs.contains(&"selector") {
-            return None;
+            let latched = self.latched_selector?;
+            return Some(IN_PORT_NAMES[resolve_selector_index(latched, self.num_inputs())]);
         }
         let selector = params
             .get("selector")
@@ -234,15 +256,57 @@ impl EffectNode for MuxTexture {
         Some(IN_PORT_NAMES[resolve_selector_index(selector, self.num_inputs())])
     }
 
+    /// Passthrough alias: the selected-branch copy is a per-pixel identity, so
+    /// when the selector is INLINE (unwired) the executor aliases the chosen
+    /// input's texture onto the output — zero GPU work — instead of running
+    /// the full-canvas sampled copy. The executor only installs the alias when
+    /// the slots' dims + format match (a 256×1 LUT ramp muxed up to canvas
+    /// still resamples through `evaluate`). Wired selectors keep the dispatch:
+    /// `evaluate` is where the selector latch updates, and an aliased skip
+    /// would freeze it.
+    fn skip_passthrough(
+        &self,
+        params: &ParamValues,
+        wired_inputs: &[&str],
+    ) -> Option<(&'static str, &'static str)> {
+        if wired_inputs.contains(&"selector") {
+            return None;
+        }
+        let selector = params.get("selector").and_then(|v| v.as_scalar())?;
+        let port = IN_PORT_NAMES[resolve_selector_index(selector, self.num_inputs())];
+        // Alias only when the selected slot is actually wired — the unwired
+        // fallback (in_0 / clear-to-black) must keep running evaluate.
+        if !wired_inputs.contains(&port) {
+            return None;
+        }
+        Some((port, "out"))
+    }
+
+    /// The alias source is dynamic (any wired `in_N`), so the planner extends
+    /// every wired texture input's lifetime to `out`'s last reader.
+    fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
+        Some("out")
+    }
+
     fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // Read the selector. Port-shadows-param: wired value overrides the
-        // inline param, otherwise the param drives the choice.
+        // inline param, otherwise the param drives the choice. A WIRED
+        // selector renders with the LATCHED (last frame's) value — the same
+        // value `selected_input_branch` pruned with this frame — so a pruned
+        // branch is never read; the selector edge lands one frame later.
         let selector = match ctx.inputs.scalar("selector") {
-            Some(ParamValue::Float(f)) => f,
-            _ => match ctx.params.get("selector") {
-                Some(ParamValue::Float(f)) => *f,
-                _ => 0.0,
-            },
+            Some(ParamValue::Float(f)) => {
+                let effective = self.latched_selector.unwrap_or(f);
+                self.latched_selector = Some(f);
+                effective
+            }
+            _ => {
+                self.latched_selector = None;
+                match ctx.params.get("selector") {
+                    Some(ParamValue::Float(f)) => *f,
+                    _ => 0.0,
+                }
+            }
         };
         let idx = resolve_selector_index(selector, self.num_inputs());
 
