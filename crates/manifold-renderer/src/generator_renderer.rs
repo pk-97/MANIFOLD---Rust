@@ -181,6 +181,30 @@ impl GeneratorRenderer {
         }
     }
 
+    /// Enable/disable a full-graph dump on the generator at `layer_id` — every
+    /// node output is captured this frame, for the per-node thumbnail atlas. The
+    /// generator side of the effect compositor's `set_dump_request`; the watched
+    /// layer is already kept unfused by [`Self::set_preview_node`], so the
+    /// per-node textures the dump reads exist.
+    pub fn set_dump(&mut self, layer_id: &LayerId, on: bool) {
+        if let Some(state) = self.layer_generators.get_mut(layer_id) {
+            state.generator.set_dump_all(on);
+        }
+    }
+
+    /// Every captured Texture2D output of the generator at `layer_id` as
+    /// `(node_id, port, type_id, texture)`, after a [`Self::render_all`] with the
+    /// dump enabled. The generator counterpart of `Compositor::dump_textures`.
+    pub fn dump_textures(
+        &self,
+        layer_id: &LayerId,
+    ) -> Vec<(String, String, String, &manifold_gpu::GpuTexture)> {
+        self.layer_generators
+            .get(layer_id)
+            .map(|s| s.generator.dump_textures_all())
+            .unwrap_or_default()
+    }
+
     /// The captured preview texture for the generator on `layer_id`, from the
     /// most recent [`Self::render_all`]. `None` if absent or nothing captured.
     pub fn preview_texture(&self, layer_id: &LayerId) -> Option<&manifold_gpu::GpuTexture> {

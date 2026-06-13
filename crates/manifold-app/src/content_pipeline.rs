@@ -1031,10 +1031,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     if let Some(gen_renderer) =
                         renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
                     {
-                        // Aim (or clear) the node-output preview before render.
+                        // Aim (or clear) the node-output preview before render,
+                        // and enable the full-graph dump on the watched layer
+                        // when the thumbnail atlas is on (so every node's output
+                        // is captured this frame — the generator side of the
+                        // effect compositor's dump).
                         match &self.node_preview_generator {
                             Some((layer_id, node_id)) => {
-                                gen_renderer.set_preview_node(layer_id, node_id.as_ref())
+                                gen_renderer.set_preview_node(layer_id, node_id.as_ref());
+                                gen_renderer.set_dump(layer_id, self.node_atlas_enabled);
                             }
                             None => gen_renderer.clear_preview(),
                         }
@@ -1089,6 +1094,62 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.node_preview_textures[self.write_surface_index].as_ref()
                 {
                     gen_enc.clear_texture(target, 0.0, 0.0, 0.0, 1.0);
+                }
+            }
+
+            // ── Per-node thumbnail atlas (generator) ────────────────
+            // Mirror of the effect-side atlas capture below, on the generator's
+            // dump. Same cell packing; unifies the editor's behaviour across
+            // effect and generator graphs.
+            #[cfg(target_os = "macos")]
+            {
+                let mut gen_layout: Option<Vec<(NodeId, u32)>> = None;
+                if self.node_atlas_enabled
+                    && let Some((layer_id, _)) = self.node_preview_generator.clone()
+                    && let (Some(atlas), Some(raw), Some(sampler)) = (
+                        self.node_atlas_textures[self.write_surface_index].as_ref(),
+                        self.preview_pipelines().raw,
+                        self.preview_sampler.as_ref(),
+                    )
+                    && let Some(gr) = renderers
+                        .iter()
+                        .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>())
+                {
+                    let mut new_layout: Vec<(NodeId, u32)> = Vec::new();
+                    gen_enc.clear_texture(atlas, 0.0, 0.0, 0.0, 0.0);
+                    for (i, (name, _port, _type_id, tex)) in
+                        gr.dump_textures(&layer_id).iter().enumerate().take(ATLAS_CELLS)
+                    {
+                        let gx = (i as u32) % ATLAS_GRID;
+                        let gy = (i as u32) / ATLAS_GRID;
+                        gen_enc.draw_fullscreen_viewport(
+                            raw,
+                            atlas,
+                            &[
+                                manifold_gpu::GpuBinding::Texture {
+                                    binding: 0,
+                                    texture: tex,
+                                },
+                                manifold_gpu::GpuBinding::Sampler {
+                                    binding: 1,
+                                    sampler,
+                                },
+                            ],
+                            (
+                                (gx * ATLAS_CELL) as f32,
+                                (gy * ATLAS_CELL) as f32,
+                                ATLAS_CELL as f32,
+                                ATLAS_CELL as f32,
+                            ),
+                            manifold_gpu::GpuLoadAction::Load,
+                            "Node Thumbnail Atlas Cell (Generator)",
+                        );
+                        new_layout.push((NodeId::new(name.as_str()), i as u32));
+                    }
+                    gen_layout = Some(new_layout);
+                }
+                if let Some(l) = gen_layout {
+                    self.last_node_atlas_layout = l;
                 }
             }
             gen_enc.commit();
@@ -1357,16 +1418,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // node output this frame. Pack each into a cell of the atlas; the
             // canvas samples one cell per node. Authoring-only (gated on the UI
             // enabling it), so a live show pays nothing.
+            // Gated on an effect being watched: a watched *generator* fills the
+            // same atlas + layout in the generator block above, and the
+            // compositor render runs later — so without this guard the empty
+            // effect dump would clobber the generator's layout.
             #[cfg(target_os = "macos")]
             {
-                let mut new_layout: Vec<(NodeId, u32)> = Vec::new();
+                let mut eff_layout: Option<Vec<(NodeId, u32)>> = None;
                 if self.node_atlas_enabled
+                    && self.node_preview_request.is_some()
                     && let (Some(atlas), Some(raw), Some(sampler)) = (
                         self.node_atlas_textures[self.write_surface_index].as_ref(),
                         self.preview_pipelines().raw,
                         self.preview_sampler.as_ref(),
                     )
                 {
+                    let mut new_layout: Vec<(NodeId, u32)> = Vec::new();
                     // Clear the whole atlas once, then Load-blit each cell so
                     // earlier cells survive.
                     native_enc.clear_texture(atlas, 0.0, 0.0, 0.0, 0.0);
@@ -1403,8 +1470,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         );
                         new_layout.push((NodeId::new(name.as_str()), i as u32));
                     }
+                    eff_layout = Some(new_layout);
                 }
-                self.last_node_atlas_layout = new_layout;
+                if let Some(l) = eff_layout {
+                    self.last_node_atlas_layout = l;
+                }
             }
         }
 
