@@ -251,3 +251,12 @@ All groups render one fixed `GROUP_HEADER_BG`.
   canvas text-editing is the missing piece (the canvas has no text-input mode today; the editor only
   routes chars to the mapping popover). Deferred with the image atlas for the pixels-in-hand session;
   the backend is ready for whatever trigger we choose (breadcrumb-leaf edit or an inspector field).
+- **Phase 5 — Generator mapping drawer: ALREADY SHIPPED (verified, no code needed).** The brief
+  assumed a `mappable=true` flip blocked on generators lacking per-instance bindings. Reading the
+  code, the card-target unification already landed: `preset_to_config` sets `mappable: true` for
+  generator rows, and the whole drawer pipeline is target-generic — `open_editor_card_mapping`,
+  `full_reshape_for`, `seed_def_for`, `watched_value`, and `preview`/`commit` all branch on
+  `GraphTarget::Generator`, committing through `EditParamMappingCommand::new(target, …)` against the
+  generator's `preset_metadata` reshape (range/scale/offset/invert/curve). So a generator card param
+  shows the chevron and the sideways mapping drawer edits + undoes exactly like an effect. Cleaned up
+  the stale `ParamInfo::mappable` doc comment that still claimed generators leave it `false`.

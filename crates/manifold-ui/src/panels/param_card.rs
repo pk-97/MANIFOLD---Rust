@@ -94,9 +94,11 @@ pub struct ParamInfo {
     /// Ableton trim range `(range_min, range_max)`. When present, trim handles
     /// are shown on the slider track.
     pub ableton_range: Option<(f32, f32)>,
-    /// This row maps to a remappable `UserParamBinding` (range / scale / offset
-    /// / invert / curve). Only effect user-tail bindings set this today; static
-    /// effect params and generator params leave it `false`. Drives the sideways
+    /// This row carries a per-instance editable reshape (range / scale / offset
+    /// / invert / curve). After the card-target unification every exposed card
+    /// param is remappable — effect static + user-tail bindings AND generator
+    /// params — via `EditParamMappingCommand` on the watched graph target, so
+    /// `editor_card_config` sets this `true` for both kinds. Drives the sideways
     /// mapping-drawer chevron, which only appears in [`CardContext::Author`].
     pub mappable: bool,
 }
