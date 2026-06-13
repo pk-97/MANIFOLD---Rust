@@ -363,6 +363,7 @@ pub fn dispatch(
         | PanelAction::MoveGraphNode { .. }
         | PanelAction::RelayoutGraph { .. }
         | PanelAction::SetGraphNodeParam { .. }
+        | PanelAction::BrowseGraphNodePath { .. }
         | PanelAction::GroupSelection { .. }
         | PanelAction::Ungroup { .. }
         | PanelAction::SetGroupTint { .. }

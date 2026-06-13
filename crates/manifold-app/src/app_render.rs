@@ -1282,6 +1282,30 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::BrowseGraphNodePath { node_id, param_name } => {
+                    // Blocking native folder picker — fine for authoring (same as
+                    // preset import/export). On a pick, set the param to the path
+                    // through the same command SetGraphNodeParam uses.
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) && let Some(folder) = rfd::FileDialog::new().pick_folder()
+                    {
+                        let path = folder.to_string_lossy().to_string();
+                        let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                            eid.clone(),
+                            *node_id,
+                            param_name.clone(),
+                            manifold_core::effect_graph_def::SerializedParamValue::String {
+                                value: path,
+                            },
+                            default.clone(),
+                        )
+                        .with_scope(canvas_scope.clone());
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
                 PanelAction::GroupSelection {
                     scope_path,
                     node_ids,
@@ -3535,6 +3559,7 @@ fn build_graph_editor_view(
                 ParamSnapshotKind::Vec2 => GraphEditorParamKind::Vec2,
                 ParamSnapshotKind::Vec3 => GraphEditorParamKind::Vec3,
                 ParamSnapshotKind::Vec4 => GraphEditorParamKind::Vec4,
+                ParamSnapshotKind::String => GraphEditorParamKind::String,
                 ParamSnapshotKind::Other => GraphEditorParamKind::Other,
             },
             default_value: p.default_value,

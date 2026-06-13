@@ -260,3 +260,17 @@ All groups render one fixed `GROUP_HEADER_BG`.
   generator's `preset_metadata` reshape (range/scale/offset/invert/curve). So a generator card param
   shows the chevron and the sideways mapping drawer edits + undoes exactly like an effect. Cleaned up
   the stale `ParamInfo::mappable` doc comment that still claimed generators leave it `false`.
+- **Phase 6 — registry widgets: the two headline widgets shipped in Phase 2; path picker added; the
+  rest DEFERRED.** The brief's highest-value widgets — the **colour picker and the vector editor** —
+  already landed in Phase 2 (`ParamSnapshotKind::Color/Vec2/3/4` + the swatch / channel sliders).
+  This phase adds the one further widget that is both tractable and non-visual: a **native folder
+  picker** for path-like String params (`image_folder.folder`). `ParamSnapshotKind::String` is split
+  out, the value shows in the inspector + node face (`string_summary`), and a path-like name
+  (folder/path/file/dir) gets a Browse button → `BrowseGraphNodePath` → `rfd::FileDialog::pick_folder`
+  → `SetGraphNodeParam(String)`. Tested (2 panel tests). **Deferred (pixels-in-hand / text-input
+  pass):** the gradient-ramp stop editor, the response-curve editor, the numeric table/sequence
+  editor, a free-text field (`render_text.text`/`fontFamily`), and the `wgsl_compute` code editor.
+  These all need either a canvas text-input mode (which doesn't exist — the editor only routes chars
+  to the mapping popover) or a complex draggable-stops / curve widget whose correctness is visual, and
+  the project gates authoring-canvas visuals on Peter's eyes. They share the deferred bucket with the
+  image-thumbnail atlas and the group-rename UI.

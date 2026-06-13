@@ -397,7 +397,9 @@ fn format_param_for_node(p: &manifold_renderer::node_graph::ParamSnapshot) -> Pa
                     .vec_value
                     .map(|v| format!("{:.2}, {:.2}, {:.2}, {:.2}", v[0], v[1], v[2], v[3]))
                     .unwrap_or_else(|| "—".to_string()),
-                ParamSnapshotKind::Other => {
+                // String + Table both read out of `summary` (the string value /
+                // the table dimensions).
+                ParamSnapshotKind::String | ParamSnapshotKind::Other => {
                     p.summary.clone().unwrap_or_else(|| "—".to_string())
                 }
                 // Numeric/bool kinds are handled by numeric_value_fill above.

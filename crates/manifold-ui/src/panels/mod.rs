@@ -415,6 +415,13 @@ pub enum PanelAction {
         param_name: String,
         new_value: manifold_core::effect_graph_def::SerializedParamValue,
     },
+    /// Open a native folder picker for a path-like String param and set it to
+    /// the chosen path. Emitted by the inspector's Browse button; the host runs
+    /// the (blocking) dialog and dispatches a `SetGraphNodeParam` String value.
+    BrowseGraphNodePath {
+        node_id: u32,
+        param_name: String,
+    },
     /// Collapse a set of nodes at `scope_path` (the canvas's current view
     /// depth, a path of group ids; empty = document root) into a single group
     /// node. Emitted by Ctrl+G on a canvas selection. `handle` is the new

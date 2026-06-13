@@ -70,9 +70,22 @@ pub enum GraphEditorParamKind {
     Vec2,
     Vec3,
     Vec4,
-    /// Remaining structured types (Table, String) with no dedicated inline
-    /// editor yet — shown as a disabled row.
+    /// Text / path string. Shown read-only as its value; a path-like param
+    /// (name contains folder/path/file/dir) also gets a Browse button that
+    /// opens a native folder picker. Free-text editing isn't inline yet.
+    String,
+    /// Remaining structured types (Table) with no dedicated inline editor yet —
+    /// shown as a disabled row.
     Other,
+}
+
+/// Whether a String param's name looks like a filesystem path, so the inspector
+/// offers a native Browse picker rather than treating it as free text.
+fn is_path_param(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    ["folder", "path", "file", "dir"]
+        .iter()
+        .any(|k| n.contains(k))
 }
 
 impl GraphEditorParamKind {
@@ -288,6 +301,13 @@ enum RowState {
         /// range or a sensible default for vectors).
         min: f32,
         max: f32,
+    },
+    /// Browse button on a path-like String param. Click opens a native folder
+    /// picker (host-side) and sets the param to the chosen path.
+    BrowseButton {
+        button_node_id: u32,
+        node_runtime_id: u32,
+        param_name: String,
     },
 }
 
@@ -584,6 +604,11 @@ impl GraphEditorPanel {
                 y = self.build_vec_param(tree, bg_id, viewport, y, node.runtime_node_id, ps);
                 continue;
             }
+            // String params show their value; path-like ones add a Browse button.
+            if ps.kind == GraphEditorParamKind::String {
+                y = self.build_string_param(tree, bg_id, viewport, y, node.runtime_node_id, ps);
+                continue;
+            }
             // Remaining unsupported types (Table / String) — show a row but
             // disabled. V2's single-slot surface can't carry them.
             let supported = matches!(
@@ -735,6 +760,7 @@ impl GraphEditorPanel {
                     | GraphEditorParamKind::Vec2
                     | GraphEditorParamKind::Vec3
                     | GraphEditorParamKind::Vec4
+                    | GraphEditorParamKind::String
                     | GraphEditorParamKind::Other => ParamConvert::Float,
                 };
                 let (min, max) = ps.range.unwrap_or((0.0, 1.0));
@@ -895,6 +921,96 @@ impl GraphEditorPanel {
             y += ROW_H;
         }
         y
+    }
+
+    /// Build a String param row: a disabled expose checkbox (strings aren't
+    /// single-slot card-exposable), the label, the current value, and — for a
+    /// path-like param — a Browse button that opens a native folder picker.
+    /// Free-text editing of plain strings isn't inline yet (no canvas text
+    /// field), so non-path strings are read-only here. Returns the y past the row.
+    fn build_string_param(
+        &mut self,
+        tree: &mut UITree,
+        bg_id: i32,
+        viewport: Rect,
+        y: f32,
+        node_runtime_id: u32,
+        ps: &GraphEditorParam,
+    ) -> f32 {
+        let cb_x = viewport.x + PADDING;
+        let cb_y = y + (ROW_H - CHECKBOX_H) * 0.5;
+        tree.add_button(
+            bg_id,
+            cb_x,
+            cb_y,
+            CHECKBOX_W,
+            CHECKBOX_H,
+            checkbox_style(false, false),
+            "",
+        );
+        let label_x = cb_x + CHECKBOX_W + CHECKBOX_GAP;
+        let row_remaining = (viewport.x + viewport.width - PADDING - label_x).max(10.0);
+        let is_path = is_path_param(&ps.name);
+        // Reserve a Browse button at the right for path params.
+        let browse_w = if is_path { 64.0 } else { 0.0 };
+        let value_w = (row_remaining * 0.5).max(60.0);
+        let label_w = (row_remaining - value_w - browse_w - 6.0).max(10.0);
+        tree.add_label(
+            bg_id,
+            label_x,
+            y,
+            label_w,
+            ROW_H,
+            &ps.label,
+            UIStyle {
+                text_color: color::TEXT_WHITE_C32,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        let value_str = ps.summary.clone().unwrap_or_else(|| "—".to_string());
+        tree.add_label(
+            bg_id,
+            label_x + label_w,
+            y,
+            value_w,
+            ROW_H,
+            &value_str,
+            UIStyle {
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Right,
+                ..UIStyle::default()
+            },
+        );
+        if is_path {
+            let btn_id = tree.add_button(
+                bg_id,
+                viewport.x + viewport.width - PADDING - browse_w,
+                y,
+                browse_w,
+                ROW_H,
+                UIStyle {
+                    bg_color: color::BUTTON_INACTIVE_C32,
+                    hover_bg_color: color::HOVER_OVERLAY,
+                    text_color: color::TEXT_WHITE_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Center,
+                    corner_radius: 3.0,
+                    border_color: color::TEXT_DIMMED_C32,
+                    border_width: 1.0,
+                    ..UIStyle::default()
+                },
+                "Browse",
+            );
+            self.rows.push(RowState::BrowseButton {
+                button_node_id: btn_id,
+                node_runtime_id,
+                param_name: ps.name.clone(),
+            });
+        }
+        y + ROW_H
     }
 
     /// Render the value inspector for the previewed node into the pinned
@@ -1160,6 +1276,18 @@ impl GraphEditorPanel {
                 // Colour / vector channel cells edit by drag only; a click is a
                 // no-op (handled in handle_drag / handle_drag_begin).
                 RowState::VecComponent { .. } => {}
+                RowState::BrowseButton {
+                    button_node_id,
+                    node_runtime_id,
+                    param_name,
+                } => {
+                    if *button_node_id == node_id {
+                        return vec![PanelAction::BrowseGraphNodePath {
+                            node_id: *node_runtime_id,
+                            param_name: param_name.clone(),
+                        }];
+                    }
+                }
             }
         }
         Vec::new()
@@ -1374,6 +1502,7 @@ fn value_cell_click_to_param(
         | GraphEditorParamKind::Vec2
         | GraphEditorParamKind::Vec3
         | GraphEditorParamKind::Vec4
+        | GraphEditorParamKind::String
         | GraphEditorParamKind::Other => None,
     }
 }
@@ -1427,6 +1556,8 @@ fn format_inner_param_value(p: &GraphEditorParam) -> String {
             "{:.2}, {:.2}, {:.2}, {:.2}",
             p.vec_value[0], p.vec_value[1], p.vec_value[2], p.vec_value[3]
         ),
+        // String renders via build_string_param; this arm is for completeness.
+        GraphEditorParamKind::String => p.summary.clone().unwrap_or_else(|| "—".to_string()),
         GraphEditorParamKind::Other => "—".to_string(),
     }
 }
@@ -2450,5 +2581,88 @@ mod tests {
             }
             other => panic!("unexpected action: {other:?}"),
         }
+    }
+
+    // ── String params + path picker ─────────────────────────────────
+
+    fn snap_node_with_string(name: &str, value: &str) -> GraphEditorNodeView {
+        GraphEditorNodeView {
+            runtime_node_id: 11,
+            node_id: manifold_core::NodeId::new("img"),
+            node_handle: Some("img".to_string()),
+            title: "Image Folder".to_string(),
+            parameters: vec![GraphEditorParam {
+                name: name.to_string(),
+                label: name.to_string(),
+                kind: GraphEditorParamKind::String,
+                default_value: 0.0,
+                current_value: 0.0,
+                range: None,
+                enum_labels: None,
+                summary: Some(value.to_string()),
+                vec_value: [0.0; 4],
+            }],
+        }
+    }
+
+    #[test]
+    fn path_string_param_gets_a_browse_button_that_emits_browse() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_string("folder", "/clips/seq_01");
+        panel.configure(
+            None,
+            Some(&node),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        panel.build(&mut tree, viewport());
+        let browse = panel
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                RowState::BrowseButton {
+                    button_node_id,
+                    param_name,
+                    ..
+                } if param_name == "folder" => Some(*button_node_id),
+                _ => None,
+            })
+            .expect("a path-like String param has a Browse button");
+        match panel.handle_click(browse).as_slice() {
+            [PanelAction::BrowseGraphNodePath {
+                node_id,
+                param_name,
+            }] => {
+                assert_eq!(*node_id, 11);
+                assert_eq!(param_name.as_str(), "folder");
+            }
+            other => panic!("expected BrowseGraphNodePath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plain_text_string_param_has_no_browse_button() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_string("text", "HELLO");
+        panel.configure(
+            None,
+            Some(&node),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        panel.build(&mut tree, viewport());
+        assert!(
+            panel
+                .rows
+                .iter()
+                .all(|r| !matches!(r, RowState::BrowseButton { .. })),
+            "a non-path String param is read-only (no Browse button)"
+        );
     }
 }

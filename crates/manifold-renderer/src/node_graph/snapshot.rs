@@ -219,8 +219,12 @@ pub enum ParamSnapshotKind {
     Vec3,
     /// 4-component vector. Editable via X/Y/Z/W sliders.
     Vec4,
-    /// Remaining multi-slot / structured types (Table, String) — not yet given
-    /// a dedicated inline editor; shown via `summary`.
+    /// Text / path string. Shown as its value; a path-like param (name contains
+    /// folder/path/file/dir) gets a Browse button that opens a native picker.
+    /// Free-text editing of non-path strings is not inline-editable yet.
+    String,
+    /// Remaining structured types (Table) — not yet given a dedicated inline
+    /// editor; shown via `summary`.
     Other,
 }
 
@@ -408,6 +412,7 @@ impl GraphSnapshot {
                             ParamValue::Table(t) => {
                                 Some(format!("{}×{}", t.row_count(), t.col_count()))
                             }
+                            ParamValue::String(s) => Some(string_summary(s)),
                             _ => None,
                         };
                         ParamSnapshot {
@@ -715,6 +720,7 @@ fn node_snapshot_from_constructed(
             let current = params.get(pd.name).cloned().unwrap_or_else(|| pd.default.clone());
             let summary = match &current {
                 ParamValue::Table(t) => Some(format!("{}×{}", t.row_count(), t.col_count())),
+                ParamValue::String(s) => Some(string_summary(s)),
                 _ => None,
             };
             ParamSnapshot {
@@ -805,8 +811,29 @@ fn param_snapshot_kind(ty: ParamType) -> ParamSnapshotKind {
         ParamType::Vec2 => ParamSnapshotKind::Vec2,
         ParamType::Vec3 => ParamSnapshotKind::Vec3,
         ParamType::Vec4 => ParamSnapshotKind::Vec4,
-        // Table / String have no dedicated inline editor yet.
-        ParamType::Table | ParamType::String => ParamSnapshotKind::Other,
+        ParamType::String => ParamSnapshotKind::String,
+        // Table has no dedicated inline editor yet (shown via `summary`).
+        ParamType::Table => ParamSnapshotKind::Other,
+    }
+}
+
+/// Compact display for a String param. A path-like value shows its trailing
+/// component (so the row reads `sequence_01`, not the full disk path); plain
+/// text is truncated. Empty reads as `(empty)`.
+fn string_summary(s: &str) -> String {
+    if s.is_empty() {
+        return "(empty)".to_string();
+    }
+    let shown = if s.contains('/') {
+        let trimmed = s.trim_end_matches('/');
+        trimmed.rsplit('/').next().unwrap_or(trimmed)
+    } else {
+        s
+    };
+    if shown.chars().count() > 24 {
+        format!("{}…", shown.chars().take(23).collect::<String>())
+    } else {
+        shown.to_string()
     }
 }
 
