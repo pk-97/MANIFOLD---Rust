@@ -1,5 +1,10 @@
 # Editor Reorg — Build Brief (autonomous session, 2026-06-01)
 
+> **Historical (as of 2026-06-13).** The three-lane layout this brief built has
+> shipped. For the editor's current state and the remaining UX work, see
+> `docs/GRAPH_EDITOR_UX_BUILD_BRIEF.md`. Kept for the reuse map and the affine-fold
+> decision record.
+
 Working brief for the WS1/WS2/WS3 session. Pins every locked decision so neither
 the main context nor any agent drifts. Peter authorized an autonomous run: make
 the judgment calls here, log them in commit messages, surface only when the UI is

@@ -1,8 +1,12 @@
 # Node Groups — Editor UI/UX Spec
 
-Status: **planned, not started.** Authored 2026-06-02 for a later ultracode build session.
-Builds directly on the backend foundation in `NODE_GROUPS_DESIGN.md` (schema + `flatten_groups`,
-landed on the `node-groups` branch). Companion: `NODE_GRAPH_SYSTEM.md`,
+Status: **Phases A–C shipped; D dropped; E pending** (authored 2026-06-02, status
+corrected 2026-06-13). Phases A–C (snapshot nesting, read-only navigation +
+breadcrumb, marquee select + collapse/ungroup) are built. **Phase D (interface
+editing) is dropped** — groups are organisation-only, exposure stays direct-to-card
+(Peter, 2026-06-13). Phase E (naming + color) is scoped in
+`docs/GRAPH_EDITOR_UX_BUILD_BRIEF.md` §4. Builds on the backend in
+`NODE_GROUPS_DESIGN.md` (schema + `flatten_groups`). Companion: `NODE_GRAPH_SYSTEM.md`,
 `CARD_TARGET_UNIFICATION.md`.
 
 The bar is professional node-editor UX — TouchDesigner / Blender for the network model,

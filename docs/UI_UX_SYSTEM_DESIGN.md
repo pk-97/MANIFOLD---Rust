@@ -1,14 +1,17 @@
 # MANIFOLD — Graph & Parameter UI/UX System Design
 
-Status: **design, pre-build** (2026-05-31). This is the agreed spec for the
-next UI/UX pass on the effect/generator/graph/node surfaces. It is the
-human-facing half of the node "UX backend" initiative
+Status: **rationale doc — partly built** (2026-05-31, status corrected 2026-06-13).
+This is the original vision for the UI/UX pass on the effect/generator/graph/node
+surfaces. It is the human-facing half of the node "UX backend" initiative
 ([project_node_descriptor_ux_backend], `docs/NODE_CATALOG.md`): the descriptor
 backend already exists and feeds the agent catalog; this design surfaces that
 same backend to humans, and adds the structural UI it implies.
 
-Nothing here is built yet. Where a section says "current," that is what ships
-today; "target" is the design.
+**Much of this has since shipped** (on-node controls, collapse, in-place edit,
+single-node preview, groups navigation, popup palette, window behaviour). For the
+*current state + the remaining work*, see `docs/GRAPH_EDITOR_UX_BUILD_BRIEF.md`
+(2026-06-13), which is code-verified and authoritative. Read this doc for the
+*why*; read the brief for the *what's-left*.
 
 ---
 
