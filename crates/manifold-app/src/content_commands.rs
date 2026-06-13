@@ -75,6 +75,9 @@ impl ContentThread {
             ContentCommand::SetNodePreviewNormalize(on) => {
                 self.node_preview_normalize = on;
             }
+            ContentCommand::SetNodeAtlasEnabled(on) => {
+                self.content_pipeline.set_node_atlas_enabled(on);
+            }
             ContentCommand::DumpGraphOutputs => {
                 if let Some(manifold_core::GraphTarget::Effect(effect_id)) =
                     self.watched_graph_target.clone()

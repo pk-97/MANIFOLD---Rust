@@ -1197,6 +1197,7 @@ impl ContentThread {
             active_graph_snapshot: active_graph_snapshot_arc,
             node_preview_info: self.content_pipeline.node_preview_info(),
             live_node_params: self.content_pipeline.live_node_params(),
+            node_atlas_layout: self.content_pipeline.node_atlas_layout().to_vec(),
         };
 
         // Send state to UI. Unbounded channel — never drops snapshots.

@@ -215,10 +215,25 @@ pub struct Application {
     #[cfg(target_os = "macos")]
     pub(crate) ui_node_preview_textures:
         [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    /// IOSurface bridge for the per-node thumbnail atlas (one big texture packed
+    /// as a cell grid). The editor present pass samples cells onto canvas nodes.
+    #[cfg(target_os = "macos")]
+    pub(crate) node_atlas_texture_bridge:
+        Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    /// UI-side textures imported from the thumbnail-atlas IOSurfaces.
+    #[cfg(target_os = "macos")]
+    pub(crate) ui_node_atlas_textures:
+        [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    /// Whether the content thread currently has atlas capture enabled — dedups
+    /// the `SetNodeAtlasEnabled` command so it sends only on change.
+    pub(crate) node_atlas_enabled_sent: bool,
     pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) atlas_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) atlas_sampler: Option<manifold_gpu::GpuSampler>,
+    /// Samples one atlas cell (UV sub-rect via inline `Bytes` uniform) onto a
+    /// node's body in the editor present pass. The per-node thumbnail blit.
+    pub(crate) node_thumb_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
@@ -461,10 +476,16 @@ impl Application {
             node_preview_texture_bridge: None,
             #[cfg(target_os = "macos")]
             ui_node_preview_textures: [None, None, None],
+            #[cfg(target_os = "macos")]
+            node_atlas_texture_bridge: None,
+            #[cfg(target_os = "macos")]
+            ui_node_atlas_textures: [None, None, None],
+            node_atlas_enabled_sent: false,
             blit_pipeline: None,
             blit_sampler: None,
             atlas_pipeline: None,
             atlas_sampler: None,
+            node_thumb_pipeline: None,
             ui_renderer: None,
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
@@ -1602,6 +1623,42 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     ..Default::default()
                 }));
 
+            // Per-node thumbnail pipeline — samples one atlas cell (a UV
+            // sub-rect, passed as inline bytes `cell = vec4(u0, v0, du, dv)`) and
+            // draws it into the node's body viewport in the editor present pass.
+            let thumb_shader = r#"
+@group(0) @binding(0) var t_atlas: texture_2d<f32>;
+@group(0) @binding(1) var s_atlas: sampler;
+struct Cell { rect: vec4<f32> };
+@group(0) @binding(2) var<uniform> cell: Cell;
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
+    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let uv = cell.rect.xy + in.uv * cell.rect.zw;
+    return textureSample(t_atlas, s_atlas, uv);
+}
+"#;
+            self.node_thumb_pipeline = Some(native_device.create_render_pipeline(
+                thumb_shader,
+                "vs_main",
+                "fs_main",
+                manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+                None,
+                "Node Thumbnail Pipeline",
+            ));
+
             // Create UI renderer using native Metal
             self.ui_renderer = Some(UIRenderer::new(
                 &native_device,
@@ -1681,6 +1738,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 });
                 self.ui_node_preview_textures = node_textures.map(Some);
                 self.node_preview_texture_bridge = Some(Arc::clone(&node_bridge));
+
+                // Per-node thumbnail atlas bridge — one big cell-grid texture.
+                let atlas_dim = crate::content_pipeline::ATLAS_DIM;
+                let atlas_bridge =
+                    Arc::new(crate::shared_texture::SharedTextureBridge::new(atlas_dim, atlas_dim));
+                let atlas_textures: [manifold_gpu::GpuTexture;
+                    crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
+                    atlas_bridge.import_texture_native(&gpu.device, i)
+                });
+                self.ui_node_atlas_textures = atlas_textures.map(Some);
+                self.node_atlas_texture_bridge = Some(Arc::clone(&atlas_bridge));
             }
 
             // Create native Metal device BEFORE renderers so they can build native pipelines.
@@ -1752,6 +1820,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     crate::shared_texture::SURFACE_COUNT] =
                     std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
                 content_pipeline.set_node_preview_textures(node_textures, Arc::clone(bridge));
+            }
+            // Content-side import of the thumbnail-atlas IOSurfaces.
+            #[cfg(target_os = "macos")]
+            if let Some(ref bridge) = self.node_atlas_texture_bridge {
+                let native_dev = content_pipeline.native_device().unwrap();
+                let atlas_textures: [manifold_gpu::GpuTexture;
+                    crate::shared_texture::SURFACE_COUNT] =
+                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
+                content_pipeline.set_node_atlas_textures(atlas_textures, Arc::clone(bridge));
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());
 
@@ -3691,6 +3768,7 @@ impl Drop for Application {
         self.blit_sampler = None;
         self.atlas_pipeline = None;
         self.atlas_sampler = None;
+        self.node_thumb_pipeline = None;
         self.ws.ui_offscreen = None;
     }
 }

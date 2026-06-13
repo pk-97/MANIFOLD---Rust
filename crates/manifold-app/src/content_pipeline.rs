@@ -117,6 +117,15 @@ fn compute_occluded_layer_indices(
 /// Self-contained content rendering pipeline.
 ///
 /// Owns the compositor and orchestrates GPU rendering of generators + compositing.
+/// Per-node thumbnail atlas geometry. The atlas is one `ATLAS_DIM`-square
+/// texture packed as `ATLAS_GRID`×`ATLAS_GRID` cells, so up to
+/// `ATLAS_GRID * ATLAS_GRID` node thumbnails fit. `ATLAS_DIM = ATLAS_GRID * ATLAS_CELL`.
+pub const ATLAS_GRID: u32 = 16;
+pub const ATLAS_CELL: u32 = 64;
+pub const ATLAS_DIM: u32 = ATLAS_GRID * ATLAS_CELL;
+/// Max node thumbnails an atlas holds.
+pub const ATLAS_CELLS: usize = (ATLAS_GRID * ATLAS_GRID) as usize;
+
 /// The PlaybackEngine (which owns GeneratorRenderer) is borrowed for each frame.
 ///
 /// On macOS, uses native Metal encoding via manifold-gpu.
@@ -191,6 +200,22 @@ pub struct ContentPipeline {
     /// IOSurface bridge for the node-output preview path.
     #[cfg(target_os = "macos")]
     node_preview_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    /// When set, capture every node output of the watched effect into the
+    /// thumbnail atlas this frame. Set by the UI only while the graph editor is
+    /// open (throttled), so it costs nothing during a live show.
+    node_atlas_enabled: bool,
+    /// Triple-buffered IOSurface textures for the per-node thumbnail atlas — one
+    /// big texture packed as an `ATLAS_GRID`×`ATLAS_GRID` cell grid, each cell a
+    /// node's downscaled output. The canvas samples one cell per node.
+    #[cfg(target_os = "macos")]
+    node_atlas_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    /// IOSurface bridge for the thumbnail atlas path.
+    #[cfg(target_os = "macos")]
+    node_atlas_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    /// Published `(node_id, cell_index)` layout from the last atlas capture, so
+    /// the UI knows which atlas cell holds each node's thumbnail. Empty when the
+    /// atlas is off or nothing was captured.
+    last_node_atlas_layout: Vec<(NodeId, u32)>,
     /// Per-surface signal values — tracks the GpuEvent signal value from the last
     /// frame that wrote to each surface. Before writing to surface S, we wait for
     /// surface_signal_values[S] to complete (the frame that last used it).
@@ -341,6 +366,12 @@ impl ContentPipeline {
             node_preview_textures: [None, None, None],
             #[cfg(target_os = "macos")]
             node_preview_bridge: None,
+            node_atlas_enabled: false,
+            #[cfg(target_os = "macos")]
+            node_atlas_textures: [None, None, None],
+            #[cfg(target_os = "macos")]
+            node_atlas_bridge: None,
+            last_node_atlas_layout: Vec::new(),
             #[cfg(target_os = "macos")]
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             last_fence_wait_ms: 0.0,
@@ -800,6 +831,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.node_preview_request = request;
     }
 
+    /// Install the IOSurface textures + bridge for the per-node thumbnail atlas.
+    #[cfg(target_os = "macos")]
+    pub fn set_node_atlas_textures(
+        &mut self,
+        textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT],
+        bridge: Arc<crate::shared_texture::SharedTextureBridge>,
+    ) {
+        self.node_atlas_textures = textures.map(Some);
+        self.node_atlas_bridge = Some(bridge);
+    }
+
+    /// Enable/disable per-node thumbnail capture into the atlas. The UI sets this
+    /// only while the graph editor is open (throttled), so a live show pays nothing.
+    pub fn set_node_atlas_enabled(&mut self, on: bool) {
+        self.node_atlas_enabled = on;
+    }
+
+    /// The `(node_id, cell_index)` layout from the last atlas capture.
+    pub fn node_atlas_layout(&self) -> &[(NodeId, u32)] {
+        &self.last_node_atlas_layout
+    }
+
     /// Request a one-shot dump of every output of `effect_id` to `dir` on the
     /// next render (the watched effect's node outputs, read back to disk as
     /// 16-bit PNGs + a manifest).
@@ -1161,9 +1214,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // output this frame. Cheap clone; `None` clears (no preview).
             self.compositor
                 .set_preview_request(self.node_preview_request.clone());
-            // Enable a one-shot dump on the watched effect's chain this frame.
+            // Enable a dump on the watched effect's chain this frame — for the
+            // one-shot Cmd+D disk dump, or continuously while the thumbnail atlas
+            // is on (both read the same captured per-node textures).
+            let atlas_effect = if self.node_atlas_enabled {
+                self.node_preview_request.as_ref().map(|(e, _)| e.clone())
+            } else {
+                None
+            };
             self.compositor
-                .set_dump_request(pending_dump.as_ref().map(|(e, _)| e.clone()));
+                .set_dump_request(pending_dump.as_ref().map(|(e, _)| e.clone()).or(atlas_effect));
 
             let _compositor_tex = self.compositor.render(&mut gpu_comp, &frame);
         }
@@ -1291,6 +1351,61 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             {
                 native_enc.clear_texture(target, 0.0, 0.0, 0.0, 1.0);
             }
+
+            // ── Per-node thumbnail atlas ────────────────────────────
+            // While the editor is open, dump mode captured every watched-effect
+            // node output this frame. Pack each into a cell of the atlas; the
+            // canvas samples one cell per node. Authoring-only (gated on the UI
+            // enabling it), so a live show pays nothing.
+            #[cfg(target_os = "macos")]
+            {
+                let mut new_layout: Vec<(NodeId, u32)> = Vec::new();
+                if self.node_atlas_enabled
+                    && let (Some(atlas), Some(raw), Some(sampler)) = (
+                        self.node_atlas_textures[self.write_surface_index].as_ref(),
+                        self.preview_pipelines().raw,
+                        self.preview_sampler.as_ref(),
+                    )
+                {
+                    // Clear the whole atlas once, then Load-blit each cell so
+                    // earlier cells survive.
+                    native_enc.clear_texture(atlas, 0.0, 0.0, 0.0, 0.0);
+                    for (i, (name, _port, _type_id, tex)) in self
+                        .compositor
+                        .dump_textures()
+                        .iter()
+                        .enumerate()
+                        .take(ATLAS_CELLS)
+                    {
+                        let gx = (i as u32) % ATLAS_GRID;
+                        let gy = (i as u32) / ATLAS_GRID;
+                        native_enc.draw_fullscreen_viewport(
+                            raw,
+                            atlas,
+                            &[
+                                manifold_gpu::GpuBinding::Texture {
+                                    binding: 0,
+                                    texture: tex,
+                                },
+                                manifold_gpu::GpuBinding::Sampler {
+                                    binding: 1,
+                                    sampler,
+                                },
+                            ],
+                            (
+                                (gx * ATLAS_CELL) as f32,
+                                (gy * ATLAS_CELL) as f32,
+                                ATLAS_CELL as f32,
+                                ATLAS_CELL as f32,
+                            ),
+                            manifold_gpu::GpuLoadAction::Load,
+                            "Node Thumbnail Atlas Cell",
+                        );
+                        new_layout.push((NodeId::new(name.as_str()), i as u32));
+                    }
+                }
+                self.last_node_atlas_layout = new_layout;
+            }
         }
 
         // ── Live recording capture ──────────────────────────────────
@@ -1339,11 +1454,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else {
                     None
                 };
+            // Publish the thumbnail atlas only on frames it was actually filled.
+            let node_atlas = if self.node_atlas_enabled {
+                self.node_atlas_bridge.clone()
+            } else {
+                None
+            };
             native_enc.add_completed_handler(move || {
                 if let Some(ref b) = preview {
                     b.publish_front(write_idx);
                 }
                 if let Some(ref b) = node_preview {
+                    b.publish_front(write_idx);
+                }
+                if let Some(ref b) = node_atlas {
                     b.publish_front(write_idx);
                 }
                 // Signal recording thread that the GPU blit is complete.

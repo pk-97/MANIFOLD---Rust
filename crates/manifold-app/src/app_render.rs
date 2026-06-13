@@ -2696,6 +2696,14 @@ impl Application {
             self.last_preview_node = preview_node;
         }
 
+        // Keep per-node thumbnail capture on while the editor is open (deduped).
+        if !self.node_atlas_enabled_sent {
+            self.send_content_cmd(
+                crate::content_command::ContentCommand::SetNodeAtlasEnabled(true),
+            );
+            self.node_atlas_enabled_sent = true;
+        }
+
         let Some(gpu) = &self.gpu else { return };
         let Some(wid) = self.graph_editor_window_id else {
             return;
@@ -3120,6 +3128,77 @@ impl Application {
             true,
             "Editor Offscreen → Drawable",
         );
+
+        // ── Per-node thumbnails on the canvas ──
+        // Blit each visible node's atlas cell into its body, over the canvas.
+        // Authoring-only (the content thread only fills the atlas while the
+        // editor is open). No-op until the first atlas frame lands.
+        #[cfg(target_os = "macos")]
+        if let (Some(thumb_p), Some(atlas_sampler), Some(bridge)) = (
+            self.node_thumb_pipeline.as_ref(),
+            self.atlas_sampler.as_ref(),
+            self.node_atlas_texture_bridge.as_ref(),
+        ) {
+            let front = bridge.front_index() as usize;
+            if let Some(atlas_tex) =
+                self.ui_node_atlas_textures.get(front).and_then(|t| t.as_ref())
+            {
+                let layout: ahash::AHashMap<&manifold_core::NodeId, u32> = self
+                    .content_state
+                    .node_atlas_layout
+                    .iter()
+                    .map(|(id, cell)| (id, *cell))
+                    .collect();
+                if !layout.is_empty() {
+                    let vp = crate::graph_canvas::Rect::new(
+                        canvas_x,
+                        0.0,
+                        canvas_width,
+                        logical_h as f32,
+                    );
+                    let thumbs = self
+                        .graph_canvas
+                        .as_ref()
+                        .map(|c| c.visible_node_thumbnails(vp))
+                        .unwrap_or_default();
+                    let sf = scale as f32;
+                    let inv = 1.0 / crate::content_pipeline::ATLAS_GRID as f32;
+                    for (node_id, bx, by, bw, bh) in thumbs {
+                        let Some(&cell) = layout.get(&node_id) else {
+                            continue;
+                        };
+                        let gx = (cell % crate::content_pipeline::ATLAS_GRID) as f32;
+                        let gy = (cell / crate::content_pipeline::ATLAS_GRID) as f32;
+                        let cell_uv = [gx * inv, gy * inv, inv, inv];
+                        let mut bytes = [0u8; 16];
+                        for (k, v) in cell_uv.iter().enumerate() {
+                            bytes[k * 4..k * 4 + 4].copy_from_slice(&v.to_ne_bytes());
+                        }
+                        present_enc.draw_fullscreen_viewport(
+                            thumb_p,
+                            &drawable_tex,
+                            &[
+                                manifold_gpu::GpuBinding::Texture {
+                                    binding: 0,
+                                    texture: atlas_tex,
+                                },
+                                manifold_gpu::GpuBinding::Sampler {
+                                    binding: 1,
+                                    sampler: atlas_sampler,
+                                },
+                                manifold_gpu::GpuBinding::Bytes {
+                                    binding: 2,
+                                    data: &bytes,
+                                },
+                            ],
+                            (bx * sf, by * sf, bw * sf, bh * sf),
+                            manifold_gpu::GpuLoadAction::Load,
+                            "Node Thumbnail",
+                        );
+                    }
+                }
+            }
+        }
 
         // ── Sidebar-top preview monitors ──
         // Composite the captured node texture (top) and the master compositor

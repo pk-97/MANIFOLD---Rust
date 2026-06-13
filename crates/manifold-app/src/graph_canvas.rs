@@ -1136,6 +1136,39 @@ impl GraphCanvas {
         &self.node_search
     }
 
+    /// Visible non-group nodes as `(stable node_id, body_x, body_y, body_w,
+    /// body_h)` in screen space — the node-body region (below the header) the
+    /// present pass blits each node's atlas thumbnail into. Skips groups
+    /// (containers) and boundary nodes with an empty `node_id` (no captured
+    /// output). Culls off-canvas nodes.
+    pub fn visible_node_thumbnails(
+        &self,
+        viewport: Rect,
+    ) -> Vec<(manifold_core::NodeId, f32, f32, f32, f32)> {
+        let mut out = Vec::new();
+        let header = NODE_HEADER_HEIGHT * self.zoom;
+        for node in &self.nodes {
+            if node.is_group || node.node_id.as_str().is_empty() {
+                continue;
+            }
+            let (sx, sy) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
+            let sw = NODE_WIDTH * self.zoom;
+            let sh = node.height() * self.zoom;
+            if sx + sw < viewport.x
+                || sx > viewport.x + viewport.w
+                || sy + sh < viewport.y
+                || sy > viewport.y + viewport.h
+            {
+                continue;
+            }
+            let body_h = (sh - header).max(0.0);
+            if body_h > 1.0 {
+                out.push((node.node_id.clone(), sx, sy + header, sw, body_h));
+            }
+        }
+        out
+    }
+
     /// Whether `node` matches the active search — its title or handle contains
     /// the query. Always true when no search is active.
     fn node_matches_search(&self, node: &NodeView) -> bool {
@@ -3483,6 +3516,21 @@ mod tests {
         canvas.set_snapshot(&snap);
         assert!(canvas.scope_path().is_empty());
         assert!(canvas.nodes.iter().any(|n| n.is_group));
+    }
+
+    #[test]
+    fn visible_node_thumbnails_skip_groups_and_have_positive_body_rects() {
+        let snap = grouped_snapshot();
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snap);
+        // A viewport huge enough that nothing culls.
+        let vp = Rect::new(-10_000.0, -10_000.0, 20_000.0, 20_000.0);
+        let thumbs = canvas.visible_node_thumbnails(vp);
+        // The group ("tweak") is excluded; the two plain nodes remain.
+        assert!(thumbs.iter().all(|(id, ..)| id.as_str() != "tweak"));
+        assert_eq!(thumbs.len(), 2, "two non-group nodes get thumbnails");
+        // Each body rect (below the header) has positive size.
+        assert!(thumbs.iter().all(|(_, _, _, w, h)| *w > 0.0 && *h > 0.0));
     }
 
     #[test]

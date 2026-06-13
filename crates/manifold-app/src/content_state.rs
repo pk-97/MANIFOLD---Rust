@@ -163,6 +163,10 @@ pub struct ContentState {
     /// editor is watching. Param names are `&'static`, so this allocates only the
     /// small per-node `Vec`s.
     pub live_node_params: manifold_renderer::node_graph::LiveNodeParams,
+    /// `(node_id, atlas_cell_index)` for the per-node thumbnail atlas captured
+    /// this frame. The editor canvas maps each visible node to its atlas cell to
+    /// blit the thumbnail. Empty unless the editor enabled the atlas.
+    pub node_atlas_layout: Vec<(manifold_core::NodeId, u32)>,
 }
 
 /// Lightweight snapshot of modulated param values.
@@ -400,6 +404,7 @@ impl Default for ContentState {
             active_graph_snapshot: None,
             node_preview_info: None,
             live_node_params: Vec::new(),
+            node_atlas_layout: Vec::new(),
         }
     }
 }
