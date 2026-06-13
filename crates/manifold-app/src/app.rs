@@ -291,6 +291,14 @@ pub struct Application {
     /// existing `EffectMapping*` actions, dispatched against the editor's
     /// `watched_graph_target` (by effect id) like the canvas popover.
     pub(crate) editor_mapping_popover: crate::mapping_popover::MappingPopover,
+    /// Graph-editor node clipboard: the copied nodes + the wires among them,
+    /// captured at the source scope. Cmd+C fills it, Cmd+V pastes it (offset,
+    /// fresh ids). `None` until the first copy. Plain owned data — no identity
+    /// tie to the source, so it survives edits to the original.
+    pub(crate) graph_node_clipboard: Option<(
+        Vec<manifold_core::effect_graph_def::EffectGraphNode>,
+        Vec<manifold_core::effect_graph_def::EffectGraphWire>,
+    )>,
     /// Built-once list of atoms shown in the spawn popup (node browser).
     /// The palette column is gone; this still feeds the popup's Node mode.
     pub(crate) palette_atoms_cache: Vec<manifold_ui::panels::graph_palette::GraphPaletteAtom>,
@@ -482,6 +490,7 @@ impl Application {
             },
             editor_card_config_hash: None,
             editor_mapping_popover: crate::mapping_popover::MappingPopover::new(),
+            graph_node_clipboard: None,
             palette_atoms_cache: {
                 use manifold_renderer::node_graph::{Category, descriptor_for};
                 let cat_of = |type_id: &str| {
@@ -2829,6 +2838,48 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 {
                     if let Some(canvas) = self.graph_canvas.as_mut() {
                         canvas.request_cycle_group_tint();
+                    }
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    return;
+                }
+                // Editor window: Cmd+C copies the selected nodes (and the wires
+                // among them) to the graph clipboard; Cmd+V pastes them offset
+                // with fresh ids. Duplicate is just copy-then-paste. (Cmd+D is
+                // taken by the node-dump below.)
+                if is_graph_editor
+                    && self.modifiers.command
+                    && let winit::keyboard::Key::Character(c) = &logical_key
+                    && c.eq_ignore_ascii_case("c")
+                {
+                    self.graph_node_clipboard = self.copy_selected_graph_nodes();
+                    return;
+                }
+                if is_graph_editor
+                    && self.modifiers.command
+                    && let winit::keyboard::Key::Character(c) = &logical_key
+                    && c.eq_ignore_ascii_case("v")
+                {
+                    if let (Some(target), Some(default), Some((nodes, wires))) = (
+                        self.watched_graph_target.clone(),
+                        self.watched_catalog_default.clone(),
+                        self.graph_node_clipboard.clone(),
+                    ) {
+                        let scope = self
+                            .graph_canvas
+                            .as_ref()
+                            .map(|c| c.scope_path().to_vec())
+                            .unwrap_or_default();
+                        let cmd = manifold_editing::commands::graph::PasteNodesCommand::new(
+                            target,
+                            scope,
+                            nodes,
+                            wires,
+                            (30.0, 30.0),
+                            default,
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.offscreen_dirty = true;

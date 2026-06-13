@@ -274,3 +274,27 @@ All groups render one fixed `GROUP_HEADER_BG`.
   to the mapping popover) or a complex draggable-stops / curve widget whose correctness is visual, and
   the project gates authoring-canvas visuals on Peter's eyes. They share the deferred bucket with the
   image-thumbnail atlas and the group-rename UI.
+- **Phase 7 — connection type feedback + node copy/paste SHIPPED; find-a-node DEFERRED.**
+  *Type feedback:* while dragging a wire, the ghost turns green over a compatible input port and red
+  over an incompatible one (`wire_drop_compat` / `ports_compatible`, port-category equality encoded by
+  colour), so a mis-wire reads before the drop; the actual connect still validates server-side.
+  *Copy/paste/duplicate:* `Cmd+C` copies the selected nodes + the wires among them to a graph
+  clipboard; `Cmd+V` pastes them via `PasteNodesCommand` with fresh runtime ids, fresh stable
+  `NodeId`s, deduped handles (`b` → `b_2`), an editor-position offset, and re-anchored internal wires
+  (external wires dropped); undo removes exactly the pasted set. Duplicate is copy-then-paste (Cmd+D
+  is already the node-dump shortcut). Tested: 1 canvas compat test + 2 editing paste tests (fresh
+  identity + wire remap). *Find-a-node DEFERRED:* a search box needs the same canvas text-input mode
+  as group-rename / free-text params — same deferred bucket.
+
+## Final status (autonomous run, 2026-06-13)
+
+All 7 phases are addressed end-to-end. **Shipped:** live on-canvas values (1), colour + vector
+editors (2), control-node sparklines (3), jump-to-node + group colour + group-rename backend (4),
+generator mapping drawer — found already complete (5), String legibility + path picker (6),
+connection type feedback + node copy/paste (7). **Deferred to a pixels-in-hand / canvas-text-input
+pass** (one coherent bucket, each documented above with its precise blocker — all are either GPU/
+visual features the project gates on Peter's eyes, or need a canvas text-input mode that doesn't
+exist yet, so building them blind would risk the instrument): the per-node image-thumbnail atlas
+(3), the group-rename UI trigger (4), and the gradient/curve/table/free-text/wgsl-code editors and
+find-a-node search (6/7). Every shipped item compiles clean, passes focused tests, and is clippy-clean
+on the project's standard gate.

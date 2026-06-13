@@ -59,6 +59,26 @@ fn build_mapping_command_with_reverse(
     )
 }
 
+/// Immutable descend into a graph def at a scope path of group ids — the def
+/// analog of the snapshot's `resolve_level`. `None` if the path doesn't resolve
+/// (a group id is missing or isn't a group). Empty scope is the document root.
+fn descend_def_level<'a>(
+    def: &'a manifold_core::effect_graph_def::EffectGraphDef,
+    scope: &[u32],
+) -> Option<(
+    &'a [manifold_core::effect_graph_def::EffectGraphNode],
+    &'a [manifold_core::effect_graph_def::EffectGraphWire],
+)> {
+    let mut nodes = def.nodes.as_slice();
+    let mut wires = def.wires.as_slice();
+    for &gid in scope {
+        let group = nodes.iter().find(|n| n.id == gid)?.group.as_deref()?;
+        nodes = &group.nodes;
+        wires = &group.wires;
+    }
+    Some((nodes, wires))
+}
+
 /// The current reshape for `param_id` read out of a preset graph def:
 /// `(label, min, max, invert, curve, scale, offset)`. Range/curve/invert/label
 /// live on the param's [`ParamSpecDef`]; scale/offset on its [`BindingDef`]
@@ -198,6 +218,70 @@ impl Application {
                     .map(|v| v.canonical_def.clone())
             }
         }
+    }
+
+    /// The graph def the editor currently shows for the watched target — the
+    /// per-instance override if it has diverged, else the catalog / bundled
+    /// default. Cloned (copy is a rare authoring action). `None` when nothing is
+    /// watched.
+    fn watched_def_cloned(&self) -> Option<manifold_core::effect_graph_def::EffectGraphDef> {
+        match self.watched_graph_target.as_ref()? {
+            manifold_core::GraphTarget::Effect(eid) => {
+                let fx = self.local_project.find_effect_by_id(eid)?;
+                if let Some(d) = fx.graph.as_ref() {
+                    Some(d.clone())
+                } else {
+                    manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())
+                        .map(|v| v.canonical_def.clone())
+                }
+            }
+            manifold_core::GraphTarget::Generator(lid) => {
+                let layer = self
+                    .local_project
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|l| &l.layer_id == lid)?;
+                if let Some(d) = layer.generator_graph() {
+                    Some(d.clone())
+                } else {
+                    manifold_renderer::node_graph::bundled_preset_def(
+                        layer.gen_params()?.generator_type(),
+                    )
+                    .cloned()
+                }
+            }
+        }
+    }
+
+    /// Resolve the canvas's current selection into copy-ready data: the selected
+    /// def nodes plus the wires whose BOTH endpoints are selected (internal
+    /// connectivity only). `None` when nothing is watched or selected. Backs
+    /// Cmd+C (store to clipboard) and Cmd+D (duplicate immediately).
+    pub(crate) fn copy_selected_graph_nodes(
+        &self,
+    ) -> Option<(
+        Vec<manifold_core::effect_graph_def::EffectGraphNode>,
+        Vec<manifold_core::effect_graph_def::EffectGraphWire>,
+    )> {
+        let canvas = self.graph_canvas.as_ref()?;
+        let ids: std::collections::HashSet<u32> = canvas.selected_ids().into_iter().collect();
+        if ids.is_empty() {
+            return None;
+        }
+        let scope = canvas.scope_path().to_vec();
+        let def = self.watched_def_cloned()?;
+        let (nodes, wires) = descend_def_level(&def, &scope)?;
+        let sel_nodes: Vec<_> = nodes.iter().filter(|n| ids.contains(&n.id)).cloned().collect();
+        if sel_nodes.is_empty() {
+            return None;
+        }
+        let sel_wires: Vec<_> = wires
+            .iter()
+            .filter(|w| ids.contains(&w.from_node) && ids.contains(&w.to_node))
+            .cloned()
+            .collect();
+        Some((sel_nodes, sel_wires))
     }
 
     /// Modal Yes/No confirm shown before deleting a graph node that backs card

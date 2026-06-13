@@ -99,6 +99,11 @@ const PORT_ARRAY_COLOR: [f32; 4] = [0.50, 1.00, 0.62, 1.0];
 const PORT_CAMERA_COLOR: [f32; 4] = [1.00, 0.55, 0.55, 1.0];
 const PORT_LIGHT_COLOR: [f32; 4] = [1.00, 0.95, 0.55, 1.0];
 const PORT_MATERIAL_COLOR: [f32; 4] = [0.95, 0.65, 0.40, 1.0];
+/// Ghost-wire tint while dragging over a compatible / incompatible input port —
+/// a live green/red "this will / won't connect" hint, so a mis-wire is caught
+/// before the drop, not after. The actual connect still validates server-side.
+const CONNECT_OK_COLOR: [f32; 4] = [0.42, 0.88, 0.52, 0.85];
+const CONNECT_BAD_COLOR: [f32; 4] = [0.92, 0.38, 0.38, 0.85];
 /// Group node tint. A group reads as a distinct, slightly heavier box than an
 /// atom so a complex graph shows its structure at a glance — teal-leaning
 /// header + a faint teal body wash, the colour we reserve for "container".
@@ -2660,6 +2665,26 @@ impl GraphCanvas {
         }
     }
 
+    /// While dragging a wire from a port of colour `from_color`, classify the
+    /// input port currently under the cursor: `Some(true)` compatible drop,
+    /// `Some(false)` incompatible, `None` when the cursor isn't over a foreign
+    /// input port. Compatibility is port-category equality (the canvas encodes
+    /// category as colour); the real connect still validates server-side, so
+    /// this is purely the live hint behind the ghost wire's green/red tint.
+    fn wire_drop_compat(&self, viewport: Rect, from_node: u32, from_color: [f32; 4]) -> Option<bool> {
+        let hit = self.port_under(viewport, self.cursor.0, self.cursor.1)?;
+        if hit.is_output || hit.node_id == from_node {
+            return None;
+        }
+        let to_color = self
+            .find_node(hit.node_id)?
+            .inputs
+            .iter()
+            .find(|p| p.name == hit.port_name)?
+            .color;
+        Some(ports_compatible(from_color, to_color))
+    }
+
     fn draw_ghost_wire(
         &self,
         ui: &mut UIRenderer,
@@ -2691,9 +2716,15 @@ impl GraphCanvas {
         // Ghost takes its colour from the from-port's kind so users
         // can tell what *kind* of wire they're about to make at a
         // glance — drag from a scalar output, drag a warm-orange
-        // ghost. 0.55 alpha keeps it readable as "in flight".
+        // ghost. 0.55 alpha keeps it readable as "in flight". When the
+        // cursor is over an input port, switch to a green/red compat
+        // hint so a mis-wire reads before the drop.
         let port_color = node.outputs[idx].color;
-        let ghost_color = [port_color[0], port_color[1], port_color[2], 0.55];
+        let ghost_color = match self.wire_drop_compat(viewport, from_node, port_color) {
+            Some(true) => CONNECT_OK_COLOR,
+            Some(false) => CONNECT_BAD_COLOR,
+            None => [port_color[0], port_color[1], port_color[2], 0.55],
+        };
         let mut prev = cubic_bezier(0.0, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
         for i in 1..=steps {
             let t = i as f32 / steps as f32;
@@ -3230,6 +3261,13 @@ fn node_id_for_handle(snap: &GraphSnapshot, handle: &str) -> Option<manifold_cor
         None
     }
     search(&snap.nodes, handle)
+}
+
+/// Two ports can be wired iff they share a port category, which the canvas
+/// encodes 1:1 as the port colour (Texture2D and its typed variant share one
+/// colour, so they're treated as compatible — exactly the validator's view).
+fn ports_compatible(from_color: [f32; 4], to_color: [f32; 4]) -> bool {
+    from_color == to_color
 }
 
 /// Axis-aligned rectangle overlap, each `(x, y, w, h)`. Touching edges don't
@@ -3784,5 +3822,16 @@ mod tests {
                 .all(|a| !matches!(a, PanelAction::SetGroupTint { .. })),
             "no tint action without a selected group"
         );
+    }
+
+    // ── Connection type feedback ────────────────────────────────────
+
+    #[test]
+    fn ports_compatible_is_colour_category_equality() {
+        // Same category → compatible (the ghost wire reads green).
+        assert!(ports_compatible(PORT_TEXTURE2D_COLOR, PORT_TEXTURE2D_COLOR));
+        // Cross-category → incompatible (red), so a mis-wire is caught pre-drop.
+        assert!(!ports_compatible(PORT_TEXTURE2D_COLOR, PORT_SCALAR_COLOR));
+        assert!(!ports_compatible(PORT_SCALAR_COLOR, PORT_ARRAY_COLOR));
     }
 }
