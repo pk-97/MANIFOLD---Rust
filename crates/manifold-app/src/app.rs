@@ -2820,6 +2820,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                     return;
                 }
+                // Editor window: Cmd+T recolours the selected group, cycling its
+                // header through the preset tint palette for at-a-glance legibility.
+                if is_graph_editor
+                    && self.modifiers.command
+                    && let winit::keyboard::Key::Character(c) = &logical_key
+                    && c.eq_ignore_ascii_case("t")
+                {
+                    if let Some(canvas) = self.graph_canvas.as_mut() {
+                        canvas.request_cycle_group_tint();
+                    }
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    return;
+                }
                 // Editor window: Cmd+D dumps every node output of the watched
                 // effect to a temp folder (16-bit PNGs + manifest) for visual
                 // inspection. The content thread picks the dir and logs it.

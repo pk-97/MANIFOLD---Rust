@@ -206,6 +206,7 @@ pub fn group_selection(
             interface,
             nodes: body_nodes,
             wires: body_wires,
+            tint: None,
         })),
     };
 

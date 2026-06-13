@@ -748,6 +748,7 @@ mod tests {
                 wire(1, "out", 2, "b"),
                 wire(2, "out", 3, "out"),
             ],
+            tint: None,
         }));
         g
     }
@@ -807,6 +808,7 @@ mod tests {
                 node(3, GROUP_OUTPUT_TYPE_ID, None),
             ],
             wires: vec![wire(0, "src", 1, "src"), wire(1, "out", 3, "out")],
+            tint: None,
         }));
         let d = def(
             vec![
@@ -893,6 +895,7 @@ mod tests {
             },
             nodes: vec![node(0, GROUP_INPUT_TYPE_ID, None), inner, node(2, GROUP_OUTPUT_TYPE_ID, None)],
             wires: vec![wire(0, "src", 1, "src"), wire(1, "out", 2, "out")],
+            tint: None,
         }));
         let d = def(
             vec![node(0, "system.source", Some("source")), outer, node(9, "system.final_output", Some("final"))],
@@ -1103,6 +1106,7 @@ mod tests {
                 node(2, GROUP_OUTPUT_TYPE_ID, None),
             ],
             wires: vec![wire(0, "src", 10, "src"), wire(10, "out", 2, "out")],
+            tint: None,
         }));
 
         let mut d = def(
@@ -1168,6 +1172,7 @@ mod tests {
                 wire(1, "out", 3, "amount"),
                 wire(2, "out", 3, "tex"),
             ],
+            tint: None,
         }));
         let mut d = def(vec![g], vec![]);
         set_node_id(&mut d, "g", "group_g");

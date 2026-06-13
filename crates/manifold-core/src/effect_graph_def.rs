@@ -270,6 +270,13 @@ pub struct GroupDef {
     pub interface: GroupInterface,
     pub nodes: Vec<EffectGraphNode>,
     pub wires: Vec<EffectGraphWire>,
+    /// Optional RGBA accent for the group's header in the editor. Purely
+    /// cosmetic legibility (Resolume / TouchDesigner style colour-coding) so a
+    /// busy graph reads as a few labelled boxes under stage pressure. `None`
+    /// uses the default group tint. Additive + serde-default, so every saved
+    /// show stays byte-identical until a colour is chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<[f32; 4]>,
 }
 
 /// Tagged-enum wire form of the renderer's `ParamValue`. Tagged because
@@ -846,6 +853,7 @@ mod tests {
                     to_port: "out".to_string(),
                 },
             ],
+            tint: None,
         };
         let def = EffectGraphDef {
             version: EFFECT_GRAPH_VERSION,

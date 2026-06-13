@@ -1322,6 +1322,26 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::SetGroupTint {
+                    scope_path,
+                    group_id,
+                    tint,
+                } => {
+                    if let (Some(target), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::SetGroupTintCommand::new(
+                            target.clone(),
+                            scope_path.clone(),
+                            *group_id,
+                            *tint,
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
                 PanelAction::ToggleNodeParamExpose {
                     node_id,
                     node_handle,
@@ -3910,6 +3930,7 @@ mod preview_target_tests {
                 node(2, "", GROUP_OUTPUT_TYPE_ID, vec![tex("out")], vec![]),
             ],
             wires: vec![wire(0, "src", 1, "in"), wire(1, "out", 2, "out")],
+            tint: None,
         }));
         g
     }

@@ -434,6 +434,14 @@ pub enum PanelAction {
         scope_path: Vec<u32>,
         group_id: u32,
     },
+    /// Set (or clear) the accent colour of a group node at `scope_path`.
+    /// Emitted by the recolour gesture on a selected group; routed to
+    /// `SetGroupTintCommand`. Cosmetic only — `None` restores the default tint.
+    SetGroupTint {
+        scope_path: Vec<u32>,
+        group_id: u32,
+        tint: Option<[f32; 4]>,
+    },
     /// Flip auto-gain/normalization on the editor's node-output preview pane.
     /// `on` is the new state. Emitted by the toggle under the preview; routed to
     /// `ContentCommand::SetNodePreviewNormalize`. Node preview only.

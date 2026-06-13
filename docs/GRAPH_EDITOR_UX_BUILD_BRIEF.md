@@ -241,3 +241,13 @@ All groups render one fixed `GROUP_HEADER_BG`.
   (`feedback_graph_editor_is_authoring_not_perform`); building it blind risks the live
   path. The existing single-node sidebar image preview remains. This is the one piece of
   the original 7-phase plan intentionally left for a pixels-in-hand session.
+- **Phase 4 — Jump-to-node + group colour SHIPPED; group-rename backend SHIPPED, its UI DEFERRED.**
+  *Jump-to-node:* clicking a card param's name in the editor's left lane navigates the canvas to the
+  node that defines it (snapshot `outer_routings` → stable `NodeId` → `focus_node`, descending into
+  groups), read-only on the card. *Group colour:* `GroupDef::tint` carried through `GroupSnapshot` to
+  the canvas group header; `Cmd+T` cycles a selected group through a muted preset palette via
+  `SetGroupTintCommand` (cosmetic, undoable). *Group rename:* `RenameGroupCommand` ships tested
+  (validates `/`-free + sibling-unique, structural, undoable) but has **no UI trigger yet** — inline
+  canvas text-editing is the missing piece (the canvas has no text-input mode today; the editor only
+  routes chars to the mapping popover). Deferred with the image atlas for the pixels-in-hand session;
+  the backend is ready for whatever trigger we choose (breadcrumb-leaf edit or an inspector field).

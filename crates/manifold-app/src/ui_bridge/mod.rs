@@ -365,6 +365,7 @@ pub fn dispatch(
         | PanelAction::SetGraphNodeParam { .. }
         | PanelAction::GroupSelection { .. }
         | PanelAction::Ungroup { .. }
+        | PanelAction::SetGroupTint { .. }
         | PanelAction::SetNodePreviewNormalize(_)
         | PanelAction::EffectMappingRangeSnapshot { .. }
         | PanelAction::EffectMappingRangeChanged { .. }

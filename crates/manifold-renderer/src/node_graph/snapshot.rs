@@ -134,6 +134,9 @@ pub struct NodeSnapshot {
 pub struct GroupSnapshot {
     pub nodes: Vec<NodeSnapshot>,
     pub wires: Vec<WireSnapshot>,
+    /// Group accent colour (`GroupDef::tint`), carried so the canvas can paint
+    /// the group's header. `None` for an untinted group (the default tint).
+    pub tint: Option<[f32; 4]>,
 }
 
 /// Snapshot of one inner-node parameter, sized for the user-exposed-
@@ -595,6 +598,7 @@ fn snapshot_level(
                 group: Some(Box::new(GroupSnapshot {
                     nodes: body_nodes,
                     wires: body_wires,
+                    tint: group.tint,
                 })),
             }
         } else if dn.type_id == GROUP_INPUT_TYPE_ID {
@@ -894,6 +898,7 @@ mod tests {
                 mk(2, GROUP_OUTPUT_TYPE_ID, None),
             ],
             wires: vec![w(0, "src", 1, "in"), w(1, "out", 2, "out")],
+            tint: None,
         };
         let mut group_node = mk(10, GROUP_TYPE_ID, Some("tweak"));
         group_node.group = Some(Box::new(body));

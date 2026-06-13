@@ -103,6 +103,18 @@ const PORT_MATERIAL_COLOR: [f32; 4] = [0.95, 0.65, 0.40, 1.0];
 /// atom so a complex graph shows its structure at a glance — teal-leaning
 /// header + a faint teal body wash, the colour we reserve for "container".
 const GROUP_HEADER_BG: [f32; 4] = [0.18, 0.34, 0.40, 1.0];
+/// Preset group accent colours the recolour gesture cycles through — muted so
+/// they read as labels, not alerts, under stage lighting. The first entry is
+/// the default teal (`GROUP_HEADER_BG`), so cycling from untinted lands on a
+/// real colour immediately.
+const GROUP_TINT_PALETTE: [[f32; 4]; 6] = [
+    [0.18, 0.34, 0.40, 1.0], // teal (default)
+    [0.40, 0.24, 0.42, 1.0], // plum
+    [0.42, 0.30, 0.18, 1.0], // amber
+    [0.22, 0.40, 0.26, 1.0], // moss
+    [0.40, 0.22, 0.24, 1.0], // rust
+    [0.24, 0.28, 0.44, 1.0], // indigo
+];
 const GROUP_BODY_BG: [f32; 4] = [0.16, 0.22, 0.25, 1.0];
 const GROUP_BODY_BG_HOVER: [f32; 4] = [0.20, 0.27, 0.30, 1.0];
 /// Border on a group's bounding box and the "enter" chevron, brighter than a
@@ -229,6 +241,10 @@ struct NodeView {
     /// interface ports; the body lives in the snapshot and is re-resolved by
     /// scope, not stored on the view.
     is_group: bool,
+    /// Group accent colour (`GroupDef::tint`), painted on the group header in
+    /// place of the default group tint. `None` for ordinary nodes and untinted
+    /// groups. Cycled by the recolour gesture on a selected group.
+    group_tint: Option<[f32; 4]>,
     /// Friendly one-line summary from the node's `NodeDescriptor`, shown
     /// as a hover tooltip over the node's header/body. `None` for groups
     /// (no descriptor) and for any node whose author left the summary
@@ -1070,6 +1086,32 @@ impl GraphCanvas {
         });
     }
 
+    /// Cycle the selected group's accent colour to the next preset tint, for
+    /// legibility (Resolume / TouchDesigner colour-coding). No-op unless exactly
+    /// one group node is selected. Emits `SetGroupTint`; the next colour is the
+    /// one after the group's current tint in [`GROUP_TINT_PALETTE`] (or the
+    /// first, when it's untinted or off-palette).
+    pub fn request_cycle_group_tint(&mut self) {
+        let Some(group_id) = self.single_selected_group() else {
+            return;
+        };
+        let current = self
+            .nodes
+            .iter()
+            .find(|n| n.id == group_id)
+            .and_then(|n| n.group_tint);
+        let next_idx = current
+            .and_then(|c| GROUP_TINT_PALETTE.iter().position(|p| *p == c))
+            .map(|i| (i + 1) % GROUP_TINT_PALETTE.len())
+            .unwrap_or(0);
+        group_log!("CycleGroupTint group={group_id} -> palette[{next_idx}]");
+        self.pending_actions.push(PanelAction::SetGroupTint {
+            scope_path: self.scope.clone(),
+            group_id,
+            tint: Some(GROUP_TINT_PALETTE[next_idx]),
+        });
+    }
+
     /// Re-run the layered auto-layout over the current level and emit a single
     /// undoable `RelayoutGraph` action carrying every node's new position.
     /// Wired to Cmd+L. Writes positions optimistically so the canvas updates
@@ -1188,6 +1230,7 @@ impl GraphCanvas {
                     .collect(),
                 breaks_dependency_cycle: n.breaks_dependency_cycle,
                 is_group: n.type_id == GROUP_TYPE_ID,
+                group_tint: n.group.as_ref().and_then(|g| g.tint),
                 tooltip: manifold_renderer::node_graph::descriptor_for(&n.type_id)
                     .map(|d| d.summary)
                     .filter(|s| !s.is_empty())
@@ -2760,7 +2803,9 @@ impl GraphCanvas {
 
         let header_h = NODE_HEADER_HEIGHT * self.zoom;
         let header_color = if node.is_group {
-            GROUP_HEADER_BG
+            // A per-group tint overrides the default group header, so a busy
+            // graph reads as a few colour-coded boxes at a glance.
+            node.group_tint.unwrap_or(GROUP_HEADER_BG)
         } else {
             node.header_color
         };
@@ -3281,6 +3326,7 @@ mod tests {
                 node(2, "system.group_output", None),
             ],
             wires: vec![wire(0, "src", 1, "in"), wire(1, "out", 2, "out")],
+            tint: None,
         };
         let mut group = node(10, GROUP_TYPE_ID, Some("tweak"));
         group.inputs = vec![port("src")];
@@ -3702,5 +3748,39 @@ mod tests {
         assert_eq!(nid.as_str(), "inner");
         // Unrouted param id resolves to nothing.
         assert!(resolve_card_param_node_id(&snap, "user.nope.0").is_none());
+    }
+
+    // ── Group tint ──────────────────────────────────────────────────
+
+    #[test]
+    fn cycle_group_tint_emits_first_palette_colour_for_untinted_group() {
+        let snap = grouped_snapshot();
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snap);
+        canvas.select_single(10); // the group node
+        canvas.request_cycle_group_tint();
+        let emitted = canvas.drain_actions().into_iter().find_map(|a| match a {
+            PanelAction::SetGroupTint {
+                group_id: 10, tint, ..
+            } => Some(tint),
+            _ => None,
+        });
+        assert_eq!(emitted, Some(Some(GROUP_TINT_PALETTE[0])));
+    }
+
+    #[test]
+    fn cycle_group_tint_noop_without_a_selected_group() {
+        let snap = grouped_snapshot();
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snap);
+        canvas.select_single(0); // a plain node, not a group
+        canvas.request_cycle_group_tint();
+        assert!(
+            canvas
+                .drain_actions()
+                .iter()
+                .all(|a| !matches!(a, PanelAction::SetGroupTint { .. })),
+            "no tint action without a selected group"
+        );
     }
 }

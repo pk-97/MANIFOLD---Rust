@@ -1695,6 +1695,178 @@ impl Command for UngroupNodeCommand {
 }
 
 // ---------------------------------------------------------------------------
+// Set group tint (cosmetic, non-structural)
+// ---------------------------------------------------------------------------
+
+/// Set (or clear) the accent colour of a group node at `scope_path`. Cosmetic
+/// only — it never changes what runs, so it routes as a non-structural edit
+/// (no chain rebuild). Undo restores the prior tint.
+#[derive(Debug)]
+pub struct SetGroupTintCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    group_node_id: u32,
+    tint: Option<[f32; 4]>,
+    catalog_default: EffectGraphDef,
+    /// Pre-edit tint. `Some(prev)` once captured; outer `Option` distinguishes
+    /// "not yet executed."
+    prev: Option<Option<[f32; 4]>>,
+}
+
+impl SetGroupTintCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        group_node_id: u32,
+        tint: Option<[f32; 4]>,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            scope_path,
+            group_node_id,
+            tint,
+            catalog_default,
+            prev: None,
+        }
+    }
+}
+
+impl Command for SetGroupTintCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let id = self.group_node_id;
+        let tint = self.tint;
+        let captured =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, false, |def| {
+                let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let group = nodes
+                    .iter_mut()
+                    .find(|n| n.id == id)
+                    .and_then(|n| n.group.as_mut())?;
+                let prev = group.tint;
+                group.tint = tint;
+                Some(prev)
+            });
+        if self.prev.is_none() {
+            self.prev = captured.flatten();
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some(prev) = self.prev else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let id = self.group_node_id;
+        let _ = with_existing_target_graph_mut(project, &self.target, false, |def| {
+            if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
+                && let Some(group) = nodes
+                    .iter_mut()
+                    .find(|n| n.id == id)
+                    .and_then(|n| n.group.as_mut())
+            {
+                group.tint = prev;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Set Group Tint"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rename group (handle = namespace, so structural)
+// ---------------------------------------------------------------------------
+
+/// Rename a group node at `scope_path`. The handle is the group's namespace
+/// (it prefixes inner handles at flatten time), so this is a structural edit.
+/// Rejected as a no-op when the new handle is empty, contains `/`, or collides
+/// with a sibling at the same level. Undo restores the prior handle.
+#[derive(Debug)]
+pub struct RenameGroupCommand {
+    target: GraphTarget,
+    scope_path: Vec<u32>,
+    group_node_id: u32,
+    new_handle: String,
+    catalog_default: EffectGraphDef,
+    /// Pre-edit handle. `Some(prev)` once captured (the rename was applied);
+    /// stays `None` when the rename was rejected or never executed.
+    prev: Option<Option<String>>,
+}
+
+impl RenameGroupCommand {
+    pub fn new(
+        target: GraphTarget,
+        scope_path: Vec<u32>,
+        group_node_id: u32,
+        new_handle: String,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            scope_path,
+            group_node_id,
+            new_handle,
+            catalog_default,
+            prev: None,
+        }
+    }
+}
+
+impl Command for RenameGroupCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let scope = self.scope_path.clone();
+        let id = self.group_node_id;
+        let new_handle = self.new_handle.clone();
+        let captured =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                // Reject invalid / colliding names — a rejected rename changes
+                // nothing (the canvas keeps the old name).
+                if new_handle.is_empty() || new_handle.contains('/') {
+                    return None;
+                }
+                if nodes
+                    .iter()
+                    .any(|n| n.id != id && n.handle.as_deref() == Some(new_handle.as_str()))
+                {
+                    return None;
+                }
+                let node = nodes.iter_mut().find(|n| n.id == id)?;
+                // Only groups carry a renamable namespace here.
+                node.group.as_ref()?;
+                let prev = node.handle.clone();
+                node.handle = Some(new_handle.clone());
+                Some(prev)
+            });
+        if self.prev.is_none() {
+            self.prev = captured.flatten();
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some(prev) = self.prev.clone() else {
+            return;
+        };
+        let scope = self.scope_path.clone();
+        let id = self.group_node_id;
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
+                && let Some(node) = nodes.iter_mut().find(|n| n.id == id)
+            {
+                node.handle = prev;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Rename Group"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -3585,5 +3757,113 @@ mod tests {
             SerializedParamValue::Float { value } => assert!((value - 45.0).abs() < 1e-6),
             _ => panic!("expected Float param value"),
         }
+    }
+
+    // ── group tint + rename ──
+
+    /// Collapse node 1 into a group `g` and return the project + the group's id.
+    fn project_with_group(handle: &str) -> (Project, EffectId, u32) {
+        let (mut project, fx) = project_with_graph(abc_graph());
+        let mut group = GroupNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![1],
+            handle.to_string(),
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        );
+        group.execute(&mut project);
+        let gid = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some(handle))
+            .unwrap()
+            .id;
+        (project, fx, gid)
+    }
+
+    #[test]
+    fn set_group_tint_applies_and_undo_restores() {
+        let (mut project, fx, gid) = project_with_group("g");
+        let mut cmd = SetGroupTintCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            gid,
+            Some([0.4, 0.2, 0.4, 1.0]),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+        let g = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.id == gid)
+            .unwrap();
+        assert_eq!(g.group.as_ref().unwrap().tint, Some([0.4, 0.2, 0.4, 1.0]));
+
+        cmd.undo(&mut project);
+        let g = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.id == gid)
+            .unwrap();
+        assert_eq!(g.group.as_ref().unwrap().tint, None, "tint restored to default");
+    }
+
+    #[test]
+    fn rename_group_applies_undo_restores_and_rejects_invalid() {
+        let (mut project, fx, gid) = project_with_group("g");
+
+        // Valid rename.
+        let mut rn = RenameGroupCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            gid,
+            "fx_chain".to_string(),
+            mirror_catalog_default(),
+        );
+        rn.execute(&mut project);
+        assert_eq!(
+            graph_of(&project, &fx)
+                .nodes
+                .iter()
+                .find(|n| n.id == gid)
+                .unwrap()
+                .handle
+                .as_deref(),
+            Some("fx_chain")
+        );
+        rn.undo(&mut project);
+        assert_eq!(
+            graph_of(&project, &fx)
+                .nodes
+                .iter()
+                .find(|n| n.id == gid)
+                .unwrap()
+                .handle
+                .as_deref(),
+            Some("g"),
+            "handle restored on undo"
+        );
+
+        // A `/`-bearing name is rejected (the handle is a namespace) — no-op.
+        let mut bad = RenameGroupCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            gid,
+            "a/b".to_string(),
+            mirror_catalog_default(),
+        );
+        bad.execute(&mut project);
+        assert_eq!(
+            graph_of(&project, &fx)
+                .nodes
+                .iter()
+                .find(|n| n.id == gid)
+                .unwrap()
+                .handle
+                .as_deref(),
+            Some("g"),
+            "invalid name left the group unchanged"
+        );
     }
 }
