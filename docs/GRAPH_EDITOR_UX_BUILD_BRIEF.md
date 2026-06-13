@@ -298,3 +298,81 @@ exist yet, so building them blind would risk the instrument): the per-node image
 (3), the group-rename UI trigger (4), and the gradient/curve/table/free-text/wgsl-code editors and
 find-a-node search (6/7). Every shipped item compiles clean, passes focused tests, and is clippy-clean
 on the project's standard gate.
+
+## Follow-up run, 2026-06-14 (branch `graph-editor-ux`)
+
+The "pixels-in-hand / canvas-text-input" bucket above is now almost entirely shipped. The
+canvas text-input mode it was waiting on turned out to be buildable blind (it's keyboard +
+overlay plumbing, not visual-correctness work), which unblocked everything that rode on it.
+
+- **Canvas / inspector text-input foundation. SHIPPED (a5f743dc).** The editor window now owns
+  its own key routing + overlay render for graph text fields, reusing the existing
+  `TextInputState` / `render_text_input_overlay`. Four `TextInputField` graph variants
+  (`GraphGroupRename` / `GraphStringParam` / `GraphWgsl` / `GraphNodeSearch`, plus
+  `GraphTableCell` below) dispatch to the content thread only (the canvas renders from
+  content-thread snapshots). Multiline fields (WGSL) insert a newline on Enter and commit on
+  Cmd+Enter; single-line fields commit on bare Enter.
+- **Group rename (F2). SHIPPED (a5f743dc).** Single-selected group, inline field anchored over
+  its header (`group_rename_target` + `editor_canvas_viewport`), routes to `RenameGroupCommand`
+  at the canvas scope.
+- **Free-text String editing. SHIPPED (a5f743dc).** The inspector value cell for a non-path
+  String param (`render_text.text`) is now click-to-edit. `ParamSnapshot` / `GraphEditorParam`
+  carry the raw untruncated `string_value` (the old `summary` is lossy), so the edit
+  round-trips. Commit goes through `SetGraphNodeParamCommand` with a String value.
+- **WGSL code editor. SHIPPED (a5f743dc).** `wgsl_compute` nodes show an "Edit Code" button
+  that opens a multiline editor over the kernel. New `SetWgslSourceCommand` mutates
+  `node.wgsl_source` with undo; a blank buffer clears the override back to the built-in kernel.
+  `NodeSnapshot` / `GraphEditorNodeView` now carry `wgsl_source`. (Known limitation: the
+  overlay does not scroll, so a very long kernel can clip past the window bottom — a later
+  polish item; short edits are fine.)
+- **Find-a-node search (Cmd+F). SHIPPED (a5f743dc).** Live search dims every non-matching node
+  on the canvas (drawn last in `draw_node`); Esc clears, Enter keeps the highlight.
+- **Table grid editor (gradient stops + numeric sequences). SHIPPED (2a488dc4).** Makes
+  `ParamValue::Table` params editable — they were read-only ("N×M"). One numeric grid covers
+  `gradient_ramp` (≤16 `[pos,r,g,b]` stops), `cycle_table_row`, and `scalar_array_accumulator`.
+  `ParamSnapshot` / `GraphEditorParam` carry the full `table_value`; the inspector renders a
+  header + a clickable cell per entry; a cell edit rebuilds just that cell into a full `Table`
+  value (`SetGraphNodeParamCommand`, target-generic). The **response-curve editor** the brief
+  listed turned out to be the mapping-popover's response curve, which already ships — no
+  separate widget needed. (Columns are addressed by index; the richer gradient-swatch /
+  draggable-stop presentation is the visual polish below.)
+
+All four editors are `GraphTarget`-generic, so they work identically on effect and generator
+graphs (no fork — `feedback_graph_editor_unified_surface`). New unit tests cover the
+`SetWgslSourceCommand` round-trip and the panel's Table/String cell emits; focused suites and
+the standard clippy gate are green.
+
+### Still genuinely pixels-in-hand (one item)
+
+- **Per-node image-thumbnail atlas (§3).** This is the one deferral that is NOT just
+  text-input plumbing, and after a concrete feasibility pass it stays deferred — building it
+  blind would risk the live render path for a feature whose correctness is only verifiable
+  visually. The evidence:
+  - The canvas's `UIRenderer` (`manifold-renderer/src/ui_renderer.rs`) exposes only
+    `draw_rect` / `draw_line` / `draw_text` — there is **no textured-quad / image draw
+    primitive**. Per-node thumbnails on the canvas need a brand-new textured-quad GPU pipeline
+    in the UI renderer (pipeline + vertex format + sampler + batching), which is itself a
+    GPU feature whose output is only verifiable by eye.
+  - The capture half runs inside the content-thread executor each (throttled) frame — N node
+    outputs blitted into one atlas texture, bridged once via `SharedTextureBridge`. A bug
+    there (texture leak, fence stall, panic) degrades or kills a live show.
+  - Correctness — right node → right atlas cell → right canvas quad, correct encoding, no
+    flicker — cannot be unit-tested; it needs the running app.
+  - The single-node preview pane already lets the user inspect any node's output by selecting
+    it, so the atlas is a scale/ergonomics enhancement, not a functional gap. Partial
+    scaffolding would also violate the no-stopgap rule (`feedback_no_silent_fallbacks_or_interim_stopgaps`).
+
+  **Implementation plan for the pixels-in-hand session** (so it is fast when it happens):
+  1. `UIRenderer`: add `draw_textured_quad(rect, atlas_texture, uv_rect, tint)` — a Metal
+     pipeline sampling a bound atlas with a per-quad UV sub-rect, batched like `draw_rect`.
+  2. Content thread: after the watched graph executes, for each visible node (UI sends the
+     visible `NodeId` set + desired thumb size, throttled ~10 fps), blit its output texture
+     through the existing per-encoding preview pipelines into a packed atlas texture (grid
+     pack, e.g. 8×8 of 64² for ≤64 nodes). Reuse the single-node `*_pipeline` blits.
+  3. Bridge the atlas with one `SharedTextureBridge` (triple-buffered, same pattern as the
+     node-preview pane).
+  4. Canvas `draw_node`: compute each node's atlas UV cell and emit a `draw_textured_quad`
+     into the node body. Fall back to the current solid header when a node has no captured
+     thumb yet.
+  5. Verify on the Liveschool fixture: no perform-path regression, thumbnails track the live
+     output, throttle holds frame time.
