@@ -851,6 +851,98 @@ impl Command for SetGraphNodeParamCommand {
 }
 
 // ---------------------------------------------------------------------------
+// Set WGSL source (per-node kernel edit)
+// ---------------------------------------------------------------------------
+
+/// Replace a `node.wgsl_compute*` node's kernel source (`node.wgsl_source`).
+/// The source is a real authoring surface — the graph editor's code panel
+/// commits the whole edited buffer through here. Structural (the chain
+/// recompiles the kernel); undo restores the prior source exactly, including
+/// the `None` ("inherit the primitive's built-in WGSL") state.
+#[derive(Debug)]
+pub struct SetWgslSourceCommand {
+    target: GraphTarget,
+    node_id: u32,
+    new_source: String,
+    catalog_default: EffectGraphDef,
+    /// View depth this edit targets (empty = root). See [`descend_level`].
+    scope_path: Vec<u32>,
+    /// Source before execute(). `Some(None)` means "node had no override
+    /// source"; `Some(Some(s))` means "node had source `s`". `None` at
+    /// pre-execute time.
+    previous: Option<Option<String>>,
+}
+
+impl SetWgslSourceCommand {
+    pub fn new(
+        target: GraphTarget,
+        node_id: u32,
+        new_source: String,
+        catalog_default: EffectGraphDef,
+    ) -> Self {
+        Self {
+            target,
+            node_id,
+            new_source,
+            catalog_default,
+            scope_path: Vec::new(),
+            previous: None,
+        }
+    }
+
+    /// Target a nested group level instead of the document root.
+    pub fn with_scope(mut self, scope_path: Vec<u32>) -> Self {
+        self.scope_path = scope_path;
+        self
+    }
+}
+
+impl Command for SetWgslSourceCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let node_id = self.node_id;
+        // Empty buffer clears the override back to the primitive's built-in
+        // kernel rather than compiling an empty shader.
+        let new_source = if self.new_source.trim().is_empty() {
+            None
+        } else {
+            Some(self.new_source.clone())
+        };
+        let prev_already_captured = self.previous.is_some();
+        let scope = self.scope_path.clone();
+        let captured: Option<Option<String>> =
+            with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
+                let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                nodes.iter_mut().find(|n| n.id == node_id).map(|node| {
+                    std::mem::replace(&mut node.wgsl_source, new_source.clone())
+                })
+            })
+            .flatten();
+        if !prev_already_captured && let Some(prev) = captured {
+            self.previous = Some(prev);
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let Some(prev) = self.previous.take() else {
+            return;
+        };
+        let node_id = self.node_id;
+        let scope = self.scope_path.clone();
+        let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
+            if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope)
+                && let Some(node) = nodes.iter_mut().find(|n| n.id == node_id)
+            {
+                node.wgsl_source = prev;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Edit WGSL Source"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Revert Graph (effect or generator)
 // ---------------------------------------------------------------------------
 
@@ -2804,6 +2896,53 @@ mod tests {
             node.params.get("mode"),
             Some(&SerializedParamValue::Enum { value: 3 }),
         );
+    }
+
+    #[test]
+    fn set_wgsl_source_sets_and_undo_restores_absence() {
+        let (mut project, id) = project_with_one_master_effect();
+        project.find_effect_by_id_mut(&id).unwrap().graph = Some(mirror_catalog_default());
+
+        let mut cmd = SetWgslSourceCommand::new(
+            GraphTarget::Effect(id.clone()),
+            1,
+            "fn main() {}".to_string(),
+            mirror_catalog_default(),
+        );
+        cmd.execute(&mut project);
+
+        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let node = def.nodes.iter().find(|n| n.id == 1).unwrap();
+        assert_eq!(node.wgsl_source.as_deref(), Some("fn main() {}"));
+
+        cmd.undo(&mut project);
+        let def = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let node = def.nodes.iter().find(|n| n.id == 1).unwrap();
+        assert!(node.wgsl_source.is_none(), "undo restores the absent source");
+    }
+
+    #[test]
+    fn set_wgsl_source_empty_clears_back_to_builtin() {
+        let (mut project, id) = project_with_one_master_effect();
+        let mut def = mirror_catalog_default();
+        // Pre-seed node 1 with a custom kernel so the clear has something to drop.
+        def.nodes.iter_mut().find(|n| n.id == 1).unwrap().wgsl_source =
+            Some("// custom".to_string());
+        project.find_effect_by_id_mut(&id).unwrap().graph = Some(def.clone());
+
+        // An all-whitespace buffer clears the override rather than compiling empty.
+        let mut cmd =
+            SetWgslSourceCommand::new(GraphTarget::Effect(id.clone()), 1, "   ".to_string(), def);
+        cmd.execute(&mut project);
+
+        let after = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let node = after.nodes.iter().find(|n| n.id == 1).unwrap();
+        assert!(node.wgsl_source.is_none(), "blank source clears the override");
+
+        cmd.undo(&mut project);
+        let after = project.find_effect_by_id(&id).unwrap().graph.as_ref().unwrap();
+        let node = after.nodes.iter().find(|n| n.id == 1).unwrap();
+        assert_eq!(node.wgsl_source.as_deref(), Some("// custom"));
     }
 
     #[test]

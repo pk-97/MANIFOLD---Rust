@@ -141,6 +141,10 @@ pub struct GraphEditorParam {
     /// RGBA / XYZW order (`Vec2`/`Vec3` zero-pad the tail). `[0.0; 4]` for scalar
     /// kinds, which use `current_value`. Drives the swatch + channel editor.
     pub vec_value: [f32; 4],
+    /// Raw untruncated value for `String` kinds — what the inline editor seeds
+    /// with. `summary` is lossy (path tails, 24-char cap), so it can't
+    /// round-trip an edit. `None` for non-String params.
+    pub string_value: Option<String>,
 }
 
 /// UI-facing view of the currently-selected node, decoupled from the
@@ -165,6 +169,10 @@ pub struct GraphEditorNodeView {
     /// Display title for the node (header label fallback).
     pub title: String,
     pub parameters: Vec<GraphEditorParam>,
+    /// WGSL kernel source when this node is a `wgsl_compute*` node carrying a
+    /// custom kernel. Drives the inspector's "Edit Code" button; `None` for
+    /// every other node (the button isn't shown).
+    pub wgsl_source: Option<String>,
 }
 
 /// Value inspector for a previewed node that has no image output (control /
@@ -308,6 +316,24 @@ enum RowState {
         button_node_id: u32,
         node_runtime_id: u32,
         param_name: String,
+    },
+    /// Clickable value cell on a free-text (non-path) String param. Click opens
+    /// the inline text editor anchored over the cell, seeded with `current`.
+    /// `rect` (x, y, w, h) is captured at build so the click can anchor without
+    /// re-walking the tree.
+    EditTextButton {
+        button_node_id: u32,
+        node_runtime_id: u32,
+        param_name: String,
+        current: String,
+        rect: (f32, f32, f32, f32),
+    },
+    /// "Edit Code" button on a `wgsl_compute` node. Click opens the multiline
+    /// WGSL editor seeded with the node's kernel `source`.
+    WgslButton {
+        button_node_id: u32,
+        node_runtime_id: u32,
+        source: String,
     },
 }
 
@@ -596,6 +622,37 @@ impl GraphEditorPanel {
             );
             return;
         };
+
+        // `wgsl_compute` nodes carry an editable kernel — surface an "Edit Code"
+        // button that opens the multiline WGSL editor over the node's source.
+        if let Some(src) = node.wgsl_source.clone() {
+            let btn_w = (viewport.width - 2.0 * PADDING).max(40.0);
+            let btn_id = tree.add_button(
+                bg_id,
+                viewport.x + PADDING,
+                y,
+                btn_w,
+                ROW_H,
+                UIStyle {
+                    bg_color: color::BUTTON_INACTIVE_C32,
+                    hover_bg_color: color::HOVER_OVERLAY,
+                    text_color: color::TEXT_WHITE_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Center,
+                    corner_radius: 3.0,
+                    border_color: color::TEXT_DIMMED_C32,
+                    border_width: 1.0,
+                    ..UIStyle::default()
+                },
+                "Edit Code…",
+            );
+            self.rows.push(RowState::WgslButton {
+                button_node_id: btn_id,
+                node_runtime_id: node.runtime_node_id,
+                source: src,
+            });
+            y += ROW_H + 6.0;
+        }
 
         for ps in &node.parameters {
             // Colour / vector params get a dedicated inline editor (swatch +
@@ -970,20 +1027,55 @@ impl GraphEditorPanel {
             },
         );
         let value_str = ps.summary.clone().unwrap_or_else(|| "—".to_string());
-        tree.add_label(
-            bg_id,
-            label_x + label_w,
-            y,
-            value_w,
-            ROW_H,
-            &value_str,
-            UIStyle {
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Right,
-                ..UIStyle::default()
-            },
-        );
+        let value_x = label_x + label_w;
+        if is_path {
+            // Read-only display; the Browse button drives the value.
+            tree.add_label(
+                bg_id,
+                value_x,
+                y,
+                value_w,
+                ROW_H,
+                &value_str,
+                UIStyle {
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                },
+            );
+        } else {
+            // Free-text: the value cell is itself a click target that opens the
+            // inline editor.
+            let cell_id = tree.add_button(
+                bg_id,
+                value_x,
+                y,
+                value_w,
+                ROW_H,
+                UIStyle {
+                    bg_color: color::BUTTON_INACTIVE_C32,
+                    hover_bg_color: color::HOVER_OVERLAY,
+                    text_color: color::TEXT_WHITE_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Right,
+                    corner_radius: 3.0,
+                    ..UIStyle::default()
+                },
+                &value_str,
+            );
+            // Anchor the editor across the whole row (the value cell alone is
+            // too narrow to type a sentence into).
+            let editor_x = viewport.x + PADDING;
+            let editor_w = (viewport.x + viewport.width - PADDING - editor_x).max(60.0);
+            self.rows.push(RowState::EditTextButton {
+                button_node_id: cell_id,
+                node_runtime_id,
+                param_name: ps.name.clone(),
+                current: ps.string_value.clone().unwrap_or_default(),
+                rect: (editor_x, y, editor_w, ROW_H),
+            });
+        }
         if is_path {
             let btn_id = tree.add_button(
                 bg_id,
@@ -1285,6 +1377,35 @@ impl GraphEditorPanel {
                         return vec![PanelAction::BrowseGraphNodePath {
                             node_id: *node_runtime_id,
                             param_name: param_name.clone(),
+                        }];
+                    }
+                }
+                RowState::EditTextButton {
+                    button_node_id,
+                    node_runtime_id,
+                    param_name,
+                    current,
+                    rect,
+                } => {
+                    if *button_node_id == node_id {
+                        return vec![PanelAction::EditGraphNodeStringParam {
+                            node_id: *node_runtime_id,
+                            param_name: param_name.clone(),
+                            current: current.clone(),
+                            anchor: *rect,
+                        }];
+                    }
+                }
+                RowState::WgslButton {
+                    button_node_id,
+                    node_runtime_id,
+                    source,
+                } => {
+                    if *button_node_id == node_id {
+                        return vec![PanelAction::EditGraphNodeWgsl {
+                            node_id: *node_runtime_id,
+                            current: source.clone(),
+                            anchor: (0.0, 0.0, 0.0, 0.0),
                         }];
                     }
                 }
@@ -1646,6 +1767,7 @@ mod tests {
                     enum_labels: None,
                     summary: None,
                     vec_value: [0.0; 4],
+                    string_value: None,
                 },
                 GraphEditorParam {
                     name: "scale".to_string(),
@@ -1657,6 +1779,7 @@ mod tests {
                     enum_labels: None,
                     summary: None,
                     vec_value: [0.0; 4],
+                    string_value: None,
                 },
                 GraphEditorParam {
                     name: "color".to_string(),
@@ -1668,8 +1791,10 @@ mod tests {
                     enum_labels: None,
                     summary: None,
                     vec_value: [0.0; 4],
+                    string_value: None,
                 },
             ],
+            wgsl_source: None,
         }
     }
 
@@ -1992,6 +2117,7 @@ mod tests {
                     enum_labels: None,
                     summary: None,
                     vec_value: [0.0; 4],
+                    string_value: None,
                 },
                 GraphEditorParam {
                     name: "enabled".to_string(),
@@ -2003,6 +2129,7 @@ mod tests {
                     enum_labels: None,
                     summary: None,
                     vec_value: [0.0; 4],
+                    string_value: None,
                 },
                 GraphEditorParam {
                     name: "mode".to_string(),
@@ -2014,8 +2141,10 @@ mod tests {
                     enum_labels: Some(vec!["FoldX".into(), "FoldY".into(), "FoldBoth".into()]),
                     summary: None,
                     vec_value: [0.0; 4],
+                    string_value: None,
                 },
             ],
+            wgsl_source: None,
         }
     }
 
@@ -2489,7 +2618,9 @@ mod tests {
                 enum_labels: None,
                 summary: None,
                 vec_value: initial,
+                string_value: None,
             }],
+            wgsl_source: None,
         }
     }
 
@@ -2601,7 +2732,9 @@ mod tests {
                 enum_labels: None,
                 summary: Some(value.to_string()),
                 vec_value: [0.0; 4],
+                string_value: Some(value.to_string()),
             }],
+            wgsl_source: None,
         }
     }
 

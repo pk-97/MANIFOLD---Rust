@@ -364,6 +364,8 @@ pub fn dispatch(
         | PanelAction::RelayoutGraph { .. }
         | PanelAction::SetGraphNodeParam { .. }
         | PanelAction::BrowseGraphNodePath { .. }
+        | PanelAction::EditGraphNodeStringParam { .. }
+        | PanelAction::EditGraphNodeWgsl { .. }
         | PanelAction::GroupSelection { .. }
         | PanelAction::Ungroup { .. }
         | PanelAction::SetGroupTint { .. }

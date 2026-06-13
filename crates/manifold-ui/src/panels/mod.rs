@@ -422,6 +422,26 @@ pub enum PanelAction {
         node_id: u32,
         param_name: String,
     },
+    /// Open the inline text editor over a free-text String param's value cell
+    /// (e.g. `render_text.text`). Emitted when the value cell is clicked; the
+    /// host begins a `GraphStringParam` text-input session anchored at `anchor`
+    /// (`x, y, w, h` in logical px) seeded with `current`. Commit routes back
+    /// through `SetGraphNodeParamCommand` with a String value.
+    EditGraphNodeStringParam {
+        node_id: u32,
+        param_name: String,
+        current: String,
+        anchor: (f32, f32, f32, f32),
+    },
+    /// Open the multiline WGSL code editor over the selected `wgsl_compute`
+    /// node's kernel source. Emitted by the inspector's "Edit Code" button; the
+    /// host begins a `GraphWgsl` text-input session anchored at `anchor`
+    /// (`x, y, w, h`) seeded with `current`. Commit routes to `SetWgslSourceCommand`.
+    EditGraphNodeWgsl {
+        node_id: u32,
+        current: String,
+        anchor: (f32, f32, f32, f32),
+    },
     /// Collapse a set of nodes at `scope_path` (the canvas's current view
     /// depth, a path of group ids; empty = document root) into a single group
     /// node. Emitted by Ctrl+G on a canvas selection. `handle` is the new

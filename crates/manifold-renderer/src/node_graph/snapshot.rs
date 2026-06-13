@@ -124,6 +124,12 @@ pub struct NodeSnapshot {
     /// `outputs` are the group's interface ports; the recursive body lives
     /// here so the canvas can descend into it. `None` for every ordinary node.
     pub group: Option<Box<GroupSnapshot>>,
+    /// Per-node WGSL kernel source override (`EffectGraphNode::wgsl_source`),
+    /// carried so the editor can open it in the code panel. `Some` only for
+    /// `node.wgsl_compute*` nodes whose JSON pins a custom kernel; `None`
+    /// everywhere else (boundary nodes, groups, the live-flattened
+    /// [`GraphSnapshot::from_graph`] path that has no def to read it from).
+    pub wgsl_source: Option<String>,
 }
 
 /// The body of a group node as the editor sees it — a sub-graph the canvas
@@ -183,6 +189,11 @@ pub struct ParamSnapshot {
     /// inspector render a colour swatch / per-component editor — `current_value`
     /// flattens these to 0.0 and so can't carry them.
     pub vec_value: Option<[f32; 4]>,
+    /// Raw, untruncated value for `String` params — what the inline editor
+    /// seeds with on open. `summary` is a lossy display string (path tails,
+    /// 24-char cap), so it can't round-trip an edit. `None` for non-String
+    /// params.
+    pub string_value: Option<String>,
 }
 
 /// Coarse-grained variant of `ParamType` — the user-exposed-param
@@ -415,6 +426,10 @@ impl GraphSnapshot {
                             ParamValue::String(s) => Some(string_summary(s)),
                             _ => None,
                         };
+                        let string_value = match &current {
+                            ParamValue::String(s) => Some(s.to_string()),
+                            _ => None,
+                        };
                         ParamSnapshot {
                             name: pd.name.to_string(),
                             label: pd.label.to_string(),
@@ -435,6 +450,7 @@ impl GraphSnapshot {
                             exposed: inst.exposed_params.contains(pd.name),
                             summary,
                             vec_value: param_vec_value(&current),
+                            string_value,
                         }
                     })
                     .collect();
@@ -450,6 +466,7 @@ impl GraphSnapshot {
                     editor_pos: None,
                     breaks_dependency_cycle: inst.node.breaks_dependency_cycle(),
                     group: None,
+                    wgsl_source: None,
                 }
             })
             .collect();
@@ -605,6 +622,7 @@ fn snapshot_level(
                     wires: body_wires,
                     tint: group.tint,
                 })),
+                wgsl_source: None,
             }
         } else if dn.type_id == GROUP_INPUT_TYPE_ID {
             NodeSnapshot {
@@ -619,6 +637,7 @@ fn snapshot_level(
                 editor_pos: dn.editor_pos,
                 breaks_dependency_cycle: false,
                 group: None,
+                wgsl_source: None,
             }
         } else if dn.type_id == GROUP_OUTPUT_TYPE_ID {
             NodeSnapshot {
@@ -633,6 +652,7 @@ fn snapshot_level(
                 editor_pos: dn.editor_pos,
                 breaks_dependency_cycle: false,
                 group: None,
+                wgsl_source: None,
             }
         } else {
             let mut boxed = registry.construct(&dn.type_id)?;
@@ -661,6 +681,7 @@ fn snapshot_level(
                 &params,
                 &dn.exposed_params,
                 dn.editor_pos,
+                dn.wgsl_source.clone(),
             )
         };
         out_nodes.push(snap);
@@ -683,6 +704,7 @@ fn snapshot_level(
 /// Build a [`NodeSnapshot`] from a constructed (and reconfigured) node plus its
 /// document-side identity. The port/param mapping mirrors [`GraphSnapshot::from_graph`]'s
 /// per-node logic for the structural (group-preserving) path.
+#[allow(clippy::too_many_arguments)]
 fn node_snapshot_from_constructed(
     node: &dyn EffectNode,
     id: u32,
@@ -692,6 +714,7 @@ fn node_snapshot_from_constructed(
     params: &ParamValues,
     exposed: &std::collections::BTreeSet<String>,
     editor_pos: Option<(f32, f32)>,
+    wgsl_source: Option<String>,
 ) -> NodeSnapshot {
     let type_id = node.type_id().as_str().to_string();
     let title = display_label(&type_id, author_title);
@@ -723,6 +746,10 @@ fn node_snapshot_from_constructed(
                 ParamValue::String(s) => Some(string_summary(s)),
                 _ => None,
             };
+            let string_value = match &current {
+                ParamValue::String(s) => Some(s.to_string()),
+                _ => None,
+            };
             ParamSnapshot {
                 name: pd.name.to_string(),
                 label: pd.label.to_string(),
@@ -738,6 +765,7 @@ fn node_snapshot_from_constructed(
                 exposed: exposed.contains(pd.name),
                 summary,
                 vec_value: param_vec_value(&current),
+                string_value,
             }
         })
         .collect();
@@ -753,6 +781,7 @@ fn node_snapshot_from_constructed(
         editor_pos,
         breaks_dependency_cycle: node.breaks_dependency_cycle(),
         group: None,
+        wgsl_source,
     }
 }
 

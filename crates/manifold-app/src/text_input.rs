@@ -40,6 +40,33 @@ pub enum TextInputField {
     SearchFilter,
     /// Timeline marker rename. MarkerId stored in TextInputState::marker_id.
     MarkerName,
+    /// Graph-editor group rename. Carries the group's runtime node id; the scope
+    /// is read from the canvas at commit time. Routes to `RenameGroupCommand`.
+    GraphGroupRename(u32),
+    /// Graph-editor String node param (e.g. `render_text.text`). Carries the
+    /// node's runtime id; the param name is in `TextInputState::graph_param_name`
+    /// (String, not `Copy`). Routes to `SetGraphNodeParam(String)`.
+    GraphStringParam(u32),
+    /// Graph-editor `wgsl_compute` source. Carries the node's runtime id; the
+    /// source edits multiline. Routes to `SetWgslSourceCommand`.
+    GraphWgsl(u32),
+    /// Graph-editor find-a-node search. Commit / live filter highlights matching
+    /// nodes on the canvas; no undo command.
+    GraphNodeSearch,
+}
+
+impl TextInputField {
+    /// Whether this field is edited inside the graph-editor window (so the
+    /// editor's key handler + overlay render own it, not the main window's).
+    pub fn is_graph_field(self) -> bool {
+        matches!(
+            self,
+            TextInputField::GraphGroupRename(_)
+                | TextInputField::GraphStringParam(_)
+                | TextInputField::GraphWgsl(_)
+                | TextInputField::GraphNodeSearch
+        )
+    }
 }
 
 /// Screen-space rectangle for anchoring the text input overlay.
@@ -88,6 +115,8 @@ pub struct TextInputState {
     pub multiline: bool,
     /// MarkerId for MarkerName field (String not Copy, so stored separately).
     pub marker_id: Option<manifold_core::MarkerId>,
+    /// Param name for `GraphStringParam` (String not `Copy`, so stored here).
+    pub graph_param_name: Option<String>,
 }
 
 impl TextInputState {
@@ -102,6 +131,7 @@ impl TextInputState {
             select_all: false,
             multiline: false,
             marker_id: None,
+            graph_param_name: None,
         }
     }
 
@@ -121,7 +151,10 @@ impl TextInputState {
         self.anchor = anchor;
         self.font_size = font_size;
         self.select_all = true;
-        self.multiline = matches!(field, TextInputField::GenStringParam(_));
+        self.multiline = matches!(
+            field,
+            TextInputField::GenStringParam(_) | TextInputField::GraphWgsl(_)
+        );
     }
 
     /// Cancel editing without committing.

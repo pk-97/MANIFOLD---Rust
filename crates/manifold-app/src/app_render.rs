@@ -1390,6 +1390,63 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::EditGraphNodeStringParam {
+                    node_id,
+                    param_name,
+                    current,
+                    anchor,
+                } => {
+                    // Open the inline editor over the value cell. The param name
+                    // (not `Copy`) rides on the text-input state; commit routes
+                    // through SetGraphNodeParamCommand with a String value.
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::GraphStringParam(*node_id),
+                        current,
+                        crate::text_input::AnchorRect::new(
+                            anchor.0,
+                            anchor.1,
+                            anchor.2.max(120.0),
+                            anchor.3,
+                        ),
+                        12.0,
+                    );
+                    self.text_input.graph_param_name = Some(param_name.clone());
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    continue;
+                }
+                PanelAction::EditGraphNodeWgsl {
+                    node_id,
+                    current,
+                    anchor: _,
+                } => {
+                    // The kernel editor is multiline and large — anchor it over
+                    // the canvas (top-left) rather than the small sidebar button.
+                    let anchor = self
+                        .editor_canvas_viewport()
+                        .map(|vp| {
+                            crate::text_input::AnchorRect::new(
+                                vp.x + 24.0,
+                                40.0,
+                                (vp.w - 48.0).max(240.0),
+                                22.0,
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            crate::text_input::AnchorRect::new(360.0, 40.0, 520.0, 22.0)
+                        });
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::GraphWgsl(*node_id),
+                        current,
+                        anchor,
+                        12.0,
+                    );
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    continue;
+                }
                 PanelAction::GroupSelection {
                     scope_path,
                     node_ids,
@@ -2554,6 +2611,27 @@ impl Application {
     ///
     /// Gated on the editor's own CVDisplayLink: when it hasn't fired,
     /// we skip the present to avoid wasting a drawable slot.
+    /// The graph-editor canvas viewport rect in logical pixels — the same
+    /// region `canvas.render` draws into. `None` when the editor window is
+    /// closed or its surface isn't ready. Used to anchor overlays (the group
+    /// rename field) in screen space from the key handler, outside the present
+    /// pass where `canvas_x`/`canvas_width` are computed inline.
+    pub(crate) fn editor_canvas_viewport(&self) -> Option<crate::graph_canvas::Rect> {
+        let wid = self.graph_editor_window_id?;
+        let win_state = self.window_registry.get(&wid)?;
+        let surface = win_state.surface.as_ref()?;
+        let scale = win_state.window.scale_factor();
+        let logical_w = (surface.width as f64 / scale).max(1.0) as f32;
+        let logical_h = (surface.height as f64 / scale).max(1.0) as f32;
+        let palette_width = manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
+        let sidebar_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+        let canvas_x = palette_width;
+        let canvas_width = (logical_w - palette_width - sidebar_width).max(0.0);
+        Some(crate::graph_canvas::Rect::new(
+            canvas_x, 0.0, canvas_width, logical_h,
+        ))
+    }
+
     fn present_graph_editor_window(&mut self) {
         // Forward the editor's single-node selection to the content thread so
         // it can capture that node's output for the preview pane. Deduplicated
@@ -2957,6 +3035,13 @@ impl Application {
                 ui.push_layer(Layer::Overlay);
                 self.editor_mapping_popover.set_live_value(popover_live_value);
                 self.editor_mapping_popover.render(ui);
+                ui.pop_layer();
+            }
+            // Graph text-input overlay (group rename / String param / wgsl /
+            // node search) — tops everything on the Overlay layer.
+            if self.text_input.active && self.text_input.field.is_graph_field() {
+                ui.push_layer(Layer::Overlay);
+                render_text_input_overlay(&self.text_input, &self.frame_timer, ui);
                 ui.pop_layer();
             }
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
@@ -3652,6 +3737,7 @@ fn build_graph_editor_view(
             enum_labels: p.enum_labels.clone(),
             summary: p.summary.clone(),
             vec_value: p.vec_value.unwrap_or([0.0; 4]),
+            string_value: p.string_value.clone(),
         })
         .collect();
     Some(GraphEditorNodeView {
@@ -3660,6 +3746,7 @@ fn build_graph_editor_view(
         node_handle: node.node_handle.clone(),
         title: node.title.clone(),
         parameters,
+        wgsl_source: node.wgsl_source.clone(),
     })
 }
 
@@ -4008,6 +4095,7 @@ mod preview_target_tests {
             editor_pos: None,
             breaks_dependency_cycle: false,
             group: None,
+            wgsl_source: None,
         }
     }
 

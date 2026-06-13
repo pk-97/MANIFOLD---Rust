@@ -969,6 +969,10 @@ pub struct GraphCanvas {
     /// later, after `set_snapshot` has rebuilt the (possibly newly-entered)
     /// level so the node's position is known. `None` when nothing is pending.
     pending_focus: Option<u32>,
+    /// Lowercased find-a-node query. Non-empty dims nodes whose title/handle
+    /// doesn't contain it and brightens the matches, so a name jumps out of a
+    /// busy graph. Empty = no search active. Set live by the editor's search box.
+    node_search: String,
 }
 
 /// Max seconds between two empty-canvas presses for them to count as a
@@ -1013,6 +1017,7 @@ impl GraphCanvas {
             format_on_enter: false,
             spark_history: ahash::AHashMap::new(),
             pending_focus: None,
+            node_search: String::new(),
             debug_overlay: false,
         }
     }
@@ -1117,6 +1122,48 @@ impl GraphCanvas {
             group_id,
             tint: Some(GROUP_TINT_PALETTE[next_idx]),
         });
+    }
+
+    /// Set the find-a-node query (stored lowercased). Empty clears the search,
+    /// restoring every node to full brightness.
+    pub fn set_node_search(&mut self, query: &str) {
+        self.node_search = query.to_ascii_lowercase();
+    }
+
+    /// The active find-a-node query (lowercased), or empty when no search is
+    /// running. Lets the editor re-seed the field when reopening the search box.
+    pub fn node_search(&self) -> &str {
+        &self.node_search
+    }
+
+    /// Whether `node` matches the active search — its title or handle contains
+    /// the query. Always true when no search is active.
+    fn node_matches_search(&self, node: &NodeView) -> bool {
+        if self.node_search.is_empty() {
+            return true;
+        }
+        node.title.to_ascii_lowercase().contains(&self.node_search)
+            || node
+                .handle
+                .as_deref()
+                .is_some_and(|h| h.to_ascii_lowercase().contains(&self.node_search))
+    }
+
+    /// For a single selected group: its id, current display name, and the
+    /// screen-space rect of its header (where the rename field anchors). `None`
+    /// unless exactly one group node is selected. Drives F2-to-rename.
+    pub fn group_rename_target(&self, viewport: Rect) -> Option<(u32, String, f32, f32, f32, f32)> {
+        let gid = self.single_selected_group()?;
+        let node = self.nodes.iter().find(|n| n.id == gid)?;
+        let (sx, sy) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
+        Some((
+            gid,
+            node.title.clone(),
+            sx,
+            sy,
+            NODE_WIDTH * self.zoom,
+            NODE_HEADER_HEIGHT * self.zoom,
+        ))
     }
 
     /// Re-run the layered auto-layout over the current level and emit a single
@@ -3030,6 +3077,13 @@ impl GraphCanvas {
                 TEXT_PRIMARY,
             );
         }
+
+        // Find-a-node: dim nodes that don't match the active search so the
+        // matches stay bright and jump out of a busy graph. Drawn last, over the
+        // node's own content.
+        if !self.node_search.is_empty() && !self.node_matches_search(node) {
+            ui.draw_rect(sx, sy, sw, sh, [0.05, 0.05, 0.07, 0.66]);
+        }
     }
 
     /// Whether a wire connects to the focused node (selected or hovered).
@@ -3344,6 +3398,7 @@ mod tests {
             editor_pos: None,
             breaks_dependency_cycle: false,
             group: None,
+            wgsl_source: None,
         }
     }
 
@@ -3600,6 +3655,7 @@ mod tests {
             exposed: false,
             summary: None,
             vec_value: None,
+            string_value: None,
         }
     }
 

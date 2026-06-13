@@ -1192,6 +1192,82 @@ impl Application {
                 }
                 self.needs_rebuild = true;
             }
+            // ── Graph-editor fields ──────────────────────────────────────
+            // The graph canvas renders from `content_state.active_graph_snapshot`
+            // (the content thread owns the authoritative graph), so these
+            // dispatch to the content thread only — no local_project execute.
+            TextInputField::GraphGroupRename(group_node_id) => {
+                let new_handle = text.trim().to_string();
+                if !new_handle.is_empty()
+                    && let (Some(target), Some(default)) = (
+                        self.watched_graph_target.clone(),
+                        self.watched_catalog_default.clone(),
+                    )
+                {
+                    let scope = self
+                        .graph_canvas
+                        .as_ref()
+                        .map(|c| c.scope_path().to_vec())
+                        .unwrap_or_default();
+                    let cmd = manifold_editing::commands::graph::RenameGroupCommand::new(
+                        target,
+                        scope,
+                        group_node_id,
+                        new_handle,
+                        default,
+                    );
+                    self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            TextInputField::GraphStringParam(node_id) => {
+                if let (Some(param_name), Some(target), Some(default)) = (
+                    self.text_input.graph_param_name.take(),
+                    self.watched_graph_target.clone(),
+                    self.watched_catalog_default.clone(),
+                ) {
+                    let scope = self
+                        .graph_canvas
+                        .as_ref()
+                        .map(|c| c.scope_path().to_vec())
+                        .unwrap_or_default();
+                    let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                        target,
+                        node_id,
+                        param_name,
+                        manifold_core::effect_graph_def::SerializedParamValue::String {
+                            value: text.to_string(),
+                        },
+                        default,
+                    )
+                    .with_scope(scope);
+                    self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            TextInputField::GraphWgsl(node_id) => {
+                if let (Some(target), Some(default)) = (
+                    self.watched_graph_target.clone(),
+                    self.watched_catalog_default.clone(),
+                ) {
+                    let scope = self
+                        .graph_canvas
+                        .as_ref()
+                        .map(|c| c.scope_path().to_vec())
+                        .unwrap_or_default();
+                    let cmd = manifold_editing::commands::graph::SetWgslSourceCommand::new(
+                        target,
+                        node_id,
+                        text.to_string(),
+                        default,
+                    )
+                    .with_scope(scope);
+                    self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            TextInputField::GraphNodeSearch => {
+                // Live-filtered while typing (see the editor key handler); the
+                // final query persists as the canvas highlight. Nothing to
+                // commit to the model.
+            }
         }
     }
 
@@ -2742,6 +2818,66 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                     return;
                 }
+                // Editor window: a graph text field (group rename / String param /
+                // wgsl / node search) is active → keystrokes type into it. Ahead
+                // of node-delete + navigation so Backspace edits text and Esc
+                // cancels the edit rather than deleting a node or leaving a group.
+                if is_graph_editor
+                    && self.text_input.active
+                    && self.text_input.field.is_graph_field()
+                {
+                    use winit::keyboard::{Key, NamedKey};
+                    let typing = !self.modifiers.command && !self.modifiers.ctrl;
+                    let was_search = self.text_input.field
+                        == crate::text_input::TextInputField::GraphNodeSearch;
+                    match &logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            self.text_input.cancel();
+                            if was_search && let Some(canvas) = self.graph_canvas.as_mut() {
+                                canvas.set_node_search("");
+                            }
+                        }
+                        Key::Named(NamedKey::Enter) => {
+                            // Multiline (WGSL code): Enter inserts a newline, the
+                            // natural code-editor convention; Cmd+Enter commits.
+                            // Single-line fields commit on a bare Enter.
+                            if self.text_input.multiline && !self.modifiers.command {
+                                self.text_input.insert_char('\n');
+                            } else {
+                                let (field, text) = self.text_input.commit();
+                                self.handle_text_input_commit(field, &text);
+                            }
+                        }
+                        Key::Named(NamedKey::Backspace) => self.text_input.backspace(),
+                        Key::Named(NamedKey::Delete) => self.text_input.delete(),
+                        Key::Named(NamedKey::ArrowLeft) => self.text_input.move_left(),
+                        Key::Named(NamedKey::ArrowRight) => self.text_input.move_right(),
+                        Key::Named(NamedKey::Space) if typing => self.text_input.insert_char(' '),
+                        Key::Character(c) => {
+                            if c == "a" && self.modifiers.command {
+                                self.text_input.select_all_text();
+                            } else if typing {
+                                for ch in c.chars() {
+                                    self.text_input.insert_char(ch);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    // Live node-search highlight: push the query each keystroke
+                    // while the search field is still active.
+                    if was_search
+                        && self.text_input.active
+                        && let Some(canvas) = self.graph_canvas.as_mut()
+                    {
+                        let q = self.text_input.text.trim().to_string();
+                        canvas.set_node_search(&q);
+                    }
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    return;
+                }
                 // Editor window: Delete/Backspace removes the currently
                 // selected node. Has to happen before primary keyboard
                 // routing because the editor window has its own focus
@@ -2839,6 +2975,64 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     if let Some(canvas) = self.graph_canvas.as_mut() {
                         canvas.request_cycle_group_tint();
                     }
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    return;
+                }
+                // Editor window: F2 renames the single selected group inline.
+                // The rename field anchors over the group's header; commit
+                // routes to RenameGroupCommand at the canvas scope.
+                if is_graph_editor
+                    && matches!(
+                        logical_key,
+                        winit::keyboard::Key::Named(winit::keyboard::NamedKey::F2)
+                    )
+                {
+                    let target = self
+                        .editor_canvas_viewport()
+                        .zip(self.graph_canvas.as_ref())
+                        .and_then(|(vp, canvas)| canvas.group_rename_target(vp));
+                    if let Some((gid, name, sx, sy, sw, sh)) = target {
+                        self.text_input.begin(
+                            crate::text_input::TextInputField::GraphGroupRename(gid),
+                            &name,
+                            crate::text_input::AnchorRect::new(sx, sy, sw.max(80.0), sh.max(18.0)),
+                            13.0,
+                        );
+                        if let Some(ed) = self.graph_editor.as_mut() {
+                            ed.offscreen_dirty = true;
+                        }
+                    }
+                    return;
+                }
+                // Editor window: Cmd+F opens the find-a-node search box. Typing
+                // dims every non-matching node live; Esc clears, Enter keeps the
+                // highlight. Anchored top-left over the canvas.
+                if is_graph_editor
+                    && self.modifiers.command
+                    && let winit::keyboard::Key::Character(c) = &logical_key
+                    && c.eq_ignore_ascii_case("f")
+                {
+                    let anchor = self
+                        .editor_canvas_viewport()
+                        .map(|vp| {
+                            crate::text_input::AnchorRect::new(vp.x + 12.0, 12.0, 220.0, 18.0)
+                        })
+                        .unwrap_or_else(|| {
+                            crate::text_input::AnchorRect::new(120.0, 12.0, 220.0, 18.0)
+                        });
+                    let initial = self
+                        .graph_canvas
+                        .as_ref()
+                        .map(|c| c.node_search().to_string())
+                        .unwrap_or_default();
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::GraphNodeSearch,
+                        &initial,
+                        anchor,
+                        13.0,
+                    );
                     if let Some(ed) = self.graph_editor.as_mut() {
                         ed.offscreen_dirty = true;
                     }
