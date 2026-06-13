@@ -442,6 +442,21 @@ pub enum PanelAction {
         current: String,
         anchor: (f32, f32, f32, f32),
     },
+    /// Open the inline numeric editor over one cell of a `Table` param's grid
+    /// (gradient stop / numeric sequence). Emitted when a grid cell is clicked.
+    /// The host begins a `GraphTableCell` session anchored at `anchor` seeded
+    /// with `current`, and stashes `rows` + `(row, col)` so commit can rebuild
+    /// the one edited cell into a full `Table` value through
+    /// `SetGraphNodeParamCommand`.
+    EditGraphNodeTableCell {
+        node_id: u32,
+        param_name: String,
+        row: usize,
+        col: usize,
+        current: f32,
+        rows: Vec<Vec<f32>>,
+        anchor: (f32, f32, f32, f32),
+    },
     /// Collapse a set of nodes at `scope_path` (the canvas's current view
     /// depth, a path of group ids; empty = document root) into a single group
     /// node. Emitted by Ctrl+G on a canvas selection. `handle` is the new

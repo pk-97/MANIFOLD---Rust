@@ -366,6 +366,7 @@ pub fn dispatch(
         | PanelAction::BrowseGraphNodePath { .. }
         | PanelAction::EditGraphNodeStringParam { .. }
         | PanelAction::EditGraphNodeWgsl { .. }
+        | PanelAction::EditGraphNodeTableCell { .. }
         | PanelAction::GroupSelection { .. }
         | PanelAction::Ungroup { .. }
         | PanelAction::SetGroupTint { .. }

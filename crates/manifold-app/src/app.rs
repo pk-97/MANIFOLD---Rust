@@ -1268,6 +1268,41 @@ impl Application {
                 // final query persists as the canvas highlight. Nothing to
                 // commit to the model.
             }
+            TextInputField::GraphTableCell => {
+                if let Some(edit) = self.text_input.graph_table_edit.take()
+                    && let Ok(v) = text.trim().parse::<f32>()
+                    && let (Some(target), Some(default)) = (
+                        self.watched_graph_target.clone(),
+                        self.watched_catalog_default.clone(),
+                    )
+                {
+                    let mut rows = edit.rows;
+                    if let Some(cell) = rows.get_mut(edit.row).and_then(|r| r.get_mut(edit.col)) {
+                        // No-op edits skip the command so an accidental click +
+                        // Enter doesn't push an empty undo step.
+                        if (*cell - v).abs() > f32::EPSILON {
+                            *cell = v;
+                            let scope = self
+                                .graph_canvas
+                                .as_ref()
+                                .map(|c| c.scope_path().to_vec())
+                                .unwrap_or_default();
+                            let cmd =
+                                manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                                    target,
+                                    edit.node_id,
+                                    edit.param_name,
+                                    manifold_core::effect_graph_def::SerializedParamValue::Table {
+                                        rows,
+                                    },
+                                    default,
+                                )
+                                .with_scope(scope);
+                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                        }
+                    }
+                }
+            }
         }
     }
 

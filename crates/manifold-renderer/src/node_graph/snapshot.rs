@@ -194,6 +194,11 @@ pub struct ParamSnapshot {
     /// 24-char cap), so it can't round-trip an edit. `None` for non-String
     /// params.
     pub string_value: Option<String>,
+    /// Row-major cell values for `Table` params (`gradient_ramp` stops,
+    /// `cycle_table_row`, `scalar_array_accumulator`). Drives the inline grid
+    /// editor — `summary` only carries the "N×M" shape. `None` for non-Table
+    /// params.
+    pub table_value: Option<Vec<Vec<f32>>>,
 }
 
 /// Coarse-grained variant of `ParamType` — the user-exposed-param
@@ -430,6 +435,10 @@ impl GraphSnapshot {
                             ParamValue::String(s) => Some(s.to_string()),
                             _ => None,
                         };
+                        let table_value = match &current {
+                            ParamValue::Table(t) => Some(t.rows().to_vec()),
+                            _ => None,
+                        };
                         ParamSnapshot {
                             name: pd.name.to_string(),
                             label: pd.label.to_string(),
@@ -451,6 +460,7 @@ impl GraphSnapshot {
                             summary,
                             vec_value: param_vec_value(&current),
                             string_value,
+                            table_value,
                         }
                     })
                     .collect();
@@ -750,6 +760,10 @@ fn node_snapshot_from_constructed(
                 ParamValue::String(s) => Some(s.to_string()),
                 _ => None,
             };
+            let table_value = match &current {
+                ParamValue::Table(t) => Some(t.rows().to_vec()),
+                _ => None,
+            };
             ParamSnapshot {
                 name: pd.name.to_string(),
                 label: pd.label.to_string(),
@@ -766,6 +780,7 @@ fn node_snapshot_from_constructed(
                 summary,
                 vec_value: param_vec_value(&current),
                 string_value,
+                table_value,
             }
         })
         .collect();

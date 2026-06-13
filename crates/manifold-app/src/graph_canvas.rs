@@ -3656,6 +3656,7 @@ mod tests {
             summary: None,
             vec_value: None,
             string_value: None,
+            table_value: None,
         }
     }
 

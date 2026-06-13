@@ -1447,6 +1447,40 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::EditGraphNodeTableCell {
+                    node_id,
+                    param_name,
+                    row,
+                    col,
+                    current,
+                    rows,
+                    anchor,
+                } => {
+                    // Open the inline numeric editor over the cell; stash the
+                    // whole table so commit can rebuild just this cell.
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::GraphTableCell,
+                        &fmt_table_cell_seed(*current),
+                        crate::text_input::AnchorRect::new(
+                            anchor.0,
+                            anchor.1,
+                            anchor.2.max(48.0),
+                            anchor.3,
+                        ),
+                        12.0,
+                    );
+                    self.text_input.graph_table_edit = Some(crate::text_input::TableCellEdit {
+                        node_id: *node_id,
+                        param_name: param_name.clone(),
+                        row: *row,
+                        col: *col,
+                        rows: rows.clone(),
+                    });
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    continue;
+                }
                 PanelAction::GroupSelection {
                     scope_path,
                     node_ids,
@@ -3690,6 +3724,18 @@ fn find_snapshot_node<'a>(
     None
 }
 
+/// Seed text for the inline `Table` cell editor — compact but lossless enough
+/// to round-trip: integers without a decimal point, fractionals to four places
+/// with trailing zeros trimmed.
+fn fmt_table_cell_seed(v: f32) -> String {
+    if v == v.trunc() && v.abs() < 1.0e7 {
+        format!("{}", v as i64)
+    } else {
+        let s = format!("{v:.4}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
 fn build_graph_editor_view(
     selected_node: Option<u32>,
     snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
@@ -3738,6 +3784,7 @@ fn build_graph_editor_view(
             summary: p.summary.clone(),
             vec_value: p.vec_value.unwrap_or([0.0; 4]),
             string_value: p.string_value.clone(),
+            table_value: p.table_value.clone(),
         })
         .collect();
     Some(GraphEditorNodeView {

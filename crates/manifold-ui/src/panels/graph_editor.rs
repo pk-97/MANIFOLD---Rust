@@ -88,6 +88,18 @@ fn is_path_param(name: &str) -> bool {
         .any(|k| n.contains(k))
 }
 
+/// Compact display for a `Table` cell — integers without a decimal point,
+/// fractionals to three places with trailing zeros trimmed, so the grid stays
+/// narrow.
+fn fmt_table_cell(v: f32) -> String {
+    if v == v.trunc() && v.abs() < 1.0e6 {
+        format!("{}", v as i64)
+    } else {
+        let s = format!("{v:.3}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
 impl GraphEditorParamKind {
     /// Component count for the multi-component (colour / vector) kinds, else 0.
     fn vec_components(self) -> usize {
@@ -145,6 +157,9 @@ pub struct GraphEditorParam {
     /// with. `summary` is lossy (path tails, 24-char cap), so it can't
     /// round-trip an edit. `None` for non-String params.
     pub string_value: Option<String>,
+    /// Row-major cell values for `Table` params — drives the inline grid
+    /// editor. `None` for non-Table params (`summary` only carries "N×M").
+    pub table_value: Option<Vec<Vec<f32>>>,
 }
 
 /// UI-facing view of the currently-selected node, decoupled from the
@@ -334,6 +349,18 @@ enum RowState {
         button_node_id: u32,
         node_runtime_id: u32,
         source: String,
+    },
+    /// One clickable cell in a `Table` param's grid editor. Click opens the
+    /// inline numeric editor over the cell. The full table is looked up by
+    /// `param_name` at click time (off `selected_node`) so each cell row stays
+    /// small. `rect` (x, y, w, h) is captured at build for the anchor.
+    TableCell {
+        button_node_id: u32,
+        node_runtime_id: u32,
+        param_name: String,
+        row: usize,
+        col: usize,
+        rect: (f32, f32, f32, f32),
     },
 }
 
@@ -666,7 +693,21 @@ impl GraphEditorPanel {
                 y = self.build_string_param(tree, bg_id, viewport, y, node.runtime_node_id, ps);
                 continue;
             }
-            // Remaining unsupported types (Table / String) — show a row but
+            // Table params (gradient stops, numeric sequences) get an inline
+            // grid of editable cells.
+            if let Some(rows) = ps.table_value.as_ref().filter(|r| !r.is_empty()) {
+                y = self.build_table_param(
+                    tree,
+                    bg_id,
+                    viewport,
+                    y,
+                    node.runtime_node_id,
+                    ps,
+                    rows,
+                );
+                continue;
+            }
+            // Remaining unsupported types — show a row but
             // disabled. V2's single-slot surface can't carry them.
             let supported = matches!(
                 ps.kind,
@@ -1105,6 +1146,84 @@ impl GraphEditorPanel {
         y + ROW_H
     }
 
+    /// Render a `Table` param as an inline grid of clickable numeric cells —
+    /// the gradient-stop / numeric-sequence editor. A header line carries the
+    /// label + N×M shape, then one row of `cell_w`-wide cells per table row.
+    /// Each cell click opens the inline numeric editor over it. Returns the new
+    /// `y` below the grid. Columns are addressed by index (the table carries no
+    /// per-column semantics); a richer swatch/draggable presentation is a later
+    /// visual pass.
+    #[allow(clippy::too_many_arguments)]
+    fn build_table_param(
+        &mut self,
+        tree: &mut UITree,
+        bg_id: i32,
+        viewport: Rect,
+        y: f32,
+        node_runtime_id: u32,
+        ps: &GraphEditorParam,
+        rows: &[Vec<f32>],
+    ) -> f32 {
+        const CELL_H: f32 = 22.0;
+        const CELL_GAP: f32 = 3.0;
+        let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+        let header = format!("{}  ({}×{})", ps.label, rows.len(), cols);
+        tree.add_label(
+            bg_id,
+            viewport.x + PADDING,
+            y,
+            (viewport.width - 2.0 * PADDING).max(10.0),
+            ROW_H,
+            &header,
+            UIStyle {
+                text_color: color::TEXT_WHITE_C32,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        let mut yy = y + ROW_H;
+        if cols == 0 {
+            return yy;
+        }
+        let grid_x = viewport.x + PADDING;
+        let grid_w = (viewport.width - 2.0 * PADDING).max(40.0);
+        let cell_w = ((grid_w - CELL_GAP * (cols as f32 - 1.0)) / cols as f32).max(24.0);
+        for (r, rowvals) in rows.iter().enumerate() {
+            let mut cx = grid_x;
+            for (c, &v) in rowvals.iter().enumerate() {
+                let cell_id = tree.add_button(
+                    bg_id,
+                    cx,
+                    yy,
+                    cell_w,
+                    CELL_H,
+                    UIStyle {
+                        bg_color: color::BUTTON_INACTIVE_C32,
+                        hover_bg_color: color::HOVER_OVERLAY,
+                        text_color: color::TEXT_WHITE_C32,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Center,
+                        corner_radius: 2.0,
+                        ..UIStyle::default()
+                    },
+                    &fmt_table_cell(v),
+                );
+                self.rows.push(RowState::TableCell {
+                    button_node_id: cell_id,
+                    node_runtime_id,
+                    param_name: ps.name.clone(),
+                    row: r,
+                    col: c,
+                    rect: (cx, yy, cell_w, CELL_H),
+                });
+                cx += cell_w + CELL_GAP;
+            }
+            yy += CELL_H + CELL_GAP;
+        }
+        yy + 4.0
+    }
+
     /// Render the value inspector for the previewed node into the pinned
     /// node-output pane (`region`) when the node carries no image — its title,
     /// one-line "what it does", then the live OUTPUT signal and INPUT values.
@@ -1407,6 +1526,40 @@ impl GraphEditorPanel {
                             current: source.clone(),
                             anchor: (0.0, 0.0, 0.0, 0.0),
                         }];
+                    }
+                }
+                RowState::TableCell {
+                    button_node_id,
+                    node_runtime_id,
+                    param_name,
+                    row,
+                    col,
+                    rect,
+                } => {
+                    if *button_node_id == node_id {
+                        // Look up the full table off the selected node so the
+                        // host can rebuild just the edited cell on commit.
+                        if let Some(rows) = self
+                            .selected_node
+                            .as_ref()
+                            .and_then(|n| n.parameters.iter().find(|p| &p.name == param_name))
+                            .and_then(|p| p.table_value.clone())
+                        {
+                            let current = rows
+                                .get(*row)
+                                .and_then(|r| r.get(*col))
+                                .copied()
+                                .unwrap_or(0.0);
+                            return vec![PanelAction::EditGraphNodeTableCell {
+                                node_id: *node_runtime_id,
+                                param_name: param_name.clone(),
+                                row: *row,
+                                col: *col,
+                                current,
+                                rows,
+                                anchor: *rect,
+                            }];
+                        }
                     }
                 }
             }
@@ -1768,6 +1921,7 @@ mod tests {
                     summary: None,
                     vec_value: [0.0; 4],
                     string_value: None,
+                    table_value: None,
                 },
                 GraphEditorParam {
                     name: "scale".to_string(),
@@ -1780,6 +1934,7 @@ mod tests {
                     summary: None,
                     vec_value: [0.0; 4],
                     string_value: None,
+                    table_value: None,
                 },
                 GraphEditorParam {
                     name: "color".to_string(),
@@ -1792,6 +1947,7 @@ mod tests {
                     summary: None,
                     vec_value: [0.0; 4],
                     string_value: None,
+                    table_value: None,
                 },
             ],
             wgsl_source: None,
@@ -2118,6 +2274,7 @@ mod tests {
                     summary: None,
                     vec_value: [0.0; 4],
                     string_value: None,
+                    table_value: None,
                 },
                 GraphEditorParam {
                     name: "enabled".to_string(),
@@ -2130,6 +2287,7 @@ mod tests {
                     summary: None,
                     vec_value: [0.0; 4],
                     string_value: None,
+                    table_value: None,
                 },
                 GraphEditorParam {
                     name: "mode".to_string(),
@@ -2142,6 +2300,7 @@ mod tests {
                     summary: None,
                     vec_value: [0.0; 4],
                     string_value: None,
+                    table_value: None,
                 },
             ],
             wgsl_source: None,
@@ -2619,6 +2778,7 @@ mod tests {
                 summary: None,
                 vec_value: initial,
                 string_value: None,
+                table_value: None,
             }],
             wgsl_source: None,
         }
@@ -2733,6 +2893,7 @@ mod tests {
                 summary: Some(value.to_string()),
                 vec_value: [0.0; 4],
                 string_value: Some(value.to_string()),
+                table_value: None,
             }],
             wgsl_source: None,
         }
@@ -2797,5 +2958,143 @@ mod tests {
                 .all(|r| !matches!(r, RowState::BrowseButton { .. })),
             "a non-path String param is read-only (no Browse button)"
         );
+    }
+
+    #[test]
+    fn plain_text_string_value_cell_click_emits_string_edit() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_string("text", "HELLO");
+        panel.configure(
+            None,
+            Some(&node),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        panel.build(&mut tree, viewport());
+        let cell = panel
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                RowState::EditTextButton {
+                    button_node_id,
+                    param_name,
+                    ..
+                } if param_name == "text" => Some(*button_node_id),
+                _ => None,
+            })
+            .expect("a non-path String param has a clickable value cell");
+        match panel.handle_click(cell).as_slice() {
+            [PanelAction::EditGraphNodeStringParam {
+                node_id,
+                param_name,
+                current,
+                ..
+            }] => {
+                assert_eq!(*node_id, 11);
+                assert_eq!(param_name, "text");
+                assert_eq!(current, "HELLO");
+            }
+            other => panic!("expected EditGraphNodeStringParam, got {other:?}"),
+        }
+    }
+
+    // ── Table param grid editor ─────────────────────────────────────
+
+    fn snap_node_with_table(rows: Vec<Vec<f32>>) -> GraphEditorNodeView {
+        let cols = rows.first().map(|r| r.len()).unwrap_or(0);
+        GraphEditorNodeView {
+            runtime_node_id: 13,
+            node_id: manifold_core::NodeId::new("ramp"),
+            node_handle: Some("ramp".to_string()),
+            title: "Gradient Ramp".to_string(),
+            parameters: vec![GraphEditorParam {
+                name: "stops".to_string(),
+                label: "Stops".to_string(),
+                kind: GraphEditorParamKind::Other,
+                default_value: 0.0,
+                current_value: 0.0,
+                range: None,
+                enum_labels: None,
+                summary: Some(format!("{}×{}", rows.len(), cols)),
+                vec_value: [0.0; 4],
+                string_value: None,
+                table_value: Some(rows),
+            }],
+            wgsl_source: None,
+        }
+    }
+
+    #[test]
+    fn table_param_builds_one_clickable_cell_per_entry() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_table(vec![vec![0.0, 1.0, 0.0, 0.0], vec![1.0, 0.0, 0.0, 1.0]]);
+        panel.configure(
+            None,
+            Some(&node),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        panel.build(&mut tree, viewport());
+        let cells = panel
+            .rows
+            .iter()
+            .filter(|r| matches!(r, RowState::TableCell { .. }))
+            .count();
+        assert_eq!(cells, 8, "a 2×4 table yields eight editable cells");
+    }
+
+    #[test]
+    fn table_cell_click_emits_edit_with_coords_and_full_table() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let rows = vec![vec![0.0, 0.25, 0.5, 0.75], vec![1.0, 0.1, 0.2, 0.3]];
+        let node = snap_node_with_table(rows.clone());
+        panel.configure(
+            None,
+            Some(&node),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        panel.build(&mut tree, viewport());
+        // The cell at row 1, col 2 carries value 0.2.
+        let btn = panel
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                RowState::TableCell {
+                    button_node_id,
+                    row: 1,
+                    col: 2,
+                    ..
+                } => Some(*button_node_id),
+                _ => None,
+            })
+            .expect("row 1 col 2 cell exists");
+        match panel.handle_click(btn).as_slice() {
+            [PanelAction::EditGraphNodeTableCell {
+                node_id,
+                param_name,
+                row,
+                col,
+                current,
+                rows: got,
+                ..
+            }] => {
+                assert_eq!(*node_id, 13);
+                assert_eq!(param_name, "stops");
+                assert_eq!((*row, *col), (1, 2));
+                assert!((*current - 0.2).abs() < 1e-6, "current is the clicked cell");
+                assert_eq!(got, &rows, "the full table rides along for rebuild");
+            }
+            other => panic!("expected EditGraphNodeTableCell, got {other:?}"),
+        }
     }
 }

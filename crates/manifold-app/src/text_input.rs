@@ -53,6 +53,10 @@ pub enum TextInputField {
     /// Graph-editor find-a-node search. Commit / live filter highlights matching
     /// nodes on the canvas; no undo command.
     GraphNodeSearch,
+    /// Graph-editor `Table` param cell. The cell coordinate + full table ride on
+    /// `TextInputState::graph_table_edit`; commit parses the new f32, rebuilds the
+    /// one cell, and routes to `SetGraphNodeParam(Table)`.
+    GraphTableCell,
 }
 
 impl TextInputField {
@@ -65,8 +69,22 @@ impl TextInputField {
                 | TextInputField::GraphStringParam(_)
                 | TextInputField::GraphWgsl(_)
                 | TextInputField::GraphNodeSearch
+                | TextInputField::GraphTableCell
         )
     }
+}
+
+/// In-flight edit context for a `Table` cell — everything the commit needs to
+/// rebuild the one edited cell back into a full `Table` value. Set when the
+/// cell editor opens (`TextInputField::GraphTableCell`), consumed on commit.
+#[derive(Debug, Clone)]
+pub struct TableCellEdit {
+    pub node_id: u32,
+    pub param_name: String,
+    pub row: usize,
+    pub col: usize,
+    /// The full table at edit-open time, row-major.
+    pub rows: Vec<Vec<f32>>,
 }
 
 /// Screen-space rectangle for anchoring the text input overlay.
@@ -117,6 +135,9 @@ pub struct TextInputState {
     pub marker_id: Option<manifold_core::MarkerId>,
     /// Param name for `GraphStringParam` (String not `Copy`, so stored here).
     pub graph_param_name: Option<String>,
+    /// Cell context for `GraphTableCell` (carries the full table, so stored
+    /// here rather than on the `Copy` field enum).
+    pub graph_table_edit: Option<TableCellEdit>,
 }
 
 impl TextInputState {
@@ -132,6 +153,7 @@ impl TextInputState {
             multiline: false,
             marker_id: None,
             graph_param_name: None,
+            graph_table_edit: None,
         }
     }
 
@@ -163,6 +185,10 @@ impl TextInputState {
         self.text.clear();
         self.select_all = false;
         self.multiline = false;
+        // Drop any per-session graph edit context so a cancelled cell/param
+        // edit can't be mistaken for a later one.
+        self.graph_param_name = None;
+        self.graph_table_edit = None;
     }
 
     /// Insert a character at the cursor position.
