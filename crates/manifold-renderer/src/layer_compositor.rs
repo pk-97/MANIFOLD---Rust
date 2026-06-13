@@ -2002,6 +2002,36 @@ impl Compositor for LayerCompositor {
         (Vec::new(), Vec::new())
     }
 
+    /// Live param values for every node of the watched effect. The watched id
+    /// comes from `preview_request`; we ask each chain for that effect's nodes
+    /// and return the first non-empty (only the chain holding the effect has a
+    /// matching slot, so at most one answers). Same chain set as
+    /// [`Self::preview_scalar_io`] — master, then layer, then group chains.
+    fn live_node_params(&self) -> crate::node_graph::LiveNodeParams {
+        let Some((effect_id, _)) = self.preview_request.as_ref() else {
+            return Vec::new();
+        };
+        if let Some(cg) = self.master_effect_chain.as_ref() {
+            let params = cg.live_node_params(effect_id);
+            if !params.is_empty() {
+                return params;
+            }
+        }
+        for chain in self
+            .effect_chains
+            .values()
+            .chain(self.group_effect_chains.values())
+        {
+            if let Some(cg) = chain.as_ref() {
+                let params = cg.live_node_params(effect_id);
+                if !params.is_empty() {
+                    return params;
+                }
+            }
+        }
+        Vec::new()
+    }
+
     fn set_dump_request(&mut self, effect_id: Option<EffectId>) {
         self.dump_request = effect_id;
     }

@@ -185,6 +185,11 @@ impl PortView {
 #[derive(Debug, Clone)]
 struct NodeView {
     id: u32,
+    /// Stable [`manifold_core::NodeId`] of this node — the addressing identity
+    /// that survives grouping. Empty for anonymous boundary nodes. Used to match
+    /// the per-frame live param tap (`ContentState::live_node_params`, keyed by
+    /// node_id) onto this view so on-face values reflect live modulation.
+    node_id: manifold_core::NodeId,
     /// Stable string handle from the def, if any (`None` for boundary /
     /// anonymous nodes). Used to mint a collision-free handle when this
     /// node's level gets a new group, and by Ctrl+G's payload.
@@ -305,6 +310,11 @@ struct ParamView {
     /// `SetGraphNodeParam`.
     name: String,
     label: String,
+    /// Snapshot kind + declared range, retained so a per-frame live value
+    /// ([`GraphCanvas::apply_live_values`]) can reformat the value string and
+    /// fill bar exactly as the structural snapshot did, without re-snapshotting.
+    kind: manifold_renderer::node_graph::ParamSnapshotKind,
+    range: Option<(f32, f32)>,
     value: String,
     /// `Some(0..1)` position of the current value within its declared
     /// range, for the fill bar. `None` for params with no numeric range
@@ -338,59 +348,99 @@ struct ScrubInfo {
 /// (degrees for angles, Hz for frequencies, enum labels, On/Off).
 fn format_param_for_node(p: &manifold_renderer::node_graph::ParamSnapshot) -> ParamView {
     use manifold_renderer::node_graph::ParamSnapshotKind;
-    let value = match p.kind {
-        ParamSnapshotKind::Enum => p
-            .enum_labels
-            .as_ref()
-            .and_then(|labels| labels.get(p.current_value as usize).cloned())
-            .unwrap_or_else(|| format!("{}", p.current_value as i64)),
-        ParamSnapshotKind::Bool => {
-            if p.current_value >= 0.5 { "On" } else { "Off" }.to_string()
+    // Numeric / bool kinds share their formatting + fill with the per-frame
+    // live-value path; enum / trigger / other are display-only here.
+    let (value, fill) = match numeric_value_fill(p.kind, p.current_value, p.range) {
+        Some(vf) => vf,
+        None => {
+            let v = match p.kind {
+                ParamSnapshotKind::Enum => p
+                    .enum_labels
+                    .as_ref()
+                    .and_then(|labels| labels.get(p.current_value as usize).cloned())
+                    .unwrap_or_else(|| format!("{}", p.current_value as i64)),
+                ParamSnapshotKind::Trigger => format!("{}", p.current_value as i64),
+                ParamSnapshotKind::Other => {
+                    p.summary.clone().unwrap_or_else(|| "—".to_string())
+                }
+                // Numeric/bool kinds are handled by numeric_value_fill above.
+                _ => String::new(),
+            };
+            (v, None)
         }
-        ParamSnapshotKind::Int => format!("{}", p.current_value as i64),
-        ParamSnapshotKind::Float => format!("{:.2}", p.current_value),
-        // Stored radians, shown as degrees (see ParamType::Angle).
-        ParamSnapshotKind::Angle => format!("{:.0}°", p.current_value.to_degrees()),
-        // Stored rad/s, shown as Hz (see ParamType::Frequency).
-        ParamSnapshotKind::Frequency => {
-            format!("{:.2} Hz", p.current_value / std::f32::consts::TAU)
-        }
-        ParamSnapshotKind::Trigger => format!("{}", p.current_value as i64),
-        ParamSnapshotKind::Other => p.summary.clone().unwrap_or_else(|| "—".to_string()),
     };
-    let fill = match p.kind {
-        ParamSnapshotKind::Float
-        | ParamSnapshotKind::Angle
-        | ParamSnapshotKind::Frequency
-        | ParamSnapshotKind::Int => p.range.map(|(lo, hi)| {
-            if hi > lo {
-                ((p.current_value - lo) / (hi - lo)).clamp(0.0, 1.0)
-            } else {
-                0.0
-            }
-        }),
-        _ => None,
-    };
-    let scrub = match p.kind {
-        ParamSnapshotKind::Float
-        | ParamSnapshotKind::Angle
-        | ParamSnapshotKind::Frequency
-        | ParamSnapshotKind::Int => p.range.map(|(lo, hi)| ScrubInfo {
-            range: (lo, hi),
-            current_value: p.current_value,
-            is_int: matches!(p.kind, ParamSnapshotKind::Int),
-        }),
-        _ => None,
-    };
+    let scrub = scrub_for(p.kind, p.current_value, p.range);
     ParamView {
         name: p.name.clone(),
         label: p.label.clone(),
+        kind: p.kind,
+        range: p.range,
         value,
         fill,
         scrub,
         // Resolved by the caller that knows the owning node's type_id;
         // this formatter only sees the param snapshot.
         tooltip: None,
+    }
+}
+
+/// Format the value string + fill fraction for the param kinds the on-node face
+/// can render and the live tap can drive: continuous numerics (Float / Angle /
+/// Frequency / Int) and bools. `None` for kinds whose display needs more than a
+/// scalar (enum labels, trigger, multi-component "Other"). The single source of
+/// truth for both the structural snapshot ([`format_param_for_node`]) and the
+/// per-frame live refresh ([`GraphCanvas::apply_live_values`]), so a frozen and
+/// a modulated value format identically.
+fn numeric_value_fill(
+    kind: manifold_renderer::node_graph::ParamSnapshotKind,
+    value: f32,
+    range: Option<(f32, f32)>,
+) -> Option<(String, Option<f32>)> {
+    use manifold_renderer::node_graph::ParamSnapshotKind;
+    let s = match kind {
+        ParamSnapshotKind::Float => format!("{value:.2}"),
+        // Stored radians, shown as degrees (see ParamType::Angle).
+        ParamSnapshotKind::Angle => format!("{:.0}°", value.to_degrees()),
+        // Stored rad/s, shown as Hz (see ParamType::Frequency).
+        ParamSnapshotKind::Frequency => format!("{:.2} Hz", value / std::f32::consts::TAU),
+        ParamSnapshotKind::Int => format!("{}", value as i64),
+        ParamSnapshotKind::Bool => if value >= 0.5 { "On" } else { "Off" }.to_string(),
+        _ => return None,
+    };
+    let fill = match kind {
+        ParamSnapshotKind::Float
+        | ParamSnapshotKind::Angle
+        | ParamSnapshotKind::Frequency
+        | ParamSnapshotKind::Int => range.map(|(lo, hi)| {
+            if hi > lo {
+                ((value - lo) / (hi - lo)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        }),
+        _ => None,
+    };
+    Some((s, fill))
+}
+
+/// Scrub metadata for the draggable numeric kinds (Float / Angle / Frequency /
+/// Int) that declared a range. `None` otherwise.
+fn scrub_for(
+    kind: manifold_renderer::node_graph::ParamSnapshotKind,
+    value: f32,
+    range: Option<(f32, f32)>,
+) -> Option<ScrubInfo> {
+    use manifold_renderer::node_graph::ParamSnapshotKind;
+    match kind {
+        ParamSnapshotKind::Float
+        | ParamSnapshotKind::Angle
+        | ParamSnapshotKind::Frequency
+        | ParamSnapshotKind::Int => range.map(|(lo, hi)| ScrubInfo {
+            range: (lo, hi),
+            current_value: value,
+            is_int: matches!(kind, ParamSnapshotKind::Int),
+        }),
+        _ => None,
     }
 }
 
@@ -1038,6 +1088,7 @@ impl GraphCanvas {
             .iter()
             .map(|n| NodeView {
                 id: n.id,
+                node_id: n.node_id.clone(),
                 handle: n.node_handle.clone(),
                 title: n.title.clone(),
                 params: n
@@ -1142,6 +1193,65 @@ impl GraphCanvas {
                 scope_path: self.scope.clone(),
                 positions,
             });
+        }
+    }
+
+    /// Overlay this frame's live (post-modulation) param values onto the node
+    /// faces. The structural snapshot ([`Self::set_snapshot`]) only rebuilds on
+    /// a `graph_version` bump, so a driver / Ableton / envelope / card slider
+    /// moving a knob never reached the canvas — this closes that gap by
+    /// refreshing each on-face value string, fill bar, and scrub anchor every
+    /// frame from `ContentState::live_node_params`, matched by stable `NodeId`.
+    ///
+    /// Only continuous-numeric and bool params are touched (enums, triggers, and
+    /// multi-component params keep their snapshot display, which an edit already
+    /// refreshes via `graph_version`). The param the user is actively scrubbing
+    /// is skipped so the live feed never fights a drag. No-op when `live` is
+    /// empty (no editor watching), so the closed-editor path pays nothing.
+    pub fn apply_live_values(&mut self, live: &manifold_renderer::node_graph::LiveNodeParams) {
+        if live.is_empty() {
+            return;
+        }
+        let by_id: ahash::AHashMap<&manifold_core::NodeId, &Vec<(&'static str, f32)>> =
+            live.iter().map(|(id, vals)| (id, vals)).collect();
+        // The param the user is mid-scrub on stays the source of truth until
+        // release; cloned so the per-node mutable walk below has no live borrow
+        // of `self.drag_mode`.
+        let scrubbing: Option<(u32, String)> = match &self.drag_mode {
+            DragMode::ParamScrub {
+                node_id,
+                param_name,
+                ..
+            } => Some((*node_id, param_name.clone())),
+            _ => None,
+        };
+        for node in &mut self.nodes {
+            if node.node_id.is_empty() {
+                continue;
+            }
+            let Some(vals) = by_id.get(&node.node_id) else {
+                continue;
+            };
+            let node_id = node.id;
+            for pv in &mut node.params {
+                if scrubbing
+                    .as_ref()
+                    .is_some_and(|(sn, sp)| *sn == node_id && sp.as_str() == pv.name)
+                {
+                    continue;
+                }
+                let Some(&(_, value)) = vals.iter().find(|(name, _)| *name == pv.name) else {
+                    continue;
+                };
+                let Some((value_str, fill)) = numeric_value_fill(pv.kind, value, pv.range) else {
+                    continue;
+                };
+                pv.value = value_str;
+                pv.fill = fill;
+                if let Some(scrub) = pv.scrub.as_mut() {
+                    scrub.current_value = value;
+                }
+            }
         }
     }
 
@@ -3112,5 +3222,91 @@ mod tests {
         let p_in = y[1] + off; // node1 input port
         assert!((p_out - p_mid).abs() < 0.01, "out {p_out} mid {p_mid}");
         assert!((p_in - p_mid).abs() < 0.01, "in {p_in} mid {p_mid}");
+    }
+
+    // ── Live values overlay ─────────────────────────────────────────
+
+    /// A Float param snapshot over `[0, 1]`, current value `current`.
+    fn float_param(name: &str, current: f32) -> manifold_renderer::node_graph::ParamSnapshot {
+        manifold_renderer::node_graph::ParamSnapshot {
+            name: name.to_string(),
+            label: name.to_string(),
+            kind: manifold_renderer::node_graph::ParamSnapshotKind::Float,
+            default_value: 0.0,
+            current_value: current,
+            range: Some((0.0, 1.0)),
+            enum_labels: None,
+            exposed: false,
+            summary: None,
+        }
+    }
+
+    /// One plain node (`id == 1`, given handle so its `node_id` is set) carrying
+    /// `params`, wrapped in a root snapshot.
+    fn snapshot_with_param_node(
+        handle: &str,
+        params: Vec<manifold_renderer::node_graph::ParamSnapshot>,
+    ) -> GraphSnapshot {
+        let mut n = node(1, "node.gain", Some(handle));
+        n.parameters = params;
+        GraphSnapshot {
+            nodes: vec![n],
+            wires: Vec::new(),
+            outer_routings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn apply_live_values_refreshes_on_face_value_and_fill() {
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.25)]));
+        // The frozen snapshot value formats to 0.25.
+        assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
+
+        // A live value of 0.80 overlays the frozen value, refreshing the string,
+        // the fill bar, and the scrub anchor — matched by stable node_id.
+        let live = vec![(manifold_core::NodeId::new("gain"), vec![("amount", 0.8_f32)])];
+        canvas.apply_live_values(&live);
+        let pv = &canvas.find_node(1).unwrap().params[0];
+        assert_eq!(pv.value, "0.80");
+        assert!((pv.fill.unwrap() - 0.8).abs() < 1e-3);
+        assert!((pv.scrub.unwrap().current_value - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_live_values_skips_the_actively_scrubbed_param() {
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.25)]));
+        // Mid-scrub on this exact (node, param): the drag stays the source of
+        // truth, so the live feed must not overwrite it.
+        canvas.drag_mode = DragMode::ParamScrub {
+            node_id: 1,
+            param_name: "amount".to_string(),
+            range: (0.0, 1.0),
+            start_value: 0.25,
+            is_int: false,
+            press_origin_x: 0.0,
+        };
+        let live = vec![(manifold_core::NodeId::new("gain"), vec![("amount", 0.8_f32)])];
+        canvas.apply_live_values(&live);
+        assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
+    }
+
+    #[test]
+    fn apply_live_values_empty_feed_is_a_noop() {
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.25)]));
+        canvas.apply_live_values(&Vec::new());
+        assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
+    }
+
+    #[test]
+    fn apply_live_values_ignores_unmatched_node_ids() {
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.25)]));
+        // A live entry for a different node leaves this one untouched.
+        let live = vec![(manifold_core::NodeId::new("other"), vec![("amount", 0.8_f32)])];
+        canvas.apply_live_values(&live);
+        assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
     }
 }

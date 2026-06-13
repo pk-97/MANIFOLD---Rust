@@ -491,6 +491,11 @@ impl Application {
             self.content_state.active_graph_snapshot.as_ref(),
         ) {
             canvas.set_snapshot(snap);
+            // Overlay this frame's live (modulated) node values on top of the
+            // just-pushed structural snapshot, so a driver / Ableton / envelope /
+            // card slider is seen moving each knob on the node face. Empty (and a
+            // no-op) whenever no editor is watching the content side.
+            canvas.apply_live_values(&self.content_state.live_node_params);
             // Tell the canvas whether the watched effect is diverged
             // from its bundled preset so the "Reset to Default" pill
             // appears in the header only when there's something to

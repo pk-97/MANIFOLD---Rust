@@ -257,6 +257,12 @@ pub struct ContentPipeline {
     /// Pulled into [`ContentState`](crate::content_state::ContentState) each
     /// frame so the editor can show a value inspector for non-image nodes.
     last_node_preview_info: Option<crate::content_state::NodePreviewInfo>,
+    /// Live (post-modulation) scalar param values for every node of the watched
+    /// effect/generator this frame, keyed by stable `NodeId`. Pulled into
+    /// [`ContentState`](crate::content_state::ContentState) so the editor canvas
+    /// shows values that move under a card slider / driver / Ableton / envelope
+    /// instead of the frozen authoring def. Empty whenever no editor is watching.
+    last_live_node_params: manifold_renderer::node_graph::LiveNodeParams,
     /// Layer indices occluded this frame by a fully-opaque layer above them
     /// (opaque blend at full opacity replaces every pixel, so nothing below
     /// it can contribute). Occlusion elides ONLY the final blend dispatches
@@ -328,6 +334,7 @@ impl ContentPipeline {
             node_preview_request: None,
             node_preview_generator: None,
             last_node_preview_info: None,
+            last_live_node_params: Vec::new(),
             occluded_layers_scratch: Vec::new(),
             pending_graph_dump: None,
             #[cfg(target_os = "macos")]
@@ -912,6 +919,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Reset the node-preview inspector info; the active preview path below
         // repopulates it for this frame.
         self.last_node_preview_info = None;
+        // Reset the editor canvas's live node-param values; the watched effect
+        // or generator path below repopulates them post-render so the canvas
+        // shows live (modulated) values, not the frozen authoring def. Stays
+        // empty whenever no editor is watching — zero cost on the closed path.
+        self.last_live_node_params.clear();
         let texture_pool = self.texture_pool.as_ref();
 
         // Split borrow: get renderers + project from engine simultaneously.
@@ -1027,6 +1039,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 }
             }
             gen_enc.commit();
+        }
+        // Tap the watched generator's live node-param values for the editor
+        // canvas (post-render, so card / driver / Ableton / envelope writes are
+        // already applied). Re-find the renderer here so the `node_preview_generator`
+        // borrow from the capture block above is released. Cloning the LayerId is
+        // an Arc bump. Only the watched layer is queried.
+        if let Some((layer_id, _)) = self.node_preview_generator.clone()
+            && let Some(gen_r) = renderers
+                .iter()
+                .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>())
+        {
+            self.last_live_node_params = gen_r.live_node_params(&layer_id);
         }
         let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -1243,6 +1267,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     inputs,
                     outputs,
                 });
+            }
+            // Live node-param values for the watched effect's canvas — collected
+            // whenever an effect is watched, with or without a selected node, so
+            // every on-face value reflects this frame's modulation. The
+            // compositor resolves the watched effect from its own preview request.
+            if self.node_preview_request.is_some() {
+                self.last_live_node_params = self.compositor.live_node_params();
             }
             if let Some(node_tex) = self.compositor.preview_texture() {
                 let encoding = self.compositor.preview_encoding();
@@ -1682,6 +1713,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     /// editor's value inspector. `None` when no node is being previewed.
     pub fn node_preview_info(&self) -> Option<crate::content_state::NodePreviewInfo> {
         self.last_node_preview_info.clone()
+    }
+
+    /// Live (post-modulation) scalar param values for the watched effect/generator
+    /// from the most recent render, keyed by stable `NodeId`. Empty when no editor
+    /// is watching. The editor canvas overlays these onto its node faces so a
+    /// driver / Ableton / envelope / card slider is seen moving the knob.
+    pub fn live_node_params(&self) -> manifold_renderer::node_graph::LiveNodeParams {
+        self.last_live_node_params.clone()
     }
 
     /// Clean up per-owner effect state for stopped clips.

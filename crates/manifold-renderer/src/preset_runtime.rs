@@ -2177,6 +2177,58 @@ impl PresetRuntime {
         )
     }
 
+    /// Live (post-binding-apply, post-modulation) scalar param values for every
+    /// node of `effect_id`, keyed by stable [`NodeId`]. Lets the editor canvas
+    /// reflect what a card slider / driver / Ableton / envelope is doing to each
+    /// inner knob *this frame*, instead of the frozen authoring def that the
+    /// structural `from_def` snapshot carries (it only rebuilds on `graph_version`,
+    /// so modulation never moved it). Card bindings apply via
+    /// [`BoundGraph::apply`](crate::node_graph::BoundGraph) → `graph.set_param`,
+    /// which writes the reshaped value straight into the node's param map, so
+    /// reading it back here is exactly what the executor just ran with. Empty
+    /// when this chain doesn't hold `effect_id`. Cheap: param names are
+    /// `&'static`, so only the small `Vec`s allocate per frame.
+    pub fn live_node_params(&self, effect_id: &EffectId) -> crate::node_graph::LiveNodeParams {
+        let Some(slot) = self.effect_nodes.iter().find(|s| &s.effect_id == effect_id) else {
+            return Vec::new();
+        };
+        slot.node_map
+            .iter()
+            .filter_map(|(node_id, inst)| {
+                let n = self.graph.get_node(*inst)?;
+                let values = n
+                    .node
+                    .parameters()
+                    .iter()
+                    .map(|pd| {
+                        let v = n
+                            .params
+                            .get(pd.name)
+                            .map(crate::node_graph::param_default_to_f32)
+                            .unwrap_or_else(|| {
+                                crate::node_graph::param_default_to_f32(&pd.default)
+                            });
+                        (pd.name, v)
+                    })
+                    .collect();
+                Some((node_id.clone(), values))
+            })
+            .collect()
+    }
+
+    /// Generator convenience: a generator runtime holds exactly one effect (the
+    /// whole generator), so its live params are [`Self::live_node_params`] for
+    /// that single slot. Empty for an effect-chain runtime with no slots.
+    pub fn live_node_params_watched(&self) -> crate::node_graph::LiveNodeParams {
+        match self.effect_nodes.first() {
+            Some(slot) => {
+                let eid = slot.effect_id.clone();
+                self.live_node_params(&eid)
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// Clear any preview capture on this chain. Called each frame for chains
     /// that don't hold the watched effect so a stale target doesn't keep a
     /// texture pinned.

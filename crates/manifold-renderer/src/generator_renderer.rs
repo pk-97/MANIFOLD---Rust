@@ -211,6 +211,18 @@ impl GeneratorRenderer {
             .unwrap_or_default()
     }
 
+    /// Live (post-modulation) scalar param values for every node of the watched
+    /// generator on `layer_id`, keyed by stable [`NodeId`] — so the editor
+    /// canvas reflects what a card slider / driver / Ableton / envelope is doing
+    /// to each inner knob this frame, not the frozen authoring def. Empty if the
+    /// layer has no generator.
+    pub fn live_node_params(&self, layer_id: &LayerId) -> crate::node_graph::LiveNodeParams {
+        self.layer_generators
+            .get(layer_id)
+            .map(|s| s.generator.live_node_params_watched())
+            .unwrap_or_default()
+    }
+
     pub fn set_device(&mut self, device: &GpuDevice) {
         self.device_ptr = device as *const GpuDevice;
     }

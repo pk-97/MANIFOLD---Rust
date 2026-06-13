@@ -34,6 +34,16 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 /// previewed node has no image output.
 pub type PreviewScalarIo = (Vec<(String, f32)>, Vec<(String, f32)>);
 
+/// Live (post-binding-apply, post-modulation) scalar param values for every
+/// node of the watched effect/generator this frame, keyed by stable
+/// [`NodeId`]. Each node carries `(param_name, value)` pairs read straight off
+/// the running graph, so the editor canvas can show what a driver / Ableton /
+/// envelope / card slider is *actually* doing to each knob this frame instead
+/// of the frozen authoring default. Param names are `&'static` (they come from
+/// the primitive's `ParamDef`), so the per-frame tap allocates only the small
+/// outer/inner `Vec`s, never the strings. Empty when nothing is watched.
+pub type LiveNodeParams = Vec<(NodeId, Vec<(&'static str, f32)>)>;
+
 /// How the node-output preview should render a captured texture. Six fixed
 /// encodings cover the data the graph actually carries; anything unclassified
 /// falls to [`PreviewEncoding::ScalarLift`], which keeps blacks black and lifts

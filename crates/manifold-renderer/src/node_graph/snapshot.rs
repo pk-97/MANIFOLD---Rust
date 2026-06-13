@@ -786,7 +786,11 @@ fn param_snapshot_kind(ty: ParamType) -> ParamSnapshotKind {
 /// becomes 0.0/1.0, Int/Enum cast to f32, multi-component types
 /// collapse to 0.0 (their snapshot kind is `Other` and they're not
 /// user-exposable, so the value is unused).
-fn param_default_to_f32(value: &ParamValue) -> f32 {
+///
+/// `pub(crate)` so the live-value tap ([`crate::preset_runtime::PresetRuntime::live_node_params`])
+/// can reuse the exact same flattening the structural snapshot uses, keeping the
+/// editor canvas's frozen and live values byte-identical in formatting.
+pub(crate) fn param_default_to_f32(value: &ParamValue) -> f32 {
     match value {
         ParamValue::Float(f) => *f,
         ParamValue::Bool(b) => {

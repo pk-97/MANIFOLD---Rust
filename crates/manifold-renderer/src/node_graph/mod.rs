@@ -98,7 +98,7 @@ pub use ports::{
     std430_stride, std430_stride_and_align,
 };
 pub use descriptor::{Category, NodeDescriptor, Role, descriptor_for};
-pub use preview_encoding::{PreviewEncoding, PreviewScalarIo};
+pub use preview_encoding::{LiveNodeParams, PreviewEncoding, PreviewScalarIo};
 pub use param_doc::{ParamDoc, tooltip_for};
 pub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};
 pub use snapshot::{
@@ -106,6 +106,9 @@ pub use snapshot::{
     OuterParamSource, ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot,
     WireSnapshot,
 };
+/// Crate-internal: the `ParamValue → f32` flattening the live-value tap shares
+/// with the structural snapshot, so frozen and live values format identically.
+pub(crate) use snapshot::param_default_to_f32;
 pub use state_store::{NodeState, OwnerKey, StateStore};
 pub use validation::{
     ChannelMismatchInfo, ChannelMismatchReason, GraphError, TextureChannelMismatchInfo,

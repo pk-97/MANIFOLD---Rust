@@ -154,6 +154,15 @@ pub struct ContentState {
     /// Live node-output preview state for the editor's value inspector. `None`
     /// when no node is being previewed. See [`NodePreviewInfo`].
     pub node_preview_info: Option<NodePreviewInfo>,
+
+    /// Live (post-modulation) scalar param values for every node of the watched
+    /// effect/generator this frame, keyed by stable `NodeId`. The editor canvas
+    /// overlays these onto its node faces so a driver / Ableton / envelope / card
+    /// slider is *seen* moving the knob, instead of the frozen authoring def the
+    /// `graph_version`-cached `active_graph_snapshot` carries. Empty whenever no
+    /// editor is watching. Param names are `&'static`, so this allocates only the
+    /// small per-node `Vec`s.
+    pub live_node_params: manifold_renderer::node_graph::LiveNodeParams,
 }
 
 /// Lightweight snapshot of modulated param values.
@@ -390,6 +399,7 @@ impl Default for ContentState {
             modulation_snapshot: None,
             active_graph_snapshot: None,
             node_preview_info: None,
+            live_node_params: Vec::new(),
         }
     }
 }

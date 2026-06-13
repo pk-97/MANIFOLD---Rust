@@ -148,6 +148,16 @@ pub trait Compositor: Send {
         (Vec::new(), Vec::new())
     }
 
+    /// Live (post-modulation) scalar param values for every node of the watched
+    /// effect this frame, keyed by stable [`NodeId`] — so the editor canvas can
+    /// show values that move under a card slider / driver / Ableton / envelope,
+    /// not the frozen authoring def. Walks the watched chain set internally
+    /// (the watched effect id comes from the active preview request). Default
+    /// empty for compositors without effect chains.
+    fn live_node_params(&self) -> crate::node_graph::LiveNodeParams {
+        Vec::new()
+    }
+
     /// Request a one-shot "dump every output" of effect `effect_id` on the next
     /// `render`, or clear it. Default no-op. See [`Self::dump_textures`].
     fn set_dump_request(&mut self, _effect_id: Option<EffectId>) {}
