@@ -365,5 +365,13 @@ no new executor multi-capture and no new `UIRenderer` primitive were needed. Wha
 Compiles + clippy clean; `visible_node_thumbnails` geometry is unit-tested. **Visual QA the
 next run can confirm/tune** (only checkable with the app running): thumbnail placement fills
 the body below the header and may overlap on-face param text; cells are raw blits, so non-colour
-outputs (depth/normal/scalar) read dark — per-encoding "smart" thumbnails are a later pass; and
-generators have no thumbnails in v1 (dump is effect-watched only — the one parity follow-up).
+outputs (depth/normal/scalar) read dark — per-encoding "smart" thumbnails are a later pass.
+
+**Effect/generator parity (aebf2cf5).** The first cut shipped effect-only because the
+executor's dump was only exposed on the `Compositor` (effect) side; the generator
+`PresetRuntime` has the same `set_dump_all` / `dump_textures_all` but no passthrough.
+`GeneratorRenderer` gained `set_dump` / `dump_textures`, and `content_pipeline` packs a watched
+generator's dump into the same atlas in the generator capture block (the effect block is now
+gated on a watched effect so it can't clobber the generator's layout). Exactly one of
+effect/generator fills the atlas per frame — they're mutually exclusive. The editor now behaves
+identically for both (`feedback_graph_editor_unified_surface` / `feedback_effect_generator_binding_parity`).
