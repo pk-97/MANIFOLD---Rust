@@ -342,37 +342,28 @@ graphs (no fork — `feedback_graph_editor_unified_surface`). New unit tests cov
 `SetWgslSourceCommand` round-trip and the panel's Table/String cell emits; focused suites and
 the standard clippy gate are green.
 
-### Still genuinely pixels-in-hand (one item)
+### Per-node image-thumbnail atlas (§3) — SHIPPED (8a749247), visual QA pending
 
-- **Per-node image-thumbnail atlas (§3).** This is the one deferral that is NOT just
-  text-input plumbing, and after a concrete feasibility pass it stays deferred — building it
-  blind would risk the live render path for a feature whose correctness is only verifiable
-  visually. The evidence:
-  - The canvas's `UIRenderer` (`manifold-renderer/src/ui_renderer.rs`) exposes only
-    `draw_rect` / `draw_line` / `draw_text` — there is **no textured-quad / image draw
-    primitive**. Per-node thumbnails on the canvas need a brand-new textured-quad GPU pipeline
-    in the UI renderer (pipeline + vertex format + sampler + batching), which is itself a
-    GPU feature whose output is only verifiable by eye.
-  - The capture half runs inside the content-thread executor each (throttled) frame — N node
-    outputs blitted into one atlas texture, bridged once via `SharedTextureBridge`. A bug
-    there (texture leak, fence stall, panic) degrades or kills a live show.
-  - Correctness — right node → right atlas cell → right canvas quad, correct encoding, no
-    flicker — cannot be unit-tested; it needs the running app.
-  - The single-node preview pane already lets the user inspect any node's output by selecting
-    it, so the atlas is a scale/ergonomics enhancement, not a functional gap. Partial
-    scaffolding would also violate the no-stopgap rule (`feedback_no_silent_fallbacks_or_interim_stopgaps`).
+Built after all. The feasibility trace turned up a simpler path than the earlier plan
+assumed: the executor already has a **dump mode** (`set_dump_request` / `dump_textures`, the
+same capture Cmd+D uses) that keeps every watched-effect node output alive for one frame — so
+no new executor multi-capture and no new `UIRenderer` primitive were needed. What landed:
 
-  **Implementation plan for the pixels-in-hand session** (so it is fast when it happens):
-  1. `UIRenderer`: add `draw_textured_quad(rect, atlas_texture, uv_rect, tint)` — a Metal
-     pipeline sampling a bound atlas with a per-quad UV sub-rect, batched like `draw_rect`.
-  2. Content thread: after the watched graph executes, for each visible node (UI sends the
-     visible `NodeId` set + desired thumb size, throttled ~10 fps), blit its output texture
-     through the existing per-encoding preview pipelines into a packed atlas texture (grid
-     pack, e.g. 8×8 of 64² for ≤64 nodes). Reuse the single-node `*_pipeline` blits.
-  3. Bridge the atlas with one `SharedTextureBridge` (triple-buffered, same pattern as the
-     node-preview pane).
-  4. Canvas `draw_node`: compute each node's atlas UV cell and emit a `draw_textured_quad`
-     into the node body. Fall back to the current solid header when a node has no captured
-     thumb yet.
-  5. Verify on the Liveschool fixture: no perform-path regression, thumbnails track the live
-     output, throttle holds frame time.
+- **Content** (`content_pipeline`): while the atlas is enabled, dump mode captures every
+  watched-effect node output; each is blitted into a cell of one `ATLAS_GRID`×`ATLAS_GRID`
+  atlas texture (`draw_fullscreen_viewport` per cell, Load after one clear). The
+  `(node_id, cell)` layout + the atlas `SharedTextureBridge` are published like the single-node
+  preview.
+- **Plumbing**: `ContentState::node_atlas_layout` carries the layout to the UI;
+  `ContentCommand::SetNodeAtlasEnabled` toggles capture — sent on editor open, cleared on
+  close, so **a live show pays nothing** (authoring-only, the same gate the brief wanted).
+- **UI** (`app`): allocates the atlas bridge + a `node_thumb_pipeline` whose fragment samples
+  one cell (UV sub-rect via an inline `Bytes` uniform — no UIRenderer change).
+- **Present pass** (`app_render`): for each visible canvas node with a layout cell, blits its
+  atlas cell into the node body. `GraphCanvas::visible_node_thumbnails` gives the body rects.
+
+Compiles + clippy clean; `visible_node_thumbnails` geometry is unit-tested. **Visual QA the
+next run can confirm/tune** (only checkable with the app running): thumbnail placement fills
+the body below the header and may overlap on-face param text; cells are raw blits, so non-colour
+outputs (depth/normal/scalar) read dark — per-encoding "smart" thumbnails are a later pass; and
+generators have no thumbnails in v1 (dump is effect-watched only — the one parity follow-up).
