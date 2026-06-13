@@ -174,13 +174,21 @@ pub struct ParamSnapshot {
     /// `Table` — rendered as `"6×5"` in the inspector). `None` for
     /// numeric params, which render `current_value` instead.
     pub summary: Option<String>,
+    /// The live multi-component value for `Color` / `Vec2` / `Vec3` / `Vec4`
+    /// kinds, in RGBA / XYZW order (`Vec2`/`Vec3` zero-pad the unused tail).
+    /// `None` for scalar kinds, whose value is `current_value`. Lets the
+    /// inspector render a colour swatch / per-component editor — `current_value`
+    /// flattens these to 0.0 and so can't carry them.
+    pub vec_value: Option<[f32; 4]>,
 }
 
 /// Coarse-grained variant of `ParamType` — the user-exposed-param
 /// surface only needs to know "is it a float / int / bool / enum"
-/// to pick the right `ParamConvert` at expose time. Vec2/Vec3/
-/// Vec4/Color are not user-exposable in the V2 surface (they need
-/// multi-slot routing) and are flagged so the panel can skip them.
+/// to pick the right `ParamConvert` at expose time, plus the
+/// multi-component kinds (`Color` / `Vec2` / `Vec3` / `Vec4`) so the
+/// inspector can render a swatch / per-component editor. The multi-component
+/// kinds are still not single-slot card-exposable (a macro slot is one
+/// `f32`), but they ARE editable inline via `ParamSnapshot::vec_value`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamSnapshotKind {
     Float,
@@ -199,8 +207,17 @@ pub enum ParamSnapshotKind {
     /// `manifold-renderer/.../parameters.rs` for the storage / cold-start
     /// contract; the outer-card click handler increments by one per press.
     Trigger,
-    /// Multi-component types (Vec2/Vec3/Vec4/Color) — not exposable
-    /// in the V2 user surface.
+    /// RGBA colour. Editable via a swatch + R/G/B/A channel sliders; its live
+    /// value is carried in `ParamSnapshot::vec_value`.
+    Color,
+    /// 2-component vector (e.g. a UV point). Editable via X/Y channel sliders.
+    Vec2,
+    /// 3-component vector (e.g. a direction). Editable via X/Y/Z sliders.
+    Vec3,
+    /// 4-component vector. Editable via X/Y/Z/W sliders.
+    Vec4,
+    /// Remaining multi-slot / structured types (Table, String) — not yet given
+    /// a dedicated inline editor; shown via `summary`.
     Other,
 }
 
@@ -409,6 +426,7 @@ impl GraphSnapshot {
                             },
                             exposed: inst.exposed_params.contains(pd.name),
                             summary,
+                            vec_value: param_vec_value(&current),
                         }
                     })
                     .collect();
@@ -709,6 +727,7 @@ fn node_snapshot_from_constructed(
                 },
                 exposed: exposed.contains(pd.name),
                 summary,
+                vec_value: param_vec_value(&current),
             }
         })
         .collect();
@@ -778,7 +797,24 @@ fn param_snapshot_kind(ty: ParamType) -> ParamSnapshotKind {
         ParamType::Bool => ParamSnapshotKind::Bool,
         ParamType::Enum => ParamSnapshotKind::Enum,
         ParamType::Trigger => ParamSnapshotKind::Trigger,
-        _ => ParamSnapshotKind::Other,
+        ParamType::Color => ParamSnapshotKind::Color,
+        ParamType::Vec2 => ParamSnapshotKind::Vec2,
+        ParamType::Vec3 => ParamSnapshotKind::Vec3,
+        ParamType::Vec4 => ParamSnapshotKind::Vec4,
+        // Table / String have no dedicated inline editor yet.
+        ParamType::Table | ParamType::String => ParamSnapshotKind::Other,
+    }
+}
+
+/// Extract the multi-component value of a `Color` / `Vec` param as RGBA / XYZW,
+/// zero-padding the unused tail. `None` for scalar / structured values, which
+/// carry their value in `current_value` or `summary` instead.
+fn param_vec_value(value: &ParamValue) -> Option<[f32; 4]> {
+    match value {
+        ParamValue::Color(c) | ParamValue::Vec4(c) => Some(*c),
+        ParamValue::Vec3(c) => Some([c[0], c[1], c[2], 0.0]),
+        ParamValue::Vec2(c) => Some([c[0], c[1], 0.0, 0.0]),
+        _ => None,
     }
 }
 

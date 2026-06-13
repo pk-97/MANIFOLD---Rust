@@ -60,9 +60,43 @@ pub enum GraphEditorParamKind {
     /// Momentary "fire once" button. Renders as a click-once button on
     /// the outer card; click handler increments storage by one.
     Trigger,
-    /// Multi-component types — shown as a disabled row, not exposable
-    /// in the V2 single-slot user surface.
+    /// RGBA colour. Rendered as a swatch plus R/G/B/A channel sliders that scrub
+    /// in place; the live value is carried in [`GraphEditorParam::vec_value`].
+    /// Not single-slot card-exposable (a macro slot is one `f32`), but editable.
+    Color,
+    /// 2/3/4-component vector. Rendered as per-component (X/Y/Z/W) sliders that
+    /// scrub in place, carried in [`GraphEditorParam::vec_value`]. Editable but
+    /// not single-slot card-exposable.
+    Vec2,
+    Vec3,
+    Vec4,
+    /// Remaining structured types (Table, String) with no dedicated inline
+    /// editor yet — shown as a disabled row.
     Other,
+}
+
+impl GraphEditorParamKind {
+    /// Component count for the multi-component (colour / vector) kinds, else 0.
+    fn vec_components(self) -> usize {
+        match self {
+            GraphEditorParamKind::Color | GraphEditorParamKind::Vec4 => 4,
+            GraphEditorParamKind::Vec3 => 3,
+            GraphEditorParamKind::Vec2 => 2,
+            _ => 0,
+        }
+    }
+
+    /// Per-channel labels for the multi-component editor (`Color` uses RGBA,
+    /// vectors use XYZW). Empty for scalar kinds.
+    fn channel_labels(self) -> &'static [&'static str] {
+        match self {
+            GraphEditorParamKind::Color => &["R", "G", "B", "A"],
+            GraphEditorParamKind::Vec2 => &["X", "Y"],
+            GraphEditorParamKind::Vec3 => &["X", "Y", "Z"],
+            GraphEditorParamKind::Vec4 => &["X", "Y", "Z", "W"],
+            _ => &[],
+        }
+    }
 }
 
 /// UI-facing description of one inner-node parameter, owned for
@@ -90,6 +124,10 @@ pub struct GraphEditorParam {
     /// `Table` — rendered as `"6×5"` in the inspector). `None` for
     /// numeric params, which render `current_value` instead.
     pub summary: Option<String>,
+    /// Live multi-component value for `Color` / `Vec2` / `Vec3` / `Vec4` kinds,
+    /// RGBA / XYZW order (`Vec2`/`Vec3` zero-pad the tail). `[0.0; 4]` for scalar
+    /// kinds, which use `current_value`. Drives the swatch + channel editor.
+    pub vec_value: [f32; 4],
 }
 
 /// UI-facing view of the currently-selected node, decoupled from the
@@ -231,6 +269,26 @@ enum RowState {
         /// local control or expose the param on the card.
         wire_driven: bool,
     },
+    /// One channel of a multi-component (`Color` / `Vec`) param's inline editor.
+    /// Each channel cell scrubs its own component; the drag rebuilds the full
+    /// value and emits a single `SetGraphNodeParam` carrying the whole
+    /// colour/vector. Click is a no-op (channels edit by drag only).
+    VecComponent {
+        value_cell_node_id: u32,
+        node_runtime_id: u32,
+        inner_param: String,
+        /// Color / Vec2 / Vec3 / Vec4 — picks the emitted `SerializedParamValue`.
+        kind: GraphEditorParamKind,
+        /// Which component (0 = R/X, 1 = G/Y, ...).
+        channel: usize,
+        /// The full current value; a drag overwrites `base[channel]` and emits
+        /// the rebuilt whole.
+        base: [f32; 4],
+        /// Scrub range for this channel (0..1 for colour; the param's declared
+        /// range or a sensible default for vectors).
+        min: f32,
+        max: f32,
+    },
 }
 
 /// In-progress drag scrub on a Float/Int value cell. Captured when
@@ -258,6 +316,23 @@ struct DragState {
     /// delta in pixels, then mapped to value-space via
     /// `DRAG_FULL_RANGE_PX`.
     press_origin_x: f32,
+    /// Multi-component context when scrubbing one channel of a `Color` / `Vec`
+    /// param: the channel index and the full base value, so each `Drag` rebuilds
+    /// the whole colour/vector and emits it as one `SetGraphNodeParam`. `None`
+    /// for a plain scalar scrub.
+    vec: Option<VecDrag>,
+}
+
+/// The colour/vector context of an in-progress channel scrub.
+#[derive(Debug, Clone, Copy)]
+struct VecDrag {
+    /// Color / Vec2 / Vec3 / Vec4 — picks the emitted `SerializedParamValue`.
+    kind: GraphEditorParamKind,
+    /// Which component this drag moves.
+    channel: usize,
+    /// The full value at press time; the dragged channel is overwritten on
+    /// each `Drag`, the rest carried through unchanged.
+    base: [f32; 4],
 }
 
 /// Pixels of horizontal drag corresponding to a full param range
@@ -503,7 +578,13 @@ impl GraphEditorPanel {
         };
 
         for ps in &node.parameters {
-            // Unsupported types — Vec/Color/etc. — show a row but
+            // Colour / vector params get a dedicated inline editor (swatch +
+            // per-channel sliders) rather than the single-cell scalar row.
+            if ps.kind.vec_components() > 0 {
+                y = self.build_vec_param(tree, bg_id, viewport, y, node.runtime_node_id, ps);
+                continue;
+            }
+            // Remaining unsupported types (Table / String) — show a row but
             // disabled. V2's single-slot surface can't carry them.
             let supported = matches!(
                 ps.kind,
@@ -647,7 +728,14 @@ impl GraphEditorPanel {
                     GraphEditorParamKind::Bool => ParamConvert::BoolThreshold,
                     GraphEditorParamKind::Enum => ParamConvert::EnumRound,
                     GraphEditorParamKind::Trigger => ParamConvert::Trigger,
-                    GraphEditorParamKind::Other => ParamConvert::Float, // unreachable
+                    // Colour / vector kinds never reach here (`supported` is
+                    // false for them — they take the build_vec_param branch),
+                    // and `Other` is the disabled fallback. Both unreachable.
+                    GraphEditorParamKind::Color
+                    | GraphEditorParamKind::Vec2
+                    | GraphEditorParamKind::Vec3
+                    | GraphEditorParamKind::Vec4
+                    | GraphEditorParamKind::Other => ParamConvert::Float,
                 };
                 let (min, max) = ps.range.unwrap_or((0.0, 1.0));
                 let static_block_slot = self
@@ -677,6 +765,136 @@ impl GraphEditorPanel {
 
             y += ROW_H;
         }
+    }
+
+    /// Build the inline editor for a `Color` / `Vec` param: a header row (a
+    /// disabled expose checkbox — colours and vectors aren't single-slot
+    /// card-exposable — the label, and for colours a live swatch), then one row
+    /// per channel with a draggable value cell. Each channel cell pushes a
+    /// [`RowState::VecComponent`] so a drag rebuilds the whole value and emits
+    /// one `SetGraphNodeParam`. Returns the y cursor past the widget.
+    fn build_vec_param(
+        &mut self,
+        tree: &mut UITree,
+        bg_id: i32,
+        viewport: Rect,
+        mut y: f32,
+        node_runtime_id: u32,
+        ps: &GraphEditorParam,
+    ) -> f32 {
+        let components = ps.kind.vec_components();
+        let labels = ps.kind.channel_labels();
+        let is_color = matches!(ps.kind, GraphEditorParamKind::Color);
+        // Channel scrub range: colours are physical 0..1; vectors take the
+        // declared range or a symmetric default covering directions and UVs.
+        let (cmin, cmax) = if is_color {
+            (0.0, 1.0)
+        } else {
+            ps.range.unwrap_or((-1.0, 1.0))
+        };
+
+        // ── Header row: disabled checkbox + label + (colour) swatch ──
+        let cb_x = viewport.x + PADDING;
+        let cb_y = y + (ROW_H - CHECKBOX_H) * 0.5;
+        tree.add_button(
+            bg_id,
+            cb_x,
+            cb_y,
+            CHECKBOX_W,
+            CHECKBOX_H,
+            checkbox_style(false, false),
+            "",
+        );
+        let label_x = cb_x + CHECKBOX_W + CHECKBOX_GAP;
+        let row_remaining = (viewport.x + viewport.width - PADDING - label_x).max(10.0);
+        let swatch_w = if is_color { ROW_H } else { 0.0 };
+        let label_w = (row_remaining - swatch_w - 6.0).max(10.0);
+        tree.add_label(
+            bg_id,
+            label_x,
+            y,
+            label_w,
+            ROW_H,
+            &ps.label,
+            UIStyle {
+                text_color: color::TEXT_WHITE_C32,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        if is_color {
+            let v = ps.vec_value;
+            let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let sw_x = viewport.x + viewport.width - PADDING - swatch_w;
+            tree.add_panel(
+                bg_id,
+                sw_x,
+                y + 3.0,
+                swatch_w,
+                ROW_H - 6.0,
+                UIStyle {
+                    bg_color: Color32::new(to_u8(v[0]), to_u8(v[1]), to_u8(v[2]), 255),
+                    corner_radius: 3.0,
+                    border_color: color::TEXT_DIMMED_C32,
+                    border_width: 1.0,
+                    ..UIStyle::default()
+                },
+            );
+        }
+        y += ROW_H;
+
+        // ── One channel row per component ──
+        for (ch, ch_label) in labels.iter().enumerate().take(components) {
+            let comp_x = viewport.x + PADDING + CHECKBOX_W + CHECKBOX_GAP;
+            tree.add_label(
+                bg_id,
+                comp_x,
+                y,
+                16.0,
+                ROW_H,
+                ch_label,
+                UIStyle {
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            let cell_x = comp_x + 20.0;
+            let cell_w = (viewport.x + viewport.width - PADDING - cell_x).max(40.0);
+            let cell_id = tree.add_button(
+                bg_id,
+                cell_x,
+                y,
+                cell_w,
+                ROW_H,
+                UIStyle {
+                    bg_color: color::BUTTON_INACTIVE_C32,
+                    hover_bg_color: color::HOVER_OVERLAY,
+                    text_color: color::TEXT_WHITE_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Right,
+                    corner_radius: 3.0,
+                    border_color: color::TEXT_DIMMED_C32,
+                    border_width: 1.0,
+                    ..UIStyle::default()
+                },
+                &format!("{:.3}", ps.vec_value[ch]),
+            );
+            self.rows.push(RowState::VecComponent {
+                value_cell_node_id: cell_id,
+                node_runtime_id,
+                inner_param: ps.name.clone(),
+                kind: ps.kind,
+                channel: ch,
+                base: ps.vec_value,
+                min: cmin,
+                max: cmax,
+            });
+            y += ROW_H;
+        }
+        y
     }
 
     /// Render the value inspector for the previewed node into the pinned
@@ -939,6 +1157,9 @@ impl GraphEditorPanel {
                         return Vec::new();
                     }
                 }
+                // Colour / vector channel cells edit by drag only; a click is a
+                // no-op (handled in handle_drag / handle_drag_begin).
+                RowState::VecComponent { .. } => {}
             }
         }
         Vec::new()
@@ -950,35 +1171,66 @@ impl GraphEditorPanel {
         // driven rows are also a no-op: the wire wins each frame,
         // so a scrub would be silently overwritten.
         for row in &self.rows {
-            if let RowState::InnerNode {
-                value_cell_node_id: Some(cell),
-                node_runtime_id,
-                kind,
-                min,
-                max,
-                current_value,
-                wire_driven,
-                ..
-            } = row
-                && *cell == node_id
-                && !*wire_driven
-                && matches!(
+            match row {
+                RowState::InnerNode {
+                    value_cell_node_id: Some(cell),
+                    node_runtime_id,
                     kind,
-                    GraphEditorParamKind::Float
-                        | GraphEditorParamKind::Angle
-                        | GraphEditorParamKind::Frequency
-                        | GraphEditorParamKind::Int
-                )
-            {
-                self.drag = Some(DragState {
-                    value_cell_node_id: node_id,
-                    node_runtime_id: *node_runtime_id,
-                    kind: *kind,
-                    range: (*min, *max),
-                    start_value: *current_value,
-                    press_origin_x: origin_x,
-                });
-                return Vec::new();
+                    min,
+                    max,
+                    current_value,
+                    wire_driven,
+                    ..
+                } if *cell == node_id
+                    && !*wire_driven
+                    && matches!(
+                        kind,
+                        GraphEditorParamKind::Float
+                            | GraphEditorParamKind::Angle
+                            | GraphEditorParamKind::Frequency
+                            | GraphEditorParamKind::Int
+                    ) =>
+                {
+                    self.drag = Some(DragState {
+                        value_cell_node_id: node_id,
+                        node_runtime_id: *node_runtime_id,
+                        kind: *kind,
+                        range: (*min, *max),
+                        start_value: *current_value,
+                        press_origin_x: origin_x,
+                        vec: None,
+                    });
+                    return Vec::new();
+                }
+                // One channel of a colour / vector editor: anchor on the channel's
+                // current value and carry the full base so each Drag rebuilds the
+                // whole value.
+                RowState::VecComponent {
+                    value_cell_node_id,
+                    node_runtime_id,
+                    kind,
+                    channel,
+                    base,
+                    min,
+                    max,
+                    ..
+                } if *value_cell_node_id == node_id => {
+                    self.drag = Some(DragState {
+                        value_cell_node_id: node_id,
+                        node_runtime_id: *node_runtime_id,
+                        kind: *kind,
+                        range: (*min, *max),
+                        start_value: base[*channel],
+                        press_origin_x: origin_x,
+                        vec: Some(VecDrag {
+                            kind: *kind,
+                            channel: *channel,
+                            base: *base,
+                        }),
+                    });
+                    return Vec::new();
+                }
+                _ => {}
             }
         }
         Vec::new()
@@ -1003,6 +1255,42 @@ impl GraphEditorPanel {
         if matches!(drag.kind, GraphEditorParamKind::Int) {
             new_v = new_v.round();
         }
+
+        // Colour / vector channel scrub: overwrite the dragged component in the
+        // base value and emit the whole colour/vector as one edit, so the other
+        // channels are carried through unchanged.
+        if let Some(vd) = drag.vec {
+            let mut full = vd.base;
+            full[vd.channel] = new_v;
+            let serialized = match vd.kind {
+                GraphEditorParamKind::Color => SerializedParamValue::Color { value: full },
+                GraphEditorParamKind::Vec4 => SerializedParamValue::Vec4 { value: full },
+                GraphEditorParamKind::Vec3 => SerializedParamValue::Vec3 {
+                    value: [full[0], full[1], full[2]],
+                },
+                GraphEditorParamKind::Vec2 => SerializedParamValue::Vec2 {
+                    value: [full[0], full[1]],
+                },
+                _ => return Vec::new(),
+            };
+            let param_name = self.rows.iter().find_map(|r| match r {
+                RowState::VecComponent {
+                    value_cell_node_id,
+                    inner_param,
+                    ..
+                } if *value_cell_node_id == node_id => Some(inner_param.clone()),
+                _ => None,
+            });
+            let Some(param_name) = param_name else {
+                return Vec::new();
+            };
+            return vec![PanelAction::SetGraphNodeParam {
+                node_id: drag.node_runtime_id,
+                param_name,
+                new_value: serialized,
+            }];
+        }
+
         // Numeric storage is `Float`-only now (Int collapsed). The `Int`
         // presentation hint still drives the rounding above; we just emit
         // the rounded value as a Float scalar.
@@ -1076,10 +1364,16 @@ fn value_cell_click_to_param(
         GraphEditorParamKind::Trigger => Some(SerializedParamValue::Float {
             value: current_value + 1.0,
         }),
+        // Float/Int edit by drag; colour/vector channels edit by drag in their
+        // own row; Other has no editor. None of these emit on a click.
         GraphEditorParamKind::Float
         | GraphEditorParamKind::Angle
         | GraphEditorParamKind::Frequency
         | GraphEditorParamKind::Int
+        | GraphEditorParamKind::Color
+        | GraphEditorParamKind::Vec2
+        | GraphEditorParamKind::Vec3
+        | GraphEditorParamKind::Vec4
         | GraphEditorParamKind::Other => None,
     }
 }
@@ -1114,6 +1408,25 @@ fn format_inner_param_value(p: &GraphEditorParam) -> String {
             format!("{:.2} Hz", p.current_value / std::f32::consts::TAU)
         }
         GraphEditorParamKind::Trigger => "▶ Fire".to_string(),
+        // Colour / vector params render via the dedicated build_vec_param editor,
+        // not this single-cell formatter; these arms are for completeness.
+        GraphEditorParamKind::Color => format!(
+            "#{:02X}{:02X}{:02X}",
+            (p.vec_value[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (p.vec_value[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (p.vec_value[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+        ),
+        GraphEditorParamKind::Vec2 => {
+            format!("{:.2}, {:.2}", p.vec_value[0], p.vec_value[1])
+        }
+        GraphEditorParamKind::Vec3 => format!(
+            "{:.2}, {:.2}, {:.2}",
+            p.vec_value[0], p.vec_value[1], p.vec_value[2]
+        ),
+        GraphEditorParamKind::Vec4 => format!(
+            "{:.2}, {:.2}, {:.2}, {:.2}",
+            p.vec_value[0], p.vec_value[1], p.vec_value[2], p.vec_value[3]
+        ),
         GraphEditorParamKind::Other => "—".to_string(),
     }
 }
@@ -1201,6 +1514,7 @@ mod tests {
                     range: Some((-1.0, 1.0)),
                     enum_labels: None,
                     summary: None,
+                    vec_value: [0.0; 4],
                 },
                 GraphEditorParam {
                     name: "scale".to_string(),
@@ -1211,6 +1525,7 @@ mod tests {
                     range: Some((0.0, 4.0)),
                     enum_labels: None,
                     summary: None,
+                    vec_value: [0.0; 4],
                 },
                 GraphEditorParam {
                     name: "color".to_string(),
@@ -1221,6 +1536,7 @@ mod tests {
                     range: None,
                     enum_labels: None,
                     summary: None,
+                    vec_value: [0.0; 4],
                 },
             ],
         }
@@ -1544,6 +1860,7 @@ mod tests {
                     range: Some((0.0, 4.0)),
                     enum_labels: None,
                     summary: None,
+                    vec_value: [0.0; 4],
                 },
                 GraphEditorParam {
                     name: "enabled".to_string(),
@@ -1554,6 +1871,7 @@ mod tests {
                     range: None,
                     enum_labels: None,
                     summary: None,
+                    vec_value: [0.0; 4],
                 },
                 GraphEditorParam {
                     name: "mode".to_string(),
@@ -1564,6 +1882,7 @@ mod tests {
                     range: None,
                     enum_labels: Some(vec!["FoldX".into(), "FoldY".into(), "FoldBoth".into()]),
                     summary: None,
+                    vec_value: [0.0; 4],
                 },
             ],
         }
@@ -2018,5 +2337,118 @@ mod tests {
         let cb_id = checkbox_id_of(scale_row);
         let actions = panel.handle_click(cb_id);
         assert_eq!(actions.len(), 1, "non-wired sibling stays interactive");
+    }
+
+    // ── Inline colour / vector editor ───────────────────────────────
+
+    /// A node with a single `Color` param carrying `initial` RGBA.
+    fn snap_node_with_color(initial: [f32; 4]) -> GraphEditorNodeView {
+        GraphEditorNodeView {
+            runtime_node_id: 9,
+            node_id: manifold_core::NodeId::new("tint"),
+            node_handle: Some("tint".to_string()),
+            title: "Tint".to_string(),
+            parameters: vec![GraphEditorParam {
+                name: "color".to_string(),
+                label: "Color".to_string(),
+                kind: GraphEditorParamKind::Color,
+                default_value: 0.0,
+                current_value: 0.0,
+                range: None,
+                enum_labels: None,
+                summary: None,
+                vec_value: initial,
+            }],
+        }
+    }
+
+    #[test]
+    fn color_param_builds_one_vec_component_row_per_channel() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_color([0.1, 0.2, 0.3, 1.0]);
+        panel.configure(
+            None,
+            Some(&node),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        panel.build(&mut tree, viewport());
+        let channels = panel
+            .rows
+            .iter()
+            .filter(|r| matches!(r, RowState::VecComponent { .. }))
+            .count();
+        assert_eq!(channels, 4, "RGBA produces four channel rows");
+    }
+
+    #[test]
+    fn color_channel_drag_emits_full_color_with_other_channels_held() {
+        use crate::input::{Modifiers, UIEvent};
+        use crate::node::Vec2;
+
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_color([0.2, 0.4, 0.6, 1.0]);
+        panel.configure(
+            None,
+            Some(&node),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        panel.build(&mut tree, viewport());
+
+        // Drag the green channel cell (index 1).
+        let g_cell = panel
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                RowState::VecComponent {
+                    value_cell_node_id,
+                    channel: 1,
+                    ..
+                } => Some(*value_cell_node_id),
+                _ => None,
+            })
+            .expect("green channel cell");
+
+        panel.handle_event(&UIEvent::DragBegin {
+            node_id: g_cell,
+            pos: Vec2::new(100.0, 0.0),
+            origin: Vec2::new(100.0, 0.0),
+            modifiers: Modifiers::default(),
+        });
+        // A full-range drag right pushes green from 0.4 past 1.0 → clamped to 1.0.
+        let acts = panel.handle_event(&UIEvent::Drag {
+            node_id: g_cell,
+            pos: Vec2::new(100.0 + DRAG_FULL_RANGE_PX, 0.0),
+            delta: Vec2::new(DRAG_FULL_RANGE_PX, 0.0),
+        });
+        assert_eq!(acts.len(), 1);
+        match &acts[0] {
+            PanelAction::SetGraphNodeParam {
+                node_id,
+                param_name,
+                new_value,
+            } => {
+                assert_eq!(*node_id, 9);
+                assert_eq!(param_name, "color");
+                match new_value {
+                    SerializedParamValue::Color { value } => {
+                        // R, B, A carried through unchanged; G driven to max.
+                        assert!((value[0] - 0.2).abs() < 1e-4);
+                        assert!((value[1] - 1.0).abs() < 1e-4, "green clamps to 1.0");
+                        assert!((value[2] - 0.6).abs() < 1e-4);
+                        assert!((value[3] - 1.0).abs() < 1e-4);
+                    }
+                    other => panic!("expected Color, got {other:?}"),
+                }
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
     }
 }

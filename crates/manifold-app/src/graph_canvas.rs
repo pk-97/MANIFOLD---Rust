@@ -360,6 +360,24 @@ fn format_param_for_node(p: &manifold_renderer::node_graph::ParamSnapshot) -> Pa
                     .and_then(|labels| labels.get(p.current_value as usize).cloned())
                     .unwrap_or_else(|| format!("{}", p.current_value as i64)),
                 ParamSnapshotKind::Trigger => format!("{}", p.current_value as i64),
+                // Colour reads as a hex string on the face; the swatch + channel
+                // editor lives in the inspector sidebar.
+                ParamSnapshotKind::Color => p
+                    .vec_value
+                    .map(format_color_hex)
+                    .unwrap_or_else(|| "—".to_string()),
+                ParamSnapshotKind::Vec2 => p
+                    .vec_value
+                    .map(|v| format!("{:.2}, {:.2}", v[0], v[1]))
+                    .unwrap_or_else(|| "—".to_string()),
+                ParamSnapshotKind::Vec3 => p
+                    .vec_value
+                    .map(|v| format!("{:.2}, {:.2}, {:.2}", v[0], v[1], v[2]))
+                    .unwrap_or_else(|| "—".to_string()),
+                ParamSnapshotKind::Vec4 => p
+                    .vec_value
+                    .map(|v| format!("{:.2}, {:.2}, {:.2}, {:.2}", v[0], v[1], v[2], v[3]))
+                    .unwrap_or_else(|| "—".to_string()),
                 ParamSnapshotKind::Other => {
                     p.summary.clone().unwrap_or_else(|| "—".to_string())
                 }
@@ -442,6 +460,14 @@ fn scrub_for(
         }),
         _ => None,
     }
+}
+
+/// Format an RGBA colour (0..1 components) as `#RRGGBB` for the node-face value
+/// cell. Alpha is dropped from the compact face string (it's still editable on
+/// the inspector's A channel). Shared with the inspector's swatch path.
+fn format_color_hex(c: [f32; 4]) -> String {
+    let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{:02X}{:02X}{:02X}", to_u8(c[0]), to_u8(c[1]), to_u8(c[2]))
 }
 
 /// Pick the node's most informative param and format it as a one-line
@@ -3238,6 +3264,7 @@ mod tests {
             enum_labels: None,
             exposed: false,
             summary: None,
+            vec_value: None,
         }
     }
 

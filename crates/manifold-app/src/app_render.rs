@@ -3500,6 +3500,10 @@ fn build_graph_editor_view(
                 ParamSnapshotKind::Bool => GraphEditorParamKind::Bool,
                 ParamSnapshotKind::Enum => GraphEditorParamKind::Enum,
                 ParamSnapshotKind::Trigger => GraphEditorParamKind::Trigger,
+                ParamSnapshotKind::Color => GraphEditorParamKind::Color,
+                ParamSnapshotKind::Vec2 => GraphEditorParamKind::Vec2,
+                ParamSnapshotKind::Vec3 => GraphEditorParamKind::Vec3,
+                ParamSnapshotKind::Vec4 => GraphEditorParamKind::Vec4,
                 ParamSnapshotKind::Other => GraphEditorParamKind::Other,
             },
             default_value: p.default_value,
@@ -3507,6 +3511,7 @@ fn build_graph_editor_view(
             range: p.range,
             enum_labels: p.enum_labels.clone(),
             summary: p.summary.clone(),
+            vec_value: p.vec_value.unwrap_or([0.0; 4]),
         })
         .collect();
     Some(GraphEditorNodeView {
