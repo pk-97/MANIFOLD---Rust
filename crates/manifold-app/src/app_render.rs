@@ -2799,6 +2799,17 @@ impl Application {
             ws.ui_root.browser_popup.build(&mut ws.ui_root.tree);
         }
 
+        // A pending jump-to-node centres now that `set_snapshot` has laid the
+        // canvas out for this frame's scope (no-op until the target is present).
+        if let Some(canvas) = self.graph_canvas.as_mut() {
+            canvas.resolve_pending_focus(crate::graph_canvas::Rect::new(
+                canvas_x,
+                0.0,
+                canvas_width,
+                logical_h as f32,
+            ));
+        }
+
         // ── Build frame: clear, then draw the canvas + sidebar ──
         let mut encoder = gpu.device.create_encoder("Graph Editor Frame");
         encoder.clear_texture(offscreen, 0.10, 0.10, 0.12, 1.0);

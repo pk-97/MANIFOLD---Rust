@@ -2148,7 +2148,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 {
                                     // consumed by the canvas popover
                                 } else if in_panel {
-                                    if let Some(ed) = self.graph_editor.as_mut() {
+                                    // Jump-to-node: a click on a card param's NAME
+                                    // in the left lane navigates the centre canvas
+                                    // to the node that param is exposed from, so
+                                    // the instrument and the graph stay in lockstep.
+                                    // Read-only on the card; only the canvas moves.
+                                    let mut jumped = false;
+                                    if cx < palette_width
+                                        && let Some(ed) = self.graph_editor.as_ref()
+                                        && let Some(param_id) =
+                                            self.editor_card.label_hit(&ed.ui_root.tree, cx, cy)
+                                        && let Some(snap) =
+                                            self.content_state.active_graph_snapshot.as_deref()
+                                        && let Some(node_id) =
+                                            crate::graph_canvas::resolve_card_param_node_id(
+                                                snap, &param_id,
+                                            )
+                                    {
+                                        jumped = canvas.focus_node(snap, &node_id);
+                                    }
+                                    if !jumped
+                                        && let Some(ed) = self.graph_editor.as_mut()
+                                    {
                                         ed.ui_root.input.process_pointer(
                                             &mut ed.ui_root.tree,
                                             Vec2::new(cx, cy),

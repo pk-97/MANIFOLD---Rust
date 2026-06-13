@@ -940,6 +940,12 @@ pub struct GraphCanvas {
     /// legible." Bounded to [`SPARK_CAPACITY`] points per node; pruned to the
     /// live node set on a topology rebuild. Empty when no editor is watching.
     spark_history: ahash::AHashMap<manifold_core::NodeId, std::collections::VecDeque<f32>>,
+    /// Runtime id of a node the canvas should centre + select once it is laid
+    /// out at the current scope — set by [`Self::focus_node`] (jump-to-node from
+    /// a card param) and consumed by [`Self::resolve_pending_focus`] one frame
+    /// later, after `set_snapshot` has rebuilt the (possibly newly-entered)
+    /// level so the node's position is known. `None` when nothing is pending.
+    pending_focus: Option<u32>,
 }
 
 /// Max seconds between two empty-canvas presses for them to count as a
@@ -983,6 +989,7 @@ impl GraphCanvas {
             scope_titles: Vec::new(),
             format_on_enter: false,
             spark_history: ahash::AHashMap::new(),
+            pending_focus: None,
             debug_overlay: false,
         }
     }
@@ -1341,6 +1348,58 @@ impl GraphCanvas {
             }
             hist.push_back(f);
         }
+    }
+
+    /// Jump-to-node: navigate the canvas to the node with stable `node_id`,
+    /// descending into the group that contains it if needed, select it, and
+    /// queue it to be centred. Returns `false` if the id isn't in the snapshot.
+    /// The host calls this when the user activates a card param's locate
+    /// affordance, so the left card and the centre canvas stay in lockstep.
+    ///
+    /// Centring is deferred to [`Self::resolve_pending_focus`] (next frame) so
+    /// the node's position is known after `set_snapshot` rebuilds the level —
+    /// otherwise a node inside a just-entered group has no position yet.
+    pub fn focus_node(
+        &mut self,
+        snap: &manifold_renderer::node_graph::GraphSnapshot,
+        node_id: &manifold_core::NodeId,
+    ) -> bool {
+        let Some((scope, titles, rid)) = find_node_scope(snap, node_id) else {
+            return false;
+        };
+        if self.scope != scope {
+            self.scope = scope;
+            self.scope_titles = titles;
+            // Don't auto-format the entered level — preserve its arrangement.
+            self.format_on_enter = false;
+            // Force the next `set_snapshot` to rebuild for the new level.
+            self.topology_hash = 0;
+        }
+        self.select_single(rid);
+        self.pending_focus = Some(rid);
+        true
+    }
+
+    /// Centre the pending jump-to-node target (set by [`Self::focus_node`]) once
+    /// it exists at the current level. No-op when nothing is pending or the
+    /// target isn't laid out yet (a scope rebuild is still in flight — retried
+    /// next frame). Called by the editor present path, which has the viewport.
+    pub fn resolve_pending_focus(&mut self, viewport: Rect) {
+        let Some(rid) = self.pending_focus else {
+            return;
+        };
+        let Some(node) = self.nodes.iter().find(|n| n.id == rid) else {
+            return;
+        };
+        let node_cx = node.pos_graph.0 + NODE_WIDTH * 0.5;
+        let node_cy = node.pos_graph.1 + node.height() * 0.5;
+        // Invert `to_screen` so the node centre lands at the canvas content
+        // centre: `screen = origin + (graph + pan) * zoom`.
+        let content_cx = viewport.w * 0.5;
+        let content_cy = HEADER_HEIGHT + (viewport.h - HEADER_HEIGHT) * 0.5;
+        self.pan.0 = content_cx / self.zoom - node_cx;
+        self.pan.1 = (content_cy - HEADER_HEIGHT) / self.zoom - node_cy;
+        self.pending_focus = None;
     }
 
     // ── Group navigation (scope) ────────────────────────────────────
@@ -3049,6 +3108,83 @@ pub(crate) fn resolve_level<'a>(
     Some((nodes, wires))
 }
 
+/// Locate a node by stable [`NodeId`](manifold_core::NodeId) anywhere in the
+/// hierarchical snapshot. Returns the scope path of group runtime ids to its
+/// level, those groups' titles (for the breadcrumb), and the node's runtime id.
+/// `None` if no node carries that id. Used by jump-to-node to navigate the
+/// canvas to a card param's defining node, even when it lives inside a group.
+fn find_node_scope(
+    snap: &GraphSnapshot,
+    target: &manifold_core::NodeId,
+) -> Option<(Vec<u32>, Vec<String>, u32)> {
+    fn search(
+        nodes: &[NodeSnapshot],
+        target: &manifold_core::NodeId,
+        path: &mut Vec<u32>,
+        titles: &mut Vec<String>,
+    ) -> Option<u32> {
+        // Prefer a direct hit at this level over descending.
+        if let Some(n) = nodes.iter().find(|n| &n.node_id == target) {
+            return Some(n.id);
+        }
+        for n in nodes {
+            if let Some(group) = n.group.as_deref() {
+                path.push(n.id);
+                titles.push(n.title.clone());
+                if let Some(rid) = search(&group.nodes, target, path, titles) {
+                    return Some(rid);
+                }
+                path.pop();
+                titles.pop();
+            }
+        }
+        None
+    }
+    if target.is_empty() {
+        return None;
+    }
+    let mut path = Vec::new();
+    let mut titles = Vec::new();
+    search(&snap.nodes, target, &mut path, &mut titles).map(|rid| (path, titles, rid))
+}
+
+/// Resolve a card param id (a binding's `outer_param_id`) to the stable
+/// [`NodeId`](manifold_core::NodeId) of the node it's exposed from, using the
+/// snapshot's `outer_routings` (the same map for effects and generators). The
+/// routing carries the node *handle*; we resolve that to the node's id so
+/// jump-to-node addresses by the grouping-invariant identity. `None` when the
+/// param isn't a routed binding or its node isn't in the snapshot.
+pub(crate) fn resolve_card_param_node_id(
+    snap: &GraphSnapshot,
+    param_id: &str,
+) -> Option<manifold_core::NodeId> {
+    let handle = snap
+        .outer_routings
+        .iter()
+        .find(|r| r.outer_param_id == param_id)
+        .map(|r| r.node_handle.clone())?;
+    node_id_for_handle(snap, &handle)
+}
+
+/// The stable `NodeId` of the node whose handle is `handle`, searched through
+/// the full nested snapshot. `None` if no such (id-bearing) node exists.
+fn node_id_for_handle(snap: &GraphSnapshot, handle: &str) -> Option<manifold_core::NodeId> {
+    fn search(nodes: &[NodeSnapshot], handle: &str) -> Option<manifold_core::NodeId> {
+        for n in nodes {
+            if n.node_handle.as_deref() == Some(handle) && !n.node_id.is_empty() {
+                return Some(n.node_id.clone());
+            }
+            if let Some(group) = n.group.as_deref()
+                && let Some(id) = search(&group.nodes, handle)
+            {
+                return Some(id);
+            }
+        }
+        None
+    }
+    search(&snap.nodes, handle)
+}
+
 /// Axis-aligned rectangle overlap, each `(x, y, w, h)`. Touching edges don't
 /// count as overlapping (strict inequality), matching the marquee feel: a
 /// node is grabbed only once the band actually crosses into it.
@@ -3510,5 +3646,61 @@ mod tests {
         };
         canvas.set_snapshot(&snap2);
         assert!(!canvas.spark_history.contains_key(&manifold_core::NodeId::new("gain")));
+    }
+
+    // ── Jump-to-node ────────────────────────────────────────────────
+
+    #[test]
+    fn find_node_scope_locates_root_and_nested_nodes() {
+        let snap = grouped_snapshot();
+        // Root-level node: empty scope.
+        let (path, _, rid) = find_node_scope(&snap, &manifold_core::NodeId::new("source")).unwrap();
+        assert!(path.is_empty());
+        assert_eq!(rid, 0);
+        // Node inside the group: scope = [group runtime id], title carried.
+        let (path, titles, rid) =
+            find_node_scope(&snap, &manifold_core::NodeId::new("inner")).unwrap();
+        assert_eq!(path, vec![10]);
+        assert_eq!(titles, vec!["tweak".to_string()]);
+        assert_eq!(rid, 1);
+        // Unknown id.
+        assert!(find_node_scope(&snap, &manifold_core::NodeId::new("nope")).is_none());
+    }
+
+    #[test]
+    fn focus_node_descends_into_the_group_and_selects() {
+        let snap = grouped_snapshot();
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snap);
+        assert!(canvas.focus_node(&snap, &manifold_core::NodeId::new("inner")));
+        assert_eq!(canvas.scope_path(), &[10]);
+        assert_eq!(canvas.selected_ids(), vec![1]);
+        assert_eq!(canvas.pending_focus, Some(1));
+    }
+
+    #[test]
+    fn focus_node_unknown_id_is_a_noop() {
+        let snap = grouped_snapshot();
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snap);
+        assert!(!canvas.focus_node(&snap, &manifold_core::NodeId::new("nope")));
+        assert!(canvas.scope_path().is_empty());
+        assert_eq!(canvas.pending_focus, None);
+    }
+
+    #[test]
+    fn resolve_card_param_node_id_via_outer_routing() {
+        let mut snap = grouped_snapshot();
+        snap.outer_routings = vec![manifold_renderer::node_graph::OuterParamRouting {
+            outer_label: "Amount".into(),
+            outer_param_id: "user.inner.amount.0".into(),
+            node_handle: "inner".into(),
+            inner_param: "amount".into(),
+            source: manifold_renderer::node_graph::OuterParamSource::Static,
+        }];
+        let nid = resolve_card_param_node_id(&snap, "user.inner.amount.0").unwrap();
+        assert_eq!(nid.as_str(), "inner");
+        // Unrouted param id resolves to nothing.
+        assert!(resolve_card_param_node_id(&snap, "user.nope.0").is_none());
     }
 }

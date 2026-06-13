@@ -224,7 +224,7 @@ const CHANGE_BTN_H: f32 = 16.0;
 
 /// Generator toggle/trigger row node IDs (button + its label).
 struct ToggleParamIds {
-    _label_id: i32,
+    label_id: i32,
     button_id: i32,
 }
 
@@ -638,6 +638,41 @@ impl ParamCardPanel {
         let pi = self.param_info.iter().position(|p| p.param_id == param_id)?;
         let cid = *self.mapping_chevron_ids.get(pi)?;
         (cid >= 0).then(|| tree.get_bounds(cid as u32))
+    }
+
+    /// Hit-test the param NAME labels (slider + toggle/trigger rows) and return
+    /// the [`ParamId`](manifold_core::effects::ParamId) of the row whose label
+    /// contains `(sx, sy)`, or `None`. Read-only — no behaviour change and no
+    /// effect on the performance card; the graph-editor host calls it in Author
+    /// context to jump from a card param straight to the node that defines it.
+    pub fn label_hit(
+        &self,
+        tree: &UITree,
+        sx: f32,
+        sy: f32,
+    ) -> Option<manifold_core::effects::ParamId> {
+        let pos = Vec2::new(sx, sy);
+        for (i, info) in self.param_info.iter().enumerate() {
+            let label_id = self
+                .slider_ids
+                .get(i)
+                .and_then(|s| s.as_ref())
+                .map(|ids| ids.label)
+                .filter(|&l| l >= 0)
+                .or_else(|| {
+                    self.toggle_ids
+                        .get(i)
+                        .and_then(|t| t.as_ref())
+                        .map(|ids| ids.label_id)
+                        .filter(|&l| l >= 0)
+                });
+            if let Some(lid) = label_id
+                && tree.get_bounds(lid as u32).contains(pos)
+            {
+                return Some(info.param_id.clone());
+            }
+        }
+        None
     }
 
     /// Get string param info for text input anchoring (generator kind).
@@ -1448,7 +1483,7 @@ impl ParamCardPanel {
                     }
 
                     self.toggle_ids[i] = Some(ToggleParamIds {
-                        _label_id: label_id,
+                        label_id,
                         button_id,
                     });
                     self.toggle_cache[i] = on;
@@ -1734,8 +1769,8 @@ impl ParamCardPanel {
         }
         for (pi, t) in self.toggle_ids.iter().enumerate() {
             if let Some(ids) = t
-                && ids._label_id >= 0
-                && ids._label_id as u32 == label_id
+                && ids.label_id >= 0
+                && ids.label_id as u32 == label_id
             {
                 return self
                     .param_info
@@ -1981,11 +2016,11 @@ impl ParamCardPanel {
         // shared matcher above).
         for (pi, toggle) in self.toggle_ids.iter().enumerate() {
             if let Some(t) = toggle
-                && t._label_id >= 0
-                && id == t._label_id
+                && t.label_id >= 0
+                && id == t.label_id
                 && let Some(addr) = self.osc_addresses.get(pi).and_then(|a| a.clone())
             {
-                self.copied_flash.trigger(t._label_id as u32);
+                self.copied_flash.trigger(t.label_id as u32);
                 return vec![PanelAction::CopyOscAddress(addr)];
             }
         }
