@@ -126,6 +126,9 @@ const MARQUEE_BORDER: [f32; 4] = [0.50, 0.78, 1.00, 0.80];
 /// a ranged value sits between its declared min and max.
 const PARAM_FILL_BG: [f32; 4] = [1.0, 1.0, 1.0, 0.07];
 const PARAM_FILL_FG: [f32; 4] = [0.50, 0.78, 1.00, 0.55];
+/// Sparkline trace colour — the same soft cyan as the fill bar, a touch brighter
+/// so the moving line reads against the node body without shouting.
+const SPARKLINE_COLOR: [f32; 4] = [0.55, 0.82, 1.00, 0.85];
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
 const TEXT_HEADER: [u8; 4] = [240, 240, 250, 255];
@@ -468,6 +471,19 @@ fn scrub_for(
 fn format_color_hex(c: [f32; 4]) -> String {
     let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02X}{:02X}{:02X}", to_u8(c[0]), to_u8(c[1]), to_u8(c[2]))
+}
+
+/// Whether a sparkline history actually moves — `true` only if its range spans
+/// more than a hair. A dead-flat trace (a static, unmodulated knob) isn't worth
+/// the ink, so the node face stays clean until something drives the param.
+fn spark_has_variation(hist: &std::collections::VecDeque<f32>) -> bool {
+    let mut lo = f32::INFINITY;
+    let mut hi = f32::NEG_INFINITY;
+    for &v in hist {
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    hi - lo > 0.01
 }
 
 /// Pick the node's most informative param and format it as a one-line
@@ -916,6 +932,14 @@ pub struct GraphCanvas {
     /// arrangement — once a layout exists (hand-moved or a prior auto-format),
     /// this never fires for that group again.
     format_on_enter: bool,
+    /// Per-node recent history (normalized 0..1) of the node's primary numeric
+    /// param, keyed by stable `NodeId`. Pushed each frame by
+    /// [`Self::apply_live_values`] from the live tap and drawn as a small
+    /// sparkline on the collapsed node face, so a modulated knob reads as a
+    /// moving trace — the design's "even the invisible math nodes become
+    /// legible." Bounded to [`SPARK_CAPACITY`] points per node; pruned to the
+    /// live node set on a topology rebuild. Empty when no editor is watching.
+    spark_history: ahash::AHashMap<manifold_core::NodeId, std::collections::VecDeque<f32>>,
 }
 
 /// Max seconds between two empty-canvas presses for them to count as a
@@ -928,6 +952,11 @@ const DOUBLE_CLICK_RADIUS_PX: f32 = 4.0;
 /// drag — used to tell a pan from a deselecting click, and a marquee from a
 /// stray shift-click.
 const CLICK_MOVE_SLOP_PX: f32 = 4.0;
+
+/// Points retained in each node's sparkline history. At the editor's ~UI frame
+/// rate this is roughly a second of trace — enough to read a slow LFO without
+/// hoarding memory across a big graph.
+const SPARK_CAPACITY: usize = 48;
 
 impl GraphCanvas {
     pub fn new() -> Self {
@@ -953,6 +982,7 @@ impl GraphCanvas {
             scope: Vec::new(),
             scope_titles: Vec::new(),
             format_on_enter: false,
+            spark_history: ahash::AHashMap::new(),
             debug_overlay: false,
         }
     }
@@ -1168,6 +1198,15 @@ impl GraphCanvas {
             })
             .collect();
 
+        // Drop sparkline histories for nodes that left this level (group
+        // navigation, delete, ungroup) so the map can't grow unbounded across a
+        // long authoring session. Param-only edits keep the same topology hash
+        // and take the early-return path above, so traces survive a knob tweak.
+        if !self.spark_history.is_empty() {
+            self.spark_history
+                .retain(|id, _| self.nodes.iter().any(|n| &n.node_id == id));
+        }
+
         // Two-step position assignment:
         //   1. Auto-layout writes columns/rows for every node, but
         //      we only keep its result for nodes that didn't have a
@@ -1251,6 +1290,10 @@ impl GraphCanvas {
             } => Some((*node_id, param_name.clone())),
             _ => None,
         };
+        // Sparkline samples gathered during the mutable node walk, applied to
+        // `spark_history` afterwards (can't touch `self.spark_history` while
+        // `self.nodes` is borrowed mutably).
+        let mut spark_updates: Vec<(manifold_core::NodeId, f32)> = Vec::new();
         for node in &mut self.nodes {
             if node.node_id.is_empty() {
                 continue;
@@ -1259,6 +1302,10 @@ impl GraphCanvas {
                 continue;
             };
             let node_id = node.id;
+            // The node's first ranged numeric param drives its sparkline — the
+            // same "primary" pick the collapsed summary uses, so the trace and
+            // the summary read the same knob.
+            let mut primary_fill: Option<f32> = None;
             for pv in &mut node.params {
                 if scrubbing
                     .as_ref()
@@ -1277,7 +1324,22 @@ impl GraphCanvas {
                 if let Some(scrub) = pv.scrub.as_mut() {
                     scrub.current_value = value;
                 }
+                if primary_fill.is_none()
+                    && let Some(f) = fill
+                {
+                    primary_fill = Some(f);
+                }
             }
+            if let Some(f) = primary_fill {
+                spark_updates.push((node.node_id.clone(), f));
+            }
+        }
+        for (id, f) in spark_updates {
+            let hist = self.spark_history.entry(id).or_default();
+            if hist.len() >= SPARK_CAPACITY {
+                hist.pop_front();
+            }
+            hist.push_back(f);
         }
     }
 
@@ -2567,6 +2629,35 @@ impl GraphCanvas {
         }
     }
 
+    /// Draw a node's primary-param sparkline (normalized 0..1 history) into the
+    /// rect `(x, y, w, h)` as a soft polyline, y inverted so 1.0 sits at the top.
+    /// Subtle by design — it signals "this knob is moving," it isn't a readout.
+    fn draw_sparkline(
+        &self,
+        ui: &mut UIRenderer,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        hist: &std::collections::VecDeque<f32>,
+    ) {
+        let n = hist.len();
+        if n < 2 || w <= 1.0 || h <= 1.0 {
+            return;
+        }
+        let dx = w / (n - 1) as f32;
+        let thickness = (1.0 * self.zoom).clamp(0.8, 1.6);
+        let mut prev: Option<(f32, f32)> = None;
+        for (i, &v) in hist.iter().enumerate() {
+            let px = x + i as f32 * dx;
+            let py = y + h - v.clamp(0.0, 1.0) * h;
+            if let Some((px0, py0)) = prev {
+                ui.draw_line(px0, py0, px, py, thickness, SPARKLINE_COLOR);
+            }
+            prev = Some((px, py));
+        }
+    }
+
     fn draw_node(&self, ui: &mut UIRenderer, viewport: Rect, canvas: Rect, node: &NodeView) {
         let (sx, sy) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
         let sw = NODE_WIDTH * self.zoom;
@@ -2668,25 +2759,47 @@ impl GraphCanvas {
         let pad_x = 8.0 * self.zoom;
         let inner_w = sw - 2.0 * pad_x;
 
-        // Collapsed: one summary line ("Mode: FoldX"), so a folded node still
-        // shows its key value without the full param wall.
-        if show_text
-            && node.collapsed
-            && let Some(summary) = node.summary.as_deref()
-        {
+        // Collapsed: one summary line ("Mode: FoldX") plus, when the live tap
+        // has been moving the node's primary knob, a small sparkline of its
+        // recent history on the right — so a folded node still shows its key
+        // value AND whether something is modulating it, without the full wall.
+        if show_text && node.collapsed {
             let text_y = sy + header_h + 2.0 * self.zoom;
-            let max_chars = (inner_w / (text_size * 0.55)) as usize;
-            let line: std::borrow::Cow<'_, str> =
-                if summary.chars().count() > max_chars && max_chars > 1 {
-                    let take = max_chars.saturating_sub(1);
-                    std::borrow::Cow::Owned(format!(
-                        "{}…",
-                        summary.chars().take(take).collect::<String>()
-                    ))
-                } else {
-                    std::borrow::Cow::Borrowed(summary)
-                };
-            ui.draw_text(sx + pad_x, text_y, &line, text_size, TEXT_SECONDARY);
+            // Reserve the right edge for a sparkline if this node has a trace.
+            let hist = self
+                .spark_history
+                .get(&node.node_id)
+                .filter(|h| h.len() >= 2 && spark_has_variation(h));
+            let spark_w = if hist.is_some() {
+                (inner_w * 0.4).min(56.0 * self.zoom)
+            } else {
+                0.0
+            };
+            if let Some(hist) = hist {
+                self.draw_sparkline(
+                    ui,
+                    sx + sw - pad_x - spark_w,
+                    text_y,
+                    spark_w,
+                    row_h - 4.0 * self.zoom,
+                    hist,
+                );
+            }
+            if let Some(summary) = node.summary.as_deref() {
+                let avail_w = (inner_w - spark_w - 4.0 * self.zoom).max(1.0);
+                let max_chars = (avail_w / (text_size * 0.55)) as usize;
+                let line: std::borrow::Cow<'_, str> =
+                    if summary.chars().count() > max_chars && max_chars > 1 {
+                        let take = max_chars.saturating_sub(1);
+                        std::borrow::Cow::Owned(format!(
+                            "{}…",
+                            summary.chars().take(take).collect::<String>()
+                        ))
+                    } else {
+                        std::borrow::Cow::Borrowed(summary)
+                    };
+                ui.draw_text(sx + pad_x, text_y, &line, text_size, TEXT_SECONDARY);
+            }
         }
 
         // Expanded: every param row — label + value with a fill bar under
@@ -3335,5 +3448,67 @@ mod tests {
         let live = vec![(manifold_core::NodeId::new("other"), vec![("amount", 0.8_f32)])];
         canvas.apply_live_values(&live);
         assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
+    }
+
+    #[test]
+    fn apply_live_values_feeds_sparkline_history() {
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.2)]));
+        for v in [0.2_f32, 0.5, 0.8] {
+            canvas.apply_live_values(&vec![(
+                manifold_core::NodeId::new("gain"),
+                vec![("amount", v)],
+            )]);
+        }
+        let hist = canvas
+            .spark_history
+            .get(&manifold_core::NodeId::new("gain"))
+            .expect("history recorded for the primary param");
+        assert_eq!(hist.len(), 3);
+        // Range is 0..1, so the stored normalized (fill) value equals the input.
+        assert!((hist[0] - 0.2).abs() < 1e-4);
+        assert!((hist[2] - 0.8).abs() < 1e-4);
+    }
+
+    #[test]
+    fn sparkline_history_is_capped_at_capacity() {
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.2)]));
+        for i in 0..(SPARK_CAPACITY + 10) {
+            let v = (i % 10) as f32 / 10.0;
+            canvas.apply_live_values(&vec![(
+                manifold_core::NodeId::new("gain"),
+                vec![("amount", v)],
+            )]);
+        }
+        let hist = canvas
+            .spark_history
+            .get(&manifold_core::NodeId::new("gain"))
+            .unwrap();
+        assert_eq!(hist.len(), SPARK_CAPACITY, "ring buffer holds the cap, no more");
+    }
+
+    #[test]
+    fn topology_rebuild_prunes_stale_sparkline_history() {
+        let mut canvas = GraphCanvas::new();
+        canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.2)]));
+        canvas.apply_live_values(&vec![(
+            manifold_core::NodeId::new("gain"),
+            vec![("amount", 0.5_f32)],
+        )]);
+        assert!(canvas.spark_history.contains_key(&manifold_core::NodeId::new("gain")));
+
+        // A real topology change (different runtime id, so `hash_level` differs
+        // and `set_snapshot` takes the full-rebuild path) evicts the old node's
+        // trace so the history map can't accrete across a session.
+        let mut n = node(2, "node.gain", Some("other"));
+        n.parameters = vec![float_param("amount", 0.2)];
+        let snap2 = GraphSnapshot {
+            nodes: vec![n],
+            wires: Vec::new(),
+            outer_routings: Vec::new(),
+        };
+        canvas.set_snapshot(&snap2);
+        assert!(!canvas.spark_history.contains_key(&manifold_core::NodeId::new("gain")));
     }
 }

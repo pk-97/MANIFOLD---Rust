@@ -215,3 +215,29 @@ All groups render one fixed `GROUP_HEADER_BG`.
   Liveschool fixture and confirm no perform-path regression.
 - Voice for any user-facing copy: `feedback_product_copy_voice` (natural, professional;
   no em-dashes, no semicolons, no AI-speak).
+
+## Build progress — autonomous run, 2026-06-13 (branch `graph-editor-ux`)
+
+- **Phase 1 — Live values on the canvas. SHIPPED.** `PresetRuntime::live_node_params`
+  taps each watched node's post-modulation params off the running graph (stable
+  `NodeId`, `&'static` names), surfaced through `Compositor` / `GeneratorRenderer`,
+  carried on `ContentState::live_node_params`, overlaid each frame by
+  `GraphCanvas::apply_live_values`. Skips the actively-scrubbed param; zero cost when
+  no editor watches. Tested (4 canvas tests).
+- **Phase 2 — Inline colour + vector editor. SHIPPED.** `ParamSnapshot::vec_value`
+  carries the real multi-component value; `ParamSnapshotKind` / `GraphEditorParamKind`
+  split out Color/Vec2/Vec3/Vec4. The inspector renders a swatch + R/G/B/A (colour) or
+  X/Y/Z/W (vector) channel sliders; each channel scrubs and emits the whole rebuilt
+  value. Node face shows a hex / component readout. Still not single-slot card-exposable
+  (correct — a macro slot is one `f32`). Tested (2 panel tests).
+- **Phase 3 — Sparklines SHIPPED; per-node image atlas DEFERRED.** Control-node
+  legibility (the design's §6 "even the invisible math nodes become legible") ships as a
+  per-node sparkline: `GraphCanvas::spark_history` rings the primary param's normalized
+  value from the live tap and `draw_sparkline` traces it on the collapsed node face (only
+  when it actually moves). Tested (3 canvas tests). **Deferred:** the full multi-node
+  *image* thumbnail atlas (executor multi-capture → atlas texture → IOSurface bridge → UI
+  sampling). It is a large GPU feature on the content/render path whose correctness is
+  visual, and the project gates authoring-canvas visuals on Peter's eyes
+  (`feedback_graph_editor_is_authoring_not_perform`); building it blind risks the live
+  path. The existing single-node sidebar image preview remains. This is the one piece of
+  the original 7-phase plan intentionally left for a pixels-in-hand session.
