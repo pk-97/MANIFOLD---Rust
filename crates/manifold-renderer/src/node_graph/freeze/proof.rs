@@ -915,6 +915,202 @@ fn every_fused_generator_kernel_compiles() {
     );
 }
 
+/// Diagnostic for the Infrared "black background goes navy" report: render the
+/// REAL bundled Infrared preset (full palette bank group + mux, Arctic palette,
+/// amount 1, contrast 1) on a pure-black input through the production executor,
+/// unfused — the path the live compositor actually runs. The centre pixel must
+/// be black; if it's navy (Arctic's low stop) the preset graph itself lifts
+/// black, independent of the live compositor/input.
+#[test]
+fn infrared_preset_black_stays_black() {
+    use crate::node_graph::chain_spec::splice_def_into_chain;
+    use crate::node_graph::parameters::ParamValue;
+    use manifold_core::PresetTypeId;
+
+    fn black_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
+        let px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
+        let tex = device.create_texture(&GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
+            format: FMT,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::CPU_UPLOAD
+                | GpuTextureUsage::SHADER_READ
+                | GpuTextureUsage::COPY_SRC,
+            label: "ir-black-in",
+            mip_levels: 1,
+        });
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                px.as_ptr().cast::<u8>(),
+                std::mem::size_of_val(px.as_slice()),
+            )
+        };
+        device.upload_texture(&tex, bytes);
+        tex
+    }
+
+    fn center_rgb(device: &GpuDevice, rt: &RenderTarget) -> [f32; 3] {
+        let (w, h) = (rt.width, rt.height);
+        let bpr = w * 8;
+        let buf = device.create_buffer_shared(u64::from(h * bpr));
+        let mut e = device.create_encoder("ir-read");
+        e.copy_texture_to_buffer(&rt.texture, &buf, w, h, bpr);
+        e.commit_and_wait_completed();
+        let ptr = buf.mapped_ptr().expect("mapped");
+        let all =
+            unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (h * bpr) as usize) };
+        let o = (((h / 2) * w + w / 2) * 8) as usize;
+        [
+            f16::from_le_bytes([all[o], all[o + 1]]).to_f32(),
+            f16::from_le_bytes([all[o + 2], all[o + 3]]).to_f32(),
+            f16::from_le_bytes([all[o + 4], all[o + 5]]).to_f32(),
+        ]
+    }
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (128u32, 128u32);
+    let input = black_input(&device, w, h);
+
+    let id = PresetTypeId::new("Infrared");
+    let def = crate::node_graph::bundled_presets::bundled_preset_def(&id)
+        .expect("Infrared preset def");
+
+    let mut graph = Graph::new();
+    let src = graph.add_node(Box::new(Source::new()));
+    let result =
+        splice_def_into_chain(&mut graph, (src, "out"), def, &registry).expect("splice");
+    let names: Vec<&str> = result.handles.iter().map(|(n, _)| n.as_ref()).collect();
+    eprintln!("handles: {names:?}");
+    let find = |name: &str| -> Option<NodeInstanceId> {
+        result
+            .handles
+            .iter()
+            .find(|(n, _)| n.as_ref() == name)
+            .map(|(_, id)| *id)
+    };
+    // Arctic (6) if the mux handle is reachable; otherwise default palette
+    // (White Hot) — texel 0 is black for both, so black→black either way.
+    if let Some(mux) = find("Palette Bank/palette_mux").or_else(|| find("palette_mux")) {
+        graph.set_param(mux, "selector", ParamValue::Float(6.0)).unwrap();
+    }
+    if let Some(ir) = find("infrared") {
+        graph.set_param(ir, "amount", ParamValue::Float(1.0)).unwrap();
+        graph.set_param(ir, "contrast", ParamValue::Float(1.0)).unwrap();
+    }
+    let fout = graph.add_node(Box::new(FinalOutput::new()));
+    graph.connect(result.output, (fout, "in")).unwrap();
+
+    let plan = compile(&graph).expect("compile");
+    let src_res = resource_for_output(&plan, src, "out");
+    let out_res = resource_for_output(&plan, result.output.0, result.output.1);
+    let img = render_graph(&device, &mut graph, &plan, src_res, &input, out_res);
+    let rgb = center_rgb(&device, &img);
+
+    eprintln!("Infrared preset (Arctic, black input) centre = {rgb:?}");
+    // Pure black must read back PURE black, not a faint navy. With the old
+    // centre LUT mapping this was [0, 0.0006, 0.0046] (visible blue); the
+    // endpoint mapping (gradient_ramp texel 0 == first stop) drives it to ~0.
+    assert!(
+        rgb[0] < 5e-4 && rgb[1] < 5e-4 && rgb[2] < 5e-4,
+        "Infrared lifted pure black to {rgb:?} — the LUT's texel 0 is not the \
+         first stop (centre-vs-endpoint mapping regression in gradient_ramp)",
+    );
+}
+
+/// Diagnostic for the "navy background" report: render the REAL WireframeZoo
+/// generator through the production `PresetRuntime` path and characterise its
+/// background. The invariant under test is "pure black carries through as pure
+/// black" — if the generator's empty regions come out > 0, the floor is born
+/// here (before any effect), which is what Infrared then colours.
+#[test]
+fn wireframe_generator_background_is_black() {
+    use crate::node_graph::bundled_presets::bundled_preset_json;
+    use crate::preset_context::{MAX_GEN_PARAMS, PresetContext};
+    use crate::preset_runtime::PresetRuntime;
+    use manifold_core::PresetTypeId;
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (192u32, 192u32);
+
+    let id = PresetTypeId::new("WireframeZoo");
+    let json = bundled_preset_json(&id).expect("WireframeZoo json");
+    let def: EffectGraphDef = serde_json::from_str(&json).expect("parse");
+
+    let ctx = PresetContext {
+        time: 0.0,
+        beat: 0.0,
+        dt: 1.0 / 60.0,
+        width: w,
+        height: h,
+        output_width: w,
+        output_height: h,
+        aspect: 1.0,
+        owner_key: 0,
+        is_clip_level: false,
+        frame_count: 0,
+        anim_progress: 0.0,
+        trigger_count: 0,
+        params: [0.0; MAX_GEN_PARAMS],
+        param_count: 0,
+    };
+
+    let mut generator = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
+        .expect("generator builds");
+    let target = RenderTarget::new(&device, w, h, FMT, "wz-bg");
+    for _ in 0..3 {
+        let mut enc = device.create_encoder("wz-render");
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
+            generator.render(&mut gpu, &target.texture, &ctx);
+        }
+        enc.commit_and_wait_completed();
+    }
+
+    // Read the whole frame, report per-channel min/max and the corner pixel
+    // (almost certainly background for a centred wireframe).
+    let bpr = w * 8;
+    let buf = device.create_buffer_shared(u64::from(h * bpr));
+    let mut renc = device.create_encoder("wz-read");
+    renc.copy_texture_to_buffer(&target.texture, &buf, w, h, bpr);
+    renc.commit_and_wait_completed();
+    let ptr = buf.mapped_ptr().expect("mapped");
+    let all = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (h * bpr) as usize) };
+    let at = |x: u32, y: u32| -> [f32; 4] {
+        let o = ((y * w + x) * 8) as usize;
+        [
+            f16::from_le_bytes([all[o], all[o + 1]]).to_f32(),
+            f16::from_le_bytes([all[o + 2], all[o + 3]]).to_f32(),
+            f16::from_le_bytes([all[o + 4], all[o + 5]]).to_f32(),
+            f16::from_le_bytes([all[o + 6], all[o + 7]]).to_f32(),
+        ]
+    };
+    let mut minc = [f32::INFINITY; 4];
+    let mut maxc = [f32::NEG_INFINITY; 4];
+    for y in 0..h {
+        for x in 0..w {
+            let p = at(x, y);
+            for c in 0..4 {
+                minc[c] = minc[c].min(p[c]);
+                maxc[c] = maxc[c].max(p[c]);
+            }
+        }
+    }
+    eprintln!("WireframeZoo per-channel min = {minc:?}");
+    eprintln!("WireframeZoo per-channel max = {maxc:?}");
+    eprintln!("corner(0,0)     = {:?}", at(0, 0));
+    eprintln!("corner(w-1,0)   = {:?}", at(w - 1, 0));
+    eprintln!("edge(0,h/2)     = {:?}", at(0, h / 2));
+    // The darkest pixel in the frame IS the background. It must be black.
+    assert!(
+        minc[0] < 0.01 && minc[1] < 0.01 && minc[2] < 0.01,
+        "generator background floor is not black: per-channel min = {minc:?}",
+    );
+}
+
 /// Tier 3 oracle — a gather atom folded into a region renders identically fused
 /// vs unfused. source → sharpen(Gather) → invert → final: in the fused kernel,
 /// sharpen samples the source (bound `src_0` + the internal sampler) at the

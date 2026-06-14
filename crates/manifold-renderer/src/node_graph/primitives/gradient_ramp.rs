@@ -1,8 +1,12 @@
 //! `node.gradient_ramp` — general N-stop gradient / LUT generator.
 //!
 //! Emits a 1D piecewise-linear gradient as a texture: output texel x maps to
-//! `t = (x + 0.5) / width * domain`, evaluated over a `Table` of stops (each
-//! row `[position, r, g, b]`). The gradient is constant in y, so the output is
+//! `t = x / (width - 1) * domain` (endpoint-inclusive, so texel 0 is exactly the
+//! first stop and the last texel is exactly `t = domain`), evaluated over a
+//! `Table` of stops (each row `[position, r, g, b]`). The endpoint mapping is
+//! what lets a pure-black input read back pure black through `node.color_lut` —
+//! a centre mapping `(x + 0.5) / width` leaves texel 0 a half-step up the ramp,
+//! a faint hue on the darkest palettes. The gradient is constant in y, so the output is
 //! a luminance LUT that `node.color_lut` samples directly — but it's reusable
 //! as a gradient texture anywhere (false-colour, duotone, thermal palettes,
 //! gradient-map, UI ramps).
@@ -44,7 +48,8 @@ const LUT_WIDTH: u32 = 256;
 // header to 16 bytes, then appends each table's `array<vec4<f32>, 16>`. So the
 // field order here is {domain, count, _pad, _pad, stops} — domain ahead of count,
 // unlike the hand gradient_ramp.wgsl ({count, domain, …}). The body recovers the
-// column t from uv.x, so there is no width field.
+// column t from uv.x and the codegen-supplied dims.x (textureDimensions of the
+// output), so there is no width uniform field.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GradientRampUniforms {
@@ -59,7 +64,7 @@ struct GradientRampUniforms {
 crate::primitive! {
     name: GradientRamp,
     type_id: "node.gradient_ramp",
-    purpose: "General N-stop gradient / LUT generator. Emits a 1D piecewise-linear gradient as a texture — texel x → t = (x+0.5)/width * domain, evaluated over a Table of `[position, r, g, b]` stops (up to 16). Constant in y, so it's a luminance LUT for node.color_lut, and reusable as a gradient texture anywhere (false-colour, duotone, thermal palettes, gradient-map, UI ramps). Evaluation matches the classic gradient(): clamp below the first stop, lerp between stops, and EXTRAPOLATE the last segment past the last stop — the overshoot that paints HDR blowout highlights when domain > 1.",
+    purpose: "General N-stop gradient / LUT generator. Emits a 1D piecewise-linear gradient as a texture — texel x → t = x/(width-1) * domain (endpoint-inclusive: texel 0 is exactly the first stop, the last texel is exactly t=domain), evaluated over a Table of `[position, r, g, b]` stops (up to 16). Constant in y, so it's a luminance LUT for node.color_lut, and reusable as a gradient texture anywhere (false-colour, duotone, thermal palettes, gradient-map, UI ramps). Evaluation matches the classic gradient(): clamp below the first stop, lerp between stops, and EXTRAPOLATE the last segment past the last stop — the overshoot that paints HDR blowout highlights when domain > 1.",
     inputs: {
         domain: ScalarF32 optional,
     },
@@ -88,7 +93,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Stop positions are in t-space; `domain` sets the max t the texture covers (texel x → t = (x+0.5)/width * domain). Stops in [0,1] with domain=2 reproduce Infrared's [0,2] LUT (the [1,2] tail is the extrapolated overshoot). Feed `out` into node.color_lut's `lut` input (sampled by luminance) for a gradient-map effect, or use it directly as a ramp texture. Stops are NOT clamped to [0,1] colour — negative / >1 channels are preserved (legacy Black Hot reaches negative past the last stop). Up to 16 stops; rows beyond that are ignored.",
+    composition_notes: "Stop positions are in t-space; `domain` sets the max t the texture covers (texel x → t = x/(width-1) * domain, endpoint-inclusive so texel 0 = t=0 = the first stop and the last texel = t=domain). Stops in [0,1] with domain=2 reproduce Infrared's [0,2] LUT (the [1,2] tail is the extrapolated overshoot). Feed `out` into node.color_lut's `lut` input (sampled by luminance) for a gradient-map effect, or use it directly as a ramp texture. Stops are NOT clamped to [0,1] colour — negative / >1 channels are preserved (legacy Black Hot reaches negative past the last stop). Up to 16 stops; rows beyond that are ignored.",
     examples: ["preset.effect.infrared"],
     picker: { label: "Gradient", category: Atom },
     summary: "Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like.",
@@ -102,14 +107,17 @@ crate::primitive! {
 
 impl Primitive for GradientRamp {
     /// Right-sized LUT output (workstream 4): a fixed `LUT_WIDTH × 1` strip
-    /// regardless of canvas. The body recovers `t` from `uv.x` (there is no width
-    /// field), so the gradient is identical at any width — only the texel
-    /// quantization changes, and 256 is the industry LUT width. Constant in y, so
-    /// height 1. LOOK-affecting in principle (256-step vs canvas-step
-    /// quantization); smooth thermal palettes are indistinguishable, but this is
-    /// the visual-verification class — flagged for Peter's pass on Infrared. Every
-    /// shipped consumer samples it at a normalized coord (see `LUT_WIDTH`), so the
-    /// strip is read resolution-independently, never texel-exact.
+    /// regardless of canvas. The body maps texel x → `t = x/(width-1) * domain`
+    /// (endpoint-inclusive, recovered from `uv.x` and `dims.x`), so endpoints are
+    /// exact at any width and the interior shifts by at most half a texel — only
+    /// the texel quantization changes, and 256 is the industry LUT width. The
+    /// endpoint mapping is load-bearing for the dark end: with the old centre
+    /// mapping `(x+0.5)/width`, texel 0 sat at `t≈0.004` (a faint navy on Arctic),
+    /// and shrinking the strip to 256 widened that gap into the visible range —
+    /// pure black no longer read back pure black. Endpoint puts texel 0 exactly on
+    /// the first stop. Constant in y, so height 1. Every shipped consumer samples
+    /// it at a normalized coord (see `LUT_WIDTH`), so the strip is read
+    /// resolution-independently, never texel-exact.
     fn output_dims(
         &self,
         _port: &str,

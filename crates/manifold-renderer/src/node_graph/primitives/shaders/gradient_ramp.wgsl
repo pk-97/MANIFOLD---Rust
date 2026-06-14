@@ -1,6 +1,11 @@
 // node.gradient_ramp — N-stop piecewise-linear gradient → LUT texture.
 //
-// Output texel x maps to t = (x + 0.5) / width * domain. The gradient is
+// Output texel x maps to t = x / (width - 1) * domain — ENDPOINT-inclusive, so
+// texel 0 holds t=0 (the first stop, e.g. pure black) and the last texel holds
+// t=domain. A pure-black input therefore reads back pure black through
+// node.color_lut; a centre mapping (x+0.5)/width would leave texel 0 a half-step
+// up the ramp (a faint hue on the darkest palettes). Matches legacy i/(N-1).
+// The gradient is
 // evaluated over `count` stops (each vec4 = (position, r, g, b)) and matches
 // the legacy Infrared gradient() exactly:
 //   - t <= first stop position  → the first stop's colour (clamp below).
@@ -33,7 +38,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= dims.x || id.y >= dims.y {
         return;
     }
-    let t = (f32(id.x) + 0.5) / f32(dims.x) * u.domain;
+    let t = f32(id.x) / max(f32(dims.x) - 1.0, 1.0) * u.domain;
 
     let n = max(u.count, 1u);
     var rgb = u.stops[0].yzw;
