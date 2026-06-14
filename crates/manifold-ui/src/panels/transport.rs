@@ -14,6 +14,12 @@ const SECTION_SPACER: f32 = 8.0;
 const RIGHT_SPACING: f32 = 4.0;
 const CENTER_SPACER: f32 = 12.0;
 
+// Thin separators dropped into the existing section gaps so the bar reads as
+// clustered groups (sources | transport | tempo | file | render) instead of one
+// undifferentiated run of buttons.
+const DIVIDER_W: f32 = 1.0;
+const DIVIDER_V_INSET: f32 = 7.0;
+
 const STATUS_DOT_SIZE: f32 = 8.0;
 const STATUS_TEXT_W: f32 = 55.0;
 
@@ -1021,6 +1027,35 @@ impl TransportPanel {
         ) as i32;
     }
 
+    /// Drop thin vertical dividers into the section gaps the layout already
+    /// leaves, so the eye groups the bar into sources / transport / tempo /
+    /// file / render. Non-interactive panels — they never intercept clicks.
+    fn build_dividers(&mut self, tree: &mut UITree, bg: i32, bar: Rect) {
+        let y = bar.y + DIVIDER_V_INSET;
+        let h = (bar.height - DIVIDER_V_INSET * 2.0).max(1.0);
+        let l = &self.layout;
+        let mids = [
+            (l.clock_authority.x_max() + l.link_button.x) * 0.5, // source | link
+            (l.link_status.x_max() + l.clk_button.x) * 0.5,      // link | clk
+            (l.clk_status.x_max() + l.sync_button.x) * 0.5,      // clk | sync
+            (l.rec_button.x_max() + l.bpm_label.x) * 0.5,        // transport | tempo
+            (l.save_as.x_max() + l.export_button.x) * 0.5,       // file | render
+        ];
+        for mx in mids {
+            tree.add_panel(
+                bg,
+                mx - DIVIDER_W * 0.5,
+                y,
+                DIVIDER_W,
+                h,
+                UIStyle {
+                    bg_color: color::DIVIDER_COLOR,
+                    ..UIStyle::default()
+                },
+            );
+        }
+    }
+
     fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
         // clock_authority_id is read-only — authority is auto-determined from enabled sources
@@ -1110,6 +1145,7 @@ impl Panel for TransportPanel {
         self.build_left(tree, bg);
         self.build_center(tree, bg);
         self.build_right(tree, bg);
+        self.build_dividers(tree, bg, bar);
 
         self.cache_node_count = tree.count() - self.cache_first_node;
     }

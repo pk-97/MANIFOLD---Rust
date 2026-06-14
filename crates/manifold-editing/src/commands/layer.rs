@@ -47,6 +47,13 @@ impl Command for AddLayerCommand {
                 Layer::new(self.name.clone(), self.layer_type, 0)
             };
             new_layer.parent_layer_id = self.parent_group_id.clone();
+            // `Layer::new` keys layer_color off its index arg, but `insert_layer`
+            // overwrites `index` positionally and never recomputes the colour —
+            // so passing 0 here gave every added layer index-0's hue (the uniform
+            // timeline colour). Seed from the current layer count so each new
+            // layer steps to the next maximally-separated golden-ratio hue.
+            new_layer.layer_color =
+                Layer::generate_layer_color(project.timeline.layers.len());
             new_layer
         };
         self.layer = Some(layer.clone());
