@@ -506,11 +506,19 @@ impl ContentThread {
                     f(p);
                 }
                 // Re-notify renderers so caches (e.g. VideoRenderer's VideoLibrary)
-                // stay in sync with the mutated project.
-                if let Some(p) = self.engine.project() {
-                    let project_clone = p.clone();
-                    for renderer in self.engine.renderers_mut() {
-                        renderer.on_project_loaded(&project_clone);
+                // stay in sync with the mutated project. Split-borrow the renderers
+                // and the project so the live `&Project` is passed straight through —
+                // never a clone. This handler runs on EVERY MutateProject, including
+                // the per-mouse-move closures the live param / opacity / macro drags
+                // send, so a `project.clone()` here was deep-copying the whole
+                // timeline (every layer, clip, effect) each drag tick and stalling
+                // the content thread — the slider-drag render stutter. The mutation
+                // already happened above, so the reference reflects the same state a
+                // clone would have.
+                let (renderers, project) = self.engine.split_renderer_project();
+                if let Some(p) = project {
+                    for renderer in renderers.iter_mut() {
+                        renderer.on_project_loaded(p);
                     }
                 }
                 // Rebuild Ableton listeners so trim range changes take effect
