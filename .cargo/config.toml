@@ -1,0 +1,8 @@
+# Use lld as the linker for dev builds. manifold-app links every crate, so the
+# link step dominates incremental rebuilds. lld is a brew dependency:
+#   brew install lld
+# If you ever uninstall lld, comment the block below out — Apple's default
+# linker (ld-prime) is the fallback and is itself fast on Apple Silicon, so
+# this is a "measure it" optimisation, not a load-bearing one.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld/bin/ld64.lld"]

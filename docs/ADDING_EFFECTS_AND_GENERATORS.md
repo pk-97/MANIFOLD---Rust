@@ -1,12 +1,12 @@
 # Adding Effects and Generators
 
-Effects and generators ship through two different paths today. Effects went through the May 2026 JSON migration; generators are still on the original `inventory::submit!` workflow until their parallel migration lands.
+Effects and generators ship through the same path: a JSON preset file. Both went through the JSON migration (generators are fully migrated — zero Rust generators remain), and both load from disk at startup, not from the compiled binary.
 
 ---
 
 ## Adding an Effect — drop a JSON file
 
-A new effect is one file: `crates/manifold-renderer/assets/effect-presets/<TypeId>.json`. The build script (`build.rs`) scans the directory at compile time and codegens the `BUNDLED_PRESETS_GENERATED` table — no central registry edit, no Rust to write.
+A new effect is one file: `crates/manifold-renderer/assets/effect-presets/<TypeId>.json`. The preset loader (`preset_loader.rs`) scans that directory at startup and builds the catalog at runtime — the binary embeds no preset JSON, there's no `build.rs` codegen, no central registry edit, and no Rust to write. While the app is running, edits to a preset JSON hot-reload live (no rebuild, no restart) via the catalog's `ArcSwap` snapshot + file watcher.
 
 If your effect can be expressed by composing primitives that already exist, that's the whole step. If it needs a new atomic operation (new shader, new shape of compute work), add a primitive first ([ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md)) and then reference it from your JSON.
 
@@ -85,7 +85,7 @@ Static (registry) and user (per-instance exposed) bindings both run through the 
 
 ### Validation
 
-The build script does structural checks only — every file must parse and carry a `version`. Deeper validation runs at runtime in the preset loader:
+The loader does structural checks only — every file must parse and carry a `version`. Deeper validation runs when a preset is instantiated:
 
 - Every `typeId` in `nodes` references a registered primitive.
 - Every `bindings.target.handle` resolves to a node in the graph.
@@ -189,5 +189,5 @@ Generators will eventually follow effects onto a JSON-authoritative workflow und
 - [ADDING_PRIMITIVES.md](ADDING_PRIMITIVES.md) — authoring a new primitive (the atoms JSON presets reference)
 - [PRIMITIVE_LIBRARY_DESIGN.md](PRIMITIVE_LIBRARY_DESIGN.md) — primitive catalog, decomposition recipes
 - [EFFECT_RUNTIME_UNIFICATION.md](EFFECT_RUNTIME_UNIFICATION.md) §7.11 — bindings unification (one ResolvedBinding, one ParamConvert)
-- `crates/manifold-renderer/build.rs` — preset scan + codegen
-- `crates/manifold-renderer/src/node_graph/bundled_presets.rs` — runtime loader + the `every_bundled_preset_loads_validates_and_compiles` test
+- `crates/manifold-renderer/src/preset_loader.rs` — disk scan, catalog build, fail-loud rules, hot-reload watcher
+- `crates/manifold-renderer/src/node_graph/bundled_presets.rs` — thin lookup over the disk-loaded catalog + the `every_bundled_preset_loads_validates_and_compiles` test

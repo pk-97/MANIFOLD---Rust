@@ -60,9 +60,22 @@ opt-level = 2
 [profile.dev.package.symphonia-codec-aac]
 opt-level = 2
 
+# Dev profile — tuned for fast edit-rebuild-relink iteration.
+# manifold-app links every crate, so link time dominates incremental builds.
+[profile.dev]
+# Keep file:line in backtraces but skip full variable/type debuginfo —
+# a big cut to both codegen and link time across the 14-crate workspace.
+debug = "line-tables-only"
+# On macOS, leave debuginfo in the .o files instead of running dsymutil to
+# pack a .dSYM on every link. Removes the slowest part of the link step.
+split-debuginfo = "unpacked"
+
 # Release profile — optimise for runtime performance and binary size.
 [profile.release]
 # lto = "fat"
-codegen-units = 1
+# 16 codegen units instead of 1: parallel codegen for a far faster release
+# build at ~1-2% runtime cost. Re-set to 1 only for a final shipped build.
+codegen-units = 16
 strip = "symbols"
 panic = "abort"
+split-debuginfo = "unpacked"
