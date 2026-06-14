@@ -19,6 +19,7 @@ pub mod reference;
 pub mod region;
 pub mod segment;
 pub mod space;
+pub mod verdict_cache;
 
 pub use classify::FusionKind;
 pub use diff::{DiffResult, TextureDiff};

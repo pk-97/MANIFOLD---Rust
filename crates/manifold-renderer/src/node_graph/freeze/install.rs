@@ -671,25 +671,61 @@ pub(crate) fn compile_segment_view(
     // the whole segment to refused. The winning partial mask becomes the
     // segment's def, so the live path renders exactly the measured winner.
     if let Some(device) = gate_device {
-        let baseline = segment_baseline_def(cards).unwrap_or_else(|| concat.clone());
         let n = canonical_region_count(&concat, registry);
-        let mut fused_for_mask = |mask: &[bool]| -> Option<EffectGraphDef> {
-            if mask.iter().all(|&on| on) {
-                return Some(fused.def.clone());
+        let cache_key = segment_key(cards);
+        let device_name = device.device_name();
+
+        // A verdict measured on this EXACT segment content on a prior launch.
+        // The key is content-derived, so a persisted entry can only ever be
+        // applied to the same graph it was measured on — change a card or the
+        // wiring and the key changes, missing the cache and re-measuring. On a
+        // hit we skip the (expensive, 4K) gate measurement and rebuild from the
+        // recorded mask; codegen below is cheap.
+        let win_mask: Vec<bool> = match super::verdict_cache::lookup(&device_name, cache_key) {
+            Some(super::verdict_cache::SegmentVerdict::KeepPerCard) => return None,
+            Some(super::verdict_cache::SegmentVerdict::Fuse(mask)) if mask.len() == n => mask,
+            // No verdict (or a cached mask whose length no longer matches the
+            // partition — codegen drift a version bump missed): measure now and
+            // persist the result for next launch.
+            _ => {
+                let baseline = segment_baseline_def(cards).unwrap_or_else(|| concat.clone());
+                let mut fused_for_mask = |mask: &[bool]| -> Option<EffectGraphDef> {
+                    if mask.iter().all(|&on| on) {
+                        return Some(fused.def.clone());
+                    }
+                    let cand =
+                        fuse_canonical_def_masked(&concat, registry, Some(mask), &bound_targets)?;
+                    if !fused_def_builds(&cand.def, registry, &cand.expected_spaces) {
+                        return None;
+                    }
+                    Some(cand.def.clone())
+                };
+                match super::perf_gate::measure_segment_masked(
+                    device,
+                    registry,
+                    &baseline,
+                    n,
+                    &mut fused_for_mask,
+                ) {
+                    Some(mask) => {
+                        super::verdict_cache::record(
+                            &device_name,
+                            cache_key,
+                            super::verdict_cache::SegmentVerdict::Fuse(mask.clone()),
+                        );
+                        mask
+                    }
+                    None => {
+                        super::verdict_cache::record(
+                            &device_name,
+                            cache_key,
+                            super::verdict_cache::SegmentVerdict::KeepPerCard,
+                        );
+                        return None;
+                    }
+                }
             }
-            let cand = fuse_canonical_def_masked(&concat, registry, Some(mask), &bound_targets)?;
-            if !fused_def_builds(&cand.def, registry, &cand.expected_spaces) {
-                return None;
-            }
-            Some(cand.def.clone())
         };
-        let win_mask = super::perf_gate::measure_segment_masked(
-            device,
-            registry,
-            &baseline,
-            n,
-            &mut fused_for_mask,
-        )?;
         if !win_mask.iter().all(|&on| on) {
             // Partial winner: rebuild the final FusedDef from the mask so the
             // retarget map below matches the def that actually splices.
