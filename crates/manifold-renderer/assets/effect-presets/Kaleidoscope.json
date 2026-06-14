@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Kaleidoscope",
-  "description": "Polar segment-mirror, decomposed: node.radial_fold_uv builds the folded sample UV, node.remap resamples the source there, node.mix crossfades. Replaces the legacy node.kaleidoscope bundle (bit-exact — the fold shader is a verbatim port).",
+  "description": "Kaleidoscope is a polar segment-mirror effect decomposed into three atomic stages for clarity and editability.\n\nThe flow is source in, three processing steps, output. First, Fold UV computes the radial folding coordinates for the selected segment count (default 6) and mirror geometry. Next, Resample reads the source texture at those folded UVs, effectively tiling the mirrored pattern into the canvas. Finally, Blend Crossfade mixes between the original source and the resampled kaleidoscope image using the Amount slider (0 = pure source, 1 = pure kaleidoscope).\n\nThe Fold UV shader is a verbatim port of the legacy node.kaleidoscope kernel, so the visual result is bit-exact with the original bundle. Segments is editable at any time and affects the fold geometry live. This decomposition replaces the monolithic legacy shader with three well-named, independently usable atoms.",
   "presetMetadata": {
     "id": "Kaleidoscope",
     "displayName": "Kaleidoscope",
@@ -9,6 +9,7 @@
     "oscPrefix": "kaleidoscope",
     "legacyDiscriminant": 14,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -28,6 +30,7 @@
         "defaultValue": 6.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
         "oscSuffix": "Segments"
       }
     ],
@@ -73,47 +76,99 @@
   "nodes": [
     {
       "id": 0,
+      "nodeId": "source",
       "typeId": "system.source",
-      "handle": "source", "nodeId": "source"
+      "handle": "source",
+      "title": "Source"
     },
     {
       "id": 1,
+      "nodeId": "fold",
       "typeId": "node.radial_fold_uv",
-      "handle": "fold", "nodeId": "fold",
+      "handle": "fold",
       "params": {
-        "segments": { "type": "Float", "value": 6.0 },
-        "cx": { "type": "Float", "value": 0.5 },
-        "cy": { "type": "Float", "value": 0.5 }
-      }
+        "cx": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "cy": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "segments": {
+          "type": "Float",
+          "value": 6.0
+        }
+      },
+      "title": "Fold UV"
     },
     {
       "id": 2,
+      "nodeId": "remapped",
       "typeId": "node.remap",
-      "handle": "remapped", "nodeId": "remapped",
+      "handle": "remapped",
       "params": {
-        "wrap": { "type": "Enum", "value": 0 }
-      }
+        "wrap": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Resample"
     },
     {
       "id": 3,
+      "nodeId": "kaleidoscope",
       "typeId": "node.mix",
-      "handle": "kaleidoscope", "nodeId": "kaleidoscope",
+      "handle": "kaleidoscope",
       "params": {
-        "amount": { "type": "Float", "value": 1.0 },
-        "mode": { "type": "Enum", "value": 0 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Blend Crossfade"
     },
     {
       "id": 4,
+      "nodeId": "final_output",
       "typeId": "system.final_output",
-      "handle": "final_output", "nodeId": "final_output"
+      "handle": "final_output"
     }
   ],
   "wires": [
-    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "uv_field" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "source" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "a" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "b" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "uv_field"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    }
   ]
 }

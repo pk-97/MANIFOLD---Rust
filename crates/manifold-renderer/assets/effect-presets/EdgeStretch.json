@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "EdgeStretch",
-  "description": "Edge-stretch, decomposed: node.uv_strip_clamp builds the strip-clamped sample UV, node.remap resamples the source there, node.mix crossfades. Replaces the legacy node.edge_stretch bundle (bit-exact — the clamp shader is a verbatim port).",
+  "description": "Edge stretch remaps source material toward its edges: a decomposed, shaderless pipeline that builds on three atoms. The UV Strip Clamp shader resamples the source texture by clamping a sample width along one or both axes (horizontal, vertical, or both). Remapped Source then resamples the original at those clamped coordinates. Finally, Crossfade blends the remapped texture back toward the original, using the Amount parameter to dial the effect in and out from zero to full stretch. The result is the live input, preserving the performance surface bindings: Amount and Width drive the mix and clamp width, Direction routes to both stretch controls, and the preset skips when Amount is zero.",
   "presetMetadata": {
     "id": "EdgeStretch",
     "displayName": "Edge Stretch",
@@ -9,6 +9,7 @@
     "oscPrefix": "edgeStretch",
     "legacyDiscriminant": 15,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -28,6 +30,7 @@
         "defaultValue": 0.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "SourceWidth"
       },
@@ -39,6 +42,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
         "valueLabels": [
           "Horiz",
           "Vert",
@@ -102,46 +106,94 @@
   "nodes": [
     {
       "id": 0,
+      "nodeId": "source",
       "typeId": "system.source",
-      "handle": "source", "nodeId": "source"
+      "handle": "source"
     },
     {
       "id": 1,
+      "nodeId": "strip",
       "typeId": "node.uv_strip_clamp",
-      "handle": "strip", "nodeId": "strip",
+      "handle": "strip",
       "params": {
-        "width": { "type": "Float", "value": 0.5 },
-        "direction": { "type": "Enum", "value": 0 }
-      }
+        "direction": {
+          "type": "Enum",
+          "value": 0
+        },
+        "width": {
+          "type": "Float",
+          "value": 0.5
+        }
+      },
+      "title": "UV Strip Clamp"
     },
     {
       "id": 2,
+      "nodeId": "remapped",
       "typeId": "node.remap",
-      "handle": "remapped", "nodeId": "remapped",
+      "handle": "remapped",
       "params": {
-        "wrap": { "type": "Enum", "value": 0 }
-      }
+        "wrap": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Remapped Source"
     },
     {
       "id": 3,
+      "nodeId": "edge_stretch",
       "typeId": "node.mix",
-      "handle": "edge_stretch", "nodeId": "edge_stretch",
+      "handle": "edge_stretch",
       "params": {
-        "amount": { "type": "Float", "value": 1.0 },
-        "mode": { "type": "Enum", "value": 0 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Crossfade"
     },
     {
       "id": 4,
+      "nodeId": "final_output",
       "typeId": "system.final_output",
-      "handle": "final_output", "nodeId": "final_output"
+      "handle": "final_output"
     }
   ],
   "wires": [
-    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "uv_field" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "source" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "a" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "b" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "uv_field"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    }
   ]
 }

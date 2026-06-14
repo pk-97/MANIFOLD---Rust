@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "InvertColors",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Invert Colors is a simple, single-stage effect that reads the incoming image and inverts all RGB values per pixel. The Amount slider controls the strength of the inversion applied by the core node: at 0.0 no inversion occurs (effect is skipped); at 1.0 (default) colors are fully inverted. Pass this effect through to the output with the inverted result.",
   "presetMetadata": {
     "id": "InvertColors",
     "displayName": "Invert",
@@ -9,6 +9,7 @@
     "oscPrefix": "invert",
     "legacyDiscriminant": 1,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       }
     ],
@@ -44,24 +46,30 @@
   "nodes": [
     {
       "id": 0,
+      "nodeId": "source",
       "typeId": "system.source",
-      "handle": "source", "nodeId": "source"
+      "handle": "source",
+      "title": "Source"
     },
     {
       "id": 1,
+      "nodeId": "invert",
       "typeId": "node.invert",
-      "handle": "invert", "nodeId": "invert",
+      "handle": "invert",
       "params": {
         "intensity": {
           "type": "Float",
           "value": 1.0
         }
-      }
+      },
+      "title": "Invert"
     },
     {
       "id": 2,
+      "nodeId": "final_output",
       "typeId": "system.final_output",
-      "handle": "final_output", "nodeId": "final_output"
+      "handle": "final_output",
+      "title": "Output"
     }
   ],
   "wires": [

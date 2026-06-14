@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "QuadMirror",
-  "description": "Center-symmetric 4-way UV fold, decomposed: centered_uv → abs → scale_offset builds the mirrored UV field, node.remap resamples the source there, node.mix crossfades. Replaces the legacy node.quad_mirror bundle.",
+  "description": "Quad Mirror is a center-symmetric 4-way UV fold effect decomposed into a readable linear pipeline. The source feeds into a centered UV coordinate system, which is folded by absolute value to create mirror symmetry. A scale-offset transform then remaps the folded coordinates back into the 0-1 range, and a remap node resamples the source texture at the mirrored coordinates. Finally, a mix node crossfades between the original source and the remapped version, with the Amount parameter controlling the blend. At load, this flat structure compiles byte-identically to the legacy node.quad_mirror bundle.",
   "presetMetadata": {
     "id": "QuadMirror",
     "displayName": "Quad Mirror",
@@ -9,6 +9,7 @@
     "oscPrefix": "quadMirror",
     "legacyDiscriminant": 17,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       }
     ],
@@ -44,64 +46,138 @@
   "nodes": [
     {
       "id": 0,
+      "nodeId": "source",
       "typeId": "system.source",
-      "handle": "source", "nodeId": "source"
+      "handle": "source"
     },
     {
       "id": 1,
+      "nodeId": "center",
       "typeId": "node.centered_uv",
-      "handle": "center", "nodeId": "center",
+      "handle": "center",
       "params": {
-        "cx": { "type": "Float", "value": 0.5 },
-        "cy": { "type": "Float", "value": 0.5 },
-        "scale_x": { "type": "Float", "value": 1.0 },
-        "scale_y": { "type": "Float", "value": 1.0 }
-      }
+        "cx": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "cy": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Centered UV"
     },
     {
       "id": 2,
+      "nodeId": "fold",
       "typeId": "node.abs_texture",
-      "handle": "fold", "nodeId": "fold"
+      "handle": "fold",
+      "title": "Fold (Absolute)"
     },
     {
       "id": 3,
+      "nodeId": "mirror_uv",
       "typeId": "node.scale_offset_texture",
-      "handle": "mirror_uv", "nodeId": "mirror_uv",
+      "handle": "mirror_uv",
       "params": {
-        "scale": { "type": "Float", "value": -2.0 },
-        "offset": { "type": "Float", "value": 1.0 }
-      }
+        "offset": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": -2.0
+        }
+      },
+      "title": "Mirror Remap"
     },
     {
       "id": 4,
+      "nodeId": "remapped",
       "typeId": "node.remap",
-      "handle": "remapped", "nodeId": "remapped",
+      "handle": "remapped",
       "params": {
-        "wrap": { "type": "Enum", "value": 0 }
-      }
+        "wrap": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Resample"
     },
     {
       "id": 5,
+      "nodeId": "quad_mirror",
       "typeId": "node.mix",
-      "handle": "quad_mirror", "nodeId": "quad_mirror",
+      "handle": "quad_mirror",
       "params": {
-        "amount": { "type": "Float", "value": 1.0 },
-        "mode": { "type": "Enum", "value": 0 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Crossfade"
     },
     {
       "id": 6,
+      "nodeId": "final_output",
       "typeId": "system.final_output",
-      "handle": "final_output", "nodeId": "final_output"
+      "handle": "final_output"
     }
   ],
   "wires": [
-    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "source" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "uv_field" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "a" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "uv_field"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in"
+    }
   ]
 }

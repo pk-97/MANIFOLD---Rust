@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "StylizedFeedback",
-  "description": "Zoom/rotate/blend feedback chain built from primitives: feedback (1-frame delay) → affine_transform (zoom/rotate the previous frame) → gain (scale by Amount) → vignette (soft rectangular fade hides the displaced copy's hard edges) → mix (Screen-blend the source over the transformed history). The loop closes through the feedback node's state capture, exposed in the graph editor.",
+  "description": "Feedback trails built from a simple cascade. The source image mixes with the prior frame delayed by one render, which gets zoomed and rotated, scaled by Amount, vignetted to hide edge artifacts from the transform, then Screen-blended back over the fresh input. The Amount slider gates the feedback intensity; Zoom and Rotate are direct transforms applied to history. The loop closes when the blended result recirculates through the feedback node's 1-frame delay, building persistent trails from the motion.",
   "presetMetadata": {
     "id": "StylizedFeedback",
     "displayName": "Stylized Feedback",
@@ -9,6 +9,7 @@
     "oscPrefix": "stylizedFeedback",
     "legacyDiscriminant": 20,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 0.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -28,6 +30,7 @@
         "defaultValue": 0.95,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "Zoom"
       },
@@ -39,6 +42,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "Rotate"
       }
@@ -53,7 +57,9 @@
           "nodeId": "gain",
           "param": "gain"
         },
-        "convert": { "type": "Float" }
+        "convert": {
+          "type": "Float"
+        }
       },
       {
         "id": "zoom",
@@ -64,7 +70,9 @@
           "nodeId": "affine",
           "param": "scale"
         },
-        "convert": { "type": "Float" }
+        "convert": {
+          "type": "Float"
+        }
       },
       {
         "id": "rotate",
@@ -75,60 +83,152 @@
           "nodeId": "affine",
           "param": "rotation"
         },
-        "convert": { "type": "Float" }
+        "convert": {
+          "type": "Float"
+        }
       }
     ],
-    "skipMode": { "kind": "never" }
+    "skipMode": {
+      "kind": "never"
+    }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
-    { "id": 1, "typeId": "node.feedback", "handle": "feedback", "nodeId": "feedback" },
+    {
+      "id": 0,
+      "nodeId": "source",
+      "typeId": "system.source",
+      "handle": "source",
+      "title": "Source"
+    },
+    {
+      "id": 1,
+      "nodeId": "feedback",
+      "typeId": "node.feedback",
+      "handle": "feedback",
+      "title": "Feedback"
+    },
     {
       "id": 2,
+      "nodeId": "affine",
       "typeId": "node.affine_transform",
-      "handle": "affine", "nodeId": "affine",
+      "handle": "affine",
       "params": {
-        "scale": { "type": "Float", "value": 0.95 },
-        "rotation": { "type": "Float", "value": 0.0 }
-      }
+        "rotation": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 0.95
+        }
+      },
+      "title": "Zoom Rotate"
     },
     {
       "id": 3,
+      "nodeId": "gain",
       "typeId": "node.gain",
-      "handle": "gain", "nodeId": "gain",
+      "handle": "gain",
       "params": {
-        "gain": { "type": "Float", "value": 0.5 }
-      }
+        "gain": {
+          "type": "Float",
+          "value": 0.5
+        }
+      },
+      "title": "Amount"
     },
     {
       "id": 4,
+      "nodeId": "vignette",
       "typeId": "node.vignette",
-      "handle": "vignette", "nodeId": "vignette",
+      "handle": "vignette",
       "params": {
-        "shape": { "type": "Enum", "value": 2 },
-        "size": { "type": "Float", "value": 0.98 },
-        "softness": { "type": "Float", "value": 0.04 },
-        "strength": { "type": "Float", "value": 1.0 }
-      }
+        "shape": {
+          "type": "Enum",
+          "value": 2
+        },
+        "size": {
+          "type": "Float",
+          "value": 0.98
+        },
+        "softness": {
+          "type": "Float",
+          "value": 0.04
+        },
+        "strength": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Vignette"
     },
     {
       "id": 5,
+      "nodeId": "mix",
       "typeId": "node.mix",
-      "handle": "mix", "nodeId": "mix",
+      "handle": "mix",
       "params": {
-        "amount": { "type": "Float", "value": 1.0 },
-        "mode": { "type": "Enum", "value": 1 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 1
+        }
+      },
+      "title": "Screen Blend"
     },
-    { "id": 6, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+    {
+      "id": 6,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "a" },
-    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 1, "toPort": "in" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in"
+    }
   ]
 }

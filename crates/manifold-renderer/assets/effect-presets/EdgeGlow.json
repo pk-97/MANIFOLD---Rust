@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "EdgeGlow",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "Edge detection effect that finds and highlights boundaries in the input image. The source feeds through a configurable edge detector (choice of Sobel, Laplacian, or Frei-Chen kernels) with selectable sensitivity and blend amount, then outputs the result. Mode switches between three classic edge-detection algorithms, Threshold sets the sensitivity to noise, and Amount controls the final glow intensity.",
   "presetMetadata": {
     "id": "EdgeGlow",
     "displayName": "Edge Detect",
@@ -9,6 +9,7 @@
     "oscPrefix": "edgeDetect",
     "legacyDiscriminant": 25,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -28,6 +30,7 @@
         "defaultValue": 0.1,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "Threshold"
       },
@@ -39,6 +42,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
         "valueLabels": [
           "Sobel",
           "Laplacian",
@@ -89,13 +93,15 @@
   "nodes": [
     {
       "id": 0,
+      "nodeId": "source",
       "typeId": "system.source",
-      "handle": "source", "nodeId": "source"
+      "handle": "source"
     },
     {
       "id": 1,
+      "nodeId": "edge_detect",
       "typeId": "node.edge_detect",
-      "handle": "edge_detect", "nodeId": "edge_detect",
+      "handle": "edge_detect",
       "params": {
         "amount": {
           "type": "Float",
@@ -105,12 +111,14 @@
           "type": "Float",
           "value": 0.1
         }
-      }
+      },
+      "title": "Edge Detector"
     },
     {
       "id": 2,
+      "nodeId": "final_output",
       "typeId": "system.final_output",
-      "handle": "final_output", "nodeId": "final_output"
+      "handle": "final_output"
     }
   ],
   "wires": [

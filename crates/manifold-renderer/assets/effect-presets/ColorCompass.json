@@ -1,13 +1,14 @@
 {
   "version": 2,
   "name": "ColorCompass",
-  "description": "Image slides toward its own brightest direction. Four ColorSamples read N/E/S/W luma, subtractions produce a (dx, dy) direction vector, smoothing tames per-frame jitter, the smoothed components drive AffineTransform's translate_x / translate_y. Translation is proportional to brightness asymmetry — small asymmetry slides a little, big asymmetry slides a lot, and zero asymmetry is exactly zero (no atan2 degeneracy). Feedback-free; the loop closes through the one-frame texture→scalar bridge.",
+  "description": "Image slides toward its own brightest direction. Four ColorSamples read luma at cardinal compass points (north, south, east, west). Subtracting north from south yields the vertical component of motion; subtracting west from east yields horizontal. Both direction components are scaled by the Intensity slider to set the per-frame translation magnitude. A pair of Smoothing nodes with Reactivity as the time constant tame per-frame jitter in the computed direction, letting the movement feel purposeful rather than noisy. Finally, AffineTransform applies the smoothed components as translate_x and translate_y, sliding the image proportionally to the brightness gradient. Translation magnitude is zero when the image is rotationally symmetric (no brighter direction) and grows linearly with asymmetry, avoiding any atan2 singularities. Feedback-free; the loop closes through the one-frame texture-to-scalar bridge.",
   "presetMetadata": {
     "id": "ColorCompass",
     "displayName": "Color Compass",
     "category": "Spatial",
     "oscPrefix": "color_compass",
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "intensity",
@@ -17,6 +18,7 @@
         "defaultValue": 5.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -27,6 +29,7 @@
         "defaultValue": 0.05,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       }
     ],
@@ -66,176 +69,318 @@
   "nodes": [
     {
       "id": 0,
+      "nodeId": "source",
       "typeId": "system.source",
-      "handle": "source", "nodeId": "source"
+      "handle": "source",
+      "title": "Source"
     },
     {
       "id": 1,
+      "nodeId": "sample_n",
       "typeId": "node.color_sample",
-      "handle": "sample_n", "nodeId": "sample_n",
+      "handle": "sample_n",
       "params": {
-        "uv": {
-          "type": "Vec2",
-          "value": [0.5, 0.2]
-        },
         "radius_px": {
           "type": "Int",
           "value": 24
+        },
+        "uv": {
+          "type": "Vec2",
+          "value": [
+            0.5,
+            0.2
+          ]
         }
-      }
+      },
+      "title": "Sample North"
     },
     {
       "id": 2,
+      "nodeId": "sample_s",
       "typeId": "node.color_sample",
-      "handle": "sample_s", "nodeId": "sample_s",
+      "handle": "sample_s",
       "params": {
-        "uv": {
-          "type": "Vec2",
-          "value": [0.5, 0.8]
-        },
         "radius_px": {
           "type": "Int",
           "value": 24
+        },
+        "uv": {
+          "type": "Vec2",
+          "value": [
+            0.5,
+            0.8
+          ]
         }
-      }
+      },
+      "title": "Sample South"
     },
     {
       "id": 3,
+      "nodeId": "sample_e",
       "typeId": "node.color_sample",
-      "handle": "sample_e", "nodeId": "sample_e",
+      "handle": "sample_e",
       "params": {
-        "uv": {
-          "type": "Vec2",
-          "value": [0.8, 0.5]
-        },
         "radius_px": {
           "type": "Int",
           "value": 24
+        },
+        "uv": {
+          "type": "Vec2",
+          "value": [
+            0.8,
+            0.5
+          ]
         }
-      }
+      },
+      "title": "Sample East"
     },
     {
       "id": 4,
+      "nodeId": "sample_w",
       "typeId": "node.color_sample",
-      "handle": "sample_w", "nodeId": "sample_w",
+      "handle": "sample_w",
       "params": {
-        "uv": {
-          "type": "Vec2",
-          "value": [0.2, 0.5]
-        },
         "radius_px": {
           "type": "Int",
           "value": 24
+        },
+        "uv": {
+          "type": "Vec2",
+          "value": [
+            0.2,
+            0.5
+          ]
         }
-      }
+      },
+      "title": "Sample West"
     },
     {
       "id": 5,
+      "nodeId": "math_dy",
       "typeId": "node.math",
-      "handle": "math_dy", "nodeId": "math_dy",
+      "handle": "math_dy",
       "params": {
         "op": {
           "type": "Enum",
           "value": 1
         }
-      }
+      },
+      "title": "Vertical Direction"
     },
     {
       "id": 6,
+      "nodeId": "math_dx",
       "typeId": "node.math",
-      "handle": "math_dx", "nodeId": "math_dx",
+      "handle": "math_dx",
       "params": {
         "op": {
           "type": "Enum",
           "value": 1
         }
-      }
+      },
+      "title": "Horizontal Direction"
     },
     {
       "id": 7,
+      "nodeId": "intensity_value",
       "typeId": "node.value",
-      "handle": "intensity_value", "nodeId": "intensity_value",
+      "handle": "intensity_value",
       "params": {
         "value": {
           "type": "Float",
           "value": 5.0
         }
-      }
+      },
+      "title": "Intensity"
     },
     {
       "id": 8,
+      "nodeId": "math_int_x",
       "typeId": "node.math",
-      "handle": "math_int_x", "nodeId": "math_int_x",
+      "handle": "math_int_x",
       "params": {
         "op": {
           "type": "Enum",
           "value": 2
         }
-      }
+      },
+      "title": "Scale X by Intensity"
     },
     {
       "id": 9,
+      "nodeId": "math_int_y",
       "typeId": "node.math",
-      "handle": "math_int_y", "nodeId": "math_int_y",
+      "handle": "math_int_y",
       "params": {
         "op": {
           "type": "Enum",
           "value": 2
         }
-      }
+      },
+      "title": "Scale Y by Intensity"
     },
     {
       "id": 10,
+      "nodeId": "reactivity_value",
       "typeId": "node.value",
-      "handle": "reactivity_value", "nodeId": "reactivity_value",
+      "handle": "reactivity_value",
       "params": {
         "value": {
           "type": "Float",
           "value": 0.05
         }
-      }
+      },
+      "title": "Reactivity"
     },
     {
       "id": 11,
+      "nodeId": "smoothing_x",
       "typeId": "node.smoothing",
-      "handle": "smoothing_x", "nodeId": "smoothing_x"
+      "handle": "smoothing_x",
+      "title": "Smooth X"
     },
     {
       "id": 12,
+      "nodeId": "smoothing_y",
       "typeId": "node.smoothing",
-      "handle": "smoothing_y", "nodeId": "smoothing_y"
+      "handle": "smoothing_y",
+      "title": "Smooth Y"
     },
     {
       "id": 13,
+      "nodeId": "affine",
       "typeId": "node.affine_transform",
-      "handle": "affine", "nodeId": "affine"
+      "handle": "affine",
+      "title": "Translate by Direction"
     },
     {
       "id": 14,
+      "nodeId": "final_output",
       "typeId": "system.final_output",
-      "handle": "final_output", "nodeId": "final_output"
+      "handle": "final_output",
+      "title": "Output"
     }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "in" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "in" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 13, "toPort": "in" },
-    { "fromNode": 1, "fromPort": "luma", "toNode": 5, "toPort": "a" },
-    { "fromNode": 2, "fromPort": "luma", "toNode": 5, "toPort": "b" },
-    { "fromNode": 3, "fromPort": "luma", "toNode": 6, "toPort": "a" },
-    { "fromNode": 4, "fromPort": "luma", "toNode": 6, "toPort": "b" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 8, "toPort": "a" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 8, "toPort": "b" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 9, "toPort": "a" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "b" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 11, "toPort": "in" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 12, "toPort": "in" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "time_constant" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "time_constant" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "translate_x" },
-    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "translate_y" },
-    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "luma",
+      "toNode": 5,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "luma",
+      "toNode": 5,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "luma",
+      "toNode": 6,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "luma",
+      "toNode": 6,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "time_constant"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 12,
+      "toPort": "time_constant"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "translate_x"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "translate_y"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "in"
+    }
   ]
 }

@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Strobe",
-  "description": "Strobe, decomposed: node.beat_gate produces the beat-synced square gate (fract(beats*rate) >= 0.5 ? amount : 0, reading FrameTime.beats — identical to the legacy inline gate, proven by beat_gate's parity test), and node.flash applies it to the image in the selected mode (Opacity = toward black, White = toward white, Gain = 3x brighten). Replaces the fused node.strobe kernel; the gate is now a reusable wireable signal and the flash a reusable scalar-driven brightness modulator (drive it from an LFO/audio/MIDI too). No system.generator_input needed — beat_gate reads the beat from FrameTime.",
+  "description": "Strobe is a beat-synced brightness modulator, decomposed from the legacy fused kernel into two reusable pieces: a beat-gated square wave and a brightness flash effect.\n\nThe source image flows into the flash node, which modulates it by a brightness envelope driven by the beat gate. The beat gate reads FrameTime.beats and produces a square wave at a synced rate (1/1 to 1/64), scaled by the amount slider. The gate is held internally at 50 percent duty cycle and zero phase, giving a clean on/off pulse matching the legacy strobe behavior.\n\nThe flash node applies the gate signal to the image in one of three modes: Opacity fades toward black, White fades toward white, and Gain applies a 3x brighten. The result is driven directly to the output.\n\nNo grouping is needed: the graph is already transparent, and moving between nodes requires no layering.",
   "presetMetadata": {
     "id": "Strobe",
     "displayName": "Strobe",
@@ -9,6 +9,7 @@
     "oscPrefix": "strobe",
     "legacyDiscriminant": 19,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -28,6 +30,7 @@
         "defaultValue": 6.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
         "valueLabels": [
           "1/1",
           "1/2",
@@ -50,6 +53,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
         "valueLabels": [
           "Opacity",
           "White",
@@ -63,22 +67,40 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "gate", "param": "amount" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "gate",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
       },
       {
         "id": "rate",
         "label": "Rate",
         "defaultValue": 6.0,
-        "target": { "kind": "node", "nodeId": "gate", "param": "rate" },
-        "convert": { "type": "EnumRound" }
+        "target": {
+          "kind": "node",
+          "nodeId": "gate",
+          "param": "rate"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
       },
       {
         "id": "mode",
         "label": "Mode",
         "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "flash", "param": "mode" },
-        "convert": { "type": "EnumRound" }
+        "target": {
+          "kind": "node",
+          "nodeId": "flash",
+          "param": "mode"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
       }
     ],
     "skipMode": {
@@ -87,32 +109,81 @@
     }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
+    {
+      "id": 0,
+      "nodeId": "source",
+      "typeId": "system.source",
+      "handle": "source",
+      "title": "Source"
+    },
     {
       "id": 1,
+      "nodeId": "gate",
       "typeId": "node.beat_gate",
-      "handle": "gate", "nodeId": "gate",
+      "handle": "gate",
       "params": {
-        "rate": { "type": "Enum", "value": 6 },
-        "amount": { "type": "Float", "value": 0.0 },
-        "duty": { "type": "Float", "value": 0.5 },
-        "phase": { "type": "Float", "value": 0.0 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "duty": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "phase": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "rate": {
+          "type": "Enum",
+          "value": 6
+        }
+      },
+      "title": "Beat Gate"
     },
     {
       "id": 2,
+      "nodeId": "flash",
       "typeId": "node.flash",
-      "handle": "flash", "nodeId": "flash",
+      "handle": "flash",
       "params": {
-        "amount": { "type": "Float", "value": 0.0 },
-        "mode": { "type": "Enum", "value": 0 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Flash"
     },
-    { "id": 3, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+    {
+      "id": 3,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
-    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "amount" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "amount"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    }
   ]
 }

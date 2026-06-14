@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "ChromaticAberration",
-  "description": "RGB channel separation, decomposed: node.radial_offset_field builds the radial/linear direction field, node.math scales the UV-space `offset` into a (negated) pixel displacement, node.chromatic_displace does the 3-tap RGB recombine (R outward, G center, B inward), node.mix crossfades by `amount`. Replaces the fused node.chromatic_aberration kernel. Visual delta vs legacy: chromatic_displace divides by dims so the split is isotropic in pixels (round halo) where the legacy added a raw UV offset (anisotropic / elliptical). Same controls, same look family; verified by eye.",
+  "description": "Chromatic aberration via RGB channel separation. The source image flows through three stages. First, a radial or linear direction field is built from the canvas center or a specified angle, with falloff control. That field is scaled by the offset parameter (negated to pixel coordinates) to set the per-channel displacement. The chromatic_displace kernel reads the source at three sample points along the field (red outward, green center, blue inward) and recombines them. Finally, a mix node crossfades the separated result back against the source by the amount slider, skipping the effect when amount is zero. The direction field (radial vs. linear) and angle are card-controlled; falloff and offset drive the visual intensity.",
   "presetMetadata": {
     "id": "ChromaticAberration",
     "displayName": "Chromatic Aberration",
@@ -9,6 +9,7 @@
     "oscPrefix": "chromAb",
     "legacyDiscriminant": 30,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -28,6 +30,7 @@
         "defaultValue": 0.01,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "Offset"
       },
@@ -39,6 +42,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
         "valueLabels": [
           "Radial",
           "Linear"
@@ -53,6 +57,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "Angle"
       },
@@ -64,6 +69,7 @@
         "defaultValue": 0.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "Falloff"
       }
@@ -143,58 +149,125 @@
   "nodes": [
     {
       "id": 0,
+      "nodeId": "source",
       "typeId": "system.source",
-      "handle": "source", "nodeId": "source"
+      "handle": "source"
     },
     {
       "id": 1,
+      "nodeId": "field",
       "typeId": "node.radial_offset_field",
-      "handle": "field", "nodeId": "field",
+      "handle": "field",
       "params": {
-        "mode": { "type": "Enum", "value": 0 },
-        "angle": { "type": "Float", "value": 0.0 },
-        "falloff": { "type": "Float", "value": 0.5 }
-      }
+        "angle": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "falloff": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Direction Field"
     },
     {
       "id": 2,
+      "nodeId": "offset_scale",
       "typeId": "node.math",
-      "handle": "offset_scale", "nodeId": "offset_scale",
+      "handle": "offset_scale",
       "params": {
-        "a": { "type": "Float", "value": 0.01 },
-        "b": { "type": "Float", "value": -1000.0 },
-        "op": { "type": "Enum", "value": 2 }
-      }
+        "a": {
+          "type": "Float",
+          "value": 0.01
+        },
+        "b": {
+          "type": "Float",
+          "value": -1000.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Pixel Displacement"
     },
     {
       "id": 3,
+      "nodeId": "split",
       "typeId": "node.chromatic_displace",
-      "handle": "split", "nodeId": "split",
+      "handle": "split",
       "params": {
-        "amount": { "type": "Float", "value": -10.0 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": -10.0
+        }
+      },
+      "title": "RGB Separation"
     },
     {
       "id": 4,
+      "nodeId": "chromatic",
       "typeId": "node.mix",
-      "handle": "chromatic", "nodeId": "chromatic",
+      "handle": "chromatic",
       "params": {
-        "amount": { "type": "Float", "value": 1.0 },
-        "mode": { "type": "Enum", "value": 0 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Blend To Source"
     },
     {
       "id": 5,
+      "nodeId": "final_output",
       "typeId": "system.final_output",
-      "handle": "final_output", "nodeId": "final_output"
+      "handle": "final_output"
     }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "in" },
-    { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "velocity" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "amount" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "a" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "b" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "velocity"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "amount"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "in"
+    }
   ]
 }

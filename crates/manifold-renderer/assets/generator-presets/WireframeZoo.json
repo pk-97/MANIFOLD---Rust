@@ -1,13 +1,14 @@
 {
   "version": 2,
   "name": "Wireframe",
-  "description": "Wireframe shapes — five 3D Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) rotated continuously around three axes and drawn as line wireframes. Atom-decomposed in tranche 5 of the 2nd-pass audit: the bundled `node.wireframe_shape` split into `node.polytope_vertices` (curated-enum GPU dispatch — Platonic vertex coordinates) + `node.polytope_edges` (curated-enum CPU write — wireframe adjacency table). Both atoms read a shared `shape` scalar so vertices and edges agree per frame; the scalar comes from a `node.mux_scalar` that swaps between an inline static shape and a `node.clip_trigger_cycle` output when Clip Trigger is enabled. The downstream `rotate_3d → project_3d → render_lines` chain is unchanged and reusable across every Array<MeshVertex> + Array<EdgePair> producer (future loaded meshes, geodesic spheres, parametric prisms).\n\nLegacy outer-card param names (`xy` / `zw` / `xw` / `verts` / `v_size`) are aliased to the new general-user names (`rotate_x_speed` / `rotate_y_speed` / `rotate_z_speed` / `show_verts` / `vert_size`) for save-file backward compatibility.",
+  "description": "Wireframe shapes, running five Platonic solids (Tetrahedron, Cube, Octahedron, Icosahedron, Dodecahedron) rotating continuously on three axes and rendering as line wireframes.\n\nThe system input feeds time and trigger count. Three rotation multipliers (angle_x_mul, angle_y_mul, angle_z_mul) scale incoming time by slider-controlled rotation speeds for each axis. A shape selector (shape_mux) chooses between a static shape set by slider and a clip-triggered shape cycling through the five Platonic solids. Both the polytope_verts and polytope_edges nodes read this shared shape selector so their outputs stay in sync per frame.\n\nThe vertices pass through a 3D rotation stage (rotate) using the three computed angles, then a projection stage (project) that applies perspective scaling, then to the wireframe render node which draws lines (edges) between vertices and optionally draws vertex points. The final color output goes to the system output.\n\nAtom decomposition split the legacy bundled wireframe shape node into polytope_vertices (GPU dispatch with curated Platonic coordinates) and polytope_edges (CPU write with wireframe adjacency), making the geometry reusable for future loaded meshes and parametric generators. All bindings reach their target nodes by stable nodeId, so the flat graph preserves the live performance surface unchanged.",
   "presetMetadata": {
     "id": "WireframeZoo",
     "displayName": "Wireframe",
     "category": "Procedural",
     "oscPrefix": "wireframeZoo",
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "rotate_x_speed",
@@ -17,6 +18,7 @@
         "defaultValue": 0.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -27,6 +29,7 @@
         "defaultValue": 0.3,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -37,6 +40,7 @@
         "defaultValue": 0.2,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -47,6 +51,7 @@
         "defaultValue": 0.003,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F4"
       },
       {
@@ -57,6 +62,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F0"
       },
       {
@@ -67,6 +73,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": true,
+        "isTrigger": false,
         "formatString": "F0"
       },
       {
@@ -77,6 +84,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F1"
       },
       {
@@ -87,6 +95,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -97,156 +106,484 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": true,
+        "isTrigger": false,
         "formatString": "F0"
       }
     ],
-    "paramAliases": [
-      { "old": "xy",     "new": "rotate_x_speed" },
-      { "old": "zw",     "new": "rotate_y_speed" },
-      { "old": "xw",     "new": "rotate_z_speed" },
-      { "old": "verts",  "new": "show_verts" },
-      { "old": "v_size", "new": "vert_size" }
-    ],
     "bindings": [
-      { "id": "rotate_x_speed", "label": "Rotate X Speed", "defaultValue": 0.5,
-        "target": { "kind": "node", "nodeId": "angle_x_mul", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "rotate_y_speed", "label": "Rotate Y Speed", "defaultValue": 0.3,
-        "target": { "kind": "node", "nodeId": "angle_y_mul", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "rotate_z_speed", "label": "Rotate Z Speed", "defaultValue": 0.2,
-        "target": { "kind": "node", "nodeId": "angle_z_mul", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "line", "label": "Line", "defaultValue": 0.003,
-        "target": { "kind": "node", "nodeId": "render", "param": "edge_thickness" },
-        "convert": { "type": "Float" } },
-      { "id": "shape", "label": "Shape", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "shape_mux", "param": "in_0" },
-        "convert": { "type": "Float" } },
-      { "id": "show_verts", "label": "Show Vertices", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "render", "param": "show_verts" },
-        "convert": { "type": "BoolThreshold" } },
-      { "id": "vert_size", "label": "Vertex Size", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "render", "param": "vert_size" },
-        "convert": { "type": "Float" } },
-      { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "project", "param": "proj_scale" },
-        "convert": { "type": "Float" } },
-      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "clip_trigger_value", "param": "value" },
-        "convert": { "type": "Float" } }
+      {
+        "id": "rotate_x_speed",
+        "label": "Rotate X Speed",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "angle_x_mul",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "rotate_y_speed",
+        "label": "Rotate Y Speed",
+        "defaultValue": 0.3,
+        "target": {
+          "kind": "node",
+          "nodeId": "angle_y_mul",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "rotate_z_speed",
+        "label": "Rotate Z Speed",
+        "defaultValue": 0.2,
+        "target": {
+          "kind": "node",
+          "nodeId": "angle_z_mul",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "line",
+        "label": "Line",
+        "defaultValue": 0.003,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "edge_thickness"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "shape",
+        "label": "Shape",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "shape_mux",
+          "param": "in_0"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "show_verts",
+        "label": "Show Vertices",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "show_verts"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "vert_size",
+        "label": "Vertex Size",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "vert_size"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "project",
+          "param": "proj_scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "clip_trigger_value",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
     ],
-    "skipMode": { "kind": "never" }
+    "skipMode": {
+      "kind": "never"
+    },
+    "paramAliases": [
+      {
+        "old": "xy",
+        "new": "rotate_x_speed"
+      },
+      {
+        "old": "zw",
+        "new": "rotate_y_speed"
+      },
+      {
+        "old": "xw",
+        "new": "rotate_z_speed"
+      },
+      {
+        "old": "verts",
+        "new": "show_verts"
+      },
+      {
+        "old": "v_size",
+        "new": "vert_size"
+      }
+    ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
     {
-      "id": 1, "typeId": "node.math", "handle": "angle_x_mul", "nodeId": "angle_x_mul",
-      "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.5 },
-        "op": { "type": "Enum",  "value": 2 }
-      }
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "title": "Inputs"
     },
     {
-      "id": 2, "typeId": "node.math", "handle": "angle_y_mul", "nodeId": "angle_y_mul",
+      "id": 1,
+      "nodeId": "angle_x_mul",
+      "typeId": "node.math",
+      "handle": "angle_x_mul",
       "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.3 },
-        "op": { "type": "Enum",  "value": 2 }
-      }
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Rotate X Speed"
     },
     {
-      "id": 3, "typeId": "node.math", "handle": "angle_z_mul", "nodeId": "angle_z_mul",
+      "id": 2,
+      "nodeId": "angle_y_mul",
+      "typeId": "node.math",
+      "handle": "angle_y_mul",
       "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.2 },
-        "op": { "type": "Enum",  "value": 2 }
-      }
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Rotate Y Speed"
     },
     {
-      "id": 4, "typeId": "node.value", "handle": "clip_trigger_value", "nodeId": "clip_trigger_value",
+      "id": 3,
+      "nodeId": "angle_z_mul",
+      "typeId": "node.math",
+      "handle": "angle_z_mul",
       "params": {
-        "value": { "type": "Float", "value": 0.0 }
-      }
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.2
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Rotate Z Speed"
     },
     {
-      "id": 5, "typeId": "node.clip_trigger_cycle", "handle": "shape_cycle", "nodeId": "shape_cycle",
+      "id": 4,
+      "nodeId": "clip_trigger_value",
+      "typeId": "node.value",
+      "handle": "clip_trigger_value",
       "params": {
-        "modulus": { "type": "Int", "value": 5 }
-      }
+        "value": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Clip Trigger Enable"
     },
     {
-      "id": 6, "typeId": "node.mux_scalar", "handle": "shape_mux", "nodeId": "shape_mux",
+      "id": 5,
+      "nodeId": "shape_cycle",
+      "typeId": "node.clip_trigger_cycle",
+      "handle": "shape_cycle",
       "params": {
-        "selector": { "type": "Float", "value": 0.0 },
-        "in_0":     { "type": "Float", "value": 0.0 }
-      }
+        "modulus": {
+          "type": "Int",
+          "value": 5
+        }
+      },
+      "title": "Shape Cycle"
     },
     {
-      "id": 7, "typeId": "node.polytope_vertices", "handle": "polytope_verts", "nodeId": "polytope_verts",
+      "id": 6,
+      "nodeId": "shape_mux",
+      "typeId": "node.mux_scalar",
+      "handle": "shape_mux",
       "params": {
-        "shape": { "type": "Enum", "value": 0 }
-      }
+        "in_0": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Shape Selector"
     },
     {
-      "id": 8, "typeId": "node.polytope_edges", "handle": "polytope_edges", "nodeId": "polytope_edges",
+      "id": 7,
+      "nodeId": "polytope_verts",
+      "typeId": "node.polytope_vertices",
+      "handle": "polytope_verts",
       "params": {
-        "shape": { "type": "Enum", "value": 0 }
-      }
-    },
-    { "id": 9, "typeId": "node.rotate_3d", "handle": "rotate", "nodeId": "rotate" },
-    {
-      "id": 10, "typeId": "node.project_3d", "handle": "project", "nodeId": "project",
-      "params": {
-        "mode":       { "type": "Enum",  "value": 0 },
-        "proj_scale": { "type": "Float", "value": 1.0 },
-        "proj_dist":  { "type": "Float", "value": 3.0 }
-      }
+        "shape": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Polytope Vertices"
     },
     {
-      "id": 11, "typeId": "node.render_lines", "handle": "render", "nodeId": "render",
+      "id": 8,
+      "nodeId": "polytope_edges",
+      "typeId": "node.polytope_edges",
+      "handle": "polytope_edges",
       "params": {
-        "edge_thickness":    { "type": "Float", "value": 0.003 },
-        "closed_loop":       { "type": "Bool",  "value": false },
-        "show_verts":        { "type": "Bool",  "value": true  },
-        "vert_size":         { "type": "Float", "value": 1.0   },
-        "animate":           { "type": "Bool",  "value": false },
-        "speed":             { "type": "Float", "value": 1.0   },
-        "window":            { "type": "Float", "value": 0.1   },
-        "beat_flash_amount": { "type": "Float", "value": 0.0   },
-        "color_r":           { "type": "Float", "value": 1.0   },
-        "color_g":           { "type": "Float", "value": 1.0   },
-        "color_b":           { "type": "Float", "value": 1.0   },
-        "color_a":           { "type": "Float", "value": 1.0   }
-      }
+        "shape": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Polytope Edges"
     },
-    { "id": 12, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+    {
+      "id": 9,
+      "nodeId": "rotate",
+      "typeId": "node.rotate_3d",
+      "handle": "rotate",
+      "title": "Rotate 3D"
+    },
+    {
+      "id": 10,
+      "nodeId": "project",
+      "typeId": "node.project_3d",
+      "handle": "project",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "proj_dist": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "proj_scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Project 3D"
+    },
+    {
+      "id": 11,
+      "nodeId": "render",
+      "typeId": "node.render_lines",
+      "handle": "render",
+      "params": {
+        "animate": {
+          "type": "Bool",
+          "value": false
+        },
+        "beat_flash_amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "closed_loop": {
+          "type": "Bool",
+          "value": false
+        },
+        "color_a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "edge_thickness": {
+          "type": "Float",
+          "value": 0.003
+        },
+        "show_verts": {
+          "type": "Bool",
+          "value": true
+        },
+        "speed": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "vert_size": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "window": {
+          "type": "Float",
+          "value": 0.1
+        }
+      },
+      "title": "Render Lines"
+    },
+    {
+      "id": 12,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "time", "toNode": 1, "toPort": "a" },
-    { "fromNode": 0, "fromPort": "time", "toNode": 2, "toPort": "a" },
-    { "fromNode": 0, "fromPort": "time", "toNode": 3, "toPort": "a" },
-
-    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 5, "toPort": "trigger_count" },
-
-    { "fromNode": 4, "fromPort": "out",  "toNode": 6, "toPort": "selector" },
-    { "fromNode": 5, "fromPort": "out",  "toNode": 6, "toPort": "in_1" },
-
-    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "shape" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 8, "toPort": "shape" },
-
-    { "fromNode": 7, "fromPort": "vertices", "toNode": 9, "toPort": "in" },
-
-    { "fromNode": 1, "fromPort": "out", "toNode": 9, "toPort": "angle_x" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 9, "toPort": "angle_y" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 9, "toPort": "angle_z" },
-
-    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "in" },
-
-    { "fromNode": 10, "fromPort": "out",   "toNode": 11, "toPort": "points" },
-    { "fromNode": 8,  "fromPort": "edges", "toNode": 11, "toPort": "edges"  },
-
-    { "fromNode": 11, "fromPort": "color", "toNode": 12, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 1,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 2,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 3,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 5,
+      "toPort": "trigger_count"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "selector"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in_1"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "shape"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "vertices",
+      "toNode": 9,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "angle_x"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "angle_y"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "angle_z"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "points"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "edges",
+      "toNode": 11,
+      "toPort": "edges"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "color",
+      "toNode": 12,
+      "toPort": "in"
+    }
   ]
 }

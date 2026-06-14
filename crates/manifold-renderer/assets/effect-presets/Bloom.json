@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Bloom",
-  "description": "Bloom, decomposed: node.threshold extracts the bright pass with a soft knee (the legacy bloom prefilter curve), node.downsample drops to quarter-res, an H+V pair of node.gaussian_blur in Linear mode (the exact port of the old node.blur pass) softens it cheaply, node.mix (Add) layers the glow back over the source by `amount`. Replaces the fused node.bloom kernel. Visual delta vs legacy: a single downsample+gaussian instead of the legacy 3-level Blur9/Blur13 mip pyramid, and `amount` scales glow intensity only (the legacy also widened the radius with amount) — same family, simpler/wider-fixed glow. Verified by eye.",
+  "description": "Glow effect, decomposed: brightness thresholding with soft knee extracts the bright pass (the bloom prefilter curve), downsampling drops to quarter resolution, separable horizontal and vertical Gaussian blur in Linear mode soften the glow with a fixed radius (the exact algorithm of the legacy blur pass), and additive blending layers the glow back over the source image. The amount slider controls glow intensity only, not blur radius like the legacy monolithic bloom kernel. Visual delta vs the old approach: a single downsample-and-blur instead of the legacy multi-level pyramid, yielding a simpler, wider fixed-radius glow. Verified by eye.",
   "presetMetadata": {
     "id": "Bloom",
     "displayName": "Bloom",
@@ -9,6 +9,7 @@
     "oscPrefix": "bloom",
     "legacyDiscriminant": 12,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 0.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       }
     ],
@@ -26,69 +28,168 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 0.5,
-        "target": { "kind": "node", "nodeId": "bloom", "param": "amount" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "bloom",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
       }
     ],
-    "skipMode": { "kind": "onZero", "paramId": "amount" }
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    }
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
+    {
+      "id": 0,
+      "nodeId": "source",
+      "typeId": "system.source",
+      "handle": "source",
+      "title": "Source"
+    },
     {
       "id": 1,
+      "nodeId": "prefilter",
       "typeId": "node.threshold",
-      "handle": "prefilter", "nodeId": "prefilter",
+      "handle": "prefilter",
       "params": {
-        "level": { "type": "Float", "value": 0.42 },
-        "softness": { "type": "Float", "value": 0.24 }
-      }
+        "level": {
+          "type": "Float",
+          "value": 0.42
+        },
+        "softness": {
+          "type": "Float",
+          "value": 0.24
+        }
+      },
+      "title": "Bright Pass"
     },
     {
       "id": 2,
+      "nodeId": "downsample",
       "typeId": "node.downsample",
-      "handle": "downsample", "nodeId": "downsample",
+      "handle": "downsample",
       "params": {
-        "factor": { "type": "Enum", "value": 1 }
-      }
+        "factor": {
+          "type": "Enum",
+          "value": 1
+        }
+      },
+      "title": "Downsample"
     },
     {
       "id": 3,
+      "nodeId": "blur_h",
       "typeId": "node.gaussian_blur",
-      "handle": "blur_h", "nodeId": "blur_h",
+      "handle": "blur_h",
       "params": {
-        "radius_mode": { "type": "Enum", "value": 2 },
-        "radius": { "type": "Float", "value": 8.0 },
-        "axis": { "type": "Enum", "value": 0 }
-      }
+        "axis": {
+          "type": "Enum",
+          "value": 0
+        },
+        "radius": {
+          "type": "Float",
+          "value": 8.0
+        },
+        "radius_mode": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Blur Horizontal"
     },
     {
       "id": 6,
+      "nodeId": "blur_v",
       "typeId": "node.gaussian_blur",
-      "handle": "blur_v", "nodeId": "blur_v",
+      "handle": "blur_v",
       "params": {
-        "radius_mode": { "type": "Enum", "value": 2 },
-        "radius": { "type": "Float", "value": 8.0 },
-        "axis": { "type": "Enum", "value": 1 }
-      }
+        "axis": {
+          "type": "Enum",
+          "value": 1
+        },
+        "radius": {
+          "type": "Float",
+          "value": 8.0
+        },
+        "radius_mode": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Blur Vertical"
     },
     {
       "id": 4,
+      "nodeId": "bloom",
       "typeId": "node.mix",
-      "handle": "bloom", "nodeId": "bloom",
+      "handle": "bloom",
       "params": {
-        "amount": { "type": "Float", "value": 0.5 },
-        "mode": { "type": "Enum", "value": 2 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Blend Glow"
     },
-    { "id": 5, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+    {
+      "id": 5,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "source" },
-    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 6, "toPort": "in" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 4, "toPort": "a" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 4, "toPort": "b" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "in"
+    }
   ]
 }

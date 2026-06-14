@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Transform",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "A canonical spatial effect that applies affine transformation to the input: translation (X, Y), scale (Zoom), and rotation. The transformation matrix is computed from four independent card bindings, applied to the source material, and passed to output. This is the default transform effect in the patch library.",
   "presetMetadata": {
     "id": "Transform",
     "displayName": "Transform",
@@ -9,6 +9,7 @@
     "oscPrefix": "transform",
     "legacyDiscriminant": 0,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "x",
@@ -18,6 +19,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -28,6 +30,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -38,6 +41,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -48,6 +52,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       }
     ],
@@ -118,13 +123,15 @@
   "nodes": [
     {
       "id": 0,
+      "nodeId": "source",
       "typeId": "system.source",
-      "handle": "source", "nodeId": "source"
+      "handle": "source"
     },
     {
       "id": 1,
+      "nodeId": "transform",
       "typeId": "node.affine_transform",
-      "handle": "transform", "nodeId": "transform",
+      "handle": "transform",
       "params": {
         "rotation": {
           "type": "Float",
@@ -142,12 +149,14 @@
           "type": "Float",
           "value": 0.0
         }
-      }
+      },
+      "title": "Affine Transform"
     },
     {
       "id": 2,
+      "nodeId": "final_output",
       "typeId": "system.final_output",
-      "handle": "final_output", "nodeId": "final_output"
+      "handle": "final_output"
     }
   ],
   "wires": [

@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Mirror",
-  "description": "Axis mirror / kaleidoscope-fold, decomposed: node.mirror_fold_uv rewrites the per-pixel sample UV for the selected mode (flip / QuadMirror / Fold X/Y/Both), node.remap resamples the source there, node.mix crossfades by amount. Replaces the legacy node.transform mirror-mode kernel (bit-exact — the fold math is a verbatim port; the affine half of node.transform belongs to node.affine_transform).",
+  "description": "Axis mirror and kaleidoscope fold effect. The source texture is split into two paths: one path transforms the sampling coordinates based on the selected mirror mode (Identity, Mirror, MirrorX, MirrorY, FlipY, QuadMirror, FoldX, FoldY, FoldBoth) via the UV Transform node; the other path passes the source straight through. The transformed coordinates are used to resample the source texture (Remapped node), producing a folded or mirrored version. Finally, the Mix node crossfades between the original source and the resampled folded version using the Amount slider, giving smooth interpolation from unaffected to fully transformed. The effect is bit-exact with the legacy transform mirror mode, decomposed for clarity: the mirror fold math is separated from the affine transform.",
   "presetMetadata": {
     "id": "Mirror",
     "displayName": "Mirror",
@@ -9,6 +9,7 @@
     "oscPrefix": "mirror",
     "legacyDiscriminant": 21,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -28,6 +30,7 @@
         "defaultValue": 6.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
         "valueLabels": [
           "Identity",
           "Mirror",
@@ -97,45 +100,92 @@
   "nodes": [
     {
       "id": 0,
+      "nodeId": "source",
       "typeId": "system.source",
-      "handle": "source", "nodeId": "source"
+      "handle": "source",
+      "title": "Source"
     },
     {
       "id": 1,
+      "nodeId": "uv_transform",
       "typeId": "node.mirror_fold_uv",
-      "handle": "uv_transform", "nodeId": "uv_transform",
+      "handle": "uv_transform",
       "params": {
-        "mode": { "type": "Enum", "value": 6 }
-      }
+        "mode": {
+          "type": "Enum",
+          "value": 6
+        }
+      },
+      "title": "UV Transform"
     },
     {
       "id": 2,
+      "nodeId": "remapped",
       "typeId": "node.remap",
-      "handle": "remapped", "nodeId": "remapped",
+      "handle": "remapped",
       "params": {
-        "wrap": { "type": "Enum", "value": 0 }
-      }
+        "wrap": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Remapped"
     },
     {
       "id": 3,
+      "nodeId": "mix",
       "typeId": "node.mix",
-      "handle": "mix", "nodeId": "mix",
+      "handle": "mix",
       "params": {
-        "amount": { "type": "Float", "value": 1.0 },
-        "mode": { "type": "Enum", "value": 0 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Mix"
     },
     {
       "id": 4,
+      "nodeId": "final_output",
       "typeId": "system.final_output",
-      "handle": "final_output", "nodeId": "final_output"
+      "handle": "final_output",
+      "title": "Output"
     }
   ],
   "wires": [
-    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "uv_field" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "source" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "a" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "b" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "uv_field"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    }
   ]
 }

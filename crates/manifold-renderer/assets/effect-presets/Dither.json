@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Dither",
-  "description": "Dither, decomposed: node.dither_pattern generates the per-pixel ordered-dither / halftone threshold (the six classic algorithms), and node.dither does the luminance-preserving dither-biased quantize + hue rescale + crossfade reading that pattern. Replaces the fused node.dither kernel — bit-exact (the quantize math is verbatim; only the threshold source moved to an atom). The pattern generator is now reusable: feed it to other halftone consumers, or feed node.dither a BYO threshold texture.",
+  "description": "Dither applies a classic ordered-dither / halftone threshold pattern to the incoming image, preserving luminance while dropping bit depth and introducing pattern-biased quantization for a stylized, lo-fi aesthetic.\n\nThe pipeline is straightforward: the source image enters the dither node, which reads per-pixel thresholds from the pattern generator. The pattern selector (algorithm) chooses one of six ordered-dither families (Bayer, Halftone, Lines, X-Hatch, Noise, Diamond), and the Amount slider controls the mix from fully dithered back toward the original, enabling smooth blends between patterned and smooth. The patterned output feeds directly to the final output. Because the pattern generator is a reusable atom, it can be fed to other halftone consumers or replaced with a custom threshold texture.",
   "presetMetadata": {
     "id": "Dither",
     "displayName": "Dither",
@@ -9,6 +9,7 @@
     "oscPrefix": "dither",
     "legacyDiscriminant": 18,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -28,6 +30,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
         "valueLabels": [
           "Bayer",
           "Halftone",
@@ -44,45 +47,100 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "dither", "param": "amount" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "dither",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
       },
       {
         "id": "pattern",
         "label": "Pattern",
         "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "pattern", "param": "algorithm" },
-        "convert": { "type": "EnumRound" }
+        "target": {
+          "kind": "node",
+          "nodeId": "pattern",
+          "param": "algorithm"
+        },
+        "convert": {
+          "type": "EnumRound"
+        }
       }
     ],
-    "skipMode": { "kind": "onZero", "paramId": "amount" },
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    },
     "paramAliases": [
-      { "old": "algo", "new": "pattern" }
+      {
+        "old": "algo",
+        "new": "pattern"
+      }
     ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
+    {
+      "id": 0,
+      "nodeId": "source",
+      "typeId": "system.source",
+      "handle": "source",
+      "title": "Source"
+    },
     {
       "id": 1,
+      "nodeId": "pattern",
       "typeId": "node.dither_pattern",
-      "handle": "pattern", "nodeId": "pattern",
+      "handle": "pattern",
       "params": {
-        "algorithm": { "type": "Enum", "value": 0 }
-      }
+        "algorithm": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Dither Pattern"
     },
     {
       "id": 2,
+      "nodeId": "dither",
       "typeId": "node.dither",
-      "handle": "dither", "nodeId": "dither",
+      "handle": "dither",
       "params": {
-        "amount": { "type": "Float", "value": 0.0 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Quantize and Dither"
     },
-    { "id": 3, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+    {
+      "id": 3,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "in" },
-    { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "pattern" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "pattern"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "in"
+    }
   ]
 }

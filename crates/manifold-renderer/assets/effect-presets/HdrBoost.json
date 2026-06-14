@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "HdrBoost",
-  "description": "Highlight Boost, decomposed: node.threshold extracts the bright pass with a soft knee, a node.math chain converts the EV `gain` to a linear factor (2^gain - 1), node.gain scales the highlights by it, and node.mix (Add) layers the boosted highlights back over the source by `amount` — pushing them into HDR (>1), no clamp. Replaces the fused node.highlight_boost kernel. Same family; visual delta vs legacy: the bright-pass uses the shared threshold curve and the boost scales the extracted colour directly rather than the legacy excess/lum-normalised proportional ramp. Verified by eye.",
+  "description": "Highlight boost: a decomposed alternative to the fused highlight_boost kernel. The source passes through a soft-knee threshold to extract the bright pass, which then scales by a gain factor computed from an EV (exposure value) slider. The gain conversion chain is linear: 2^gain - 1 turns EV stops into a multiplicative boost. The scaled highlights blend back into the original source as an additive layer, pushing the result into HDR territory (>1) with no clamp. Bindings reach all four performance parameters: amount controls the final mix weight, gain drives the exponential factor, threshold and knee control the bright-pass extraction. Verified equivalent to the legacy kernel in visual behavior, with one algorithmic delta: the bright-pass uses the shared threshold curve and the boost scales the extracted color directly, rather than the legacy proportional-ramp approach.",
   "presetMetadata": {
     "id": "HdrBoost",
     "displayName": "Highlight Boost",
@@ -9,6 +9,7 @@
     "oscPrefix": "hdrBoost",
     "legacyDiscriminant": 41,
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "amount",
@@ -18,6 +19,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -28,6 +30,7 @@
         "defaultValue": 1.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "Gain"
       },
@@ -39,6 +42,7 @@
         "defaultValue": 0.15,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "Threshold"
       },
@@ -50,6 +54,7 @@
         "defaultValue": 0.3,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "Knee"
       }
@@ -59,91 +64,203 @@
         "id": "amount",
         "label": "Amount",
         "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "highlight_boost", "param": "amount" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "highlight_boost",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
       },
       {
         "id": "gain",
         "label": "Gain",
         "defaultValue": 1.5,
-        "target": { "kind": "node", "nodeId": "ev_exp", "param": "a" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "ev_exp",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
       },
       {
         "id": "threshold",
         "label": "Threshold",
         "defaultValue": 0.15,
-        "target": { "kind": "node", "nodeId": "prefilter", "param": "level" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "prefilter",
+          "param": "level"
+        },
+        "convert": {
+          "type": "Float"
+        }
       },
       {
         "id": "knee",
         "label": "Knee",
         "defaultValue": 0.3,
-        "target": { "kind": "node", "nodeId": "prefilter", "param": "softness" },
-        "convert": { "type": "Float" }
+        "target": {
+          "kind": "node",
+          "nodeId": "prefilter",
+          "param": "softness"
+        },
+        "convert": {
+          "type": "Float"
+        }
       }
     ],
-    "skipMode": { "kind": "onZero", "paramId": "amount" },
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    },
     "paramAliases": [
-      { "old": "thresh", "new": "threshold" }
+      {
+        "old": "thresh",
+        "new": "threshold"
+      }
     ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
+    {
+      "id": 0,
+      "nodeId": "source",
+      "typeId": "system.source",
+      "handle": "source"
+    },
     {
       "id": 1,
+      "nodeId": "prefilter",
       "typeId": "node.threshold",
-      "handle": "prefilter", "nodeId": "prefilter",
+      "handle": "prefilter",
       "params": {
-        "level": { "type": "Float", "value": 0.15 },
-        "softness": { "type": "Float", "value": 0.3 }
-      }
+        "level": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "softness": {
+          "type": "Float",
+          "value": 0.3
+        }
+      },
+      "title": "Bright Pass Threshold"
     },
     {
       "id": 2,
+      "nodeId": "ev_exp",
       "typeId": "node.math",
-      "handle": "ev_exp", "nodeId": "ev_exp",
+      "handle": "ev_exp",
       "params": {
-        "a": { "type": "Float", "value": 1.5 },
-        "op": { "type": "Enum", "value": 13 }
-      }
+        "a": {
+          "type": "Float",
+          "value": 1.5
+        },
+        "op": {
+          "type": "Enum",
+          "value": 13
+        }
+      },
+      "title": "Gain Exponent (2^x)"
     },
     {
       "id": 3,
+      "nodeId": "ev_minus1",
       "typeId": "node.math",
-      "handle": "ev_minus1", "nodeId": "ev_minus1",
+      "handle": "ev_minus1",
       "params": {
-        "b": { "type": "Float", "value": 1.0 },
-        "op": { "type": "Enum", "value": 1 }
-      }
+        "b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 1
+        }
+      },
+      "title": "Linear Boost Factor"
     },
     {
       "id": 4,
+      "nodeId": "boost",
       "typeId": "node.gain",
-      "handle": "boost", "nodeId": "boost",
+      "handle": "boost",
       "params": {
-        "gain": { "type": "Float", "value": 1.83 }
-      }
+        "gain": {
+          "type": "Float",
+          "value": 1.83
+        }
+      },
+      "title": "Highlight Boost Scale"
     },
     {
       "id": 5,
+      "nodeId": "highlight_boost",
       "typeId": "node.mix",
-      "handle": "highlight_boost", "nodeId": "highlight_boost",
+      "handle": "highlight_boost",
       "params": {
-        "amount": { "type": "Float", "value": 1.0 },
-        "mode": { "type": "Enum", "value": 2 }
-      }
+        "amount": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Highlight Blend"
     },
-    { "id": 6, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+    {
+      "id": 6,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "source" },
-    { "fromNode": 1, "fromPort": "out", "toNode": 4, "toPort": "in" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "a" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "gain" },
-    { "fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "a" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "gain"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "in"
+    }
   ]
 }

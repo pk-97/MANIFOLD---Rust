@@ -1,13 +1,14 @@
 {
   "version": 2,
   "name": "SoftFocusGraph",
-  "description": "Canonical default graph generated from ChainSpec::splice.",
+  "description": "A soft-focus effect that blends the source image with a blurred copy at variable intensity. The source image feeds both the Blur node (which softens it using a Gaussian kernel at the Radius parameter) and the Mix node directly. The Blur output and the original then blend at the Mix stage, controlled by the Amount slider. At Amount zero the effect is skipped and the output is the raw input; at Amount one it reaches full softening. Blur mode and Mix mode are both fixed to their defaults, so the only live parameters are Radius and Amount.",
   "presetMetadata": {
     "id": "SoftFocusGraph",
     "displayName": "Soft Focus",
     "category": "Stylize",
     "oscPrefix": "soft_focus_graph",
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "radius",
@@ -17,6 +18,7 @@
         "defaultValue": 6.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F1",
         "oscSuffix": "px"
       },
@@ -28,6 +30,7 @@
         "defaultValue": 0.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       }
     ],
@@ -67,13 +70,16 @@
   "nodes": [
     {
       "id": 0,
+      "nodeId": "source",
       "typeId": "system.source",
-      "handle": "source", "nodeId": "source"
+      "handle": "source",
+      "title": "Source"
     },
     {
       "id": 1,
+      "nodeId": "blur",
       "typeId": "node.blur",
-      "handle": "blur", "nodeId": "blur",
+      "handle": "blur",
       "params": {
         "mode": {
           "type": "Enum",
@@ -83,12 +89,14 @@
           "type": "Float",
           "value": 4.0
         }
-      }
+      },
+      "title": "Blur"
     },
     {
       "id": 2,
+      "nodeId": "mix",
       "typeId": "node.mix",
-      "handle": "mix", "nodeId": "mix",
+      "handle": "mix",
       "params": {
         "amount": {
           "type": "Float",
@@ -98,12 +106,15 @@
           "type": "Enum",
           "value": 0
         }
-      }
+      },
+      "title": "Blend"
     },
     {
       "id": 3,
+      "nodeId": "final_output",
       "typeId": "system.final_output",
-      "handle": "final_output", "nodeId": "final_output"
+      "handle": "final_output",
+      "title": "Output"
     }
   ],
   "wires": [

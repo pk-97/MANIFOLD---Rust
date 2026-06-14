@@ -1,13 +1,14 @@
 {
   "version": 2,
   "name": "Plasma",
-  "description": "Plasma family — eight pattern variants (Classic, Rings, Diamond, Warp, Cells, Noise, Fractal, Lattice) on node.wgsl_compute, the JSON-editable shader escape hatch. Per Peter (2026-05-29): the variants are simple per-pixel sin-sum shaders but would be an absurd graph as raw math atoms, so they live in one editable WGSL string selected by a `switch (pattern)` — the right tool for a simple shader / complex graph. Replaces the compiled-in node.plasma_pattern_2d primitive: same algorithms and constants, now user-editable (append a case to the switch + a pattern_2d function to add a variant). time/aspect wire from generator_input; scale is inverted in-shader (zoom). clip_trigger uses node.clip_trigger_cycle (uniqueness invariant) + node.mux_scalar to swap between the manual `pattern` slider and trigger-driven cycling, matching the Strange Attractor pattern.",
+  "description": "Plasma generates eight pattern variants (Classic, Rings, Diamond, Warp, Cells, Noise, Fractal, Lattice) from the JSON-editable WGSL compute kernel, replacing the legacy compiled-in primitive. The top-level flow is simple: the Inputs node supplies time and aspect ratio directly to the Plasma Pattern kernel. A clip trigger either cycles through patterns automatically (Clip Trigger Cycle) or holds the manual pattern slider selection, selected via a multiplexer. The chosen pattern feeds the kernel, which applies the selected variant with live complexity and contrast control. The output renders directly to the display with speed scaling applied in-shader (scale is inverted for zoom). This is a flat graph; every stage names what it does and no internal grouping earns additional clarity.",
   "presetMetadata": {
     "id": "Plasma",
     "displayName": "Plasma",
     "category": "Procedural",
     "oscPrefix": "plasma",
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "pattern",
@@ -17,6 +18,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F0"
       },
       {
@@ -27,6 +29,7 @@
         "defaultValue": 0.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -37,6 +40,7 @@
         "defaultValue": 0.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -47,6 +51,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -57,6 +62,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -67,63 +73,224 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": true,
+        "isTrigger": false,
         "formatString": "F0"
       }
     ],
-    "paramAliases": [
-      { "old": "snap", "new": "clip_trigger" }
-    ],
     "bindings": [
-      { "id": "pattern",    "label": "Pattern",    "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "pattern_mux", "param": "in_0" },
-        "convert": { "type": "Float" } },
-      { "id": "complexity", "label": "Complexity", "defaultValue": 0.5,
-        "target": { "kind": "node", "nodeId": "plasma", "param": "complexity" },
-        "convert": { "type": "Float" } },
-      { "id": "contrast",   "label": "Contrast",   "defaultValue": 0.5,
-        "target": { "kind": "node", "nodeId": "plasma", "param": "contrast" },
-        "convert": { "type": "Float" } },
-      { "id": "speed",      "label": "Speed",      "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "plasma", "param": "speed" },
-        "convert": { "type": "Float" } },
-      { "id": "scale",      "label": "Scale",      "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "plasma", "param": "scale" },
-        "convert": { "type": "Float" } },
-      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "pattern_mux", "param": "selector" },
-        "convert": { "type": "Float" } }
+      {
+        "id": "pattern",
+        "label": "Pattern",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "pattern_mux",
+          "param": "in_0"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "complexity",
+        "label": "Complexity",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "plasma",
+          "param": "complexity"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "contrast",
+        "label": "Contrast",
+        "defaultValue": 0.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "plasma",
+          "param": "contrast"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "plasma",
+          "param": "speed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "plasma",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "pattern_mux",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
     ],
-    "skipMode": { "kind": "never" }
+    "skipMode": {
+      "kind": "never"
+    },
+    "paramAliases": [
+      {
+        "old": "snap",
+        "new": "clip_trigger"
+      }
+    ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
-    { "id": 1, "typeId": "node.wgsl_compute", "handle": "plasma", "nodeId": "plasma", "title": "Plasma Pattern",
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "title": "Inputs"
+    },
+    {
+      "id": 1,
+      "nodeId": "plasma",
+      "typeId": "node.wgsl_compute",
+      "handle": "plasma",
+      "params": {
+        "aspect": {
+          "type": "Float",
+          "value": 1.777
+        },
+        "complexity": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "contrast": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "pattern": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "speed": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "time": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
       "wgslSource": "// Plasma — eight pattern variants on the JSON-editable wgsl_compute\n// escape hatch. Same algorithms/constants as the legacy PlasmaGenerator;\n// `pattern` picks the variant, the rest are shared. Add a variant:\n// append a plasma_* fn and a case to the switch, bump the outer slider max.\n\n// @fusion: source\n// @param: time = 0.0\n// @param: aspect = 1.777\n// @param: pattern = 0.0\n// @param: complexity = 0.5\n// @param: contrast = 0.5\n// @param: speed = 1.0\n// @param: scale = 1.0\n\nfn plasma_classic(uv: vec2<f32>, t: f32, cx: f32) -> f32 {\n    let freq = 3.0 + cx * 5.0;\n    let v1 = sin(uv.x * freq + t * 1.3);\n    let v2 = sin(uv.y * (freq * 0.8) + t * 0.9);\n    let v3 = sin((uv.x + uv.y) * (freq * 0.6) + t * 1.1);\n    let v4 = sin(length(uv * freq * 1.2) + t * 0.7);\n    let angle = t * 0.3;\n    let cs = cos(angle);\n    let sn = sin(angle);\n    let ruv = vec2<f32>(uv.x * cs - uv.y * sn, uv.x * sn + uv.y * cs);\n    let v5 = sin(ruv.x * (freq * 1.4) + t * 1.5);\n    return (v1 + v2 + v3 + v4 + v5) / 5.0;\n}\n\nfn plasma_rings(uv: vec2<f32>, t: f32, cx: f32) -> f32 {\n    let freq = 4.0 + cx * 8.0;\n    let angle = t * 0.2;\n    let ca = cos(angle);\n    let sa = sin(angle);\n    let ruv = vec2<f32>(ca * uv.x - sa * uv.y, sa * uv.x + ca * uv.y);\n    let r = length(vec2<f32>(ruv.x * 1.0, ruv.y * 1.6));\n    let v1 = sin(r * freq - t * 2.0);\n    let v2 = sin(r * freq * 1.5 + t * 1.3);\n    let off = vec2<f32>(0.3 * sin(t * 0.4), 0.3 * cos(t * 0.5));\n    let r2 = length(uv - off);\n    let v3 = sin(r2 * freq * 0.8 + t * 0.7);\n    return (v1 + v2 + v3) / 3.0;\n}\n\nfn plasma_diamond(uv: vec2<f32>, t: f32, cx: f32) -> f32 {\n    let freq = 4.0 + cx * 6.0;\n    let v1 = sin(uv.x * freq + t);\n    let v2 = sin(uv.y * freq + t * 1.2);\n    let k = 0.01;\n    let smooth_l1 = sqrt(uv.x * uv.x + k) + sqrt(uv.y * uv.y + k);\n    let v3 = sin(smooth_l1 * freq * 0.7 + t * 0.8);\n    let v4 = sin((uv.x * uv.x + uv.y * uv.y) * freq * 0.3 + t * 1.5);\n    return (v1 + v2 + v3 + v4) / 4.0;\n}\n\nfn plasma_warp(uv: vec2<f32>, t: f32, cx: f32) -> f32 {\n    let freq = 3.0 + cx * 4.0;\n    var p = uv * freq;\n    p.x += sin(p.y * 0.5 + t) * (1.0 + cx);\n    p.y += cos(p.x * 0.5 + t * 0.7) * (1.0 + cx);\n    let v1 = sin(p.x + t * 0.9);\n    let v2 = sin(p.y + t * 1.1);\n    let v3 = sin((p.x + p.y) * 0.7 + t * 0.5);\n    return (v1 + v2 + v3) / 3.0;\n}\n\nfn plasma_cells(uv: vec2<f32>, t: f32, cx: f32) -> f32 {\n    let freq = 3.0 + cx * 5.0;\n    let v1 = sin(uv.x * freq + sin(uv.y * freq * 0.5 + t));\n    let v2 = sin(uv.y * freq + sin(uv.x * freq * 0.5 + t * 0.8));\n    let v3 = sin(length(uv + vec2<f32>(sin(t * 0.3), cos(t * 0.4))) * freq * 1.5);\n    let v4 = sin(length(uv - vec2<f32>(sin(t * 0.5), cos(t * 0.2))) * freq * 1.2 + t);\n    return (v1 * v2 + v3 + v4) / 3.0;\n}\n\nfn plasma_noise(uv: vec2<f32>, t: f32, cx: f32) -> f32 {\n    let octaves = 3u + u32(cx * 2.0);\n    var val = 0.0;\n    var amp = 1.0;\n    var total_amp = 0.0;\n    var freq = 2.5;\n    var p = uv;\n    for (var i = 0u; i < octaves; i++) {\n        val += amp * sin(p.x * freq + t * 0.6 + sin(p.y * freq * 0.7 + t * 0.4));\n        val += amp * sin(p.y * freq * 0.9 - t * 0.5 + cos(p.x * freq * 0.6 + t * 0.3));\n        total_amp += amp * 2.0;\n        amp *= 0.5;\n        freq *= 1.8;\n        let angle = 0.5 + t * 0.08;\n        let cs = cos(angle);\n        let sn = sin(angle);\n        p = vec2<f32>(p.x * cs - p.y * sn, p.x * sn + p.y * cs);\n    }\n    return val / total_amp;\n}\n\nfn plasma_fractal(uv: vec2<f32>, t: f32, cx: f32) -> f32 {\n    var p = uv * (2.0 + cx * 2.0);\n    var val = 0.0;\n    var scl = 1.0;\n    var total_scale = 0.0;\n    for (var i = 0; i < 5; i++) {\n        let fi = f32(i);\n        let v = sin(p.x + t * (0.4 + fi * 0.08)) * cos(p.y + t * (0.25 + fi * 0.1));\n        val += v * scl;\n        total_scale += scl;\n        scl *= 0.55;\n        p = vec2<f32>(sin(p.x * 1.8 + t * 0.15 + fi), sin(p.y * 1.8 + t * 0.12 + fi * 0.7));\n    }\n    return val / total_scale;\n}\n\nfn plasma_lattice(uv: vec2<f32>, t: f32, cx: f32) -> f32 {\n    let freq = 3.0 + cx * 5.0;\n    let v1 = sin(uv.x * freq * 3.14159 + t * 0.8) + sin(uv.y * freq * 3.14159 + t * 0.6);\n    let v2 = sin((uv.x + uv.y) * freq * 2.22 + t * 1.1) + sin((uv.x - uv.y) * freq * 2.22 + t * 0.9);\n    let warp_x = uv.x + sin(uv.y * 2.0 + t) * cx * 0.3;\n    let warp_y = uv.y + cos(uv.x * 2.0 + t * 0.7) * cx * 0.3;\n    let v3 = sin(warp_x * freq * 3.14159 + t * 0.5) + sin(warp_y * freq * 3.14159 - t * 0.3);\n    return (v1 + v2 + v3) / 6.0;\n}\n\nfn body(uv: vec2<f32>, dims: vec2<f32>, time: f32, aspect: f32, pattern: f32, complexity: f32, contrast: f32, speed: f32, scale: f32) -> vec4<f32> {\n    var uvc = uv - vec2<f32>(0.5);\n    uvc.x *= aspect;\n    let uv_scale = select(1.0, 1.0 / scale, scale > 0.0);\n    uvc *= uv_scale;\n    let t = time * speed;\n    let p = i32(pattern + 0.5);\n    let cx = complexity;\n    var plasma: f32;\n    switch p {\n        case 1: { plasma = plasma_rings(uvc, t, cx); }\n        case 2: { plasma = plasma_diamond(uvc, t, cx); }\n        case 3: { plasma = plasma_warp(uvc, t, cx); }\n        case 4: { plasma = plasma_cells(uvc, t, cx); }\n        case 5: { plasma = plasma_noise(uvc, t, cx); }\n        case 6: { plasma = plasma_fractal(uvc, t, cx); }\n        case 7: { plasma = plasma_lattice(uvc, t, cx); }\n        default: { plasma = plasma_classic(uvc, t, cx); }\n    }\n    let edge = mix(0.3, 0.02, contrast);\n    let lum = smoothstep(-edge, edge, plasma);\n    return vec4<f32>(lum, lum, lum, lum);\n}\n",
+      "title": "Plasma Pattern"
+    },
+    {
+      "id": 2,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    },
+    {
+      "id": 3,
+      "nodeId": "pattern_cycle",
+      "typeId": "node.clip_trigger_cycle",
+      "handle": "pattern_cycle",
       "params": {
-        "time":       { "type": "Float", "value": 0.0 },
-        "aspect":     { "type": "Float", "value": 1.777 },
-        "pattern":    { "type": "Float", "value": 0.0 },
-        "complexity": { "type": "Float", "value": 0.5 },
-        "contrast":   { "type": "Float", "value": 0.5 },
-        "speed":      { "type": "Float", "value": 1.0 },
-        "scale":      { "type": "Float", "value": 1.0 }
-      } },
-    { "id": 2, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" },
-    { "id": 3, "typeId": "node.clip_trigger_cycle", "handle": "pattern_cycle", "nodeId": "pattern_cycle",
-      "params": { "modulus": { "type": "Float", "value": 8.0 } } },
-    { "id": 4, "typeId": "node.mux_scalar", "handle": "pattern_mux", "nodeId": "pattern_mux",
+        "modulus": {
+          "type": "Float",
+          "value": 8.0
+        }
+      },
+      "title": "Pattern Cycle"
+    },
+    {
+      "id": 4,
+      "nodeId": "pattern_mux",
+      "typeId": "node.mux_scalar",
+      "handle": "pattern_mux",
       "params": {
-        "selector": { "type": "Float", "value": 0.0 },
-        "in_0":     { "type": "Float", "value": 0.0 },
-        "in_1":     { "type": "Float", "value": 0.0 }
-      } }
+        "in_0": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "in_1": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Pattern Select"
+    }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "time",          "toNode": 1, "toPort": "time" },
-    { "fromNode": 0, "fromPort": "aspect",        "toNode": 1, "toPort": "aspect" },
-    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 3, "toPort": "trigger_count" },
-    { "fromNode": 3, "fromPort": "out",           "toNode": 4, "toPort": "in_1" },
-    { "fromNode": 4, "fromPort": "out",           "toNode": 1, "toPort": "pattern" },
-    { "fromNode": 1, "fromPort": "out",           "toNode": 2, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 1,
+      "toPort": "time"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "aspect",
+      "toNode": 1,
+      "toPort": "aspect"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 3,
+      "toPort": "trigger_count"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 4,
+      "toPort": "in_1"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 1,
+      "toPort": "pattern"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "in"
+    }
   ]
 }
