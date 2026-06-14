@@ -561,7 +561,10 @@ pub const PLAYHEAD_WIDTH: f32 = 2.0;
 pub const CLIP_MIN_WIDTH: f32 = 10.0;
 pub const CLIP_VERTICAL_PAD: f32 = 12.0;
 pub const OVERVIEW_STRIP_HEIGHT: f32 = 16.0;
-pub const MIN_INSPECTOR_WIDTH: f32 = 196.0;
+// Floor wide enough that a full param row — label + slider track + value field
+// + the D/E modulation buttons — keeps its columns instead of crushing the
+// track to nothing. Below this the card is unreadable on stage.
+pub const MIN_INSPECTOR_WIDTH: f32 = 232.0;
 pub const MAX_INSPECTOR_WIDTH: f32 = 900.0;
 pub const DEFAULT_INSPECTOR_WIDTH: f32 = 500.0;
 pub const INSPECTOR_RESIZE_HANDLE_WIDTH: f32 = 6.0;

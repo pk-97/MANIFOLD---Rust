@@ -232,6 +232,54 @@ struct ToggleParamIds {
     button_id: i32,
 }
 
+/// Packed right-aligned positions for the 0–4 header modulation badges.
+/// In display order [MOD, ABL, ENV, DRV]; `None` for a hidden badge.
+/// `name_right` is the right edge of the name cell (left edge of the badge
+/// block, or the toggle gap when no badge shows) — what `name_w` clips to.
+struct BadgeLayout {
+    mod_x: Option<f32>,
+    abl_x: Option<f32>,
+    env_x: Option<f32>,
+    drv_x: Option<f32>,
+    name_right: f32,
+}
+
+/// Lay the visible header badges out flush against the left edge of the toggle,
+/// packing only the active ones so a lone badge sits at the right edge instead
+/// of floating mid-header in a slot reserved for badges that aren't showing.
+fn effect_badge_layout(
+    toggle_x: f32,
+    show_mod: bool,
+    show_abl: bool,
+    show_env: bool,
+    show_drv: bool,
+) -> BadgeLayout {
+    let shows = [show_mod, show_abl, show_env, show_drv];
+    let count = shows.iter().filter(|s| **s).count();
+    let block_right = toggle_x - GAP;
+    let block_w = if count == 0 {
+        0.0
+    } else {
+        count as f32 * BADGE_W + (count as f32 - 1.0) * GAP
+    };
+    let block_left = block_right - block_w;
+    let mut xs: [Option<f32>; 4] = [None; 4];
+    let mut cursor = block_left;
+    for (i, show) in shows.iter().enumerate() {
+        if *show {
+            xs[i] = Some(cursor);
+            cursor += BADGE_W + GAP;
+        }
+    }
+    BadgeLayout {
+        mod_x: xs[0],
+        abl_x: xs[1],
+        env_x: xs[2],
+        drv_x: xs[3],
+        name_right: if count == 0 { block_right } else { block_left - GAP },
+    }
+}
+
 // ── ParamCardState ───────────────────────────────────────────────
 
 /// Presenter-owned visual state for one parameter card — the single source of
@@ -307,6 +355,11 @@ pub struct ParamCardPanel {
     inner_bg_id: i32,
     header_bg_id: i32,
     name_label_id: i32,
+    /// Transparent CLIPS_CHILDREN container sized to the name cell. The name
+    /// label nests inside it so a long effect name is clipped at the cell edge
+    /// instead of overflowing into the header badges. Resized live in sync when
+    /// the active-badge set changes.
+    name_clip_id: i32,
     chevron_btn_id: i32,
     cog_btn_id: i32,
 
@@ -394,6 +447,7 @@ impl ParamCardPanel {
             inner_bg_id: -1,
             header_bg_id: -1,
             name_label_id: -1,
+            name_clip_id: -1,
             chevron_btn_id: -1,
             cog_btn_id: -1,
             drag_icon_id: -1,
@@ -881,15 +935,19 @@ impl ParamCardPanel {
         ) as i32;
         tree.set_flag(self.header_bg_id as u32, UIFlags::INTERACTIVE);
 
-        // Layout (right-to-left for fixed elements). MOD badge sits
-        // between the name label and the existing ABL/ENV/DRV chips.
+        // Layout (right-to-left for fixed elements). Badges pack flush against
+        // the toggle — only the active ones take a slot — so the name cell is
+        // as wide as possible and a lone badge never floats mid-header.
         let cog_x = x + w - PADDING - COG_W;
         let chevron_x = cog_x - GAP - CHEVRON_W;
         let toggle_x = chevron_x - GAP - TOGGLE_W;
-        let drv_x = toggle_x - GAP - BADGE_W;
-        let env_x = drv_x - GAP - BADGE_W;
-        let abl_x = env_x - GAP - BADGE_W;
-        let mod_x = abl_x - GAP - BADGE_W;
+        let badges = effect_badge_layout(
+            toggle_x,
+            self.state.has_graph_mod,
+            self.state.has_abl,
+            self.state.has_env,
+            self.state.has_drv,
+        );
         // Author mode drops the drag-reorder handle (one card, nothing to
         // reorder against), so the name reclaims its indent.
         let author = self.context == CardContext::Author;
@@ -898,7 +956,15 @@ impl ParamCardPanel {
         } else {
             x + PADDING + DRAG_HANDLE_W + GAP
         };
-        let name_w = (mod_x - GAP - name_x).max(10.0);
+        let name_w = (badges.name_right - name_x).max(10.0);
+        // Placeholder x for a hidden badge — invisible, repositioned by sync
+        // when it later turns on. Parking it at the block's right edge keeps it
+        // off the name even in the brief frame before sync runs.
+        let badge_park = toggle_x - GAP - BADGE_W;
+        let mod_x = badges.mod_x.unwrap_or(badge_park);
+        let abl_x = badges.abl_x.unwrap_or(badge_park);
+        let env_x = badges.env_x.unwrap_or(badge_park);
+        let drv_x = badges.drv_x.unwrap_or(badge_park);
         let elem_y = y + (HEADER_HEIGHT - 16.0) * 0.5;
         let badge_y = y + (HEADER_HEIGHT - BADGE_H) * 0.5;
 
@@ -936,12 +1002,28 @@ impl ParamCardPanel {
             }
         }
 
-        // Name label
-        self.name_label_id = tree.add_label(
+        // Name cell — a transparent clip container the label nests in, so a
+        // long name is cut at the cell edge rather than drawn over the badges.
+        self.name_clip_id = tree.add_panel(
             self.header_bg_id,
             name_x,
             elem_y,
             name_w,
+            16.0,
+            UIStyle {
+                bg_color: Color32::TRANSPARENT,
+                ..UIStyle::default()
+            },
+        ) as i32;
+        tree.set_flag(self.name_clip_id as u32, UIFlags::CLIPS_CHILDREN);
+
+        // Name label — generous width so left-aligned text never self-limits;
+        // the clip container above enforces the cell edge.
+        self.name_label_id = tree.add_label(
+            self.name_clip_id,
+            name_x,
+            elem_y,
+            (toggle_x - name_x).max(name_w),
             16.0,
             name,
             UIStyle {
@@ -1593,6 +1675,46 @@ impl ParamCardPanel {
         }
     }
 
+    /// Re-pack the header badges + resize the name cell after the active-badge
+    /// set changes in the sync path (no rebuild). Mirrors the packed layout
+    /// `build_effect_header` computes, so a toggled badge lands flush-right and
+    /// the name reclaims the freed width without a card rebuild.
+    fn reposition_effect_badges(&self, tree: &mut UITree) {
+        if self.toggle_btn_id < 0 || self.name_clip_id < 0 || self.mod_badge_bg_id < 0 {
+            return;
+        }
+        let toggle_x = tree.get_bounds(self.toggle_btn_id as u32).x;
+        let badge_y = tree.get_bounds(self.mod_badge_bg_id as u32).y;
+        let badges = effect_badge_layout(
+            toggle_x,
+            self.state.has_graph_mod,
+            self.state.has_abl,
+            self.state.has_env,
+            self.state.has_drv,
+        );
+        let park = toggle_x - GAP - BADGE_W;
+        for (bg, txt, x) in [
+            (self.mod_badge_bg_id, self.mod_badge_text_id, badges.mod_x),
+            (self.abl_badge_bg_id, self.abl_badge_text_id, badges.abl_x),
+            (self.env_badge_bg_id, self.env_badge_text_id, badges.env_x),
+            (self.drv_badge_bg_id, self.drv_badge_text_id, badges.drv_x),
+        ] {
+            let r = Rect::new(x.unwrap_or(park), badge_y, BADGE_W, BADGE_H);
+            if bg >= 0 {
+                tree.set_bounds(bg as u32, r);
+            }
+            if txt >= 0 {
+                tree.set_bounds(txt as u32, r);
+            }
+        }
+        let name_b = tree.get_bounds(self.name_clip_id as u32);
+        let name_w = (badges.name_right - name_b.x).max(10.0);
+        tree.set_bounds(
+            self.name_clip_id as u32,
+            Rect::new(name_b.x, name_b.y, name_w, name_b.height),
+        );
+    }
+
     fn sync_values_effect(
         &mut self,
         tree: &mut UITree,
@@ -1643,6 +1765,8 @@ impl ParamCardPanel {
             tree.set_visible(self.drv_badge_text_id as u32, self.cached_has_drv);
             tree.set_visible(self.mod_badge_bg_id as u32, self.cached_has_graph_mod);
             tree.set_visible(self.mod_badge_text_id as u32, self.cached_has_graph_mod);
+            // Re-pack the badges + resize the name cell now the active set changed.
+            self.reposition_effect_badges(tree);
             // Re-tint the header background when the modified-state flips.
             let header_bg = if self.cached_has_graph_mod {
                 color::MOD_HEADER_BG_C32
