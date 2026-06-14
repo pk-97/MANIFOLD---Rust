@@ -86,12 +86,16 @@ fn apply_instance_envelopes(
     }
     let env_count = inst.envelopes.as_ref().map_or(0, |e| e.len());
     let mut any_modulated = false;
-    let level = ParamEnvelope::decay_level(active_elapsed);
 
     for ei in 0..env_count {
-        let (enabled, param_id, target_norm) = {
+        let (enabled, param_id, target_norm, decay_beats) = {
             let env = &inst.envelopes.as_ref().unwrap()[ei];
-            (env.enabled, env.param_id.clone(), env.target_normalized)
+            (
+                env.enabled,
+                env.param_id.clone(),
+                env.target_normalized,
+                env.decay_beats,
+            )
         };
         if !enabled {
             continue;
@@ -104,6 +108,7 @@ fn apply_instance_envelopes(
         if resolved.idx >= inst.param_values.len() {
             continue;
         }
+        let level = ParamEnvelope::decay_level(active_elapsed, decay_beats);
         if apply_envelope_offset(
             &mut inst.param_values[resolved.idx].value,
             resolved.min,
@@ -372,7 +377,7 @@ fn compute_active_clip_timing(
 mod tests {
     use super::*;
     use manifold_core::effect_registration::EffectMetadata;
-    use manifold_core::effects::{ENVELOPE_DECAY_BEATS, ParamEnvelope};
+    use manifold_core::effects::{DEFAULT_ENVELOPE_DECAY_BEATS, ParamEnvelope};
     use manifold_core::generator_registration::{GeneratorMetadata, ParamSpec};
     use manifold_core::layer::Layer;
     use manifold_core::preset_definition_registry::create_default;
@@ -488,11 +493,12 @@ mod tests {
 
     #[test]
     fn effect_envelope_decays_over_decay_beats() {
-        // Halfway through the decay window the level is 0.5; past it, 0.
+        // Per-envelope decay time: halfway through the window the level is 0.5,
+        // past it, 0. Uses the default decay (1.0 beat) from `full_depth_env`.
         let layer = effect_layer_with_env(full_depth_env("amount"));
         let mut project = project_with(layer);
 
-        let half = (ENVELOPE_DECAY_BEATS * 0.5) as f64;
+        let half = (DEFAULT_ENVELOPE_DECAY_BEATS * 0.5) as f64;
         assert!(evaluate_all_envelopes(&mut project, &[(Beats(half), Beats(8.0))]));
         let v_half = project.timeline.layers[0].effects.as_ref().unwrap()[0].param_values[0].value;
         assert!(
@@ -502,7 +508,7 @@ mod tests {
 
         // Reset base, then past the decay window → level 0 → no change.
         project.timeline.layers[0].effects.as_mut().unwrap()[0].param_values[0].value = 0.0;
-        let past = (ENVELOPE_DECAY_BEATS + 0.5) as f64;
+        let past = (DEFAULT_ENVELOPE_DECAY_BEATS + 0.5) as f64;
         assert!(!evaluate_all_envelopes(&mut project, &[(Beats(past), Beats(8.0))]));
         let v_past = project.timeline.layers[0].effects.as_ref().unwrap()[0].param_values[0].value;
         assert_eq!(v_past, 0.0, "past the decay window the envelope is spent");

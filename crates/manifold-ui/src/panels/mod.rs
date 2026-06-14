@@ -205,12 +205,18 @@ pub enum PanelAction {
     TrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
     /// Commit trim drag (record undo command).
     TrimCommit(GraphParamTarget, manifold_core::effects::ParamId),
-    /// Envelope "Amount" (depth / `target_normalized`) changed.
+    /// Envelope target (orange handle / `target_normalized`) changed.
     TargetChanged(GraphParamTarget, manifold_core::effects::ParamId, f32),
-    /// Snapshot Amount before drag (for undo).
+    /// Snapshot target before drag (for undo).
     TargetSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
-    /// Commit Amount drag (record undo command).
+    /// Commit target drag (record undo command).
     TargetCommit(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Envelope decay slider (`decay_beats`) changed.
+    EnvDecayChanged(GraphParamTarget, manifold_core::effects::ParamId, f32),
+    /// Snapshot decay before drag (for undo).
+    EnvDecaySnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Commit decay drag (record undo command).
+    EnvDecayCommit(GraphParamTarget, manifold_core::effects::ParamId),
     /// Reorder effect card: move from_index to to_index.
     /// Unity: EffectsListBitmapPanel.onCardReorder.
     EffectReorder(usize, usize),

@@ -3320,13 +3320,11 @@ pub mod beat_division_helper {
 
 // ─── Param Envelope (triggered decay modulation) ───
 
-/// Fixed fall-off time, in beats, for every parameter envelope. The envelope
-/// is a clip-triggered decay — one shape, one feel — so the only per-envelope
-/// control is its depth (`target_normalized`, the card's "Amount"). Tempo-synced
-/// because it's in beats; change here to retune the feel for all envelopes.
-pub const ENVELOPE_DECAY_BEATS: f32 = 1.0;
+/// Default decay time (beats) for a freshly-created envelope, so it modulates
+/// usefully the moment it's armed. Tempo-synced because it's in beats.
+pub const DEFAULT_ENVELOPE_DECAY_BEATS: f32 = 1.0;
 
-/// ADSR / random envelope modulating a single effect or generator
+/// Clip-triggered decay envelope modulating a single effect or generator
 /// parameter.
 ///
 /// Address shape: `param_id` is the canonical mapping key, mirroring
@@ -3352,10 +3350,14 @@ pub struct ParamEnvelope {
     /// effect instance and drops the now-redundant key.
     pub param_id: ParamId,
     pub enabled: bool,
-    /// Modulation depth (normalized 0-1) — the card's "Amount". On a clip's
-    /// rising edge the parameter snaps toward this offset and decays back over
-    /// [`ENVELOPE_DECAY_BEATS`].
+    /// The envelope's target (the orange handle on the slider track): the
+    /// normalized 0-1 position the parameter is pulled toward on a clip's rising
+    /// edge.
     pub target_normalized: f32,
+    /// Decay time in beats — how long the value takes to fall back to its base
+    /// after a trigger. The single ADSR stage kept (attack/sustain/release were
+    /// dropped as not useful); editable per envelope via the card's one slider.
+    pub decay_beats: f32,
     /// Parked legacy `targetParamIndex: i32` from V1.1 deserialization
     /// or RegistryMissing fallback during post-load resolution. See
     /// [`ParameterDriver::legacy_param_index`] for the recovery
@@ -3377,9 +3379,9 @@ impl Serialize for ParamEnvelope {
         let emit_param_id = !self.param_id.is_empty();
         let emit_legacy_index = !emit_param_id && self.legacy_param_index.is_some();
 
-        // 2 base fields (enabled, targetNormalized) + addressing field
-        // (paramId XOR targetParamIndex).
-        let mut field_count = 2;
+        // 3 base fields (enabled, targetNormalized, decayBeats) + addressing
+        // field (paramId XOR targetParamIndex).
+        let mut field_count = 3;
         if emit_param_id || emit_legacy_index {
             field_count += 1;
         }
@@ -3392,6 +3394,7 @@ impl Serialize for ParamEnvelope {
         }
         s.serialize_field("enabled", &self.enabled)?;
         s.serialize_field("targetNormalized", &self.target_normalized)?;
+        s.serialize_field("decayBeats", &self.decay_beats)?;
         s.end()
     }
 }
@@ -3406,6 +3409,7 @@ impl ParamEnvelope {
             param_id: param_id.into(),
             enabled: true,
             target_normalized: 1.0,
+            decay_beats: DEFAULT_ENVELOPE_DECAY_BEATS,
             legacy_param_index: None,
             current_level: 0.0,
             was_clip_active: false,
@@ -3413,14 +3417,14 @@ impl ParamEnvelope {
     }
 
     /// Triggered decay level [0, 1] at `local_beat` into the active clip: 1.0 at
-    /// the rising edge, falling linearly to 0 over [`ENVELOPE_DECAY_BEATS`], then
-    /// held at 0. The single envelope shape after the ADSR/Random simplification —
-    /// depth is the per-envelope `target_normalized` (the card's "Amount").
-    pub fn decay_level(local_beat: Beats) -> f32 {
-        if local_beat < Beats::ZERO || ENVELOPE_DECAY_BEATS <= 0.0 {
+    /// the rising edge, falling linearly to 0 over `decay_beats`, then held at 0.
+    /// The single envelope shape after the ADSR/Random simplification — depth is
+    /// the per-envelope `target_normalized` (the orange target handle).
+    pub fn decay_level(local_beat: Beats, decay_beats: f32) -> f32 {
+        if local_beat < Beats::ZERO || decay_beats <= 0.0 {
             return 0.0;
         }
-        (1.0 - local_beat.as_f32() / ENVELOPE_DECAY_BEATS).clamp(0.0, 1.0)
+        (1.0 - local_beat.as_f32() / decay_beats).clamp(0.0, 1.0)
     }
 }
 
@@ -3440,11 +3444,10 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
             // here — the v1.5→v1.6 migration consumes it to place the envelope
             // on the right instance, and serde ignores the leftover key.
             //
-            // The pre-simplification ADSR/Random keys (`attackBeats`,
-            // `sustainLevel`, `releaseBeats`, `decayBeats`, `mode`, `randomJump`,
-            // `rangeMin`, `rangeMax`) are likewise not read — serde ignores them,
-            // so an old ADSR or Random envelope loads as a plain decay envelope
-            // keeping only its depth (`targetNormalized`). That IS the migration.
+            // The dropped ADSR/Random keys (`attackBeats`, `sustainLevel`,
+            // `releaseBeats`, `mode`, `randomJump`, `rangeMin`, `rangeMax`) are
+            // not read — serde ignores them, so an old ADSR or Random envelope
+            // loads as a plain decay envelope keeping its depth + decay time.
             #[serde(default)]
             param_id: Option<String>,
             #[serde(default, rename = "targetParamIndex")]
@@ -3453,6 +3456,8 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
             enabled: bool,
             #[serde(default = "default_one")]
             target_normalized: f32,
+            #[serde(default = "default_decay_beats")]
+            decay_beats: f32,
         }
 
         let raw = Raw::deserialize(deserializer)?;
@@ -3465,6 +3470,7 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
             param_id,
             enabled: raw.enabled,
             target_normalized: raw.target_normalized,
+            decay_beats: raw.decay_beats,
             legacy_param_index,
             current_level: 0.0,
             was_clip_active: false,
@@ -3479,6 +3485,9 @@ fn default_true() -> bool {
 }
 fn default_one() -> f32 {
     1.0
+}
+fn default_decay_beats() -> f32 {
+    DEFAULT_ENVELOPE_DECAY_BEATS
 }
 fn generate_effect_id() -> EffectId {
     EffectId::new(crate::math::short_id())

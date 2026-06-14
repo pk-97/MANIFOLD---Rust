@@ -15,7 +15,9 @@ use manifold_editing::commands::effects::{
     ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
     ToggleEffectCommand,
 };
-use manifold_editing::commands::envelopes::ChangeEnvelopeTargetCommand;
+use manifold_editing::commands::envelopes::{
+    ChangeEnvelopeDecayCommand, ChangeEnvelopeTargetCommand,
+};
 use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand, PasteGeneratorCommand,
@@ -274,6 +276,7 @@ pub(super) fn dispatch_inspector(
     drag_snapshot: &mut Option<f32>,
     trim_snapshot: &mut Option<(f32, f32)>,
     target_snapshot: &mut Option<f32>,
+    decay_snapshot: &mut Option<f32>,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
     editor_target: Option<&manifold_core::GraphTarget>,
 ) -> DispatchResult {
@@ -1161,6 +1164,17 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
+        PanelAction::EnvDecayChanged(gpt, param_id, decay) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let d = *decay;
+                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
+                    env.decay_beats = d;
+                });
+            }
+            DispatchResult::handled()
+        }
 
         // ── Modulation undo: snapshot/commit ────────────────────────
         PanelAction::TrimSnapshot(gpt, param_id) => {
@@ -1251,6 +1265,48 @@ pub(super) fn dispatch_inspector(
                 {
                     let cmd =
                         ChangeEnvelopeTargetCommand::new(target, env_idx, old_target, new_t);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            *active_inspector_drag = None;
+            DispatchResult::handled()
+        }
+        PanelAction::EnvDecaySnapshot(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let d = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.envelopes
+                            .as_ref()
+                            .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
+                            .map(|e| e.decay_beats)
+                    })
+                    .flatten();
+                if let Some(d) = d {
+                    *decay_snapshot = Some(d);
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::EnvDecayCommit(gpt, param_id) => {
+            if let Some(old_decay) = decay_snapshot.take()
+                && let Some(target) =
+                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let info = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.envelopes
+                            .as_ref()
+                            .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
+                            .map(|idx| (idx, inst.envelopes.as_ref().unwrap()[idx].decay_beats))
+                    })
+                    .flatten();
+                if let Some((env_idx, new_d)) = info
+                    && (old_decay - new_d).abs() > f32::EPSILON
+                {
+                    let cmd =
+                        ChangeEnvelopeDecayCommand::new(target, env_idx, old_decay, new_d);
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }
             }

@@ -94,7 +94,49 @@ impl Command for RemoveEnvelopeCommand {
     }
 }
 
-/// Change an envelope's `target_normalized` — the card's "Amount" (by index).
+/// Change an envelope's `decay_beats` — the card's single envelope slider (by index).
+#[derive(Debug)]
+pub struct ChangeEnvelopeDecayCommand {
+    target: GraphTarget,
+    env_index: usize,
+    old_decay: f32,
+    new_decay: f32,
+}
+
+impl ChangeEnvelopeDecayCommand {
+    pub fn new(target: GraphTarget, env_index: usize, old_decay: f32, new_decay: f32) -> Self {
+        Self {
+            target,
+            env_index,
+            old_decay,
+            new_decay,
+        }
+    }
+
+    fn apply(project: &mut Project, target: &GraphTarget, idx: usize, value: f32) {
+        project.with_preset_graph_mut(target, |inst| {
+            if let Some(env) = inst.envelopes.as_mut().and_then(|e| e.get_mut(idx)) {
+                env.decay_beats = value;
+            }
+        });
+    }
+}
+
+impl Command for ChangeEnvelopeDecayCommand {
+    fn execute(&mut self, project: &mut Project) {
+        Self::apply(project, &self.target, self.env_index, self.new_decay);
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        Self::apply(project, &self.target, self.env_index, self.old_decay);
+    }
+
+    fn description(&self) -> &str {
+        "Change Envelope Decay"
+    }
+}
+
+/// Change an envelope's `target_normalized` — the orange target handle (by index).
 #[derive(Debug)]
 pub struct ChangeEnvelopeTargetCommand {
     target: GraphTarget,

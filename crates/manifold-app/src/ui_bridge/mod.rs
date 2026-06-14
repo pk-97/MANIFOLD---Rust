@@ -70,6 +70,7 @@ pub fn dispatch(
     drag_snapshot: &mut Option<f32>,
     trim_snapshot: &mut Option<(f32, f32)>,
     target_snapshot: &mut Option<f32>,
+    decay_snapshot: &mut Option<f32>,
     user_prefs: &mut UserPrefs,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
     // `Some(GraphTarget)` when the graph editor dispatches one of its left-lane
@@ -185,6 +186,9 @@ pub fn dispatch(
         | PanelAction::TrimCommit(..)
         | PanelAction::TargetSnapshot(..)
         | PanelAction::TargetCommit(..)
+        | PanelAction::EnvDecayChanged(..)
+        | PanelAction::EnvDecaySnapshot(..)
+        | PanelAction::EnvDecayCommit(..)
         | PanelAction::ParamLabelRightClick(..)
         | PanelAction::AddEffectClicked(_)
         | PanelAction::BrowserSearchClicked
@@ -243,6 +247,7 @@ pub fn dispatch(
             drag_snapshot,
             trim_snapshot,
             target_snapshot,
+            decay_snapshot,
             active_inspector_drag,
             editor_target,
         ),

@@ -1402,6 +1402,7 @@ mod tests {
             param_id: std::borrow::Cow::Borrowed(""),
             enabled: true,
             target_normalized: 1.0,
+            decay_beats: 1.0,
             legacy_param_index: Some(0),
             current_level: 0.0,
             was_clip_active: false,

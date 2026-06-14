@@ -160,8 +160,10 @@ pub struct ParamCardConfig {
     pub trim_min: Vec<f32>,
     /// Per-param driver trim max (normalized). Defaults to 1.0.
     pub trim_max: Vec<f32>,
-    /// Per-param envelope depth — the card's "Amount" (normalized). Default 1.0.
+    /// Per-param envelope target (the orange handle, normalized). Default 1.0.
     pub target_norm: Vec<f32>,
+    /// Per-param envelope decay time in beats. Default 1.0.
+    pub env_decay: Vec<f32>,
     /// Per-param driver beat division button index (0-10). -1 if no driver.
     pub driver_beat_div_idx: Vec<i32>,
     /// Per-param driver waveform index (0-4). -1 if no driver.
@@ -375,6 +377,8 @@ pub struct ParamCardPanel {
     driver_config_ids: Vec<Option<DriverConfigIds>>,
     /// Per-param orange envelope target handle on the slider track (when armed).
     target_ids: Vec<Option<EnvelopeTargetIds>>,
+    /// Per-param envelope drawer — the single "Decay" slider (when armed).
+    envelope_config_ids: Vec<Option<EnvelopeConfigIds>>,
     trim_ids: Vec<Option<TrimHandleIds>>,
     ableton_trim_ids: Vec<Option<TrimHandleIds>>,
     ableton_config_ids: Vec<Option<AbletonConfigIds>>,
@@ -452,6 +456,7 @@ impl ParamCardPanel {
             envelope_btn_ids: Vec::new(),
             driver_config_ids: Vec::new(),
             target_ids: Vec::new(),
+            envelope_config_ids: Vec::new(),
             trim_ids: Vec::new(),
             ableton_trim_ids: Vec::new(),
             ableton_config_ids: Vec::new(),
@@ -501,6 +506,7 @@ impl ParamCardPanel {
             &config.trim_min,
             &config.trim_max,
             &config.target_norm,
+            &config.env_decay,
             &config.driver_beat_div_idx,
             &config.driver_waveform_idx,
             &config.driver_reversed,
@@ -520,6 +526,8 @@ impl ParamCardPanel {
         self.driver_config_ids.resize_with(n, || None);
         self.target_ids = Vec::new();
         self.target_ids.resize_with(n, || None);
+        self.envelope_config_ids = Vec::new();
+        self.envelope_config_ids.resize_with(n, || None);
         self.trim_ids = Vec::new();
         self.trim_ids.resize_with(n, || None);
         self.ableton_trim_ids = Vec::new();
@@ -771,8 +779,18 @@ impl ParamCardPanel {
         {
             h += DRIVER_CONFIG_HEIGHT;
         }
-        // An armed envelope adds no drawer — its target handle is an overlay on
-        // the slider track, so it contributes no row height.
+        // An armed envelope adds a single "Decay" slider drawer (the target is
+        // an overlay handle on the track, so only the drawer adds height).
+        if self
+            .state
+            .mod_state
+            .envelope_expanded
+            .get(i)
+            .copied()
+            .unwrap_or(false)
+        {
+            h += ENV_CONFIG_HEIGHT;
+        }
         if self.param_info[i].ableton_display.is_some() {
             h += ABL_CONFIG_HEIGHT;
         }
@@ -1241,6 +1259,7 @@ impl ParamCardPanel {
             self.slider_ids[i] = row.slider;
             self.trim_ids[i] = row.trim;
             self.target_ids[i] = row.target;
+            self.envelope_config_ids[i] = row.envelope_config;
             self.ableton_trim_ids[i] = row.ableton_trim;
             self.envelope_btn_ids[i] = row.envelope_btn;
             self.driver_btn_ids[i] = row.driver_btn;
@@ -1535,6 +1554,7 @@ impl ParamCardPanel {
                     self.slider_ids[i] = row.slider;
                     self.trim_ids[i] = row.trim;
                     self.target_ids[i] = row.target;
+                    self.envelope_config_ids[i] = row.envelope_config;
                     self.ableton_trim_ids[i] = row.ableton_trim;
                     self.envelope_btn_ids[i] = row.envelope_btn;
                     self.driver_btn_ids[i] = row.driver_btn;
@@ -2092,13 +2112,13 @@ impl ParamCardPanel {
         Vec::new()
     }
 
-    /// Unified pointer-down hit-testing for both card kinds. Steps 1-3 grab the
-    /// modulation widgets (the envelope drawer's "Amount" slider, driver trim
-    /// bars, Ableton trim bars); step 4 is the param slider, with the proximity
-    /// catch-zone for the driver trim handles when a driver is expanded. The
+    /// Unified pointer-down hit-testing for both card kinds. Steps 1-4 grab the
+    /// modulation widgets (the envelope target handle, the envelope decay slider,
+    /// driver trim bars, Ableton trim bars); step 5 is the param slider, with the
+    /// proximity catch-zones for the target handle and driver trim handles. The
     /// emitted target comes from `param_target()`, so effect and generator share
     /// one path; toggle/trigger rows (generator-only, no slider widget) are
-    /// skipped in step 4.
+    /// skipped in step 5.
     pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
         let target = self.param_target();
 
@@ -2112,7 +2132,22 @@ impl ParamCardPanel {
             }
         }
 
-        // 2. Trim bars.
+        // 2. Envelope decay slider (in the drawer).
+        for (pi, env_cfg) in self.envelope_config_ids.iter().enumerate() {
+            if let Some(c) = env_cfg
+                && node_id == c.decay_slider.track
+            {
+                self.drag.dragging_decay_param = pi as i32;
+                let norm = BitmapSlider::x_to_normalized(c.decay_slider.track_rect, pos.x);
+                let decay = norm.clamp(0.0, 1.0) * ENV_DECAY_MAX;
+                return vec![
+                    PanelAction::EnvDecaySnapshot(target, self.pid_at(pi)),
+                    PanelAction::EnvDecayChanged(target, self.pid_at(pi), decay),
+                ];
+            }
+        }
+
+        // 3. Trim bars.
         for (pi, trim) in self.trim_ids.iter().enumerate() {
             if let Some(t) = trim {
                 if node_id as i32 == t.min_bar_id {
@@ -2128,7 +2163,7 @@ impl ParamCardPanel {
             }
         }
 
-        // 3. Ableton trim bars.
+        // 4. Ableton trim bars.
         for (pi, trim) in self.ableton_trim_ids.iter().enumerate() {
             if let Some(t) = trim {
                 if node_id as i32 == t.min_bar_id {
@@ -2144,7 +2179,7 @@ impl ParamCardPanel {
             }
         }
 
-        // 4. Param slider tracks. Toggle/trigger rows have no slider widget, so
+        // 5. Param slider tracks. Toggle/trigger rows have no slider widget, so
         // skip them. When a driver is expanded, the thin (4px) trim bars get an
         // ~8px proximity catch-zone so they're grabbable by feel before falling
         // through to a normal param drag.
@@ -2294,6 +2329,26 @@ impl ParamCardPanel {
                 return match self.kind {
                     ParamCardKind::Effect => vec![PanelAction::TargetChanged(GraphParamTarget::Effect(ei), pid, norm)],
                     ParamCardKind::Generator => vec![PanelAction::TargetChanged(GraphParamTarget::Generator, pid, norm)],
+                };
+            }
+        }
+
+        // Envelope decay slider drag — update the drawer slider's fill + value,
+        // dispatch the decay change (in beats).
+        if self.drag.dragging_decay_param >= 0 {
+            let pi = self.drag.dragging_decay_param as usize;
+            if let Some(cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref()) {
+                let norm = BitmapSlider::x_to_normalized(cfg.decay_slider.track_rect, pos.x)
+                    .clamp(0.0, 1.0);
+                let decay = norm * ENV_DECAY_MAX;
+                if let Some(v) = self.state.mod_state.env_decay.get_mut(pi) {
+                    *v = decay;
+                }
+                BitmapSlider::update_value(tree, &cfg.decay_slider, norm, &format!("{decay:.2}"));
+                let pid = self.pid_at(pi);
+                return match self.kind {
+                    ParamCardKind::Effect => vec![PanelAction::EnvDecayChanged(GraphParamTarget::Effect(ei), pid, decay)],
+                    ParamCardKind::Generator => vec![PanelAction::EnvDecayChanged(GraphParamTarget::Generator, pid, decay)],
                 };
             }
         }
@@ -2469,6 +2524,15 @@ impl ParamCardPanel {
             return match self.kind {
                 ParamCardKind::Effect => vec![PanelAction::TargetCommit(GraphParamTarget::Effect(ei), pid)],
                 ParamCardKind::Generator => vec![PanelAction::TargetCommit(GraphParamTarget::Generator, pid)],
+            };
+        }
+        if self.drag.dragging_decay_param >= 0 {
+            let pi = self.drag.dragging_decay_param as usize;
+            self.drag.dragging_decay_param = -1;
+            let pid = self.pid_at(pi);
+            return match self.kind {
+                ParamCardKind::Effect => vec![PanelAction::EnvDecayCommit(GraphParamTarget::Effect(ei), pid)],
+                ParamCardKind::Generator => vec![PanelAction::EnvDecayCommit(GraphParamTarget::Generator, pid)],
             };
         }
         if self.drag.dragging_trim_param >= 0 {
@@ -2660,6 +2724,7 @@ mod tests {
             trim_min: vec![0.0; n],
             trim_max: vec![1.0; n],
             target_norm: vec![1.0; n],
+            env_decay: vec![1.0; n],
             driver_beat_div_idx: vec![-1; n],
             driver_waveform_idx: vec![-1; n],
             driver_reversed: vec![false; n],
@@ -2952,6 +3017,7 @@ mod tests {
             trim_min: vec![0.0; 3],
             trim_max: vec![1.0; 3],
             target_norm: vec![1.0; 3],
+            env_decay: vec![1.0; 3],
             driver_beat_div_idx: vec![-1; 3],
             driver_waveform_idx: vec![-1; 3],
             driver_reversed: vec![false; 3],

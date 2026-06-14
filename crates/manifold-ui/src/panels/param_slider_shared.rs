@@ -33,9 +33,19 @@ pub(crate) const WAVEFORM_COUNT: usize = 5;
 
 pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 
-// The envelope arms a single in-context affordance: an orange target handle on
-// the parameter's own slider track (its depth — the card's "Amount"). No drawer,
-// no extra height — the decay feel is fixed.
+// Arming the envelope shows two controls: the orange target handle on the
+// parameter's own track (the value it's pulled toward) and a single "Decay"
+// slider in a one-row drawer (how fast it falls back).
+pub(crate) const ENV_CONFIG_HEIGHT: f32 = 30.0;
+pub(crate) const ENV_ROW_HEIGHT: f32 = 22.0;
+pub(crate) const ENV_PAD_H: f32 = 5.0;
+pub(crate) const ENV_DECAY_LABEL_W: f32 = 50.0;
+/// Decay slider full-scale, in beats (0 → this).
+pub(crate) const ENV_DECAY_MAX: f32 = 8.0;
+/// Default decay for a freshly-armed envelope — mirrors core's
+/// `DEFAULT_ENVELOPE_DECAY_BEATS` so the slider shows a usable value at once.
+pub(crate) const DEFAULT_ENV_DECAY: f32 = 1.0;
+
 pub(crate) const TRIM_BAR_W: f32 = 4.0;
 pub(crate) const TARGET_BAR_W: f32 = 6.0;
 pub(crate) const OVERLAY_INSET: f32 = 1.0;
@@ -64,6 +74,12 @@ pub(crate) struct DriverConfigIds {
 /// parameter's own range.
 pub(crate) struct EnvelopeTargetIds {
     pub(crate) target_bar_id: i32,
+}
+
+/// The envelope drawer — a single "Decay" slider (`decay_beats`).
+pub(crate) struct EnvelopeConfigIds {
+    pub(crate) _container_id: i32,
+    pub(crate) decay_slider: SliderNodeIds,
 }
 
 pub(crate) struct TrimHandleIds {
@@ -99,14 +115,17 @@ pub struct AbletonMappingDisplay {
 
 /// Per-parameter modulation state for the unified `ParamCardPanel` (both kinds).
 /// Contains driver expansion, envelope expansion, trim values, the envelope
-/// depth (`target_norm` — the card's "Amount"), and driver visual state (beat
-/// div, waveform, reversed, dotted, triplet).
+/// target (`target_norm` — the orange handle) and decay time (`env_decay` — the
+/// drawer slider), and driver visual state (beat div, waveform, reversed,
+/// dotted, triplet).
 pub struct ParamModState {
     pub driver_expanded: Vec<bool>,
     pub envelope_expanded: Vec<bool>,
     pub trim_min: Vec<f32>,
     pub trim_max: Vec<f32>,
     pub target_norm: Vec<f32>,
+    /// Envelope decay time in beats.
+    pub env_decay: Vec<f32>,
     pub driver_beat_div_idx: Vec<i32>,
     pub driver_waveform_idx: Vec<i32>,
     pub driver_reversed: Vec<bool>,
@@ -122,6 +141,7 @@ impl ParamModState {
             trim_min: vec![0.0; param_count],
             trim_max: vec![1.0; param_count],
             target_norm: vec![0.5; param_count],
+            env_decay: vec![DEFAULT_ENV_DECAY; param_count],
             driver_beat_div_idx: vec![-1; param_count],
             driver_waveform_idx: vec![-1; param_count],
             driver_reversed: vec![false; param_count],
@@ -130,7 +150,7 @@ impl ParamModState {
         }
     }
 
-    /// Sync driver/envelope/trim/Amount state from config vectors.
+    /// Sync driver/envelope/trim/target/decay state from config vectors.
     /// `n` is the param count. Reads from config slices with fallback defaults.
     #[allow(clippy::too_many_arguments)]
     pub fn sync_from_config(
@@ -141,6 +161,7 @@ impl ParamModState {
         trim_min: &[f32],
         trim_max: &[f32],
         target_norm: &[f32],
+        env_decay: &[f32],
         driver_beat_div_idx: &[i32],
         driver_waveform_idx: &[i32],
         driver_reversed: &[bool],
@@ -153,6 +174,7 @@ impl ParamModState {
             self.trim_min[i] = trim_min.get(i).copied().unwrap_or(0.0);
             self.trim_max[i] = trim_max.get(i).copied().unwrap_or(1.0);
             self.target_norm[i] = target_norm.get(i).copied().unwrap_or(1.0);
+            self.env_decay[i] = env_decay.get(i).copied().unwrap_or(DEFAULT_ENV_DECAY);
             self.driver_beat_div_idx[i] = driver_beat_div_idx.get(i).copied().unwrap_or(-1);
             self.driver_waveform_idx[i] = driver_waveform_idx.get(i).copied().unwrap_or(-1);
             self.driver_reversed[i] = driver_reversed.get(i).copied().unwrap_or(false);
@@ -169,8 +191,10 @@ pub(crate) struct ParamDragState {
     pub(crate) dragging_param: i32,
     pub(crate) dragging_trim_param: i32,
     pub(crate) dragging_trim_is_min: bool,
-    /// The envelope "Amount" (depth / `target_normalized`) slider in the drawer.
+    /// The envelope target (orange handle / `target_normalized`) on the track.
     pub(crate) dragging_target_param: i32,
+    /// The envelope decay slider (`decay_beats`) in the drawer.
+    pub(crate) dragging_decay_param: i32,
     pub(crate) dragging_ableton_trim_param: i32,
     pub(crate) dragging_ableton_trim_is_min: bool,
 }
@@ -182,6 +206,7 @@ impl ParamDragState {
             dragging_trim_param: -1,
             dragging_trim_is_min: false,
             dragging_target_param: -1,
+            dragging_decay_param: -1,
             dragging_ableton_trim_param: -1,
             dragging_ableton_trim_is_min: false,
         }
@@ -191,6 +216,7 @@ impl ParamDragState {
         self.dragging_param >= 0
             || self.dragging_trim_param >= 0
             || self.dragging_target_param >= 0
+            || self.dragging_decay_param >= 0
             || self.dragging_ableton_trim_param >= 0
     }
 }
@@ -535,6 +561,57 @@ pub(crate) fn build_envelope_target(
     EnvelopeTargetIds { target_bar_id }
 }
 
+/// The envelope drawer: a single "Decay" slider (`decay_beats`, 0..ENV_DECAY_MAX
+/// beats). The one ADSR stage kept — how fast the value falls back after a
+/// trigger. Depth is the orange target handle on the track above.
+pub(crate) fn build_envelope_config(
+    tree: &mut UITree,
+    parent: i32,
+    x: f32,
+    y: f32,
+    w: f32,
+    mod_state: &ParamModState,
+    param_idx: usize,
+) -> EnvelopeConfigIds {
+    let container_id = tree.add_panel(
+        parent,
+        x,
+        y,
+        w,
+        ENV_CONFIG_HEIGHT,
+        UIStyle {
+            bg_color: color::CONFIG_BG_C32,
+            corner_radius: 2.0,
+            ..UIStyle::default()
+        },
+    ) as i32;
+
+    let sx = x + ENV_PAD_H;
+    let row_y = y + 4.0;
+    let slider_w = w - ENV_PAD_H * 2.0;
+    let decay = mod_state
+        .env_decay
+        .get(param_idx)
+        .copied()
+        .unwrap_or(DEFAULT_ENV_DECAY);
+    let decay_slider = BitmapSlider::build(
+        tree,
+        container_id,
+        Rect::new(sx, row_y, slider_w, ENV_ROW_HEIGHT),
+        Some("Decay"),
+        (decay / ENV_DECAY_MAX).clamp(0.0, 1.0),
+        &format!("{decay:.2}"),
+        &SliderColors::envelope(),
+        FONT_SIZE,
+        ENV_DECAY_LABEL_W,
+    );
+
+    EnvelopeConfigIds {
+        _container_id: container_id,
+        decay_slider,
+    }
+}
+
 pub(crate) fn build_trim_handles(
     tree: &mut UITree,
     track_parent: i32,
@@ -839,6 +916,8 @@ pub(crate) struct ParamRowIds {
     pub(crate) ableton_trim: Option<TrimHandleIds>,
     pub(crate) envelope_btn: i32,
     pub(crate) driver_btn: i32,
+    /// Envelope drawer (the single "Decay" slider).
+    pub(crate) envelope_config: Option<EnvelopeConfigIds>,
     pub(crate) driver_config: Option<DriverConfigIds>,
     pub(crate) ableton_config: Option<AbletonConfigIds>,
     /// `y` after this row's slider + any expanded driver/envelope/Ableton
@@ -888,6 +967,7 @@ pub(crate) fn build_param_row(
         ableton_trim: None,
         envelope_btn: -1,
         driver_btn: -1,
+        envelope_config: None,
         driver_config: None,
         ableton_config: None,
         new_cy: cy,
@@ -993,8 +1073,14 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
-    // The armed envelope adds no drawer — its only control is the orange target
-    // handle on the slider track above; the decay feel is fixed.
+    // Envelope drawer — a single "Decay" slider. Depth is the orange target
+    // handle on the track above; this is how fast the value falls back.
+    if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
+        ids.envelope_config = Some(build_envelope_config(
+            tree, parent, x, cy, config_w, mod_state, i,
+        ));
+        cy += ENV_CONFIG_HEIGHT;
+    }
 
     // Driver config drawer.
     if mod_state.driver_expanded.get(i).copied().unwrap_or(false) {

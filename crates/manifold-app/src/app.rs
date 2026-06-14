@@ -162,8 +162,10 @@ pub struct Application {
     pub(crate) slider_snapshot: Option<f32>,
     /// Trim drag snapshot (min, max) for undo. Unity: onTrimSnapshot/onTrimCommit.
     pub(crate) trim_snapshot: Option<(f32, f32)>,
-    /// Envelope Amount (target) drag snapshot for undo.
+    /// Envelope target-handle drag snapshot for undo.
     pub(crate) target_snapshot: Option<f32>,
+    /// Envelope decay-slider drag snapshot for undo.
+    pub(crate) decay_snapshot: Option<f32>,
     /// User param-binding mapping range drag snapshot `(min, max)` for
     /// undo. Captured on `EffectMappingRangeSnapshot`, committed as one
     /// `EditUserParamBindingCommand` on `EffectMappingRangeCommit`.
@@ -453,6 +455,7 @@ impl Application {
             slider_snapshot: None,
             trim_snapshot: None,
             target_snapshot: None,
+            decay_snapshot: None,
             mapping_range_snapshot: None,
             mapping_affine_snapshot: None,
             active_inspector_drag: None,

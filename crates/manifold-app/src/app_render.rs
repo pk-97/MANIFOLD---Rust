@@ -2052,6 +2052,7 @@ impl Application {
                 &mut self.slider_snapshot,
                 &mut self.trim_snapshot,
                 &mut self.target_snapshot,
+                &mut self.decay_snapshot,
                 &mut self.user_prefs,
                 &mut self.active_inspector_drag,
                 editor_target,

@@ -1302,6 +1302,7 @@ struct CardModulation {
     driver_triplet: Vec<bool>,
     envelope_active: Vec<bool>,
     target_norm: Vec<f32>,
+    env_decay: Vec<f32>,
 }
 
 /// Build the driver + envelope display arrays for one preset instance's card.
@@ -1322,6 +1323,7 @@ fn build_card_modulation(
         driver_triplet: vec![false; n],
         envelope_active: vec![false; n],
         target_norm: vec![1.0; n],
+        env_decay: vec![1.0; n],
     };
     if let Some(ref drivers) = inst.drivers {
         for d in drivers {
@@ -1351,6 +1353,7 @@ fn build_card_modulation(
             };
             m.envelope_active[pi] = true;
             m.target_norm[pi] = env.target_normalized;
+            m.env_decay[pi] = env.decay_beats;
         }
     }
     m
@@ -1419,6 +1422,7 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
         trim_min: vec![],
         trim_max: vec![],
         target_norm: vec![],
+        env_decay: vec![],
         driver_beat_div_idx: vec![],
         driver_waveform_idx: vec![],
         driver_reversed: vec![],
@@ -1698,6 +1702,7 @@ fn preset_to_config(
         trim_min: m.trim_min,
         trim_max: m.trim_max,
         target_norm: m.target_norm,
+        env_decay: m.env_decay,
         driver_beat_div_idx: m.driver_beat_div_idx,
         driver_waveform_idx: m.driver_waveform_idx,
         driver_reversed: m.driver_reversed,
