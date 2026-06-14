@@ -17,11 +17,13 @@
 //! / Panel infrastructure. Pan via middle-mouse drag, zoom via scroll
 //! wheel, hover highlights. No editing yet.
 
-use manifold_renderer::node_graph::{GraphSnapshot, NodeSnapshot, PortKindSnapshot, WireSnapshot};
+use manifold_renderer::node_graph::{
+    GraphSnapshot, GroupSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
+};
 use manifold_renderer::ui_renderer::{Layer, UIRenderer};
 use manifold_ui::PanelAction;
 
-use manifold_core::effect_graph_def::GROUP_TYPE_ID;
+use manifold_core::effect_graph_def::{GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID};
 
 use crate::mapping_popover::MappingPopover;
 
@@ -42,8 +44,20 @@ macro_rules! group_log {
 }
 
 const HEADER_HEIGHT: f32 = 28.0;
-const NODE_WIDTH: f32 = 168.0;
+const NODE_WIDTH: f32 = 300.0;
 const NODE_HEADER_HEIGHT: f32 = 22.0;
+/// Padding around the preview strip inside a node, so the thumbnail reads as a
+/// recessed screen rather than a fill bleeding to the node edges.
+const PREVIEW_PAD: f32 = 6.0;
+/// Inner width / height of a node's output-preview strip — a 16:9 image area
+/// inset by `PREVIEW_PAD` on each side. Only nodes (and groups) that output an
+/// image carry the strip; pure scalar nodes (param distributors, the generator
+/// input) don't reserve the space. The strip sits in its own band between the
+/// header and the param/port rows, so ports never overlap the thumbnail.
+const PREVIEW_IMG_W: f32 = NODE_WIDTH - 2.0 * PREVIEW_PAD;
+const PREVIEW_IMG_H: f32 = PREVIEW_IMG_W * 9.0 / 16.0;
+/// Total vertical space the preview band occupies (image + pad above and below).
+const PREVIEW_BAND_H: f32 = PREVIEW_IMG_H + 2.0 * PREVIEW_PAD;
 /// Height of one on-node parameter row: label + value on one line, with a
 /// thin fill bar underneath for ranged values. Nodes carry their params on
 /// their face so you read (and, in a later pass, tune) them where you are,
@@ -62,8 +76,9 @@ const PORT_RADIUS: f32 = 4.0;
 const PORT_COL_WIDTH: f32 = 10.0;
 const NODE_CORNER: f32 = 6.0;
 
-// Auto-layout grid spacing.
-const COL_SPACING: f32 = 220.0;
+// Auto-layout grid spacing. Wide enough that 300px nodes never touch
+// horizontally (NODE_WIDTH + ~60px breathing room for the wires between cols).
+const COL_SPACING: f32 = 360.0;
 const LAYOUT_ORIGIN: (f32, f32) = (60.0, 60.0);
 /// Vertical gap between two stacked nodes (or routing lanes) within a
 /// column. Node heights vary, so the layout spaces by `height + VGAP`
@@ -84,11 +99,33 @@ const LAYOUT_ORDER_ITERS: usize = 8;
 /// then resolves overlaps; alternating direction straightens wires.
 const LAYOUT_COORD_ITERS: usize = 12;
 
+// ── Wire routing (draw-only) ──
+/// One muted-violet colour for every feedback return path, so they read as a
+/// family distinct from the blue data / orange control wires regardless of the
+/// source port's kind.
+const RETURN_WIRE_COLOR: [f32; 3] = [0.62, 0.55, 0.78];
+/// How far (graph px) above the higher endpoint's node-top a return path arcs,
+/// so it clears the node band and reads as "going around".
+const RETURN_ARC_CLEAR: f32 = 36.0;
+/// Return paths are dashed: `RETURN_DASH` sampled segments drawn, then the same
+/// count skipped, repeating — a feedback wire at a glance.
+const RETURN_DASH: i32 = 3;
+/// Stagger the incoming-wire landing handle by port depth only on nodes with at
+/// least this many inputs, so a dense fan-in (e.g. a ~15-input tracking node)
+/// splays into the input stack instead of overlapping. Small mixers (a/b,
+/// numbered slots) keep their uniform handles.
+const FANIN_STAGGER_MIN: usize = 6;
+
 const BG_COLOR: [f32; 4] = [0.10, 0.10, 0.12, 1.0];
 const HEADER_BG: [f32; 4] = [0.14, 0.14, 0.17, 1.0];
 const GRID_DOT: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
 const NODE_BG: [f32; 4] = [0.18, 0.18, 0.22, 1.0];
 const NODE_BG_HOVER: [f32; 4] = [0.22, 0.22, 0.27, 1.0];
+/// Recessed "screen" the preview thumbnail is blitted over (and the letterbox
+/// colour for non-16:9 outputs). Near-black so an empty / loading strip reads
+/// as an off monitor, not a hole in the node.
+const PREVIEW_SCREEN_BG: [f32; 4] = [0.04, 0.04, 0.05, 1.0];
+const PREVIEW_SCREEN_BORDER: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
 const NODE_HEADER_BG: [f32; 4] = [0.28, 0.30, 0.42, 1.0];
 const NODE_BORDER: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
 const NODE_BORDER_SELECTED: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
@@ -255,12 +292,93 @@ struct NodeView {
     /// (no descriptor) and for any node whose author left the summary
     /// blank. Resolved once on the topology rebuild — it never changes.
     tooltip: Option<String>,
+    /// Stable [`NodeId`] whose captured output texture this node shows in its
+    /// preview strip, or `None` for nodes that output no image (param
+    /// distributors, the generator input). For an ordinary image node this is
+    /// its own `node_id`; for a **group** it's the inner node producing the
+    /// group's primary output (resolved once at build time), so a collapsed
+    /// group still previews what it emits without any extra capture — that
+    /// inner node is already a cell in the flattened atlas. The presence of a
+    /// value is what gives the node a preview band ([`Self::preview_h`]).
+    preview_node_id: Option<manifold_core::NodeId>,
+}
+
+/// Whether a port carries an image (the only kind the thumbnail atlas captures).
+fn port_kind_is_image(kind: &PortKindSnapshot) -> bool {
+    matches!(
+        kind,
+        PortKindSnapshot::Texture2D
+            | PortKindSnapshot::Texture2DTyped { .. }
+            | PortKindSnapshot::Texture3D
+    )
+}
+
+/// The stable [`NodeId`] whose captured texture a node previews, or `None` for a
+/// node that emits no image. Ordinary node → its own id (if it has an image
+/// output); group → the inner producer of its primary output. See
+/// [`NodeView::preview_node_id`].
+fn node_preview_target(n: &NodeSnapshot) -> Option<manifold_core::NodeId> {
+    if let Some(body) = n.group.as_deref() {
+        let port = group_primary_output_port(&n.outputs)?;
+        group_output_producer(body, port)
+    } else if !n.node_id.as_str().is_empty()
+        && n.outputs.iter().any(|p| port_kind_is_image(&p.kind))
+    {
+        Some(n.node_id.clone())
+    } else {
+        None
+    }
+}
+
+/// A group's primary image output port name — the first output that carries a
+/// texture. Unlike `manifold_core::flatten::primary_output_port` (which falls
+/// back to the first output of any kind), this is image-only: a group with no
+/// image output gets no preview band, exactly like an ordinary scalar node.
+fn group_primary_output_port(outputs: &[PortSnapshot]) -> Option<&str> {
+    outputs
+        .iter()
+        .find(|p| port_kind_is_image(&p.kind))
+        .map(|p| p.name.as_str())
+}
+
+/// The stable [`NodeId`] of the concrete inner node producing `port` of a group
+/// `body`, resolving through nested sub-groups. Snapshot-side mirror of
+/// `manifold_core::flatten::producer_for_output`. `None` if the port is fed by
+/// the group's own input (an unsupported passthrough the flattener also rejects)
+/// or has no producer.
+fn group_output_producer(body: &GroupSnapshot, port: &str) -> Option<manifold_core::NodeId> {
+    let out_boundary = body
+        .nodes
+        .iter()
+        .find(|n| n.type_id == GROUP_OUTPUT_TYPE_ID)?;
+    let wire = body
+        .wires
+        .iter()
+        .find(|w| w.to_node == out_boundary.id && w.to_port == port)?;
+    let producer = body.nodes.iter().find(|n| n.id == wire.from_node)?;
+    if let Some(inner) = producer.group.as_deref() {
+        group_output_producer(inner, &wire.from_port)
+    } else if producer.type_id == GROUP_INPUT_TYPE_ID {
+        None
+    } else {
+        Some(producer.node_id.clone())
+    }
 }
 
 impl NodeView {
     fn height(&self) -> f32 {
         let port_rows = self.inputs.len().max(self.outputs.len()) as f32;
-        NODE_HEADER_HEIGHT + self.body_h() + port_rows * PORT_ROW_HEIGHT + 6.0
+        NODE_HEADER_HEIGHT + self.preview_h() + self.body_h() + port_rows * PORT_ROW_HEIGHT + 6.0
+    }
+
+    /// Height of the output-preview band below the header: the 16:9 strip plus
+    /// its padding, or `0` for a node that emits no image. Zoom-independent.
+    fn preview_h(&self) -> f32 {
+        if self.preview_node_id.is_some() {
+            PREVIEW_BAND_H
+        } else {
+            0.0
+        }
     }
 
     /// Height of the body block below the header: collapsed shows the single
@@ -278,9 +396,11 @@ impl NodeView {
         }
     }
 
-    /// Y offset where port rows start, below the header and the body block.
+    /// Y offset where port rows start, below the header, preview band, and body
+    /// block. Ports live in their own band beneath the preview, so the strip and
+    /// the port dots/labels never overlap.
     fn ports_y_offset(&self) -> f32 {
-        NODE_HEADER_HEIGHT + self.body_h()
+        NODE_HEADER_HEIGHT + self.preview_h() + self.body_h()
     }
 
     fn input_port_pos_graph(&self, idx: usize) -> (f32, f32) {
@@ -1136,21 +1256,24 @@ impl GraphCanvas {
         &self.node_search
     }
 
-    /// Visible non-group nodes as `(stable node_id, body_x, body_y, body_w,
-    /// body_h)` in screen space — the node-body region (below the header) the
-    /// present pass blits each node's atlas thumbnail into. Skips groups
-    /// (containers) and boundary nodes with an empty `node_id` (no captured
-    /// output). Culls off-canvas nodes.
+    /// Visible previewable nodes as `(capture node_id, strip_x, strip_y,
+    /// strip_w, strip_h)` in screen space — the 16:9 preview-strip region the
+    /// present pass blits each node's atlas thumbnail into. The `node_id` is the
+    /// *capture* id ([`NodeView::preview_node_id`]): a node's own id, or for a
+    /// group the inner node producing its output — so groups preview too,
+    /// reusing the producer's existing atlas cell. Nodes with no image output
+    /// emit nothing. Culls off-canvas nodes.
     pub fn visible_node_thumbnails(
         &self,
         viewport: Rect,
     ) -> Vec<(manifold_core::NodeId, f32, f32, f32, f32)> {
         let mut out = Vec::new();
         let header = NODE_HEADER_HEIGHT * self.zoom;
+        let pad = PREVIEW_PAD * self.zoom;
         for node in &self.nodes {
-            if node.is_group || node.node_id.as_str().is_empty() {
+            let Some(capture_id) = node.preview_node_id.clone() else {
                 continue;
-            }
+            };
             let (sx, sy) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
             let sw = NODE_WIDTH * self.zoom;
             let sh = node.height() * self.zoom;
@@ -1161,9 +1284,10 @@ impl GraphCanvas {
             {
                 continue;
             }
-            let body_h = (sh - header).max(0.0);
-            if body_h > 1.0 {
-                out.push((node.node_id.clone(), sx, sy + header, sw, body_h));
+            let strip_w = PREVIEW_IMG_W * self.zoom;
+            let strip_h = PREVIEW_IMG_H * self.zoom;
+            if strip_h > 1.0 {
+                out.push((capture_id, sx + pad, sy + header + pad, strip_w, strip_h));
             }
         }
         out
@@ -1322,6 +1446,7 @@ impl GraphCanvas {
                     .map(|d| d.summary)
                     .filter(|s| !s.is_empty())
                     .map(str::to_owned),
+                preview_node_id: node_preview_target(n),
             })
             .collect();
         self.nodes = new_nodes;
@@ -1843,7 +1968,7 @@ impl GraphCanvas {
                 continue;
             }
             let (nx, ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
-            let block_top = ny + header_h;
+            let block_top = ny + header_h + node.preview_h() * self.zoom;
             let block_bottom = block_top + node.params.len() as f32 * row_h;
             if sx >= nx && sx <= nx + sw && sy >= block_top && sy < block_bottom {
                 let idx = ((sy - block_top) / row_h) as usize;
@@ -1868,7 +1993,7 @@ impl GraphCanvas {
         let row_h = PARAM_ROW_H * self.zoom;
         let sw = NODE_WIDTH * self.zoom;
         let (nx, ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
-        let row_top = ny + header_h + pi as f32 * row_h;
+        let row_top = ny + header_h + node.preview_h() * self.zoom + pi as f32 * row_h;
         Some(Rect::new(nx, row_top, sw, row_h))
     }
 
@@ -2562,10 +2687,21 @@ impl GraphCanvas {
 
         self.draw_grid(ui, canvas);
 
-        // Wires in two passes so the focused node's connections read clearly
-        // over the rest: dim/normal wires first, then focus wires on top.
+        // Wires in three back-to-front tiers so the image path reads over the
+        // scalar fan and the focused node's connections read over everything:
+        //   1. faded control/scalar wires (the orange driver fan)
+        //   2. data wires (the actual image path)
+        //   3. any wire touching the focused/hovered node
+        // A faded control wire stored after a data wire used to paint *on top*
+        // of it and muddy the path; ordering the draws fixes that for free —
+        // same wires, same geometry, draw-order only.
         for wire in &self.wires {
-            if !self.wire_touches_focus(wire) {
+            if !self.wire_touches_focus(wire) && self.wire_is_control(wire) {
+                self.draw_wire(ui, viewport, wire);
+            }
+        }
+        for wire in &self.wires {
+            if !self.wire_touches_focus(wire) && !self.wire_is_control(wire) {
                 self.draw_wire(ui, viewport, wire);
             }
         }
@@ -2971,6 +3107,29 @@ impl GraphCanvas {
             );
         }
 
+        // Output-preview strip — a recessed 16:9 "screen" directly under the
+        // header that the present pass blits this node's atlas thumbnail over.
+        // Drawn for any node (or group) that emits an image, at every zoom, so
+        // the strip is there before the first atlas frame lands and shows
+        // through the letterbox bars of a non-16:9 output. Lives in its own band
+        // above the param/port rows — ports never overlap it.
+        let preview_h = node.preview_h() * self.zoom;
+        if node.preview_node_id.is_some() {
+            let pad = PREVIEW_PAD * self.zoom;
+            ui.draw_bordered_rect(
+                sx + pad,
+                sy + header_h + pad,
+                PREVIEW_IMG_W * self.zoom,
+                PREVIEW_IMG_H * self.zoom,
+                PREVIEW_SCREEN_BG,
+                2.0 * self.zoom,
+                1.0,
+                PREVIEW_SCREEN_BORDER,
+            );
+        }
+        // Top of the param/summary body — below the header and the preview band.
+        let body_top = sy + header_h + preview_h;
+
         let row_h = PARAM_ROW_H * self.zoom;
         let text_size = (9.0 * self.zoom).max(7.0);
         let pad_x = 8.0 * self.zoom;
@@ -2981,7 +3140,7 @@ impl GraphCanvas {
         // recent history on the right — so a folded node still shows its key
         // value AND whether something is modulating it, without the full wall.
         if show_text && node.collapsed {
-            let text_y = sy + header_h + 2.0 * self.zoom;
+            let text_y = body_top + 2.0 * self.zoom;
             // Reserve the right edge for a sparkline if this node has a trace.
             let hist = self
                 .spark_history
@@ -3027,7 +3186,7 @@ impl GraphCanvas {
             &[]
         };
         for (i, p) in expanded_params.iter().enumerate() {
-            let row_y = sy + header_h + i as f32 * row_h;
+            let row_y = body_top + i as f32 * row_h;
             let text_y = row_y + 2.0 * self.zoom;
 
             // Value, right-aligned. Measured first so the label can be
@@ -3129,6 +3288,16 @@ impl GraphCanvas {
             || self.hovered == Some(wire.to_node)
     }
 
+    /// Whether a wire carries a control/scalar value (orange) rather than image
+    /// data — resolved from the source output port's kind, the same way
+    /// `draw_wire` decides its alpha. Drives the back-to-front draw tier so the
+    /// faded driver fan sits *under* the image path.
+    fn wire_is_control(&self, wire: &WireView) -> bool {
+        self.find_node(wire.from_node)
+            .and_then(|f| f.outputs.iter().find(|p| p.name == wire.from_port))
+            .is_some_and(|p| p.is_control)
+    }
+
     fn draw_wire(&self, ui: &mut UIRenderer, viewport: Rect, wire: &WireView) {
         let (Some(from), Some(to)) = (self.find_node(wire.from_node), self.find_node(wire.to_node))
         else {
@@ -3150,50 +3319,100 @@ impl GraphCanvas {
         let (sx1, sy1) = self.to_screen(viewport, gx1, gy1);
 
         let span_x = (sx1 - sx0).abs();
-        let dx = span_x.max(40.0) * 0.5;
-        // Skip wires (those whose horizontal span exceeds ~1.5 columns)
-        // arc downward so they read as "going around" intermediate
-        // nodes rather than passing through them. Without this, fan-out
-        // wires (e.g., SoftFocus's Source → Mix.a) emerge from the
-        // intermediate node's right edge and look like they originate
-        // there. Magnitude scales with span so longer skips arc more.
-        let skip_bump = if span_x > 320.0 {
-            ((span_x - 320.0) * 0.25).min(80.0)
-        } else {
-            0.0
-        };
-        let cx0 = sx0 + dx;
-        let cy0 = sy0 + skip_bump;
-        let cx1 = sx1 - dx;
-        let cy1 = sy1 + skip_bump;
-
-        // Wire takes its colour from the from-port's kind (matching the
-        // port circles). Control/value wires (scalar, orange) fan out from
-        // driver nodes and dominate the spaghetti, so they fade to a faint
-        // baseline unless their node is focused; data wires stay readable;
-        // and any wire touching the focused node lights up over the rest.
-        let port_color = from.outputs[from_idx].color;
+        let span_y = (sy1 - sy0).abs();
         let focused = self.wire_touches_focus(wire);
-        let is_control = from.outputs[from_idx].is_control;
-        let alpha = if focused {
-            0.95
-        } else if is_control {
-            0.16
-        } else {
-            0.7
-        };
-        let wire_color = [port_color[0], port_color[1], port_color[2], alpha];
+        // A wire terminating on a cycle-breaking node is a feedback RETURN path
+        // (the "Previous X" recurrent-state taps). It's drawn as a deliberate
+        // return — muted violet, dashed, routed over the top — so the loop
+        // topology reads instead of looking like a wrong-direction data wire.
+        // Layout still excludes it (auto_layout skips these), so this is
+        // purely cosmetic — the endpoints are untouched ground truth.
+        let is_return = to.breaks_dependency_cycle;
 
-        // Sample the bezier into ~30 short line segments. Step count
-        // scales with screen-space length so close-up curves stay smooth.
-        let approx_len = ((sx1 - sx0).abs() + (sy1 - sy0).abs() + 2.0 * dx).max(40.0);
-        let steps = (approx_len / 12.0).clamp(16.0, 64.0) as i32;
+        // ── Colour + alpha ──
+        // Forward wires take the from-port's kind colour (matching the port
+        // circles); control/scalar wires (orange) fade to a faint baseline
+        // unless focused; data wires stay readable. Return paths get one
+        // violet family regardless of port kind, dimmer than data but above
+        // the control fan. Any focused wire lights to full.
+        let is_control = from.outputs[from_idx].is_control;
+        let port_color = from.outputs[from_idx].color;
+        let (base_rgb, alpha): ([f32; 3], f32) = if is_return {
+            (RETURN_WIRE_COLOR, if focused { 0.95 } else { 0.34 })
+        } else {
+            let a = if focused {
+                0.95
+            } else if is_control {
+                0.16
+            } else {
+                0.7
+            };
+            ([port_color[0], port_color[1], port_color[2]], a)
+        };
+        let wire_color = [base_rgb[0], base_rgb[1], base_rgb[2], alpha];
+
+        // ── Control points ──
+        let (cx0, cy0, cx1, cy1) = if is_return {
+            // Route up and OVER the node band: the source is downstream
+            // (right) and target upstream (left), so the curve sweeps
+            // right-to-left along the top — visibly "around", not "through".
+            // Endpoints stay on their port dots; only the interior controls
+            // move. (No skip_bump — it pulls down, fighting the arc.)
+            let top_g = from.pos_graph.1.min(to.pos_graph.1);
+            let (_, top_s) = self.to_screen(viewport, from.pos_graph.0, top_g);
+            let arc_y = top_s - RETURN_ARC_CLEAR * self.zoom;
+            let dx = span_x.max(40.0) * 0.3;
+            (sx0 + dx, arc_y, sx1 - dx, arc_y)
+        } else {
+            // Forward wire. Handle reach grows with the vertical drop so steep
+            // wires leave/enter more horizontally — a clean S instead of a
+            // near-straight diagonal — which peels apart the fan-in to a
+            // many-input node. On high-fan-in nodes, stagger the landing
+            // handle by port depth so converging wires splay into the input
+            // stack instead of overlapping for the last stretch. Long wires
+            // still bump downward to read as going around intermediates.
+            let dx = (span_x.max(40.0) * 0.5 + span_y * 0.35).min(span_x.max(160.0));
+            let skip_bump = if span_x > 320.0 {
+                ((span_x - 320.0) * 0.25).min(80.0)
+            } else {
+                0.0
+            };
+            let to_count = to.inputs.len();
+            let land_dx = if to_count >= FANIN_STAGGER_MIN {
+                let frac = if to_count > 1 {
+                    to_idx as f32 / (to_count - 1) as f32
+                } else {
+                    0.0
+                };
+                dx * (0.6 + 0.8 * frac)
+            } else {
+                dx
+            };
+            (sx0 + dx, sy0 + skip_bump, sx1 - land_dx, sy1 + skip_bump)
+        };
+
+        // Sample the bezier into short line segments. Step count scales with
+        // screen-space extent (endpoints + control reach) so close-up curves
+        // and the tall return arc both stay smooth.
+        let approx_len = (span_x
+            + span_y
+            + (cy0 - sy0).abs()
+            + (cy1 - sy1).abs()
+            + (cx0 - sx0).abs()
+            + (sx1 - cx1).abs())
+        .max(40.0);
+        let steps = (approx_len / 12.0).clamp(16.0, 80.0) as i32;
         let thickness = (1.6 * self.zoom).clamp(1.2, 2.4) * if focused { 1.5 } else { 1.0 };
         let mut prev = cubic_bezier(0.0, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
         for i in 1..=steps {
             let t = i as f32 / steps as f32;
             let curr = cubic_bezier(t, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
-            ui.draw_line(prev.0, prev.1, curr.0, curr.1, thickness, wire_color);
+            // Dash return paths (3 segments on, 3 off) so they read as
+            // feedback at a glance; advance `prev` every step regardless so
+            // the gaps land on the curve.
+            if !is_return || (i / RETURN_DASH) % 2 == 0 {
+                ui.draw_line(prev.0, prev.1, curr.0, curr.1, thickness, wire_color);
+            }
             prev = curr;
         }
     }
@@ -3519,17 +3738,27 @@ mod tests {
     }
 
     #[test]
-    fn visible_node_thumbnails_skip_groups_and_have_positive_body_rects() {
+    fn visible_node_thumbnails_preview_image_nodes_and_groups_via_producer() {
         let snap = grouped_snapshot();
         let mut canvas = GraphCanvas::new();
         canvas.set_snapshot(&snap);
         // A viewport huge enough that nothing culls.
         let vp = Rect::new(-10_000.0, -10_000.0, 20_000.0, 20_000.0);
         let thumbs = canvas.visible_node_thumbnails(vp);
-        // The group ("tweak") is excluded; the two plain nodes remain.
-        assert!(thumbs.iter().all(|(id, ..)| id.as_str() != "tweak"));
-        assert_eq!(thumbs.len(), 2, "two non-group nodes get thumbnails");
-        // Each body rect (below the header) has positive size.
+        // All three root nodes output an image (the fixture's ports are
+        // Texture2D), so each gets a preview strip: source, final, and the
+        // group — but the group is keyed to its OUTPUT PRODUCER ("inner"), not
+        // its own id, since that inner node is the cell already in the atlas.
+        assert_eq!(thumbs.len(), 3, "two image nodes + the group via its producer");
+        assert!(
+            thumbs.iter().any(|(id, ..)| id.as_str() == "inner"),
+            "the group previews its inner output producer"
+        );
+        assert!(
+            thumbs.iter().all(|(id, ..)| id.as_str() != "tweak"),
+            "a group is never keyed to its own id — always its producer's"
+        );
+        // Each preview-strip rect is the 16:9 image area and has positive size.
         assert!(thumbs.iter().all(|(_, _, _, w, h)| *w > 0.0 && *h > 0.0));
     }
 

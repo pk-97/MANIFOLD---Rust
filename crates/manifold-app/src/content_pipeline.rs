@@ -117,14 +117,51 @@ fn compute_occluded_layer_indices(
 /// Self-contained content rendering pipeline.
 ///
 /// Owns the compositor and orchestrates GPU rendering of generators + compositing.
-/// Per-node thumbnail atlas geometry. The atlas is one `ATLAS_DIM`-square
-/// texture packed as `ATLAS_GRID`×`ATLAS_GRID` cells, so up to
-/// `ATLAS_GRID * ATLAS_GRID` node thumbnails fit. `ATLAS_DIM = ATLAS_GRID * ATLAS_CELL`.
-pub const ATLAS_GRID: u32 = 16;
-pub const ATLAS_CELL: u32 = 64;
-pub const ATLAS_DIM: u32 = ATLAS_GRID * ATLAS_CELL;
+/// Per-node thumbnail atlas geometry. The atlas is one `ATLAS_W`×`ATLAS_H`
+/// texture packed as an `ATLAS_GRID`×`ATLAS_GRID` grid of **16:9** cells, so
+/// each thumbnail keeps a video aspect instead of being squashed into a square
+/// (the old 64²-square capture distorted every output twice — once into the
+/// square cell, once stretching that square into the node body). Cells are
+/// `ATLAS_CELL_W`×`ATLAS_CELL_H`; up to `ATLAS_GRID²` node thumbnails fit.
+///
+/// `8×8` × `256×144` → a `2048×1152` atlas (~9.4 MB `Rgba16Float` per surface,
+/// authoring-only). Fewer but far larger cells than the old `16×16`×`64²`: a
+/// single graph level rarely shows more than ~64 image nodes, and the extra
+/// resolution is what makes a thumbnail readable at editor zoom.
+pub const ATLAS_GRID: u32 = 8;
+pub const ATLAS_CELL_W: u32 = 256;
+pub const ATLAS_CELL_H: u32 = 144;
+pub const ATLAS_W: u32 = ATLAS_GRID * ATLAS_CELL_W;
+pub const ATLAS_H: u32 = ATLAS_GRID * ATLAS_CELL_H;
 /// Max node thumbnails an atlas holds.
 pub const ATLAS_CELLS: usize = (ATLAS_GRID * ATLAS_GRID) as usize;
+
+/// Aspect-fit viewport `(x, y, w, h)` for atlas cell `i`, letterboxing a source
+/// of `src_w`×`src_h` inside its 16:9 cell so the thumbnail keeps the source's
+/// true aspect (the atlas is cleared transparent first, so the letterbox bars
+/// read as the node's preview-screen background, not black bars). A 16:9 source
+/// fills the cell exactly; anything else is centred and padded.
+pub fn atlas_cell_viewport(i: usize, src_w: u32, src_h: u32) -> (f32, f32, f32, f32) {
+    let gx = (i as u32 % ATLAS_GRID) as f32;
+    let gy = (i as u32 / ATLAS_GRID) as f32;
+    let cell_x = gx * ATLAS_CELL_W as f32;
+    let cell_y = gy * ATLAS_CELL_H as f32;
+    let cw = ATLAS_CELL_W as f32;
+    let ch = ATLAS_CELL_H as f32;
+    let src_aspect = (src_w.max(1) as f32) / (src_h.max(1) as f32);
+    let cell_aspect = cw / ch;
+    let (draw_w, draw_h) = if src_aspect > cell_aspect {
+        (cw, cw / src_aspect)
+    } else {
+        (ch * src_aspect, ch)
+    };
+    (
+        cell_x + (cw - draw_w) * 0.5,
+        cell_y + (ch - draw_h) * 0.5,
+        draw_w,
+        draw_h,
+    )
+}
 
 /// The PlaybackEngine (which owns GeneratorRenderer) is borrowed for each frame.
 ///
@@ -977,6 +1014,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // shows live (modulated) values, not the frozen authoring def. Stays
         // empty whenever no editor is watching — zero cost on the closed path.
         self.last_live_node_params.clear();
+        // Whether a node-thumbnail capture block actually wrote the atlas this
+        // frame. The triple-buffered atlas front is published ONLY when this is
+        // set — publishing on every `node_atlas_enabled` frame (even ones whose
+        // dump came back empty during setup lag or while the watched layer
+        // wasn't rendering) flips the UI to a freshly-cleared, all-transparent
+        // surface + empty layout, which is the editor's "strobe to black".
+        let mut atlas_filled_this_frame = false;
         let texture_pool = self.texture_pool.as_ref();
 
         // Split borrow: get renderers + project from engine simultaneously.
@@ -1115,38 +1159,38 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         .iter()
                         .find_map(|r| r.as_any().downcast_ref::<GeneratorRenderer>())
                 {
-                    let mut new_layout: Vec<(NodeId, u32)> = Vec::new();
-                    gen_enc.clear_texture(atlas, 0.0, 0.0, 0.0, 0.0);
-                    for (i, (name, _port, _type_id, tex)) in
-                        gr.dump_textures(&layer_id).iter().enumerate().take(ATLAS_CELLS)
-                    {
-                        let gx = (i as u32) % ATLAS_GRID;
-                        let gy = (i as u32) / ATLAS_GRID;
-                        gen_enc.draw_fullscreen_viewport(
-                            raw,
-                            atlas,
-                            &[
-                                manifold_gpu::GpuBinding::Texture {
-                                    binding: 0,
-                                    texture: tex,
-                                },
-                                manifold_gpu::GpuBinding::Sampler {
-                                    binding: 1,
-                                    sampler,
-                                },
-                            ],
-                            (
-                                (gx * ATLAS_CELL) as f32,
-                                (gy * ATLAS_CELL) as f32,
-                                ATLAS_CELL as f32,
-                                ATLAS_CELL as f32,
-                            ),
-                            manifold_gpu::GpuLoadAction::Load,
-                            "Node Thumbnail Atlas Cell (Generator)",
-                        );
-                        new_layout.push((NodeId::new(name.as_str()), i as u32));
+                    // Empty dump = the chain hasn't run with dump on yet (setup
+                    // lag). Skip the clear+publish entirely so the UI keeps the
+                    // last good atlas instead of flashing to a cleared surface.
+                    let dump = gr.dump_textures(&layer_id);
+                    if !dump.is_empty() {
+                        let mut new_layout: Vec<(NodeId, u32)> = Vec::new();
+                        gen_enc.clear_texture(atlas, 0.0, 0.0, 0.0, 0.0);
+                        for (i, (name, _port, _type_id, tex)) in
+                            dump.iter().enumerate().take(ATLAS_CELLS)
+                        {
+                            gen_enc.draw_fullscreen_viewport(
+                                raw,
+                                atlas,
+                                &[
+                                    manifold_gpu::GpuBinding::Texture {
+                                        binding: 0,
+                                        texture: tex,
+                                    },
+                                    manifold_gpu::GpuBinding::Sampler {
+                                        binding: 1,
+                                        sampler,
+                                    },
+                                ],
+                                atlas_cell_viewport(i, tex.width, tex.height),
+                                manifold_gpu::GpuLoadAction::Load,
+                                "Node Thumbnail Atlas Cell (Generator)",
+                            );
+                            new_layout.push((NodeId::new(name.as_str()), i as u32));
+                        }
+                        gen_layout = Some(new_layout);
+                        atlas_filled_this_frame = true;
                     }
-                    gen_layout = Some(new_layout);
                 }
                 if let Some(l) = gen_layout {
                     self.last_node_atlas_layout = l;
@@ -1433,44 +1477,40 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         self.preview_sampler.as_ref(),
                     )
                 {
-                    let mut new_layout: Vec<(NodeId, u32)> = Vec::new();
-                    // Clear the whole atlas once, then Load-blit each cell so
-                    // earlier cells survive.
-                    native_enc.clear_texture(atlas, 0.0, 0.0, 0.0, 0.0);
-                    for (i, (name, _port, _type_id, tex)) in self
-                        .compositor
-                        .dump_textures()
-                        .iter()
-                        .enumerate()
-                        .take(ATLAS_CELLS)
-                    {
-                        let gx = (i as u32) % ATLAS_GRID;
-                        let gy = (i as u32) / ATLAS_GRID;
-                        native_enc.draw_fullscreen_viewport(
-                            raw,
-                            atlas,
-                            &[
-                                manifold_gpu::GpuBinding::Texture {
-                                    binding: 0,
-                                    texture: tex,
-                                },
-                                manifold_gpu::GpuBinding::Sampler {
-                                    binding: 1,
-                                    sampler,
-                                },
-                            ],
-                            (
-                                (gx * ATLAS_CELL) as f32,
-                                (gy * ATLAS_CELL) as f32,
-                                ATLAS_CELL as f32,
-                                ATLAS_CELL as f32,
-                            ),
-                            manifold_gpu::GpuLoadAction::Load,
-                            "Node Thumbnail Atlas Cell",
-                        );
-                        new_layout.push((NodeId::new(name.as_str()), i as u32));
+                    // Empty dump = the chain hasn't run with dump on yet (setup
+                    // lag). Skip the clear+publish entirely so the UI keeps the
+                    // last good atlas instead of flashing to a cleared surface.
+                    let dump = self.compositor.dump_textures();
+                    if !dump.is_empty() {
+                        let mut new_layout: Vec<(NodeId, u32)> = Vec::new();
+                        // Clear the whole atlas once, then Load-blit each cell so
+                        // earlier cells survive.
+                        native_enc.clear_texture(atlas, 0.0, 0.0, 0.0, 0.0);
+                        for (i, (name, _port, _type_id, tex)) in
+                            dump.iter().enumerate().take(ATLAS_CELLS)
+                        {
+                            native_enc.draw_fullscreen_viewport(
+                                raw,
+                                atlas,
+                                &[
+                                    manifold_gpu::GpuBinding::Texture {
+                                        binding: 0,
+                                        texture: tex,
+                                    },
+                                    manifold_gpu::GpuBinding::Sampler {
+                                        binding: 1,
+                                        sampler,
+                                    },
+                                ],
+                                atlas_cell_viewport(i, tex.width, tex.height),
+                                manifold_gpu::GpuLoadAction::Load,
+                                "Node Thumbnail Atlas Cell",
+                            );
+                            new_layout.push((NodeId::new(name.as_str()), i as u32));
+                        }
+                        eff_layout = Some(new_layout);
+                        atlas_filled_this_frame = true;
                     }
-                    eff_layout = Some(new_layout);
                 }
                 if let Some(l) = eff_layout {
                     self.last_node_atlas_layout = l;
@@ -1524,8 +1564,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else {
                     None
                 };
-            // Publish the thumbnail atlas only on frames it was actually filled.
-            let node_atlas = if self.node_atlas_enabled {
+            // Publish the thumbnail atlas only on frames a capture block actually
+            // wrote it — never on an enabled-but-empty frame, which would flip the
+            // UI to a freshly-cleared (all-transparent) surface and strobe black.
+            let node_atlas = if atlas_filled_this_frame {
                 self.node_atlas_bridge.clone()
             } else {
                 None
