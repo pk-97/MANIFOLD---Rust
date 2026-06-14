@@ -1295,10 +1295,7 @@ fn make_driver() -> ParameterDriver {
 
 fn make_envelope() -> ParamEnvelope {
     let mut env = ParamEnvelope::new("x");
-    env.attack_beats = 0.25;
-    env.decay_beats = 0.25;
-    env.sustain_level = 1.0;
-    env.release_beats = 0.25;
+    env.target_normalized = 0.75; // the card's "Amount" (depth)
     env
 }
 

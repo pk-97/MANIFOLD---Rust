@@ -17,7 +17,7 @@
 
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
-use super::{EnvelopeParam, GraphParamTarget, PanelAction};
+use super::{GraphParamTarget, PanelAction};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -160,21 +160,8 @@ pub struct ParamCardConfig {
     pub trim_min: Vec<f32>,
     /// Per-param driver trim max (normalized). Defaults to 1.0.
     pub trim_max: Vec<f32>,
-    /// Per-param envelope target (normalized). Defaults to 1.0.
+    /// Per-param envelope depth — the card's "Amount" (normalized). Default 1.0.
     pub target_norm: Vec<f32>,
-    /// Per-param envelope ADSR values (beats).
-    pub env_attack: Vec<f32>,
-    pub env_decay: Vec<f32>,
-    pub env_sustain: Vec<f32>,
-    pub env_release: Vec<f32>,
-    /// Per-param envelope mode (ADSR or Random).
-    pub env_mode: Vec<EnvelopeMode>,
-    /// Per-param random_jump flag.
-    pub env_random_jump: Vec<bool>,
-    /// Per-param envelope range min (normalized). Defaults to 0.0.
-    pub env_range_min: Vec<f32>,
-    /// Per-param envelope range max (normalized). Defaults to 1.0.
-    pub env_range_max: Vec<f32>,
     /// Per-param driver beat division button index (0-10). -1 if no driver.
     pub driver_beat_div_idx: Vec<i32>,
     /// Per-param driver waveform index (0-4). -1 if no driver.
@@ -203,10 +190,6 @@ const COG_W: f32 = 18.0;
 /// that show it shrink their slider by this much so the chevron sits past the
 /// D/E buttons at the row's right edge.
 const MAP_CHEVRON_W: f32 = 14.0;
-/// Label-cell width in the graph editor's wide (Author) lane. Friendly names
-/// ("Particle Count", "Tint Saturation") clip at the inspector's terse 60px,
-/// so the editor lane — which has the room — gives them more.
-const AUTHOR_LABEL_WIDTH: f32 = 108.0;
 
 // Effect shell furniture.
 const DRAG_HANDLE_W: f32 = 18.0;
@@ -390,11 +373,9 @@ pub struct ParamCardPanel {
     driver_btn_ids: Vec<i32>,
     envelope_btn_ids: Vec<i32>,
     driver_config_ids: Vec<Option<DriverConfigIds>>,
+    /// Per-param envelope drawer — the single "Amount" depth slider.
     envelope_config_ids: Vec<Option<EnvelopeConfigIds>>,
-    envelope_random_config_ids: Vec<Option<EnvelopeRandomConfigIds>>,
     trim_ids: Vec<Option<TrimHandleIds>>,
-    target_ids: Vec<Option<EnvelopeTargetIds>>,
-    envelope_range_ids: Vec<Option<TrimHandleIds>>,
     ableton_trim_ids: Vec<Option<TrimHandleIds>>,
     ableton_config_ids: Vec<Option<AbletonConfigIds>>,
 
@@ -471,10 +452,7 @@ impl ParamCardPanel {
             envelope_btn_ids: Vec::new(),
             driver_config_ids: Vec::new(),
             envelope_config_ids: Vec::new(),
-            envelope_random_config_ids: Vec::new(),
             trim_ids: Vec::new(),
-            target_ids: Vec::new(),
-            envelope_range_ids: Vec::new(),
             ableton_trim_ids: Vec::new(),
             ableton_config_ids: Vec::new(),
             toggle_ids: Vec::new(),
@@ -523,14 +501,6 @@ impl ParamCardPanel {
             &config.trim_min,
             &config.trim_max,
             &config.target_norm,
-            &config.env_attack,
-            &config.env_decay,
-            &config.env_sustain,
-            &config.env_release,
-            &config.env_mode,
-            &config.env_random_jump,
-            &config.env_range_min,
-            &config.env_range_max,
             &config.driver_beat_div_idx,
             &config.driver_waveform_idx,
             &config.driver_reversed,
@@ -550,14 +520,8 @@ impl ParamCardPanel {
         self.driver_config_ids.resize_with(n, || None);
         self.envelope_config_ids = Vec::new();
         self.envelope_config_ids.resize_with(n, || None);
-        self.envelope_random_config_ids = Vec::new();
-        self.envelope_random_config_ids.resize_with(n, || None);
         self.trim_ids = Vec::new();
         self.trim_ids.resize_with(n, || None);
-        self.target_ids = Vec::new();
-        self.target_ids.resize_with(n, || None);
-        self.envelope_range_ids = Vec::new();
-        self.envelope_range_ids.resize_with(n, || None);
         self.ableton_trim_ids = Vec::new();
         self.ableton_trim_ids.resize_with(n, || None);
         self.ableton_config_ids = Vec::new();
@@ -815,17 +779,8 @@ impl ParamCardPanel {
             .copied()
             .unwrap_or(false)
         {
-            h += ENV_RANDOM_CONFIG_HEIGHT;
-            let env_mode = self
-                .state
-                .mod_state
-                .env_mode
-                .get(i)
-                .copied()
-                .unwrap_or(EnvelopeMode::Adsr);
-            if env_mode == EnvelopeMode::Adsr {
-                h += ENV_CONFIG_HEIGHT;
-            }
+            // The envelope drawer is a single "Amount" slider row.
+            h += ENV_CONFIG_HEIGHT;
         }
         if self.param_info[i].ableton_display.is_some() {
             h += ABL_CONFIG_HEIGHT;
@@ -1258,11 +1213,10 @@ impl ParamCardPanel {
         } else {
             0.0
         };
-        let label_width = if author {
-            AUTHOR_LABEL_WIDTH
-        } else {
-            crate::slider::DEFAULT_LABEL_WIDTH
-        };
+        // Match the timeline/inspector card exactly: same label width in both
+        // contexts. Right-aligned labels overflow-left cleanly, so the wider
+        // Author cell only made the editor card's rows diverge from the timeline.
+        let label_width = crate::slider::DEFAULT_LABEL_WIDTH;
         let slider_w = w - PADDING * 2.0 - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0 - chevron_lane;
 
         for i in 0..self.param_info.len() {
@@ -1295,13 +1249,10 @@ impl ParamCardPanel {
             );
             self.slider_ids[i] = row.slider;
             self.trim_ids[i] = row.trim;
-            self.target_ids[i] = row.target;
-            self.envelope_range_ids[i] = row.envelope_range;
             self.ableton_trim_ids[i] = row.ableton_trim;
             self.envelope_btn_ids[i] = row.envelope_btn;
             self.driver_btn_ids[i] = row.driver_btn;
             self.envelope_config_ids[i] = row.envelope_config;
-            self.envelope_random_config_ids[i] = row.envelope_random_config;
             self.driver_config_ids[i] = row.driver_config;
             self.ableton_config_ids[i] = row.ableton_config;
             // Mapping-drawer chevron at the row's right edge (Author + mappable).
@@ -1514,13 +1465,8 @@ impl ParamCardPanel {
             };
             let slider_w =
                 content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0 - chevron_lane;
-            // Wider label cell in the editor (Author) lane so friendly names
-            // don't clip; the inspector keeps the terse default.
-            let label_width = if self.context == CardContext::Author {
-                AUTHOR_LABEL_WIDTH
-            } else {
-                crate::slider::DEFAULT_LABEL_WIDTH
-            };
+            // Same label width as the timeline card (see build_effect_sliders).
+            let label_width = crate::slider::DEFAULT_LABEL_WIDTH;
 
             for i in 0..self.param_info.len() {
                 let info = self.param_info[i].clone();
@@ -1597,13 +1543,10 @@ impl ParamCardPanel {
                     );
                     self.slider_ids[i] = row.slider;
                     self.trim_ids[i] = row.trim;
-                    self.target_ids[i] = row.target;
-                    self.envelope_range_ids[i] = row.envelope_range;
                     self.ableton_trim_ids[i] = row.ableton_trim;
                     self.envelope_btn_ids[i] = row.envelope_btn;
                     self.driver_btn_ids[i] = row.driver_btn;
                     self.envelope_config_ids[i] = row.envelope_config;
-                    self.envelope_random_config_ids[i] = row.envelope_random_config;
                     self.driver_config_ids[i] = row.driver_config;
                     self.ableton_config_ids[i] = row.ableton_config;
                     // Mapping-drawer chevron at the row's right edge (Author +
@@ -1997,7 +1940,6 @@ impl ParamCardPanel {
             &self.driver_btn_ids,
             &self.envelope_btn_ids,
             &self.driver_config_ids,
-            &self.envelope_random_config_ids,
             &self.ableton_config_ids,
             &self.slider_ids,
             &self.osc_addresses,
@@ -2012,12 +1954,6 @@ impl ParamCardPanel {
                 }
                 RowClick::DriverConfig(pi, action) => {
                     vec![PanelAction::DriverConfig(GraphParamTarget::Effect(ei), self.pid_at(pi), action)]
-                }
-                RowClick::EnvModeToggle(pi) => {
-                    vec![PanelAction::EnvModeToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
-                }
-                RowClick::EnvRandomJumpToggle(pi) => {
-                    vec![PanelAction::EnvRandomJumpToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::AbletonInvert(pi) => {
                     vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
@@ -2109,7 +2045,6 @@ impl ParamCardPanel {
             &self.driver_btn_ids,
             &self.envelope_btn_ids,
             &self.driver_config_ids,
-            &self.envelope_random_config_ids,
             &self.ableton_config_ids,
             &self.slider_ids,
             &self.osc_addresses,
@@ -2122,10 +2057,6 @@ impl ParamCardPanel {
                 }
                 RowClick::DriverConfig(pi, action) => {
                     vec![PanelAction::DriverConfig(GraphParamTarget::Generator, self.pid_at(pi), action)]
-                }
-                RowClick::EnvModeToggle(pi) => vec![PanelAction::EnvModeToggle(GraphParamTarget::Generator, self.pid_at(pi))],
-                RowClick::EnvRandomJumpToggle(pi) => {
-                    vec![PanelAction::EnvRandomJumpToggle(GraphParamTarget::Generator, self.pid_at(pi))]
                 }
                 RowClick::AbletonInvert(pi) => {
                     vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Generator, self.pid_at(pi))]
@@ -2170,44 +2101,33 @@ impl ParamCardPanel {
         Vec::new()
     }
 
-    /// Unified pointer-down hit-testing for both card kinds. Steps 1-5 grab the
-    /// modulation overlay handles (env range / target / trim / Ableton trim /
-    /// ADSR sliders); step 6 is the param slider, including the proximity
-    /// catch-zone for trim/target/range handles when a driver/envelope is
-    /// expanded. The emitted target comes from `param_target()`, so effect and
-    /// generator share one path — generators gain the proximity catch-zone they
-    /// previously lacked, and toggle/trigger rows (generator-only, no slider
-    /// widget) are skipped in step 6.
+    /// Unified pointer-down hit-testing for both card kinds. Steps 1-3 grab the
+    /// modulation widgets (the envelope drawer's "Amount" slider, driver trim
+    /// bars, Ableton trim bars); step 4 is the param slider, with the proximity
+    /// catch-zone for the driver trim handles when a driver is expanded. The
+    /// emitted target comes from `param_target()`, so effect and generator share
+    /// one path; toggle/trigger rows (generator-only, no slider widget) are
+    /// skipped in step 4.
     pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
         let target = self.param_target();
 
-        // 1. Envelope range handles (Random mode) — highest priority.
-        for (pi, range) in self.envelope_range_ids.iter().enumerate() {
-            if let Some(t) = range {
-                if node_id as i32 == t.min_bar_id {
-                    self.drag.dragging_range_param = pi as i32;
-                    self.drag.dragging_range_is_min = true;
-                    return vec![PanelAction::EnvRangeSnapshot(target, self.pid_at(pi))];
-                }
-                if node_id as i32 == t.max_bar_id {
-                    self.drag.dragging_range_param = pi as i32;
-                    self.drag.dragging_range_is_min = false;
-                    return vec![PanelAction::EnvRangeSnapshot(target, self.pid_at(pi))];
-                }
-            }
-        }
-
-        // 2. Envelope target bars (ADSR mode).
-        for (pi, etarget) in self.target_ids.iter().enumerate() {
-            if let Some(t) = etarget
-                && node_id as i32 == t.target_bar_id
+        // 1. Envelope "Amount" depth slider (in the expanded drawer). Drives
+        //    `target_normalized` through the same Target* command path the old
+        //    on-track handle used — so undo/redo and the dual-edit are unchanged.
+        for (pi, env_cfg) in self.envelope_config_ids.iter().enumerate() {
+            if let Some(c) = env_cfg
+                && node_id == c.amount_slider.track
             {
                 self.drag.dragging_target_param = pi as i32;
-                return vec![PanelAction::TargetSnapshot(target, self.pid_at(pi))];
+                let norm = BitmapSlider::x_to_normalized(c.amount_slider.track_rect, pos.x);
+                return vec![
+                    PanelAction::TargetSnapshot(target, self.pid_at(pi)),
+                    PanelAction::TargetChanged(target, self.pid_at(pi), norm),
+                ];
             }
         }
 
-        // 3. Trim bars.
+        // 2. Trim bars.
         for (pi, trim) in self.trim_ids.iter().enumerate() {
             if let Some(t) = trim {
                 if node_id as i32 == t.min_bar_id {
@@ -2223,7 +2143,7 @@ impl ParamCardPanel {
             }
         }
 
-        // 4. Ableton trim bars.
+        // 3. Ableton trim bars.
         for (pi, trim) in self.ableton_trim_ids.iter().enumerate() {
             if let Some(t) = trim {
                 if node_id as i32 == t.min_bar_id {
@@ -2239,33 +2159,10 @@ impl ParamCardPanel {
             }
         }
 
-        // 5. ADSR slider tracks (attack / decay / sustain / release).
-        for (pi, env_cfg) in self.envelope_config_ids.iter().enumerate() {
-            if let Some(c) = env_cfg {
-                let slots = [
-                    (&c.attack_slider, EnvelopeParam::Attack, ENV_ADR_MAX),
-                    (&c.decay_slider, EnvelopeParam::Decay, ENV_ADR_MAX),
-                    (&c.sustain_slider, EnvelopeParam::Sustain, ENV_S_MAX),
-                    (&c.release_slider, EnvelopeParam::Release, ENV_ADR_MAX),
-                ];
-                for (slot, (slider, param, max)) in slots.iter().enumerate() {
-                    if node_id == slider.track {
-                        self.drag.dragging_env_param = pi as i32;
-                        self.drag.dragging_env_slot = slot;
-                        let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                        return vec![
-                            PanelAction::EnvParamSnapshot(target, self.pid_at(pi)),
-                            PanelAction::EnvParamChanged(target, self.pid_at(pi), *param, norm * max),
-                        ];
-                    }
-                }
-            }
-        }
-
-        // 6. Param slider tracks. Toggle/trigger rows have no slider widget, so
-        // skip them. When a driver/envelope is expanded, the thin (4px) trim /
-        // target / range bars get an ~8px proximity catch-zone so they're
-        // grabbable by feel before falling through to a normal param drag.
+        // 4. Param slider tracks. Toggle/trigger rows have no slider widget, so
+        // skip them. When a driver is expanded, the thin (4px) trim bars get an
+        // ~8px proximity catch-zone so they're grabbable by feel before falling
+        // through to a normal param drag.
         for (pi, slider) in self.slider_ids.iter().enumerate() {
             if self
                 .param_info
@@ -2277,7 +2174,7 @@ impl ParamCardPanel {
             }
             if let Some(ids) = slider
                 && (node_id == ids.track || {
-                    // Also accept clicks on trim bar / fill / target nodes that are children of this track
+                    // Also accept clicks on the driver trim bar / fill children.
                     self.trim_ids
                         .get(pi)
                         .and_then(|t| t.as_ref())
@@ -2286,20 +2183,6 @@ impl ParamCardPanel {
                                 || node_id as i32 == t.min_bar_id
                                 || node_id as i32 == t.max_bar_id
                         })
-                        || self
-                            .target_ids
-                            .get(pi)
-                            .and_then(|t| t.as_ref())
-                            .is_some_and(|t| node_id as i32 == t.target_bar_id)
-                        || self
-                            .envelope_range_ids
-                            .get(pi)
-                            .and_then(|t| t.as_ref())
-                            .is_some_and(|t| {
-                                node_id as i32 == t.fill_id
-                                    || node_id as i32 == t.min_bar_id
-                                    || node_id as i32 == t.max_bar_id
-                            })
                 })
             {
                 // If driver is expanded, check proximity to trim handles before falling through to param drag
@@ -2348,74 +2231,7 @@ impl ParamCardPanel {
                     }
                 }
 
-                // If envelope is expanded, check proximity to target/range handles
-                if self
-                    .state
-                    .mod_state
-                    .envelope_expanded
-                    .get(pi)
-                    .copied()
-                    .unwrap_or(false)
-                {
-                    let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
-                    let base_x = ids.track_rect.x + OVERLAY_INSET;
-                    let hit_zone = 8.0;
-                    let env_mode = self
-                        .state
-                        .mod_state
-                        .env_mode
-                        .get(pi)
-                        .copied()
-                        .unwrap_or(EnvelopeMode::Adsr);
-
-                    if env_mode == EnvelopeMode::Random {
-                        let rmin = self
-                            .state
-                            .mod_state
-                            .env_range_min
-                            .get(pi)
-                            .copied()
-                            .unwrap_or(0.0);
-                        let rmax = self
-                            .state
-                            .mod_state
-                            .env_range_max
-                            .get(pi)
-                            .copied()
-                            .unwrap_or(1.0);
-                        let min_center = base_x + rmin * usable;
-                        let max_center = base_x + rmax * usable;
-                        let dist_min = (pos.x - min_center).abs();
-                        let dist_max = (pos.x - max_center).abs();
-
-                        if dist_min < hit_zone && dist_min <= dist_max {
-                            self.drag.dragging_range_param = pi as i32;
-                            self.drag.dragging_range_is_min = true;
-                            return vec![PanelAction::EnvRangeSnapshot(target, self.pid_at(pi))];
-                        }
-                        if dist_max < hit_zone {
-                            self.drag.dragging_range_param = pi as i32;
-                            self.drag.dragging_range_is_min = false;
-                            return vec![PanelAction::EnvRangeSnapshot(target, self.pid_at(pi))];
-                        }
-                    } else {
-                        let tgt = self
-                            .state
-                            .mod_state
-                            .target_norm
-                            .get(pi)
-                            .copied()
-                            .unwrap_or(1.0);
-                        let target_center = base_x + tgt * usable;
-
-                        if (pos.x - target_center).abs() < hit_zone {
-                            self.drag.dragging_target_param = pi as i32;
-                            return vec![PanelAction::TargetSnapshot(target, self.pid_at(pi))];
-                        }
-                    }
-                }
-
-                // No trim/target nearby — normal param slider drag
+                // No trim handle nearby — normal param slider drag
                 self.drag.dragging_param = pi as i32;
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                 let info = &self.param_info[pi];
@@ -2437,99 +2253,17 @@ impl ParamCardPanel {
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         let ei = self.effect_index;
 
-        // Range handle drag — update state, reposition bar nodes, dispatch action
-        if self.drag.dragging_range_param >= 0 {
-            let pi = self.drag.dragging_range_param as usize;
-            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
-                let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                let rmin = self
-                    .state
-                    .mod_state
-                    .env_range_min
-                    .get(pi)
-                    .copied()
-                    .unwrap_or(0.0);
-                let rmax = self
-                    .state
-                    .mod_state
-                    .env_range_max
-                    .get(pi)
-                    .copied()
-                    .unwrap_or(1.0);
-                let (new_min, new_max) = if self.drag.dragging_range_is_min {
-                    (norm.min(rmax), rmax)
-                } else {
-                    (rmin, norm.max(rmin))
-                };
-                if let Some(v) = self.state.mod_state.env_range_min.get_mut(pi) {
-                    *v = new_min;
-                }
-                if let Some(v) = self.state.mod_state.env_range_max.get_mut(pi) {
-                    *v = new_max;
-                }
-
-                if let Some(t) = self.envelope_range_ids.get(pi).and_then(|t| t.as_ref()) {
-                    let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
-                    let base_x = slider.track_rect.x + OVERLAY_INSET;
-                    let fill_x = base_x + new_min * usable;
-                    let fill_w = (new_max - new_min) * usable;
-                    let fill_h = slider.track_rect.height - OVERLAY_INSET * 2.0;
-                    tree.set_bounds(
-                        t.fill_id as u32,
-                        Rect::new(fill_x, slider.track_rect.y + OVERLAY_INSET, fill_w, fill_h),
-                    );
-                    tree.set_bounds(
-                        t.min_bar_id as u32,
-                        Rect::new(
-                            base_x + new_min * usable - TRIM_BAR_W * 0.5,
-                            slider.track_rect.y,
-                            TRIM_BAR_W,
-                            slider.track_rect.height,
-                        ),
-                    );
-                    tree.set_bounds(
-                        t.max_bar_id as u32,
-                        Rect::new(
-                            base_x + new_max * usable - TRIM_BAR_W * 0.5,
-                            slider.track_rect.y,
-                            TRIM_BAR_W,
-                            slider.track_rect.height,
-                        ),
-                    );
-                }
-
-                let pid = self.pid_at(pi);
-                return vec![PanelAction::EnvRangeChanged(
-                    self.param_target(),
-                    pid,
-                    new_min,
-                    new_max,
-                )];
-            }
-        }
-
-        // Target bar drag — update state, reposition bar node, dispatch action
+        // Envelope "Amount" depth slider drag — update the drawer slider's fill
+        // + value cell, dispatch the Target change (same command path as before).
         if self.drag.dragging_target_param >= 0 {
             let pi = self.drag.dragging_target_param as usize;
-            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
-                let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
+            if let Some(cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref()) {
+                let norm = BitmapSlider::x_to_normalized(cfg.amount_slider.track_rect, pos.x)
+                    .clamp(0.0, 1.0);
                 if let Some(v) = self.state.mod_state.target_norm.get_mut(pi) {
                     *v = norm;
                 }
-
-                // Visual update: reposition target bar node in the tree
-                if let Some(t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
-                    let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
-                    let base_x = slider.track_rect.x + OVERLAY_INSET;
-                    let bar_x = base_x + norm * usable - TARGET_BAR_W * 0.5;
-                    let bar_h = slider.track_rect.height + 4.0;
-                    let bar_y = slider.track_rect.y - 2.0;
-                    tree.set_bounds(
-                        t.target_bar_id as u32,
-                        Rect::new(bar_x, bar_y, TARGET_BAR_W, bar_h),
-                    );
-                }
-
+                BitmapSlider::update_value(tree, &cfg.amount_slider, norm, &format!("{norm:.2}"));
                 let pid = self.pid_at(pi);
                 return match self.kind {
                     ParamCardKind::Effect => vec![PanelAction::TargetChanged(GraphParamTarget::Effect(ei), pid, norm)],
@@ -2668,32 +2402,6 @@ impl ParamCardPanel {
             }
         }
 
-        // ADSR drag
-        if self.drag.dragging_env_param >= 0 {
-            let pi = self.drag.dragging_env_param as usize;
-            if let Some(cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref()) {
-                let (slider, param, max) = match self.drag.dragging_env_slot {
-                    0 => (&cfg.attack_slider, EnvelopeParam::Attack, ENV_ADR_MAX),
-                    1 => (&cfg.decay_slider, EnvelopeParam::Decay, ENV_ADR_MAX),
-                    2 => (&cfg.sustain_slider, EnvelopeParam::Sustain, ENV_S_MAX),
-                    _ => (&cfg.release_slider, EnvelopeParam::Release, ENV_ADR_MAX),
-                };
-                let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                let val = norm * max;
-                let text = format!("{:.2}", val);
-                BitmapSlider::update_value(tree, slider, norm, &text);
-                let pid = self.pid_at(pi);
-                return match self.kind {
-                    ParamCardKind::Effect => {
-                        vec![PanelAction::EnvParamChanged(GraphParamTarget::Effect(ei), pid, param, val)]
-                    }
-                    ParamCardKind::Generator => {
-                        vec![PanelAction::EnvParamChanged(GraphParamTarget::Generator, pid, param, val)]
-                    }
-                };
-            }
-        }
-
         // Param slider drag
         if self.drag.dragging_param >= 0 {
             let pi = self.drag.dragging_param as usize;
@@ -2728,15 +2436,6 @@ impl ParamCardPanel {
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         let ei = self.effect_index;
 
-        if self.drag.dragging_range_param >= 0 {
-            let pi = self.drag.dragging_range_param as usize;
-            self.drag.dragging_range_param = -1;
-            let pid = self.pid_at(pi);
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::EnvRangeCommit(GraphParamTarget::Effect(ei), pid)],
-                ParamCardKind::Generator => vec![PanelAction::EnvRangeCommit(GraphParamTarget::Generator, pid)],
-            };
-        }
         if self.drag.dragging_target_param >= 0 {
             let pi = self.drag.dragging_target_param as usize;
             self.drag.dragging_target_param = -1;
@@ -2762,15 +2461,6 @@ impl ParamCardPanel {
             return match self.kind {
                 ParamCardKind::Effect => vec![PanelAction::AbletonTrimCommit(GraphParamTarget::Effect(ei), pid)],
                 ParamCardKind::Generator => vec![PanelAction::AbletonTrimCommit(GraphParamTarget::Generator, pid)],
-            };
-        }
-        if self.drag.dragging_env_param >= 0 {
-            let pi = self.drag.dragging_env_param as usize;
-            self.drag.dragging_env_param = -1;
-            let pid = self.pid_at(pi);
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::EnvParamCommit(GraphParamTarget::Effect(ei), pid)],
-                ParamCardKind::Generator => vec![PanelAction::EnvParamCommit(GraphParamTarget::Generator, pid)],
             };
         }
         if self.drag.dragging_param >= 0 {
@@ -2944,14 +2634,6 @@ mod tests {
             trim_min: vec![0.0; n],
             trim_max: vec![1.0; n],
             target_norm: vec![1.0; n],
-            env_attack: vec![0.0; n],
-            env_decay: vec![0.0; n],
-            env_sustain: vec![0.0; n],
-            env_release: vec![0.0; n],
-            env_mode: vec![EnvelopeMode::Adsr; n],
-            env_random_jump: vec![false; n],
-            env_range_min: vec![0.0; n],
-            env_range_max: vec![1.0; n],
             driver_beat_div_idx: vec![-1; n],
             driver_waveform_idx: vec![-1; n],
             driver_reversed: vec![false; n],
@@ -3165,8 +2847,8 @@ mod tests {
         panel.state.mod_state.envelope_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
+        // The expanded envelope drawer is the single "Amount" slider.
         assert!(panel.envelope_config_ids[0].is_some());
-        assert!(panel.target_ids[0].is_some());
     }
 
     // ── Generator-card fixtures + tests ───────────────────────────
@@ -3244,14 +2926,6 @@ mod tests {
             trim_min: vec![0.0; 3],
             trim_max: vec![1.0; 3],
             target_norm: vec![1.0; 3],
-            env_attack: vec![0.0; 3],
-            env_decay: vec![0.0; 3],
-            env_sustain: vec![0.0; 3],
-            env_release: vec![0.0; 3],
-            env_mode: vec![EnvelopeMode::Adsr; 3],
-            env_random_jump: vec![false; 3],
-            env_range_min: vec![0.0; 3],
-            env_range_max: vec![1.0; 3],
             driver_beat_div_idx: vec![-1; 3],
             driver_waveform_idx: vec![-1; 3],
             driver_reversed: vec![false; 3],

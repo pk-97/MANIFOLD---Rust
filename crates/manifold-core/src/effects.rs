@@ -3318,18 +3318,13 @@ pub mod beat_division_helper {
     }
 }
 
-// ─── Param Envelope (ADSR modulation) ───
+// ─── Param Envelope (triggered decay modulation) ───
 
-/// Envelope evaluation mode.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum EnvelopeMode {
-    /// Classic ADSR envelope shape driven by clip timing.
-    #[default]
-    Adsr,
-    /// Random value on each clip rising edge (walk or jump).
-    Random,
-}
+/// Fixed fall-off time, in beats, for every parameter envelope. The envelope
+/// is a clip-triggered decay — one shape, one feel — so the only per-envelope
+/// control is its depth (`target_normalized`, the card's "Amount"). Tempo-synced
+/// because it's in beats; change here to retune the feel for all envelopes.
+pub const ENVELOPE_DECAY_BEATS: f32 = 1.0;
 
 /// ADSR / random envelope modulating a single effect or generator
 /// parameter.
@@ -3357,33 +3352,19 @@ pub struct ParamEnvelope {
     /// effect instance and drops the now-redundant key.
     pub param_id: ParamId,
     pub enabled: bool,
-    pub attack_beats: f32,
-    pub decay_beats: f32,
-    pub sustain_level: f32,
-    pub release_beats: f32,
+    /// Modulation depth (normalized 0-1) — the card's "Amount". On a clip's
+    /// rising edge the parameter snaps toward this offset and decays back over
+    /// [`ENVELOPE_DECAY_BEATS`].
     pub target_normalized: f32,
-    /// Envelope evaluation mode (ADSR or Random).
-    pub mode: EnvelopeMode,
-    /// When mode=Random: true = jump to fully random value, false = walk by step.
-    pub random_jump: bool,
-    /// Random mode range minimum (normalized 0-1). Walk/jump stays within this range.
-    pub range_min: f32,
-    /// Random mode range maximum (normalized 0-1). Walk/jump stays within this range.
-    pub range_max: f32,
     /// Parked legacy `targetParamIndex: i32` from V1.1 deserialization
     /// or RegistryMissing fallback during post-load resolution. See
     /// [`ParameterDriver::legacy_param_index`] for the recovery
     /// invariant — same contract here.
     pub legacy_param_index: Option<i32>,
-    /// Cached ADSR output (0-1) for UI display. Not serialized.
+    /// Cached decay output (0-1) for UI display. Not serialized.
     pub current_level: f32,
-    /// Current random walk position (normalized 0-1). Runtime only.
-    pub walk_value: f32,
     /// Rising edge detection: was a clip active on the previous frame?
     pub was_clip_active: bool,
-    /// Previous frame's elapsed beats within the active clip. Used by Random
-    /// mode to detect clip restarts and loop points (elapsed decreases).
-    pub last_elapsed: f32,
 }
 
 impl Serialize for ParamEnvelope {
@@ -3396,8 +3377,9 @@ impl Serialize for ParamEnvelope {
         let emit_param_id = !self.param_id.is_empty();
         let emit_legacy_index = !emit_param_id && self.legacy_param_index.is_some();
 
-        // 10 base fields + addressing field (paramId XOR targetParamIndex).
-        let mut field_count = 10;
+        // 2 base fields (enabled, targetNormalized) + addressing field
+        // (paramId XOR targetParamIndex).
+        let mut field_count = 2;
         if emit_param_id || emit_legacy_index {
             field_count += 1;
         }
@@ -3409,15 +3391,7 @@ impl Serialize for ParamEnvelope {
             s.serialize_field("targetParamIndex", &self.legacy_param_index.unwrap())?;
         }
         s.serialize_field("enabled", &self.enabled)?;
-        s.serialize_field("attackBeats", &self.attack_beats)?;
-        s.serialize_field("decayBeats", &self.decay_beats)?;
-        s.serialize_field("sustainLevel", &self.sustain_level)?;
-        s.serialize_field("releaseBeats", &self.release_beats)?;
         s.serialize_field("targetNormalized", &self.target_normalized)?;
-        s.serialize_field("mode", &self.mode)?;
-        s.serialize_field("randomJump", &self.random_jump)?;
-        s.serialize_field("rangeMin", &self.range_min)?;
-        s.serialize_field("rangeMax", &self.range_max)?;
         s.end()
     }
 }
@@ -3431,79 +3405,22 @@ impl ParamEnvelope {
         Self {
             param_id: param_id.into(),
             enabled: true,
-            attack_beats: 0.0,
-            decay_beats: 0.0,
-            sustain_level: 0.0,
-            release_beats: 0.0,
             target_normalized: 1.0,
-            mode: EnvelopeMode::Adsr,
-            random_jump: false,
-            range_min: 0.0,
-            range_max: 1.0,
             legacy_param_index: None,
             current_level: 0.0,
-            walk_value: -1.0,
             was_clip_active: false,
-            last_elapsed: -1.0,
         }
     }
 
-    /// Calculate ADSR envelope level [0, 1] at given position within clip.
-    /// Port of C# EnvelopeEvaluator.CalculateADSR().
-    pub fn calculate_adsr(
-        local_beat: Beats,
-        clip_duration: Beats,
-        attack: f32,
-        decay: f32,
-        sustain: f32,
-        release: f32,
-    ) -> f32 {
-        if clip_duration <= Beats::ZERO || local_beat < Beats::ZERO {
+    /// Triggered decay level [0, 1] at `local_beat` into the active clip: 1.0 at
+    /// the rising edge, falling linearly to 0 over [`ENVELOPE_DECAY_BEATS`], then
+    /// held at 0. The single envelope shape after the ADSR/Random simplification —
+    /// depth is the per-envelope `target_normalized` (the card's "Amount").
+    pub fn decay_level(local_beat: Beats) -> f32 {
+        if local_beat < Beats::ZERO || ENVELOPE_DECAY_BEATS <= 0.0 {
             return 0.0;
         }
-
-        let local_beat = local_beat.as_f32();
-        let clip_duration = clip_duration.as_f32();
-
-        let mut a = attack.max(0.0);
-        let mut d = decay.max(0.0);
-        let mut r = release.max(0.0);
-        let s = sustain.clamp(0.0, 1.0);
-
-        let total_adr = a + d + r;
-        if total_adr > clip_duration && total_adr > 0.0 {
-            let scale = clip_duration / total_adr;
-            a *= scale;
-            d *= scale;
-            r *= scale;
-        }
-
-        let release_start = clip_duration - r;
-
-        if local_beat < a {
-            return if a > 0.0 { local_beat / a } else { 1.0 };
-        }
-
-        let decay_start = a;
-        if local_beat < decay_start + d {
-            let t = if d > 0.0 {
-                (local_beat - decay_start) / d
-            } else {
-                1.0
-            };
-            return 1.0 - (1.0 - s) * t;
-        }
-
-        if local_beat >= release_start {
-            let t = if r > 0.0 {
-                ((local_beat - release_start) / r).min(1.0)
-            } else {
-                1.0
-            };
-            return s * (1.0 - t);
-        }
-
-        s
+        (1.0 - local_beat.as_f32() / ENVELOPE_DECAY_BEATS).clamp(0.0, 1.0)
     }
 }
 
@@ -3522,30 +3439,20 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
             // `targetEffectType` from pre-v1.6 files is intentionally not read
             // here — the v1.5→v1.6 migration consumes it to place the envelope
             // on the right instance, and serde ignores the leftover key.
+            //
+            // The pre-simplification ADSR/Random keys (`attackBeats`,
+            // `sustainLevel`, `releaseBeats`, `decayBeats`, `mode`, `randomJump`,
+            // `rangeMin`, `rangeMax`) are likewise not read — serde ignores them,
+            // so an old ADSR or Random envelope loads as a plain decay envelope
+            // keeping only its depth (`targetNormalized`). That IS the migration.
             #[serde(default)]
             param_id: Option<String>,
             #[serde(default, rename = "targetParamIndex")]
             param_index: Option<i32>,
             #[serde(default = "default_true")]
             enabled: bool,
-            #[serde(default)]
-            attack_beats: f32,
-            #[serde(default)]
-            decay_beats: f32,
-            #[serde(default)]
-            sustain_level: f32,
-            #[serde(default)]
-            release_beats: f32,
             #[serde(default = "default_one")]
             target_normalized: f32,
-            #[serde(default)]
-            mode: EnvelopeMode,
-            #[serde(default)]
-            random_jump: bool,
-            #[serde(default)]
-            range_min: f32,
-            #[serde(default = "default_one")]
-            range_max: f32,
         }
 
         let raw = Raw::deserialize(deserializer)?;
@@ -3557,20 +3464,10 @@ impl<'de> Deserialize<'de> for ParamEnvelope {
         Ok(ParamEnvelope {
             param_id,
             enabled: raw.enabled,
-            attack_beats: raw.attack_beats,
-            decay_beats: raw.decay_beats,
-            sustain_level: raw.sustain_level,
-            release_beats: raw.release_beats,
             target_normalized: raw.target_normalized,
-            mode: raw.mode,
-            random_jump: raw.random_jump,
-            range_min: raw.range_min,
-            range_max: raw.range_max,
             legacy_param_index,
             current_level: 0.0,
-            walk_value: -1.0,
             was_clip_active: false,
-            last_elapsed: -1.0,
         })
     }
 }
@@ -3801,15 +3698,18 @@ mod tests {
 
     #[test]
     fn envelope_deserialize_canonical_param_id() {
+        // Legacy ADSR keys (attackBeats etc.) are ignored post-simplification —
+        // the envelope loads as a plain decay envelope keeping only its depth.
         let json = r#"{
             "paramId": "amount",
             "enabled": true,
-            "attackBeats": 0.5
+            "attackBeats": 0.5,
+            "targetNormalized": 0.7
         }"#;
         let e: ParamEnvelope = serde_json::from_str(json).unwrap();
         assert_eq!(e.param_id, "amount");
         assert_eq!(e.legacy_param_index, None);
-        assert!((e.attack_beats - 0.5).abs() < 1e-6);
+        assert!((e.target_normalized - 0.7).abs() < 1e-6);
     }
 
     #[test]

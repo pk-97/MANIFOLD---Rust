@@ -162,12 +162,8 @@ pub struct Application {
     pub(crate) slider_snapshot: Option<f32>,
     /// Trim drag snapshot (min, max) for undo. Unity: onTrimSnapshot/onTrimCommit.
     pub(crate) trim_snapshot: Option<(f32, f32)>,
-    /// ADSR drag snapshot (attack, decay, sustain, release) for undo.
-    pub(crate) adsr_snapshot: Option<(f32, f32, f32, f32)>,
-    /// Envelope target drag snapshot for undo.
+    /// Envelope Amount (target) drag snapshot for undo.
     pub(crate) target_snapshot: Option<f32>,
-    /// Envelope range drag snapshot (min, max) for undo.
-    pub(crate) range_snapshot: Option<(f32, f32)>,
     /// User param-binding mapping range drag snapshot `(min, max)` for
     /// undo. Captured on `EffectMappingRangeSnapshot`, committed as one
     /// `EditUserParamBindingCommand` on `EffectMappingRangeCommit`.
@@ -234,6 +230,12 @@ pub struct Application {
     /// Samples one atlas cell (UV sub-rect via inline `Bytes` uniform) onto a
     /// node's body in the editor present pass. The per-node thumbnail blit.
     pub(crate) node_thumb_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// Linear + clamp-to-edge sampler for the per-node thumbnail blit. The UI
+    /// `atlas_sampler` is Nearest (crisp glyphs), which made the thumbnail's
+    /// downscaled cell read as hard blocky pixels when upscaled into the node
+    /// body — this samples it smoothly instead. Clamp + a half-texel UV inset
+    /// (see app_render) keep linear taps from bleeding the neighbouring cell.
+    pub(crate) thumb_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
@@ -450,9 +452,7 @@ impl Application {
             active_layer_id: None,
             slider_snapshot: None,
             trim_snapshot: None,
-            adsr_snapshot: None,
             target_snapshot: None,
-            range_snapshot: None,
             mapping_range_snapshot: None,
             mapping_affine_snapshot: None,
             active_inspector_drag: None,
@@ -486,6 +486,7 @@ impl Application {
             atlas_pipeline: None,
             atlas_sampler: None,
             node_thumb_pipeline: None,
+            thumb_sampler: None,
             ui_renderer: None,
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
@@ -1658,6 +1659,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 None,
                 "Node Thumbnail Pipeline",
             ));
+            self.thumb_sampler = Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                min_filter: manifold_gpu::GpuFilterMode::Linear,
+                mag_filter: manifold_gpu::GpuFilterMode::Linear,
+                address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
+                address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
+                ..Default::default()
+            }));
 
             // Create UI renderer using native Metal
             self.ui_renderer = Some(UIRenderer::new(
@@ -1739,10 +1747,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.ui_node_preview_textures = node_textures.map(Some);
                 self.node_preview_texture_bridge = Some(Arc::clone(&node_bridge));
 
-                // Per-node thumbnail atlas bridge — one big cell-grid texture.
-                let atlas_dim = crate::content_pipeline::ATLAS_DIM;
-                let atlas_bridge =
-                    Arc::new(crate::shared_texture::SharedTextureBridge::new(atlas_dim, atlas_dim));
+                // Per-node thumbnail atlas bridge — one big cell-grid texture of
+                // 16:9 cells (not square), so thumbnails keep a video aspect.
+                let atlas_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(
+                    crate::content_pipeline::ATLAS_W,
+                    crate::content_pipeline::ATLAS_H,
+                ));
                 let atlas_textures: [manifold_gpu::GpuTexture;
                     crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
                     atlas_bridge.import_texture_native(&gpu.device, i)
@@ -3769,6 +3779,7 @@ impl Drop for Application {
         self.atlas_pipeline = None;
         self.atlas_sampler = None;
         self.node_thumb_pipeline = None;
+        self.thumb_sampler = None;
         self.ws.ui_offscreen = None;
     }
 }

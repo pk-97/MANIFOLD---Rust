@@ -12,7 +12,6 @@ use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
 pub use manifold_core::ableton_mapping::AbletonMappingStatus;
-pub use manifold_core::effects::EnvelopeMode;
 
 // ── Shared layout constants ─────────────────────────────────────
 
@@ -34,17 +33,14 @@ pub(crate) const WAVEFORM_COUNT: usize = 5;
 
 pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 
-pub(crate) const ENV_CONFIG_HEIGHT: f32 = 55.0;
+// Envelope drawer = one "Amount" slider row (depth). A single row + padding.
+pub(crate) const ENV_CONFIG_HEIGHT: f32 = 30.0;
 pub(crate) const ENV_ROW_HEIGHT: f32 = 22.0;
-pub(crate) const ENV_LABEL_W: f32 = 17.0;
+pub(crate) const ENV_AMOUNT_LABEL_W: f32 = 50.0;
 pub(crate) const ENV_PAD_H: f32 = 5.0;
 
 pub(crate) const TRIM_BAR_W: f32 = 4.0;
-pub(crate) const TARGET_BAR_W: f32 = 6.0;
 pub(crate) const OVERLAY_INSET: f32 = 1.0;
-
-pub(crate) const ENV_ADR_MAX: f32 = 8.0;
-pub(crate) const ENV_S_MAX: f32 = 1.0;
 
 pub(crate) const BEAT_DIV_LABELS: [&str; BEAT_DIV_COUNT] = [
     "1/32", "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16", "32",
@@ -67,26 +63,14 @@ pub(crate) struct DriverConfigIds {
 
 pub(crate) struct EnvelopeConfigIds {
     pub(crate) _container_id: i32,
-    pub(crate) attack_slider: SliderNodeIds,
-    pub(crate) decay_slider: SliderNodeIds,
-    pub(crate) sustain_slider: SliderNodeIds,
-    pub(crate) release_slider: SliderNodeIds,
-}
-
-pub(crate) struct EnvelopeRandomConfigIds {
-    pub(crate) _container_id: i32,
-    pub(crate) mode_btn_id: i32,
-    pub(crate) jump_btn_id: i32,
+    /// The single "Amount" slider — the envelope's depth (`target_normalized`).
+    pub(crate) amount_slider: SliderNodeIds,
 }
 
 pub(crate) struct TrimHandleIds {
     pub(crate) fill_id: i32,
     pub(crate) min_bar_id: i32,
     pub(crate) max_bar_id: i32,
-}
-
-pub(crate) struct EnvelopeTargetIds {
-    pub(crate) target_bar_id: i32,
 }
 
 pub(crate) struct AbletonConfigIds {
@@ -115,22 +99,15 @@ pub struct AbletonMappingDisplay {
 // ── Shared modulation state ─────────────────────────────────────
 
 /// Per-parameter modulation state for the unified `ParamCardPanel` (both kinds).
-/// Contains driver expansion, envelope expansion, trim/target values, ADSR values,
-/// and driver visual state (beat div, waveform, reversed, dotted, triplet).
+/// Contains driver expansion, envelope expansion, trim values, the envelope
+/// depth (`target_norm` — the card's "Amount"), and driver visual state (beat
+/// div, waveform, reversed, dotted, triplet).
 pub struct ParamModState {
     pub driver_expanded: Vec<bool>,
     pub envelope_expanded: Vec<bool>,
     pub trim_min: Vec<f32>,
     pub trim_max: Vec<f32>,
     pub target_norm: Vec<f32>,
-    pub env_attack: Vec<f32>,
-    pub env_decay: Vec<f32>,
-    pub env_sustain: Vec<f32>,
-    pub env_release: Vec<f32>,
-    pub env_mode: Vec<EnvelopeMode>,
-    pub env_random_jump: Vec<bool>,
-    pub env_range_min: Vec<f32>,
-    pub env_range_max: Vec<f32>,
     pub driver_beat_div_idx: Vec<i32>,
     pub driver_waveform_idx: Vec<i32>,
     pub driver_reversed: Vec<bool>,
@@ -146,14 +123,6 @@ impl ParamModState {
             trim_min: vec![0.0; param_count],
             trim_max: vec![1.0; param_count],
             target_norm: vec![0.5; param_count],
-            env_attack: vec![0.0; param_count],
-            env_decay: vec![0.0; param_count],
-            env_sustain: vec![0.0; param_count],
-            env_release: vec![0.0; param_count],
-            env_mode: vec![EnvelopeMode::Adsr; param_count],
-            env_random_jump: vec![false; param_count],
-            env_range_min: vec![0.0; param_count],
-            env_range_max: vec![1.0; param_count],
             driver_beat_div_idx: vec![-1; param_count],
             driver_waveform_idx: vec![-1; param_count],
             driver_reversed: vec![false; param_count],
@@ -162,7 +131,7 @@ impl ParamModState {
         }
     }
 
-    /// Sync driver/envelope/trim/target/ADSR state from config vectors.
+    /// Sync driver/envelope/trim/Amount state from config vectors.
     /// `n` is the param count. Reads from config slices with fallback defaults.
     #[allow(clippy::too_many_arguments)]
     pub fn sync_from_config(
@@ -173,14 +142,6 @@ impl ParamModState {
         trim_min: &[f32],
         trim_max: &[f32],
         target_norm: &[f32],
-        env_attack: &[f32],
-        env_decay: &[f32],
-        env_sustain: &[f32],
-        env_release: &[f32],
-        env_mode: &[EnvelopeMode],
-        env_random_jump: &[bool],
-        env_range_min: &[f32],
-        env_range_max: &[f32],
         driver_beat_div_idx: &[i32],
         driver_waveform_idx: &[i32],
         driver_reversed: &[bool],
@@ -193,14 +154,6 @@ impl ParamModState {
             self.trim_min[i] = trim_min.get(i).copied().unwrap_or(0.0);
             self.trim_max[i] = trim_max.get(i).copied().unwrap_or(1.0);
             self.target_norm[i] = target_norm.get(i).copied().unwrap_or(1.0);
-            self.env_attack[i] = env_attack.get(i).copied().unwrap_or(0.0);
-            self.env_decay[i] = env_decay.get(i).copied().unwrap_or(0.0);
-            self.env_sustain[i] = env_sustain.get(i).copied().unwrap_or(0.0);
-            self.env_release[i] = env_release.get(i).copied().unwrap_or(0.0);
-            self.env_mode[i] = env_mode.get(i).copied().unwrap_or(EnvelopeMode::Adsr);
-            self.env_random_jump[i] = env_random_jump.get(i).copied().unwrap_or(false);
-            self.env_range_min[i] = env_range_min.get(i).copied().unwrap_or(0.0);
-            self.env_range_max[i] = env_range_max.get(i).copied().unwrap_or(1.0);
             self.driver_beat_div_idx[i] = driver_beat_div_idx.get(i).copied().unwrap_or(-1);
             self.driver_waveform_idx[i] = driver_waveform_idx.get(i).copied().unwrap_or(-1);
             self.driver_reversed[i] = driver_reversed.get(i).copied().unwrap_or(false);
@@ -215,13 +168,10 @@ impl ParamModState {
 /// Drag tracking state for the unified `ParamCardPanel` (both kinds).
 pub(crate) struct ParamDragState {
     pub(crate) dragging_param: i32,
-    pub(crate) dragging_env_param: i32,
-    pub(crate) dragging_env_slot: usize,
     pub(crate) dragging_trim_param: i32,
     pub(crate) dragging_trim_is_min: bool,
+    /// The envelope "Amount" (depth / `target_normalized`) slider in the drawer.
     pub(crate) dragging_target_param: i32,
-    pub(crate) dragging_range_param: i32,
-    pub(crate) dragging_range_is_min: bool,
     pub(crate) dragging_ableton_trim_param: i32,
     pub(crate) dragging_ableton_trim_is_min: bool,
 }
@@ -230,13 +180,9 @@ impl ParamDragState {
     pub(crate) fn new() -> Self {
         Self {
             dragging_param: -1,
-            dragging_env_param: -1,
-            dragging_env_slot: 0,
             dragging_trim_param: -1,
             dragging_trim_is_min: false,
             dragging_target_param: -1,
-            dragging_range_param: -1,
-            dragging_range_is_min: false,
             dragging_ableton_trim_param: -1,
             dragging_ableton_trim_is_min: false,
         }
@@ -244,10 +190,8 @@ impl ParamDragState {
 
     pub(crate) fn is_dragging(&self) -> bool {
         self.dragging_param >= 0
-            || self.dragging_env_param >= 0
             || self.dragging_trim_param >= 0
             || self.dragging_target_param >= 0
-            || self.dragging_range_param >= 0
             || self.dragging_ableton_trim_param >= 0
     }
 }
@@ -579,218 +523,29 @@ pub(crate) fn build_envelope_config(
         },
     ) as i32;
 
-    let half_w = (w - ENV_PAD_H * 2.0 - GAP) * 0.5;
     let sx = x + ENV_PAD_H;
-    let row1_y = y + 4.0;
-    let row2_y = row1_y + ENV_ROW_HEIGHT + 4.0;
+    let row_y = y + 4.0;
+    let slider_w = w - ENV_PAD_H * 2.0;
 
-    let attack_val = mod_state.env_attack.get(param_idx).copied().unwrap_or(0.1);
-    let decay_val = mod_state.env_decay.get(param_idx).copied().unwrap_or(0.3);
-    let sustain_val = mod_state.env_sustain.get(param_idx).copied().unwrap_or(0.7);
-    let release_val = mod_state.env_release.get(param_idx).copied().unwrap_or(0.5);
-
-    let env_colors = SliderColors::envelope();
-
-    let attack_slider = BitmapSlider::build(
+    // Single "Amount" slider — the envelope's depth (`target_normalized`, 0-1).
+    // On a clip trigger the parameter snaps this far toward its offset, then
+    // decays back over the fixed feel.
+    let amount = mod_state.target_norm.get(param_idx).copied().unwrap_or(1.0);
+    let amount_slider = BitmapSlider::build(
         tree,
         container_id,
-        Rect::new(sx, row1_y, half_w, ENV_ROW_HEIGHT),
-        Some("A"),
-        attack_val / ENV_ADR_MAX,
-        &format!("{:.2}", attack_val),
-        &env_colors,
+        Rect::new(sx, row_y, slider_w, ENV_ROW_HEIGHT),
+        Some("Amount"),
+        amount,
+        &format!("{:.2}", amount),
+        &SliderColors::envelope(),
         FONT_SIZE,
-        ENV_LABEL_W,
-    );
-
-    let decay_slider = BitmapSlider::build(
-        tree,
-        container_id,
-        Rect::new(sx + half_w + GAP, row1_y, half_w, ENV_ROW_HEIGHT),
-        Some("D"),
-        decay_val / ENV_ADR_MAX,
-        &format!("{:.2}", decay_val),
-        &env_colors,
-        FONT_SIZE,
-        ENV_LABEL_W,
-    );
-
-    let sustain_slider = BitmapSlider::build(
-        tree,
-        container_id,
-        Rect::new(sx, row2_y, half_w, ENV_ROW_HEIGHT),
-        Some("S"),
-        sustain_val / ENV_S_MAX,
-        &format!("{:.2}", sustain_val),
-        &env_colors,
-        FONT_SIZE,
-        ENV_LABEL_W,
-    );
-
-    let release_slider = BitmapSlider::build(
-        tree,
-        container_id,
-        Rect::new(sx + half_w + GAP, row2_y, half_w, ENV_ROW_HEIGHT),
-        Some("R"),
-        release_val / ENV_ADR_MAX,
-        &format!("{:.2}", release_val),
-        &env_colors,
-        FONT_SIZE,
-        ENV_LABEL_W,
+        ENV_AMOUNT_LABEL_W,
     );
 
     EnvelopeConfigIds {
         _container_id: container_id,
-        attack_slider,
-        decay_slider,
-        sustain_slider,
-        release_slider,
-    }
-}
-
-/// Height for the random envelope config panel (single row with mode + jump buttons).
-pub(crate) const ENV_RANDOM_CONFIG_HEIGHT: f32 = 30.0;
-
-pub(crate) fn build_envelope_random_config(
-    tree: &mut UITree,
-    parent: i32,
-    x: f32,
-    y: f32,
-    w: f32,
-    mod_state: &ParamModState,
-    param_idx: usize,
-) -> EnvelopeRandomConfigIds {
-    let container_id = tree.add_panel(
-        parent,
-        x,
-        y,
-        w,
-        ENV_RANDOM_CONFIG_HEIGHT,
-        UIStyle {
-            bg_color: color::CONFIG_BG_C32,
-            corner_radius: 2.0,
-            ..UIStyle::default()
-        },
-    ) as i32;
-
-    let is_random = mod_state
-        .env_mode
-        .get(param_idx)
-        .copied()
-        .unwrap_or(EnvelopeMode::Adsr)
-        == EnvelopeMode::Random;
-    let is_jump = mod_state
-        .env_random_jump
-        .get(param_idx)
-        .copied()
-        .unwrap_or(false);
-
-    let sx = x + ENV_PAD_H;
-    let btn_y = y + 4.0;
-    let btn_h = ENV_ROW_HEIGHT;
-    let btn_w = 50.0;
-    let btn_gap = 4.0;
-
-    // "RND" button — toggles envelope mode between ADSR and Random
-    let mode_btn_id = tree.add_button(
-        container_id,
-        sx,
-        btn_y,
-        btn_w,
-        btn_h,
-        config_btn_style(is_random, color::FONT_CAPTION),
-        "RND",
-    ) as i32;
-
-    // "JUMP" button — toggles random_jump (only meaningful when mode=Random)
-    let jump_btn_id = tree.add_button(
-        container_id,
-        sx + btn_w + btn_gap,
-        btn_y,
-        btn_w,
-        btn_h,
-        config_btn_style(is_random && is_jump, color::FONT_CAPTION),
-        "JUMP",
-    ) as i32;
-
-    EnvelopeRandomConfigIds {
-        _container_id: container_id,
-        mode_btn_id,
-        jump_btn_id,
-    }
-}
-
-/// Orange range handles for Random envelope mode. Same layout as trim handles
-/// but reads from `env_range_min/max` and uses envelope orange colors.
-pub(crate) fn build_envelope_range_handles(
-    tree: &mut UITree,
-    track_parent: i32,
-    track_rect: Rect,
-    mod_state: &ParamModState,
-    param_idx: usize,
-) -> TrimHandleIds {
-    let usable = track_rect.width - OVERLAY_INSET * 2.0;
-    let rmin = mod_state
-        .env_range_min
-        .get(param_idx)
-        .copied()
-        .unwrap_or(0.0);
-    let rmax = mod_state
-        .env_range_max
-        .get(param_idx)
-        .copied()
-        .unwrap_or(1.0);
-
-    let fill_x = track_rect.x + OVERLAY_INSET + rmin * usable;
-    let fill_w = (rmax - rmin) * usable;
-    let fill_id = tree.add_panel(
-        track_parent,
-        fill_x,
-        track_rect.y + OVERLAY_INSET,
-        fill_w,
-        track_rect.height - OVERLAY_INSET * 2.0,
-        UIStyle {
-            bg_color: color::ENV_FILL_C32,
-            ..UIStyle::default()
-        },
-    ) as i32;
-
-    let min_x = fill_x - TRIM_BAR_W * 0.5;
-    let min_bar_id = tree.add_button(
-        track_parent,
-        min_x,
-        track_rect.y,
-        TRIM_BAR_W,
-        track_rect.height,
-        UIStyle {
-            bg_color: color::ENVELOPE_ACTIVE_C32,
-            hover_bg_color: color::TARGET_BAR_HOVER_C32,
-            corner_radius: 1.0,
-            ..UIStyle::default()
-        },
-        "",
-    ) as i32;
-
-    let max_x = track_rect.x + OVERLAY_INSET + rmax * usable - TRIM_BAR_W * 0.5;
-    let max_bar_id = tree.add_button(
-        track_parent,
-        max_x,
-        track_rect.y,
-        TRIM_BAR_W,
-        track_rect.height,
-        UIStyle {
-            bg_color: color::ENVELOPE_ACTIVE_C32,
-            hover_bg_color: color::TARGET_BAR_HOVER_C32,
-            corner_radius: 1.0,
-            ..UIStyle::default()
-        },
-        "",
-    ) as i32;
-
-    TrimHandleIds {
-        fill_id,
-        min_bar_id,
-        max_bar_id,
+        amount_slider,
     }
 }
 
@@ -923,37 +678,6 @@ pub(crate) fn build_trim_handles_explicit(
         min_bar_id,
         max_bar_id,
     }
-}
-
-pub(crate) fn build_envelope_target(
-    tree: &mut UITree,
-    track_parent: i32,
-    track_rect: Rect,
-    mod_state: &ParamModState,
-    param_idx: usize,
-) -> EnvelopeTargetIds {
-    let usable = track_rect.width - OVERLAY_INSET * 2.0;
-    let norm = mod_state.target_norm.get(param_idx).copied().unwrap_or(0.5);
-    let bar_x = track_rect.x + OVERLAY_INSET + norm * usable - TARGET_BAR_W * 0.5;
-    let bar_h = track_rect.height + 4.0;
-    let bar_y = track_rect.y - 2.0;
-
-    let target_bar_id = tree.add_button(
-        track_parent,
-        bar_x,
-        bar_y,
-        TARGET_BAR_W,
-        bar_h,
-        UIStyle {
-            bg_color: color::ENVELOPE_ACTIVE_C32,
-            hover_bg_color: color::TARGET_BAR_HOVER_C32,
-            corner_radius: 1.0,
-            ..UIStyle::default()
-        },
-        "",
-    ) as i32;
-
-    EnvelopeTargetIds { target_bar_id }
 }
 
 // ── Shared event helpers ────────────────────────────────────────
@@ -1124,13 +848,10 @@ pub(crate) enum AbletonConfigClick {
 pub(crate) struct ParamRowIds {
     pub(crate) slider: Option<SliderNodeIds>,
     pub(crate) trim: Option<TrimHandleIds>,
-    pub(crate) target: Option<EnvelopeTargetIds>,
-    pub(crate) envelope_range: Option<TrimHandleIds>,
     pub(crate) ableton_trim: Option<TrimHandleIds>,
     pub(crate) envelope_btn: i32,
     pub(crate) driver_btn: i32,
     pub(crate) envelope_config: Option<EnvelopeConfigIds>,
-    pub(crate) envelope_random_config: Option<EnvelopeRandomConfigIds>,
     pub(crate) driver_config: Option<DriverConfigIds>,
     pub(crate) ableton_config: Option<AbletonConfigIds>,
     /// `y` after this row's slider + any expanded driver/envelope/Ableton
@@ -1176,13 +897,10 @@ pub(crate) fn build_param_row(
     let mut ids = ParamRowIds {
         slider: None,
         trim: None,
-        target: None,
-        envelope_range: None,
         ableton_trim: None,
         envelope_btn: -1,
         driver_btn: -1,
         envelope_config: None,
-        envelope_random_config: None,
         driver_config: None,
         ableton_config: None,
         new_cy: cy,
@@ -1226,31 +944,8 @@ pub(crate) fn build_param_row(
         ));
     }
 
-    // Envelope target or range handles (if envelope expanded).
-    if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
-        let env_mode = mod_state
-            .env_mode
-            .get(i)
-            .copied()
-            .unwrap_or(EnvelopeMode::Adsr);
-        if env_mode == EnvelopeMode::Random {
-            ids.envelope_range = Some(build_envelope_range_handles(
-                tree,
-                slider.track as i32,
-                slider.track_rect,
-                mod_state,
-                i,
-            ));
-        } else {
-            ids.target = Some(build_envelope_target(
-                tree,
-                slider.track as i32,
-                slider.track_rect,
-                mod_state,
-                i,
-            ));
-        }
-    }
+    // The envelope's depth is no longer a handle on the slider track — it's the
+    // "Amount" slider in the expanded drawer below.
 
     // Ableton trim handles (when the param has an Ableton mapping).
     if let Some((amin, amax)) = info.ableton_range {
@@ -1302,25 +997,12 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
-    // Envelope config drawer.
+    // Envelope config drawer — a single "Amount" (depth) slider.
     if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
-        let env_mode = mod_state
-            .env_mode
-            .get(i)
-            .copied()
-            .unwrap_or(EnvelopeMode::Adsr);
-        // Always build the random config buttons (mode toggle + jump toggle).
-        ids.envelope_random_config = Some(build_envelope_random_config(
+        ids.envelope_config = Some(build_envelope_config(
             tree, parent, x, cy, config_w, mod_state, i,
         ));
-        cy += ENV_RANDOM_CONFIG_HEIGHT;
-        // ADSR sliders only in ADSR mode.
-        if env_mode == EnvelopeMode::Adsr {
-            ids.envelope_config = Some(build_envelope_config(
-                tree, parent, x, cy, config_w, mod_state, i,
-            ));
-            cy += ENV_CONFIG_HEIGHT;
-        }
+        cy += ENV_CONFIG_HEIGHT;
     }
 
     // Driver config drawer.
@@ -1361,10 +1043,6 @@ pub(crate) enum RowClick {
     EnvelopeToggle(usize),
     /// A button inside the driver-config drawer (param index + action).
     DriverConfig(usize, DriverConfigAction),
-    /// The envelope mode (ADSR/Random) toggle (param index).
-    EnvModeToggle(usize),
-    /// The envelope random-jump toggle (param index).
-    EnvRandomJumpToggle(usize),
     /// The Ableton-config invert button (param index).
     AbletonInvert(usize),
     /// The slider's param label, when it carries an OSC address to copy
@@ -1389,7 +1067,6 @@ pub(crate) fn match_param_row_click(
     driver_btn_ids: &[i32],
     envelope_btn_ids: &[i32],
     driver_config_ids: &[Option<DriverConfigIds>],
-    envelope_random_config_ids: &[Option<EnvelopeRandomConfigIds>],
     ableton_config_ids: &[Option<AbletonConfigIds>],
     slider_ids: &[Option<SliderNodeIds>],
     osc_addresses: &[Option<String>],
@@ -1430,18 +1107,6 @@ pub(crate) fn match_param_row_click(
             DriverClickResult::Reverse => DriverConfigAction::Reverse,
         };
         return Some(RowClick::DriverConfig(pi, action));
-    }
-
-    // Envelope random-config buttons (mode toggle, jump toggle).
-    for (pi, cfg) in envelope_random_config_ids.iter().enumerate() {
-        if let Some(c) = cfg {
-            if id == c.mode_btn_id {
-                return Some(RowClick::EnvModeToggle(pi));
-            }
-            if id == c.jump_btn_id {
-                return Some(RowClick::EnvRandomJumpToggle(pi));
-            }
-        }
     }
 
     // Ableton config invert button.

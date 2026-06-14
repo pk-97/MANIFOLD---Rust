@@ -2051,9 +2051,7 @@ impl Application {
                 &mut self.active_layer_id,
                 &mut self.slider_snapshot,
                 &mut self.trim_snapshot,
-                &mut self.adsr_snapshot,
                 &mut self.target_snapshot,
-                &mut self.range_snapshot,
                 &mut self.user_prefs,
                 &mut self.active_inspector_drag,
                 editor_target,
@@ -2789,37 +2787,30 @@ impl Application {
         let preview_title_h = 18.0_f32;
         let preview_w = (sidebar_width - 2.0 * preview_pad).max(1.0);
         let preview_h = preview_w * 9.0 / 16.0;
-        // The sidebar top hosts two pinned, stacked 16:9 monitors, each a
-        // titled pane (title row + body): the selected node's output on top,
-        // and the master compositor output below it. Both panes are ALWAYS
-        // reserved so neither moves as the selection changes. The node pane's
-        // body shows the node's image, or — for a control / math / envelope
-        // node with no image — its value inspector text in place of the image,
-        // or a placeholder when nothing is selected. The master pane always
-        // shows what the live show is putting out. The param rows begin below
-        // both panes (`sidebar_content_top`), a fixed offset.
+        // The right column is monitors-only now — the inner-node param list moved
+        // under the left card. Two equal stacked 16:9 monitors (the selected
+        // node's output on top, the master compositor output below), each a
+        // titled pane (title row + body). The pair is centred vertically in the
+        // column so it reads as intentional rather than top-pinned with a void
+        // beneath. The node pane's body shows the node's image, or — for a
+        // control / math / envelope node with no image — its value inspector text
+        // in place of the image, or a placeholder when nothing is selected. The
+        // master pane always shows what the live show is putting out.
         let node_preview_info = self.content_state.node_preview_info.clone();
         let preview_has_image = node_preview_info
             .as_ref()
             .map(|i| i.has_image)
             .unwrap_or(false);
         let show_image = self.last_preview_node.is_some() && preview_has_image;
-        let mut pane_y = preview_pad;
-        // Node-output monitor: title row + 16:9 body, always reserved (pinned).
+        let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
+        let mut pane_y = (((logical_h as f32) - pane_block_h) * 0.5).max(preview_pad);
+        // Node-output monitor: title row + 16:9 body.
         let node_title_y = pane_y;
         let node_img_y = node_title_y + preview_title_h;
         pane_y = node_img_y + preview_h + preview_pad;
-        // Master-out monitor: always present, pinned just below the node pane.
+        // Master-out monitor: just below the node pane.
         let master_title_y = pane_y;
         let master_img_y = master_title_y + preview_title_h;
-        pane_y = master_img_y + preview_h + preview_pad;
-        let sidebar_content_top = pane_y;
-        let sidebar_viewport = manifold_ui::Rect::new(
-            sidebar_x,
-            sidebar_content_top,
-            sidebar_width,
-            (logical_h as f32 - sidebar_content_top).max(0.0),
-        );
         let palette_viewport =
             manifold_ui::Rect::new(0.0, 0.0, palette_width, logical_h as f32);
 
@@ -2926,6 +2917,9 @@ impl Application {
         // is small, so a clear + rebuild is cheaper than dirty-tracking and
         // means stale rows can never linger after the target changes.
         ws.ui_root.tree.clear();
+        // Left lane = the card, then the inner-node param list docked right under
+        // it. Track the card's built height so the panel knows where to start.
+        let mut card_h = 0.0_f32;
         if let Some((config, values)) = editor_card_data.as_ref() {
             // Gate `configure` on a structural/mod-state change (same discipline
             // as the inspector's gated `sync_inspector_data`): reconfiguring
@@ -2947,6 +2941,7 @@ impl Application {
             }
             self.editor_card.build(&mut ws.ui_root.tree, palette_viewport);
             self.editor_card.sync_values(&mut ws.ui_root.tree, values);
+            card_h = self.editor_card.compute_height();
             // Close the drawer only when the row it anchored on is actually gone
             // (target changed, param unexposed) — NOT on any config change. The
             // drawer edits the note live, and the note's min/max now flow into
@@ -2969,10 +2964,32 @@ impl Application {
             self.editor_card_config_hash = None;
             self.editor_mapping_popover.close();
         }
+        // Inner-node param list: docked under the card in the LEFT lane now (the
+        // right column is monitors-only). A thin divider sets it off from the card.
+        let panel_top = if card_h > 0.0 { card_h + 5.0 } else { 0.0 };
+        if card_h > 0.0 {
+            ws.ui_root.tree.add_panel(
+                -1,
+                0.0,
+                card_h + 2.0,
+                palette_width,
+                1.0,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::DIVIDER_COLOR,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            );
+        }
+        let panel_viewport = manifold_ui::Rect::new(
+            0.0,
+            panel_top,
+            palette_width,
+            (logical_h as f32 - panel_top).max(0.0),
+        );
         self.graph_editor_panel
-            .build(&mut ws.ui_root.tree, sidebar_viewport);
+            .build(&mut ws.ui_root.tree, panel_viewport);
 
-        // Pinned sidebar-top preview monitors: a backing panel, the two pane
+        // Pinned preview monitors in the right column: a backing panel, the two pane
         // titles, and — for a non-image node — the value inspector text in the
         // node pane. Added to the editor tree so they composite into the
         // offscreen; the monitor images blit onto the drawable below each title
@@ -2986,14 +3003,14 @@ impl Application {
                 ..UIStyle::default()
             };
             let title_x = sidebar_x + preview_pad;
-            // Backing panel for the pinned monitor region so the titles and the
-            // inspector text sit on the same surface as the param list below.
+            // Backing panel for the whole right column so the two centred monitors
+            // sit on a clean, uniform surface rather than a black void.
             ws.ui_root.tree.add_panel(
                 -1,
                 sidebar_x,
                 0.0,
                 sidebar_width,
-                sidebar_content_top,
+                logical_h as f32,
                 UIStyle {
                     bg_color: manifold_ui::color::EFFECT_CARD_INNER_BG_C32,
                     ..UIStyle::default()
@@ -3151,7 +3168,7 @@ impl Application {
         #[cfg(target_os = "macos")]
         if let (Some(thumb_p), Some(atlas_sampler), Some(bridge)) = (
             self.node_thumb_pipeline.as_ref(),
-            self.atlas_sampler.as_ref(),
+            self.thumb_sampler.as_ref(),
             self.node_atlas_texture_bridge.as_ref(),
         ) {
             let front = bridge.front_index() as usize;
@@ -3177,14 +3194,26 @@ impl Application {
                         .map(|c| c.visible_node_thumbnails(vp))
                         .unwrap_or_default();
                     let sf = scale as f32;
+                    // The atlas is a GRID×GRID grid of equal-UV cells (cells are
+                    // 16:9 in pixels, but each spans 1/GRID of the atlas on both
+                    // axes), so one `inv` serves u and v. A half-texel inset keeps
+                    // the Linear thumb sampler's taps inside the cell instead of
+                    // bleeding the neighbour at the border.
                     let inv = 1.0 / crate::content_pipeline::ATLAS_GRID as f32;
+                    let half_tx = 0.5 / crate::content_pipeline::ATLAS_W as f32;
+                    let half_ty = 0.5 / crate::content_pipeline::ATLAS_H as f32;
                     for (node_id, bx, by, bw, bh) in thumbs {
                         let Some(&cell) = layout.get(&node_id) else {
                             continue;
                         };
                         let gx = (cell % crate::content_pipeline::ATLAS_GRID) as f32;
                         let gy = (cell / crate::content_pipeline::ATLAS_GRID) as f32;
-                        let cell_uv = [gx * inv, gy * inv, inv, inv];
+                        let cell_uv = [
+                            gx * inv + half_tx,
+                            gy * inv + half_ty,
+                            inv - 2.0 * half_tx,
+                            inv - 2.0 * half_ty,
+                        ];
                         let mut bytes = [0u8; 16];
                         for (k, v) in cell_uv.iter().enumerate() {
                             bytes[k * 4..k * 4 + 4].copy_from_slice(&v.to_ne_bytes());

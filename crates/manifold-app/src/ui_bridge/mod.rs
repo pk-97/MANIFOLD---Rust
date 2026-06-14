@@ -69,9 +69,7 @@ pub fn dispatch(
     active_layer: &mut Option<LayerId>,
     drag_snapshot: &mut Option<f32>,
     trim_snapshot: &mut Option<(f32, f32)>,
-    adsr_snapshot: &mut Option<(f32, f32, f32, f32)>,
     target_snapshot: &mut Option<f32>,
-    range_snapshot: &mut Option<(f32, f32)>,
     user_prefs: &mut UserPrefs,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
     // `Some(GraphTarget)` when the graph editor dispatches one of its left-lane
@@ -181,20 +179,12 @@ pub fn dispatch(
         | PanelAction::DriverToggle(..)
         | PanelAction::EnvelopeToggle(..)
         | PanelAction::DriverConfig(..)
-        | PanelAction::EnvParamChanged(..)
         | PanelAction::TrimChanged(..)
         | PanelAction::TargetChanged(..)
         | PanelAction::TrimSnapshot(..)
         | PanelAction::TrimCommit(..)
         | PanelAction::TargetSnapshot(..)
         | PanelAction::TargetCommit(..)
-        | PanelAction::EnvRangeChanged(..)
-        | PanelAction::EnvRangeSnapshot(..)
-        | PanelAction::EnvRangeCommit(..)
-        | PanelAction::EnvParamSnapshot(..)
-        | PanelAction::EnvParamCommit(..)
-        | PanelAction::EnvModeToggle(..)
-        | PanelAction::EnvRandomJumpToggle(..)
         | PanelAction::ParamLabelRightClick(..)
         | PanelAction::AddEffectClicked(_)
         | PanelAction::BrowserSearchClicked
@@ -252,9 +242,7 @@ pub fn dispatch(
             active_layer,
             drag_snapshot,
             trim_snapshot,
-            adsr_snapshot,
             target_snapshot,
-            range_snapshot,
             active_inspector_drag,
             editor_target,
         ),

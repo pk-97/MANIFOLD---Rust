@@ -15,9 +15,7 @@ use manifold_editing::commands::effects::{
     ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
     ToggleEffectCommand,
 };
-use manifold_editing::commands::envelopes::{
-    ChangeEnvelopeADSRCommand, ChangeEnvelopeRangeCommand, ChangeEnvelopeTargetCommand,
-};
+use manifold_editing::commands::envelopes::ChangeEnvelopeTargetCommand;
 use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand, PasteGeneratorCommand,
@@ -275,9 +273,7 @@ pub(super) fn dispatch_inspector(
     active_layer: &mut Option<LayerId>,
     drag_snapshot: &mut Option<f32>,
     trim_snapshot: &mut Option<(f32, f32)>,
-    adsr_snapshot: &mut Option<(f32, f32, f32, f32)>,
     target_snapshot: &mut Option<f32>,
-    range_snapshot: &mut Option<(f32, f32)>,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
     editor_target: Option<&manifold_core::GraphTarget>,
 ) -> DispatchResult {
@@ -1141,23 +1137,6 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::EnvParamChanged(gpt, param_id, param, val) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                let p = *param;
-                let v = *val;
-                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
-                    match p {
-                        manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
-                        manifold_ui::EnvelopeParam::Decay => env.decay_beats = v,
-                        manifold_ui::EnvelopeParam::Sustain => env.sustain_level = v,
-                        manifold_ui::EnvelopeParam::Release => env.release_beats = v,
-                    }
-                });
-            }
-            DispatchResult::handled()
-        }
         PanelAction::TrimChanged(gpt, param_id, min, max) => {
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
@@ -1277,178 +1256,6 @@ pub(super) fn dispatch_inspector(
             }
             *active_inspector_drag = None;
             DispatchResult::handled()
-        }
-        PanelAction::EnvRangeChanged(gpt, param_id, rmin, rmax) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                let rm = *rmin;
-                let rx = *rmax;
-                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), move |env| {
-                    env.range_min = rm;
-                    env.range_max = rx;
-                });
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::EnvRangeSnapshot(gpt, param_id) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                let range = project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.envelopes
-                            .as_ref()
-                            .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
-                            .map(|e| (e.range_min, e.range_max))
-                    })
-                    .flatten();
-                if let Some(range) = range {
-                    *range_snapshot = Some(range);
-                }
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::EnvRangeCommit(gpt, param_id) => {
-            if let Some((old_min, old_max)) = range_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                let info = project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.envelopes
-                            .as_ref()
-                            .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
-                            .map(|idx| {
-                                let e = &inst.envelopes.as_ref().unwrap()[idx];
-                                (idx, e.range_min, e.range_max)
-                            })
-                    })
-                    .flatten();
-                if let Some((env_idx, new_min, new_max)) = info
-                    && ((old_min - new_min).abs() > f32::EPSILON
-                        || (old_max - new_max).abs() > f32::EPSILON)
-                {
-                    let cmd = ChangeEnvelopeRangeCommand::new(
-                        target,
-                        env_idx,
-                        old_min,
-                        old_max,
-                        new_min,
-                        new_max,
-                    );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-        PanelAction::EnvParamSnapshot(gpt, param_id) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                let adsr = project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.envelopes
-                            .as_ref()
-                            .and_then(|es| es.iter().find(|e| e.param_id == *param_id))
-                            .map(|e| {
-                                (
-                                    e.attack_beats,
-                                    e.decay_beats,
-                                    e.sustain_level,
-                                    e.release_beats,
-                                )
-                            })
-                    })
-                    .flatten();
-                if let Some(adsr) = adsr {
-                    *adsr_snapshot = Some(adsr);
-                }
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::EnvParamCommit(gpt, param_id) => {
-            if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                let info = project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.envelopes
-                            .as_ref()
-                            .and_then(|es| es.iter().position(|e| e.param_id == *param_id))
-                            .map(|idx| {
-                                let e = &inst.envelopes.as_ref().unwrap()[idx];
-                                (
-                                    idx,
-                                    e.attack_beats,
-                                    e.decay_beats,
-                                    e.sustain_level,
-                                    e.release_beats,
-                                )
-                            })
-                    })
-                    .flatten();
-                if let Some((env_idx, na, nd, ns, nr)) = info
-                    && ((old_a - na).abs() > f32::EPSILON
-                        || (old_d - nd).abs() > f32::EPSILON
-                        || (old_s - ns).abs() > f32::EPSILON
-                        || (old_r - nr).abs() > f32::EPSILON)
-                {
-                    let cmd = ChangeEnvelopeADSRCommand::new(
-                        target,
-                        env_idx,
-                        old_a,
-                        old_d,
-                        old_s,
-                        old_r,
-                        na,
-                        nd,
-                        ns,
-                        nr,
-                    );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-
-        // ── Envelope mode toggles ──────────────────────────────────
-        PanelAction::EnvModeToggle(gpt, param_id) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                // Unified across effects + generators via graph_env_dual_edit:
-                // the closure runs identically on the local UI project and the
-                // content thread, so the `last_elapsed = -1.0` re-seed now
-                // happens on BOTH (the generator path used to skip it locally).
-                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), |env| {
-                    use manifold_core::effects::EnvelopeMode;
-                    env.mode = match env.mode {
-                        EnvelopeMode::Adsr => EnvelopeMode::Random,
-                        EnvelopeMode::Random => EnvelopeMode::Adsr,
-                    };
-                    // Reset rising edge + walk state so Random mode triggers immediately.
-                    env.was_clip_active = false;
-                    env.walk_value = -1.0;
-                    env.last_elapsed = -1.0; // sentinel: re-seed from current param
-                });
-            }
-            DispatchResult::structural()
-        }
-        PanelAction::EnvRandomJumpToggle(gpt, param_id) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                // Matches the envelope by param_id only (the generator twin
-                // used to also require `enabled`; unified to the effect rule).
-                graph_env_dual_edit(project, content_tx, &target, param_id.clone(), |env| {
-                    env.random_jump = !env.random_jump;
-                });
-            }
-            DispatchResult::structural()
         }
 
         // ── Effect management ──────────────────────────────────────

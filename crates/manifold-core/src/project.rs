@@ -1401,20 +1401,10 @@ mod tests {
         fx.envelopes = Some(vec![ParamEnvelope {
             param_id: std::borrow::Cow::Borrowed(""),
             enabled: true,
-            attack_beats: 0.1,
-            decay_beats: 0.1,
-            sustain_level: 0.5,
-            release_beats: 0.1,
             target_normalized: 1.0,
-            mode: crate::effects::EnvelopeMode::Adsr,
-            random_jump: false,
-            range_min: 0.0,
-            range_max: 1.0,
             legacy_param_index: Some(0),
             current_level: 0.0,
-            walk_value: -1.0,
             was_clip_active: false,
-            last_elapsed: -1.0,
         }]);
         layer.effects = Some(vec![fx]);
         p.timeline.layers.push(layer);

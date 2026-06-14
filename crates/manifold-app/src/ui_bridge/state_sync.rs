@@ -1302,14 +1302,6 @@ struct CardModulation {
     driver_triplet: Vec<bool>,
     envelope_active: Vec<bool>,
     target_norm: Vec<f32>,
-    env_attack: Vec<f32>,
-    env_decay: Vec<f32>,
-    env_sustain: Vec<f32>,
-    env_release: Vec<f32>,
-    env_mode: Vec<manifold_core::effects::EnvelopeMode>,
-    env_random_jump: Vec<bool>,
-    env_range_min: Vec<f32>,
-    env_range_max: Vec<f32>,
 }
 
 /// Build the driver + envelope display arrays for one preset instance's card.
@@ -1330,14 +1322,6 @@ fn build_card_modulation(
         driver_triplet: vec![false; n],
         envelope_active: vec![false; n],
         target_norm: vec![1.0; n],
-        env_attack: vec![0.0; n],
-        env_decay: vec![0.0; n],
-        env_sustain: vec![0.0; n],
-        env_release: vec![0.0; n],
-        env_mode: vec![manifold_core::effects::EnvelopeMode::Adsr; n],
-        env_random_jump: vec![false; n],
-        env_range_min: vec![0.0; n],
-        env_range_max: vec![1.0; n],
     };
     if let Some(ref drivers) = inst.drivers {
         for d in drivers {
@@ -1367,14 +1351,6 @@ fn build_card_modulation(
             };
             m.envelope_active[pi] = true;
             m.target_norm[pi] = env.target_normalized;
-            m.env_attack[pi] = env.attack_beats;
-            m.env_decay[pi] = env.decay_beats;
-            m.env_sustain[pi] = env.sustain_level;
-            m.env_release[pi] = env.release_beats;
-            m.env_mode[pi] = env.mode;
-            m.env_random_jump[pi] = env.random_jump;
-            m.env_range_min[pi] = env.range_min;
-            m.env_range_max[pi] = env.range_max;
         }
     }
     m
@@ -1443,14 +1419,6 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
         trim_min: vec![],
         trim_max: vec![],
         target_norm: vec![],
-        env_attack: vec![],
-        env_decay: vec![],
-        env_sustain: vec![],
-        env_release: vec![],
-        env_mode: vec![],
-        env_random_jump: vec![],
-        env_range_min: vec![],
-        env_range_max: vec![],
         driver_beat_div_idx: vec![],
         driver_waveform_idx: vec![],
         driver_reversed: vec![],
@@ -1730,14 +1698,6 @@ fn preset_to_config(
         trim_min: m.trim_min,
         trim_max: m.trim_max,
         target_norm: m.target_norm,
-        env_attack: m.env_attack,
-        env_decay: m.env_decay,
-        env_sustain: m.env_sustain,
-        env_release: m.env_release,
-        env_mode: m.env_mode,
-        env_random_jump: m.env_random_jump,
-        env_range_min: m.env_range_min,
-        env_range_max: m.env_range_max,
         driver_beat_div_idx: m.driver_beat_div_idx,
         driver_waveform_idx: m.driver_waveform_idx,
         driver_reversed: m.driver_reversed,

@@ -36,15 +36,6 @@ pub enum DriverConfigAction {
     Reverse,
 }
 
-/// ADSR envelope parameters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EnvelopeParam {
-    Attack,
-    Decay,
-    Sustain,
-    Release,
-}
-
 /// Which graph host a per-param [`PanelAction`] targets — the
 /// discriminator that replaced the parallel `Effect*` / `Gen*` variant
 /// pairs, so a card action can't be emitted (or dispatched) for the wrong
@@ -209,31 +200,17 @@ pub enum PanelAction {
     DriverToggle(GraphParamTarget, manifold_core::effects::ParamId),
     EnvelopeToggle(GraphParamTarget, manifold_core::effects::ParamId),
     DriverConfig(GraphParamTarget, manifold_core::effects::ParamId, DriverConfigAction),
-    EnvParamChanged(GraphParamTarget, manifold_core::effects::ParamId, EnvelopeParam, f32),
-    /// Snapshot ADSR state before drag (for undo).
-    EnvParamSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
-    /// Commit ADSR drag (record undo command).
-    EnvParamCommit(GraphParamTarget, manifold_core::effects::ParamId),
-    /// Toggle envelope mode between ADSR and Random.
-    EnvModeToggle(GraphParamTarget, manifold_core::effects::ParamId),
-    /// Toggle random_jump flag on a Random-mode envelope.
-    EnvRandomJumpToggle(GraphParamTarget, manifold_core::effects::ParamId),
     TrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
     /// Snapshot trim state before drag (for undo).
     TrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
     /// Commit trim drag (record undo command).
     TrimCommit(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Envelope "Amount" (depth / `target_normalized`) changed.
     TargetChanged(GraphParamTarget, manifold_core::effects::ParamId, f32),
-    /// Snapshot target state before drag (for undo).
+    /// Snapshot Amount before drag (for undo).
     TargetSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
-    /// Commit target drag (record undo command).
+    /// Commit Amount drag (record undo command).
     TargetCommit(GraphParamTarget, manifold_core::effects::ParamId),
-    /// Envelope range changed: target, param_id, range_min, range_max.
-    EnvRangeChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
-    /// Snapshot envelope range before drag (for undo).
-    EnvRangeSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
-    /// Commit envelope range drag (record undo command).
-    EnvRangeCommit(GraphParamTarget, manifold_core::effects::ParamId),
     /// Reorder effect card: move from_index to to_index.
     /// Unity: EffectsListBitmapPanel.onCardReorder.
     EffectReorder(usize, usize),
@@ -499,9 +476,9 @@ pub enum PanelAction {
     // ── Generator-only per-param actions ───────────────────────────────
     //
     // The effect/generator mirror pairs (snapshot / changed / commit /
-    // right-click, drivers, envelopes, trims, targets, env-ranges) collapsed
-    // into the target-carrying `ParamSnapshot` … `EnvRangeCommit` variants
-    // above. Only these have no effect counterpart and stay generator-only.
+    // right-click, drivers, envelope Amount, trims) collapsed into the
+    // target-carrying `ParamSnapshot` … `TargetCommit` variants above. Only
+    // these have no effect counterpart and stay generator-only.
     GenTypeClicked(Option<LayerId>), // layer_id
     GenParamToggle(manifold_core::effects::ParamId),
     /// Outer-card click on a `is_trigger` param's button — increment the
