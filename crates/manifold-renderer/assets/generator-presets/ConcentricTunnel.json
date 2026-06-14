@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "ConcentricTunnel",
-  "description": "Concentric polygon rings expanding outward from the centre — fully decomposed onto the curated atom library. The polyline-construction pattern is now visible as graph nodes (TouchDesigner Pattern → Math → Function → Merge shape) rather than sealed inside `node.polygon_shape` and `node.concentric_outlines` (both deleted in this pass).\n\nPer-frame outline construction:\n  mux_final_n_sides → generate_range(0, 2π, active_count=N, end_inclusive=false) → cos / sin via `array_math` → pack_curve_xy → outline[64]\n  mux_final_n_sides → consecutive_edges(closed=true) → edges[64]\n\nThe edge topology uses `EdgePair::SENTINEL` for the inactive tail (slots N..64), so a triangle drawn from a 64-slot buffer doesn't smear lines through 61 padding vertices. `pack_curve_xy.scale = 4.0` cancels the atom's internal `PROJ_SCALE = 0.25` Lissajous-screen-fit factor so the polygon's final radius matches `size = 1.0` directly (legacy parity).\n\nPer-frame ring stack:\n  i_array = generate_range(0, K-1, K=16, end_inclusive=true) → [0, 1, …, 15]\n  frac_exp = expansion − floor(expansion)\n  frac_offset = frac_exp × ring_spacing\n  scales = i_array × ring_spacing + frac_offset → [(frac_exp + i) × ring_spacing]\n  array_replicate_polyline_rings(outline, edges, scales) → outline[1024], edges[1024]\n  render_lines\n\nThe trigger-mode scaffolding (Shape / Spawn / Both via `clip_trigger_index` + `mux_cycle_sides` + `mux_final_n_sides` + `mode_*_enable` + `shape_active` / `spawn_active`) is unchanged from the previous bundled version — it was already in the graph, and it stays. Mux option tables (n-side choices, beat-rate choices, cycle sequence, mode gates) live as inline `in_N` params on the mux nodes themselves, not as a constellation of `node.value` constants wired in — the future node UI surfaces those inline values on the node body. The replicator atom inherits the sentinel-preserving edge propagation contract from the deleted `concentric_outlines` bundle: inactive input edges stay inactive in every output ring.",
+  "description": "Concentric polygon rings expanding outward from the centre — fully decomposed onto the curated atom library. The polyline-construction pattern is now visible as graph nodes (TouchDesigner Pattern → Math → Function → Merge shape) rather than sealed inside legacy bundles.\n\nThe instrument organizes into a transparent pipeline. Inputs feeds the top-level IO, Trigger Mode decodes the clip trigger and mode selector into per-behavior gates (shape active, spawn active); those gates select which n-sides value feeds into the polygon outline. Polygon Outline builds a single ring by generating equally-spaced angles, applying cos/sin to get x and y coordinates, and packing them into a curve array. Ring Stack And Render takes that single outline and replicates it into sixteen rings at different scales (based on the expansion envelope and ring spacing), generates the edge topology for the stacked rings using sentinel-safe replication, and renders the final 1024-vertex line set. The groups are purely a presentation layer and flatten to byte-identical behavior at load; card bindings reach inner nodes by stable nodeId regardless of grouping.",
   "presetMetadata": {
     "id": "ConcentricTunnel",
     "displayName": "Concentric Tunnel",
@@ -19,9 +19,16 @@
         "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "Circle",
+          "Triangle",
+          "Square",
+          "Pentagon",
+          "Hexagon"
+        ],
         "formatString": "F0",
-        "oscSuffix": "shape",
-        "valueLabels": ["Circle", "Triangle", "Square", "Pentagon", "Hexagon"]
+        "oscSuffix": "shape"
       },
       {
         "id": "line",
@@ -31,6 +38,7 @@
         "defaultValue": 0.008,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F4",
         "oscSuffix": "line"
       },
@@ -42,9 +50,16 @@
         "defaultValue": 2.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "1/4",
+          "1/2",
+          "1",
+          "2",
+          "4"
+        ],
         "formatString": "F0",
-        "oscSuffix": "rate",
-        "valueLabels": ["1/4", "1/2", "1", "2", "4"]
+        "oscSuffix": "rate"
       },
       {
         "id": "ring_spacing",
@@ -54,6 +69,7 @@
         "defaultValue": 0.12,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "ringSpacing"
       },
@@ -65,6 +81,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": true,
+        "isTrigger": false,
         "formatString": "F0",
         "oscSuffix": "clipTrigger"
       },
@@ -76,315 +93,1179 @@
         "defaultValue": 2.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "Shape",
+          "Spawn",
+          "Both"
+        ],
         "formatString": "F0",
-        "oscSuffix": "triggerMode",
-        "valueLabels": ["Shape", "Spawn", "Both"]
+        "oscSuffix": "triggerMode"
       }
-    ],
-    "paramAliases": [
-      { "old": "scale", "new": "ring_spacing" },
-      { "old": "clip_trigger_mode", "new": "trigger_mode" }
     ],
     "bindings": [
-      { "id": "shape", "label": "Shape", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "mux_n_sides", "param": "selector" },
-        "convert": { "type": "Float" } },
-      { "id": "line", "label": "Line", "defaultValue": 0.008,
-        "target": { "kind": "node", "nodeId": "render", "param": "edge_thickness" },
-        "convert": { "type": "Float" } },
-      { "id": "rate", "label": "Rate", "defaultValue": 2.0,
-        "target": { "kind": "node", "nodeId": "mux_ring_freq", "param": "selector" },
-        "convert": { "type": "Float" } },
-      { "id": "ring_spacing", "label": "Ring Spacing", "defaultValue": 0.12,
-        "target": { "kind": "node", "nodeId": "frac_offset", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "ring_spacing", "label": "Ring Spacing", "defaultValue": 0.12,
-        "target": { "kind": "node", "nodeId": "scales", "param": "scale" },
-        "convert": { "type": "Float" } },
-      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "shape_active", "param": "a" },
-        "convert": { "type": "Float" } },
-      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "spawn_active", "param": "a" },
-        "convert": { "type": "Float" } },
-      { "id": "trigger_mode", "label": "Trigger Mode", "defaultValue": 2.0,
-        "target": { "kind": "node", "nodeId": "mode_shape_enable", "param": "selector" },
-        "convert": { "type": "Float" } },
-      { "id": "trigger_mode", "label": "Trigger Mode", "defaultValue": 2.0,
-        "target": { "kind": "node", "nodeId": "mode_spawn_enable", "param": "selector" },
-        "convert": { "type": "Float" } }
+      {
+        "id": "shape",
+        "label": "Shape",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mux_n_sides",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "line",
+        "label": "Line",
+        "defaultValue": 0.008,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "edge_thickness"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "rate",
+        "label": "Rate",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mux_ring_freq",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "ring_spacing",
+        "label": "Ring Spacing",
+        "defaultValue": 0.12,
+        "target": {
+          "kind": "node",
+          "nodeId": "frac_offset",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "ring_spacing",
+        "label": "Ring Spacing",
+        "defaultValue": 0.12,
+        "target": {
+          "kind": "node",
+          "nodeId": "scales",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "shape_active",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "spawn_active",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "trigger_mode",
+        "label": "Trigger Mode",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mode_shape_enable",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "trigger_mode",
+        "label": "Trigger Mode",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mode_spawn_enable",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
     ],
-    "skipMode": { "kind": "never" }
+    "skipMode": {
+      "kind": "never"
+    },
+    "paramAliases": [
+      {
+        "old": "scale",
+        "new": "ring_spacing"
+      },
+      {
+        "old": "clip_trigger_mode",
+        "new": "trigger_mode"
+      }
+    ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
-
     {
-      "id": 1, "typeId": "node.mux_scalar", "handle": "mux_n_sides", "nodeId": "mux_n_sides",
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "title": "Inputs"
+    },
+    {
+      "id": 1,
+      "nodeId": "mux_n_sides",
+      "typeId": "node.mux_scalar",
+      "handle": "mux_n_sides",
       "params": {
-        "selector": { "type": "Float", "value": 0.0 },
-        "in_0":     { "type": "Float", "value": 64.0 },
-        "in_1":     { "type": "Float", "value": 3.0  },
-        "in_2":     { "type": "Float", "value": 4.0  },
-        "in_3":     { "type": "Float", "value": 5.0  },
-        "in_4":     { "type": "Float", "value": 6.0  }
+        "in_0": {
+          "type": "Float",
+          "value": 64.0
+        },
+        "in_1": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "in_2": {
+          "type": "Float",
+          "value": 4.0
+        },
+        "in_3": {
+          "type": "Float",
+          "value": 5.0
+        },
+        "in_4": {
+          "type": "Float",
+          "value": 6.0
+        },
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Shape N-Sides Mux"
+    },
+    {
+      "id": 2,
+      "nodeId": "mux_ring_freq",
+      "typeId": "node.mux_scalar",
+      "handle": "mux_ring_freq",
+      "params": {
+        "in_0": {
+          "type": "Float",
+          "value": 4.0
+        },
+        "in_1": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "in_2": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "in_3": {
+          "type": "Float",
+          "value": 0.5
+        },
+        "in_4": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "selector": {
+          "type": "Float",
+          "value": 2.0
+        }
+      },
+      "title": "Rate Mux"
+    },
+    {
+      "id": 3,
+      "nodeId": "base_expansion",
+      "typeId": "node.math",
+      "handle": "base_expansion",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Base Expansion"
+    },
+    {
+      "id": 4,
+      "nodeId": "spawn_gate",
+      "typeId": "node.math",
+      "handle": "spawn_gate",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "Spawn Gate"
+    },
+    {
+      "id": 5,
+      "nodeId": "expansion",
+      "typeId": "node.math",
+      "handle": "expansion",
+      "params": {
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "op": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "title": "Final Expansion"
+    },
+    {
+      "id": 7,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    },
+    {
+      "id": 14,
+      "nodeId": "mux_final_n_sides",
+      "typeId": "node.mux_scalar",
+      "handle": "mux_final_n_sides",
+      "params": {
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Final N-Sides Selector"
+    },
+    {
+      "id": 28,
+      "nodeId": "Trigger Mode",
+      "typeId": "group",
+      "handle": "Trigger Mode",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "triggerCount",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "out",
+              "portType": ""
+            },
+            {
+              "name": "shapeActive",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "spawnActive",
+              "portType": "Scalar(F32)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 8,
+            "nodeId": "shape_cycle_idx",
+            "typeId": "node.clip_trigger_index",
+            "handle": "shape_cycle_idx",
+            "params": {
+              "modulus": {
+                "type": "Int",
+                "value": 6
+              }
+            },
+            "title": "Shape Cycle Index"
+          },
+          {
+            "id": 9,
+            "nodeId": "mux_cycle_sides",
+            "typeId": "node.mux_scalar",
+            "handle": "mux_cycle_sides",
+            "params": {
+              "in_0": {
+                "type": "Float",
+                "value": 3.0
+              },
+              "in_1": {
+                "type": "Float",
+                "value": 4.0
+              },
+              "in_2": {
+                "type": "Float",
+                "value": 5.0
+              },
+              "in_3": {
+                "type": "Float",
+                "value": 6.0
+              },
+              "in_4": {
+                "type": "Float",
+                "value": 8.0
+              },
+              "in_5": {
+                "type": "Float",
+                "value": 12.0
+              },
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Cycle N-Sides Mux"
+          },
+          {
+            "id": 10,
+            "nodeId": "mode_shape_enable",
+            "typeId": "node.mux_scalar",
+            "handle": "mode_shape_enable",
+            "params": {
+              "in_0": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "in_1": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "in_2": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "selector": {
+                "type": "Float",
+                "value": 2.0
+              }
+            },
+            "title": "Shape Mode Enable"
+          },
+          {
+            "id": 11,
+            "nodeId": "mode_spawn_enable",
+            "typeId": "node.mux_scalar",
+            "handle": "mode_spawn_enable",
+            "params": {
+              "in_0": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "in_1": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "in_2": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "selector": {
+                "type": "Float",
+                "value": 2.0
+              }
+            },
+            "title": "Spawn Mode Enable"
+          },
+          {
+            "id": 12,
+            "nodeId": "shape_active",
+            "typeId": "node.math",
+            "handle": "shape_active",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Shape Active Gated"
+          },
+          {
+            "id": 13,
+            "nodeId": "spawn_active",
+            "typeId": "node.math",
+            "handle": "spawn_active",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Spawn Active Gated"
+          },
+          {
+            "id": 29,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 30,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 9,
+            "toPort": "selector"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 29,
+            "fromPort": "triggerCount",
+            "toNode": 8,
+            "toPort": "trigger_count"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 30,
+            "toPort": "out"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 30,
+            "toPort": "shapeActive"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 30,
+            "toPort": "spawnActive"
+          }
+        ],
+        "tint": [
+          0.8,
+          0.6,
+          0.2,
+          1.0
+        ]
       }
     },
     {
-      "id": 2, "typeId": "node.mux_scalar", "handle": "mux_ring_freq", "nodeId": "mux_ring_freq",
-      "params": {
-        "selector": { "type": "Float", "value": 2.0 },
-        "in_0":     { "type": "Float", "value": 4.0  },
-        "in_1":     { "type": "Float", "value": 2.0  },
-        "in_2":     { "type": "Float", "value": 1.0  },
-        "in_3":     { "type": "Float", "value": 0.5  },
-        "in_4":     { "type": "Float", "value": 0.25 }
+      "id": 29,
+      "nodeId": "Polygon Outline",
+      "typeId": "group",
+      "handle": "Polygon Outline",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "sideCount",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "sideCount2",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "outlinePoints",
+              "portType": "Array(Vec2)"
+            },
+            {
+              "name": "edgeTopology",
+              "portType": "Array(EdgePair)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 15,
+            "nodeId": "angles",
+            "typeId": "node.generate_range",
+            "handle": "angles",
+            "params": {
+              "end": {
+                "type": "Float",
+                "value": 6.2831855
+              },
+              "end_inclusive": {
+                "type": "Bool",
+                "value": false
+              },
+              "max_capacity": {
+                "type": "Int",
+                "value": 64
+              },
+              "start": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Angle Range"
+          },
+          {
+            "id": 16,
+            "nodeId": "cos_t",
+            "typeId": "node.array_math",
+            "handle": "cos_t",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 12
+              }
+            },
+            "title": "Cosine Applied"
+          },
+          {
+            "id": 17,
+            "nodeId": "cos_x",
+            "typeId": "node.array_math",
+            "handle": "cos_x",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 6
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "X Coordinate Scaled"
+          },
+          {
+            "id": 18,
+            "nodeId": "sin_t",
+            "typeId": "node.array_math",
+            "handle": "sin_t",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 11
+              }
+            },
+            "title": "Sine Applied"
+          },
+          {
+            "id": 19,
+            "nodeId": "sin_y",
+            "typeId": "node.array_math",
+            "handle": "sin_y",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 6
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "Y Coordinate Scaled"
+          },
+          {
+            "id": 20,
+            "nodeId": "pack",
+            "typeId": "node.pack_curve_xy",
+            "handle": "pack",
+            "params": {
+              "scale": {
+                "type": "Float",
+                "value": 4.0
+              }
+            },
+            "title": "Pack Curve XY"
+          },
+          {
+            "id": 21,
+            "nodeId": "edges_topology",
+            "typeId": "node.consecutive_edges",
+            "handle": "edges_topology",
+            "params": {
+              "closed": {
+                "type": "Bool",
+                "value": true
+              },
+              "count": {
+                "type": "Int",
+                "value": 4
+              },
+              "max_capacity": {
+                "type": "Int",
+                "value": 64
+              }
+            },
+            "title": "Edges Topology"
+          },
+          {
+            "id": 30,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 31,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 16,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "out",
+            "toNode": 17,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 18,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 17,
+            "fromPort": "out",
+            "toNode": 20,
+            "toPort": "x"
+          },
+          {
+            "fromNode": 19,
+            "fromPort": "out",
+            "toNode": 20,
+            "toPort": "y"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "sideCount",
+            "toNode": 15,
+            "toPort": "active_count"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "sideCount2",
+            "toNode": 21,
+            "toPort": "count"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "out",
+            "toNode": 31,
+            "toPort": "outlinePoints"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "edges",
+            "toNode": 31,
+            "toPort": "edgeTopology"
+          }
+        ],
+        "tint": [
+          0.2,
+          0.6,
+          0.8,
+          1.0
+        ]
       }
     },
-
     {
-      "id": 3, "typeId": "node.math", "handle": "base_expansion", "nodeId": "base_expansion",
-      "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 1.0 },
-        "op": { "type": "Enum",  "value": 2 }
+      "id": 30,
+      "nodeId": "Ring Stack And Render",
+      "typeId": "group",
+      "handle": "Ring Stack And Render",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "a",
+              "portType": ""
+            },
+            {
+              "name": "expansion",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "edges",
+              "portType": ""
+            },
+            {
+              "name": "outline",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "finalImage",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 6,
+            "nodeId": "render",
+            "typeId": "node.render_lines",
+            "handle": "render",
+            "params": {
+              "animate": {
+                "type": "Bool",
+                "value": false
+              },
+              "beat_flash_amount": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "closed_loop": {
+                "type": "Bool",
+                "value": false
+              },
+              "color_a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color_b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "edge_thickness": {
+                "type": "Float",
+                "value": 0.008
+              },
+              "show_verts": {
+                "type": "Bool",
+                "value": false
+              },
+              "speed": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "vert_size": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "window": {
+                "type": "Float",
+                "value": 0.1
+              }
+            },
+            "title": "Render Lines"
+          },
+          {
+            "id": 22,
+            "nodeId": "i_array",
+            "typeId": "node.generate_range",
+            "handle": "i_array",
+            "params": {
+              "end": {
+                "type": "Float",
+                "value": 15.0
+              },
+              "end_inclusive": {
+                "type": "Bool",
+                "value": true
+              },
+              "max_capacity": {
+                "type": "Int",
+                "value": 16
+              },
+              "start": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Ring Index Array"
+          },
+          {
+            "id": 23,
+            "nodeId": "floor_exp",
+            "typeId": "node.math",
+            "handle": "floor_exp",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 10
+              }
+            },
+            "title": "Floor Expansion"
+          },
+          {
+            "id": 24,
+            "nodeId": "frac_exp",
+            "typeId": "node.math",
+            "handle": "frac_exp",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Fractional Expansion"
+          },
+          {
+            "id": 25,
+            "nodeId": "frac_offset",
+            "typeId": "node.math",
+            "handle": "frac_offset",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.12
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Fractional Offset Scaled"
+          },
+          {
+            "id": 26,
+            "nodeId": "scales",
+            "typeId": "node.array_math",
+            "handle": "scales",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 6
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.12
+              }
+            },
+            "title": "Ring Scale Factors"
+          },
+          {
+            "id": 27,
+            "nodeId": "stack",
+            "typeId": "node.array_replicate_polyline_rings",
+            "handle": "stack",
+            "params": {
+              "max_rings": {
+                "type": "Int",
+                "value": 16
+              }
+            },
+            "title": "Replicate Polyline Rings"
+          },
+          {
+            "id": 31,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 32,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 23,
+            "fromPort": "out",
+            "toNode": 24,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 25,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "offset"
+          },
+          {
+            "fromNode": 26,
+            "fromPort": "out",
+            "toNode": 27,
+            "toPort": "scales"
+          },
+          {
+            "fromNode": 27,
+            "fromPort": "outline",
+            "toNode": 6,
+            "toPort": "points"
+          },
+          {
+            "fromNode": 27,
+            "fromPort": "edges",
+            "toNode": 6,
+            "toPort": "edges"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "a",
+            "toNode": 23,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "expansion",
+            "toNode": 24,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "edges",
+            "toNode": 27,
+            "toPort": "edges"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "outline",
+            "toNode": 27,
+            "toPort": "outline"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "color",
+            "toNode": 32,
+            "toPort": "finalImage"
+          }
+        ],
+        "tint": [
+          0.6,
+          0.2,
+          0.8,
+          1.0
+        ]
       }
-    },
-    {
-      "id": 4, "typeId": "node.math", "handle": "spawn_gate", "nodeId": "spawn_gate",
-      "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.0 },
-        "op": { "type": "Enum",  "value": 2 }
-      }
-    },
-    {
-      "id": 5, "typeId": "node.math", "handle": "expansion", "nodeId": "expansion",
-      "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.0 },
-        "op": { "type": "Enum",  "value": 0 }
-      }
-    },
-
-    {
-      "id": 6, "typeId": "node.render_lines", "handle": "render", "nodeId": "render",
-      "params": {
-        "edge_thickness":    { "type": "Float", "value": 0.008 },
-        "closed_loop":       { "type": "Bool",  "value": false },
-        "show_verts":        { "type": "Bool",  "value": false },
-        "vert_size":         { "type": "Float", "value": 1.0   },
-        "animate":           { "type": "Bool",  "value": false },
-        "speed":             { "type": "Float", "value": 1.0   },
-        "window":            { "type": "Float", "value": 0.1   },
-        "beat_flash_amount": { "type": "Float", "value": 0.0   },
-        "color_r":           { "type": "Float", "value": 1.0   },
-        "color_g":           { "type": "Float", "value": 1.0   },
-        "color_b":           { "type": "Float", "value": 1.0   },
-        "color_a":           { "type": "Float", "value": 1.0   }
-      }
-    },
-    { "id": 7, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" },
-
-    {
-      "id": 8, "typeId": "node.clip_trigger_index", "handle": "shape_cycle_idx", "nodeId": "shape_cycle_idx",
-      "params": { "modulus": { "type": "Int", "value": 6 } }
-    },
-    {
-      "id": 9, "typeId": "node.mux_scalar", "handle": "mux_cycle_sides", "nodeId": "mux_cycle_sides",
-      "params": {
-        "selector": { "type": "Float", "value": 0.0 },
-        "in_0":     { "type": "Float", "value": 3.0  },
-        "in_1":     { "type": "Float", "value": 4.0  },
-        "in_2":     { "type": "Float", "value": 5.0  },
-        "in_3":     { "type": "Float", "value": 6.0  },
-        "in_4":     { "type": "Float", "value": 8.0  },
-        "in_5":     { "type": "Float", "value": 12.0 }
-      }
-    },
-
-    {
-      "id": 10, "typeId": "node.mux_scalar", "handle": "mode_shape_enable", "nodeId": "mode_shape_enable",
-      "params": {
-        "selector": { "type": "Float", "value": 2.0 },
-        "in_0":     { "type": "Float", "value": 1.0 },
-        "in_1":     { "type": "Float", "value": 0.0 },
-        "in_2":     { "type": "Float", "value": 1.0 }
-      }
-    },
-    {
-      "id": 11, "typeId": "node.mux_scalar", "handle": "mode_spawn_enable", "nodeId": "mode_spawn_enable",
-      "params": {
-        "selector": { "type": "Float", "value": 2.0 },
-        "in_0":     { "type": "Float", "value": 0.0 },
-        "in_1":     { "type": "Float", "value": 1.0 },
-        "in_2":     { "type": "Float", "value": 1.0 }
-      }
-    },
-
-    {
-      "id": 12, "typeId": "node.math", "handle": "shape_active", "nodeId": "shape_active",
-      "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.0 },
-        "op": { "type": "Enum",  "value": 2 }
-      }
-    },
-    {
-      "id": 13, "typeId": "node.math", "handle": "spawn_active", "nodeId": "spawn_active",
-      "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.0 },
-        "op": { "type": "Enum",  "value": 2 }
-      }
-    },
-
-    {
-      "id": 14, "typeId": "node.mux_scalar", "handle": "mux_final_n_sides", "nodeId": "mux_final_n_sides",
-      "params": { "selector": { "type": "Float", "value": 0.0 } }
-    },
-
-    {
-      "id": 15, "typeId": "node.generate_range", "handle": "angles", "nodeId": "angles",
-      "params": {
-        "start":         { "type": "Float", "value": 0.0 },
-        "end":           { "type": "Float", "value": 6.28318530718 },
-        "max_capacity":  { "type": "Int",   "value": 64 },
-        "end_inclusive": { "type": "Bool",  "value": false }
-      }
-    },
-    {
-      "id": 16, "typeId": "node.array_math", "handle": "cos_t", "nodeId": "cos_t",
-      "params": { "op": { "type": "Enum", "value": 12 } }
-    },
-    {
-      "id": 17, "typeId": "node.array_math", "handle": "cos_x", "nodeId": "cos_x",
-      "params": {
-        "op":     { "type": "Enum",  "value": 6 },
-        "scale":  { "type": "Float", "value": 1.0 },
-        "offset": { "type": "Float", "value": 0.0 }
-      }
-    },
-    {
-      "id": 18, "typeId": "node.array_math", "handle": "sin_t", "nodeId": "sin_t",
-      "params": { "op": { "type": "Enum", "value": 11 } }
-    },
-    {
-      "id": 19, "typeId": "node.array_math", "handle": "sin_y", "nodeId": "sin_y",
-      "params": {
-        "op":     { "type": "Enum",  "value": 6 },
-        "scale":  { "type": "Float", "value": 1.0 },
-        "offset": { "type": "Float", "value": 0.0 }
-      }
-    },
-    {
-      "id": 20, "typeId": "node.pack_curve_xy", "handle": "pack", "nodeId": "pack",
-      "params": { "scale": { "type": "Float", "value": 4.0 } }
-    },
-    {
-      "id": 21, "typeId": "node.consecutive_edges", "handle": "edges_topology", "nodeId": "edges_topology",
-      "params": {
-        "count":        { "type": "Int",  "value": 4 },
-        "closed":       { "type": "Bool", "value": true },
-        "max_capacity": { "type": "Int",  "value": 64 }
-      }
-    },
-
-    {
-      "id": 22, "typeId": "node.generate_range", "handle": "i_array", "nodeId": "i_array",
-      "params": {
-        "start":         { "type": "Float", "value": 0.0 },
-        "end":           { "type": "Float", "value": 15.0 },
-        "max_capacity":  { "type": "Int",   "value": 16 },
-        "end_inclusive": { "type": "Bool",  "value": true }
-      }
-    },
-    {
-      "id": 23, "typeId": "node.math", "handle": "floor_exp", "nodeId": "floor_exp",
-      "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.0 },
-        "op": { "type": "Enum",  "value": 10 }
-      }
-    },
-    {
-      "id": 24, "typeId": "node.math", "handle": "frac_exp", "nodeId": "frac_exp",
-      "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.0 },
-        "op": { "type": "Enum",  "value": 1 }
-      }
-    },
-    {
-      "id": 25, "typeId": "node.math", "handle": "frac_offset", "nodeId": "frac_offset",
-      "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.12 },
-        "op": { "type": "Enum",  "value": 2 }
-      }
-    },
-    {
-      "id": 26, "typeId": "node.array_math", "handle": "scales", "nodeId": "scales",
-      "params": {
-        "op":     { "type": "Enum",  "value": 6 },
-        "scale":  { "type": "Float", "value": 0.12 },
-        "offset": { "type": "Float", "value": 0.0 }
-      }
-    },
-    {
-      "id": 27, "typeId": "node.array_replicate_polyline_rings", "handle": "stack", "nodeId": "stack",
-      "params": { "max_rings": { "type": "Int", "value": 16 } }
     }
   ],
   "wires": [
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 8,  "toPort": "trigger_count" },
-    { "fromNode": 8,  "fromPort": "out",           "toNode": 9,  "toPort": "selector" },
-
-    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "b" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "b" },
-
-    { "fromNode": 12, "fromPort": "out", "toNode": 14, "toPort": "selector" },
-    { "fromNode": 1,  "fromPort": "out", "toNode": 14, "toPort": "in_0" },
-    { "fromNode": 9,  "fromPort": "out", "toNode": 14, "toPort": "in_1" },
-
-    { "fromNode": 0,  "fromPort": "beat", "toNode": 3, "toPort": "a" },
-    { "fromNode": 2,  "fromPort": "out",  "toNode": 3, "toPort": "b" },
-
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 4, "toPort": "a" },
-    { "fromNode": 13, "fromPort": "out",           "toNode": 4, "toPort": "b" },
-
-    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "a" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "b" },
-
-    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "active_count" },
-
-    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "a" },
-    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "a" },
-
-    { "fromNode": 15, "fromPort": "out", "toNode": 18, "toPort": "a" },
-    { "fromNode": 18, "fromPort": "out", "toNode": 19, "toPort": "a" },
-
-    { "fromNode": 17, "fromPort": "out", "toNode": 20, "toPort": "x" },
-    { "fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "y" },
-
-    { "fromNode": 14, "fromPort": "out", "toNode": 21, "toPort": "count" },
-
-    { "fromNode": 5,  "fromPort": "out", "toNode": 23, "toPort": "a" },
-    { "fromNode": 5,  "fromPort": "out", "toNode": 24, "toPort": "a" },
-    { "fromNode": 23, "fromPort": "out", "toNode": 24, "toPort": "b" },
-
-    { "fromNode": 24, "fromPort": "out", "toNode": 25, "toPort": "a" },
-
-    { "fromNode": 22, "fromPort": "out", "toNode": 26, "toPort": "a"      },
-    { "fromNode": 25, "fromPort": "out", "toNode": 26, "toPort": "offset" },
-
-    { "fromNode": 20, "fromPort": "out",   "toNode": 27, "toPort": "outline" },
-    { "fromNode": 21, "fromPort": "edges", "toNode": 27, "toPort": "edges"   },
-    { "fromNode": 26, "fromPort": "out",   "toNode": 27, "toPort": "scales"  },
-
-    { "fromNode": 27, "fromPort": "outline", "toNode": 6, "toPort": "points" },
-    { "fromNode": 27, "fromPort": "edges",   "toNode": 6, "toPort": "edges"  },
-
-    { "fromNode": 6, "fromPort": "color", "toNode": 7, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 28,
+      "toPort": "triggerCount"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "shapeActive",
+      "toNode": 14,
+      "toPort": "selector"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "in_0"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "in_1"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "beat",
+      "toNode": 3,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 3,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 4,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "spawnActive",
+      "toNode": 4,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 29,
+      "toPort": "sideCount"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 29,
+      "toPort": "sideCount2"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "expansion"
+    },
+    {
+      "fromNode": 29,
+      "fromPort": "outlinePoints",
+      "toNode": 30,
+      "toPort": "outline"
+    },
+    {
+      "fromNode": 29,
+      "fromPort": "edgeTopology",
+      "toNode": 30,
+      "toPort": "edges"
+    },
+    {
+      "fromNode": 30,
+      "fromPort": "finalImage",
+      "toNode": 7,
+      "toPort": "in"
+    }
   ]
 }

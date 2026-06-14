@@ -1,500 +1,3352 @@
 {
   "version": 2,
   "name": "Particle Text",
-  "description": "Particle Text — text baked into FluidSim2D's force field as a curl-rotated gradient. Same atom-decomposed base as FluidSim2D (`seed_particles` + wgsl_compute pattern + `array_feedback` particle loop + per-particle `sample / simplex_noise_force / anti_clump / euler / wrap / apply_radial_burst` integrator + texture-domain `gradient_central_diff / scale_offset / rotate_vec2_by_angle` force field), with one extra branch grafted in. Density-adaptive simplex noise now runs per-particle inside the force chain rather than per-pixel.\n\nText-force branch added in parallel to the velocity field: `node.render_text → gaussian_blur H+V (softens the gradient so it isn't single-texel spiky) → gradient_central_diff (R channel, texel-scale, clamp wrap) → rotate_vec2_by_angle (angle=PI/2: perpendicular curl-along-edge flow, divergence-free) → gain (driven by outer-card text_strength)`. That contribution is summed into the velocity field via `mix(Add)` so the per-particle sampler reads field + text in one composed texture; noise is then added per-particle downstream.\n\nOuter-card params on top of the FluidSim2D surface: `text` (string), `fontFamily` (string), `text_size` (font height as a fraction of output height, 0.05..1.0, default 0.25), `text_strength` (gain on the text-derived force, 0..20, default 4.0).\n\nDeparture from legacy ParticleText visual: particles never \"form the text and dissolve\" — the text is a persistent attractor / repeller depending on local flow direction. Best results with text_strength 3-8 and text_size 0.3-0.6 against FluidSim2D defaults. Increase `feather` for chunkier glyph trails; increase `count_m` to fill the text shape more densely.",
+  "description": "Particle Text renders particle dynamics driven by both a fluid-density force field and a procedural text attractor. The graph is organized into named stages so you can see the entire signal flow at a glance.\n\nThe spine is the particle feedback loop. Particle State (array_feedback) holds the previous frame's particles and is updated each frame: Spawn Particles seeds new particles on each clip trigger, Particle State stores them, Move Particles integrates them forward through both forces and sends the result back to Particle State. Render Density splats those particles into a density image.\n\nTwo parallel force sources feed the integrator. Density Field takes the rendered density, computes a gradient, scales and rotates it into a curl-flow (divergence-free), and blurs it. Text Force renders the text string, blurs it softly, computes a perpendicular gradient, and scales it by the text_strength slider. Both fields are summed via field_plus_text and sampled per-particle.\n\nResolution Scaling derives all the resolution-independent numbers the particle pipeline needs: particle count, scatter energy, blur radii, and display intensity, all keyed to canvas size. Clip Triggers controls the behavioral triggers: the gate and envelope, the mode selector, and the four behaviors that can fire on a clip trigger event (turbulence burst, rotation flip, flow reversal, pattern reset, inject burst).\n\nDisplay zooms and tone-maps the final density to the screen. Everything flattens to byte-identical behavior at load, and card bindings reach every inner node by its stable nodeId regardless of grouping depth.",
   "presetMetadata": {
     "id": "ParticleText",
     "displayName": "Particle Text",
     "category": "Generator",
     "oscPrefix": "particleText",
     "available": true,
+    "isLineBased": false,
     "params": [
-      { "id": "flow",              "name": "Flow",              "min": -0.1,  "max": -0.001, "defaultValue": -0.01,  "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
-      { "id": "feather",           "name": "Feather",           "min": 4.0,   "max": 60.0,   "defaultValue": 20.0,   "wholeNumbers": true,  "isToggle": false, "formatString": "F0" },
-      { "id": "curl",              "name": "Curl",              "min": 30.0,  "max": 90.0,   "defaultValue": 85.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F0" },
-      { "id": "turbulence",        "name": "Turbulence",        "min": 0.0,   "max": 0.01,   "defaultValue": 0.001,  "wholeNumbers": false, "isToggle": false, "formatString": "F4" },
-      { "id": "speed",             "name": "Speed",             "min": 0.1,   "max": 3.0,    "defaultValue": 1.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
-      { "id": "contrast",          "name": "Contrast",          "min": 1.0,   "max": 8.0,    "defaultValue": 3.5,    "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
-      { "id": "scale",             "name": "Scale",             "min": 0.25,  "max": 3.0,    "defaultValue": 1.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "count_m",           "name": "Particle Count",    "min": 0.1,   "max": 8.0,    "defaultValue": 2.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
-      { "id": "clip_trigger",      "name": "Clip Trigger",      "min": 0.0,   "max": 1.0,    "defaultValue": 0.0,    "wholeNumbers": true,  "isToggle": true,  "formatString": "F0" },
-      { "id": "clip_trigger_mode", "name": "Clip Trigger Mode", "min": 0.0,   "max": 4.0,    "defaultValue": 0.0,    "wholeNumbers": true,  "isToggle": false, "valueLabels": ["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"] },
-      { "id": "anti_clump",        "name": "Anti-Clump",        "min": 0.0,   "max": 0.05,   "defaultValue": 0.01666,"wholeNumbers": false, "isToggle": false, "formatString": "F4" },
-      { "id": "force",             "name": "Force",             "min": 0.0,   "max": 0.1,    "defaultValue": 0.005,  "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
-      { "id": "fill",              "name": "Fill",              "min": 0.1,   "max": 1.0,    "defaultValue": 1.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "text_size",         "name": "Text Size",         "min": 0.05,  "max": 1.0,    "defaultValue": 0.25,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "text_strength",     "name": "Text Strength",     "min": 0.0,   "max": 20.0,   "defaultValue": 4.0,    "wholeNumbers": false, "isToggle": false, "formatString": "F1" }
-    ],
-    "stringParams": [
-      { "id": "text",       "name": "Text", "defaultValue": "HELLO" },
-      { "id": "fontFamily", "name": "Font", "defaultValue": "" }
+      {
+        "id": "flow",
+        "name": "Flow",
+        "min": -0.1,
+        "max": -0.001,
+        "defaultValue": -0.01,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "feather",
+        "name": "Feather",
+        "min": 4.0,
+        "max": 60.0,
+        "defaultValue": 20.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "curl",
+        "name": "Curl",
+        "min": 30.0,
+        "max": 90.0,
+        "defaultValue": 85.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "turbulence",
+        "name": "Turbulence",
+        "min": 0.0,
+        "max": 0.01,
+        "defaultValue": 0.001,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F4"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.1,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "contrast",
+        "name": "Contrast",
+        "min": 1.0,
+        "max": 8.0,
+        "defaultValue": 3.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "scale",
+        "name": "Scale",
+        "min": 0.25,
+        "max": 3.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "count_m",
+        "name": "Particle Count",
+        "min": 0.1,
+        "max": 8.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "clip_trigger",
+        "name": "Clip Trigger",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": true,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "clip_trigger_mode",
+        "name": "Clip Trigger Mode",
+        "min": 0.0,
+        "max": 4.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "isTrigger": false,
+        "valueLabels": [
+          "Turbulence",
+          "Rot Flip",
+          "Flow Inv",
+          "Pattern",
+          "Inject"
+        ]
+      },
+      {
+        "id": "anti_clump",
+        "name": "Anti-Clump",
+        "min": 0.0,
+        "max": 0.05,
+        "defaultValue": 0.01666,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F4"
+      },
+      {
+        "id": "force",
+        "name": "Force",
+        "min": 0.0,
+        "max": 0.1,
+        "defaultValue": 0.005,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "fill",
+        "name": "Fill",
+        "min": 0.1,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "text_size",
+        "name": "Text Size",
+        "min": 0.05,
+        "max": 1.0,
+        "defaultValue": 0.25,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "text_strength",
+        "name": "Text Strength",
+        "min": 0.0,
+        "max": 20.0,
+        "defaultValue": 4.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1"
+      }
     ],
     "bindings": [
-      { "id": "speed",             "label": "Speed",        "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "euler", "param": "speed" },
-        "convert": { "type": "Float" } },
-
-      { "id": "flow",              "label": "Flow",         "defaultValue": -0.01,
-        "target": { "kind": "node", "nodeId": "slope_final", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "feather",           "label": "Feather",      "defaultValue": 20.0,
-        "target": { "kind": "node", "nodeId": "blur_radius_x_width", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "feather",           "label": "Feather",      "defaultValue": 20.0,
-        "target": { "kind": "node", "nodeId": "blur_radius_x_height", "param": "b" },
-        "convert": { "type": "Float" } },
-
-      { "id": "curl",              "label": "Curl",         "defaultValue": 85.0,
-        "target": { "kind": "node", "nodeId": "rotation_rad_base", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "turbulence",        "label": "Turbulence",   "defaultValue": 0.001,
-        "target": { "kind": "node", "nodeId": "turbulence_base", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "contrast",          "label": "Contrast",     "defaultValue": 3.5,
-        "target": { "kind": "node", "nodeId": "display_tone", "param": "contrast" },
-        "convert": { "type": "Float" } },
-
-      { "id": "scale",             "label": "Scale",        "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "uv_scale_inv", "param": "b" },
-        "convert": { "type": "Float" } },
-
-      { "id": "count_m",           "label": "Particle Count", "defaultValue": 2.0,
-        "target": { "kind": "node", "nodeId": "particle_count_calc", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "trig_gate_env", "param": "enable" },
-        "convert": { "type": "BoolThreshold" } },
-      { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "mode3_gate", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "clip_trigger",      "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "mode4_gate", "param": "b" },
-        "convert": { "type": "Float" } },
-
-      { "id": "clip_trigger_mode", "label": "Trigger Mode", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "mode_value", "param": "value" },
-        "convert": { "type": "Float" } },
-
-      { "id": "anti_clump",        "label": "Anti-Clump",   "defaultValue": 0.01666,
-        "target": { "kind": "node", "nodeId": "anti_clump", "param": "strength" },
-        "convert": { "type": "Float" } },
-
-      { "id": "force",             "label": "Force",        "defaultValue": 0.005,
-        "target": { "kind": "node", "nodeId": "inject_force_gated", "param": "b" },
-        "convert": { "type": "Float" } },
-
-      { "id": "fill",              "label": "Fill",         "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "active_count_calc", "param": "b" },
-        "convert": { "type": "Float" } },
-
-      { "id": "text_size",         "label": "Text Size",     "defaultValue": 0.25,
-        "target": { "kind": "node", "nodeId": "text_render", "param": "size" },
-        "convert": { "type": "Float" } },
-
-      { "id": "text_strength",     "label": "Text Strength", "defaultValue": 4.0,
-        "target": { "kind": "node", "nodeId": "text_force_gain", "param": "gain" },
-        "convert": { "type": "Float" } }
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "euler",
+          "param": "speed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "flow",
+        "label": "Flow",
+        "defaultValue": -0.01,
+        "target": {
+          "kind": "node",
+          "nodeId": "slope_final",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "feather",
+        "label": "Feather",
+        "defaultValue": 20.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "blur_radius_x_width",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "feather",
+        "label": "Feather",
+        "defaultValue": 20.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "blur_radius_x_height",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "curl",
+        "label": "Curl",
+        "defaultValue": 85.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "rotation_rad_base",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "turbulence",
+        "label": "Turbulence",
+        "defaultValue": 0.001,
+        "target": {
+          "kind": "node",
+          "nodeId": "turbulence_base",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "contrast",
+        "label": "Contrast",
+        "defaultValue": 3.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "display_tone",
+          "param": "contrast"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "uv_scale_inv",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "count_m",
+        "label": "Particle Count",
+        "defaultValue": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "particle_count_calc",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "trig_gate_env",
+          "param": "enable"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mode3_gate",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mode4_gate",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "clip_trigger_mode",
+        "label": "Trigger Mode",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mode_value",
+          "param": "value"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "anti_clump",
+        "label": "Anti-Clump",
+        "defaultValue": 0.01666,
+        "target": {
+          "kind": "node",
+          "nodeId": "anti_clump",
+          "param": "strength"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "force",
+        "label": "Force",
+        "defaultValue": 0.005,
+        "target": {
+          "kind": "node",
+          "nodeId": "inject_force_gated",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "fill",
+        "label": "Fill",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "active_count_calc",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "text_size",
+        "label": "Text Size",
+        "defaultValue": 0.25,
+        "target": {
+          "kind": "node",
+          "nodeId": "text_render",
+          "param": "size"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "text_strength",
+        "label": "Text Strength",
+        "defaultValue": 4.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "text_force_gain",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    },
+    "stringParams": [
+      {
+        "id": "text",
+        "name": "Text",
+        "defaultValue": "HELLO",
+        "isFilePicker": false
+      },
+      {
+        "id": "fontFamily",
+        "name": "Font",
+        "defaultValue": "",
+        "isFilePicker": false
+      }
     ],
     "stringBindings": [
-      { "id": "text",       "label": "Text", "defaultValue": "HELLO",
-        "target": { "kind": "node", "nodeId": "text_render", "param": "text" } },
-      { "id": "fontFamily", "label": "Font", "defaultValue": "",
-        "target": { "kind": "node", "nodeId": "text_render", "param": "fontFamily" } }
-    ],
-    "skipMode": { "kind": "never" }
+      {
+        "id": "text",
+        "label": "Text",
+        "defaultValue": "HELLO",
+        "target": {
+          "kind": "node",
+          "nodeId": "text_render",
+          "param": "text"
+        }
+      },
+      {
+        "id": "fontFamily",
+        "label": "Font",
+        "defaultValue": "",
+        "target": {
+          "kind": "node",
+          "nodeId": "text_render",
+          "param": "fontFamily"
+        }
+      }
+    ]
   },
   "nodes": [
-    { "id": 0,  "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
-    { "id": 14, "typeId": "system.final_output",    "handle": "final_output", "nodeId": "final_output" },
-
-    { "id": 81, "typeId": "node.seed_particles", "handle": "seed_alloc", "nodeId": "seed_alloc",
-      "params": {
-        "max_capacity": { "type": "Int",   "value": 8000000 },
-        "active_count": { "type": "Int",   "value": 2000000 },
-        "seed_offset":  { "type": "Float", "value": 0.0 },
-        "seed_mode":    { "type": "Enum",  "value": 1 }
-      } },
-
-    { "id": 80, "typeId": "node.wgsl_compute", "handle": "seed_pattern", "nodeId": "seed_pattern",
-      "wgslSource": "// @reset_gated\n// FluidSim2D seed pattern — open family.\n// Writes particle positions directly into the aliased Array<Particle>\n// based on `pattern` (0-6). Bit-equivalent to the legacy fluid_seed.wgsl.\n// Adding an 8th pattern: append a `case` to the switch.\n//\n// Patterns (legacy):\n//   0 — CLT Gaussian center cluster (spread 0.052)\n//   1 — Horizontal lines (6 lines)\n//   2 — Vertical lines (6 lines)\n//   3 — Concentric rings (3 rings, radii 0.1/0.2/0.3)\n//   4 — Diagonal cross\n//   5 — Archimedean spiral (4 turns, max r=0.4)\n//   6 — Edge ring (r=0.45)\n//\n// For i >= active_count: held dead at the centre nozzle (life=0).\n// The downstream array_feedback copies this seed buffer into its\n// state.prev on first allocation and on reset_trigger edge.\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life: f32,\n    age: f32,\n    color: vec4<f32>,\n};\n\nstruct U {\n    pattern: u32,\n    trigger_count: u32,\n    active_count: u32,\n    _pad0: u32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read_write> particles: array<Particle>;\n\nconst TAU: f32 = 6.28318530718;\n\nfn wang_hash(seed_in: u32) -> u32 {\n    var seed = seed_in;\n    seed = (seed ^ 61u) ^ (seed >> 16u);\n    seed = seed * 9u;\n    seed = seed ^ (seed >> 4u);\n    seed = seed * 0x27d4eb2du;\n    seed = seed ^ (seed >> 15u);\n    return seed;\n}\n\nfn hash_float(seed: u32) -> f32 {\n    return f32(wang_hash(seed)) / 4294967296.0;\n}\n\nfn hash_float2(seed: u32) -> vec2<f32> {\n    let h1 = wang_hash(seed);\n    let h2 = wang_hash(h1);\n    return vec2<f32>(f32(h1), f32(h2)) / 4294967296.0;\n}\n\n@compute @workgroup_size(256, 1, 1)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let i = id.x;\n    if i >= arrayLength(&particles) {\n        return;\n    }\n\n    var p: Particle;\n    p.velocity = vec3<f32>(0.0);\n    p.age = -1.0;\n    p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);\n\n    // Excess particles: held dead at the centre nozzle, slight\n    // random radial scatter so they don't all sit on one pixel.\n    if i >= u.active_count {\n        let spread_hash_a = f32(wang_hash(i * 1664525u + 12345u)) / 4294967296.0;\n        let spread_hash_b = f32(wang_hash(wang_hash(i * 1664525u + 12345u))) / 4294967296.0;\n        let spread_r = spread_hash_a * 0.05;\n        let spread_a = spread_hash_b * 6.28318;\n        p.position = vec3<f32>(\n            0.5 + cos(spread_a) * spread_r,\n            0.5 + sin(spread_a) * spread_r,\n            0.0,\n        );\n        p.life = 0.0;\n        particles[i] = p;\n        return;\n    }\n\n    let seed = i * 1664525u + u.trigger_count * 747796405u;\n    var x: f32;\n    var y: f32;\n\n    switch u.pattern {\n        case 0u: {\n            // CLT Gaussian centre cluster — sum of 4 uniform hashes.\n            var sx = 0.0;\n            var sy = 0.0;\n            var s = seed;\n            for (var j = 0; j < 4; j++) {\n                let h = hash_float2(s);\n                sx += h.x;\n                sy += h.y;\n                s = wang_hash(s);\n            }\n            x = 0.5 + (sx - 2.0) * 0.052;\n            y = 0.5 + (sy - 2.0) * 0.052;\n        }\n        case 1u: {\n            let line_idx = i % 6u;\n            x = hash_float(seed);\n            y = (f32(line_idx) + 0.5) / 6.0;\n        }\n        case 2u: {\n            let line_idx = i % 6u;\n            x = (f32(line_idx) + 0.5) / 6.0;\n            y = hash_float(seed);\n        }\n        case 3u: {\n            let ring_idx = i % 3u;\n            let angle = hash_float(seed) * TAU;\n            let radius = 0.1 + f32(ring_idx) * 0.1;\n            x = 0.5 + cos(angle) * radius;\n            y = 0.5 + sin(angle) * radius;\n        }\n        case 4u: {\n            let t = hash_float(seed);\n            let spread = hash_float(seed + 1u) * 0.03;\n            if (i & 1u) != 0u {\n                x = t + spread;\n                y = t - spread;\n            } else {\n                x = t + spread;\n                y = (1.0 - t) - spread;\n            }\n        }\n        case 5u: {\n            let norm = f32(i) / f32(u.active_count);\n            let angle = norm * 4.0 * TAU;\n            let radius = norm * 0.4;\n            let spread = hash_float(seed) * 0.015;\n            x = 0.5 + cos(angle) * (radius + spread);\n            y = 0.5 + sin(angle) * (radius + spread);\n        }\n        case 6u: {\n            let angle = hash_float(seed) * TAU;\n            let spread = (hash_float(seed + 1u) - 0.5) * 0.03;\n            x = 0.5 + cos(angle) * (0.45 + spread);\n            y = 0.5 + sin(angle) * (0.45 + spread);\n        }\n        default: {\n            let pos = hash_float2(seed);\n            x = pos.x;\n            y = pos.y;\n        }\n    }\n\n    p.position = vec3<f32>(fract(x + 1.0), fract(y + 1.0), 0.0);\n    p.life = 1.0;\n    particles[i] = p;\n}\n",
-      "params": {
-        "pattern":       { "type": "Float", "value": 3.0 },
-        "trigger_count": { "type": "Float", "value": 42.0 },
-        "active_count":  { "type": "Float", "value": 2000000.0 }
-      } },
-
-    { "id": 82, "typeId": "node.array_feedback", "handle": "particles_feedback", "nodeId": "particles_feedback",
-      "params": {} },
-
-    { "id": 83, "typeId": "node.sample_texture_at_particles", "handle": "sample_forces", "nodeId": "sample_forces",
-      "params": { "active_count": { "type": "Int", "value": 2000000 } } },
-
-    { "id": 84, "typeId": "node.anti_clump_particles", "handle": "anti_clump", "nodeId": "anti_clump",
-      "params": {
-        "strength":     { "type": "Float", "value": 0.01666 },
-        "active_count": { "type": "Int",   "value": 2000000 }
-      } },
-
-    { "id": 85, "typeId": "node.euler_step_particles", "handle": "euler", "nodeId": "euler",
-      "params": {
-        "active_count": { "type": "Int",   "value": 2000000 },
-        "speed":        { "type": "Float", "value": 1.0 }
-      } },
-
-    { "id": 86, "typeId": "node.wrap_particles_torus", "handle": "wrap", "nodeId": "wrap",
-      "params": { "active_count": { "type": "Int", "value": 2000000 } } },
-
-    { "id": 4,  "typeId": "node.scatter_particles", "handle": "splat", "nodeId": "splat",
-      "params": {
-        "active_count":  { "type": "Int", "value": 2000000 },
-        "scaled_energy": { "type": "Int", "value": 4096 },
-        "boundary":      { "type": "Enum", "value": 0 }
-      } },
-
-    { "id": 5,  "typeId": "node.resolve_accumulator", "handle": "resolve", "nodeId": "resolve",
-      "params": { "fixed_point_scale": { "type": "Float", "value": 4096.0 } } },
-
-    { "id": 6,  "typeId": "node.downsample", "handle": "density_downsample", "nodeId": "density_downsample",
-      "params": { "factor": { "type": "Enum", "value": 0 } } },
-
-    { "id": 7,  "typeId": "node.gaussian_blur", "handle": "density_blur_h", "nodeId": "density_blur_h",
-      "params": { "axis": { "type": "Enum", "value": 0 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 30.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
-
-    { "id": 8,  "typeId": "node.gaussian_blur", "handle": "density_blur_v", "nodeId": "density_blur_v",
-      "params": { "axis": { "type": "Enum", "value": 1 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 17.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
-
-    { "id": 87, "typeId": "node.gradient_central_diff", "handle": "grad", "nodeId": "grad",
-      "params": {
-        "channel":    { "type": "Enum", "value": 0 },
-        "scale_mode": { "type": "Enum", "value": 1 },
-        "wrap_mode":  { "type": "Enum", "value": 1 }
-      } },
-
-    { "id": 88, "typeId": "node.scale_offset_texture", "handle": "grad_scaled", "nodeId": "grad_scaled",
-      "params": { "scale": { "type": "Float", "value": -0.01 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 89, "typeId": "node.rotate_vec2_by_angle", "handle": "grad_rotate", "nodeId": "grad_rotate",
-      "params": { "angle": { "type": "Float", "value": 1.4835 } } },
-
-    { "id": 10, "typeId": "node.gaussian_blur", "handle": "field_blur_h", "nodeId": "field_blur_h",
-      "params": { "axis": { "type": "Enum", "value": 0 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 30.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
-
-    { "id": 11, "typeId": "node.gaussian_blur", "handle": "field_blur_v", "nodeId": "field_blur_v",
-      "params": { "axis": { "type": "Enum", "value": 1 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 17.0 }, "address_mode": { "type": "Enum", "value": 1 } } },
-
-    { "id": 91, "typeId": "node.apply_radial_burst_to_particles", "handle": "apply_inject", "nodeId": "apply_inject",
-      "params": {
-        "point_x":      { "type": "Float", "value": 0.5 },
-        "point_y":      { "type": "Float", "value": 0.5 },
-        "amplitude":    { "type": "Float", "value": 0.0 },
-        "envelope":     { "type": "Float", "value": 0.0 },
-        "radius":       { "type": "Float", "value": 0.25 },
-        "active_count": { "type": "Int",   "value": 2000000 }
-      } },
-
-    { "id": 130, "typeId": "node.simplex_noise_force_at_particles", "handle": "noise_force", "nodeId": "noise_force",
-      "params": {
-        "amplitude":      { "type": "Float", "value": 0.001 },
-        "modulator_gain": { "type": "Float", "value": 20.0 },
-        "z":              { "type": "Float", "value": 0.0 },
-        "noise_scale":    { "type": "Float", "value": 2.0 },
-        "active_count":   { "type": "Int",   "value": 2000000 }
-      } },
-
-    { "id": 12, "typeId": "node.reinhard_tone_map", "handle": "display_tone", "nodeId": "display_tone",
-      "params": {
-        "intensity": { "type": "Float", "value": 3.0 },
-        "contrast":  { "type": "Float", "value": 3.0 }
-      } },
-
-    { "id": 13, "typeId": "node.affine_transform", "handle": "display_zoom", "nodeId": "display_zoom",
-      "params": {
-        "translate_x": { "type": "Float", "value": 0.0 },
-        "translate_y": { "type": "Float", "value": 0.0 },
-        "scale":       { "type": "Float", "value": 1.0 },
-        "rotation":    { "type": "Float", "value": 0.0 }
-      } },
-
-    { "id": 20, "typeId": "node.affine_scalar", "handle": "particle_count_calc", "nodeId": "particle_count_calc",
-      "params": { "a": { "type": "Float", "value": 2.0 }, "scale": { "type": "Float", "value": 1000000.0 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 21, "typeId": "node.math", "handle": "active_count_calc", "nodeId": "active_count_calc",
-      "params": { "a": { "type": "Float", "value": 2000000.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 23, "typeId": "node.affine_scalar", "handle": "scaled_energy_calc", "nodeId": "scaled_energy_calc",
-      "params": { "a": { "type": "Float", "value": 2000000.0 }, "scale": { "type": "Float", "value": 0.000004096 }, "offset": { "type": "Float", "value": 0.5 } } },
-
-    { "id": 24, "typeId": "node.affine_scalar", "handle": "rotation_rad_base", "nodeId": "rotation_rad_base",
-      "params": { "a": { "type": "Float", "value": 85.0 }, "scale": { "type": "Float", "value": 0.017453293 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 25, "typeId": "node.canvas_area_scale", "handle": "area_scale", "nodeId": "area_scale",
-      "params": { "width": { "type": "Float", "value": 1920.0 }, "height": { "type": "Float", "value": 1080.0 }, "reference_area": { "type": "Float", "value": 2073600.0 }, "min_width": { "type": "Float", "value": 640.0 }, "min_height": { "type": "Float", "value": 360.0 } } },
-
-    { "id": 26, "typeId": "node.affine_scalar", "handle": "intensity_calc", "nodeId": "intensity_calc",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "scale": { "type": "Float", "value": 3.0 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 27, "typeId": "node.math", "handle": "uv_scale_inv", "nodeId": "uv_scale_inv",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 3 } } },
-
-    { "id": 60, "typeId": "node.math", "handle": "blur_radius_x_width", "nodeId": "blur_radius_x_width",
-      "params": { "a": { "type": "Float", "value": 1920.0 }, "b": { "type": "Float", "value": 20.0 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 61, "typeId": "node.affine_scalar", "handle": "blur_h_radius_final", "nodeId": "blur_h_radius_final",
-      "params": { "a": { "type": "Float", "value": 38400.0 }, "scale": { "type": "Float", "value": 0.00078125 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 62, "typeId": "node.math", "handle": "blur_radius_x_height", "nodeId": "blur_radius_x_height",
-      "params": { "a": { "type": "Float", "value": 1080.0 }, "b": { "type": "Float", "value": 20.0 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 63, "typeId": "node.affine_scalar", "handle": "blur_v_radius_final", "nodeId": "blur_v_radius_final",
-      "params": { "a": { "type": "Float", "value": 21600.0 }, "scale": { "type": "Float", "value": 0.00078125 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 30, "typeId": "node.trigger_gate", "handle": "trig_gate_env", "nodeId": "trig_gate_env",
-      "params": { "enable": { "type": "Bool", "value": false } } },
-
-    { "id": 31, "typeId": "node.mux_scalar", "handle": "mux_mode3", "nodeId": "mux_mode3",
-      "params": { "selector": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 32, "typeId": "node.math", "handle": "mode3_gate", "nodeId": "mode3_gate",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 33, "typeId": "node.trigger_gate", "handle": "trig_gate_seed", "nodeId": "trig_gate_seed",
-      "params": { "enable": { "type": "Bool", "value": false } } },
-
-    { "id": 34, "typeId": "node.mux_scalar", "handle": "mux_mode4", "nodeId": "mux_mode4",
-      "params": { "selector": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 35, "typeId": "node.math", "handle": "mode4_gate", "nodeId": "mode4_gate",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 36, "typeId": "node.value", "handle": "const_one", "nodeId": "const_one",
-      "params": { "value": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 40, "typeId": "node.envelope_decay", "handle": "env", "nodeId": "env",
-      "params": { "decay_rate": { "type": "Float", "value": 12.0 } } },
-
-    { "id": 41, "typeId": "node.math", "handle": "env_x9", "nodeId": "env_x9",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 9.0 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 42, "typeId": "node.mux_scalar", "handle": "mux_turbulence", "nodeId": "mux_turbulence",
-      "params": { "selector": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 43, "typeId": "node.math", "handle": "turbulence_factor", "nodeId": "turbulence_factor",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 0 } } },
-
-    { "id": 44, "typeId": "node.math", "handle": "turbulence_base", "nodeId": "turbulence_base",
-      "params": { "a": { "type": "Float", "value": 0.001 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 45, "typeId": "node.math", "handle": "env_x_pi", "nodeId": "env_x_pi",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 3.14159265 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 46, "typeId": "node.mux_scalar", "handle": "mux_rotation", "nodeId": "mux_rotation",
-      "params": { "selector": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 47, "typeId": "node.math", "handle": "rotation_final", "nodeId": "rotation_final",
-      "params": { "a": { "type": "Float", "value": 1.4835 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 0 } } },
-
-    { "id": 48, "typeId": "node.math", "handle": "env_x_neg2", "nodeId": "env_x_neg2",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": -2.0 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 49, "typeId": "node.mux_scalar", "handle": "mux_slope", "nodeId": "mux_slope",
-      "params": { "selector": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 50, "typeId": "node.math", "handle": "slope_factor", "nodeId": "slope_factor",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 0.0 }, "op": { "type": "Enum", "value": 0 } } },
-
-    { "id": 51, "typeId": "node.math", "handle": "slope_final", "nodeId": "slope_final",
-      "params": { "a": { "type": "Float", "value": -0.01 }, "b": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 52, "typeId": "node.inject_burst", "handle": "inject", "nodeId": "inject",
-      "params": { "duration": { "type": "Float", "value": 0.5 } } },
-
-    { "id": 53, "typeId": "node.math", "handle": "inject_force_gated", "nodeId": "inject_force_gated",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.005 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 70, "typeId": "node.clip_trigger_cycle", "handle": "pattern_cycle", "nodeId": "pattern_cycle",
-      "params": { "modulus": { "type": "Int", "value": 7 } } },
-
-    { "id": 71, "typeId": "node.value", "handle": "mode_value", "nodeId": "mode_value",
-      "params": { "value": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 72, "typeId": "node.sample_and_hold", "handle": "mode_hold", "nodeId": "mode_hold",
-      "params": {} },
-
-    { "id": 110, "typeId": "node.affine_scalar", "handle": "noise_z", "nodeId": "noise_z",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.1 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 200, "typeId": "node.render_text", "handle": "text_render", "nodeId": "text_render",
-      "params": {
-        "size":           { "type": "Float", "value": 0.25 },
-        "pos_x":          { "type": "Float", "value": 0.0 },
-        "pos_y":          { "type": "Float", "value": 0.0 },
-        "scale":          { "type": "Float", "value": 1.0 },
-        "h_align":        { "type": "Float", "value": 1.0 },
-        "v_align":        { "type": "Float", "value": 1.0 },
-        "letter_spacing": { "type": "Float", "value": 0.0 },
-        "line_spacing":   { "type": "Float", "value": 1.2 }
-      } },
-
-    { "id": 201, "typeId": "node.gaussian_blur", "handle": "text_blur_h", "nodeId": "text_blur_h",
-      "params": { "axis": { "type": "Enum", "value": 0 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 8.0 }, "address_mode": { "type": "Enum", "value": 0 } } },
-
-    { "id": 202, "typeId": "node.gaussian_blur", "handle": "text_blur_v", "nodeId": "text_blur_v",
-      "params": { "axis": { "type": "Enum", "value": 1 }, "radius_mode": { "type": "Enum", "value": 1 }, "radius": { "type": "Float", "value": 8.0 }, "address_mode": { "type": "Enum", "value": 0 } } },
-
-    { "id": 203, "typeId": "node.gradient_central_diff", "handle": "text_grad", "nodeId": "text_grad",
-      "params": {
-        "channel":    { "type": "Enum", "value": 0 },
-        "scale_mode": { "type": "Enum", "value": 0 },
-        "wrap_mode":  { "type": "Enum", "value": 0 }
-      } },
-
-    { "id": 204, "typeId": "node.rotate_vec2_by_angle", "handle": "text_curl", "nodeId": "text_curl",
-      "params": { "angle": { "type": "Float", "value": 1.5707963 } } },
-
-    { "id": 205, "typeId": "node.gain", "handle": "text_force_gain", "nodeId": "text_force_gain",
-      "params": { "gain": { "type": "Float", "value": 4.0 } } },
-
-    { "id": 206, "typeId": "node.mix", "handle": "field_plus_text", "nodeId": "field_plus_text",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 2 } } }
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "title": "Inputs"
+    },
+    {
+      "id": 14,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    },
+    {
+      "id": 82,
+      "nodeId": "particles_feedback",
+      "typeId": "node.array_feedback",
+      "handle": "particles_feedback",
+      "title": "Particle State"
+    },
+    {
+      "id": 207,
+      "nodeId": "Spawn Particles",
+      "typeId": "group",
+      "handle": "Spawn Particles",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "active_count",
+              "portType": ""
+            },
+            {
+              "name": "pattern",
+              "portType": ""
+            },
+            {
+              "name": "reset_trigger",
+              "portType": ""
+            },
+            {
+              "name": "trigger_count",
+              "portType": ""
+            },
+            {
+              "name": "active_count_2",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "particles",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 81,
+            "nodeId": "seed_alloc",
+            "typeId": "node.seed_particles",
+            "handle": "seed_alloc",
+            "params": {
+              "active_count": {
+                "type": "Int",
+                "value": 2000000
+              },
+              "max_capacity": {
+                "type": "Int",
+                "value": 8000000
+              },
+              "seed_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "seed_offset": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Particle Allocator"
+          },
+          {
+            "id": 80,
+            "nodeId": "seed_pattern",
+            "typeId": "node.wgsl_compute",
+            "handle": "seed_pattern",
+            "params": {
+              "active_count": {
+                "type": "Float",
+                "value": 2000000.0
+              },
+              "pattern": {
+                "type": "Float",
+                "value": 3.0
+              },
+              "trigger_count": {
+                "type": "Float",
+                "value": 42.0
+              }
+            },
+            "wgslSource": "// @reset_gated\n// FluidSim2D seed pattern — open family.\n// Writes particle positions directly into the aliased Array<Particle>\n// based on `pattern` (0-6). Bit-equivalent to the legacy fluid_seed.wgsl.\n// Adding an 8th pattern: append a `case` to the switch.\n//\n// Patterns (legacy):\n//   0 — CLT Gaussian center cluster (spread 0.052)\n//   1 — Horizontal lines (6 lines)\n//   2 — Vertical lines (6 lines)\n//   3 — Concentric rings (3 rings, radii 0.1/0.2/0.3)\n//   4 — Diagonal cross\n//   5 — Archimedean spiral (4 turns, max r=0.4)\n//   6 — Edge ring (r=0.45)\n//\n// For i >= active_count: held dead at the centre nozzle (life=0).\n// The downstream array_feedback copies this seed buffer into its\n// state.prev on first allocation and on reset_trigger edge.\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life: f32,\n    age: f32,\n    color: vec4<f32>,\n};\n\nstruct U {\n    pattern: u32,\n    trigger_count: u32,\n    active_count: u32,\n    _pad0: u32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var<storage, read_write> particles: array<Particle>;\n\nconst TAU: f32 = 6.28318530718;\n\nfn wang_hash(seed_in: u32) -> u32 {\n    var seed = seed_in;\n    seed = (seed ^ 61u) ^ (seed >> 16u);\n    seed = seed * 9u;\n    seed = seed ^ (seed >> 4u);\n    seed = seed * 0x27d4eb2du;\n    seed = seed ^ (seed >> 15u);\n    return seed;\n}\n\nfn hash_float(seed: u32) -> f32 {\n    return f32(wang_hash(seed)) / 4294967296.0;\n}\n\nfn hash_float2(seed: u32) -> vec2<f32> {\n    let h1 = wang_hash(seed);\n    let h2 = wang_hash(h1);\n    return vec2<f32>(f32(h1), f32(h2)) / 4294967296.0;\n}\n\n@compute @workgroup_size(256, 1, 1)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let i = id.x;\n    if i >= arrayLength(&particles) {\n        return;\n    }\n\n    var p: Particle;\n    p.velocity = vec3<f32>(0.0);\n    p.age = -1.0;\n    p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);\n\n    // Excess particles: held dead at the centre nozzle, slight\n    // random radial scatter so they don't all sit on one pixel.\n    if i >= u.active_count {\n        let spread_hash_a = f32(wang_hash(i * 1664525u + 12345u)) / 4294967296.0;\n        let spread_hash_b = f32(wang_hash(wang_hash(i * 1664525u + 12345u))) / 4294967296.0;\n        let spread_r = spread_hash_a * 0.05;\n        let spread_a = spread_hash_b * 6.28318;\n        p.position = vec3<f32>(\n            0.5 + cos(spread_a) * spread_r,\n            0.5 + sin(spread_a) * spread_r,\n            0.0,\n        );\n        p.life = 0.0;\n        particles[i] = p;\n        return;\n    }\n\n    let seed = i * 1664525u + u.trigger_count * 747796405u;\n    var x: f32;\n    var y: f32;\n\n    switch u.pattern {\n        case 0u: {\n            // CLT Gaussian centre cluster — sum of 4 uniform hashes.\n            var sx = 0.0;\n            var sy = 0.0;\n            var s = seed;\n            for (var j = 0; j < 4; j++) {\n                let h = hash_float2(s);\n                sx += h.x;\n                sy += h.y;\n                s = wang_hash(s);\n            }\n            x = 0.5 + (sx - 2.0) * 0.052;\n            y = 0.5 + (sy - 2.0) * 0.052;\n        }\n        case 1u: {\n            let line_idx = i % 6u;\n            x = hash_float(seed);\n            y = (f32(line_idx) + 0.5) / 6.0;\n        }\n        case 2u: {\n            let line_idx = i % 6u;\n            x = (f32(line_idx) + 0.5) / 6.0;\n            y = hash_float(seed);\n        }\n        case 3u: {\n            let ring_idx = i % 3u;\n            let angle = hash_float(seed) * TAU;\n            let radius = 0.1 + f32(ring_idx) * 0.1;\n            x = 0.5 + cos(angle) * radius;\n            y = 0.5 + sin(angle) * radius;\n        }\n        case 4u: {\n            let t = hash_float(seed);\n            let spread = hash_float(seed + 1u) * 0.03;\n            if (i & 1u) != 0u {\n                x = t + spread;\n                y = t - spread;\n            } else {\n                x = t + spread;\n                y = (1.0 - t) - spread;\n            }\n        }\n        case 5u: {\n            let norm = f32(i) / f32(u.active_count);\n            let angle = norm * 4.0 * TAU;\n            let radius = norm * 0.4;\n            let spread = hash_float(seed) * 0.015;\n            x = 0.5 + cos(angle) * (radius + spread);\n            y = 0.5 + sin(angle) * (radius + spread);\n        }\n        case 6u: {\n            let angle = hash_float(seed) * TAU;\n            let spread = (hash_float(seed + 1u) - 0.5) * 0.03;\n            x = 0.5 + cos(angle) * (0.45 + spread);\n            y = 0.5 + sin(angle) * (0.45 + spread);\n        }\n        default: {\n            let pos = hash_float2(seed);\n            x = pos.x;\n            y = pos.y;\n        }\n    }\n\n    p.position = vec3<f32>(fract(x + 1.0), fract(y + 1.0), 0.0);\n    p.life = 1.0;\n    particles[i] = p;\n}\n",
+            "title": "Seed Pattern"
+          },
+          {
+            "id": 208,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 209,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 81,
+            "fromPort": "particles",
+            "toNode": 80,
+            "toPort": "particles"
+          },
+          {
+            "fromNode": 208,
+            "fromPort": "active_count",
+            "toNode": 80,
+            "toPort": "active_count"
+          },
+          {
+            "fromNode": 208,
+            "fromPort": "pattern",
+            "toNode": 80,
+            "toPort": "pattern"
+          },
+          {
+            "fromNode": 208,
+            "fromPort": "reset_trigger",
+            "toNode": 80,
+            "toPort": "reset_trigger"
+          },
+          {
+            "fromNode": 208,
+            "fromPort": "trigger_count",
+            "toNode": 80,
+            "toPort": "trigger_count"
+          },
+          {
+            "fromNode": 208,
+            "fromPort": "active_count_2",
+            "toNode": 81,
+            "toPort": "active_count"
+          },
+          {
+            "fromNode": 80,
+            "fromPort": "particles",
+            "toNode": 209,
+            "toPort": "particles"
+          }
+        ]
+      }
+    },
+    {
+      "id": 208,
+      "nodeId": "Render Density",
+      "typeId": "group",
+      "handle": "Render Density",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "active_count",
+              "portType": ""
+            },
+            {
+              "name": "height",
+              "portType": ""
+            },
+            {
+              "name": "particles",
+              "portType": ""
+            },
+            {
+              "name": "scaled_energy",
+              "portType": ""
+            },
+            {
+              "name": "width",
+              "portType": ""
+            },
+            {
+              "name": "radius",
+              "portType": ""
+            },
+            {
+              "name": "radius_2",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "density",
+              "portType": ""
+            },
+            {
+              "name": "out",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 4,
+            "nodeId": "splat",
+            "typeId": "node.scatter_particles",
+            "handle": "splat",
+            "params": {
+              "active_count": {
+                "type": "Int",
+                "value": 2000000
+              },
+              "boundary": {
+                "type": "Enum",
+                "value": 0
+              },
+              "scaled_energy": {
+                "type": "Int",
+                "value": 4096
+              }
+            },
+            "title": "Splat Particles"
+          },
+          {
+            "id": 5,
+            "nodeId": "resolve",
+            "typeId": "node.resolve_accumulator",
+            "handle": "resolve",
+            "params": {
+              "fixed_point_scale": {
+                "type": "Float",
+                "value": 4096.0
+              }
+            },
+            "title": "Resolve Accumulator"
+          },
+          {
+            "id": 6,
+            "nodeId": "density_downsample",
+            "typeId": "node.downsample",
+            "handle": "density_downsample",
+            "params": {
+              "factor": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Downsample Density"
+          },
+          {
+            "id": 7,
+            "nodeId": "density_blur_h",
+            "typeId": "node.gaussian_blur",
+            "handle": "density_blur_h",
+            "params": {
+              "address_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "radius": {
+                "type": "Float",
+                "value": 30.0
+              },
+              "radius_mode": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Blur Density H"
+          },
+          {
+            "id": 8,
+            "nodeId": "density_blur_v",
+            "typeId": "node.gaussian_blur",
+            "handle": "density_blur_v",
+            "params": {
+              "address_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "radius": {
+                "type": "Float",
+                "value": 17.0
+              },
+              "radius_mode": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Blur Density V"
+          },
+          {
+            "id": 209,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 210,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 4,
+            "fromPort": "accum",
+            "toNode": 5,
+            "toPort": "accum"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "density",
+            "toNode": 6,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "out",
+            "toNode": 8,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 209,
+            "fromPort": "active_count",
+            "toNode": 4,
+            "toPort": "active_count"
+          },
+          {
+            "fromNode": 209,
+            "fromPort": "height",
+            "toNode": 4,
+            "toPort": "height"
+          },
+          {
+            "fromNode": 209,
+            "fromPort": "particles",
+            "toNode": 4,
+            "toPort": "particles"
+          },
+          {
+            "fromNode": 209,
+            "fromPort": "scaled_energy",
+            "toNode": 4,
+            "toPort": "scaled_energy"
+          },
+          {
+            "fromNode": 209,
+            "fromPort": "width",
+            "toNode": 4,
+            "toPort": "width"
+          },
+          {
+            "fromNode": 209,
+            "fromPort": "radius",
+            "toNode": 7,
+            "toPort": "radius"
+          },
+          {
+            "fromNode": 209,
+            "fromPort": "radius_2",
+            "toNode": 8,
+            "toPort": "radius"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "density",
+            "toNode": 210,
+            "toPort": "density"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 210,
+            "toPort": "out"
+          }
+        ]
+      }
+    },
+    {
+      "id": 209,
+      "nodeId": "Density Field",
+      "typeId": "group",
+      "handle": "Density Field",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "radius",
+              "portType": ""
+            },
+            {
+              "name": "radius_2",
+              "portType": ""
+            },
+            {
+              "name": "in",
+              "portType": ""
+            },
+            {
+              "name": "scale",
+              "portType": ""
+            },
+            {
+              "name": "angle",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "out",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 87,
+            "nodeId": "grad",
+            "typeId": "node.gradient_central_diff",
+            "handle": "grad",
+            "params": {
+              "channel": {
+                "type": "Enum",
+                "value": 0
+              },
+              "scale_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "wrap_mode": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Gradient Field"
+          },
+          {
+            "id": 88,
+            "nodeId": "grad_scaled",
+            "typeId": "node.scale_offset_texture",
+            "handle": "grad_scaled",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": -0.01
+              }
+            },
+            "title": "Scale Gradient"
+          },
+          {
+            "id": 89,
+            "nodeId": "grad_rotate",
+            "typeId": "node.rotate_vec2_by_angle",
+            "handle": "grad_rotate",
+            "params": {
+              "angle": {
+                "type": "Float",
+                "value": 1.4835
+              }
+            },
+            "title": "Curl Rotation"
+          },
+          {
+            "id": 10,
+            "nodeId": "field_blur_h",
+            "typeId": "node.gaussian_blur",
+            "handle": "field_blur_h",
+            "params": {
+              "address_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "radius": {
+                "type": "Float",
+                "value": 30.0
+              },
+              "radius_mode": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Blur Force Field H"
+          },
+          {
+            "id": 11,
+            "nodeId": "field_blur_v",
+            "typeId": "node.gaussian_blur",
+            "handle": "field_blur_v",
+            "params": {
+              "address_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "radius": {
+                "type": "Float",
+                "value": 17.0
+              },
+              "radius_mode": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Blur Force Field V"
+          },
+          {
+            "id": 210,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 211,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 87,
+            "fromPort": "out",
+            "toNode": 88,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 88,
+            "fromPort": "out",
+            "toNode": 89,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 89,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 11,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 210,
+            "fromPort": "radius",
+            "toNode": 10,
+            "toPort": "radius"
+          },
+          {
+            "fromNode": 210,
+            "fromPort": "radius_2",
+            "toNode": 11,
+            "toPort": "radius"
+          },
+          {
+            "fromNode": 210,
+            "fromPort": "in",
+            "toNode": 87,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 210,
+            "fromPort": "scale",
+            "toNode": 88,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 210,
+            "fromPort": "angle",
+            "toNode": 89,
+            "toPort": "angle"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 211,
+            "toPort": "out"
+          }
+        ]
+      }
+    },
+    {
+      "id": 210,
+      "nodeId": "Text Force",
+      "typeId": "group",
+      "handle": "Text Force",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "out",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 200,
+            "nodeId": "text_render",
+            "typeId": "node.render_text",
+            "handle": "text_render",
+            "params": {
+              "h_align": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "letter_spacing": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "line_spacing": {
+                "type": "Float",
+                "value": 1.2
+              },
+              "pos_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "pos_y": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "size": {
+                "type": "Float",
+                "value": 0.25
+              },
+              "v_align": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "Render Text"
+          },
+          {
+            "id": 201,
+            "nodeId": "text_blur_h",
+            "typeId": "node.gaussian_blur",
+            "handle": "text_blur_h",
+            "params": {
+              "address_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "radius": {
+                "type": "Float",
+                "value": 8.0
+              },
+              "radius_mode": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Blur Text H"
+          },
+          {
+            "id": 202,
+            "nodeId": "text_blur_v",
+            "typeId": "node.gaussian_blur",
+            "handle": "text_blur_v",
+            "params": {
+              "address_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "radius": {
+                "type": "Float",
+                "value": 8.0
+              },
+              "radius_mode": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Blur Text V"
+          },
+          {
+            "id": 203,
+            "nodeId": "text_grad",
+            "typeId": "node.gradient_central_diff",
+            "handle": "text_grad",
+            "params": {
+              "channel": {
+                "type": "Enum",
+                "value": 0
+              },
+              "scale_mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "wrap_mode": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Text Gradient"
+          },
+          {
+            "id": 204,
+            "nodeId": "text_curl",
+            "typeId": "node.rotate_vec2_by_angle",
+            "handle": "text_curl",
+            "params": {
+              "angle": {
+                "type": "Float",
+                "value": 1.5707963
+              }
+            },
+            "title": "Text Curl Rotation"
+          },
+          {
+            "id": 205,
+            "nodeId": "text_force_gain",
+            "typeId": "node.gain",
+            "handle": "text_force_gain",
+            "params": {
+              "gain": {
+                "type": "Float",
+                "value": 4.0
+              }
+            },
+            "title": "Text Force Gain"
+          },
+          {
+            "id": 211,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 212,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 200,
+            "fromPort": "out",
+            "toNode": 201,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 201,
+            "fromPort": "out",
+            "toNode": 202,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 202,
+            "fromPort": "out",
+            "toNode": 203,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 203,
+            "fromPort": "out",
+            "toNode": 204,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 204,
+            "fromPort": "out",
+            "toNode": 205,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 205,
+            "fromPort": "out",
+            "toNode": 212,
+            "toPort": "out"
+          }
+        ]
+      }
+    },
+    {
+      "id": 211,
+      "nodeId": "Force Field Mixer",
+      "typeId": "group",
+      "handle": "Force Field Mixer",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "a",
+              "portType": ""
+            },
+            {
+              "name": "b",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "out",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 206,
+            "nodeId": "field_plus_text",
+            "typeId": "node.mix",
+            "handle": "field_plus_text",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Mix Density and Text"
+          },
+          {
+            "id": 212,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 213,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 212,
+            "fromPort": "a",
+            "toNode": 206,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 212,
+            "fromPort": "b",
+            "toNode": 206,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 206,
+            "fromPort": "out",
+            "toNode": 213,
+            "toPort": "out"
+          }
+        ]
+      }
+    },
+    {
+      "id": 212,
+      "nodeId": "Move Particles",
+      "typeId": "group",
+      "handle": "Move Particles",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "active_count",
+              "portType": ""
+            },
+            {
+              "name": "forceField",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "particles",
+              "portType": "Array(Particle)"
+            },
+            {
+              "name": "active_count_2",
+              "portType": ""
+            },
+            {
+              "name": "in_2",
+              "portType": ""
+            },
+            {
+              "name": "blurredDensity",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "active_count_3",
+              "portType": ""
+            },
+            {
+              "name": "active_count_4",
+              "portType": ""
+            },
+            {
+              "name": "active_count_5",
+              "portType": ""
+            },
+            {
+              "name": "injectAmount",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "injectEnvelope",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "injectPointX",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "injectPointY",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "active_count_6",
+              "portType": ""
+            },
+            {
+              "name": "amplitude_2",
+              "portType": ""
+            },
+            {
+              "name": "blurredDensity2",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "particles2",
+              "portType": "Array(Particle)"
+            },
+            {
+              "name": "z",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "particlesOut",
+              "portType": "Array(Particle)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 83,
+            "nodeId": "sample_forces",
+            "typeId": "node.sample_texture_at_particles",
+            "handle": "sample_forces",
+            "params": {
+              "active_count": {
+                "type": "Int",
+                "value": 2000000
+              }
+            },
+            "title": "Sample Force Field"
+          },
+          {
+            "id": 84,
+            "nodeId": "anti_clump",
+            "typeId": "node.anti_clump_particles",
+            "handle": "anti_clump",
+            "params": {
+              "active_count": {
+                "type": "Int",
+                "value": 2000000
+              },
+              "strength": {
+                "type": "Float",
+                "value": 0.01666
+              }
+            },
+            "title": "Anti Clump"
+          },
+          {
+            "id": 85,
+            "nodeId": "euler",
+            "typeId": "node.euler_step_particles",
+            "handle": "euler",
+            "params": {
+              "active_count": {
+                "type": "Int",
+                "value": 2000000
+              },
+              "speed": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "Euler Integrator"
+          },
+          {
+            "id": 86,
+            "nodeId": "wrap",
+            "typeId": "node.wrap_particles_torus",
+            "handle": "wrap",
+            "params": {
+              "active_count": {
+                "type": "Int",
+                "value": 2000000
+              }
+            },
+            "title": "Wrap at Edges"
+          },
+          {
+            "id": 91,
+            "nodeId": "apply_inject",
+            "typeId": "node.apply_radial_burst_to_particles",
+            "handle": "apply_inject",
+            "params": {
+              "active_count": {
+                "type": "Int",
+                "value": 2000000
+              },
+              "amplitude": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "envelope": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "point_x": {
+                "type": "Float",
+                "value": 0.5
+              },
+              "point_y": {
+                "type": "Float",
+                "value": 0.5
+              },
+              "radius": {
+                "type": "Float",
+                "value": 0.25
+              }
+            },
+            "title": "Apply Injection"
+          },
+          {
+            "id": 130,
+            "nodeId": "noise_force",
+            "typeId": "node.simplex_noise_force_at_particles",
+            "handle": "noise_force",
+            "params": {
+              "active_count": {
+                "type": "Int",
+                "value": 2000000
+              },
+              "amplitude": {
+                "type": "Float",
+                "value": 0.001
+              },
+              "modulator_gain": {
+                "type": "Float",
+                "value": 20.0
+              },
+              "noise_scale": {
+                "type": "Float",
+                "value": 2.0
+              },
+              "z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "id": 213,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 214,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 83,
+            "fromPort": "out",
+            "toNode": 130,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 84,
+            "fromPort": "out",
+            "toNode": 85,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 130,
+            "fromPort": "out",
+            "toNode": 85,
+            "toPort": "forces"
+          },
+          {
+            "fromNode": 85,
+            "fromPort": "out",
+            "toNode": 86,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 86,
+            "fromPort": "out",
+            "toNode": 91,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "active_count",
+            "toNode": 83,
+            "toPort": "active_count"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "forceField",
+            "toNode": 83,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "particles",
+            "toNode": 83,
+            "toPort": "particles"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "active_count_2",
+            "toNode": 84,
+            "toPort": "active_count"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "in_2",
+            "toNode": 84,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "blurredDensity",
+            "toNode": 84,
+            "toPort": "strength_modulator"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "active_count_3",
+            "toNode": 85,
+            "toPort": "active_count"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "active_count_4",
+            "toNode": 86,
+            "toPort": "active_count"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "active_count_5",
+            "toNode": 91,
+            "toPort": "active_count"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "injectAmount",
+            "toNode": 91,
+            "toPort": "amplitude"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "injectEnvelope",
+            "toNode": 91,
+            "toPort": "envelope"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "injectPointX",
+            "toNode": 91,
+            "toPort": "point_x"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "injectPointY",
+            "toNode": 91,
+            "toPort": "point_y"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "active_count_6",
+            "toNode": 130,
+            "toPort": "active_count"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "amplitude_2",
+            "toNode": 130,
+            "toPort": "amplitude"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "blurredDensity2",
+            "toNode": 130,
+            "toPort": "amplitude_modulator"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "particles2",
+            "toNode": 130,
+            "toPort": "particles"
+          },
+          {
+            "fromNode": 213,
+            "fromPort": "z",
+            "toNode": 130,
+            "toPort": "z"
+          },
+          {
+            "fromNode": 91,
+            "fromPort": "out",
+            "toNode": 214,
+            "toPort": "particlesOut"
+          }
+        ]
+      }
+    },
+    {
+      "id": 213,
+      "nodeId": "Resolution Scaling",
+      "typeId": "group",
+      "handle": "Resolution Scaling",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "height",
+              "portType": ""
+            },
+            {
+              "name": "width",
+              "portType": ""
+            },
+            {
+              "name": "a",
+              "portType": ""
+            },
+            {
+              "name": "a_2",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "activeCount",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "scatterEnergy",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "curlAngle",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "intensity",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "uvZoom",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "blurRadiusH",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "blurRadiusV",
+              "portType": "Scalar(F32)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 20,
+            "nodeId": "particle_count_calc",
+            "typeId": "node.affine_scalar",
+            "handle": "particle_count_calc",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 2.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1000000.0
+              }
+            },
+            "title": "Particle Count"
+          },
+          {
+            "id": 21,
+            "nodeId": "active_count_calc",
+            "typeId": "node.math",
+            "handle": "active_count_calc",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 2000000.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Active Count"
+          },
+          {
+            "id": 23,
+            "nodeId": "scaled_energy_calc",
+            "typeId": "node.affine_scalar",
+            "handle": "scaled_energy_calc",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 2000000.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.5
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.000004096
+              }
+            },
+            "title": "Scatter Energy"
+          },
+          {
+            "id": 24,
+            "nodeId": "rotation_rad_base",
+            "typeId": "node.affine_scalar",
+            "handle": "rotation_rad_base",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 85.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.017453292
+              }
+            },
+            "title": "Curl Angle Radians"
+          },
+          {
+            "id": 25,
+            "nodeId": "area_scale",
+            "typeId": "node.canvas_area_scale",
+            "handle": "area_scale",
+            "params": {
+              "height": {
+                "type": "Float",
+                "value": 1080.0
+              },
+              "min_height": {
+                "type": "Float",
+                "value": 360.0
+              },
+              "min_width": {
+                "type": "Float",
+                "value": 640.0
+              },
+              "reference_area": {
+                "type": "Float",
+                "value": 2073600.0
+              },
+              "width": {
+                "type": "Float",
+                "value": 1920.0
+              }
+            },
+            "title": "Canvas Area"
+          },
+          {
+            "id": 26,
+            "nodeId": "intensity_calc",
+            "typeId": "node.affine_scalar",
+            "handle": "intensity_calc",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 3.0
+              }
+            },
+            "title": "Display Intensity"
+          },
+          {
+            "id": 27,
+            "nodeId": "uv_scale_inv",
+            "typeId": "node.math",
+            "handle": "uv_scale_inv",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 3
+              }
+            },
+            "title": "UV Scale Inverse"
+          },
+          {
+            "id": 60,
+            "nodeId": "blur_radius_x_width",
+            "typeId": "node.math",
+            "handle": "blur_radius_x_width",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1920.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 20.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Blur Radius × Width"
+          },
+          {
+            "id": 61,
+            "nodeId": "blur_h_radius_final",
+            "typeId": "node.affine_scalar",
+            "handle": "blur_h_radius_final",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 38400.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.00078125
+              }
+            },
+            "title": "H Blur Radius Final"
+          },
+          {
+            "id": 62,
+            "nodeId": "blur_radius_x_height",
+            "typeId": "node.math",
+            "handle": "blur_radius_x_height",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1080.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 20.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Blur Radius × Height"
+          },
+          {
+            "id": 63,
+            "nodeId": "blur_v_radius_final",
+            "typeId": "node.affine_scalar",
+            "handle": "blur_v_radius_final",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 21600.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.00078125
+              }
+            },
+            "title": "V Blur Radius Final"
+          },
+          {
+            "id": 214,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 215,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 20,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "out",
+            "toNode": 23,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 60,
+            "fromPort": "out",
+            "toNode": 61,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 62,
+            "fromPort": "out",
+            "toNode": 63,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 214,
+            "fromPort": "height",
+            "toNode": 25,
+            "toPort": "height"
+          },
+          {
+            "fromNode": 214,
+            "fromPort": "width",
+            "toNode": 25,
+            "toPort": "width"
+          },
+          {
+            "fromNode": 214,
+            "fromPort": "a",
+            "toNode": 60,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 214,
+            "fromPort": "a_2",
+            "toNode": 62,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "out",
+            "toNode": 215,
+            "toPort": "activeCount"
+          },
+          {
+            "fromNode": 23,
+            "fromPort": "out",
+            "toNode": 215,
+            "toPort": "scatterEnergy"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 215,
+            "toPort": "curlAngle"
+          },
+          {
+            "fromNode": 26,
+            "fromPort": "out",
+            "toNode": 215,
+            "toPort": "intensity"
+          },
+          {
+            "fromNode": 27,
+            "fromPort": "out",
+            "toNode": 215,
+            "toPort": "uvZoom"
+          },
+          {
+            "fromNode": 61,
+            "fromPort": "out",
+            "toNode": 215,
+            "toPort": "blurRadiusH"
+          },
+          {
+            "fromNode": 63,
+            "fromPort": "out",
+            "toNode": 215,
+            "toPort": "blurRadiusV"
+          }
+        ]
+      }
+    },
+    {
+      "id": 214,
+      "nodeId": "Clip Triggers",
+      "typeId": "group",
+      "handle": "Clip Triggers",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "trigger_count",
+              "portType": ""
+            },
+            {
+              "name": "trigger_count_2",
+              "portType": ""
+            },
+            {
+              "name": "a",
+              "portType": ""
+            },
+            {
+              "name": "trigger",
+              "portType": ""
+            },
+            {
+              "name": "trigger_count_3",
+              "portType": ""
+            },
+            {
+              "name": "trigger_2",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "reset",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "turbulence",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "rotation",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "slope",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "injectEnvelope",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "injectPointX",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "injectPointY",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "injectAmount",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "out_6",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 30,
+            "nodeId": "trig_gate_env",
+            "typeId": "node.trigger_gate",
+            "handle": "trig_gate_env",
+            "params": {
+              "enable": {
+                "type": "Bool",
+                "value": false
+              }
+            },
+            "title": "Trigger Gate Envelope"
+          },
+          {
+            "id": 31,
+            "nodeId": "mux_mode3",
+            "typeId": "node.mux_scalar",
+            "handle": "mux_mode3",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Mode 3 Selector"
+          },
+          {
+            "id": 32,
+            "nodeId": "mode3_gate",
+            "typeId": "node.math",
+            "handle": "mode3_gate",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Mode 3 Gate"
+          },
+          {
+            "id": 33,
+            "nodeId": "trig_gate_seed",
+            "typeId": "node.trigger_gate",
+            "handle": "trig_gate_seed",
+            "params": {
+              "enable": {
+                "type": "Bool",
+                "value": false
+              }
+            },
+            "title": "Trigger Gate Seed"
+          },
+          {
+            "id": 34,
+            "nodeId": "mux_mode4",
+            "typeId": "node.mux_scalar",
+            "handle": "mux_mode4",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Mode 4 Selector"
+          },
+          {
+            "id": 35,
+            "nodeId": "mode4_gate",
+            "typeId": "node.math",
+            "handle": "mode4_gate",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Mode 4 Gate"
+          },
+          {
+            "id": 36,
+            "nodeId": "const_one",
+            "typeId": "node.value",
+            "handle": "const_one",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "Constant One"
+          },
+          {
+            "id": 40,
+            "nodeId": "env",
+            "typeId": "node.envelope_decay",
+            "handle": "env",
+            "params": {
+              "decay_rate": {
+                "type": "Float",
+                "value": 12.0
+              }
+            },
+            "title": "Decay Envelope"
+          },
+          {
+            "id": 41,
+            "nodeId": "env_x9",
+            "typeId": "node.math",
+            "handle": "env_x9",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 9.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Envelope × 9"
+          },
+          {
+            "id": 42,
+            "nodeId": "mux_turbulence",
+            "typeId": "node.mux_scalar",
+            "handle": "mux_turbulence",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Turbulence Mode Selector"
+          },
+          {
+            "id": 43,
+            "nodeId": "turbulence_factor",
+            "typeId": "node.math",
+            "handle": "turbulence_factor",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Turbulence Factor"
+          },
+          {
+            "id": 44,
+            "nodeId": "turbulence_base",
+            "typeId": "node.math",
+            "handle": "turbulence_base",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.001
+              },
+              "b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Turbulence Base"
+          },
+          {
+            "id": 45,
+            "nodeId": "env_x_pi",
+            "typeId": "node.math",
+            "handle": "env_x_pi",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 3.1415927
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Envelope × π"
+          },
+          {
+            "id": 46,
+            "nodeId": "mux_rotation",
+            "typeId": "node.mux_scalar",
+            "handle": "mux_rotation",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Rotation Mode Selector"
+          },
+          {
+            "id": 47,
+            "nodeId": "rotation_final",
+            "typeId": "node.math",
+            "handle": "rotation_final",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.4835
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Rotation Final"
+          },
+          {
+            "id": 48,
+            "nodeId": "env_x_neg2",
+            "typeId": "node.math",
+            "handle": "env_x_neg2",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": -2.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Envelope × -2"
+          },
+          {
+            "id": 49,
+            "nodeId": "mux_slope",
+            "typeId": "node.mux_scalar",
+            "handle": "mux_slope",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Slope Mode Selector"
+          },
+          {
+            "id": 50,
+            "nodeId": "slope_factor",
+            "typeId": "node.math",
+            "handle": "slope_factor",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Slope Factor"
+          },
+          {
+            "id": 51,
+            "nodeId": "slope_final",
+            "typeId": "node.math",
+            "handle": "slope_final",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": -0.01
+              },
+              "b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Slope Final"
+          },
+          {
+            "id": 52,
+            "nodeId": "inject",
+            "typeId": "node.inject_burst",
+            "handle": "inject",
+            "params": {
+              "duration": {
+                "type": "Float",
+                "value": 0.5
+              }
+            },
+            "title": "Inject Burst Generator"
+          },
+          {
+            "id": 53,
+            "nodeId": "inject_force_gated",
+            "typeId": "node.math",
+            "handle": "inject_force_gated",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.005
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Inject Force Gated"
+          },
+          {
+            "id": 70,
+            "nodeId": "pattern_cycle",
+            "typeId": "node.clip_trigger_cycle",
+            "handle": "pattern_cycle",
+            "params": {
+              "modulus": {
+                "type": "Int",
+                "value": 7
+              }
+            },
+            "title": "Pattern Cycle Counter"
+          },
+          {
+            "id": 71,
+            "nodeId": "mode_value",
+            "typeId": "node.value",
+            "handle": "mode_value",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Mode Value"
+          },
+          {
+            "id": 72,
+            "nodeId": "mode_hold",
+            "typeId": "node.sample_and_hold",
+            "handle": "mode_hold",
+            "title": "Mode Hold Sample"
+          },
+          {
+            "id": 215,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 216,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 42,
+            "fromPort": "out",
+            "toNode": 43,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 43,
+            "fromPort": "out",
+            "toNode": 44,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 41,
+            "fromPort": "out",
+            "toNode": 42,
+            "toPort": "in_0"
+          },
+          {
+            "fromNode": 40,
+            "fromPort": "out",
+            "toNode": 41,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 46,
+            "fromPort": "out",
+            "toNode": 47,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 45,
+            "fromPort": "out",
+            "toNode": 46,
+            "toPort": "in_1"
+          },
+          {
+            "fromNode": 40,
+            "fromPort": "out",
+            "toNode": 45,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 49,
+            "fromPort": "out",
+            "toNode": 50,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 50,
+            "fromPort": "out",
+            "toNode": 51,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 48,
+            "fromPort": "out",
+            "toNode": 49,
+            "toPort": "in_2"
+          },
+          {
+            "fromNode": 40,
+            "fromPort": "out",
+            "toNode": 48,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "out",
+            "toNode": 40,
+            "toPort": "trigger"
+          },
+          {
+            "fromNode": 36,
+            "fromPort": "out",
+            "toNode": 31,
+            "toPort": "in_3"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "out",
+            "toNode": 32,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "out",
+            "toNode": 33,
+            "toPort": "enable"
+          },
+          {
+            "fromNode": 36,
+            "fromPort": "out",
+            "toNode": 34,
+            "toPort": "in_4"
+          },
+          {
+            "fromNode": 34,
+            "fromPort": "out",
+            "toNode": 35,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 35,
+            "fromPort": "out",
+            "toNode": 52,
+            "toPort": "enable"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "active",
+            "toNode": 53,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 71,
+            "fromPort": "out",
+            "toNode": 72,
+            "toPort": "value"
+          },
+          {
+            "fromNode": 72,
+            "fromPort": "out",
+            "toNode": 31,
+            "toPort": "selector"
+          },
+          {
+            "fromNode": 72,
+            "fromPort": "out",
+            "toNode": 34,
+            "toPort": "selector"
+          },
+          {
+            "fromNode": 72,
+            "fromPort": "out",
+            "toNode": 42,
+            "toPort": "selector"
+          },
+          {
+            "fromNode": 72,
+            "fromPort": "out",
+            "toNode": 46,
+            "toPort": "selector"
+          },
+          {
+            "fromNode": 72,
+            "fromPort": "out",
+            "toNode": 49,
+            "toPort": "selector"
+          },
+          {
+            "fromNode": 215,
+            "fromPort": "trigger_count",
+            "toNode": 30,
+            "toPort": "trigger_count"
+          },
+          {
+            "fromNode": 215,
+            "fromPort": "trigger_count_2",
+            "toNode": 33,
+            "toPort": "trigger_count"
+          },
+          {
+            "fromNode": 215,
+            "fromPort": "a",
+            "toNode": 47,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 215,
+            "fromPort": "trigger",
+            "toNode": 52,
+            "toPort": "trigger"
+          },
+          {
+            "fromNode": 215,
+            "fromPort": "trigger_count_3",
+            "toNode": 70,
+            "toPort": "trigger_count"
+          },
+          {
+            "fromNode": 215,
+            "fromPort": "trigger_2",
+            "toNode": 72,
+            "toPort": "trigger"
+          },
+          {
+            "fromNode": 33,
+            "fromPort": "out",
+            "toNode": 216,
+            "toPort": "reset"
+          },
+          {
+            "fromNode": 44,
+            "fromPort": "out",
+            "toNode": 216,
+            "toPort": "turbulence"
+          },
+          {
+            "fromNode": 47,
+            "fromPort": "out",
+            "toNode": 216,
+            "toPort": "rotation"
+          },
+          {
+            "fromNode": 51,
+            "fromPort": "out",
+            "toNode": 216,
+            "toPort": "slope"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "active",
+            "toNode": 216,
+            "toPort": "injectEnvelope"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "point_x",
+            "toNode": 216,
+            "toPort": "injectPointX"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "point_y",
+            "toNode": 216,
+            "toPort": "injectPointY"
+          },
+          {
+            "fromNode": 53,
+            "fromPort": "out",
+            "toNode": 216,
+            "toPort": "injectAmount"
+          },
+          {
+            "fromNode": 70,
+            "fromPort": "out",
+            "toNode": 216,
+            "toPort": "out_6"
+          }
+        ]
+      }
+    },
+    {
+      "id": 215,
+      "nodeId": "Display",
+      "typeId": "group",
+      "handle": "Display",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "intensity",
+              "portType": ""
+            },
+            {
+              "name": "in",
+              "portType": ""
+            },
+            {
+              "name": "scale",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "out",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 12,
+            "nodeId": "display_tone",
+            "typeId": "node.reinhard_tone_map",
+            "handle": "display_tone",
+            "params": {
+              "contrast": {
+                "type": "Float",
+                "value": 3.0
+              },
+              "intensity": {
+                "type": "Float",
+                "value": 3.0
+              }
+            },
+            "title": "Tone Map"
+          },
+          {
+            "id": 13,
+            "nodeId": "display_zoom",
+            "typeId": "node.affine_transform",
+            "handle": "display_zoom",
+            "params": {
+              "rotation": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "translate_x": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "translate_y": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Zoom Display"
+          },
+          {
+            "id": 216,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 217,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 216,
+            "fromPort": "intensity",
+            "toNode": 12,
+            "toPort": "intensity"
+          },
+          {
+            "fromNode": 216,
+            "fromPort": "in",
+            "toNode": 13,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 216,
+            "fromPort": "scale",
+            "toNode": 13,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 217,
+            "toPort": "out"
+          }
+        ]
+      }
+    },
+    {
+      "id": 216,
+      "nodeId": "Noise",
+      "typeId": "group",
+      "handle": "Noise",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "a",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "out",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 110,
+            "nodeId": "noise_z",
+            "typeId": "node.affine_scalar",
+            "handle": "noise_z",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.1
+              }
+            },
+            "title": "Noise Z Offset"
+          },
+          {
+            "id": 217,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 218,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 217,
+            "fromPort": "a",
+            "toNode": 110,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 110,
+            "fromPort": "out",
+            "toNode": 218,
+            "toPort": "out"
+          }
+        ]
+      }
+    }
   ],
   "wires": [
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 70, "toPort": "trigger_count" },
-
-    { "fromNode": 21, "fromPort": "out",       "toNode": 81, "toPort": "active_count" },
-
-    { "fromNode": 81, "fromPort": "particles", "toNode": 80, "toPort": "particles" },
-    { "fromNode": 70, "fromPort": "out",       "toNode": 80, "toPort": "pattern" },
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 80, "toPort": "trigger_count" },
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 80, "toPort": "reset_trigger" },
-    { "fromNode": 21, "fromPort": "out",       "toNode": 80, "toPort": "active_count" },
-
-    { "fromNode": 80, "fromPort": "particles", "toNode": 82, "toPort": "seed" },
-    { "fromNode": 91, "fromPort": "out",       "toNode": 82, "toPort": "in" },
-    { "fromNode": 33, "fromPort": "out",       "toNode": 82, "toPort": "reset_trigger" },
-
-    { "fromNode": 82, "fromPort": "out", "toNode": 83, "toPort": "particles" },
-    { "fromNode": 206, "fromPort": "out", "toNode": 83, "toPort": "in" },
-    { "fromNode": 21, "fromPort": "out", "toNode": 83, "toPort": "active_count" },
-
-    { "fromNode": 83,  "fromPort": "out", "toNode": 130, "toPort": "in" },
-    { "fromNode": 82,  "fromPort": "out", "toNode": 130, "toPort": "particles" },
-    { "fromNode": 8,   "fromPort": "out", "toNode": 130, "toPort": "amplitude_modulator" },
-    { "fromNode": 44,  "fromPort": "out", "toNode": 130, "toPort": "amplitude" },
-    { "fromNode": 110, "fromPort": "out", "toNode": 130, "toPort": "z" },
-    { "fromNode": 21,  "fromPort": "out", "toNode": 130, "toPort": "active_count" },
-
-    { "fromNode": 82, "fromPort": "out", "toNode": 84, "toPort": "in" },
-    { "fromNode": 8,  "fromPort": "out", "toNode": 84, "toPort": "strength_modulator" },
-    { "fromNode": 21, "fromPort": "out", "toNode": 84, "toPort": "active_count" },
-
-    { "fromNode": 84,  "fromPort": "out", "toNode": 85, "toPort": "in" },
-    { "fromNode": 130, "fromPort": "out", "toNode": 85, "toPort": "forces" },
-    { "fromNode": 21,  "fromPort": "out", "toNode": 85, "toPort": "active_count" },
-
-    { "fromNode": 85, "fromPort": "out", "toNode": 86, "toPort": "in" },
-    { "fromNode": 21, "fromPort": "out", "toNode": 86, "toPort": "active_count" },
-
-    { "fromNode": 86, "fromPort": "out", "toNode": 91, "toPort": "in" },
-
-    { "fromNode": 82, "fromPort": "out", "toNode": 4,  "toPort": "particles" },
-    { "fromNode": 0,  "fromPort": "output_width",  "toNode": 4, "toPort": "width" },
-    { "fromNode": 0,  "fromPort": "output_height", "toNode": 4, "toPort": "height" },
-    { "fromNode": 21, "fromPort": "out", "toNode": 4, "toPort": "active_count" },
-    { "fromNode": 23, "fromPort": "out", "toNode": 4, "toPort": "scaled_energy" },
-
-    { "fromNode": 4,  "fromPort": "accum",   "toNode": 5,  "toPort": "accum" },
-    { "fromNode": 5,  "fromPort": "density", "toNode": 6,  "toPort": "in" },
-    { "fromNode": 6,  "fromPort": "out",     "toNode": 7,  "toPort": "in" },
-    { "fromNode": 7,  "fromPort": "out",     "toNode": 8,  "toPort": "in" },
-
-    { "fromNode": 8,  "fromPort": "out", "toNode": 87, "toPort": "in" },
-    { "fromNode": 87, "fromPort": "out", "toNode": 88, "toPort": "in" },
-    { "fromNode": 51, "fromPort": "out", "toNode": 88, "toPort": "scale" },
-    { "fromNode": 88, "fromPort": "out", "toNode": 89, "toPort": "in" },
-    { "fromNode": 47, "fromPort": "out", "toNode": 89, "toPort": "angle" },
-    { "fromNode": 89, "fromPort": "out", "toNode": 10, "toPort": "in" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 11, "toPort": "in" },
-
-    { "fromNode": 52, "fromPort": "point_x", "toNode": 91, "toPort": "point_x" },
-    { "fromNode": 52, "fromPort": "point_y", "toNode": 91, "toPort": "point_y" },
-    { "fromNode": 52, "fromPort": "active",  "toNode": 91, "toPort": "envelope" },
-    { "fromNode": 53, "fromPort": "out",     "toNode": 91, "toPort": "amplitude" },
-    { "fromNode": 21, "fromPort": "out",     "toNode": 91, "toPort": "active_count" },
-
-    { "fromNode": 0,   "fromPort": "time", "toNode": 110, "toPort": "a" },
-
-    { "fromNode": 200, "fromPort": "out", "toNode": 201, "toPort": "in" },
-    { "fromNode": 201, "fromPort": "out", "toNode": 202, "toPort": "in" },
-    { "fromNode": 202, "fromPort": "out", "toNode": 203, "toPort": "in" },
-    { "fromNode": 203, "fromPort": "out", "toNode": 204, "toPort": "in" },
-    { "fromNode": 204, "fromPort": "out", "toNode": 205, "toPort": "in" },
-
-    { "fromNode": 11,  "fromPort": "out", "toNode": 206, "toPort": "a" },
-    { "fromNode": 205, "fromPort": "out", "toNode": 206, "toPort": "b" },
-
-    { "fromNode": 20, "fromPort": "out", "toNode": 21, "toPort": "a" },
-
-    { "fromNode": 21, "fromPort": "out", "toNode": 23, "toPort": "a" },
-
-    { "fromNode": 42, "fromPort": "out", "toNode": 43, "toPort": "b" },
-    { "fromNode": 43, "fromPort": "out", "toNode": 44, "toPort": "b" },
-    { "fromNode": 41, "fromPort": "out", "toNode": 42, "toPort": "in_0" },
-    { "fromNode": 40, "fromPort": "out", "toNode": 41, "toPort": "a" },
-
-    { "fromNode": 24, "fromPort": "out", "toNode": 47, "toPort": "a" },
-    { "fromNode": 46, "fromPort": "out", "toNode": 47, "toPort": "b" },
-    { "fromNode": 45, "fromPort": "out", "toNode": 46, "toPort": "in_1" },
-    { "fromNode": 40, "fromPort": "out", "toNode": 45, "toPort": "a" },
-
-    { "fromNode": 49, "fromPort": "out", "toNode": 50, "toPort": "b" },
-    { "fromNode": 50, "fromPort": "out", "toNode": 51, "toPort": "b" },
-    { "fromNode": 48, "fromPort": "out", "toNode": 49, "toPort": "in_2" },
-    { "fromNode": 40, "fromPort": "out", "toNode": 48, "toPort": "a" },
-
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 30, "toPort": "trigger_count" },
-    { "fromNode": 30, "fromPort": "out",       "toNode": 40, "toPort": "trigger" },
-
-    { "fromNode": 36, "fromPort": "out",       "toNode": 31, "toPort": "in_3" },
-    { "fromNode": 31, "fromPort": "out",       "toNode": 32, "toPort": "a" },
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 33, "toPort": "trigger_count" },
-    { "fromNode": 32, "fromPort": "out",       "toNode": 33, "toPort": "enable" },
-
-    { "fromNode": 36, "fromPort": "out",       "toNode": 34, "toPort": "in_4" },
-    { "fromNode": 34, "fromPort": "out",       "toNode": 35, "toPort": "a" },
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 52, "toPort": "trigger" },
-    { "fromNode": 35, "fromPort": "out",       "toNode": 52, "toPort": "enable" },
-
-    { "fromNode": 52, "fromPort": "active", "toNode": 53, "toPort": "a" },
-
-    { "fromNode": 0,  "fromPort": "output_width",  "toNode": 60, "toPort": "a" },
-    { "fromNode": 0,  "fromPort": "output_height", "toNode": 62, "toPort": "a" },
-    { "fromNode": 60, "fromPort": "out", "toNode": 61, "toPort": "a" },
-    { "fromNode": 62, "fromPort": "out", "toNode": 63, "toPort": "a" },
-    { "fromNode": 61, "fromPort": "out", "toNode": 7,  "toPort": "radius" },
-    { "fromNode": 63, "fromPort": "out", "toNode": 8,  "toPort": "radius" },
-    { "fromNode": 61, "fromPort": "out", "toNode": 10, "toPort": "radius" },
-    { "fromNode": 63, "fromPort": "out", "toNode": 11, "toPort": "radius" },
-
-    { "fromNode": 0,  "fromPort": "output_width",  "toNode": 25, "toPort": "width" },
-    { "fromNode": 0,  "fromPort": "output_height", "toNode": 25, "toPort": "height" },
-    { "fromNode": 25, "fromPort": "out", "toNode": 26, "toPort": "a" },
-    { "fromNode": 26, "fromPort": "out", "toNode": 12, "toPort": "intensity" },
-
-    { "fromNode": 5,  "fromPort": "density", "toNode": 13, "toPort": "in" },
-    { "fromNode": 13, "fromPort": "out", "toNode": 12, "toPort": "in" },
-    { "fromNode": 27, "fromPort": "out", "toNode": 13, "toPort": "scale" },
-    { "fromNode": 12, "fromPort": "out", "toNode": 14, "toPort": "in" },
-
-    { "fromNode": 71, "fromPort": "out", "toNode": 72, "toPort": "value" },
-    { "fromNode": 0,  "fromPort": "trigger_count", "toNode": 72, "toPort": "trigger" },
-    { "fromNode": 72, "fromPort": "out", "toNode": 31, "toPort": "selector" },
-    { "fromNode": 72, "fromPort": "out", "toNode": 34, "toPort": "selector" },
-    { "fromNode": 72, "fromPort": "out", "toNode": 42, "toPort": "selector" },
-    { "fromNode": 72, "fromPort": "out", "toNode": 46, "toPort": "selector" },
-    { "fromNode": 72, "fromPort": "out", "toNode": 49, "toPort": "selector" }
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 214,
+      "toPort": "trigger_count_3"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "activeCount",
+      "toNode": 207,
+      "toPort": "active_count_2"
+    },
+    {
+      "fromNode": 214,
+      "fromPort": "out_6",
+      "toNode": 207,
+      "toPort": "pattern"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 207,
+      "toPort": "trigger_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 207,
+      "toPort": "reset_trigger"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "activeCount",
+      "toNode": 207,
+      "toPort": "active_count"
+    },
+    {
+      "fromNode": 207,
+      "fromPort": "particles",
+      "toNode": 82,
+      "toPort": "seed"
+    },
+    {
+      "fromNode": 212,
+      "fromPort": "particlesOut",
+      "toNode": 82,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 214,
+      "fromPort": "reset",
+      "toNode": 82,
+      "toPort": "reset_trigger"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 212,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 211,
+      "fromPort": "out",
+      "toNode": 212,
+      "toPort": "forceField"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "activeCount",
+      "toNode": 212,
+      "toPort": "active_count"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 212,
+      "toPort": "particles2"
+    },
+    {
+      "fromNode": 208,
+      "fromPort": "out",
+      "toNode": 212,
+      "toPort": "blurredDensity2"
+    },
+    {
+      "fromNode": 214,
+      "fromPort": "turbulence",
+      "toNode": 212,
+      "toPort": "amplitude_2"
+    },
+    {
+      "fromNode": 216,
+      "fromPort": "out",
+      "toNode": 212,
+      "toPort": "z"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "activeCount",
+      "toNode": 212,
+      "toPort": "active_count_6"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 212,
+      "toPort": "in_2"
+    },
+    {
+      "fromNode": 208,
+      "fromPort": "out",
+      "toNode": 212,
+      "toPort": "blurredDensity"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "activeCount",
+      "toNode": 212,
+      "toPort": "active_count_2"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "activeCount",
+      "toNode": 212,
+      "toPort": "active_count_3"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "activeCount",
+      "toNode": 212,
+      "toPort": "active_count_4"
+    },
+    {
+      "fromNode": 82,
+      "fromPort": "out",
+      "toNode": 208,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_width",
+      "toNode": 208,
+      "toPort": "width"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_height",
+      "toNode": 208,
+      "toPort": "height"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "activeCount",
+      "toNode": 208,
+      "toPort": "active_count"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "scatterEnergy",
+      "toNode": 208,
+      "toPort": "scaled_energy"
+    },
+    {
+      "fromNode": 208,
+      "fromPort": "out",
+      "toNode": 209,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 214,
+      "fromPort": "slope",
+      "toNode": 209,
+      "toPort": "scale"
+    },
+    {
+      "fromNode": 214,
+      "fromPort": "rotation",
+      "toNode": 209,
+      "toPort": "angle"
+    },
+    {
+      "fromNode": 214,
+      "fromPort": "injectPointX",
+      "toNode": 212,
+      "toPort": "injectPointX"
+    },
+    {
+      "fromNode": 214,
+      "fromPort": "injectPointY",
+      "toNode": 212,
+      "toPort": "injectPointY"
+    },
+    {
+      "fromNode": 214,
+      "fromPort": "injectEnvelope",
+      "toNode": 212,
+      "toPort": "injectEnvelope"
+    },
+    {
+      "fromNode": 214,
+      "fromPort": "injectAmount",
+      "toNode": 212,
+      "toPort": "injectAmount"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "activeCount",
+      "toNode": 212,
+      "toPort": "active_count_5"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 216,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 209,
+      "fromPort": "out",
+      "toNode": 211,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 210,
+      "fromPort": "out",
+      "toNode": 211,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "curlAngle",
+      "toNode": 214,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 214,
+      "toPort": "trigger_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 214,
+      "toPort": "trigger_count_2"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 214,
+      "toPort": "trigger"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_width",
+      "toNode": 213,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_height",
+      "toNode": 213,
+      "toPort": "a_2"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "blurRadiusH",
+      "toNode": 208,
+      "toPort": "radius"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "blurRadiusV",
+      "toNode": 208,
+      "toPort": "radius_2"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "blurRadiusH",
+      "toNode": 209,
+      "toPort": "radius"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "blurRadiusV",
+      "toNode": 209,
+      "toPort": "radius_2"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_width",
+      "toNode": 213,
+      "toPort": "width"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_height",
+      "toNode": 213,
+      "toPort": "height"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "intensity",
+      "toNode": 215,
+      "toPort": "intensity"
+    },
+    {
+      "fromNode": 208,
+      "fromPort": "density",
+      "toNode": 215,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 213,
+      "fromPort": "uvZoom",
+      "toNode": 215,
+      "toPort": "scale"
+    },
+    {
+      "fromNode": 215,
+      "fromPort": "out",
+      "toNode": 14,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 214,
+      "toPort": "trigger_2"
+    }
   ]
 }

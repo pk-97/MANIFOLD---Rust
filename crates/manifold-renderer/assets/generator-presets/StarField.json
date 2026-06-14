@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Star Field",
-  "description": "Star Field — fully atomized from the legacy `node.star_field_2d` Rust bundle. Composed entirely of existing texture-domain atoms: `voronoi_2d` (per-cell distance + hash) → `scale_offset` (invert distance) → `power_texture` (spike to star core, exponent driven by Size slider) → `channel_mix` (R→RGB, white stars) → in parallel: `channel_mix` (swizzle voronoi.A cell_hash → R) → `smoothstep_texture` (density threshold) → `mix(Multiply)` mask the core → `trig_texture` (per-pixel sin with per-cell freq/phase via texture-shadow inputs) → `mix(Multiply)` apply twinkle → final brightness.\n\nThe voronoi `offset_x` / `offset_y` are the sum of `drift_t × drift_x` (animation) AND `-0.5 × scale` (centering) — so when the user moves the Scale slider, the cell grid expands from the canvas center rather than from the top-left.\n\nKey primitive enablers from the original decomposition (2026-05-27):\n(1) `node.voronoi_2d` exposes the F1-winner cell hash on the A channel — was constant 1.0, now drives per-cell variation across the cellular-noise family (foam, cracked glass, embers, tiles, stars). Each cell's hash is decorrelated from its jitter offset so it stays deterministic as jitter animates.\n(2) `node.channel_mix` GPU shader implemented (was a no-op stub) — completes the 4×4 RGBA matrix transform. Used in two places here: swizzle voronoi.A → R for cell-hash reading, and broadcast R → RGB to make the star core white instead of single-channel red.\n(3) `node.trig_texture` extended with optional `freq_tex` / `phase_tex` texture-shadow inputs — per-pixel freq/phase from texture R channel when wired, unlocks per-cell unique twinkle (each cell pulses at its own freq + phase, not just a global LFO).\n(4) Tuning pass: `node.power_texture` extended with port-shadow on `exponent` so the Size slider can drive star spike sharpness via an inverting `affine_scalar` (slider 0 → exp=30 tight, slider 1 → exp=2 big halo).\n\nDropped from the legacy bundle (intentionally — atomization scope): cinematic 4-layer parallax (per-pixel spherical projection × 4 depth layers is a per-pixel iteration loop, Plasma-Noise/Fractal class blocker for atomization until the graph compiler lands). Single-layer star field with UV drift reads as 'twinkling stars'; multi-layer revivable by duplicating the inner chain. Also dropped sliders: `depth` (was per-layer parallax scaling), `warmth` (per-star colour temperature — would need color_ramp wired through per-cell-hash bridge), `glow` (per-star halo extent — would need a second voronoi pass with wider gaussian).\n\nThe Array<CurvePoint> side-channel `stars` output from the legacy bundle is dropped (no current preset consumed it; restoring blocked on parked `wgsl_compute` infra).",
+  "description": "Star Field generator, layered from time through animation and rendering into clearly named stages. Motion Control integrates time with drift speed and direction to produce animated offsets for the cell grid. Spatial Grid applies center compensation and generates a voronoi cell field. The cells' distance metric feeds Star Core, which inverts and sharpens to a spike, then masks by density threshold to isolate star locations. The cell hash output is routed at the top level as a shared signal: Cell Hash splits to both the star density mask and the Twinkle Animation subsystem. Twinkle Animation reads the per-cell hash, derives unique frequency and phase for each cell, computes a sine wave, and scales to a [0, 1] blend factor. Star Core and Twinkle Animation merge inside the graph (masked_stars blended with twinkle wave), then pass to Display for final brightness scaling and RGB broadcast (red channel to all three channels for pure white stars). Groups are transparent at load, flattening to byte-identical behavior; all bindings continue to target inner nodes by their preserved nodeId.",
   "presetMetadata": {
     "id": "StarField",
     "displayName": "Star Field",
@@ -18,6 +18,7 @@
         "defaultValue": 24.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F1",
         "oscSuffix": "scale"
       },
@@ -29,6 +30,7 @@
         "defaultValue": 0.6,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "density"
       },
@@ -40,6 +42,7 @@
         "defaultValue": 0.3,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "size"
       },
@@ -51,6 +54,7 @@
         "defaultValue": 1.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "brightness"
       },
@@ -62,6 +66,7 @@
         "defaultValue": 0.15,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "driftSpeed"
       },
@@ -73,6 +78,7 @@
         "defaultValue": 0.3,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "driftX"
       },
@@ -84,6 +90,7 @@
         "defaultValue": 0.1,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "driftY"
       },
@@ -95,155 +102,1010 @@
         "defaultValue": 0.6,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "twinkle"
       }
     ],
     "bindings": [
-      { "id": "scale",       "label": "Scale",       "defaultValue": 24.0,
-        "target": { "kind": "node", "nodeId": "cells", "param": "scale" },
-        "convert": { "type": "Float" } },
-      { "id": "scale",       "label": "Scale",       "defaultValue": 24.0,
-        "target": { "kind": "node", "nodeId": "center_offset", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "density",     "label": "Density",     "defaultValue": 0.6,
-        "target": { "kind": "node", "nodeId": "density_mask", "param": "low" },
-        "convert": { "type": "Float" } },
-
-      { "id": "size",        "label": "Star Size",   "defaultValue": 0.3,
-        "target": { "kind": "node", "nodeId": "exponent_from_size", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "brightness",  "label": "Brightness",  "defaultValue": 1.5,
-        "target": { "kind": "node", "nodeId": "final_brightness", "param": "scale" },
-        "convert": { "type": "Float" } },
-
-      { "id": "drift_speed", "label": "Drift Speed", "defaultValue": 0.15,
-        "target": { "kind": "node", "nodeId": "drift_t", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "drift_x",     "label": "Drift X",     "defaultValue": 0.3,
-        "target": { "kind": "node", "nodeId": "offset_x", "param": "scale" },
-        "convert": { "type": "Float" } },
-      { "id": "drift_y",     "label": "Drift Y",     "defaultValue": 0.1,
-        "target": { "kind": "node", "nodeId": "offset_y", "param": "scale" },
-        "convert": { "type": "Float" } },
-
-      { "id": "twinkle",     "label": "Twinkle",     "defaultValue": 0.6,
-        "target": { "kind": "node", "nodeId": "apply_twinkle", "param": "amount" },
-        "convert": { "type": "Float" } }
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 24.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "cells",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 24.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "center_offset",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "density",
+        "label": "Density",
+        "defaultValue": 0.6,
+        "target": {
+          "kind": "node",
+          "nodeId": "density_mask",
+          "param": "low"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "size",
+        "label": "Star Size",
+        "defaultValue": 0.3,
+        "target": {
+          "kind": "node",
+          "nodeId": "exponent_from_size",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "brightness",
+        "label": "Brightness",
+        "defaultValue": 1.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "final_brightness",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "drift_speed",
+        "label": "Drift Speed",
+        "defaultValue": 0.15,
+        "target": {
+          "kind": "node",
+          "nodeId": "drift_t",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "drift_x",
+        "label": "Drift X",
+        "defaultValue": 0.3,
+        "target": {
+          "kind": "node",
+          "nodeId": "offset_x",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "drift_y",
+        "label": "Drift Y",
+        "defaultValue": 0.1,
+        "target": {
+          "kind": "node",
+          "nodeId": "offset_y",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "twinkle",
+        "label": "Twinkle",
+        "defaultValue": 0.6,
+        "target": {
+          "kind": "node",
+          "nodeId": "apply_twinkle",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
     ],
+    "skipMode": {
+      "kind": "never"
+    },
     "paramAliases": [
-      { "old": "depth", "new": "scale" }
-    ],
-    "skipMode": { "kind": "never" }
+      {
+        "old": "depth",
+        "new": "scale"
+      }
+    ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
-    { "id": 1, "typeId": "system.final_output",    "handle": "final_output", "nodeId": "final_output" },
-
-    { "id": 2, "typeId": "node.math", "handle": "drift_t", "nodeId": "drift_t",
-      "params": { "op": { "type": "Enum", "value": 2 }, "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.15 } } },
-
-    { "id": 3, "typeId": "node.affine_scalar", "handle": "offset_x", "nodeId": "offset_x",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.3 }, "offset": { "type": "Float", "value": 0.0 } } },
-    { "id": 4, "typeId": "node.affine_scalar", "handle": "offset_y", "nodeId": "offset_y",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.1 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 5, "typeId": "node.voronoi_2d", "handle": "cells", "nodeId": "cells",
-      "params": { "scale": { "type": "Float", "value": 24.0 }, "jitter": { "type": "Float", "value": 1.0 }, "out_scale": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 6, "typeId": "node.scale_offset_texture", "handle": "invert_distance", "nodeId": "invert_distance",
-      "params": { "scale": { "type": "Float", "value": -1.0 }, "offset": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 7, "typeId": "node.power_texture", "handle": "spike", "nodeId": "spike",
-      "params": { "exponent": { "type": "Float", "value": 22.0 } } },
-
-    { "id": 8, "typeId": "node.channel_mix", "handle": "cell_hash_to_r", "nodeId": "cell_hash_to_r",
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input"
+    },
+    {
+      "id": 1,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output"
+    },
+    {
+      "id": 8,
+      "nodeId": "cell_hash_to_r",
+      "typeId": "node.channel_mix",
+      "handle": "cell_hash_to_r",
       "params": {
-        "row0": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] },
-        "row1": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] },
-        "row2": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 0.0] },
-        "row3": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] }
-      } },
-
-    { "id": 9, "typeId": "node.smoothstep_texture", "handle": "density_mask", "nodeId": "density_mask",
-      "params": { "low": { "type": "Float", "value": 0.6 }, "high": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 10, "typeId": "node.mix", "handle": "masked_stars", "nodeId": "masked_stars",
-      "params": { "mode": { "type": "Enum", "value": 4 }, "amount": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 11, "typeId": "node.scale_offset_texture", "handle": "freq_per_cell", "nodeId": "freq_per_cell",
-      "params": { "scale": { "type": "Float", "value": 3.5 }, "offset": { "type": "Float", "value": 1.5 } } },
-
-    { "id": 12, "typeId": "node.scale_offset_texture", "handle": "phase_per_cell", "nodeId": "phase_per_cell",
-      "params": { "scale": { "type": "Float", "value": 6.2831853 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 13, "typeId": "node.trig_texture", "handle": "twinkle_sin", "nodeId": "twinkle_sin",
-      "params": { "mode": { "type": "Enum", "value": 0 }, "freq": { "type": "Float", "value": 1.0 }, "phase": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 14, "typeId": "node.scale_offset_texture", "handle": "twinkle_to_unit", "nodeId": "twinkle_to_unit",
-      "params": { "scale": { "type": "Float", "value": 0.5 }, "offset": { "type": "Float", "value": 0.5 } } },
-
-    { "id": 15, "typeId": "node.mix", "handle": "apply_twinkle", "nodeId": "apply_twinkle",
-      "params": { "mode": { "type": "Enum", "value": 4 }, "amount": { "type": "Float", "value": 0.6 } } },
-
-    { "id": 16, "typeId": "node.scale_offset_texture", "handle": "final_brightness", "nodeId": "final_brightness",
-      "params": { "scale": { "type": "Float", "value": 1.5 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 17, "typeId": "node.channel_mix", "handle": "white_stars", "nodeId": "white_stars",
-      "params": {
-        "row0": { "type": "Vec4", "value": [1.0, 0.0, 0.0, 0.0] },
-        "row1": { "type": "Vec4", "value": [1.0, 0.0, 0.0, 0.0] },
-        "row2": { "type": "Vec4", "value": [1.0, 0.0, 0.0, 0.0] },
-        "row3": { "type": "Vec4", "value": [0.0, 0.0, 0.0, 1.0] }
-      } },
-
-    { "id": 18, "typeId": "node.affine_scalar", "handle": "center_offset", "nodeId": "center_offset",
-      "params": { "a": { "type": "Float", "value": 24.0 }, "scale": { "type": "Float", "value": -0.5 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 19, "typeId": "node.affine_scalar", "handle": "exponent_from_size", "nodeId": "exponent_from_size",
-      "params": { "a": { "type": "Float", "value": 0.3 }, "scale": { "type": "Float", "value": -28.0 }, "offset": { "type": "Float", "value": 30.0 } } }
+        "row0": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "row1": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row2": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "row3": {
+          "type": "Vec4",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      },
+      "title": "Cell Hash Router"
+    },
+    {
+      "id": 20,
+      "nodeId": "Motion Control",
+      "typeId": "group",
+      "handle": "Motion Control",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "a",
+              "portType": ""
+            },
+            {
+              "name": "offset",
+              "portType": ""
+            },
+            {
+              "name": "offset_2",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "out",
+              "portType": ""
+            },
+            {
+              "name": "out_2",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 2,
+            "nodeId": "drift_t",
+            "typeId": "node.math",
+            "handle": "drift_t",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.15
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Time × Drift Speed"
+          },
+          {
+            "id": 3,
+            "nodeId": "offset_x",
+            "typeId": "node.affine_scalar",
+            "handle": "offset_x",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.3
+              }
+            },
+            "title": "Drift X Offset"
+          },
+          {
+            "id": 4,
+            "nodeId": "offset_y",
+            "typeId": "node.affine_scalar",
+            "handle": "offset_y",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.1
+              }
+            },
+            "title": "Drift Y Offset"
+          },
+          {
+            "id": 21,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 22,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 3,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "a",
+            "toNode": 2,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "offset",
+            "toNode": 3,
+            "toPort": "offset"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "offset_2",
+            "toNode": 4,
+            "toPort": "offset"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 22,
+            "toPort": "out"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 22,
+            "toPort": "out_2"
+          }
+        ]
+      }
+    },
+    {
+      "id": 21,
+      "nodeId": "Spatial Grid",
+      "typeId": "group",
+      "handle": "Spatial Grid",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "offset_x",
+              "portType": ""
+            },
+            {
+              "name": "offset_y",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "out",
+              "portType": ""
+            },
+            {
+              "name": "out_2",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 5,
+            "nodeId": "cells",
+            "typeId": "node.voronoi_2d",
+            "handle": "cells",
+            "params": {
+              "jitter": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "out_scale": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 24.0
+              }
+            },
+            "title": "Voronoi Cells"
+          },
+          {
+            "id": 18,
+            "nodeId": "center_offset",
+            "typeId": "node.affine_scalar",
+            "handle": "center_offset",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 24.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": -0.5
+              }
+            },
+            "title": "Grid Center Offset"
+          },
+          {
+            "id": 22,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 23,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 22,
+            "fromPort": "offset_x",
+            "toNode": 5,
+            "toPort": "offset_x"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "offset_y",
+            "toNode": 5,
+            "toPort": "offset_y"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 23,
+            "toPort": "out"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "out",
+            "toNode": 23,
+            "toPort": "out_2"
+          }
+        ]
+      }
+    },
+    {
+      "id": 22,
+      "nodeId": "Star Core",
+      "typeId": "group",
+      "handle": "Star Core",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "in",
+              "portType": ""
+            },
+            {
+              "name": "in_2",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "starCore",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 6,
+            "nodeId": "invert_distance",
+            "typeId": "node.scale_offset_texture",
+            "handle": "invert_distance",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": -1.0
+              }
+            },
+            "title": "Invert Distance"
+          },
+          {
+            "id": 7,
+            "nodeId": "spike",
+            "typeId": "node.power_texture",
+            "handle": "spike",
+            "params": {
+              "exponent": {
+                "type": "Float",
+                "value": 22.0
+              }
+            },
+            "title": "Distance to Spike"
+          },
+          {
+            "id": 9,
+            "nodeId": "density_mask",
+            "typeId": "node.smoothstep_texture",
+            "handle": "density_mask",
+            "params": {
+              "high": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "low": {
+                "type": "Float",
+                "value": 0.6
+              }
+            },
+            "title": "Density Threshold"
+          },
+          {
+            "id": 10,
+            "nodeId": "masked_stars",
+            "typeId": "node.mix",
+            "handle": "masked_stars",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 4
+              }
+            },
+            "title": "Core and Mask Merge"
+          },
+          {
+            "id": 19,
+            "nodeId": "exponent_from_size",
+            "typeId": "node.affine_scalar",
+            "handle": "exponent_from_size",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.3
+              },
+              "offset": {
+                "type": "Float",
+                "value": 30.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": -28.0
+              }
+            },
+            "title": "Size to Exponent"
+          },
+          {
+            "id": 23,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 24,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 19,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "exponent"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 23,
+            "fromPort": "in",
+            "toNode": 6,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 23,
+            "fromPort": "in_2",
+            "toNode": 9,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 24,
+            "toPort": "starCore"
+          }
+        ]
+      }
+    },
+    {
+      "id": 23,
+      "nodeId": "Twinkle Animation",
+      "typeId": "group",
+      "handle": "Twinkle Animation",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "in",
+              "portType": ""
+            },
+            {
+              "name": "in_2",
+              "portType": ""
+            },
+            {
+              "name": "freq",
+              "portType": ""
+            },
+            {
+              "name": "a",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "twinkleMask",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 11,
+            "nodeId": "freq_per_cell",
+            "typeId": "node.scale_offset_texture",
+            "handle": "freq_per_cell",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 1.5
+              },
+              "scale": {
+                "type": "Float",
+                "value": 3.5
+              }
+            },
+            "title": "Cell Frequency Map"
+          },
+          {
+            "id": 12,
+            "nodeId": "phase_per_cell",
+            "typeId": "node.scale_offset_texture",
+            "handle": "phase_per_cell",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 6.2831855
+              }
+            },
+            "title": "Cell Phase Map"
+          },
+          {
+            "id": 13,
+            "nodeId": "twinkle_sin",
+            "typeId": "node.trig_texture",
+            "handle": "twinkle_sin",
+            "params": {
+              "freq": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 0
+              },
+              "phase": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Twinkle Wave Generator"
+          },
+          {
+            "id": 14,
+            "nodeId": "twinkle_to_unit",
+            "typeId": "node.scale_offset_texture",
+            "handle": "twinkle_to_unit",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.5
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.5
+              }
+            },
+            "title": "Wave to Unit Range"
+          },
+          {
+            "id": 15,
+            "nodeId": "apply_twinkle",
+            "typeId": "node.mix",
+            "handle": "apply_twinkle",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 0.6
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 4
+              }
+            },
+            "title": "Twinkle Blend"
+          },
+          {
+            "id": 24,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 25,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "phase_tex"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 14,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "out",
+            "toNode": 15,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "in",
+            "toNode": 11,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "in_2",
+            "toNode": 12,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "freq",
+            "toNode": 13,
+            "toPort": "freq"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "a",
+            "toNode": 15,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 25,
+            "toPort": "twinkleMask"
+          }
+        ]
+      }
+    },
+    {
+      "id": 24,
+      "nodeId": "Display",
+      "typeId": "group",
+      "handle": "Display",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "in",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "output",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 16,
+            "nodeId": "final_brightness",
+            "typeId": "node.scale_offset_texture",
+            "handle": "final_brightness",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.5
+              }
+            },
+            "title": "Final Brightness"
+          },
+          {
+            "id": 17,
+            "nodeId": "white_stars",
+            "typeId": "node.channel_mix",
+            "handle": "white_stars",
+            "params": {
+              "row0": {
+                "type": "Vec4",
+                "value": [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "row1": {
+                "type": "Vec4",
+                "value": [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "row2": {
+                "type": "Vec4",
+                "value": [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "row3": {
+                "type": "Vec4",
+                "value": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              }
+            },
+            "title": "Broadcast to White"
+          },
+          {
+            "id": 25,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 26,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 16,
+            "fromPort": "out",
+            "toNode": 17,
+            "toPort": "source"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "in",
+            "toNode": 16,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 17,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "output"
+          }
+        ]
+      }
+    }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "time", "toNode": 2, "toPort": "a" },
-
-    { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "a" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "a" },
-
-    { "fromNode": 18, "fromPort": "out", "toNode": 3, "toPort": "offset" },
-    { "fromNode": 18, "fromPort": "out", "toNode": 4, "toPort": "offset" },
-
-    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "offset_x" },
-    { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "offset_y" },
-
-    { "fromNode": 5, "fromPort": "out", "toNode": 6,  "toPort": "in" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 7,  "toPort": "in" },
-
-    { "fromNode": 19, "fromPort": "out", "toNode": 7, "toPort": "exponent" },
-
-    { "fromNode": 5, "fromPort": "out", "toNode": 8,  "toPort": "source" },
-
-    { "fromNode": 8, "fromPort": "out", "toNode": 9,  "toPort": "in" },
-
-    { "fromNode": 7, "fromPort": "out", "toNode": 10, "toPort": "a" },
-    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "b" },
-
-    { "fromNode": 8, "fromPort": "out", "toNode": 11, "toPort": "in" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 12, "toPort": "in" },
-
-    { "fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "in" },
-    { "fromNode": 0,  "fromPort": "time", "toNode": 13, "toPort": "freq" },
-    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "phase_tex" },
-
-    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "in" },
-
-    { "fromNode": 10, "fromPort": "out", "toNode": 15, "toPort": "a" },
-    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "b" },
-
-    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "in" },
-
-    { "fromNode": 16, "fromPort": "out", "toNode": 17, "toPort": "source" },
-    { "fromNode": 17, "fromPort": "out", "toNode": 1,  "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 20,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "out_2",
+      "toNode": 20,
+      "toPort": "offset"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "out_2",
+      "toNode": 20,
+      "toPort": "offset_2"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "out",
+      "toNode": 21,
+      "toPort": "offset_x"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "out_2",
+      "toNode": 21,
+      "toPort": "offset_y"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "out",
+      "toNode": 22,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "out",
+      "toNode": 8,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 22,
+      "toPort": "in_2"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 23,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "out",
+      "toNode": 23,
+      "toPort": "in_2"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 23,
+      "toPort": "freq"
+    },
+    {
+      "fromNode": 22,
+      "fromPort": "starCore",
+      "toNode": 23,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 23,
+      "fromPort": "twinkleMask",
+      "toNode": 24,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 24,
+      "fromPort": "output",
+      "toNode": 1,
+      "toPort": "in"
+    }
   ]
 }

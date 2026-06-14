@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Duocylinder",
-  "description": "Duocylinder — 4D torus (Cartesian product of two circles) drawn as a grid of u-/v-neighbor lines, rotating continuously through the XY, ZW, and XW planes. Atom-decomposed in tranche 5 of the 2nd-pass audit: the bundled `node.generate_duocylinder_vertices` is gone — the (u, v)-parametric surface is now a pure graph composition over the new parametric-surface atom family.\n\nThe inner graph reads as TouchDesigner Pattern-CHOP shape:\n  `generate_grid_uv(24) → (u_values, v_values)` flattens (iu, iv) ∈ [0,24)² to two 576-entry Array<f32> sweeps over [0, TAU).\n  `array_math(Cos|Sin)` per axis → cos_u / sin_u / cos_v / sin_v.\n  `array_math(ScaleOffset, scale=0.176776695)` per channel applies the 4D magnitude normalisation (= 0.25/sqrt(2) — keeps the rendered duocylinder visually identical to the legacy generator since every duocylinder point pre-bake has 4D magnitude sqrt(2), so this normalises to a 0.25 sphere matching the legacy PROJ_SCALE screen-fit factor).\n  `pack_vec4(x, y, z, w) → Array<Vec4Vertex>` zips the four scaled channels into the typed 4D vertex wire.\n  `edges_from_grid_uv(24) → Array<EdgePair>` emits the u-wrap + v-wrap topology (1152 edges).\n\nThe spine is unchanged: three `node.math` nodes turn `time × rate` into per-plane angles fed into `node.rotate_4d`; `node.project_4d` performs the two-stage 4D→3D→2D perspective collapse; `node.render_lines` carries the line + dot rendering.\n\nThe same atom family (`generate_grid_uv` + `array_math` + `pack_vec4` + `edges_from_grid_uv`) authors any (u, v)-parametric surface — torus, Klein bottle, geodesic sphere, terrain mesh — without a new Rust primitive per shape.\n\nLegacy outer-card param names (`xy` / `zw` / `xw` / `verts` / `v_size` / `anim`) are aliased to the new general-user names for save-file backward compatibility.",
+  "description": "4D duocylinder parametric surface generator, organized by pipeline stage. The top level shows the transformation spine: Input feeds time to three rotation-speed multipliers, which compute per-plane angles for continuous rotation through XY, ZW, and XW planes. These angles drive Rotate, which transforms the 4D surface; Project then collapses to 2D perspective; Render displays the geometry as line edges and vertices. Between Input and Rotate sits Surface Generation, a grouped stage that builds the parametric torus: a 24x24 u/v grid is decomposed into cosine and sine sweeps per axis, normalized by 0.25/sqrt(2) magnitude to match the legacy screen-fit factor, and zipped into a 576-vertex array; Edge topology (1152 u-wrap and v-wrap edges) is emitted separately. This organization is purely presentational—the groups flatten to byte-identical behavior at load, and all bindings reach inner nodes by stable nodeId, so it never touches the instrument surface.",
   "presetMetadata": {
     "id": "Duocylinder",
     "displayName": "Duocylinder",
@@ -19,6 +19,7 @@
         "defaultValue": 0.4,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "rotXY"
       },
@@ -30,6 +31,7 @@
         "defaultValue": 0.25,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "rotZW"
       },
@@ -41,6 +43,7 @@
         "defaultValue": 0.15,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "rotXW"
       },
@@ -52,6 +55,7 @@
         "defaultValue": 0.0015,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F4",
         "oscSuffix": "line"
       },
@@ -63,6 +67,7 @@
         "defaultValue": 3.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F1",
         "oscSuffix": "dist"
       },
@@ -74,6 +79,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": true,
+        "isTrigger": false,
         "formatString": "F0",
         "oscSuffix": "verts"
       },
@@ -85,6 +91,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F1",
         "oscSuffix": "vsize"
       },
@@ -96,6 +103,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": true,
+        "isTrigger": false,
         "formatString": "F0",
         "oscSuffix": "anim"
       },
@@ -107,6 +115,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F1",
         "oscSuffix": "speed"
       },
@@ -118,6 +127,7 @@
         "defaultValue": 0.1,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "window"
       },
@@ -129,217 +139,726 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2",
         "oscSuffix": "scale"
       }
     ],
-    "paramAliases": [
-      { "old": "xy",     "new": "rotate_xy_speed" },
-      { "old": "zw",     "new": "rotate_zw_speed" },
-      { "old": "xw",     "new": "rotate_xw_speed" },
-      { "old": "verts",  "new": "show_verts" },
-      { "old": "v_size", "new": "vert_size" },
-      { "old": "anim",   "new": "animate" }
-    ],
     "bindings": [
-      { "id": "rotate_xy_speed", "label": "Rotate XY Speed", "defaultValue": 0.4,
-        "target": { "kind": "node", "nodeId": "angle_xy_mul", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "rotate_zw_speed", "label": "Rotate ZW Speed", "defaultValue": 0.25,
-        "target": { "kind": "node", "nodeId": "angle_zw_mul", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "rotate_xw_speed", "label": "Rotate XW Speed", "defaultValue": 0.15,
-        "target": { "kind": "node", "nodeId": "angle_xw_mul", "param": "b" },
-        "convert": { "type": "Float" } },
-      { "id": "line", "label": "Line", "defaultValue": 0.0015,
-        "target": { "kind": "node", "nodeId": "render", "param": "edge_thickness" },
-        "convert": { "type": "Float" } },
-      { "id": "dist", "label": "Distance", "defaultValue": 3.0,
-        "target": { "kind": "node", "nodeId": "project", "param": "proj_dist" },
-        "convert": { "type": "Float" } },
-      { "id": "show_verts", "label": "Show Vertices", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "render", "param": "show_verts" },
-        "convert": { "type": "BoolThreshold" } },
-      { "id": "vert_size", "label": "Vertex Size", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "render", "param": "vert_size" },
-        "convert": { "type": "Float" } },
-      { "id": "animate", "label": "Animate", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "render", "param": "animate" },
-        "convert": { "type": "BoolThreshold" } },
-      { "id": "speed", "label": "Speed", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "render", "param": "speed" },
-        "convert": { "type": "Float" } },
-      { "id": "window", "label": "Window", "defaultValue": 0.1,
-        "target": { "kind": "node", "nodeId": "render", "param": "window" },
-        "convert": { "type": "Float" } },
-      { "id": "scale", "label": "Scale", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "project", "param": "proj_scale" },
-        "convert": { "type": "Float" } }
+      {
+        "id": "rotate_xy_speed",
+        "label": "Rotate XY Speed",
+        "defaultValue": 0.4,
+        "target": {
+          "kind": "node",
+          "nodeId": "angle_xy_mul",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "rotate_zw_speed",
+        "label": "Rotate ZW Speed",
+        "defaultValue": 0.25,
+        "target": {
+          "kind": "node",
+          "nodeId": "angle_zw_mul",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "rotate_xw_speed",
+        "label": "Rotate XW Speed",
+        "defaultValue": 0.15,
+        "target": {
+          "kind": "node",
+          "nodeId": "angle_xw_mul",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "line",
+        "label": "Line",
+        "defaultValue": 0.0015,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "edge_thickness"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "dist",
+        "label": "Distance",
+        "defaultValue": 3.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "project",
+          "param": "proj_dist"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "show_verts",
+        "label": "Show Vertices",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "show_verts"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "vert_size",
+        "label": "Vertex Size",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "vert_size"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "animate",
+        "label": "Animate",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "animate"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "speed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "window",
+        "label": "Window",
+        "defaultValue": 0.1,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "window"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "project",
+          "param": "proj_scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
     ],
-    "skipMode": { "kind": "never" }
+    "skipMode": {
+      "kind": "never"
+    },
+    "paramAliases": [
+      {
+        "old": "xy",
+        "new": "rotate_xy_speed"
+      },
+      {
+        "old": "zw",
+        "new": "rotate_zw_speed"
+      },
+      {
+        "old": "xw",
+        "new": "rotate_xw_speed"
+      },
+      {
+        "old": "verts",
+        "new": "show_verts"
+      },
+      {
+        "old": "v_size",
+        "new": "vert_size"
+      },
+      {
+        "old": "anim",
+        "new": "animate"
+      }
+    ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
-
     {
-      "id": 1, "typeId": "node.math", "handle": "angle_xy_mul", "nodeId": "angle_xy_mul",
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "title": "Input"
+    },
+    {
+      "id": 1,
+      "nodeId": "angle_xy_mul",
+      "typeId": "node.math",
+      "handle": "angle_xy_mul",
       "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.4 },
-        "op": { "type": "Enum",  "value": 2 }
-      }
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.4
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "XY Rotation Speed"
     },
     {
-      "id": 2, "typeId": "node.math", "handle": "angle_zw_mul", "nodeId": "angle_zw_mul",
+      "id": 2,
+      "nodeId": "angle_zw_mul",
+      "typeId": "node.math",
+      "handle": "angle_zw_mul",
       "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.25 },
-        "op": { "type": "Enum",  "value": 2 }
-      }
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "ZW Rotation Speed"
     },
     {
-      "id": 3, "typeId": "node.math", "handle": "angle_xw_mul", "nodeId": "angle_xw_mul",
+      "id": 3,
+      "nodeId": "angle_xw_mul",
+      "typeId": "node.math",
+      "handle": "angle_xw_mul",
       "params": {
-        "a":  { "type": "Float", "value": 0.0 },
-        "b":  { "type": "Float", "value": 0.15 },
-        "op": { "type": "Enum",  "value": 2 }
-      }
+        "a": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "b": {
+          "type": "Float",
+          "value": 0.15
+        },
+        "op": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "title": "XW Rotation Speed"
     },
-
     {
-      "id": 4, "typeId": "node.generate_grid_uv", "handle": "grid", "nodeId": "grid",
+      "id": 15,
+      "nodeId": "rotate",
+      "typeId": "node.rotate_4d",
+      "handle": "rotate",
       "params": {
-        "grid_size": { "type": "Int",   "value": 24 },
-        "u_max":     { "type": "Float", "value": 6.28318530717958647692 },
-        "v_max":     { "type": "Float", "value": 6.28318530717958647692 }
-      }
-    },
-
-    {
-      "id": 5, "typeId": "node.array_math", "handle": "cos_u", "nodeId": "cos_u",
-      "params": { "op": { "type": "Enum", "value": 12 } }
-    },
-    {
-      "id": 6, "typeId": "node.array_math", "handle": "sin_u", "nodeId": "sin_u",
-      "params": { "op": { "type": "Enum", "value": 11 } }
-    },
-    {
-      "id": 7, "typeId": "node.array_math", "handle": "cos_v", "nodeId": "cos_v",
-      "params": { "op": { "type": "Enum", "value": 12 } }
+        "angle_xw": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "angle_xy": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "angle_zw": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Rotate 4D"
     },
     {
-      "id": 8, "typeId": "node.array_math", "handle": "sin_v", "nodeId": "sin_v",
-      "params": { "op": { "type": "Enum", "value": 11 } }
-    },
-
-    {
-      "id": 9, "typeId": "node.array_math", "handle": "scale_x", "nodeId": "scale_x",
+      "id": 16,
+      "nodeId": "project",
+      "typeId": "node.project_4d",
+      "handle": "project",
       "params": {
-        "op":     { "type": "Enum",  "value": 6 },
-        "scale":  { "type": "Float", "value": 0.176776695 },
-        "offset": { "type": "Float", "value": 0.0 }
-      }
+        "proj_dist": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "proj_scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Project 4D"
     },
     {
-      "id": 10, "typeId": "node.array_math", "handle": "scale_y", "nodeId": "scale_y",
+      "id": 17,
+      "nodeId": "render",
+      "typeId": "node.render_lines",
+      "handle": "render",
       "params": {
-        "op":     { "type": "Enum",  "value": 6 },
-        "scale":  { "type": "Float", "value": 0.176776695 },
-        "offset": { "type": "Float", "value": 0.0 }
-      }
+        "animate": {
+          "type": "Bool",
+          "value": false
+        },
+        "beat_flash_amount": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "closed_loop": {
+          "type": "Bool",
+          "value": false
+        },
+        "color_a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "edge_thickness": {
+          "type": "Float",
+          "value": 0.0015
+        },
+        "show_verts": {
+          "type": "Bool",
+          "value": true
+        },
+        "speed": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "vert_size": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "window": {
+          "type": "Float",
+          "value": 0.1
+        }
+      },
+      "title": "Render Lines"
     },
     {
-      "id": 11, "typeId": "node.array_math", "handle": "scale_z", "nodeId": "scale_z",
-      "params": {
-        "op":     { "type": "Enum",  "value": 6 },
-        "scale":  { "type": "Float", "value": 0.176776695 },
-        "offset": { "type": "Float", "value": 0.0 }
-      }
+      "id": 18,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
     },
     {
-      "id": 12, "typeId": "node.array_math", "handle": "scale_w", "nodeId": "scale_w",
-      "params": {
-        "op":     { "type": "Enum",  "value": 6 },
-        "scale":  { "type": "Float", "value": 0.176776695 },
-        "offset": { "type": "Float", "value": 0.0 }
+      "id": 19,
+      "nodeId": "Surface Generation",
+      "typeId": "group",
+      "handle": "Surface Generation",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "vertices",
+              "portType": "Array(Vec4Vertex)"
+            },
+            {
+              "name": "topology",
+              "portType": "Array(EdgePair)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 4,
+            "nodeId": "grid",
+            "typeId": "node.generate_grid_uv",
+            "handle": "grid",
+            "params": {
+              "grid_size": {
+                "type": "Int",
+                "value": 24
+              },
+              "u_max": {
+                "type": "Float",
+                "value": 6.2831855
+              },
+              "v_max": {
+                "type": "Float",
+                "value": 6.2831855
+              }
+            },
+            "title": "Grid UV"
+          },
+          {
+            "id": 5,
+            "nodeId": "cos_u",
+            "typeId": "node.array_math",
+            "handle": "cos_u",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 12
+              }
+            },
+            "title": "Cosine U"
+          },
+          {
+            "id": 6,
+            "nodeId": "sin_u",
+            "typeId": "node.array_math",
+            "handle": "sin_u",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 11
+              }
+            },
+            "title": "Sine U"
+          },
+          {
+            "id": 7,
+            "nodeId": "cos_v",
+            "typeId": "node.array_math",
+            "handle": "cos_v",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 12
+              }
+            },
+            "title": "Cosine V"
+          },
+          {
+            "id": 8,
+            "nodeId": "sin_v",
+            "typeId": "node.array_math",
+            "handle": "sin_v",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 11
+              }
+            },
+            "title": "Sine V"
+          },
+          {
+            "id": 9,
+            "nodeId": "scale_x",
+            "typeId": "node.array_math",
+            "handle": "scale_x",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 6
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.17677669
+              }
+            },
+            "title": "Scale X"
+          },
+          {
+            "id": 10,
+            "nodeId": "scale_y",
+            "typeId": "node.array_math",
+            "handle": "scale_y",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 6
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.17677669
+              }
+            },
+            "title": "Scale Y"
+          },
+          {
+            "id": 11,
+            "nodeId": "scale_z",
+            "typeId": "node.array_math",
+            "handle": "scale_z",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 6
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.17677669
+              }
+            },
+            "title": "Scale Z"
+          },
+          {
+            "id": 12,
+            "nodeId": "scale_w",
+            "typeId": "node.array_math",
+            "handle": "scale_w",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 6
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.17677669
+              }
+            },
+            "title": "Scale W"
+          },
+          {
+            "id": 13,
+            "nodeId": "pack",
+            "typeId": "node.pack_vec4",
+            "handle": "pack",
+            "title": "Pack Vertices"
+          },
+          {
+            "id": 14,
+            "nodeId": "edges",
+            "typeId": "node.edges_from_grid_uv",
+            "handle": "edges",
+            "params": {
+              "grid_size": {
+                "type": "Int",
+                "value": 24
+              }
+            },
+            "title": "Grid Edges"
+          },
+          {
+            "id": 20,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 21,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 4,
+            "fromPort": "u_values",
+            "toNode": 5,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "u_values",
+            "toNode": 6,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "v_values",
+            "toNode": 7,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "v_values",
+            "toNode": 8,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 9,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "out",
+            "toNode": 11,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "x"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "y"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "z"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "w"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "vertices"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "edges",
+            "toNode": 21,
+            "toPort": "topology"
+          }
+        ],
+        "tint": [
+          0.2,
+          0.6,
+          0.8,
+          0.15
+        ]
       }
-    },
-
-    { "id": 13, "typeId": "node.pack_vec4", "handle": "pack", "nodeId": "pack" },
-
-    {
-      "id": 14, "typeId": "node.edges_from_grid_uv", "handle": "edges", "nodeId": "edges",
-      "params": {
-        "grid_size": { "type": "Int", "value": 24 }
-      }
-    },
-
-    {
-      "id": 15, "typeId": "node.rotate_4d", "handle": "rotate", "nodeId": "rotate",
-      "params": {
-        "angle_xy": { "type": "Float", "value": 0.0 },
-        "angle_zw": { "type": "Float", "value": 0.0 },
-        "angle_xw": { "type": "Float", "value": 0.0 }
-      }
-    },
-    {
-      "id": 16, "typeId": "node.project_4d", "handle": "project", "nodeId": "project",
-      "params": {
-        "proj_scale": { "type": "Float", "value": 1.0 },
-        "proj_dist":  { "type": "Float", "value": 3.0 }
-      }
-    },
-    {
-      "id": 17, "typeId": "node.render_lines", "handle": "render", "nodeId": "render",
-      "params": {
-        "edge_thickness":    { "type": "Float", "value": 0.0015 },
-        "closed_loop":       { "type": "Bool",  "value": false  },
-        "show_verts":        { "type": "Bool",  "value": true   },
-        "vert_size":         { "type": "Float", "value": 1.0    },
-        "animate":           { "type": "Bool",  "value": false  },
-        "speed":             { "type": "Float", "value": 1.0    },
-        "window":            { "type": "Float", "value": 0.1    },
-        "beat_flash_amount": { "type": "Float", "value": 0.0    },
-        "color_r":           { "type": "Float", "value": 1.0    },
-        "color_g":           { "type": "Float", "value": 1.0    },
-        "color_b":           { "type": "Float", "value": 1.0    },
-        "color_a":           { "type": "Float", "value": 1.0    }
-      }
-    },
-
-    { "id": 18, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+    }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "time", "toNode": 1, "toPort": "a" },
-    { "fromNode": 0, "fromPort": "time", "toNode": 2, "toPort": "a" },
-    { "fromNode": 0, "fromPort": "time", "toNode": 3, "toPort": "a" },
-
-    { "fromNode": 4, "fromPort": "u_values", "toNode": 5, "toPort": "a" },
-    { "fromNode": 4, "fromPort": "u_values", "toNode": 6, "toPort": "a" },
-    { "fromNode": 4, "fromPort": "v_values", "toNode": 7, "toPort": "a" },
-    { "fromNode": 4, "fromPort": "v_values", "toNode": 8, "toPort": "a" },
-
-    { "fromNode": 5, "fromPort": "out", "toNode":  9, "toPort": "a" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 10, "toPort": "a" },
-    { "fromNode": 7, "fromPort": "out", "toNode": 11, "toPort": "a" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 12, "toPort": "a" },
-
-    { "fromNode":  9, "fromPort": "out", "toNode": 13, "toPort": "x" },
-    { "fromNode": 10, "fromPort": "out", "toNode": 13, "toPort": "y" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 13, "toPort": "z" },
-    { "fromNode": 12, "fromPort": "out", "toNode": 13, "toPort": "w" },
-
-    { "fromNode": 13, "fromPort": "out", "toNode": 15, "toPort": "in" },
-
-    { "fromNode": 1, "fromPort": "out", "toNode": 15, "toPort": "angle_xy" },
-    { "fromNode": 2, "fromPort": "out", "toNode": 15, "toPort": "angle_zw" },
-    { "fromNode": 3, "fromPort": "out", "toNode": 15, "toPort": "angle_xw" },
-
-    { "fromNode": 15, "fromPort": "out", "toNode": 16, "toPort": "in" },
-
-    { "fromNode": 16, "fromPort": "out",   "toNode": 17, "toPort": "points" },
-    { "fromNode": 14, "fromPort": "edges", "toNode": 17, "toPort": "edges"  },
-
-    { "fromNode": 17, "fromPort": "color", "toNode": 18, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 1,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 2,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 3,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "vertices",
+      "toNode": 15,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 15,
+      "toPort": "angle_xy"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 15,
+      "toPort": "angle_zw"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "out",
+      "toNode": 15,
+      "toPort": "angle_xw"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "out",
+      "toNode": 16,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "points"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "topology",
+      "toNode": 17,
+      "toPort": "edges"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "color",
+      "toNode": 18,
+      "toPort": "in"
+    }
   ]
 }

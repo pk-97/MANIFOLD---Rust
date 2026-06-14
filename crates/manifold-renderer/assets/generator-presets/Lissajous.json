@@ -1,13 +1,14 @@
 {
   "version": 2,
   "name": "Lissajous",
-  "description": "Lissajous curve generator — decomposed from the legacy `LissajousGenerator` Rust struct into the curated atom library. The curve math is now visible as the graph itself (the TouchDesigner Pattern → Math → Function → Merge → To-SOP shape) rather than sealed inside a single `generate_lissajous` primitive.\n\nTwo modes share the same render path:\n\n- **Smooth**: the X and Y frequencies are continuously oscillating sines (`a = 2 + 1.5*sin(time*freq_x_rate)`, `b = 3 + 2*sin(time*freq_y_rate)`) producing a slowly morphing closed curve. Phase advances linearly at `time * phase_rate`.\n- **Clip Trigger**: on each clip retrigger the frequencies jump to the next row of a curated 10-row harmonic-ratio table (1:2, 1:3, 2:3, 3:4, …). Phase keeps evolving smoothly.\n\nThe outer-card `clip_trigger` toggle picks between the two via a pair of MuxScalar nodes; the table itself lives inside `node.frequency_ratio`.\n\nPer-axis curve construction:\n  freq → math(Floor)+math(Ceil)+math(Subtract) → (a_lo, a_hi, a_lerp) bracket\n  t = generate_range(0..2π)\n  t_lo = array_math(ScaleOffset, t, scale=a_lo, offset=phase)\n  t_hi = array_math(ScaleOffset, t, scale=a_hi, offset=phase)\n  x = array_math(Mix, sin(t_lo), sin(t_hi), scale=a_lerp)\n\nThis blends between the floor and ceil integer Lissajous curves so non-integer frequencies don't produce non-closing scribbles — instead, they morph smoothly between clean closed shapes. The two axis chains are zipped into `Array<CurvePoint>` by `node.pack_curve_xy` (which folds the legacy `generator_math::PROJ_SCALE = 0.25` screen-fit constant into the output). `node.render_lines` carries the animation + dot rendering + beat-flash from the legacy `LineGeneratorHelper`.\n\nBit-perfect parity with the legacy generator at default params.",
+  "description": "Lissajous curve generator — a smooth morphing closed curve traced by the Lissajous parametric equations. The generator decomposes into an oscillator bank that smoothly modulates frequency, a frequency-selection mux that routes two of the three oscillators to the X and Y axes via a harmonic-ratio table, parallel curve builders on each axis that interpolate between integer-frequency Lissajous forms to eliminate scribbles, and finally a line renderer with optional vertex markers and animation.\n\nThe oscillator bank produces three continuously varying frequencies: two (lfo_x and lfo_y) oscillate smoothly from 0.5 to 3.5 and 1.0 to 5.0 Hz respectively to morph the curve shape, and a phase LFO ramps the phase accumulation parameter linearly from 0 to 2π. The clip_trigger card control routes the frequencies either through the smooth oscillators or through a curated 10-row harmonic-ratio table (ratio node) that jumps on retrigger.\n\nEach axis follows the same construction: the selected frequency is bracketed (floor and ceiling) by two math nodes, then subtracted to give the interpolation factor (a_lerp / b_lerp). A parameter array (t) ranges from 0 to 2π. Two parallel branches apply scale-and-offset to t using the floor and ceiling frequencies, then apply sine. The two sine outputs are blended by the interpolation factor to produce the final smooth mixed coordinate. This blending avoids closed-curve scribbles at non-integer frequencies by morphing smoothly between the clean integer cases.\n\nThe two axes are zipped into an Array<CurvePoint> by pack (which includes the legacy screen-fit scale factor), then render_lines carries the animation, vertex dots, and beat-flash rendering. The groups flatten to byte-identical behavior at load.",
   "presetMetadata": {
     "id": "Lissajous",
     "displayName": "Lissajous",
     "category": "Procedural",
     "oscPrefix": "lissajous",
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "freq_x_rate",
@@ -17,6 +18,7 @@
         "defaultValue": 0.13,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F3"
       },
       {
@@ -27,6 +29,7 @@
         "defaultValue": 0.09,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F3"
       },
       {
@@ -37,6 +40,7 @@
         "defaultValue": 0.07,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F3"
       },
       {
@@ -47,6 +51,7 @@
         "defaultValue": 0.002,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F4"
       },
       {
@@ -57,6 +62,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": true,
+        "isTrigger": false,
         "formatString": "F0"
       },
       {
@@ -67,6 +73,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -77,6 +84,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": true,
+        "isTrigger": false,
         "formatString": "F0"
       },
       {
@@ -87,6 +95,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -97,6 +106,7 @@
         "defaultValue": 0.1,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -107,6 +117,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -117,249 +128,1234 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": true,
+        "isTrigger": false,
         "formatString": "F0"
       }
     ],
-    "paramAliases": [
-      { "old": "snap", "new": "clip_trigger" }
-    ],
     "bindings": [
-      { "id": "freq_x_rate", "label": "Freq X Rate", "defaultValue": 0.13,
-        "target": { "kind": "node", "nodeId": "lfo_x", "param": "angular_rate" },
-        "convert": { "type": "Float" } },
-      { "id": "freq_y_rate", "label": "Freq Y Rate", "defaultValue": 0.09,
-        "target": { "kind": "node", "nodeId": "lfo_y", "param": "angular_rate" },
-        "convert": { "type": "Float" } },
-      { "id": "phase_rate",  "label": "Phase Rate",  "defaultValue": 0.07,
-        "target": { "kind": "node", "nodeId": "lfo_phase", "param": "angular_rate" },
-        "convert": { "type": "Float" } },
-      { "id": "line",        "label": "Line",        "defaultValue": 0.002,
-        "target": { "kind": "node", "nodeId": "render", "param": "edge_thickness" },
-        "convert": { "type": "Float" } },
-      { "id": "show_verts",  "label": "Show Vertices","defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "render", "param": "show_verts" },
-        "convert": { "type": "BoolThreshold" } },
-      { "id": "vert_size",   "label": "Vertex Size", "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "render", "param": "vert_size" },
-        "convert": { "type": "Float" } },
-      { "id": "animate",     "label": "Animate",     "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "render", "param": "animate" },
-        "convert": { "type": "BoolThreshold" } },
-      { "id": "speed",       "label": "Speed",       "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "render", "param": "speed" },
-        "convert": { "type": "Float" } },
-      { "id": "window",      "label": "Window",      "defaultValue": 0.1,
-        "target": { "kind": "node", "nodeId": "render", "param": "window" },
-        "convert": { "type": "Float" } },
-      { "id": "scale",       "label": "Scale",       "defaultValue": 1.0,
-        "target": { "kind": "node", "nodeId": "pack", "param": "scale" },
-        "convert": { "type": "Float" } },
-      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "mux_x", "param": "selector" },
-        "convert": { "type": "Float" } },
-      { "id": "clip_trigger", "label": "Clip Trigger", "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "mux_y", "param": "selector" },
-        "convert": { "type": "Float" } }
+      {
+        "id": "freq_x_rate",
+        "label": "Freq X Rate",
+        "defaultValue": 0.13,
+        "target": {
+          "kind": "node",
+          "nodeId": "lfo_x",
+          "param": "angular_rate"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "freq_y_rate",
+        "label": "Freq Y Rate",
+        "defaultValue": 0.09,
+        "target": {
+          "kind": "node",
+          "nodeId": "lfo_y",
+          "param": "angular_rate"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "phase_rate",
+        "label": "Phase Rate",
+        "defaultValue": 0.07,
+        "target": {
+          "kind": "node",
+          "nodeId": "lfo_phase",
+          "param": "angular_rate"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "line",
+        "label": "Line",
+        "defaultValue": 0.002,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "edge_thickness"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "show_verts",
+        "label": "Show Vertices",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "show_verts"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "vert_size",
+        "label": "Vertex Size",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "vert_size"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "animate",
+        "label": "Animate",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "animate"
+        },
+        "convert": {
+          "type": "BoolThreshold"
+        }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "speed"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "window",
+        "label": "Window",
+        "defaultValue": 0.1,
+        "target": {
+          "kind": "node",
+          "nodeId": "render",
+          "param": "window"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "scale",
+        "label": "Scale",
+        "defaultValue": 1.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "pack",
+          "param": "scale"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mux_x",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "clip_trigger",
+        "label": "Clip Trigger",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mux_y",
+          "param": "selector"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
     ],
-    "skipMode": { "kind": "never" }
+    "skipMode": {
+      "kind": "never"
+    },
+    "paramAliases": [
+      {
+        "old": "snap",
+        "new": "clip_trigger"
+      }
+    ]
   },
   "nodes": [
-    { "id": 0, "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
-
     {
-      "id": 1, "typeId": "node.lfo", "handle": "lfo_x", "nodeId": "lfo_x",
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "title": "Inputs"
+    },
+    {
+      "id": 7,
+      "nodeId": "t",
+      "typeId": "node.generate_range",
+      "handle": "t",
       "params": {
-        "rate_mode":    { "type": "Enum",  "value": 1 },
-        "shape":        { "type": "Enum",  "value": 0 },
-        "angular_rate": { "type": "Float", "value": 0.13 },
-        "min":          { "type": "Float", "value": 0.5 },
-        "max":          { "type": "Float", "value": 3.5 }
+        "end": {
+          "type": "Float",
+          "value": 6.2831855
+        },
+        "max_capacity": {
+          "type": "Int",
+          "value": 256
+        },
+        "start": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "title": "Parameter Array"
+    },
+    {
+      "id": 24,
+      "nodeId": "pack",
+      "typeId": "node.pack_curve_xy",
+      "handle": "pack",
+      "params": {
+        "scale": {
+          "type": "Float",
+          "value": 1.0
+        }
+      },
+      "title": "Pack to Curve Points"
+    },
+    {
+      "id": 26,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Output"
+    },
+    {
+      "id": 27,
+      "nodeId": "Oscillator Bank",
+      "typeId": "group",
+      "handle": "Oscillator Bank",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "freqX",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "freqY",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "phase",
+              "portType": "Scalar(F32)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "lfo_x",
+            "typeId": "node.lfo",
+            "handle": "lfo_x",
+            "params": {
+              "angular_rate": {
+                "type": "Float",
+                "value": 0.13
+              },
+              "max": {
+                "type": "Float",
+                "value": 3.5
+              },
+              "min": {
+                "type": "Float",
+                "value": 0.5
+              },
+              "rate_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "LFO X Frequency"
+          },
+          {
+            "id": 2,
+            "nodeId": "lfo_y",
+            "typeId": "node.lfo",
+            "handle": "lfo_y",
+            "params": {
+              "angular_rate": {
+                "type": "Float",
+                "value": 0.09
+              },
+              "max": {
+                "type": "Float",
+                "value": 5.0
+              },
+              "min": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "rate_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "LFO Y Frequency"
+          },
+          {
+            "id": 3,
+            "nodeId": "lfo_phase",
+            "typeId": "node.lfo",
+            "handle": "lfo_phase",
+            "params": {
+              "angular_rate": {
+                "type": "Float",
+                "value": 0.07
+              },
+              "max": {
+                "type": "Float",
+                "value": 6.2831855
+              },
+              "min": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "rate_mode": {
+                "type": "Enum",
+                "value": 1
+              },
+              "shape": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "LFO Phase"
+          },
+          {
+            "id": 28,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 29,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 29,
+            "toPort": "freqX"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 29,
+            "toPort": "freqY"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 29,
+            "toPort": "phase"
+          }
+        ],
+        "tint": [
+          0.3,
+          0.5,
+          0.8,
+          1.0
+        ]
       }
     },
     {
-      "id": 2, "typeId": "node.lfo", "handle": "lfo_y", "nodeId": "lfo_y",
-      "params": {
-        "rate_mode":    { "type": "Enum",  "value": 1 },
-        "shape":        { "type": "Enum",  "value": 0 },
-        "angular_rate": { "type": "Float", "value": 0.09 },
-        "min":          { "type": "Float", "value": 1.0 },
-        "max":          { "type": "Float", "value": 5.0 }
+      "id": 28,
+      "nodeId": "Frequency Selection",
+      "typeId": "group",
+      "handle": "Frequency Selection",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "index",
+              "portType": ""
+            },
+            {
+              "name": "in_0",
+              "portType": ""
+            },
+            {
+              "name": "in_0_2",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "freqXSelected",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "freqYSelected",
+              "portType": "Scalar(F32)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 4,
+            "nodeId": "ratio",
+            "typeId": "node.frequency_ratio",
+            "handle": "ratio",
+            "title": "Harmonic Ratio"
+          },
+          {
+            "id": 5,
+            "nodeId": "mux_x",
+            "typeId": "node.mux_scalar",
+            "handle": "mux_x",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Frequency X Selector"
+          },
+          {
+            "id": 6,
+            "nodeId": "mux_y",
+            "typeId": "node.mux_scalar",
+            "handle": "mux_y",
+            "params": {
+              "selector": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Frequency Y Selector"
+          },
+          {
+            "id": 29,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 30,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 4,
+            "fromPort": "a",
+            "toNode": 5,
+            "toPort": "in_1"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "b",
+            "toNode": 6,
+            "toPort": "in_1"
+          },
+          {
+            "fromNode": 29,
+            "fromPort": "index",
+            "toNode": 4,
+            "toPort": "index"
+          },
+          {
+            "fromNode": 29,
+            "fromPort": "in_0",
+            "toNode": 5,
+            "toPort": "in_0"
+          },
+          {
+            "fromNode": 29,
+            "fromPort": "in_0_2",
+            "toNode": 6,
+            "toPort": "in_0"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 30,
+            "toPort": "freqXSelected"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 30,
+            "toPort": "freqYSelected"
+          }
+        ],
+        "tint": [
+          0.6,
+          0.3,
+          0.7,
+          1.0
+        ]
       }
     },
     {
-      "id": 3, "typeId": "node.lfo", "handle": "lfo_phase", "nodeId": "lfo_phase",
-      "params": {
-        "rate_mode":    { "type": "Enum",  "value": 1 },
-        "shape":        { "type": "Enum",  "value": 2 },
-        "angular_rate": { "type": "Float", "value": 0.07 },
-        "min":          { "type": "Float", "value": 0.0 },
-        "max":          { "type": "Float", "value": 6.28318530718 }
+      "id": 29,
+      "nodeId": "X Curve Builder",
+      "typeId": "group",
+      "handle": "X Curve Builder",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "a",
+              "portType": ""
+            },
+            {
+              "name": "a_2",
+              "portType": ""
+            },
+            {
+              "name": "a_3",
+              "portType": ""
+            },
+            {
+              "name": "a_4",
+              "portType": ""
+            },
+            {
+              "name": "offset",
+              "portType": ""
+            },
+            {
+              "name": "a_5",
+              "portType": ""
+            },
+            {
+              "name": "offset_2",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "xCoordinate",
+              "portType": "Array(F32)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 8,
+            "nodeId": "a_lo",
+            "typeId": "node.math",
+            "handle": "a_lo",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 10
+              }
+            },
+            "title": "X Floor Frequency"
+          },
+          {
+            "id": 9,
+            "nodeId": "a_hi",
+            "typeId": "node.math",
+            "handle": "a_hi",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 11
+              }
+            },
+            "title": "X Ceil Frequency"
+          },
+          {
+            "id": 10,
+            "nodeId": "a_lerp",
+            "typeId": "node.math",
+            "handle": "a_lerp",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "X Blend Factor"
+          },
+          {
+            "id": 11,
+            "nodeId": "t_lo_x",
+            "typeId": "node.array_math",
+            "handle": "t_lo_x",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 6
+              }
+            },
+            "title": "X Scaled Low Phase"
+          },
+          {
+            "id": 12,
+            "nodeId": "x_lo",
+            "typeId": "node.array_math",
+            "handle": "x_lo",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 11
+              }
+            },
+            "title": "X Low Sine"
+          },
+          {
+            "id": 13,
+            "nodeId": "t_hi_x",
+            "typeId": "node.array_math",
+            "handle": "t_hi_x",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 6
+              }
+            },
+            "title": "X Scaled High Phase"
+          },
+          {
+            "id": 14,
+            "nodeId": "x_hi",
+            "typeId": "node.array_math",
+            "handle": "x_hi",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 11
+              }
+            },
+            "title": "X High Sine"
+          },
+          {
+            "id": 15,
+            "nodeId": "x_mix",
+            "typeId": "node.array_math",
+            "handle": "x_mix",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 13
+              }
+            },
+            "title": "X Blended Output"
+          },
+          {
+            "id": 30,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 31,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "out",
+            "toNode": 11,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 14,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 15,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "out",
+            "toNode": 15,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 15,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "a",
+            "toNode": 8,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "a_2",
+            "toNode": 9,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "a_3",
+            "toNode": 10,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "a_4",
+            "toNode": 11,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "offset",
+            "toNode": 11,
+            "toPort": "offset"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "a_5",
+            "toNode": 13,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "offset_2",
+            "toNode": 13,
+            "toPort": "offset"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 31,
+            "toPort": "xCoordinate"
+          }
+        ],
+        "tint": [
+          0.8,
+          0.4,
+          0.2,
+          1.0
+        ]
       }
     },
-
-    { "id": 4, "typeId": "node.frequency_ratio", "handle": "ratio", "nodeId": "ratio" },
-
     {
-      "id": 5, "typeId": "node.mux_scalar", "handle": "mux_x", "nodeId": "mux_x",
-      "params": { "selector": { "type": "Float", "value": 0.0 } }
-    },
-    {
-      "id": 6, "typeId": "node.mux_scalar", "handle": "mux_y", "nodeId": "mux_y",
-      "params": { "selector": { "type": "Float", "value": 0.0 } }
-    },
-
-    {
-      "id": 7, "typeId": "node.generate_range", "handle": "t", "nodeId": "t",
-      "params": {
-        "start":        { "type": "Float", "value": 0.0 },
-        "end":          { "type": "Float", "value": 6.28318530718 },
-        "max_capacity": { "type": "Int",   "value": 256 }
+      "id": 30,
+      "nodeId": "Y Curve Builder",
+      "typeId": "group",
+      "handle": "Y Curve Builder",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "a",
+              "portType": ""
+            },
+            {
+              "name": "a_2",
+              "portType": ""
+            },
+            {
+              "name": "a_3",
+              "portType": ""
+            },
+            {
+              "name": "a_4",
+              "portType": ""
+            },
+            {
+              "name": "a_5",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "yCoordinate",
+              "portType": "Array(F32)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 16,
+            "nodeId": "b_lo",
+            "typeId": "node.math",
+            "handle": "b_lo",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 10
+              }
+            },
+            "title": "Y Floor Frequency"
+          },
+          {
+            "id": 17,
+            "nodeId": "b_hi",
+            "typeId": "node.math",
+            "handle": "b_hi",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 11
+              }
+            },
+            "title": "Y Ceil Frequency"
+          },
+          {
+            "id": 18,
+            "nodeId": "b_lerp",
+            "typeId": "node.math",
+            "handle": "b_lerp",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 1
+              }
+            },
+            "title": "Y Blend Factor"
+          },
+          {
+            "id": 19,
+            "nodeId": "t_lo_y",
+            "typeId": "node.array_math",
+            "handle": "t_lo_y",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 6
+              }
+            },
+            "title": "Y Scaled Low Phase"
+          },
+          {
+            "id": 20,
+            "nodeId": "y_lo",
+            "typeId": "node.array_math",
+            "handle": "y_lo",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 11
+              }
+            },
+            "title": "Y Low Sine"
+          },
+          {
+            "id": 21,
+            "nodeId": "t_hi_y",
+            "typeId": "node.array_math",
+            "handle": "t_hi_y",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 6
+              }
+            },
+            "title": "Y Scaled High Phase"
+          },
+          {
+            "id": 22,
+            "nodeId": "y_hi",
+            "typeId": "node.array_math",
+            "handle": "y_hi",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 11
+              }
+            },
+            "title": "Y High Sine"
+          },
+          {
+            "id": 23,
+            "nodeId": "y_mix",
+            "typeId": "node.array_math",
+            "handle": "y_mix",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 13
+              }
+            },
+            "title": "Y Blended Output"
+          },
+          {
+            "id": 31,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 32,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 16,
+            "fromPort": "out",
+            "toNode": 18,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 19,
+            "fromPort": "out",
+            "toNode": 20,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 17,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "out",
+            "toNode": 22,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "out",
+            "toNode": 23,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "out",
+            "toNode": 23,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "out",
+            "toNode": 23,
+            "toPort": "scale"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "a",
+            "toNode": 16,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "a_2",
+            "toNode": 17,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "a_3",
+            "toNode": 18,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "a_4",
+            "toNode": 19,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "a_5",
+            "toNode": 21,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 23,
+            "fromPort": "out",
+            "toNode": 32,
+            "toPort": "yCoordinate"
+          }
+        ],
+        "tint": [
+          0.2,
+          0.7,
+          0.4,
+          1.0
+        ]
       }
     },
-
     {
-      "id": 8, "typeId": "node.math", "handle": "a_lo", "nodeId": "a_lo",
-      "params": { "op": { "type": "Enum", "value": 10 } }
-    },
-    {
-      "id": 9, "typeId": "node.math", "handle": "a_hi", "nodeId": "a_hi",
-      "params": { "op": { "type": "Enum", "value": 11 } }
-    },
-    {
-      "id": 10, "typeId": "node.math", "handle": "a_lerp", "nodeId": "a_lerp",
-      "params": { "op": { "type": "Enum", "value": 1 } }
-    },
-
-    {
-      "id": 11, "typeId": "node.array_math", "handle": "t_lo_x", "nodeId": "t_lo_x",
-      "params": { "op": { "type": "Enum", "value": 6 } }
-    },
-    {
-      "id": 12, "typeId": "node.array_math", "handle": "x_lo", "nodeId": "x_lo",
-      "params": { "op": { "type": "Enum", "value": 11 } }
-    },
-    {
-      "id": 13, "typeId": "node.array_math", "handle": "t_hi_x", "nodeId": "t_hi_x",
-      "params": { "op": { "type": "Enum", "value": 6 } }
-    },
-    {
-      "id": 14, "typeId": "node.array_math", "handle": "x_hi", "nodeId": "x_hi",
-      "params": { "op": { "type": "Enum", "value": 11 } }
-    },
-    {
-      "id": 15, "typeId": "node.array_math", "handle": "x_mix", "nodeId": "x_mix",
-      "params": { "op": { "type": "Enum", "value": 13 } }
-    },
-
-    {
-      "id": 16, "typeId": "node.math", "handle": "b_lo", "nodeId": "b_lo",
-      "params": { "op": { "type": "Enum", "value": 10 } }
-    },
-    {
-      "id": 17, "typeId": "node.math", "handle": "b_hi", "nodeId": "b_hi",
-      "params": { "op": { "type": "Enum", "value": 11 } }
-    },
-    {
-      "id": 18, "typeId": "node.math", "handle": "b_lerp", "nodeId": "b_lerp",
-      "params": { "op": { "type": "Enum", "value": 1 } }
-    },
-
-    {
-      "id": 19, "typeId": "node.array_math", "handle": "t_lo_y", "nodeId": "t_lo_y",
-      "params": { "op": { "type": "Enum", "value": 6 } }
-    },
-    {
-      "id": 20, "typeId": "node.array_math", "handle": "y_lo", "nodeId": "y_lo",
-      "params": { "op": { "type": "Enum", "value": 11 } }
-    },
-    {
-      "id": 21, "typeId": "node.array_math", "handle": "t_hi_y", "nodeId": "t_hi_y",
-      "params": { "op": { "type": "Enum", "value": 6 } }
-    },
-    {
-      "id": 22, "typeId": "node.array_math", "handle": "y_hi", "nodeId": "y_hi",
-      "params": { "op": { "type": "Enum", "value": 11 } }
-    },
-    {
-      "id": 23, "typeId": "node.array_math", "handle": "y_mix", "nodeId": "y_mix",
-      "params": { "op": { "type": "Enum", "value": 13 } }
-    },
-
-    {
-      "id": 24, "typeId": "node.pack_curve_xy", "handle": "pack", "nodeId": "pack",
-      "params": { "scale": { "type": "Float", "value": 1.0 } }
-    },
-
-    {
-      "id": 25, "typeId": "node.render_lines", "handle": "render", "nodeId": "render",
-      "params": {
-        "edge_thickness":    { "type": "Float", "value": 0.002 },
-        "closed_loop":       { "type": "Bool",  "value": true  },
-        "show_verts":        { "type": "Bool",  "value": true  },
-        "vert_size":         { "type": "Float", "value": 1.0   },
-        "animate":           { "type": "Bool",  "value": false },
-        "speed":             { "type": "Float", "value": 1.0   },
-        "window":            { "type": "Float", "value": 0.1   },
-        "beat_flash_amount": { "type": "Float", "value": 0.4   },
-        "color_r":           { "type": "Float", "value": 1.0   },
-        "color_g":           { "type": "Float", "value": 1.0   },
-        "color_b":           { "type": "Float", "value": 1.0   },
-        "color_a":           { "type": "Float", "value": 1.0   }
+      "id": 31,
+      "nodeId": "Display",
+      "typeId": "group",
+      "handle": "Display",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "points",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "color",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 25,
+            "nodeId": "render",
+            "typeId": "node.render_lines",
+            "handle": "render",
+            "params": {
+              "animate": {
+                "type": "Bool",
+                "value": false
+              },
+              "beat_flash_amount": {
+                "type": "Float",
+                "value": 0.4
+              },
+              "closed_loop": {
+                "type": "Bool",
+                "value": true
+              },
+              "color_a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color_b": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color_g": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "color_r": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "edge_thickness": {
+                "type": "Float",
+                "value": 0.002
+              },
+              "show_verts": {
+                "type": "Bool",
+                "value": true
+              },
+              "speed": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "vert_size": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "window": {
+                "type": "Float",
+                "value": 0.1
+              }
+            },
+            "title": "Render Lines"
+          },
+          {
+            "id": 32,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 33,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 32,
+            "fromPort": "points",
+            "toNode": 25,
+            "toPort": "points"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "color",
+            "toNode": 33,
+            "toPort": "color"
+          }
+        ],
+        "tint": [
+          0.9,
+          0.8,
+          0.3,
+          1.0
+        ]
       }
-    },
-
-    { "id": 26, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+    }
   ],
   "wires": [
-    { "fromNode": 0, "fromPort": "trigger_count", "toNode": 4, "toPort": "index"   },
-
-    { "fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "in_0" },
-    { "fromNode": 4, "fromPort": "a",   "toNode": 5, "toPort": "in_1" },
-
-    { "fromNode": 2, "fromPort": "out", "toNode": 6, "toPort": "in_0" },
-    { "fromNode": 4, "fromPort": "b",   "toNode": 6, "toPort": "in_1" },
-
-    { "fromNode": 5, "fromPort": "out", "toNode": 8,  "toPort": "a" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 9,  "toPort": "a" },
-    { "fromNode": 5, "fromPort": "out", "toNode": 10, "toPort": "a" },
-    { "fromNode": 8, "fromPort": "out", "toNode": 10, "toPort": "b" },
-
-    { "fromNode": 7, "fromPort": "out", "toNode": 11, "toPort": "a"      },
-    { "fromNode": 8, "fromPort": "out", "toNode": 11, "toPort": "scale"  },
-    { "fromNode": 3, "fromPort": "out", "toNode": 11, "toPort": "offset" },
-    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "a" },
-
-    { "fromNode": 7, "fromPort": "out", "toNode": 13, "toPort": "a"      },
-    { "fromNode": 9, "fromPort": "out", "toNode": 13, "toPort": "scale"  },
-    { "fromNode": 3, "fromPort": "out", "toNode": 13, "toPort": "offset" },
-    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "a" },
-
-    { "fromNode": 12, "fromPort": "out", "toNode": 15, "toPort": "a"     },
-    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "b"     },
-    { "fromNode": 10, "fromPort": "out", "toNode": 15, "toPort": "scale" },
-
-    { "fromNode": 6, "fromPort": "out", "toNode": 16, "toPort": "a" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 17, "toPort": "a" },
-    { "fromNode": 6, "fromPort": "out", "toNode": 18, "toPort": "a" },
-    { "fromNode": 16, "fromPort": "out", "toNode": 18, "toPort": "b" },
-
-    { "fromNode": 7,  "fromPort": "out", "toNode": 19, "toPort": "a"     },
-    { "fromNode": 16, "fromPort": "out", "toNode": 19, "toPort": "scale" },
-    { "fromNode": 19, "fromPort": "out", "toNode": 20, "toPort": "a" },
-
-    { "fromNode": 7,  "fromPort": "out", "toNode": 21, "toPort": "a"     },
-    { "fromNode": 17, "fromPort": "out", "toNode": 21, "toPort": "scale" },
-    { "fromNode": 21, "fromPort": "out", "toNode": 22, "toPort": "a" },
-
-    { "fromNode": 20, "fromPort": "out", "toNode": 23, "toPort": "a"     },
-    { "fromNode": 22, "fromPort": "out", "toNode": 23, "toPort": "b"     },
-    { "fromNode": 18, "fromPort": "out", "toNode": 23, "toPort": "scale" },
-
-    { "fromNode": 15, "fromPort": "out", "toNode": 24, "toPort": "x" },
-    { "fromNode": 23, "fromPort": "out", "toNode": 24, "toPort": "y" },
-
-    { "fromNode": 24, "fromPort": "out",   "toNode": 25, "toPort": "points" },
-
-    { "fromNode": 25, "fromPort": "color", "toNode": 26, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "trigger_count",
+      "toNode": 28,
+      "toPort": "index"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "freqX",
+      "toNode": 28,
+      "toPort": "in_0"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "freqY",
+      "toNode": 28,
+      "toPort": "in_0_2"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "freqXSelected",
+      "toNode": 29,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "freqXSelected",
+      "toNode": 29,
+      "toPort": "a_2"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "freqXSelected",
+      "toNode": 29,
+      "toPort": "a_3"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 29,
+      "toPort": "a_4"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "phase",
+      "toNode": 29,
+      "toPort": "offset"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 29,
+      "toPort": "a_5"
+    },
+    {
+      "fromNode": 27,
+      "fromPort": "phase",
+      "toNode": 29,
+      "toPort": "offset_2"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "freqYSelected",
+      "toNode": 30,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "freqYSelected",
+      "toNode": 30,
+      "toPort": "a_2"
+    },
+    {
+      "fromNode": 28,
+      "fromPort": "freqYSelected",
+      "toNode": 30,
+      "toPort": "a_3"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "a_4"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "out",
+      "toNode": 30,
+      "toPort": "a_5"
+    },
+    {
+      "fromNode": 29,
+      "fromPort": "xCoordinate",
+      "toNode": 24,
+      "toPort": "x"
+    },
+    {
+      "fromNode": 30,
+      "fromPort": "yCoordinate",
+      "toNode": 24,
+      "toPort": "y"
+    },
+    {
+      "fromNode": 24,
+      "fromPort": "out",
+      "toNode": 31,
+      "toPort": "points"
+    },
+    {
+      "fromNode": 31,
+      "fromPort": "color",
+      "toNode": 26,
+      "toPort": "in"
+    }
   ]
 }

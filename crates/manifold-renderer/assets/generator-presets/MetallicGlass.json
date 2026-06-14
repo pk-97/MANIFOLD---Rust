@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Metallic Glass",
-  "description": "Y2K-aesthetic feedback-displacement metallic surface generator.\n\nUpstream pipeline (unchanged): 3D simplex noise drives a feedback-blend loop (mix Difference + mix Lerp at 0.98) that builds an evolving liquid-mercury height field; two-axis Gaussian blur smooths the result. The smoothed height feeds (a) a levels-shaped height channel and (b) a mirror_axis → Sobel-magnitude chain that produces an edge / roughness modulation texture. Both channels then go through their own second-stage temporal blend (node.feedback + node.mix Lerp at 0.15) that matches the legacy bundle's packed-material smoothing pass. The smoothed height drives node.displace_mesh per-vertex, and node.heightmap_to_normal (WorldYUp) builds a world-space normal map at full canvas resolution.\n\nTerminal (refactored 2026-05-27 to the bundled PBR pipeline + mesh-UV sampling): node.render_3d_mesh draws the displaced grid in one forward pass — Cook-Torrance D_GGX × G_Smith × F_Schlick + IBL reflection — taking the world-space normal_map and the edge-derived roughness_map as per-pixel inputs sampled at each fragment's mesh UV. The envmap stays node.bake_equirect_envmap (the procedural HDR studio). All scattered cook_torrance_specular / equirect_envmap_sample / mix / reinhard_tone_map nodes are gone; the renderer handles shading internally and writes linear color straight to the final_output.\n\nWhy the rewrite: the legacy chain sampled the normal_map and world_pos at SCREEN UV in deferred-shading style, which silently broke as soon as render_3d_mesh became a true 3D forward renderer (texture pattern locked to the screen instead of the surface). The bundled PBR pipeline samples surface textures at MESH UV — the per-vertex parameterization interpolated through the rasterizer — so the lit pattern follows the geometry as the camera orbits, matching every production engine (Blender, Unreal, Unity, TouchDesigner). See docs/MESH_UV_AND_RENDERER_TEXTURE_PLAN.md.",
+  "description": "A Y2K-aesthetic procedural surface shader with feedback-displaced geometry and temporal coherence. The pipeline flows from animated 3D simplex noise through a color-domain feedback loop that generates an evolving liquid-mercury height texture. Two parallel streams branch from that: the height path is levels-shaped, then temporally smoothed and displaced into mesh vertex positions; the edge path runs a mirror-axis rotation followed by Sobel gradient to produce edge/roughness maps, also temporally smoothed. A third control stream handles the camera orbit and field-of-view parameters, converting screen degrees to radians for the orbit node. At the terminal stage: the displaced triangulated mesh, camera view, and prepared surface textures (normals and roughness) flow into the bundled PBR rendering pipeline. The envmap provides image-based lighting; the pbr_material and key_light define the surface finish and key illumination. All groups flatten to byte-identical behavior: this is a presentation reorganization only.",
   "presetMetadata": {
     "id": "MetallicGlass",
     "displayName": "Metallic Glass",
@@ -9,368 +9,2259 @@
     "oscPrefix": "metallicGlass",
     "legacyDiscriminant": 23,
     "available": true,
+    "isLineBased": false,
     "params": [
-      { "id": "feedback",    "name": "Feedback",         "min": 0.5,    "max": 1.0,    "defaultValue": 0.98,  "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "noise_scale", "name": "Noise Scale",      "min": 0.1,    "max": 2.0,    "defaultValue": 0.75,  "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "noise_speed", "name": "Noise Speed",      "min": 0.01,   "max": 1.0,    "defaultValue": 0.1,   "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
-      { "id": "edge_str",    "name": "Edge Strength",    "min": 0.5,    "max": 20.0,   "defaultValue": 5.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
-      { "id": "mirror",      "name": "Mirror",           "min": 0.0,    "max": 90.0,   "defaultValue": 45.0,  "wholeNumbers": false, "isToggle": false, "formatString": "F0" },
-      { "id": "displace",    "name": "Displace",         "min": 0.0,    "max": 0.5,    "defaultValue": 0.2,   "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
-      { "id": "roughness",   "name": "Roughness",        "min": 0.01,   "max": 1.0,    "defaultValue": 0.05,  "wholeNumbers": false, "isToggle": false, "formatString": "F3" },
-      { "id": "light_int",   "name": "Light Intensity",  "min": 0.1,    "max": 10.0,   "defaultValue": 1.5,   "wholeNumbers": false, "isToggle": false, "formatString": "F1" },
-      { "id": "cam_dist",    "name": "Camera Distance",  "min": 0.5,    "max": 10.0,   "defaultValue": 2.5,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" },
-      { "id": "cam_orbit",   "name": "Camera Orbit",     "min": -180.0, "max": 180.0,  "defaultValue": 0.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F0" },
-      { "id": "cam_tilt",    "name": "Camera Tilt",      "min": -90.0,  "max": 90.0,   "defaultValue": -10.0, "wholeNumbers": false, "isToggle": false, "formatString": "F0" },
-      { "id": "cam_fov",     "name": "Camera FOV",       "min": 20.0,   "max": 120.0,  "defaultValue": 54.0,  "wholeNumbers": false, "isToggle": false, "formatString": "F0" },
-      { "id": "look_y",      "name": "Look Y",           "min": -2.0,   "max": 2.0,    "defaultValue": 0.0,   "wholeNumbers": false, "isToggle": false, "formatString": "F2" }
+      {
+        "id": "feedback",
+        "name": "Feedback",
+        "min": 0.5,
+        "max": 1.0,
+        "defaultValue": 0.98,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "noise_scale",
+        "name": "Noise Scale",
+        "min": 0.1,
+        "max": 2.0,
+        "defaultValue": 0.75,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "noise_speed",
+        "name": "Noise Speed",
+        "min": 0.01,
+        "max": 1.0,
+        "defaultValue": 0.1,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "edge_str",
+        "name": "Edge Strength",
+        "min": 0.5,
+        "max": 20.0,
+        "defaultValue": 5.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "mirror",
+        "name": "Mirror",
+        "min": 0.0,
+        "max": 90.0,
+        "defaultValue": 45.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "displace",
+        "name": "Displace",
+        "min": 0.0,
+        "max": 0.5,
+        "defaultValue": 0.2,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "roughness",
+        "name": "Roughness",
+        "min": 0.01,
+        "max": 1.0,
+        "defaultValue": 0.05,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F3"
+      },
+      {
+        "id": "light_int",
+        "name": "Light Intensity",
+        "min": 0.1,
+        "max": 10.0,
+        "defaultValue": 1.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F1"
+      },
+      {
+        "id": "cam_dist",
+        "name": "Camera Distance",
+        "min": 0.5,
+        "max": 10.0,
+        "defaultValue": 2.5,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "cam_orbit",
+        "name": "Camera Orbit",
+        "min": -180.0,
+        "max": 180.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "cam_tilt",
+        "name": "Camera Tilt",
+        "min": -90.0,
+        "max": 90.0,
+        "defaultValue": -10.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "cam_fov",
+        "name": "Camera FOV",
+        "min": 20.0,
+        "max": 120.0,
+        "defaultValue": 54.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F0"
+      },
+      {
+        "id": "look_y",
+        "name": "Look Y",
+        "min": -2.0,
+        "max": 2.0,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2"
+      }
     ],
     "bindings": [
-      { "id": "feedback",    "label": "Feedback",        "defaultValue": 0.98,
-        "target": { "kind": "node", "nodeId": "blend_lerp", "param": "amount" },
-        "convert": { "type": "Float" } },
-
-      { "id": "noise_scale", "label": "Noise Scale",     "defaultValue": 0.75,
-        "target": { "kind": "node", "nodeId": "noise_scale_inv", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "noise_speed", "label": "Noise Speed",     "defaultValue": 0.1,
-        "target": { "kind": "node", "nodeId": "noise_z_calc", "param": "b" },
-        "convert": { "type": "Float" } },
-
-      { "id": "edge_str",    "label": "Edge Strength",   "defaultValue": 5.0,
-        "target": { "kind": "node", "nodeId": "edge_gain", "param": "gain" },
-        "convert": { "type": "Float" } },
-
-      { "id": "mirror",      "label": "Mirror",          "defaultValue": 45.0,
-        "target": { "kind": "node", "nodeId": "mirror_deg_to_rad", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "displace",    "label": "Displace",        "defaultValue": 0.2,
-        "target": { "kind": "node", "nodeId": "displace_mesh_node", "param": "displacement" },
-        "convert": { "type": "Float" } },
-      { "id": "displace",    "label": "Displace",        "defaultValue": 0.2,
-        "target": { "kind": "node", "nodeId": "height_for_normal_gain", "param": "gain" },
-        "convert": { "type": "Float" } },
-
-      { "id": "roughness",   "label": "Roughness",       "defaultValue": 0.05,
-        "target": { "kind": "node", "nodeId": "pbr_material", "param": "roughness" },
-        "convert": { "type": "Float" } },
-      { "id": "roughness",   "label": "Roughness",       "defaultValue": 0.05,
-        "target": { "kind": "node", "nodeId": "roughness_from_edge", "param": "offset" },
-        "convert": { "type": "Float" } },
-
-      { "id": "light_int",   "label": "Light Intensity", "defaultValue": 1.5,
-        "target": { "kind": "node", "nodeId": "key_light", "param": "intensity" },
-        "convert": { "type": "Float" } },
-
-      { "id": "cam_dist",    "label": "Camera Distance", "defaultValue": 2.5,
-        "target": { "kind": "node", "nodeId": "cam_orbit_node", "param": "distance" },
-        "convert": { "type": "Float" } },
-
-      { "id": "cam_orbit",   "label": "Camera Orbit",    "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "cam_orbit_deg_to_rad", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "cam_tilt",    "label": "Camera Tilt",     "defaultValue": -10.0,
-        "target": { "kind": "node", "nodeId": "cam_tilt_deg_to_rad", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "cam_fov",     "label": "Camera FOV",      "defaultValue": 54.0,
-        "target": { "kind": "node", "nodeId": "cam_fov_deg_to_rad", "param": "a" },
-        "convert": { "type": "Float" } },
-
-      { "id": "look_y",      "label": "Look Y",          "defaultValue": 0.0,
-        "target": { "kind": "node", "nodeId": "cam_orbit_node", "param": "look_y" },
-        "convert": { "type": "Float" } }
-    ]
+      {
+        "id": "feedback",
+        "label": "Feedback",
+        "defaultValue": 0.98,
+        "target": {
+          "kind": "node",
+          "nodeId": "blend_lerp",
+          "param": "amount"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "noise_scale",
+        "label": "Noise Scale",
+        "defaultValue": 0.75,
+        "target": {
+          "kind": "node",
+          "nodeId": "noise_scale_inv",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "noise_speed",
+        "label": "Noise Speed",
+        "defaultValue": 0.1,
+        "target": {
+          "kind": "node",
+          "nodeId": "noise_z_calc",
+          "param": "b"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "edge_str",
+        "label": "Edge Strength",
+        "defaultValue": 5.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "edge_gain",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "mirror",
+        "label": "Mirror",
+        "defaultValue": 45.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "mirror_deg_to_rad",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "displace",
+        "label": "Displace",
+        "defaultValue": 0.2,
+        "target": {
+          "kind": "node",
+          "nodeId": "displace_mesh_node",
+          "param": "displacement"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "displace",
+        "label": "Displace",
+        "defaultValue": 0.2,
+        "target": {
+          "kind": "node",
+          "nodeId": "height_for_normal_gain",
+          "param": "gain"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "roughness",
+        "label": "Roughness",
+        "defaultValue": 0.05,
+        "target": {
+          "kind": "node",
+          "nodeId": "pbr_material",
+          "param": "roughness"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "roughness",
+        "label": "Roughness",
+        "defaultValue": 0.05,
+        "target": {
+          "kind": "node",
+          "nodeId": "roughness_from_edge",
+          "param": "offset"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "light_int",
+        "label": "Light Intensity",
+        "defaultValue": 1.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "key_light",
+          "param": "intensity"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "cam_dist",
+        "label": "Camera Distance",
+        "defaultValue": 2.5,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam_orbit_node",
+          "param": "distance"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "cam_orbit",
+        "label": "Camera Orbit",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam_orbit_deg_to_rad",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "cam_tilt",
+        "label": "Camera Tilt",
+        "defaultValue": -10.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam_tilt_deg_to_rad",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "cam_fov",
+        "label": "Camera FOV",
+        "defaultValue": 54.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam_fov_deg_to_rad",
+          "param": "a"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      },
+      {
+        "id": "look_y",
+        "label": "Look Y",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "cam_orbit_node",
+          "param": "look_y"
+        },
+        "convert": {
+          "type": "Float"
+        }
+      }
+    ],
+    "skipMode": {
+      "kind": "never"
+    }
   },
   "nodes": [
-    { "id": 0,  "typeId": "system.generator_input", "handle": "input", "nodeId": "input" },
-
-    { "id": 1,  "typeId": "node.affine_scalar", "handle": "noise_scale_inv", "nodeId": "noise_scale_inv",
-      "params": { "a": { "type": "Float", "value": 0.75 }, "scale": { "type": "Float", "value": 1.0 }, "offset": { "type": "Float", "value": 0.0 } } },
-    { "id": 2,  "typeId": "node.math", "handle": "noise_scale_recip", "nodeId": "noise_scale_recip",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "op": { "type": "Enum", "value": 3 } } },
-    { "id": 41, "typeId": "node.affine_scalar", "handle": "noise_offset_calc", "nodeId": "noise_offset_calc",
-      "params": { "a": { "type": "Float", "value": 1.333 }, "scale": { "type": "Float", "value": -0.5 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 42, "typeId": "node.math", "handle": "mesh_size_x_calc", "nodeId": "mesh_size_x_calc",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 2.0 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 3,  "typeId": "node.math", "handle": "noise_z_calc", "nodeId": "noise_z_calc",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "b": { "type": "Float", "value": 0.1 }, "op": { "type": "Enum", "value": 2 } } },
-
-    { "id": 4,  "typeId": "node.simplex_field_2d", "handle": "noise", "nodeId": "noise",
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input",
+      "handle": "input",
+      "title": "Inputs"
+    },
+    {
+      "id": 32,
+      "nodeId": "envmap",
+      "typeId": "node.bake_equirect_envmap",
+      "handle": "envmap",
       "params": {
-        "scale_x":  { "type": "Float", "value": 1.333 },
-        "scale_y":  { "type": "Float", "value": 1.333 },
-        "offset_x": { "type": "Float", "value": -0.667 },
-        "offset_y": { "type": "Float", "value": -0.667 },
-        "z":        { "type": "Float", "value": 0.0 },
-        "output_channel": { "type": "Enum", "value": 0 }
-      } },
-
-    { "id": 5,  "typeId": "node.scale_offset_texture", "handle": "noise_scaled", "nodeId": "noise_scaled",
-      "params": { "scale": { "type": "Float", "value": 0.3 }, "offset": { "type": "Float", "value": 0.5 } } },
-
-    { "id": 6,  "typeId": "node.feedback", "handle": "fb_color", "nodeId": "fb_color",
-      "outputFormats": { "out": "rgba16float" } },
-
-    { "id": 7,  "typeId": "node.mix", "handle": "noise_minus_prev", "nodeId": "noise_minus_prev",
-      "params": { "amount": { "type": "Float", "value": 1.0 }, "mode": { "type": "Enum", "value": 5 } } },
-
-    { "id": 9,  "typeId": "node.mix", "handle": "blend_lerp", "nodeId": "blend_lerp",
-      "params": { "amount": { "type": "Float", "value": 0.98 }, "mode": { "type": "Enum", "value": 0 } } },
-
-    { "id": 10, "typeId": "node.gaussian_blur", "handle": "blur_h", "nodeId": "blur_h",
-      "params": { "kernel_size": { "type": "Enum", "value": 0 }, "axis": { "type": "Enum", "value": 0 }, "step": { "type": "Float", "value": 1.0 } } },
-    { "id": 11, "typeId": "node.gaussian_blur", "handle": "blur_v", "nodeId": "blur_v",
-      "params": { "kernel_size": { "type": "Enum", "value": 0 }, "axis": { "type": "Enum", "value": 1 }, "step": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 12, "typeId": "node.brightness", "handle": "luma_for_height", "nodeId": "luma_for_height" },
-
-    { "id": 13, "typeId": "node.levels", "handle": "height_levels", "nodeId": "height_levels",
+        "azimuth_variation": {
+          "type": "Float",
+          "value": 0.12
+        },
+        "height": {
+          "type": "Int",
+          "value": 256
+        },
+        "horizon_strength": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "width": {
+          "type": "Int",
+          "value": 512
+        }
+      },
+      "title": "Environment Map"
+    },
+    {
+      "id": 50,
+      "nodeId": "geometry_pass",
+      "typeId": "node.render_3d_mesh",
+      "handle": "geometry_pass",
+      "title": "3D Geometry Pass"
+    },
+    {
+      "id": 62,
+      "nodeId": "pbr_material",
+      "typeId": "node.pbr_material",
+      "handle": "pbr_material",
       "params": {
-        "scale":  { "type": "Float", "value": 1.26 },
-        "offset": { "type": "Float", "value": 0.29 },
-        "lo":     { "type": "Float", "value": 0.0 },
-        "hi":     { "type": "Float", "value": 1.0 },
-        "gamma":  { "type": "Float", "value": 0.8 }
-      } },
-
-    { "id": 17, "typeId": "node.affine_scalar", "handle": "mirror_deg_to_rad", "nodeId": "mirror_deg_to_rad",
-      "params": { "a": { "type": "Float", "value": 45.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
-    { "id": 18, "typeId": "node.mirror_axis", "handle": "mirrored", "nodeId": "mirrored",
-      "params": { "angle": { "type": "Float", "value": 0.785398 } } },
-
-    { "id": 19, "typeId": "node.brightness", "handle": "luma_for_sobel", "nodeId": "luma_for_sobel" },
-
-    { "id": 20, "typeId": "node.convolution_2d_9tap", "handle": "sobel_x", "nodeId": "sobel_x",
+        "ambient": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_a": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.82
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "emission_b": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "emission_g": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "emission_intensity": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "emission_r": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.05
+        }
+      },
+      "title": "PBR Material"
+    },
+    {
+      "id": 63,
+      "nodeId": "key_light",
+      "typeId": "node.light",
+      "handle": "key_light",
       "params": {
-        "k0": { "type": "Float", "value": -1.0 }, "k1": { "type": "Float", "value": 0.0 }, "k2": { "type": "Float", "value": 1.0 },
-        "k3": { "type": "Float", "value": -2.0 }, "k4": { "type": "Float", "value": 0.0 }, "k5": { "type": "Float", "value": 2.0 },
-        "k6": { "type": "Float", "value": -1.0 }, "k7": { "type": "Float", "value": 0.0 }, "k8": { "type": "Float", "value": 1.0 },
-        "bias": { "type": "Float", "value": 0.0 }, "normalise": { "type": "Bool", "value": false }
-      } },
-    { "id": 21, "typeId": "node.convolution_2d_9tap", "handle": "sobel_y", "nodeId": "sobel_y",
-      "params": {
-        "k0": { "type": "Float", "value": -1.0 }, "k1": { "type": "Float", "value": -2.0 }, "k2": { "type": "Float", "value": -1.0 },
-        "k3": { "type": "Float", "value": 0.0 },  "k4": { "type": "Float", "value": 0.0 },  "k5": { "type": "Float", "value": 0.0 },
-        "k6": { "type": "Float", "value": 1.0 },  "k7": { "type": "Float", "value": 2.0 },  "k8": { "type": "Float", "value": 1.0 },
-        "bias": { "type": "Float", "value": 0.0 }, "normalise": { "type": "Bool", "value": false }
-      } },
-
-    { "id": 22, "typeId": "node.pack_channels", "handle": "gradient_xy", "nodeId": "gradient_xy",
-      "params": {
-        "default_r": { "type": "Float", "value": 0.0 },
-        "default_g": { "type": "Float", "value": 0.0 },
-        "default_b": { "type": "Float", "value": 0.0 },
-        "default_a": { "type": "Float", "value": 1.0 }
-      } },
-
-    { "id": 23, "typeId": "node.length_vec2", "handle": "gradient_mag", "nodeId": "gradient_mag" },
-
-    { "id": 24, "typeId": "node.gain", "handle": "edge_gain", "nodeId": "edge_gain",
-      "params": { "gain": { "type": "Float", "value": 5.0 } } },
-
-    { "id": 25, "typeId": "node.clamp_texture", "handle": "edge_clamp", "nodeId": "edge_clamp",
-      "params": { "min": { "type": "Float", "value": 0.0 }, "max": { "type": "Float", "value": 1.0 } } },
-
-    { "id": 32, "typeId": "node.bake_equirect_envmap", "handle": "envmap", "nodeId": "envmap",
-      "params": {
-        "width":  { "type": "Int", "value": 512 },
-        "height": { "type": "Int", "value": 256 },
-        "horizon_strength": { "type": "Float", "value": 1.0 },
-        "azimuth_variation": { "type": "Float", "value": 0.12 }
-      } },
-
-    { "id": 33, "typeId": "node.generate_grid_mesh", "handle": "grid_mesh", "nodeId": "grid_mesh",
-      "params": {
-        "max_capacity": { "type": "Int", "value": 250000 },
-        "resolution_x": { "type": "Int", "value": 500 },
-        "resolution_y": { "type": "Int", "value": 500 },
-        "size_x":       { "type": "Float", "value": 2.0 },
-        "size_y":       { "type": "Float", "value": 2.0 }
-      } },
-
-    { "id": 34, "typeId": "node.displace_mesh", "handle": "displace_mesh_node", "nodeId": "displace_mesh_node",
-      "params": {
-        "cols":         { "type": "Int", "value": 500 },
-        "rows":         { "type": "Int", "value": 500 },
-        "displacement": { "type": "Float", "value": 0.2 },
-        "height_bias":  { "type": "Float", "value": 0.5 }
-      } },
-
-    { "id": 35, "typeId": "node.triangulate_grid", "handle": "triangulated", "nodeId": "triangulated",
-      "params": {
-        "src_cols": { "type": "Int", "value": 500 },
-        "src_rows": { "type": "Int", "value": 500 }
-      } },
-
-    { "id": 36, "typeId": "node.affine_scalar", "handle": "cam_orbit_deg_to_rad", "nodeId": "cam_orbit_deg_to_rad",
-      "params": { "a": { "type": "Float", "value": 0.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 1.57079632679 } } },
-    { "id": 37, "typeId": "node.affine_scalar", "handle": "cam_tilt_deg_to_rad", "nodeId": "cam_tilt_deg_to_rad",
-      "params": { "a": { "type": "Float", "value": -10.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
-    { "id": 38, "typeId": "node.affine_scalar", "handle": "cam_fov_deg_to_rad", "nodeId": "cam_fov_deg_to_rad",
-      "params": { "a": { "type": "Float", "value": 54.0 }, "scale": { "type": "Float", "value": 0.01745329 }, "offset": { "type": "Float", "value": 0.0 } } },
-
-    { "id": 43, "typeId": "node.camera_orbit", "handle": "cam_orbit_node", "nodeId": "cam_orbit_node",
-      "params": {
-        "orbit":    { "type": "Float", "value": 1.57079632679 },
-        "tilt":     { "type": "Float", "value": -0.1745 },
-        "distance": { "type": "Float", "value": 2.5 },
-        "fov_y":    { "type": "Float", "value": 0.9425 },
-        "look_y":   { "type": "Float", "value": 0.0 },
-        "near":     { "type": "Float", "value": 0.01 },
-        "far":      { "type": "Float", "value": 50.0 }
-      } },
-
-    { "id": 49, "typeId": "node.gain", "handle": "height_for_normal_gain", "nodeId": "height_for_normal_gain",
-      "params": { "gain": { "type": "Float", "value": 0.2 } } },
-
-    { "id": 57, "typeId": "node.feedback", "handle": "fb_height_smooth", "nodeId": "fb_height_smooth",
-      "outputFormats": { "out": "rgba16float" } },
-    { "id": 58, "typeId": "node.mix", "handle": "temporal_blend_height", "nodeId": "temporal_blend_height",
-      "params": { "amount": { "type": "Float", "value": 0.15 }, "mode": { "type": "Enum", "value": 0 } } },
-
-    { "id": 59, "typeId": "node.feedback", "handle": "fb_edge_smooth", "nodeId": "fb_edge_smooth",
-      "outputFormats": { "out": "rgba16float" } },
-    { "id": 60, "typeId": "node.mix", "handle": "temporal_blend_edge", "nodeId": "temporal_blend_edge",
-      "params": { "amount": { "type": "Float", "value": 0.15 }, "mode": { "type": "Enum", "value": 0 } } },
-
-    { "id": 61, "typeId": "node.math", "handle": "z_scale_from_canvas", "nodeId": "z_scale_from_canvas",
-      "params": { "a": { "type": "Float", "value": 1.0 }, "b": { "type": "Float", "value": 1920.0 }, "op": { "type": "Enum", "value": 3 } } },
-
-    { "id": 50, "typeId": "node.render_3d_mesh", "handle": "geometry_pass", "nodeId": "geometry_pass" },
-
-    { "id": 62, "typeId": "node.pbr_material", "handle": "pbr_material", "nodeId": "pbr_material",
-      "params": {
-        "color_r":            { "type": "Float", "value": 0.8 },
-        "color_g":            { "type": "Float", "value": 0.8 },
-        "color_b":            { "type": "Float", "value": 0.82 },
-        "color_a":            { "type": "Float", "value": 1.0 },
-        "ambient":            { "type": "Float", "value": 0.0 },
-        "metallic":           { "type": "Float", "value": 1.0 },
-        "roughness":          { "type": "Float", "value": 0.05 },
-        "emission_r":         { "type": "Float", "value": 0.0 },
-        "emission_g":         { "type": "Float", "value": 0.0 },
-        "emission_b":         { "type": "Float", "value": 0.0 },
-        "emission_intensity": { "type": "Float", "value": 0.0 }
-      } },
-
-    { "id": 63, "typeId": "node.light", "handle": "key_light", "nodeId": "key_light",
-      "params": {
-        "mode":              { "type": "Enum",  "value": 0 },
-        "pos_x":             { "type": "Float", "value": -2.0 },
-        "pos_y":             { "type": "Float", "value": 2.0 },
-        "pos_z":             { "type": "Float", "value": 5.0 },
-        "aim_x":             { "type": "Float", "value": 0.0 },
-        "aim_y":             { "type": "Float", "value": 0.0 },
-        "aim_z":             { "type": "Float", "value": 0.0 },
-        "color_r":           { "type": "Float", "value": 1.0 },
-        "color_g":           { "type": "Float", "value": 1.0 },
-        "color_b":           { "type": "Float", "value": 1.0 },
-        "intensity":         { "type": "Float", "value": 1.5 },
-        "range":             { "type": "Float", "value": 30.0 },
-        "cast_shadows":      { "type": "Float", "value": 0.0 },
-        "shadow_softness":   { "type": "Enum",  "value": 1 },
-        "shadow_bias":       { "type": "Float", "value": 0.003 },
-        "shadow_resolution": { "type": "Int",   "value": 2048 }
-      } },
-
-    { "id": 51, "typeId": "node.heightmap_to_normal", "handle": "surface_normal", "nodeId": "surface_normal",
-      "params": {
-        "z_scale":     { "type": "Float", "value": 0.02 },
-        "aspect":      { "type": "Float", "value": 1.0 },
-        "coord_space": { "type": "Enum",  "value": 1 }
-      } },
-
-    { "id": 52, "typeId": "node.scale_offset_texture", "handle": "roughness_from_edge", "nodeId": "roughness_from_edge",
-      "params": { "scale": { "type": "Float", "value": 0.15 }, "offset": { "type": "Float", "value": 0.05 } } },
-
-    { "id": 40, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.5
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": -2.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 5.0
+        },
+        "range": {
+          "type": "Float",
+          "value": 30.0
+        },
+        "shadow_bias": {
+          "type": "Float",
+          "value": 0.003
+        },
+        "shadow_resolution": {
+          "type": "Int",
+          "value": 2048
+        },
+        "shadow_softness": {
+          "type": "Enum",
+          "value": 1
+        }
+      },
+      "title": "Key Light"
+    },
+    {
+      "id": 40,
+      "nodeId": "final_output",
+      "typeId": "system.final_output",
+      "handle": "final_output",
+      "title": "Final Output"
+    },
+    {
+      "id": 64,
+      "nodeId": "Height Field",
+      "typeId": "group",
+      "handle": "Height Field",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "a",
+              "portType": ""
+            },
+            {
+              "name": "b",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "out",
+              "portType": ""
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 1,
+            "nodeId": "noise_scale_inv",
+            "typeId": "node.affine_scalar",
+            "handle": "noise_scale_inv",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.75
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "Noise Scale"
+          },
+          {
+            "id": 2,
+            "nodeId": "noise_scale_recip",
+            "typeId": "node.math",
+            "handle": "noise_scale_recip",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 3
+              }
+            },
+            "title": "Noise Scale Reciprocal"
+          },
+          {
+            "id": 41,
+            "nodeId": "noise_offset_calc",
+            "typeId": "node.affine_scalar",
+            "handle": "noise_offset_calc",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.333
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": -0.5
+              }
+            },
+            "title": "Noise Offset"
+          },
+          {
+            "id": 3,
+            "nodeId": "noise_z_calc",
+            "typeId": "node.math",
+            "handle": "noise_z_calc",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.1
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Noise Z Animation"
+          },
+          {
+            "id": 4,
+            "nodeId": "noise",
+            "typeId": "node.simplex_field_2d",
+            "handle": "noise",
+            "params": {
+              "offset_x": {
+                "type": "Float",
+                "value": -0.667
+              },
+              "offset_y": {
+                "type": "Float",
+                "value": -0.667
+              },
+              "output_channel": {
+                "type": "Enum",
+                "value": 0
+              },
+              "scale_x": {
+                "type": "Float",
+                "value": 1.333
+              },
+              "scale_y": {
+                "type": "Float",
+                "value": 1.333
+              },
+              "z": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Simplex Noise Field"
+          },
+          {
+            "id": 5,
+            "nodeId": "noise_scaled",
+            "typeId": "node.scale_offset_texture",
+            "handle": "noise_scaled",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.5
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.3
+              }
+            },
+            "title": "Scaled Noise"
+          },
+          {
+            "id": 7,
+            "nodeId": "noise_minus_prev",
+            "typeId": "node.mix",
+            "handle": "noise_minus_prev",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 5
+              }
+            },
+            "title": "Difference Blend"
+          },
+          {
+            "id": 65,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 66,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 1,
+            "fromPort": "out",
+            "toNode": 2,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 3,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "z"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "scale_x"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "scale_y"
+          },
+          {
+            "fromNode": 2,
+            "fromPort": "out",
+            "toNode": 41,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 41,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "offset_x"
+          },
+          {
+            "fromNode": 41,
+            "fromPort": "out",
+            "toNode": 4,
+            "toPort": "offset_y"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 5,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 65,
+            "fromPort": "a",
+            "toNode": 3,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 65,
+            "fromPort": "b",
+            "toNode": 7,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "out",
+            "toNode": 66,
+            "toPort": "out"
+          }
+        ],
+        "tint": [
+          0.3,
+          0.5,
+          0.7,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 65,
+      "nodeId": "Feedback Loop",
+      "typeId": "group",
+      "handle": "Feedback Loop",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "in",
+              "portType": ""
+            },
+            {
+              "name": "b",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "out",
+              "portType": ""
+            },
+            {
+              "name": "blendedHeight",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 6,
+            "nodeId": "fb_color",
+            "typeId": "node.feedback",
+            "handle": "fb_color",
+            "title": "Feedback Color",
+            "outputFormats": {
+              "out": "rgba16float"
+            }
+          },
+          {
+            "id": 9,
+            "nodeId": "blend_lerp",
+            "typeId": "node.mix",
+            "handle": "blend_lerp",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 0.98
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Feedback Lerp"
+          },
+          {
+            "id": 66,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 67,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 9,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 66,
+            "fromPort": "in",
+            "toNode": 6,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 66,
+            "fromPort": "b",
+            "toNode": 9,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "out",
+            "toNode": 67,
+            "toPort": "out"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 67,
+            "toPort": "blendedHeight"
+          }
+        ],
+        "tint": [
+          0.6,
+          0.3,
+          0.3,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 66,
+      "nodeId": "Blur Smooth",
+      "typeId": "group",
+      "handle": "Blur Smooth",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "in",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "smoothedHeight",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 10,
+            "nodeId": "blur_h",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_h",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 0
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "Blur H"
+          },
+          {
+            "id": 11,
+            "nodeId": "blur_v",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_v",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 0
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            },
+            "title": "Blur V"
+          },
+          {
+            "id": 67,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 68,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 11,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 67,
+            "fromPort": "in",
+            "toNode": 10,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 68,
+            "toPort": "smoothedHeight"
+          }
+        ],
+        "tint": [
+          0.4,
+          0.6,
+          0.5,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 67,
+      "nodeId": "Surface Height",
+      "typeId": "group",
+      "handle": "Surface Height",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "source",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "heightForNormal",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "displacementHeight",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 12,
+            "nodeId": "luma_for_height",
+            "typeId": "node.brightness",
+            "handle": "luma_for_height",
+            "title": "Height Luma"
+          },
+          {
+            "id": 13,
+            "nodeId": "height_levels",
+            "typeId": "node.levels",
+            "handle": "height_levels",
+            "params": {
+              "gamma": {
+                "type": "Float",
+                "value": 0.8
+              },
+              "hi": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "lo": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.29
+              },
+              "scale": {
+                "type": "Float",
+                "value": 1.26
+              }
+            },
+            "title": "Height Levels"
+          },
+          {
+            "id": 49,
+            "nodeId": "height_for_normal_gain",
+            "typeId": "node.gain",
+            "handle": "height_for_normal_gain",
+            "params": {
+              "gain": {
+                "type": "Float",
+                "value": 0.2
+              }
+            },
+            "title": "Normal Height Gain"
+          },
+          {
+            "id": 57,
+            "nodeId": "fb_height_smooth",
+            "typeId": "node.feedback",
+            "handle": "fb_height_smooth",
+            "title": "Height Smooth Feedback",
+            "outputFormats": {
+              "out": "rgba16float"
+            }
+          },
+          {
+            "id": 58,
+            "nodeId": "temporal_blend_height",
+            "typeId": "node.mix",
+            "handle": "temporal_blend_height",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 0.15
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Height Temporal Blend"
+          },
+          {
+            "id": 68,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 69,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 13,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 58,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 57,
+            "fromPort": "out",
+            "toNode": 58,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 58,
+            "fromPort": "out",
+            "toNode": 57,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 57,
+            "toPort": "seed"
+          },
+          {
+            "fromNode": 58,
+            "fromPort": "out",
+            "toNode": 49,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 68,
+            "fromPort": "source",
+            "toNode": 12,
+            "toPort": "source"
+          },
+          {
+            "fromNode": 49,
+            "fromPort": "out",
+            "toNode": 69,
+            "toPort": "heightForNormal"
+          },
+          {
+            "fromNode": 58,
+            "fromPort": "out",
+            "toNode": 69,
+            "toPort": "displacementHeight"
+          }
+        ],
+        "tint": [
+          0.5,
+          0.7,
+          0.5,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 68,
+      "nodeId": "Edge Detection",
+      "typeId": "group",
+      "handle": "Edge Detection",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "in",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "edgeTexture",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 17,
+            "nodeId": "mirror_deg_to_rad",
+            "typeId": "node.affine_scalar",
+            "handle": "mirror_deg_to_rad",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 45.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.01745329
+              }
+            },
+            "title": "Mirror Angle to Radians"
+          },
+          {
+            "id": 18,
+            "nodeId": "mirrored",
+            "typeId": "node.mirror_axis",
+            "handle": "mirrored",
+            "params": {
+              "angle": {
+                "type": "Float",
+                "value": 0.785398
+              }
+            },
+            "title": "Mirrored Gradient"
+          },
+          {
+            "id": 19,
+            "nodeId": "luma_for_sobel",
+            "typeId": "node.brightness",
+            "handle": "luma_for_sobel",
+            "title": "Edge Luma"
+          },
+          {
+            "id": 20,
+            "nodeId": "sobel_x",
+            "typeId": "node.convolution_2d_9tap",
+            "handle": "sobel_x",
+            "params": {
+              "bias": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "k0": {
+                "type": "Float",
+                "value": -1.0
+              },
+              "k1": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "k2": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "k3": {
+                "type": "Float",
+                "value": -2.0
+              },
+              "k4": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "k5": {
+                "type": "Float",
+                "value": 2.0
+              },
+              "k6": {
+                "type": "Float",
+                "value": -1.0
+              },
+              "k7": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "k8": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "normalise": {
+                "type": "Bool",
+                "value": false
+              }
+            },
+            "title": "Sobel X"
+          },
+          {
+            "id": 21,
+            "nodeId": "sobel_y",
+            "typeId": "node.convolution_2d_9tap",
+            "handle": "sobel_y",
+            "params": {
+              "bias": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "k0": {
+                "type": "Float",
+                "value": -1.0
+              },
+              "k1": {
+                "type": "Float",
+                "value": -2.0
+              },
+              "k2": {
+                "type": "Float",
+                "value": -1.0
+              },
+              "k3": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "k4": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "k5": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "k6": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "k7": {
+                "type": "Float",
+                "value": 2.0
+              },
+              "k8": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "normalise": {
+                "type": "Bool",
+                "value": false
+              }
+            },
+            "title": "Sobel Y"
+          },
+          {
+            "id": 22,
+            "nodeId": "gradient_xy",
+            "typeId": "node.pack_channels",
+            "handle": "gradient_xy",
+            "params": {
+              "default_a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "default_b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "default_g": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "default_r": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Gradient XY"
+          },
+          {
+            "id": 23,
+            "nodeId": "gradient_mag",
+            "typeId": "node.length_vec2",
+            "handle": "gradient_mag",
+            "title": "Gradient Magnitude"
+          },
+          {
+            "id": 24,
+            "nodeId": "edge_gain",
+            "typeId": "node.gain",
+            "handle": "edge_gain",
+            "params": {
+              "gain": {
+                "type": "Float",
+                "value": 5.0
+              }
+            },
+            "title": "Edge Gain"
+          },
+          {
+            "id": 25,
+            "nodeId": "edge_clamp",
+            "typeId": "node.clamp_texture",
+            "handle": "edge_clamp",
+            "params": {
+              "max": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "min": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "title": "Edge Clamp"
+          },
+          {
+            "id": 69,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 70,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 17,
+            "fromPort": "out",
+            "toNode": 18,
+            "toPort": "angle"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "source"
+          },
+          {
+            "fromNode": 19,
+            "fromPort": "out",
+            "toNode": 20,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 19,
+            "fromPort": "out",
+            "toNode": 21,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "out",
+            "toNode": 22,
+            "toPort": "r"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "out",
+            "toNode": 22,
+            "toPort": "g"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "out",
+            "toNode": 23,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 23,
+            "fromPort": "out",
+            "toNode": 24,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 25,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 69,
+            "fromPort": "in",
+            "toNode": 18,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "out",
+            "toNode": 70,
+            "toPort": "edgeTexture"
+          }
+        ],
+        "tint": [
+          0.7,
+          0.4,
+          0.4,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 69,
+      "nodeId": "Edge Temporal Blend",
+      "typeId": "group",
+      "handle": "Edge Temporal Blend",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "seed",
+              "portType": ""
+            },
+            {
+              "name": "b",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "smoothedEdge",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 59,
+            "nodeId": "fb_edge_smooth",
+            "typeId": "node.feedback",
+            "handle": "fb_edge_smooth",
+            "title": "Edge Smooth Feedback",
+            "outputFormats": {
+              "out": "rgba16float"
+            }
+          },
+          {
+            "id": 60,
+            "nodeId": "temporal_blend_edge",
+            "typeId": "node.mix",
+            "handle": "temporal_blend_edge",
+            "params": {
+              "amount": {
+                "type": "Float",
+                "value": 0.15
+              },
+              "mode": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "title": "Edge Temporal Blend"
+          },
+          {
+            "id": 70,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 71,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 59,
+            "fromPort": "out",
+            "toNode": 60,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 60,
+            "fromPort": "out",
+            "toNode": 59,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 70,
+            "fromPort": "seed",
+            "toNode": 59,
+            "toPort": "seed"
+          },
+          {
+            "fromNode": 70,
+            "fromPort": "b",
+            "toNode": 60,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 60,
+            "fromPort": "out",
+            "toNode": 71,
+            "toPort": "smoothedEdge"
+          }
+        ],
+        "tint": [
+          0.7,
+          0.5,
+          0.4,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 70,
+      "nodeId": "Roughness Modulation",
+      "typeId": "group",
+      "handle": "Roughness Modulation",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "in",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "roughnessMap",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 52,
+            "nodeId": "roughness_from_edge",
+            "typeId": "node.scale_offset_texture",
+            "handle": "roughness_from_edge",
+            "params": {
+              "offset": {
+                "type": "Float",
+                "value": 0.05
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.15
+              }
+            },
+            "title": "Roughness from Edge"
+          },
+          {
+            "id": 71,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 72,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 71,
+            "fromPort": "in",
+            "toNode": 52,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 52,
+            "fromPort": "out",
+            "toNode": 72,
+            "toPort": "roughnessMap"
+          }
+        ],
+        "tint": [
+          0.6,
+          0.4,
+          0.5,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 71,
+      "nodeId": "Mesh Generation",
+      "typeId": "group",
+      "handle": "Mesh Generation",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "height",
+              "portType": ""
+            },
+            {
+              "name": "a",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "displaceGeometry",
+              "portType": "Mesh"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 42,
+            "nodeId": "mesh_size_x_calc",
+            "typeId": "node.math",
+            "handle": "mesh_size_x_calc",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 2.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "title": "Mesh Width Calc"
+          },
+          {
+            "id": 33,
+            "nodeId": "grid_mesh",
+            "typeId": "node.generate_grid_mesh",
+            "handle": "grid_mesh",
+            "params": {
+              "max_capacity": {
+                "type": "Int",
+                "value": 250000
+              },
+              "resolution_x": {
+                "type": "Int",
+                "value": 500
+              },
+              "resolution_y": {
+                "type": "Int",
+                "value": 500
+              },
+              "size_x": {
+                "type": "Float",
+                "value": 2.0
+              },
+              "size_y": {
+                "type": "Float",
+                "value": 2.0
+              }
+            },
+            "title": "Grid Mesh"
+          },
+          {
+            "id": 34,
+            "nodeId": "displace_mesh_node",
+            "typeId": "node.displace_mesh",
+            "handle": "displace_mesh_node",
+            "params": {
+              "cols": {
+                "type": "Int",
+                "value": 500
+              },
+              "displacement": {
+                "type": "Float",
+                "value": 0.2
+              },
+              "height_bias": {
+                "type": "Float",
+                "value": 0.5
+              },
+              "rows": {
+                "type": "Int",
+                "value": 500
+              }
+            },
+            "title": "Mesh Displacement"
+          },
+          {
+            "id": 35,
+            "nodeId": "triangulated",
+            "typeId": "node.triangulate_grid",
+            "handle": "triangulated",
+            "params": {
+              "src_cols": {
+                "type": "Int",
+                "value": 500
+              },
+              "src_rows": {
+                "type": "Int",
+                "value": 500
+              }
+            },
+            "title": "Triangulate Mesh"
+          },
+          {
+            "id": 72,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 73,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 42,
+            "fromPort": "out",
+            "toNode": 33,
+            "toPort": "size_x"
+          },
+          {
+            "fromNode": 33,
+            "fromPort": "vertices",
+            "toNode": 34,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 34,
+            "fromPort": "out",
+            "toNode": 35,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 72,
+            "fromPort": "height",
+            "toNode": 34,
+            "toPort": "height"
+          },
+          {
+            "fromNode": 72,
+            "fromPort": "a",
+            "toNode": 42,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 35,
+            "fromPort": "out",
+            "toNode": 73,
+            "toPort": "displaceGeometry"
+          }
+        ],
+        "tint": [
+          0.5,
+          0.5,
+          0.7,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 72,
+      "nodeId": "Normal Map Generation",
+      "typeId": "group",
+      "handle": "Normal Map Generation",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "aspect",
+              "portType": ""
+            },
+            {
+              "name": "in",
+              "portType": ""
+            },
+            {
+              "name": "a",
+              "portType": ""
+            },
+            {
+              "name": "b",
+              "portType": ""
+            }
+          ],
+          "outputs": [
+            {
+              "name": "normalMap",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 61,
+            "nodeId": "z_scale_from_canvas",
+            "typeId": "node.math",
+            "handle": "z_scale_from_canvas",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 1920.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 3
+              }
+            },
+            "title": "Normal Z Scale"
+          },
+          {
+            "id": 51,
+            "nodeId": "surface_normal",
+            "typeId": "node.heightmap_to_normal",
+            "handle": "surface_normal",
+            "params": {
+              "aspect": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "coord_space": {
+                "type": "Enum",
+                "value": 1
+              },
+              "z_scale": {
+                "type": "Float",
+                "value": 0.02
+              }
+            },
+            "title": "Surface Normal Map"
+          },
+          {
+            "id": 73,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 74,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 61,
+            "fromPort": "out",
+            "toNode": 51,
+            "toPort": "z_scale"
+          },
+          {
+            "fromNode": 73,
+            "fromPort": "aspect",
+            "toNode": 51,
+            "toPort": "aspect"
+          },
+          {
+            "fromNode": 73,
+            "fromPort": "in",
+            "toNode": 51,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 73,
+            "fromPort": "a",
+            "toNode": 61,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 73,
+            "fromPort": "b",
+            "toNode": 61,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 51,
+            "fromPort": "out",
+            "toNode": 74,
+            "toPort": "normalMap"
+          }
+        ],
+        "tint": [
+          0.5,
+          0.6,
+          0.7,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 73,
+      "nodeId": "Camera Control",
+      "typeId": "group",
+      "handle": "Camera Control",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "cameraMatrix",
+              "portType": "Camera"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 36,
+            "nodeId": "cam_orbit_deg_to_rad",
+            "typeId": "node.affine_scalar",
+            "handle": "cam_orbit_deg_to_rad",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 1.5707964
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.01745329
+              }
+            },
+            "title": "Orbit Degrees to Radians"
+          },
+          {
+            "id": 37,
+            "nodeId": "cam_tilt_deg_to_rad",
+            "typeId": "node.affine_scalar",
+            "handle": "cam_tilt_deg_to_rad",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": -10.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.01745329
+              }
+            },
+            "title": "Tilt Degrees to Radians"
+          },
+          {
+            "id": 38,
+            "nodeId": "cam_fov_deg_to_rad",
+            "typeId": "node.affine_scalar",
+            "handle": "cam_fov_deg_to_rad",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 54.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.01745329
+              }
+            },
+            "title": "FOV Degrees to Radians"
+          },
+          {
+            "id": 43,
+            "nodeId": "cam_orbit_node",
+            "typeId": "node.camera_orbit",
+            "handle": "cam_orbit_node",
+            "params": {
+              "distance": {
+                "type": "Float",
+                "value": 2.5
+              },
+              "far": {
+                "type": "Float",
+                "value": 50.0
+              },
+              "fov_y": {
+                "type": "Float",
+                "value": 0.9425
+              },
+              "look_y": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "near": {
+                "type": "Float",
+                "value": 0.01
+              },
+              "orbit": {
+                "type": "Float",
+                "value": 1.5707964
+              },
+              "tilt": {
+                "type": "Float",
+                "value": -0.1745
+              }
+            },
+            "title": "Camera Orbit"
+          },
+          {
+            "id": 74,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 75,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 36,
+            "fromPort": "out",
+            "toNode": 43,
+            "toPort": "orbit"
+          },
+          {
+            "fromNode": 37,
+            "fromPort": "out",
+            "toNode": 43,
+            "toPort": "tilt"
+          },
+          {
+            "fromNode": 38,
+            "fromPort": "out",
+            "toNode": 43,
+            "toPort": "fov_y"
+          },
+          {
+            "fromNode": 43,
+            "fromPort": "out",
+            "toNode": 75,
+            "toPort": "cameraMatrix"
+          }
+        ],
+        "tint": [
+          0.6,
+          0.6,
+          0.4,
+          1.0
+        ]
+      }
+    }
   ],
   "wires": [
-    { "fromNode": 1,  "fromPort": "out",  "toNode": 2,  "toPort": "b" },
-
-    { "fromNode": 0,  "fromPort": "time", "toNode": 3,  "toPort": "a" },
-    { "fromNode": 3,  "fromPort": "out",  "toNode": 4,  "toPort": "z" },
-
-    { "fromNode": 2,  "fromPort": "out",  "toNode": 4,  "toPort": "scale_x" },
-    { "fromNode": 2,  "fromPort": "out",  "toNode": 4,  "toPort": "scale_y" },
-
-    { "fromNode": 2,  "fromPort": "out",  "toNode": 41, "toPort": "a" },
-    { "fromNode": 41, "fromPort": "out",  "toNode": 4,  "toPort": "offset_x" },
-    { "fromNode": 41, "fromPort": "out",  "toNode": 4,  "toPort": "offset_y" },
-
-    { "fromNode": 4,  "fromPort": "out",  "toNode": 5,  "toPort": "in" },
-
-    { "fromNode": 5,  "fromPort": "out",  "toNode": 7,  "toPort": "a" },
-    { "fromNode": 6,  "fromPort": "out",  "toNode": 7,  "toPort": "b" },
-
-    { "fromNode": 6,  "fromPort": "out",  "toNode": 9,  "toPort": "a" },
-    { "fromNode": 7,  "fromPort": "out",  "toNode": 9,  "toPort": "b" },
-
-    { "fromNode": 9,  "fromPort": "out",  "toNode": 10, "toPort": "in" },
-    { "fromNode": 10, "fromPort": "out",  "toNode": 11, "toPort": "in" },
-    { "fromNode": 11, "fromPort": "out",  "toNode": 6,  "toPort": "in" },
-
-    { "fromNode": 11, "fromPort": "out",  "toNode": 12, "toPort": "source" },
-    { "fromNode": 12, "fromPort": "out",  "toNode": 13, "toPort": "in" },
-
-    { "fromNode": 17, "fromPort": "out",  "toNode": 18, "toPort": "angle" },
-    { "fromNode": 11, "fromPort": "out",  "toNode": 18, "toPort": "in" },
-
-    { "fromNode": 18, "fromPort": "out",  "toNode": 19, "toPort": "source" },
-    { "fromNode": 19, "fromPort": "out",  "toNode": 20, "toPort": "in" },
-    { "fromNode": 19, "fromPort": "out",  "toNode": 21, "toPort": "in" },
-
-    { "fromNode": 20, "fromPort": "out",  "toNode": 22, "toPort": "r" },
-    { "fromNode": 21, "fromPort": "out",  "toNode": 22, "toPort": "g" },
-
-    { "fromNode": 22, "fromPort": "out",  "toNode": 23, "toPort": "in" },
-    { "fromNode": 23, "fromPort": "out",  "toNode": 24, "toPort": "in" },
-    { "fromNode": 24, "fromPort": "out",  "toNode": 25, "toPort": "in" },
-
-    { "fromNode": 0,  "fromPort": "aspect", "toNode": 42, "toPort": "a" },
-    { "fromNode": 42, "fromPort": "out",    "toNode": 33, "toPort": "size_x" },
-
-    { "fromNode": 33, "fromPort": "vertices", "toNode": 34, "toPort": "in" },
-    { "fromNode": 58, "fromPort": "out",  "toNode": 34, "toPort": "height" },
-    { "fromNode": 34, "fromPort": "out",  "toNode": 35, "toPort": "in" },
-
-    { "fromNode": 13, "fromPort": "out",  "toNode": 58, "toPort": "b" },
-    { "fromNode": 57, "fromPort": "out",  "toNode": 58, "toPort": "a" },
-    { "fromNode": 58, "fromPort": "out",  "toNode": 57, "toPort": "in" },
-    { "fromNode": 13, "fromPort": "out",  "toNode": 57, "toPort": "seed" },
-
-    { "fromNode": 25, "fromPort": "out",  "toNode": 60, "toPort": "b" },
-    { "fromNode": 59, "fromPort": "out",  "toNode": 60, "toPort": "a" },
-    { "fromNode": 60, "fromPort": "out",  "toNode": 59, "toPort": "in" },
-    { "fromNode": 25, "fromPort": "out",  "toNode": 59, "toPort": "seed" },
-
-    { "fromNode": 36, "fromPort": "out",  "toNode": 43, "toPort": "orbit" },
-    { "fromNode": 37, "fromPort": "out",  "toNode": 43, "toPort": "tilt" },
-    { "fromNode": 38, "fromPort": "out",  "toNode": 43, "toPort": "fov_y" },
-
-    { "fromNode": 58, "fromPort": "out", "toNode": 49, "toPort": "in" },
-    { "fromNode": 49, "fromPort": "out", "toNode": 51, "toPort": "in" },
-    { "fromNode": 0,  "fromPort": "aspect", "toNode": 51, "toPort": "aspect" },
-
-    { "fromNode": 0,  "fromPort": "aspect",       "toNode": 61, "toPort": "a" },
-    { "fromNode": 0,  "fromPort": "output_width", "toNode": 61, "toPort": "b" },
-    { "fromNode": 61, "fromPort": "out",          "toNode": 51, "toPort": "z_scale" },
-
-    { "fromNode": 60, "fromPort": "out", "toNode": 52, "toPort": "in" },
-
-    { "fromNode": 35, "fromPort": "out",    "toNode": 50, "toPort": "vertices" },
-    { "fromNode": 43, "fromPort": "out",    "toNode": 50, "toPort": "camera" },
-    { "fromNode": 62, "fromPort": "out",    "toNode": 50, "toPort": "material" },
-    { "fromNode": 63, "fromPort": "out",    "toNode": 50, "toPort": "light" },
-    { "fromNode": 32, "fromPort": "envmap", "toNode": 50, "toPort": "envmap" },
-    { "fromNode": 51, "fromPort": "out",    "toNode": 50, "toPort": "normal_map" },
-    { "fromNode": 52, "fromPort": "out",    "toNode": 50, "toPort": "roughness_map" },
-
-    { "fromNode": 50, "fromPort": "color", "toNode": 40, "toPort": "in" }
+    {
+      "fromNode": 0,
+      "fromPort": "time",
+      "toNode": 64,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 65,
+      "fromPort": "out",
+      "toNode": 64,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 64,
+      "fromPort": "out",
+      "toNode": 65,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 65,
+      "fromPort": "blendedHeight",
+      "toNode": 66,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 66,
+      "fromPort": "smoothedHeight",
+      "toNode": 65,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 66,
+      "fromPort": "smoothedHeight",
+      "toNode": 67,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 66,
+      "fromPort": "smoothedHeight",
+      "toNode": 68,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "aspect",
+      "toNode": 71,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 67,
+      "fromPort": "displacementHeight",
+      "toNode": 71,
+      "toPort": "height"
+    },
+    {
+      "fromNode": 68,
+      "fromPort": "edgeTexture",
+      "toNode": 69,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 68,
+      "fromPort": "edgeTexture",
+      "toNode": 69,
+      "toPort": "seed"
+    },
+    {
+      "fromNode": 67,
+      "fromPort": "heightForNormal",
+      "toNode": 72,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "aspect",
+      "toNode": 72,
+      "toPort": "aspect"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "aspect",
+      "toNode": 72,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_width",
+      "toNode": 72,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 69,
+      "fromPort": "smoothedEdge",
+      "toNode": 70,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 71,
+      "fromPort": "displaceGeometry",
+      "toNode": 50,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 73,
+      "fromPort": "cameraMatrix",
+      "toNode": 50,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 62,
+      "fromPort": "out",
+      "toNode": 50,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 63,
+      "fromPort": "out",
+      "toNode": 50,
+      "toPort": "light"
+    },
+    {
+      "fromNode": 32,
+      "fromPort": "envmap",
+      "toNode": 50,
+      "toPort": "envmap"
+    },
+    {
+      "fromNode": 72,
+      "fromPort": "normalMap",
+      "toNode": 50,
+      "toPort": "normal_map"
+    },
+    {
+      "fromNode": 70,
+      "fromPort": "roughnessMap",
+      "toNode": 50,
+      "toPort": "roughness_map"
+    },
+    {
+      "fromNode": 50,
+      "fromPort": "color",
+      "toNode": 40,
+      "toPort": "in"
+    }
   ]
 }
