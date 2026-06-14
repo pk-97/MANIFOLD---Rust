@@ -9,6 +9,31 @@ guardrails learned the hard way and the working method.
 
 ---
 
+## Status — 2026-06-14 (autonomous polish pass)
+
+A deep static-analysis pass found most of section B/C was already built by the prior graph-editor session; this doc predated it. Updated reality below.
+
+**Shipped + pushed on `preset-grouping` this session:**
+- **Phase 1 — param card (the live instrument).** Slider value fill 47%→70% alpha (was near-invisible on a dark stage); value text right-aligned into a readable column; the 11 beat-div buttons weight by label width so `1/32` stops cramping; header badges 36→28px to give the effect name room. Commit `2416a47c` (color.rs, slider.rs, param_slider_shared.rs, param_card.rs).
+- **Phase 2 — timeline.** Fixed the *real* cause of the uniform-salmon clips: `AddLayerCommand` passed index 0 to `Layer::new`, so every layer drew `generate_layer_color(0)` (`insert_layer` overwrites the positional index but never recomputes the colour). Now seeds the golden-ratio hue from the layer count; loaded projects keep their stored colours. Added transport-bar dividers (sources | transport | tempo | file | render). Commit `adaaf486` (commands/layer.rs, transport.rs).
+- **Phase 3.8 — coalesce group input pins.** `infer_interface`/`group_selection` key input pins by external source, so one signal fanning to N inner sinks is a single coalesced pin (flatten + ungroup already model one port→many consumers; new fan-out flatten-equivalence test proves it). This is the *mechanism*; realising it on shipped presets is a driver re-run + visual pass (below). Commit `9fff4443` (group_edit.rs).
+
+**Already shipped by the prior graph-editor session (verified in `graph_canvas.rs` — NOT open work):**
+- Wire hover-highlight + dim — `wire_touches_focus`, control wires fade to 0.16α, focused 0.95α + thicker. *(was B4)*
+- Layered auto-layout with crossing-reduction + routing waypoints — `auto_layout`. *(was B3)*
+- Long wires arc around node bodies — `skip_bump`. *(was B5)*
+- Preview-as-node — image nodes blit a thumbnail into their body, `visible_node_thumbnails`. *(was C7)*
+- Zoom LOD — body text hidden below `PARAM_LOD_ZOOM=0.5` so the zoomed-out graph reads as clean colour boxes. *(was C9)*
+
+**Genuinely remaining — needs a human / the running app, NOT safe to do blind:**
+- **B2 semantic pin renames** — per-preset content pass on the live-show JSON; names like `blurRadiusH` encode intent the code can't infer. 3.8 already removed most of the `_5`-suffix ugliness by cutting duplicate pins. Do this with the editor open.
+- **C8 group-node output preview** — groups are skipped by `visible_node_thumbnails` because a group's output texture isn't captured at the parent scope. Wiring it touches `graph_dump.rs` + the content thread + preview-texture allocation; verify with the app running.
+- **B1 realise coalescing on shipped presets** — re-run the grouping driver (`apply_grouping.rs`) now that 3.8 coalesces, then eyeball + re-snapshot the equivalence baseline. NB: the gate `tests/grouping_equivalence.rs` is currently red from *unrelated* StylizedFeedback param drift (the on-disk preset moved past the `/tmp` baseline) — re-baseline before trusting it.
+- **C10 larger node bodies** — rejected as a blind change: param labels already truncate cleanly against the value and fit at full zoom; this is a visual-preference call best made with pixels.
+- **C9 LOD crossfade** — rejected: a smooth fade fights the blocky / no-gloss design language; the hard cutoff is on-brand.
+
+---
+
 ## The method (read this first — it's the lesson of the session)
 
 - **Polish in the real code, not in mockups.** We burned a lot of the session on SVG mockups. SVG is the wrong medium: it has gradients / rounded / arbitrary fonts the bitmap renderer treats differently, and it ignores that the UI is *already a mature, factored system*. Every mock was a double-guess. Stop mocking.
