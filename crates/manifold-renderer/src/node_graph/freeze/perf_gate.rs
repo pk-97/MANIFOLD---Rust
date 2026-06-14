@@ -45,10 +45,11 @@ use crate::node_graph::boundary_nodes::{
     FINAL_OUTPUT_TYPE_ID, GENERATOR_INPUT_TYPE_ID, SOURCE_TYPE_ID,
 };
 use crate::node_graph::freeze::install::{
-    canonical_region_count, fused_generator_def_by_id, fused_view_by_id,
+    canonical_region_count, def_content_key, fused_generator_def_by_id, fused_view_by_id,
     masked_generator_def_by_id, masked_view_by_id, override_canonical_fused_generator_def,
     override_canonical_fused_view,
 };
+use crate::node_graph::freeze::verdict_cache::{self, Kind, Verdict};
 use crate::node_graph::{
     EffectGraphDefExt, Executor, FrameTime, MetalBackend, PrimitiveRegistry, StateStore, compile,
     loaded_preset_view_by_id,
@@ -325,6 +326,10 @@ pub fn tune_all(device: &GpuDevice) {
     let registry = PrimitiveRegistry::with_builtin();
     let dev = device.device_name();
     let mut map: AHashMap<PresetTypeId, bool> = AHashMap::default();
+    // Content-key → verdict for BOTH effects and generators, written to disk
+    // once at the end (single write + prune of stale preset versions). Keyed by
+    // canonical-def content hash, so a changed preset misses and re-measures.
+    let mut disk: AHashMap<u64, Verdict> = AHashMap::default();
 
     for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(manifold_core::preset_def::PresetKind::Effect) {
         // Only effects that actually produce a fused view have anything to gate.
@@ -335,73 +340,105 @@ pub fn tune_all(device: &GpuDevice) {
             continue;
         };
         let atoms = worker_atom_count(base_view.canonical_def);
-        let unfused = measure_def(device, &registry, base_view.canonical_def, SOURCE_TYPE_ID);
-
-        let Some(u) = unfused else {
-            log::warn!(
-                "[freeze] tune {} on {dev}: unfused measurement failed -> keep unfused",
-                type_id.as_str(),
-            );
-            map.insert(type_id, false);
-            continue;
-        };
-
-        // Per-region exploration on big multi-region cards; otherwise the
-        // classic all-or-nothing measurement (the all-on candidate is the
-        // pre-warmed canonical fused view either way).
         let n = canonical_region_count(base_view.canonical_def, &registry);
-        let explore = n > 1 && u >= GREEDY_MIN_UNFUSED_MS;
-        let mut measure = |mask: &[bool]| -> Option<f64> {
-            let view = if mask.iter().all(|&on| on) {
-                fused_view
-            } else {
-                masked_view_by_id(&type_id, &registry, mask)?
-            };
-            measure_def(device, &registry, view.canonical_def, SOURCE_TYPE_ID)
-        };
-        let (mask, fused) = if explore {
-            greedy_region_mask(n, &mut measure)
-        } else {
-            let all = vec![true; n.max(1)];
-            let t = measure(&all);
-            (all, t)
-        };
+        let content_key = def_content_key(base_view.canonical_def);
 
-        let verdict = match fused {
-            Some(f) => {
-                let pays = decides_fuse(u, f);
-                let speedup = if f > 0.0 { u / f } else { 0.0 };
-                let partial = !mask.iter().all(|&on| on);
-                let outcome = if pays { "FUSE" } else { "keep unfused (below margin)" };
-                let name = type_id.as_str();
-                let mask_note = if partial {
-                    format!(" [regions {}]", mask_str(&mask))
-                } else {
-                    String::new()
-                };
-                log::info!(
-                    "[freeze] tune {name} on {dev}: unfused {u:.3}ms / fused {f:.3}ms = \
-                     {speedup:.2}x, {atoms} atoms{mask_note} -> {outcome}"
-                );
-                // A winning PARTIAL mask becomes the canonical fused view, so
-                // the live path renders exactly the measured winner.
-                if pays && partial {
+        // Persisted verdict for this exact canonical shape on this GPU — skip the
+        // measurement, replaying a partial-mask override so the live path renders
+        // the same measured winner. A length-mismatched mask (codegen drift a
+        // version bump missed) falls through to a fresh measure.
+        let cached: Option<Verdict> = match verdict_cache::lookup(Kind::Card, &dev, content_key) {
+            Some(Verdict::DontFuse) => Some(Verdict::DontFuse),
+            Some(Verdict::Fuse(mask)) if mask.len() == n => {
+                if !mask.iter().all(|&on| on) {
                     override_canonical_fused_view(
                         &type_id,
                         masked_view_by_id(&type_id, &registry, &mask),
                     );
                 }
-                pays
+                Some(Verdict::Fuse(mask))
             }
-            None => {
+            _ => None,
+        };
+
+        let verdict_obj: Verdict = if let Some(v) = cached {
+            log::info!(
+                "[freeze] tune {} on {dev}: cached, {atoms} atoms -> {}",
+                type_id.as_str(),
+                if matches!(v, Verdict::Fuse(_)) { "FUSE" } else { "keep unfused" },
+            );
+            v
+        } else {
+            let Some(u) = measure_def(device, &registry, base_view.canonical_def, SOURCE_TYPE_ID)
+            else {
                 log::warn!(
-                    "[freeze] tune {} on {dev}: fused measurement failed -> keep unfused",
+                    "[freeze] tune {} on {dev}: unfused measurement failed -> keep unfused",
                     type_id.as_str(),
                 );
-                false
+                disk.insert(content_key, Verdict::DontFuse);
+                map.insert(type_id, false);
+                continue;
+            };
+
+            // Per-region exploration on big multi-region cards; otherwise the
+            // classic all-or-nothing measurement (the all-on candidate is the
+            // pre-warmed canonical fused view either way).
+            let explore = n > 1 && u >= GREEDY_MIN_UNFUSED_MS;
+            let mut measure = |mask: &[bool]| -> Option<f64> {
+                let view = if mask.iter().all(|&on| on) {
+                    fused_view
+                } else {
+                    masked_view_by_id(&type_id, &registry, mask)?
+                };
+                measure_def(device, &registry, view.canonical_def, SOURCE_TYPE_ID)
+            };
+            let (mask, fused) = if explore {
+                greedy_region_mask(n, &mut measure)
+            } else {
+                let all = vec![true; n.max(1)];
+                let t = measure(&all);
+                (all, t)
+            };
+
+            match fused {
+                Some(f) => {
+                    let pays = decides_fuse(u, f);
+                    let speedup = if f > 0.0 { u / f } else { 0.0 };
+                    let partial = !mask.iter().all(|&on| on);
+                    let outcome = if pays { "FUSE" } else { "keep unfused (below margin)" };
+                    let name = type_id.as_str();
+                    let mask_note = if partial {
+                        format!(" [regions {}]", mask_str(&mask))
+                    } else {
+                        String::new()
+                    };
+                    log::info!(
+                        "[freeze] tune {name} on {dev}: unfused {u:.3}ms / fused {f:.3}ms = \
+                         {speedup:.2}x, {atoms} atoms{mask_note} -> {outcome}"
+                    );
+                    // A winning PARTIAL mask becomes the canonical fused view, so
+                    // the live path renders exactly the measured winner.
+                    if pays && partial {
+                        override_canonical_fused_view(
+                            &type_id,
+                            masked_view_by_id(&type_id, &registry, &mask),
+                        );
+                    }
+                    if pays { Verdict::Fuse(mask) } else { Verdict::DontFuse }
+                }
+                None => {
+                    log::warn!(
+                        "[freeze] tune {} on {dev}: fused measurement failed -> keep unfused",
+                        type_id.as_str(),
+                    );
+                    Verdict::DontFuse
+                }
             }
         };
-        map.insert(type_id, verdict);
+
+        let fuse = matches!(verdict_obj, Verdict::Fuse(_));
+        disk.insert(content_key, verdict_obj);
+        map.insert(type_id, fuse);
     }
 
     log::info!("[freeze] perf-gate tuned {} fusable effect(s) on {dev}", map.len());
@@ -420,71 +457,103 @@ pub fn tune_all(device: &GpuDevice) {
             continue;
         };
         let atoms = worker_atom_count(&canonical);
-        let unfused = measure_def(device, &registry, &canonical, GENERATOR_INPUT_TYPE_ID);
-
-        let Some(u) = unfused else {
-            log::warn!(
-                "[freeze] tune generator {} on {dev}: unfused measurement failed -> keep unfused",
-                type_id.as_str(),
-            );
-            gen_map.insert(type_id, false);
-            continue;
-        };
-
         let n = canonical_region_count(&canonical, &registry);
-        let explore = n > 1 && u >= GREEDY_MIN_UNFUSED_MS;
-        let mut measure = |mask: &[bool]| -> Option<f64> {
-            let def = if mask.iter().all(|&on| on) {
-                fused_def
-            } else {
-                masked_generator_def_by_id(&type_id, &registry, mask)?
-            };
-            measure_def(device, &registry, def, GENERATOR_INPUT_TYPE_ID)
-        };
-        let (mask, fused) = if explore {
-            greedy_region_mask(n, &mut measure)
-        } else {
-            let all = vec![true; n.max(1)];
-            let t = measure(&all);
-            (all, t)
-        };
+        let content_key = def_content_key(&canonical);
 
-        let verdict = match fused {
-            Some(f) => {
-                let pays = decides_fuse(u, f);
-                let speedup = if f > 0.0 { u / f } else { 0.0 };
-                let partial = !mask.iter().all(|&on| on);
-                let outcome = if pays { "FUSE" } else { "keep unfused (below margin)" };
-                let mask_note = if partial {
-                    format!(" [regions {}]", mask_str(&mask))
-                } else {
-                    String::new()
-                };
-                log::info!(
-                    "[freeze] tune generator {} on {dev}: unfused {u:.3}ms / fused {f:.3}ms = \
-                     {speedup:.2}x, {atoms} atoms{mask_note} -> {outcome}",
-                    type_id.as_str()
-                );
-                if pays && partial {
+        let cached: Option<Verdict> = match verdict_cache::lookup(Kind::Card, &dev, content_key) {
+            Some(Verdict::DontFuse) => Some(Verdict::DontFuse),
+            Some(Verdict::Fuse(mask)) if mask.len() == n => {
+                if !mask.iter().all(|&on| on) {
                     override_canonical_fused_generator_def(
                         &type_id,
                         masked_generator_def_by_id(&type_id, &registry, &mask),
                     );
                 }
-                pays
+                Some(Verdict::Fuse(mask))
             }
-            None => {
+            _ => None,
+        };
+
+        let verdict_obj: Verdict = if let Some(v) = cached {
+            log::info!(
+                "[freeze] tune generator {} on {dev}: cached, {atoms} atoms -> {}",
+                type_id.as_str(),
+                if matches!(v, Verdict::Fuse(_)) { "FUSE" } else { "keep unfused" },
+            );
+            v
+        } else {
+            let Some(u) = measure_def(device, &registry, &canonical, GENERATOR_INPUT_TYPE_ID) else {
                 log::warn!(
-                    "[freeze] tune generator {} on {dev}: fused measurement failed -> keep unfused",
+                    "[freeze] tune generator {} on {dev}: unfused measurement failed -> keep unfused",
                     type_id.as_str(),
                 );
-                false
+                disk.insert(content_key, Verdict::DontFuse);
+                gen_map.insert(type_id, false);
+                continue;
+            };
+
+            let explore = n > 1 && u >= GREEDY_MIN_UNFUSED_MS;
+            let mut measure = |mask: &[bool]| -> Option<f64> {
+                let def = if mask.iter().all(|&on| on) {
+                    fused_def
+                } else {
+                    masked_generator_def_by_id(&type_id, &registry, mask)?
+                };
+                measure_def(device, &registry, def, GENERATOR_INPUT_TYPE_ID)
+            };
+            let (mask, fused) = if explore {
+                greedy_region_mask(n, &mut measure)
+            } else {
+                let all = vec![true; n.max(1)];
+                let t = measure(&all);
+                (all, t)
+            };
+
+            match fused {
+                Some(f) => {
+                    let pays = decides_fuse(u, f);
+                    let speedup = if f > 0.0 { u / f } else { 0.0 };
+                    let partial = !mask.iter().all(|&on| on);
+                    let outcome = if pays { "FUSE" } else { "keep unfused (below margin)" };
+                    let mask_note = if partial {
+                        format!(" [regions {}]", mask_str(&mask))
+                    } else {
+                        String::new()
+                    };
+                    log::info!(
+                        "[freeze] tune generator {} on {dev}: unfused {u:.3}ms / fused {f:.3}ms = \
+                         {speedup:.2}x, {atoms} atoms{mask_note} -> {outcome}",
+                        type_id.as_str()
+                    );
+                    if pays && partial {
+                        override_canonical_fused_generator_def(
+                            &type_id,
+                            masked_generator_def_by_id(&type_id, &registry, &mask),
+                        );
+                    }
+                    if pays { Verdict::Fuse(mask) } else { Verdict::DontFuse }
+                }
+                None => {
+                    log::warn!(
+                        "[freeze] tune generator {} on {dev}: fused measurement failed -> keep unfused",
+                        type_id.as_str(),
+                    );
+                    Verdict::DontFuse
+                }
             }
         };
-        gen_map.insert(type_id, verdict);
+
+        let fuse = matches!(verdict_obj, Verdict::Fuse(_));
+        disk.insert(content_key, verdict_obj);
+        gen_map.insert(type_id, fuse);
     }
     log::info!("[freeze] perf-gate tuned {} fusable generator(s) on {dev}", gen_map.len());
     let _ = GEN_VERDICTS.set(gen_map);
+
+    // Single write of the complete card-verdict set (effects + generators). This
+    // both persists this run and prunes any orphaned keys from preset versions
+    // that no longer exist.
+    verdict_cache::replace_all(Kind::Card, &dev, disk);
 }
 
 #[cfg(test)]

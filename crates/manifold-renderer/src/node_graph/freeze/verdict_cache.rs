@@ -1,40 +1,38 @@
-//! Persisted chain-segment fusion verdicts (the "measure once per machine"
-//! cache the perf-gate doc anticipated, applied to the chain-segment layer).
+//! Persisted fusion verdicts (the "measure once per machine" cache the perf-gate
+//! doc anticipated). Two caches share this machinery:
 //!
-//! ## Why the segment layer
+//! - [`Kind::Card`] — per-card canonical-preset verdicts produced by
+//!   [`super::perf_gate::tune_all`] at startup.
+//! - [`Kind::Segment`] — cross-card chain-segment verdicts produced by the
+//!   chain-fusion worker ([`super::install::compile_segment_view`]).
 //!
-//! A chain segment is identified by [`super::install::segment_key`] — a hash of
-//! the member cards' *content* (topology + baked params), NOT their type. So a
-//! verdict is bound to the exact graph it was measured on: change a card, change
-//! the wiring, and the key changes, the lookup misses, and the worker
-//! re-measures from scratch. A stale persisted entry can therefore never be
-//! applied to a graph it wasn't measured against — which is exactly the property
-//! that makes persisting it safe even though "graphs change all the time".
+//! ## Why this is safe to persist
+//!
+//! Every entry is keyed by a **content hash** of the graph it was measured on —
+//! [`super::install::def_content_key`] for a card, [`super::install::segment_key`]
+//! for a segment. So a verdict is bound to the exact graph that produced it:
+//! edit a card, rewire a chain, or ship a different preset, and the key changes,
+//! the lookup misses, and the gate re-measures. A stale entry can never be
+//! applied to a graph it wasn't measured on — which is the property that makes
+//! persisting safe even though graphs change.
 //!
 //! ## What it saves
 //!
-//! The expensive part of compiling a segment is the gate measurement
-//! ([`super::perf_gate::measure_segment_masked`]): hundreds of 4K frames per
-//! candidate region mask, run on the background worker. Codegen (concat + fuse +
-//! retarget) is cheap CPU work by comparison. So this cache persists only the
-//! *verdict* — fuse-with-this-mask, or keep-per-card — and the worker still does
-//! the (cheap, deterministic) codegen on a hit. On a miss it measures as before
-//! and records the result.
-//!
-//! Net effect: the first launch on a given Mac measures each novel segment once;
-//! every launch after (and every reopen of the same show project) skips the GPU
-//! measurement and the post-project-load settling churn it caused.
+//! The expensive part of a verdict is the GPU gate measurement — hundreds of 4K
+//! frames per candidate region mask. Codegen (fuse + retarget) is cheap CPU work
+//! by comparison. So this persists only the *verdict* (the winning region mask,
+//! or don't-fuse); on a hit the caller skips the measurement and rebuilds from
+//! the recorded mask. First launch on a Mac measures each novel graph once;
+//! every launch after loads the verdicts and skips the GPU work.
 //!
 //! ## Invalidation
 //!
-//! The on-disk file carries the GPU [`device name`](manifold_gpu::GpuDevice::device_name)
-//! and a [`FORMAT_VERSION`]. A verdict only loads when both match the running
-//! process — a different GPU or a bumped codegen/partitioning version starts from
-//! an empty cache (re-measures, then overwrites). Bump [`FORMAT_VERSION`] whenever
-//! a change to region partitioning or fusion codegen could move a verdict.
-//!
-//! `MANIFOLD_FREEZE_CACHE=0` disables persistence entirely (always measure, never
-//! read/write) — the escape hatch if a cache file is ever suspected bad.
+//! Each file carries the GPU [device name](manifold_gpu::GpuDevice::device_name)
+//! and a [`FORMAT_VERSION`]. A file only loads when both match the running
+//! process; a different GPU or a bumped codegen version starts empty and
+//! re-measures. Bump [`FORMAT_VERSION`] whenever region partitioning or fusion
+//! codegen could move a verdict. `MANIFOLD_FREEZE_CACHE=0` disables persistence
+//! entirely (always measure, never read or write).
 
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -47,19 +45,38 @@ use serde::{Deserialize, Serialize};
 /// discards the on-disk cache and re-measures.
 const FORMAT_VERSION: u32 = 1;
 
-/// A measured gate outcome for one segment.
+/// Which verdict cache — selects the on-disk filename and a separate in-memory
+/// store, so card and segment verdicts never clobber each other.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// Per-card canonical-preset verdicts (`tune_all`).
+    Card,
+    /// Cross-card chain-segment verdicts (chain-fusion worker).
+    Segment,
+}
+
+impl Kind {
+    fn filename(self) -> &'static str {
+        match self {
+            Kind::Card => "cards.json",
+            Kind::Segment => "segments.json",
+        }
+    }
+}
+
+/// A measured gate outcome.
 #[derive(Clone, Debug, PartialEq)]
-pub enum SegmentVerdict {
-    /// Keep per-card — fusion did not clear the margin (or the candidate did not
-    /// build / measure).
-    KeepPerCard,
-    /// Fuse, using this winning region mask (all-`true` = whole-segment fuse).
+pub(crate) enum Verdict {
+    /// Don't fuse — fusion did not clear the margin (or the candidate did not
+    /// build / measure). For a segment this means "render per-card"; for a card,
+    /// "render unfused".
+    DontFuse,
+    /// Fuse, using this winning region mask (all-`true` = whole-graph fuse).
     Fuse(Vec<bool>),
 }
 
 /// Whether persistence is active this process. `MANIFOLD_FREEZE_CACHE=0`/`off`
-/// turns it off (every segment measured fresh, nothing read or written). Read
-/// once, cached.
+/// turns it off (everything measured fresh, nothing read or written). Read once.
 fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| match std::env::var("MANIFOLD_FREEZE_CACHE") {
@@ -68,15 +85,15 @@ fn enabled() -> bool {
     })
 }
 
-/// `~/Library/Application Support/MANIFOLD/freeze-verdicts/segments.json` — same
-/// base dir as `prefs.json` and the user preset packs. `None` if `$HOME` is
-/// unset (then the cache simply no-ops, every segment measured fresh).
-fn cache_path() -> Option<PathBuf> {
+/// `~/Library/Application Support/MANIFOLD/freeze-verdicts/<file>` — same base
+/// dir as `prefs.json` and the user preset packs. `None` if `$HOME` is unset
+/// (then the cache no-ops, everything measured fresh).
+fn cache_path(kind: Kind) -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
     Some(
         PathBuf::from(home)
             .join("Library/Application Support/MANIFOLD/freeze-verdicts")
-            .join("segments.json"),
+            .join(kind.filename()),
     )
 }
 
@@ -84,9 +101,9 @@ fn cache_path() -> Option<PathBuf> {
 
 #[derive(Serialize, Deserialize)]
 struct DiskVerdict {
-    /// `true` = fuse, `false` = keep per-card.
+    /// `true` = fuse, `false` = don't fuse.
     fuse: bool,
-    /// Winning region mask, present only when `fuse`. Absent for keep-per-card.
+    /// Winning region mask, present only when `fuse`. Absent for don't-fuse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mask: Option<Vec<bool>>,
 }
@@ -95,53 +112,71 @@ struct DiskVerdict {
 struct DiskFile {
     version: u32,
     device: String,
-    /// `segment_key` (as decimal string, since JSON object keys are strings) →
+    /// content key (decimal string, since JSON object keys are strings) →
     /// verdict. `BTreeMap` for stable, diff-friendly on-disk ordering.
-    segments: std::collections::BTreeMap<String, DiskVerdict>,
+    entries: std::collections::BTreeMap<String, DiskVerdict>,
 }
 
-// ── In-memory store ──────────────────────────────────────────────────────────
+impl DiskVerdict {
+    fn from_verdict(v: &Verdict) -> Self {
+        match v {
+            Verdict::Fuse(mask) => DiskVerdict { fuse: true, mask: Some(mask.clone()) },
+            Verdict::DontFuse => DiskVerdict { fuse: false, mask: None },
+        }
+    }
+    /// `None` for a malformed entry (a `fuse: true` with no mask) — skip it,
+    /// re-measure.
+    fn to_verdict(&self) -> Option<Verdict> {
+        match (self.fuse, &self.mask) {
+            (true, Some(mask)) => Some(Verdict::Fuse(mask.clone())),
+            (true, None) => None,
+            (false, _) => Some(Verdict::DontFuse),
+        }
+    }
+}
+
+// ── In-memory store (one per Kind) ───────────────────────────────────────────
 
 struct Inner {
-    /// The device this loaded map is valid for. A process only ever sees one
-    /// GPU, but guarding on it keeps a copied-between-machines cache honest.
+    /// The device this loaded map is valid for. A process only sees one GPU, but
+    /// guarding on it keeps a copied-between-machines cache honest.
     device: String,
-    map: AHashMap<u64, SegmentVerdict>,
+    map: AHashMap<u64, Verdict>,
 }
 
-static STORE: OnceLock<Mutex<Option<Inner>>> = OnceLock::new();
-
-fn store() -> &'static Mutex<Option<Inner>> {
-    STORE.get_or_init(|| Mutex::new(None))
+fn store(kind: Kind) -> &'static Mutex<Option<Inner>> {
+    static CARD: OnceLock<Mutex<Option<Inner>>> = OnceLock::new();
+    static SEGMENT: OnceLock<Mutex<Option<Inner>>> = OnceLock::new();
+    match kind {
+        Kind::Card => CARD.get_or_init(|| Mutex::new(None)),
+        Kind::Segment => SEGMENT.get_or_init(|| Mutex::new(None)),
+    }
 }
 
-/// Run `f` against the in-memory store for `device_name`, loading it from disk
-/// on first use (or when the device changed — shouldn't happen in one process,
-/// but it keeps the invariant local).
-fn with_inner<R>(device_name: &str, f: impl FnOnce(&mut Inner) -> R) -> R {
-    let mut guard = store().lock().expect("freeze verdict store poisoned");
+/// Run `f` against the in-memory store for `(kind, device_name)`, loading from
+/// disk on first use (or when the device changed — shouldn't happen in one
+/// process, but it keeps the invariant local).
+fn with_inner<R>(kind: Kind, device_name: &str, f: impl FnOnce(&mut Inner) -> R) -> R {
+    let mut guard = store(kind).lock().expect("freeze verdict store poisoned");
     let needs_load = guard.as_ref().map(|i| i.device != device_name).unwrap_or(true);
     if needs_load {
-        *guard = Some(load_from_disk(device_name));
+        *guard = Some(load_from_disk(kind, device_name));
     }
     f(guard.as_mut().expect("inner just set"))
 }
 
-/// Load + validate the on-disk cache for `device_name`; an empty store on any
-/// failure (missing file, parse error, version/device mismatch).
-fn load_from_disk(device_name: &str) -> Inner {
-    let empty = || Inner {
-        device: device_name.to_string(),
-        map: AHashMap::default(),
-    };
-    let Some(path) = cache_path() else {
+/// Load + validate the on-disk cache; an empty store on any failure (missing
+/// file, parse error, version/device mismatch).
+fn load_from_disk(kind: Kind, device_name: &str) -> Inner {
+    let empty = || Inner { device: device_name.to_string(), map: AHashMap::default() };
+    let Some(path) = cache_path(kind) else {
         return empty();
     };
     let Ok(bytes) = std::fs::read(&path) else {
         return empty();
     };
     let Ok(file) = serde_json::from_slice::<DiskFile>(&bytes) else {
-        log::warn!("[freeze] segment verdict cache at {} is unreadable -> ignoring", path.display());
+        log::warn!("[freeze] verdict cache at {} is unreadable -> ignoring", path.display());
         return empty();
     };
     if file.version != FORMAT_VERSION || file.device != device_name {
@@ -149,55 +184,27 @@ fn load_from_disk(device_name: &str) -> Inner {
         return empty();
     }
     let mut map = AHashMap::default();
-    for (k, v) in file.segments {
-        let Ok(key) = k.parse::<u64>() else { continue };
-        let verdict = match (v.fuse, v.mask) {
-            (true, Some(mask)) => SegmentVerdict::Fuse(mask),
-            // A fuse verdict with no mask is malformed — skip it (re-measure).
-            (true, None) => continue,
-            (false, _) => SegmentVerdict::KeepPerCard,
-        };
-        map.insert(key, verdict);
+    for (k, v) in &file.entries {
+        if let (Ok(key), Some(verdict)) = (k.parse::<u64>(), v.to_verdict()) {
+            map.insert(key, verdict);
+        }
     }
-    log::info!(
-        "[freeze] loaded {} segment verdict(s) from {}",
-        map.len(),
-        path.display(),
-    );
-    Inner {
-        device: device_name.to_string(),
-        map,
-    }
+    log::info!("[freeze] loaded {} verdict(s) from {}", map.len(), path.display());
+    Inner { device: device_name.to_string(), map }
 }
 
-/// Serialize `inner` and write it atomically (temp + rename) so a crash mid-write
-/// can't leave a half-written file that fails to parse next launch.
-fn write_to_disk(inner: &Inner) {
-    let Some(path) = cache_path() else {
+/// Serialize `inner` and write it atomically (temp + rename) so a crash
+/// mid-write can't leave a half-written file that fails to parse next launch.
+fn write_to_disk(kind: Kind, inner: &Inner) {
+    let Some(path) = cache_path(kind) else {
         return;
     };
-    let segments = inner
+    let entries = inner
         .map
         .iter()
-        .map(|(k, v)| {
-            let dv = match v {
-                SegmentVerdict::Fuse(mask) => DiskVerdict {
-                    fuse: true,
-                    mask: Some(mask.clone()),
-                },
-                SegmentVerdict::KeepPerCard => DiskVerdict {
-                    fuse: false,
-                    mask: None,
-                },
-            };
-            (k.to_string(), dv)
-        })
+        .map(|(k, v)| (k.to_string(), DiskVerdict::from_verdict(v)))
         .collect();
-    let file = DiskFile {
-        version: FORMAT_VERSION,
-        device: inner.device.clone(),
-        segments,
-    };
+    let file = DiskFile { version: FORMAT_VERSION, device: inner.device.clone(), entries };
     let Ok(json) = serde_json::to_vec_pretty(&file) else {
         return;
     };
@@ -217,28 +224,42 @@ fn write_to_disk(inner: &Inner) {
     }
 }
 
-// ── Public API (called only from the chain-fusion worker thread) ─────────────
+// ── Public API ───────────────────────────────────────────────────────────────
 
-/// The persisted verdict for `key` on `device_name`, or `None` if not cached
-/// (or persistence is disabled). On a hit the caller skips the GPU gate
-/// measurement and rebuilds the segment from the recorded mask.
-pub(crate) fn lookup(device_name: &str, key: u64) -> Option<SegmentVerdict> {
+/// The persisted verdict for `key`, or `None` if not cached (or persistence is
+/// disabled). On a hit the caller skips the GPU gate measurement and rebuilds
+/// from the recorded mask.
+pub(crate) fn lookup(kind: Kind, device_name: &str, key: u64) -> Option<Verdict> {
     if !enabled() {
         return None;
     }
-    with_inner(device_name, |inner| inner.map.get(&key).cloned())
+    with_inner(kind, device_name, |inner| inner.map.get(&key).cloned())
 }
 
-/// Record a freshly measured `verdict` for `key` and flush to disk. A no-op when
-/// persistence is disabled.
-pub(crate) fn record(device_name: &str, key: u64, verdict: SegmentVerdict) {
+/// Record a single freshly measured `verdict` for `key` and flush to disk —
+/// incremental, used by the chain-fusion worker as segments arrive one at a
+/// time. A no-op when persistence is disabled.
+pub(crate) fn record(kind: Kind, device_name: &str, key: u64, verdict: Verdict) {
     if !enabled() {
         return;
     }
-    with_inner(device_name, |inner| {
+    with_inner(kind, device_name, |inner| {
         inner.map.insert(key, verdict);
-        write_to_disk(inner);
+        write_to_disk(kind, inner);
     });
+}
+
+/// Replace the entire cache with `map` and flush once. Used by `tune_all`, which
+/// holds the complete fresh verdict set for every current preset: writing the
+/// whole thing in one go both persists the run and prunes orphaned keys left by
+/// preset versions that no longer exist. A no-op when persistence is disabled.
+pub(crate) fn replace_all(kind: Kind, device_name: &str, map: AHashMap<u64, Verdict>) {
+    if !enabled() {
+        return;
+    }
+    let inner = Inner { device: device_name.to_string(), map };
+    write_to_disk(kind, &inner);
+    *store(kind).lock().expect("freeze verdict store poisoned") = Some(inner);
 }
 
 #[cfg(test)]
@@ -247,40 +268,34 @@ mod tests {
 
     #[test]
     fn disk_roundtrip_preserves_verdicts() {
-        let inner = Inner {
-            device: "TestGPU".to_string(),
-            map: {
-                let mut m = AHashMap::default();
-                m.insert(1u64, SegmentVerdict::KeepPerCard);
-                m.insert(2u64, SegmentVerdict::Fuse(vec![true, false, true]));
-                m
-            },
-        };
-        // Round-trip through the on-disk representation directly (no real $HOME
-        // dependency): build a DiskFile, serialize, parse, and reload the map.
-        let segments = inner
+        let mut map: AHashMap<u64, Verdict> = AHashMap::default();
+        map.insert(1u64, Verdict::DontFuse);
+        map.insert(2u64, Verdict::Fuse(vec![true, false, true]));
+        let inner = Inner { device: "TestGPU".to_string(), map };
+
+        let entries = inner
             .map
             .iter()
-            .map(|(k, v)| {
-                let dv = match v {
-                    SegmentVerdict::Fuse(mask) => DiskVerdict { fuse: true, mask: Some(mask.clone()) },
-                    SegmentVerdict::KeepPerCard => DiskVerdict { fuse: false, mask: None },
-                };
-                (k.to_string(), dv)
-            })
+            .map(|(k, v)| (k.to_string(), DiskVerdict::from_verdict(v)))
             .collect();
-        let file = DiskFile { version: FORMAT_VERSION, device: inner.device.clone(), segments };
+        let file = DiskFile { version: FORMAT_VERSION, device: inner.device.clone(), entries };
         let json = serde_json::to_vec_pretty(&file).expect("serialize");
         let back: DiskFile = serde_json::from_slice(&json).expect("parse");
 
         assert_eq!(back.version, FORMAT_VERSION);
         assert_eq!(back.device, "TestGPU");
-        let keep = back.segments.get("1").expect("key 1");
-        assert!(!keep.fuse);
-        assert!(keep.mask.is_none());
-        let fuse = back.segments.get("2").expect("key 2");
-        assert!(fuse.fuse);
-        assert_eq!(fuse.mask.as_deref(), Some(&[true, false, true][..]));
+        assert_eq!(back.entries.get("1").unwrap().to_verdict(), Some(Verdict::DontFuse));
+        assert_eq!(
+            back.entries.get("2").unwrap().to_verdict(),
+            Some(Verdict::Fuse(vec![true, false, true]))
+        );
+    }
+
+    #[test]
+    fn fuse_without_mask_is_rejected() {
+        // A malformed entry (fuse:true, no mask) must not load as a fuse verdict.
+        let dv = DiskVerdict { fuse: true, mask: None };
+        assert_eq!(dv.to_verdict(), None);
     }
 
     #[test]
@@ -288,12 +303,16 @@ mod tests {
         let file = DiskFile {
             version: FORMAT_VERSION + 1,
             device: "TestGPU".to_string(),
-            segments: std::collections::BTreeMap::new(),
+            entries: std::collections::BTreeMap::new(),
         };
         let json = serde_json::to_vec(&file).expect("serialize");
-        // Simulate the load-time guard.
         let parsed: DiskFile = serde_json::from_slice(&json).expect("parse");
         let valid = parsed.version == FORMAT_VERSION && parsed.device == "TestGPU";
         assert!(!valid, "a future format version must be rejected");
+    }
+
+    #[test]
+    fn distinct_kinds_use_distinct_files() {
+        assert_ne!(Kind::Card.filename(), Kind::Segment.filename());
     }
 }

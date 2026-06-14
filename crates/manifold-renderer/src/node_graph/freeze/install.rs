@@ -681,9 +681,10 @@ pub(crate) fn compile_segment_view(
         // wiring and the key changes, missing the cache and re-measuring. On a
         // hit we skip the (expensive, 4K) gate measurement and rebuild from the
         // recorded mask; codegen below is cheap.
-        let win_mask: Vec<bool> = match super::verdict_cache::lookup(&device_name, cache_key) {
-            Some(super::verdict_cache::SegmentVerdict::KeepPerCard) => return None,
-            Some(super::verdict_cache::SegmentVerdict::Fuse(mask)) if mask.len() == n => mask,
+        use super::verdict_cache::{Kind, Verdict};
+        let win_mask: Vec<bool> = match super::verdict_cache::lookup(Kind::Segment, &device_name, cache_key) {
+            Some(Verdict::DontFuse) => return None,
+            Some(Verdict::Fuse(mask)) if mask.len() == n => mask,
             // No verdict (or a cached mask whose length no longer matches the
             // partition — codegen drift a version bump missed): measure now and
             // persist the result for next launch.
@@ -709,17 +710,19 @@ pub(crate) fn compile_segment_view(
                 ) {
                     Some(mask) => {
                         super::verdict_cache::record(
+                            Kind::Segment,
                             &device_name,
                             cache_key,
-                            super::verdict_cache::SegmentVerdict::Fuse(mask.clone()),
+                            Verdict::Fuse(mask.clone()),
                         );
                         mask
                     }
                     None => {
                         super::verdict_cache::record(
+                            Kind::Segment,
                             &device_name,
                             cache_key,
-                            super::verdict_cache::SegmentVerdict::KeepPerCard,
+                            Verdict::DontFuse,
                         );
                         return None;
                     }
