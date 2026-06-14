@@ -46,6 +46,12 @@ struct DepthRequest {
 
 struct DepthResponse {
     depth_buffer: Option<Vec<f32>>,
+    // Dims the depth was computed at. Used to discard responses that arrive
+    // after the analysis resolution changed (in-flight request raced a
+    // source-size switch) — otherwise the upload loop indexes a stale,
+    // smaller buffer with the new, larger pixel count and panics.
+    width: i32,
+    height: i32,
 }
 
 struct DepthState {
@@ -130,6 +136,8 @@ impl DepthEstimateMidas {
                 );
                 DepthResponse {
                     depth_buffer: if ok != 0 { Some(depth) } else { None },
+                    width: req.width,
+                    height: req.height,
                 }
             })
         });
@@ -252,6 +260,11 @@ impl Primitive for DepthEstimateMidas {
             // Poll worker result → mark depth_dirty.
             if let Some(response) = dw.try_recv()
                 && let Some(buf) = response.depth_buffer
+                // Discard a response computed at dims that no longer match the
+                // current analysis resolution (source size changed while it was
+                // in flight). A fresh request at the new dims is already queued.
+                && response.width as u32 == ds.analysis_width
+                && response.height as u32 == ds.analysis_height
             {
                 let first = !ds.has_depth;
                 ds.depth_buffer = buf;
