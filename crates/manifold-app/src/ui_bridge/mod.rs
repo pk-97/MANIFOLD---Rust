@@ -380,6 +380,7 @@ pub fn dispatch(
         | PanelAction::EffectMappingAffineSnapshot { .. }
         | PanelAction::EffectMappingAffineChanged { .. }
         | PanelAction::EffectMappingAffineCommit { .. }
+        | PanelAction::EffectMappingGotoNode { .. }
         | PanelAction::RevertEffectGraph => DispatchResult::handled(),
     }
 }

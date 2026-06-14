@@ -1481,7 +1481,7 @@ fn preset_to_config(
     let reg_def = manifold_core::preset_definition_registry::try_get(preset_type);
 
     // ── Source the normalized spec rows per kind ──
-    let rows: Vec<SpecRow> = match kind {
+    let mut rows: Vec<SpecRow> = match kind {
         PresetKind::Effect => {
             // Effects: registry static prefix + per-instance user-tail bindings.
             let reg_def = reg_def.as_deref()?; // skip cards for def-less effects
@@ -1573,6 +1573,35 @@ fn preset_to_config(
             }
         }
     };
+
+    // ── Overlay the per-instance reshape onto the rows ──
+    // The mapping popover writes a recalibrated range / label to the instance's
+    // graph OVERRIDE (`ParamSpecDef` in `preset_metadata` — the single reshape
+    // source). The effect rows above are sourced from the registry def, which
+    // never sees that edit, so without this overlay a remapped effect param
+    // keeps showing the catalog range on its card slider. Generators source
+    // their rows straight from `generator_graph` (their override), so the
+    // overlay is a harmless no-op there. Keyed by stable param id; covers both
+    // the static prefix and the user tail.
+    let override_def = match kind {
+        PresetKind::Effect => inst.graph_def().as_ref(),
+        PresetKind::Generator => generator_graph,
+    };
+    if let Some(meta) = override_def.and_then(|d| d.preset_metadata.as_ref()) {
+        let specs: ahash::AHashMap<&str, &manifold_core::effect_graph_def::ParamSpecDef> =
+            meta.params.iter().map(|p| (p.id.as_str(), p)).collect();
+        for row in rows.iter_mut() {
+            if let Some(spec) = specs.get(row.id.as_str()) {
+                row.min = spec.min;
+                row.max = spec.max;
+                row.name = spec.name.clone();
+                row.whole_numbers = spec.whole_numbers;
+                if !spec.value_labels.is_empty() {
+                    row.value_labels = Some(spec.value_labels.clone());
+                }
+            }
+        }
+    }
 
     // ── Shared: ParamInfo construction + id->index lookup ──
     // Card position == value index for both kinds (effect static prefix then

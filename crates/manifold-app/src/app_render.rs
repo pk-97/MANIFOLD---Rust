@@ -1721,6 +1721,21 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::EffectMappingGotoNode { binding_id } => {
+                    // Read-only navigation: resolve the binding's stable NodeId
+                    // from the live snapshot (outer routing → node handle → id)
+                    // and centre the editor canvas on it. Same path as the
+                    // card-label jump-to-node, triggered from the mapping drawer.
+                    if let (Some(snap), Some(canvas)) = (
+                        self.content_state.active_graph_snapshot.as_deref(),
+                        self.graph_canvas.as_mut(),
+                    ) && let Some(node_id) =
+                        crate::graph_canvas::resolve_card_param_node_id(snap, binding_id)
+                    {
+                        canvas.focus_node(snap, &node_id);
+                    }
+                    continue;
+                }
                 PanelAction::EnterPerformMode => {
                     self.perform.pending_enter = true;
                     continue;

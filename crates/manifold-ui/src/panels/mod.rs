@@ -334,6 +334,13 @@ pub enum PanelAction {
     EffectMappingAffineCommit {
         binding_id: String,
     },
+    /// Jump the graph-editor canvas to the node this card binding is exposed
+    /// from — "show me where this slider is mapped from." Read-only navigation
+    /// (no undo, no model write); the app resolves the binding's stable
+    /// `NodeId` from the snapshot and centres the canvas on it.
+    EffectMappingGotoNode {
+        binding_id: String,
+    },
 
     // ── Graph editor mutations (Phase 4) ──────────────────────────────
     //

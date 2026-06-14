@@ -346,7 +346,8 @@ impl MappingPopover {
     // ── Geometry ────────────────────────────────────────────────────
 
     fn panel_height(&self) -> f32 {
-        // header + preview + min + max + invert + curve + scale + offset, padded.
+        // header + preview + min + max + invert + curve + scale + offset +
+        // goto-node, padded.
         PAD + HEADER_H
             + ROW_GAP + PREVIEW_H    // live response preview
             + ROW_GAP + ROW_H        // min
@@ -355,6 +356,7 @@ impl MappingPopover {
             + ROW_GAP + CURVE_ROW_H  // curve
             + ROW_GAP + ROW_H        // scale
             + ROW_GAP + ROW_H        // offset
+            + ROW_GAP + ROW_H        // go to node
             + PAD
     }
 
@@ -398,6 +400,21 @@ impl MappingPopover {
     }
     fn offset_row_y(&self) -> f32 {
         self.scale_row_y() + ROW_H + ROW_GAP
+    }
+    fn goto_row_y(&self) -> f32 {
+        self.offset_row_y() + ROW_H + ROW_GAP
+    }
+
+    /// Full-width "Go to node" button at the popover's foot — the discoverable
+    /// "where is this slider mapped from?" affordance. Click navigates the
+    /// editor canvas to the node this binding is exposed from.
+    fn goto_btn_rect(&self) -> Rect {
+        Rect::new(
+            self.origin.0 + PAD,
+            self.goto_row_y(),
+            POPOVER_W - 2.0 * PAD,
+            ROW_H,
+        )
     }
 
     /// The row-Y for a value field (Min / Max / Scale / Offset).
@@ -519,6 +536,16 @@ impl MappingPopover {
                 };
                 return true;
             }
+        }
+        // "Go to node" — jump the editor canvas to the node this binding is
+        // exposed from. Read-only navigation; emit and close so the canvas is
+        // unobstructed when it centres.
+        if Self::point_in(self.goto_btn_rect(), sx, sy) {
+            self.pending_actions.push(PanelAction::EffectMappingGotoNode {
+                binding_id: self.binding_id.clone(),
+            });
+            self.open = false;
+            return true;
         }
         // Inside the panel but on dead space — consume so the click
         // doesn't fall through to the canvas behind it.
@@ -906,6 +933,22 @@ impl MappingPopover {
         ] {
             self.draw_value_field(ui, panel.x, which, name, format_affine(val));
         }
+
+        // ── Go to node ──
+        // The discoverable "where is this slider mapped from?" action: a
+        // full-width button that navigates the editor canvas to the node this
+        // binding is exposed from.
+        let g = self.goto_btn_rect();
+        ui.draw_rounded_rect(g.x, g.y, g.w, g.h, BTN_BG, 2.0);
+        let label = "\u{2192} Go to node";
+        let tw = label.chars().count() as f32 * FONT * 0.5;
+        ui.draw_text(
+            g.x + (g.w - tw) * 0.5,
+            g.y + 3.0,
+            label,
+            FONT,
+            TEXT_PRIMARY,
+        );
     }
 }
 
