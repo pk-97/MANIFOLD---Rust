@@ -28,12 +28,17 @@ use crate::effect_graph_def::{
 };
 use crate::id::NodeId;
 
-/// One inferred boundary port: its name plus the inner endpoint it binds to.
+/// One inferred boundary port: its name plus the inner endpoint(s) it binds to.
+///
+/// Outputs always bind exactly one inner source. Inputs may bind several inner
+/// sinks: when a single external source fans out to multiple sinks inside the
+/// selection they share one coalesced boundary pin (the flattener re-fans it on
+/// the way out, so this stays flatten-equivalent to one pin per sink — it just
+/// declutters the group's interface).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InferredPort {
     pub name: String,
-    pub inner_node: u32,
-    pub inner_port: String,
+    pub inner: Vec<(u32, String)>,
 }
 
 /// The interface a selection would expose if collapsed: inputs (inner sinks fed
@@ -57,25 +62,34 @@ pub enum GroupEditError {
 }
 
 /// Inspect the wires crossing `selected`'s boundary and derive the ports a
-/// collapsed group would expose. One input port per distinct inner sink fed
-/// from outside; one output port per distinct inner source feeding outside.
-/// Port names come from the inner port name, deduplicated. Input and output
-/// names live in separate namespaces (a group may have input `x` and output
-/// `x`). Deterministic: keyed and ordered by `(inner_node, inner_port)`.
+/// collapsed group would expose. One input port per distinct *external source*
+/// feeding into the selection (so a source fanning to several inner sinks is a
+/// single coalesced pin); one output port per distinct inner source feeding
+/// outside. Port names come from an inner port name, deduplicated. Input and
+/// output names live in separate namespaces (a group may have input `x` and
+/// output `x`). Deterministic: inputs ordered by external source, outputs by
+/// inner source.
 pub fn infer_interface(
     nodes: &[EffectGraphNode],
     wires: &[EffectGraphWire],
     selected: &BTreeSet<u32>,
 ) -> InferredInterface {
     let _ = nodes; // ports are derived purely from crossing wires
-    let mut input_keys: BTreeSet<(u32, String)> = BTreeSet::new();
+    // Inputs are coalesced by the EXTERNAL source feeding into the selection, so
+    // one upstream signal fanning to many inner sinks becomes a single boundary
+    // pin (keyed by source) rather than one pin per sink. Outputs are keyed by
+    // inner source — a source feeding several external sinks is already one pin.
+    let mut in_by_source: BTreeMap<(u32, String), Vec<(u32, String)>> = BTreeMap::new();
     let mut output_keys: BTreeSet<(u32, String)> = BTreeSet::new();
     for w in wires {
         let from_sel = selected.contains(&w.from_node);
         let to_sel = selected.contains(&w.to_node);
         match (from_sel, to_sel) {
             (false, true) => {
-                input_keys.insert((w.to_node, w.to_port.clone()));
+                in_by_source
+                    .entry((w.from_node, w.from_port.clone()))
+                    .or_default()
+                    .push((w.to_node, w.to_port.clone()));
             }
             (true, false) => {
                 output_keys.insert((w.from_node, w.from_port.clone()));
@@ -85,12 +99,19 @@ pub fn infer_interface(
     }
 
     let mut used = BTreeSet::new();
-    let inputs = input_keys
-        .into_iter()
-        .map(|(n, p)| InferredPort {
-            name: unique_name(&p, &mut used),
-            inner_node: n,
-            inner_port: p,
+    let inputs = in_by_source
+        .into_values()
+        .map(|mut sinks| {
+            sinks.sort();
+            sinks.dedup();
+            // Name from the lowest-id inner sink's port. The common case is all
+            // sinks sharing a name (e.g. "time"); the semantic-rename pass can
+            // refine it later.
+            let base = sinks[0].1.clone();
+            InferredPort {
+                name: unique_name(&base, &mut used),
+                inner: sinks,
+            }
         })
         .collect();
 
@@ -99,8 +120,7 @@ pub fn infer_interface(
         .into_iter()
         .map(|(n, p)| InferredPort {
             name: unique_name(&p, &mut used_out),
-            inner_node: n,
-            inner_port: p,
+            inner: vec![(n, p)],
         })
         .collect();
 
@@ -136,16 +156,20 @@ pub fn group_selection(
     }
 
     let iface = infer_interface(&nodes, &wires, selected);
-    let in_name: BTreeMap<(u32, String), String> = iface
-        .inputs
-        .iter()
-        .map(|p| ((p.inner_node, p.inner_port.clone()), p.name.clone()))
-        .collect();
-    let out_name: BTreeMap<(u32, String), String> = iface
-        .outputs
-        .iter()
-        .map(|p| ((p.inner_node, p.inner_port.clone()), p.name.clone()))
-        .collect();
+    // Each inner sink maps to its (possibly coalesced) input pin's name; each
+    // inner source maps to its output pin's name.
+    let mut in_name: BTreeMap<(u32, String), String> = BTreeMap::new();
+    for p in &iface.inputs {
+        for endpoint in &p.inner {
+            in_name.insert(endpoint.clone(), p.name.clone());
+        }
+    }
+    let mut out_name: BTreeMap<(u32, String), String> = BTreeMap::new();
+    for p in &iface.outputs {
+        if let Some(endpoint) = p.inner.first() {
+            out_name.insert(endpoint.clone(), p.name.clone());
+        }
+    }
 
     let max_id = nodes.iter().map(|n| n.id).max().unwrap_or(0);
     let group_node_id = max_id + 1;
@@ -163,11 +187,17 @@ pub fn group_selection(
         .filter(|w| selected.contains(&w.from_node) && selected.contains(&w.to_node))
         .cloned()
         .collect();
+    // One input pin fans out to all the inner sinks it feeds; each output pin
+    // is fed by its single inner source.
     for p in &iface.inputs {
-        body_wires.push(wire(gi_id, &p.name, p.inner_node, &p.inner_port));
+        for (sink_node, sink_port) in &p.inner {
+            body_wires.push(wire(gi_id, &p.name, *sink_node, sink_port));
+        }
     }
     for p in &iface.outputs {
-        body_wires.push(wire(p.inner_node, &p.inner_port, go_id, &p.name));
+        if let Some((src_node, src_port)) = p.inner.first() {
+            body_wires.push(wire(*src_node, src_port, go_id, &p.name));
+        }
     }
 
     let interface = GroupInterface {
@@ -216,12 +246,18 @@ pub fn group_selection(
     parent_nodes.push(group_nd);
 
     let mut parent_wires: Vec<EffectGraphWire> = Vec::new();
+    // When a source fans to several inner sinks they collapse to one coalesced
+    // pin, so the crossing wires collapse to a single parent wire into it — dedup
+    // by (source, pin) so we emit it once.
+    let mut seen_input_wires: BTreeSet<(u32, String, String)> = BTreeSet::new();
     for w in &wires {
         match (selected.contains(&w.from_node), selected.contains(&w.to_node)) {
             (false, false) => parent_wires.push(w.clone()),
             (false, true) => {
-                let name = &in_name[&(w.to_node, w.to_port.clone())];
-                parent_wires.push(wire(w.from_node, &w.from_port, group_node_id, name));
+                let name = in_name[&(w.to_node, w.to_port.clone())].clone();
+                if seen_input_wires.insert((w.from_node, w.from_port.clone(), name.clone())) {
+                    parent_wires.push(wire(w.from_node, &w.from_port, group_node_id, &name));
+                }
             }
             (true, false) => {
                 let name = &out_name[&(w.from_node, w.from_port.clone())];
@@ -445,9 +481,8 @@ mod tests {
         let iface = infer_interface(&n, &w, &sel(&[1]));
         assert_eq!(iface.inputs.len(), 1);
         assert_eq!(iface.outputs.len(), 1);
-        assert_eq!(iface.inputs[0].inner_node, 1);
-        assert_eq!(iface.inputs[0].inner_port, "in");
-        assert_eq!(iface.outputs[0].inner_port, "out");
+        assert_eq!(iface.inputs[0].inner, vec![(1, "in".to_string())]);
+        assert_eq!(iface.outputs[0].inner, vec![(1, "out".to_string())]);
     }
 
     #[test]
@@ -460,11 +495,27 @@ mod tests {
     }
 
     #[test]
-    fn dedups_repeated_port_names() {
-        // Two inner nodes both sinking on "in" from outside.
+    fn coalesces_one_source_fanning_to_many_sinks() {
+        // One external source feeding two inner sinks -> a single coalesced pin
+        // that fans out inside the group (was one pin per sink before).
         let nodes = vec![node(0, "src"), node(1, "x"), node(2, "y")];
         let wires = vec![wire(0, "out", 1, "in"), wire(0, "out", 2, "in")];
         let iface = infer_interface(&nodes, &wires, &sel(&[1, 2]));
+        assert_eq!(iface.inputs.len(), 1, "one source -> one pin");
+        assert_eq!(iface.inputs[0].name, "in");
+        assert_eq!(
+            iface.inputs[0].inner,
+            vec![(1, "in".to_string()), (2, "in".to_string())]
+        );
+    }
+
+    #[test]
+    fn dedups_repeated_port_names_across_distinct_sources() {
+        // Two *different* external sources each feeding a sink named "in" -> two
+        // pins (distinct sources don't coalesce), names deduped.
+        let nodes = vec![node(0, "s0"), node(1, "s1"), node(2, "x"), node(3, "y")];
+        let wires = vec![wire(0, "out", 2, "in"), wire(1, "out", 3, "in")];
+        let iface = infer_interface(&nodes, &wires, &sel(&[2, 3]));
         let names: Vec<_> = iface.inputs.iter().map(|p| p.name.clone()).collect();
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"in".to_string()));
@@ -632,6 +683,50 @@ mod tests {
             canonical_stripped(&flat_grouped.nodes, &flat_grouped.wires),
             canonical_stripped(&flat_original.nodes, &flat_original.wires),
             "collapse must not change what the runtime executes"
+        );
+    }
+
+    #[test]
+    fn coalesced_fanout_flattens_equivalently() {
+        use crate::effect_graph_def::{EFFECT_GRAPH_VERSION, EffectGraphDef};
+        use crate::flatten::flatten_groups;
+
+        let mk = |nodes: Vec<EffectGraphNode>, wires: Vec<EffectGraphWire>| EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes,
+            wires,
+        };
+
+        // src.out fans to x.in and y.in, both inside the group.
+        let nodes = vec![node(0, "src"), node(1, "x"), node(2, "y")];
+        let wires = vec![wire(0, "out", 1, "in"), wire(0, "out", 2, "in")];
+        let flat_original = flatten_groups(&mk(nodes.clone(), wires.clone())).unwrap();
+
+        let (pn, pw) = group_selection(nodes, wires, &sel(&[1, 2]), "g", (0.0, 0.0)).unwrap();
+        // The group exposes ONE coalesced input pin for the shared source...
+        let g = pn.iter().find(|x| x.handle.as_deref() == Some("g")).unwrap();
+        assert_eq!(
+            g.group.as_deref().unwrap().interface.inputs.len(),
+            1,
+            "fan-out coalesced to a single pin"
+        );
+        // ...and only one parent wire feeds it.
+        let g_id = g.id;
+        assert_eq!(
+            pw.iter().filter(|x| x.to_node == g_id).count(),
+            1,
+            "one coalesced parent wire into the pin"
+        );
+
+        // ...yet the flattened runtime topology is unchanged.
+        let flat_grouped = flatten_groups(&mk(pn, pw)).unwrap();
+        assert_eq!(
+            canonical_stripped(&flat_grouped.nodes, &flat_grouped.wires),
+            canonical_stripped(&flat_original.nodes, &flat_original.wires),
+            "coalesced fan-out must flatten to the same topology"
         );
     }
 }
