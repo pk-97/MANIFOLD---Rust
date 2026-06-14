@@ -1079,6 +1079,7 @@ mod tests {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         };
         let rb = ResolvedBinding::from_user(&core, &g, &node_map_for(feedback), 0)
             .expect("user binding hydrates");
@@ -1111,6 +1112,7 @@ mod tests {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         };
         let node_map: Vec<(NodeId, NodeInstanceId)> = vec![];
         assert!(ResolvedBinding::from_user(&core, &g, &node_map, 0).is_none());
@@ -1135,6 +1137,7 @@ mod tests {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         };
         assert!(ResolvedBinding::from_user(&core, &g, &node_map_for(feedback), 0).is_none());
     }
@@ -1361,6 +1364,7 @@ mod tests {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1398,6 +1402,7 @@ mod tests {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];
@@ -1435,6 +1440,7 @@ mod tests {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         };
         let user_rb = ResolvedBinding::from_user(&core_ub, &g, &node_map_for(feedback), 1).unwrap();
         let bindings = vec![static_rb, user_rb];

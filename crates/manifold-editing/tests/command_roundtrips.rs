@@ -814,6 +814,7 @@ fn change_effect_param_undo_roundtrip_on_user_tail_binding() {
         curve: Default::default(),
         scale: 1.0,
         offset: 0.0,
+        value_labels: Vec::new(),
     });
     project.settings.master_effects.push(fx);
 
@@ -1580,6 +1581,7 @@ fn expose_already_exposed_is_idempotent_noop() {
         curve: Default::default(),
         scale: 1.0,
         offset: 0.0,
+        value_labels: Vec::new(),
     });
     project.settings.master_effects.push(fx);
 
@@ -1627,6 +1629,7 @@ fn unexpose_effect_param_command_undo_roundtrip() {
         curve: Default::default(),
         scale: 1.0,
         offset: 0.0,
+        value_labels: Vec::new(),
     });
     // Drag the slider — user-tail at index 2 (n_static=2 + j=0) changed.
     fx.param_values[2].value = 0.42;
@@ -1711,6 +1714,7 @@ fn generate_user_param_id_collision_probe() {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         },
         UserParamBinding {
             id: "user.uv_transform.translate.2".to_string(),
@@ -1726,6 +1730,7 @@ fn generate_user_param_id_collision_probe() {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         },
     ];
     let existing_ids: Vec<String> = existing.iter().map(|b| b.id.clone()).collect();
@@ -1763,6 +1768,7 @@ fn unexpose_prunes_orphan_drivers_and_undo_restores_them() {
         curve: Default::default(),
         scale: 1.0,
         offset: 0.0,
+        value_labels: Vec::new(),
     });
     // Attach a driver keyed to the user binding's id. Plus a driver
     // for the static `amount` param — that one must survive the
@@ -1861,6 +1867,7 @@ fn unexpose_prunes_orphan_ableton_mappings_and_undo_restores_them() {
         curve: Default::default(),
         scale: 1.0,
         offset: 0.0,
+        value_labels: Vec::new(),
     });
     let address = AbletonMacroAddress {
         track_id: 0,
@@ -1933,6 +1940,7 @@ fn unexpose_prunes_orphan_envelopes_and_undo_restores_them() {
         curve: Default::default(),
         scale: 1.0,
         offset: 0.0,
+        value_labels: Vec::new(),
     });
     // Envelope-home unification: envelopes ride on the instance, keyed by
     // param_id. Plant one on the unexposed binding (pruned) and one on an

@@ -207,10 +207,11 @@ pub struct NodeInspector {
     pub outputs: Vec<(String, f32)>,
 }
 
-/// Right-sidebar width inside the graph-editor window. Bigger than a
-/// typical inspector cell because it has to fit a checkbox + a
-/// param label without truncation.
-pub const SIDEBAR_WIDTH: f32 = 320.0;
+/// Right-sidebar width inside the graph-editor window. The sidebar is now
+/// monitors-only (the inner-node param list moved under the left card), so the
+/// width is set by the two stacked 16:9 preview panes — wider here means bigger,
+/// more usable Node Output / Master Out monitors.
+pub const SIDEBAR_WIDTH: f32 = 460.0;
 
 /// Left-lane width inside the graph-editor window — the lane that renders the
 /// real `ParamCardPanel` for the edited effect/generator. Wide enough to fit
@@ -286,6 +287,10 @@ enum RowState {
         /// Enum option count, snapshot from the live ParamDef. Click-
         /// cycle on an enum cell wraps modulo this count.
         enum_labels_count: usize,
+        /// Enum option labels, snapshot from the live ParamDef. Carried onto
+        /// the expose action so an exposed enum keeps its labelled card slider.
+        /// Empty for non-enum params.
+        enum_labels: Vec<String>,
         convert: ParamConvert,
         currently_exposed: bool,
         /// Slot index when this inner-param is the target of a
@@ -880,6 +885,7 @@ impl GraphEditorPanel {
                     default_value: ps.default_value,
                     current_value: ps.current_value,
                     enum_labels_count: ps.enum_labels.as_ref().map(|l| l.len()).unwrap_or(0),
+                    enum_labels: ps.enum_labels.clone().unwrap_or_default(),
                     convert,
                     currently_exposed: is_exposed,
                     static_block_slot,
@@ -1437,6 +1443,7 @@ impl GraphEditorPanel {
                     default_value,
                     current_value,
                     enum_labels_count,
+                    enum_labels,
                     convert,
                     currently_exposed,
                     static_block_slot,
@@ -1469,6 +1476,7 @@ impl GraphEditorPanel {
                             default_value: *default_value,
                             convert: *convert,
                             is_angle: matches!(*kind, GraphEditorParamKind::Angle),
+                            value_labels: enum_labels.clone(),
                         }];
                     }
                     if value_cell_node_id.map(|v| v == node_id).unwrap_or(false) {
@@ -2134,6 +2142,7 @@ mod tests {
                 default_value,
                 convert,
                 is_angle,
+                ..
             } => {
                 assert_eq!(node_id, "uv_transform");
                 assert_eq!(node_handle, "uv_transform");

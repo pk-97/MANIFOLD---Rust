@@ -251,6 +251,11 @@ pub enum PanelAction {
         /// `GraphEditorParamKind::Angle`. Carried onto the appended
         /// `UserParamBinding` so the card slider shows degrees.
         is_angle: bool,
+        /// Enum option labels from the inner param's live `ParamDef`. Carried
+        /// onto the appended `UserParamBinding` (and its `ParamSpecDef`) so an
+        /// exposed enum renders as a labelled stepped card slider. Empty for
+        /// non-enum params.
+        value_labels: Vec<String>,
     },
 
     // ── User param-binding mapping edits ──────────────────────────────

@@ -499,6 +499,7 @@ impl Command for ToggleEffectParamExposeCommand {
                     curve: Default::default(),
                     scale: 1.0,
                     offset: 0.0,
+                    value_labels: Vec::new(),
                 };
                 effect.append_user_binding(binding);
                 ReverseState::Exposed { user_param_id: id }
@@ -993,6 +994,7 @@ mod tests {
             curve: MacroCurve::Linear,
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         }
     }
 

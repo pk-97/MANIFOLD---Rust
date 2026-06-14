@@ -1552,6 +1552,7 @@ impl Application {
                     default_value,
                     convert,
                     is_angle,
+                    value_labels,
                 } => {
                     if let (Some(target), Some(default)) = (
                         self.watched_graph_target.as_ref(),
@@ -1571,6 +1572,7 @@ impl Application {
                                 *default_value,
                                 *convert,
                                 *is_angle,
+                                value_labels.clone(),
                             );
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }

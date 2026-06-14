@@ -336,6 +336,14 @@ pub struct UserParamBinding {
     pub scale: f32,
     #[serde(default)]
     pub offset: f32,
+    /// Enum option labels captured from the inner param's `ParamDef` at
+    /// expose time. Drives the card slider's stepped/labelled rendering so an
+    /// exposed enum (Fold Mode, Blend Mode, …) shows its option names instead
+    /// of a bare 0..N numeric slider. Empty for non-enum params; carried onto
+    /// the appended `ParamSpecDef` so the card reads it through the normal
+    /// reshape overlay. `serde(default)` keeps pre-existing projects loading.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub value_labels: Vec<String>,
 }
 
 /// serde default for [`UserParamBinding::scale`] — identity is `1.0`, not the
@@ -1929,6 +1937,7 @@ impl PresetInstance {
             curve: spec.map(|s| s.curve).unwrap_or_default(),
             scale: b.scale,
             offset: b.offset,
+            value_labels: spec.map(|s| s.value_labels.clone()).unwrap_or_default(),
         }
     }
 
@@ -2089,7 +2098,7 @@ impl PresetInstance {
             whole_numbers,
             is_toggle: matches!(binding.convert, ParamConvert::BoolThreshold),
             is_trigger: matches!(binding.convert, ParamConvert::Trigger),
-            value_labels: Vec::new(),
+            value_labels: binding.value_labels.clone(),
             format_string: None,
             osc_suffix: String::new(),
             curve: binding.curve,
@@ -2240,7 +2249,7 @@ impl PresetInstance {
             whole_numbers,
             is_toggle: matches!(binding.convert, ParamConvert::BoolThreshold),
             is_trigger: matches!(binding.convert, ParamConvert::Trigger),
-            value_labels: Vec::new(),
+            value_labels: binding.value_labels.clone(),
             format_string: None,
             osc_suffix: String::new(),
             curve: binding.curve,
@@ -3990,6 +3999,7 @@ mod tests {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         }
     }
 
@@ -4425,6 +4435,7 @@ mod tests {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         });
         let pd = ParamSource::get_param_def(&fx, 1);
         assert_eq!(pd.id, "user.uv.translate.1");

@@ -1061,6 +1061,11 @@ pub struct ToggleNodeParamExposeCommand {
     /// `UserParamBinding` so the card slider shows degrees. Display-only —
     /// storage stays radians.
     inner_is_angle: bool,
+    /// Enum option labels for the inner param, captured at panel-build time
+    /// from the live `ParamDef`. Flows onto the appended `UserParamBinding`
+    /// (and its `ParamSpecDef`) so an exposed enum renders as a labelled
+    /// stepped card slider instead of a bare numeric one. Empty for non-enums.
+    inner_value_labels: Vec<String>,
     /// Display label for the user binding (effect-side only).
     inner_label: String,
     inner_min: f32,
@@ -1160,6 +1165,7 @@ impl ToggleNodeParamExposeCommand {
         inner_default: f32,
         inner_convert: manifold_core::effects::ParamConvert,
         inner_is_angle: bool,
+        inner_value_labels: Vec<String>,
     ) -> Self {
         Self {
             target,
@@ -1170,6 +1176,7 @@ impl ToggleNodeParamExposeCommand {
             catalog_default,
             inner_meta: Some(inner_convert),
             inner_is_angle,
+            inner_value_labels,
             inner_label,
             inner_min,
             inner_max,
@@ -1304,6 +1311,7 @@ impl Command for ToggleNodeParamExposeCommand {
         let inner_default = self.inner_default;
         let inner_convert = self.inner_meta.unwrap_or(manifold_core::effects::ParamConvert::Float);
         let inner_is_angle = self.inner_is_angle;
+        let inner_value_labels = self.inner_value_labels.clone();
 
         // Graph-side write — flip the node's `exposed_params` membership and
         // locate the static-block slot (if any). Identical for both kinds:
@@ -1357,6 +1365,7 @@ impl Command for ToggleNodeParamExposeCommand {
                 inner_default,
                 inner_convert,
                 inner_is_angle,
+                &inner_value_labels,
             ),
             // Instance vanished between the graph borrow and the mirror borrow.
             // Capture just the graph bit so undo restores it.
@@ -1424,6 +1433,7 @@ fn mirror_effect_side(
     inner_default: f32,
     inner_convert: manifold_core::effects::ParamConvert,
     inner_is_angle: bool,
+    inner_value_labels: &[String],
 ) -> EffectMirrorReverse {
     use manifold_core::effects::{ParamSlot, UserParamBinding};
 
@@ -1473,6 +1483,7 @@ fn mirror_effect_side(
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: inner_value_labels.to_vec(),
         };
         effect.append_user_binding(binding);
         EffectMirrorReverse::AppendedUserBinding {
@@ -2731,6 +2742,7 @@ mod tests {
                 curve: Default::default(),
                 scale: 1.0,
                 offset: 0.0,
+                value_labels: Vec::new(),
             });
             fx.create_driver(manifold_core::effects::ParamId::from("user.a.b.1"));
             assert!(fx.find_driver("user.a.b.1").is_some());
@@ -3118,6 +3130,7 @@ mod tests {
             0.0,
             manifold_core::effects::ParamConvert::Float,
             false,
+            Vec::new(),
         );
 
         cmd.execute(&mut project);
@@ -3298,6 +3311,7 @@ mod tests {
             0.0,
             ParamConvert::BoolThreshold,
             false,
+            Vec::new(),
         );
         expose.execute(&mut project);
 
@@ -3567,6 +3581,7 @@ mod tests {
             0.0,
             ParamConvert::BoolThreshold,
             false,
+            Vec::new(),
         );
         unexpose.execute(&mut project);
 
@@ -3654,6 +3669,7 @@ mod tests {
             0.0,
             ParamConvert::Float,
             false,
+            Vec::new(),
         );
         expose.execute(&mut project);
 
@@ -3716,6 +3732,7 @@ mod tests {
             0.0,
             ParamConvert::Float,
             false,
+            Vec::new(),
         );
         unexpose.execute(&mut project);
 
@@ -3785,6 +3802,7 @@ mod tests {
             0.0,
             ParamConvert::Float,
             false,
+            Vec::new(),
         );
         expose.execute(&mut project);
 
@@ -3815,6 +3833,7 @@ mod tests {
             0.0,
             ParamConvert::Float,
             false,
+            Vec::new(),
         );
         unexpose.execute(&mut project);
 
@@ -3940,6 +3959,7 @@ mod tests {
             0.0,
             ParamConvert::EnumRound,
             false,
+            Vec::new(),
         );
         cmd.execute(&mut project);
 
@@ -3998,6 +4018,7 @@ mod tests {
             0.0,
             manifold_core::effects::ParamConvert::Float,
             false,
+            Vec::new(),
         );
 
         cmd.execute(&mut project);

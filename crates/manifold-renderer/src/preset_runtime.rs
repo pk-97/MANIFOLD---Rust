@@ -3920,6 +3920,7 @@ mod user_binding_tests {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         });
         // Drag the user-tail slider to `translate_value`. With static
         // count = 3 (amount, zoom, rotate) the user binding's slot lives
@@ -4050,6 +4051,7 @@ mod user_binding_tests {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         });
         // Leave the outer slot at its declared default so the test
         // depends on the seed pass, not on the apply-with-divergent-
@@ -4513,6 +4515,7 @@ mod chain_error_tests {
             curve: Default::default(),
             scale: 1.0,
             offset: 0.0,
+            value_labels: Vec::new(),
         });
 
         let cg = PresetRuntime::try_build(&[fx.clone()], &[], &primitives, &device, None, 256, 256, None, None)
