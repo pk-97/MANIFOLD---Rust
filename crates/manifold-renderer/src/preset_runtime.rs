@@ -2268,22 +2268,18 @@ impl PresetRuntime {
             return Vec::new();
         };
         let mut out = Vec::new();
-        for &(node, port, res) in self.executor.dump_resources() {
+        for (node, port, _res, tex) in self.executor.dump_resources() {
             // Only this effect's nodes (reverse-map runtime id → stable NodeId).
-            let Some((node_id, _)) = slot.node_map.iter().find(|(_, niid)| *niid == node) else {
+            let Some((node_id, _)) = slot.node_map.iter().find(|(_, niid)| niid == node) else {
                 continue;
             };
-            let Some(tex) = self
-                .executor
-                .backend()
-                .slot_for(res)
-                .and_then(|s| self.executor.backend().texture_2d(s))
-            else {
+            // Texture pinned at record time, immune to the end-of-frame swap.
+            let Some(tex) = tex.as_ref() else {
                 continue;
             };
             let type_id = self
                 .graph
-                .get_node(node)
+                .get_node(*node)
                 .map(|inst| inst.node.type_id().as_str().to_string())
                 .unwrap_or_default();
             out.push((node_id.to_string(), port.to_string(), type_id, tex));
@@ -3046,18 +3042,14 @@ impl PresetRuntime {
     /// per-effect filter, unlike the chain's [`Self::dump_textures`]).
     pub fn dump_textures_all(&self) -> Vec<(String, String, String, &GpuTexture)> {
         let mut out = Vec::new();
-        for &(node, port, res) in self.executor.dump_resources() {
-            let Some(tex) = self
-                .executor
-                .backend()
-                .slot_for(res)
-                .and_then(|s| self.executor.backend().texture_2d(s))
-            else {
+        for (node, port, _res, tex) in self.executor.dump_resources() {
+            // Texture pinned at record time, immune to the end-of-frame swap.
+            let Some(tex) = tex.as_ref() else {
                 continue;
             };
             let (name, type_id) = self
                 .graph
-                .get_node(node)
+                .get_node(*node)
                 .map(|inst| {
                     (
                         inst.node_id.to_string(),

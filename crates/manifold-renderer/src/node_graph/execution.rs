@@ -125,10 +125,22 @@ pub struct Executor {
     /// host can read them all from one frame and write them to disk. One-shot,
     /// off by default — costs nothing on the live path.
     dump_all: bool,
-    /// `(node, output_port, resource)` for every Texture2D output produced
-    /// this frame while [`dump_all`] is set. Cleared and repopulated each
-    /// frame. Read after `execute_frame_*` via [`dump_resources`].
-    dump_resources: Vec<(NodeInstanceId, &'static str, ResourceId)>,
+    /// `(node, output_port, resource, texture)` for every Texture2D output
+    /// produced this frame while [`dump_all`] is set. Cleared and repopulated
+    /// each frame. Read after `execute_frame_*` via [`dump_resources`].
+    ///
+    /// The texture is a clone (retain bump) captured at the moment the producer
+    /// step records its output — *before* the end-of-frame feedback swap
+    /// ([`MetalBackend::swap_texture_2d`]) physically swaps render targets
+    /// between persistent slots. Re-resolving `slot_for(res)` after the frame
+    /// (the old approach) returns the swapped, about-to-be-overwritten buffer on
+    /// alternate frames, which strobed the editor's per-node thumbnails between
+    /// the real output and black. Pinning the identity here reads the buffer the
+    /// step actually wrote, regardless of any later swap. `None` only when the
+    /// resource has no backing texture (e.g. the mock backend in tests); real
+    /// GPU runs always resolve it.
+    dump_resources:
+        Vec<(NodeInstanceId, &'static str, ResourceId, Option<manifold_gpu::GpuTexture>)>,
     /// Same, for `Array` (storage-buffer) outputs — particle/instance/edge
     /// buffers. Read via [`dump_array_resources`] and decoded against the
     /// resource's `ArrayType` channel layout.
@@ -288,10 +300,14 @@ impl Executor {
         self.dump_all = on;
     }
 
-    /// `(node, output_port, resource)` for every Texture2D output captured on
-    /// the last frame while dump mode was on. Resolve each to a texture via
-    /// [`Backend::slot_for`] + [`Backend::texture_2d`] on [`backend`](Self::backend).
-    pub fn dump_resources(&self) -> &[(NodeInstanceId, &'static str, ResourceId)] {
+    /// `(node, output_port, resource, texture)` for every Texture2D output
+    /// captured on the last frame while dump mode was on. The texture is pinned
+    /// to the buffer the producer step wrote, before any end-of-frame swap — use
+    /// it directly rather than re-resolving `slot_for(res)`, which would read the
+    /// swapped buffer on alternate frames.
+    pub fn dump_resources(
+        &self,
+    ) -> &[(NodeInstanceId, &'static str, ResourceId, Option<manifold_gpu::GpuTexture>)] {
         &self.dump_resources
     }
 
@@ -1098,7 +1114,16 @@ impl Executor {
                 for &(port, res) in &step.outputs {
                     match plan.resource_type(res) {
                         Some(t) if t.is_texture_2d() => {
-                            self.dump_resources.push((step.node, port, res));
+                            // Pin the texture identity NOW, before the
+                            // end-of-frame feedback swap rebinds slots. Cloning
+                            // is a retain bump; dump mode already holds every
+                            // resource past the frame, so the buffer stays live.
+                            let tex = self
+                                .backend
+                                .slot_for(res)
+                                .and_then(|s| self.backend.texture_2d(s))
+                                .cloned();
+                            self.dump_resources.push((step.node, port, res, tex));
                         }
                         Some(crate::node_graph::ports::PortType::Array(_)) => {
                             self.dump_array_resources.push((step.node, port, res));
@@ -1686,7 +1711,7 @@ mod tests {
         // On: every consumed Texture2D output is recorded.
         exec.set_dump_all(true);
         exec.execute_frame(&mut g, &plan, frame_time());
-        let nodes: Vec<_> = exec.dump_resources().iter().map(|&(n, _, _)| n).collect();
+        let nodes: Vec<_> = exec.dump_resources().iter().map(|(n, _, _, _)| *n).collect();
         assert!(nodes.contains(&a), "a's output recorded");
         assert!(nodes.contains(&b), "b's output recorded");
 
