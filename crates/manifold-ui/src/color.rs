@@ -395,7 +395,7 @@ pub const DIVIDER_C32: Color32 = Color32::new(56, 56, 60, 255);
 pub const SLIDER_TRACK_C32: Color32 = Color32::new(40, 40, 42, 255);
 pub const SLIDER_TRACK_HOVER_C32: Color32 = Color32::new(48, 48, 52, 255);
 pub const SLIDER_TRACK_PRESSED_C32: Color32 = Color32::new(36, 36, 38, 255);
-pub const SLIDER_FILL_C32: Color32 = Color32::new(50, 70, 100, 120);
+pub const SLIDER_FILL_C32: Color32 = Color32::new(55, 85, 125, 180);
 pub const SLIDER_THUMB_C32: Color32 = Color32::new(180, 200, 230, 255);
 pub const SLIDER_TEXT_C32: Color32 = Color32::new(190, 190, 195, 255);
 

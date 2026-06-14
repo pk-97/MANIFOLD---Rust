@@ -151,7 +151,10 @@ impl BitmapSlider {
                 bg_color: colors.value_bg,
                 text_color: colors.text,
                 font_size,
-                text_align: TextAlign::Center,
+                // Right-aligned so a stacked column of values lines up at the
+                // decimal edge and reads like a mixer, instead of each value
+                // floating centered in its cell.
+                text_align: TextAlign::Right,
                 ..UIStyle::default()
             },
         );

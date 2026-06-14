@@ -211,7 +211,9 @@ const AUTHOR_LABEL_WIDTH: f32 = 108.0;
 // Effect shell furniture.
 const DRAG_HANDLE_W: f32 = 18.0;
 const TOGGLE_W: f32 = 30.0;
-const BADGE_W: f32 = 36.0;
+// 3-letter chips (ABL/ENV/DRV/MOD) at FONT_CAPTION don't need 36px; the
+// narrower chip reclaims header width for the effect name when several show.
+const BADGE_W: f32 = 28.0;
 const BADGE_H: f32 = 14.0;
 const BADGE_RADIUS: f32 = 7.0;
 const CONFIG_BTN_FONT_SIZE: u16 = color::FONT_CAPTION;

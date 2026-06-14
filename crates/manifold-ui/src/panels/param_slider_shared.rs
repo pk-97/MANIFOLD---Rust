@@ -458,15 +458,23 @@ pub(crate) fn build_driver_config(
         .unwrap_or(false);
     let no_mod = !is_dotted && !is_triplet;
 
-    let mut cx = x + DRIVER_PAD_H;
     let row1_y = y + 4.0;
     let avail_w = w - DRIVER_PAD_H * 2.0;
-    let btn_w =
-        (avail_w - BEAT_DIV_SPACING * (BEAT_DIV_COUNT as f32 - 1.0)) / BEAT_DIV_COUNT as f32;
+    // Beat-division labels are mixed-width ("1/32" vs "1"). A uniform button
+    // width forces the fraction labels to cramp while the integer labels waste
+    // space. Weight each button by its label length so the fractions get the
+    // room they need and the integers give it back — keeps all 11 on one row
+    // (no extra height on the live surface) and stops "1/32" clipping.
+    let content_w = avail_w - BEAT_DIV_SPACING * (BEAT_DIV_COUNT as f32 - 1.0);
+    let weights: [f32; BEAT_DIV_COUNT] =
+        std::array::from_fn(|j| BEAT_DIV_LABELS[j].chars().count() as f32 + 1.0);
+    let total_weight: f32 = weights.iter().sum();
+    let mut cx = x + DRIVER_PAD_H;
 
     let mut beat_div_btn_ids = [-1i32; BEAT_DIV_COUNT];
     for j in 0..BEAT_DIV_COUNT {
         let active = j as i32 == active_div && no_mod;
+        let btn_w = content_w * weights[j] / total_weight;
         beat_div_btn_ids[j] = tree.add_button(
             container_id,
             cx,
