@@ -1,13 +1,14 @@
 {
   "version": 2,
   "name": "BlackHole",
-  "description": "BlackHole \u2014 Kerr black hole with relativistic geodesic lensing, accretion-disk shading, and orbiting particle volumetric density. Migrated from legacy black_hole.rs onto node.wgsl_compute (the naga-introspected dynamic escape hatch) + existing primitive vocabulary (seed_particles / resolve_accumulator / gaussian_blur). 19 nodes: 4 wgsl_compute (deflection bake, Schwarzschild orbit integrator, polar+hemisphere splat, cinematic display compositor), 1 seed_particles allocator, 2 resolve_accumulator, 10 gaussian_blur (deflection H/V \u00d7 3 + polar density H/V \u00d7 2), and 3 conversion nodes (tilt/rotate deg\u2192rad via affine_scalar, scale\u2192uv_scale via math.Reciprocal).\n\nParticles self-seed on frame 1 via simulate's life<0.5 respawn path (seed_particles ships all 800k slots dead via active_count=0). The legacy 'seed' entry point is dropped \u2014 its only behavioural difference (staggered ages) is cosmetic since BlackHole has no age-based death. Frame-counter for spawn randomization computed inline as u32(time_val*60) since system.generator_input has no per-frame counter.\n\nApproximate-parity migration \u2014 not yet visually verified against legacy on the canonical fixture. Known parity deltas:\n(1) Gaussian blur uses node.gaussian_blur fixed 17-tap kernel; legacy uses custom \u03c3=4 21-tap. Visually comparable.\n(2) Deflection bake runs every frame; legacy rebakes only on camera/scale/spin param change. Adds ~150-step ray trace per pixel per frame to the cost.\n(3) Deflection runs at full canvas resolution; legacy runs at quarter-res. ~16\u00d7 per-pixel cost until output_canvas_scale lands on the dynamic node.\n(4) Particle respawn position varies with u32(time*60) (legacy: per-instance u64 frame_count).\n(5) Disk shear over time uses display.orbit_angle = 0 (legacy: time*speed*0.3). Disk doesn't rotate over time. Add an LFO + math chain in a follow-up.",
+  "description": "Kerr black hole with relativistic geodesic lensing, an accretion disk, and orbiting particle volumetric density. The instrument is a particle loop wrapped around two heavy pre-computes that the final compositor reads.\n\nThe spine runs left to right across the top level. Allocate Particles hands an 800k slot buffer to the Schwarzschild Orbit Integrator, which self-seeds on the first frame and then steps every particle through Schwarzschild gravity with a frame-dragging correction and curl turbulence, killing anything that falls through the horizon or escapes. Polar Density Scatter splats the surviving particles into a two-layer polar density map, one layer for the particles above the disk plane and one for below, and the two resolvers turn those atomic accumulators into density images.\n\nThree groups sit off to the side. Camera Setup converts the Tilt, Rotate, and Scale sliders into the radians and uv-scale the lens trace needs. Geodesic Deflection is the expensive part, a 150-step null-geodesic ray trace through Kerr spacetime that bakes three maps, the photon-ring deflection, the lensed back-disk crossing, and the escape-to-sky direction, then blurs each one with a separable Gaussian. Particle Density Blur softens the top and bottom density layers before they reach the disk.\n\nThe Cinematic Display Compositor is the convergence point. It samples the lensed star field, paints the accretion disk through both deflection crossings with volumetric emission, draws the photon ring, and optionally overlays the particle density, then writes the final image.\n\nThe groups are a presentation layer only. They flatten to the original flat graph byte for byte at load, and every card binding reaches its inner node by stable nodeId, so grouping never touches the live performance surface.",
   "presetMetadata": {
     "id": "BlackHole",
     "displayName": "Black Hole",
     "category": "Procedural",
     "oscPrefix": "blackHole",
     "available": true,
+    "isLineBased": false,
     "params": [
       {
         "id": "speed",
@@ -17,6 +18,7 @@
         "defaultValue": 0.3,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -27,6 +29,7 @@
         "defaultValue": 20.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F1"
       },
       {
@@ -37,6 +40,7 @@
         "defaultValue": 15.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F0"
       },
       {
@@ -47,6 +51,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F0"
       },
       {
@@ -57,6 +62,7 @@
         "defaultValue": 150.0,
         "wholeNumbers": true,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F0"
       },
       {
@@ -67,6 +73,7 @@
         "defaultValue": 3.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F1"
       },
       {
@@ -77,6 +84,7 @@
         "defaultValue": 10.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F1"
       },
       {
@@ -87,6 +95,7 @@
         "defaultValue": 2.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F1"
       },
       {
@@ -97,6 +106,7 @@
         "defaultValue": 1.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -107,6 +117,7 @@
         "defaultValue": 0.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -117,6 +128,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -127,6 +139,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -137,6 +150,7 @@
         "defaultValue": 0.5,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -147,6 +161,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F2"
       },
       {
@@ -157,6 +172,7 @@
         "defaultValue": 0.0,
         "wholeNumbers": false,
         "isToggle": false,
+        "isTrigger": false,
         "formatString": "F0"
       }
     ],
@@ -429,42 +445,46 @@
   "nodes": [
     {
       "id": 0,
+      "nodeId": "input",
       "typeId": "system.generator_input",
-      "handle": "input", "nodeId": "input"
+      "handle": "input"
     },
     {
       "id": 1,
+      "nodeId": "final_output",
       "typeId": "system.final_output",
-      "handle": "final_output", "nodeId": "final_output"
+      "handle": "final_output"
     },
     {
       "id": 2,
+      "nodeId": "seed",
       "typeId": "node.seed_particles",
-      "handle": "seed", "nodeId": "seed",
+      "handle": "seed",
       "params": {
-        "max_capacity": {
-          "type": "Float",
-          "value": 800000.0
-        },
         "active_count": {
           "type": "Float",
           "value": 0.0
         },
-        "seed_offset": {
+        "max_capacity": {
           "type": "Float",
-          "value": 0.0
+          "value": 800000.0
         },
         "seed_mode": {
           "type": "Enum",
           "value": 1
+        },
+        "seed_offset": {
+          "type": "Float",
+          "value": 0.0
         }
-      }
+      },
+      "title": "Allocate Particles"
     },
     {
       "id": 3,
+      "nodeId": "simulate",
       "typeId": "node.wgsl_compute",
-      "handle": "simulate", "nodeId": "simulate",
-      "wgslSource": "// Black Hole \u2014 Particle Simulation\n//\n// Simulates particles orbiting under Schwarzschild gravity.\n// Particles spawn at the outer disk edge, spiral inward, get consumed at horizon.\n// Uses Verlet integration for energy conservation.\n//\n// Particle layout (64 bytes, matches compute_common.rs Particle struct):\n//   position: vec3<f32> + pad\n//   velocity: vec3<f32> + life: f32\n//   age: f32 + pad[3]\n//   color: vec4<f32>\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life:     f32,\n    age:      f32,\n    color:    vec4<f32>,\n};\n\nstruct SimUniforms {\n    active_count: u32,\n    frame_count: u32,\n    disk_inner: f32,\n    disk_outer: f32,\n    speed: f32,\n    turbulence: f32,\n    time_val: f32,\n    dt: f32,\n    inject_burst: f32,\n    _pad0: f32,\n    _pad1: f32,\n    _pad2: f32,\n};\n\n@group(0) @binding(0) var<storage, read_write> particles: array<Particle>;\n@group(0) @binding(1) var<uniform> params: SimUniforms;\n\n// Wang hash (matches particle_common.wgsl)\nfn wang_hash(seed_in: u32) -> u32 {\n    var seed = seed_in;\n    seed = (seed ^ 61u) ^ (seed >> 16u);\n    seed = seed * 9u;\n    seed = seed ^ (seed >> 4u);\n    seed = seed * 0x27d4eb2du;\n    seed = seed ^ (seed >> 15u);\n    return seed;\n}\n\nfn hash_float(seed: u32) -> f32 {\n    return f32(wang_hash(seed)) / 4294967296.0;\n}\n\nfn hash_float3(seed: u32) -> vec3<f32> {\n    let h0 = wang_hash(seed);\n    let h1 = wang_hash(h0);\n    let h2 = wang_hash(h1);\n    return vec3<f32>(\n        f32(h0) / 4294967296.0,\n        f32(h1) / 4294967296.0,\n        f32(h2) / 4294967296.0,\n    );\n}\n\n// Simplex noise 2D (simplified \u2014 matching fluid sim pattern)\nconst SIMPLEX_GRAD2_X: array<f32, 8> = array<f32, 8>(\n    1.0, 0.7071, 0.0, -0.7071, -1.0, -0.7071, 0.0, 0.7071\n);\nconst SIMPLEX_GRAD2_Y: array<f32, 8> = array<f32, 8>(\n    0.0, 0.7071, 1.0, 0.7071, 0.0, -0.7071, -1.0, -0.7071\n);\n\nfn simplex_noise_2d(v: vec2<f32>) -> f32 {\n    let F2: f32 = 0.36602540378;\n    let G2: f32 = 0.21132486540;\n    let s = (v.x + v.y) * F2;\n    let i = floor(v + s);\n    let t = (i.x + i.y) * G2;\n    let x0 = v - (i - t);\n    let i1 = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), x0.x > x0.y);\n    let x1 = x0 - i1 + G2;\n    let x2 = x0 - 1.0 + 2.0 * G2;\n    let h0 = wang_hash(u32(i.x + 10000.0) * 73856093u ^ u32(i.y + 10000.0) * 19349663u);\n    let h1 = wang_hash(u32(i.x + i1.x + 10000.0) * 73856093u\n        ^ u32(i.y + i1.y + 10000.0) * 19349663u);\n    let h2 = wang_hash(u32(i.x + 1.0 + 10000.0) * 73856093u\n        ^ u32(i.y + 1.0 + 10000.0) * 19349663u);\n    let g0 = vec2<f32>(SIMPLEX_GRAD2_X[h0 & 7u], SIMPLEX_GRAD2_Y[h0 & 7u]);\n    let g1 = vec2<f32>(SIMPLEX_GRAD2_X[h1 & 7u], SIMPLEX_GRAD2_Y[h1 & 7u]);\n    let g2 = vec2<f32>(SIMPLEX_GRAD2_X[h2 & 7u], SIMPLEX_GRAD2_Y[h2 & 7u]);\n    let t0 = 0.5 - dot(x0, x0);\n    let t1 = 0.5 - dot(x1, x1);\n    let t2 = 0.5 - dot(x2, x2);\n    let n0 = select(0.0, t0 * t0 * t0 * t0 * dot(g0, x0), t0 >= 0.0);\n    let n1 = select(0.0, t1 * t1 * t1 * t1 * dot(g1, x1), t1 >= 0.0);\n    let n2 = select(0.0, t2 * t2 * t2 * t2 * dot(g2, x2), t2 >= 0.0);\n    return clamp((n0 + n1 + n2) * 35.0 + 0.5, 0.0, 1.0);\n}\n\n// Spawn a new particle anywhere across the disk so respawned particles\n// repopulate the inner regions, not just the outer rim. Without this,\n// the entire population eventually concentrates in the outer 20% of\n// the disk (because the original spawn zone was 0.8..1.0 of outer).\nfn spawn_particle(idx: u32) -> Particle {\n    let seed = wang_hash(idx * 1099u + u32(params.time_val * 60.0) * 7919u);\n    let rng = hash_float3(seed);\n\n    // Random angle in disk plane\n    let angle = rng.x * 6.2831853;\n    // Random radius across the full disk (linear in r \u2014 gives roughly\n    // even visual density, since outer regions have more area but we\n    // want the inner regions to remain populated).\n    let spawn_r = params.disk_inner + rng.y * (params.disk_outer - params.disk_inner);\n    // Slight vertical spread, scaled by radius so it matches disk thickness\n    let y_offset = (rng.z - 0.5) * 0.1 * spawn_r;\n\n    let pos = vec3<f32>(\n        cos(angle) * spawn_r,\n        y_offset,\n        sin(angle) * spawn_r,\n    );\n\n    // Orbital velocity: v_circular = sqrt(0.5 * rs / r) for Schwarzschild (rs = 1)\n    // Tangential direction (perpendicular to radial, in disk plane)\n    let v_orbital = sqrt(0.5 / spawn_r);\n    let tangent = vec3<f32>(-sin(angle), 0.0, cos(angle));\n\n    // Add slight inward drift to spiral\n    let radial = normalize(vec3<f32>(pos.x, 0.0, pos.z));\n    let vel = tangent * v_orbital - radial * v_orbital * 0.02;\n\n    var p: Particle;\n    p.position = pos;\n    p.velocity = vel;\n    p.life = 1.0;\n    p.age = 0.0;\n    // Temperature color: will be overridden by display based on radius\n    p.color = vec4<f32>(1.0, 0.7, 0.3, 1.0);\n    return p;\n}\n\n@compute @workgroup_size(256)\nfn simulate(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let idx = gid.x;\n    if idx >= params.active_count {\n        return;\n    }\n\n    var p = particles[idx];\n\n    // Dead particle \u2014 respawn\n    if p.life < 0.5 {\n        p = spawn_particle(idx);\n        particles[idx] = p;\n        return;\n    }\n\n    let pos = p.position;\n    let r = length(pos);\n    let dt = params.dt * params.speed;\n\n    // \u2500\u2500 Schwarzschild gravity \u2500\u2500\n    // Newtonian + GR correction for stable orbits\n    // a = -GM/r\u00b3 * pos + GR_correction\n    // In our units (rs = 1, GM = 0.5):\n    let r2 = r * r;\n    let r3 = r2 * r;\n    let gravity = -0.5 / r3 * pos;\n\n    // GR correction: perihelion precession term (3 * rs * L\u00b2 / (2 * r\u2075))\n    // This creates the characteristic frame-dragging spiral\n    let L_vec = cross(pos, p.velocity);\n    let L2 = dot(L_vec, L_vec);\n    let gr_correction = -1.5 * L2 / (r2 * r3) * pos;\n\n    let total_accel = gravity + gr_correction;\n\n    // \u2500\u2500 Turbulence (curl noise in disk plane) \u2500\u2500\n    let noise_scale = 3.0;\n    let angle = atan2(pos.z, pos.x);\n    let n1 = simplex_noise_2d(vec2<f32>(\n        angle * noise_scale + params.time_val * 0.2,\n        r * noise_scale * 0.5,\n    ));\n    let n2 = simplex_noise_2d(vec2<f32>(\n        r * noise_scale * 0.3 + params.time_val * 0.15,\n        angle * noise_scale * 1.5 + 100.0,\n    ));\n    // Curl: perpendicular to gradient\n    let turb_radial = (n1 - 0.5) * 2.0;\n    let turb_tangential = (n2 - 0.5) * 2.0;\n    let radial_dir = normalize(vec3<f32>(pos.x, 0.0, pos.z) + vec3<f32>(1e-8));\n    let tangent_dir = vec3<f32>(-radial_dir.z, 0.0, radial_dir.x);\n    let turbulence_force = (radial_dir * turb_radial + tangent_dir * turb_tangential\n        + vec3<f32>(0.0, (n1 - 0.5) * 0.5, 0.0))\n        * params.turbulence * 0.01;\n\n    // \u2500\u2500 Disk confinement (soft push toward y=0) \u2500\u2500\n    // Moderate pull \u2014 particles bob meaningfully above and below the\n    // plane (so the two-layer top/bottom split has signal), but they\n    // don't drift so far that they leave the disk's volumetric extent.\n    // The scatter shader culls particles outside |y| < 0.24*r anyway,\n    // so this just keeps the population concentrated where it counts.\n    let disk_push = vec3<f32>(0.0, -pos.y * 1.5, 0.0);\n\n    // \u2500\u2500 Velocity update (Verlet) \u2500\u2500\n    p.velocity += (total_accel + turbulence_force + disk_push) * dt;\n\n    // Light damping to prevent energy buildup from turbulence\n    p.velocity *= 0.9995;\n\n    // \u2500\u2500 Position update \u2500\u2500\n    p.position += p.velocity * dt;\n\n    // \u2500\u2500 Age \u2500\u2500\n    p.age += params.dt;\n\n    // \u2500\u2500 Kill conditions \u2500\u2500\n    let new_r = length(p.position);\n    // Consumed by event horizon\n    if new_r < 1.2 {\n        p.life = 0.0;\n    }\n    // Escaped too far\n    if new_r > params.disk_outer * 2.0 {\n        p.life = 0.0;\n    }\n    // No age cap. Particles live until they actually fall into the hole\n    // or escape \u2014 killing healthy orbiting particles by age was emptying\n    // the inner disk, since freshly-respawned particles take time to\n    // spiral inward and the old spawn zone (0.8..1.0 of outer) meant\n    // nothing ever populated the inner radii in the first place.\n\n    // \u2500\u2500 Color based on radius (temperature) \u2500\u2500\n    let t = clamp((new_r - params.disk_inner) / (params.disk_outer - params.disk_inner), 0.0, 1.0);\n    let inner_col = vec3<f32>(1.0, 0.95, 0.85);\n    let mid_col = vec3<f32>(1.0, 0.55, 0.15);\n    let outer_col = vec3<f32>(0.6, 0.12, 0.02);\n    var col: vec3<f32>;\n    if t < 0.5 {\n        col = mix(inner_col, mid_col, t * 2.0);\n    } else {\n        col = mix(mid_col, outer_col, (t - 0.5) * 2.0);\n    }\n    // Brighten particles near horizon (gravitational blueshift / heating)\n    let heat = exp(-(new_r - 1.5) * 0.5) * 2.0;\n    col += vec3<f32>(0.5, 0.3, 0.1) * heat;\n\n    p.color = vec4<f32>(col, 1.0);\n\n    particles[idx] = p;\n}\n",
+      "handle": "simulate",
       "params": {
         "active_count": {
           "type": "Float",
@@ -472,15 +492,17 @@
         },
         "dt": {
           "type": "Float",
-          "value": 0.016666666666666666
+          "value": 0.016666668
         }
-      }
+      },
+      "wgslSource": "// Black Hole — Particle Simulation\n//\n// Simulates particles orbiting under Schwarzschild gravity.\n// Particles spawn at the outer disk edge, spiral inward, get consumed at horizon.\n// Uses Verlet integration for energy conservation.\n//\n// Particle layout (64 bytes, matches compute_common.rs Particle struct):\n//   position: vec3<f32> + pad\n//   velocity: vec3<f32> + life: f32\n//   age: f32 + pad[3]\n//   color: vec4<f32>\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life:     f32,\n    age:      f32,\n    color:    vec4<f32>,\n};\n\nstruct SimUniforms {\n    active_count: u32,\n    frame_count: u32,\n    disk_inner: f32,\n    disk_outer: f32,\n    speed: f32,\n    turbulence: f32,\n    time_val: f32,\n    dt: f32,\n    inject_burst: f32,\n    _pad0: f32,\n    _pad1: f32,\n    _pad2: f32,\n};\n\n@group(0) @binding(0) var<storage, read_write> particles: array<Particle>;\n@group(0) @binding(1) var<uniform> params: SimUniforms;\n\n// Wang hash (matches particle_common.wgsl)\nfn wang_hash(seed_in: u32) -> u32 {\n    var seed = seed_in;\n    seed = (seed ^ 61u) ^ (seed >> 16u);\n    seed = seed * 9u;\n    seed = seed ^ (seed >> 4u);\n    seed = seed * 0x27d4eb2du;\n    seed = seed ^ (seed >> 15u);\n    return seed;\n}\n\nfn hash_float(seed: u32) -> f32 {\n    return f32(wang_hash(seed)) / 4294967296.0;\n}\n\nfn hash_float3(seed: u32) -> vec3<f32> {\n    let h0 = wang_hash(seed);\n    let h1 = wang_hash(h0);\n    let h2 = wang_hash(h1);\n    return vec3<f32>(\n        f32(h0) / 4294967296.0,\n        f32(h1) / 4294967296.0,\n        f32(h2) / 4294967296.0,\n    );\n}\n\n// Simplex noise 2D (simplified — matching fluid sim pattern)\nconst SIMPLEX_GRAD2_X: array<f32, 8> = array<f32, 8>(\n    1.0, 0.7071, 0.0, -0.7071, -1.0, -0.7071, 0.0, 0.7071\n);\nconst SIMPLEX_GRAD2_Y: array<f32, 8> = array<f32, 8>(\n    0.0, 0.7071, 1.0, 0.7071, 0.0, -0.7071, -1.0, -0.7071\n);\n\nfn simplex_noise_2d(v: vec2<f32>) -> f32 {\n    let F2: f32 = 0.36602540378;\n    let G2: f32 = 0.21132486540;\n    let s = (v.x + v.y) * F2;\n    let i = floor(v + s);\n    let t = (i.x + i.y) * G2;\n    let x0 = v - (i - t);\n    let i1 = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), x0.x > x0.y);\n    let x1 = x0 - i1 + G2;\n    let x2 = x0 - 1.0 + 2.0 * G2;\n    let h0 = wang_hash(u32(i.x + 10000.0) * 73856093u ^ u32(i.y + 10000.0) * 19349663u);\n    let h1 = wang_hash(u32(i.x + i1.x + 10000.0) * 73856093u\n        ^ u32(i.y + i1.y + 10000.0) * 19349663u);\n    let h2 = wang_hash(u32(i.x + 1.0 + 10000.0) * 73856093u\n        ^ u32(i.y + 1.0 + 10000.0) * 19349663u);\n    let g0 = vec2<f32>(SIMPLEX_GRAD2_X[h0 & 7u], SIMPLEX_GRAD2_Y[h0 & 7u]);\n    let g1 = vec2<f32>(SIMPLEX_GRAD2_X[h1 & 7u], SIMPLEX_GRAD2_Y[h1 & 7u]);\n    let g2 = vec2<f32>(SIMPLEX_GRAD2_X[h2 & 7u], SIMPLEX_GRAD2_Y[h2 & 7u]);\n    let t0 = 0.5 - dot(x0, x0);\n    let t1 = 0.5 - dot(x1, x1);\n    let t2 = 0.5 - dot(x2, x2);\n    let n0 = select(0.0, t0 * t0 * t0 * t0 * dot(g0, x0), t0 >= 0.0);\n    let n1 = select(0.0, t1 * t1 * t1 * t1 * dot(g1, x1), t1 >= 0.0);\n    let n2 = select(0.0, t2 * t2 * t2 * t2 * dot(g2, x2), t2 >= 0.0);\n    return clamp((n0 + n1 + n2) * 35.0 + 0.5, 0.0, 1.0);\n}\n\n// Spawn a new particle anywhere across the disk so respawned particles\n// repopulate the inner regions, not just the outer rim. Without this,\n// the entire population eventually concentrates in the outer 20% of\n// the disk (because the original spawn zone was 0.8..1.0 of outer).\nfn spawn_particle(idx: u32) -> Particle {\n    let seed = wang_hash(idx * 1099u + u32(params.time_val * 60.0) * 7919u);\n    let rng = hash_float3(seed);\n\n    // Random angle in disk plane\n    let angle = rng.x * 6.2831853;\n    // Random radius across the full disk (linear in r — gives roughly\n    // even visual density, since outer regions have more area but we\n    // want the inner regions to remain populated).\n    let spawn_r = params.disk_inner + rng.y * (params.disk_outer - params.disk_inner);\n    // Slight vertical spread, scaled by radius so it matches disk thickness\n    let y_offset = (rng.z - 0.5) * 0.1 * spawn_r;\n\n    let pos = vec3<f32>(\n        cos(angle) * spawn_r,\n        y_offset,\n        sin(angle) * spawn_r,\n    );\n\n    // Orbital velocity: v_circular = sqrt(0.5 * rs / r) for Schwarzschild (rs = 1)\n    // Tangential direction (perpendicular to radial, in disk plane)\n    let v_orbital = sqrt(0.5 / spawn_r);\n    let tangent = vec3<f32>(-sin(angle), 0.0, cos(angle));\n\n    // Add slight inward drift to spiral\n    let radial = normalize(vec3<f32>(pos.x, 0.0, pos.z));\n    let vel = tangent * v_orbital - radial * v_orbital * 0.02;\n\n    var p: Particle;\n    p.position = pos;\n    p.velocity = vel;\n    p.life = 1.0;\n    p.age = 0.0;\n    // Temperature color: will be overridden by display based on radius\n    p.color = vec4<f32>(1.0, 0.7, 0.3, 1.0);\n    return p;\n}\n\n@compute @workgroup_size(256)\nfn simulate(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let idx = gid.x;\n    if idx >= params.active_count {\n        return;\n    }\n\n    var p = particles[idx];\n\n    // Dead particle — respawn\n    if p.life < 0.5 {\n        p = spawn_particle(idx);\n        particles[idx] = p;\n        return;\n    }\n\n    let pos = p.position;\n    let r = length(pos);\n    let dt = params.dt * params.speed;\n\n    // ── Schwarzschild gravity ──\n    // Newtonian + GR correction for stable orbits\n    // a = -GM/r³ * pos + GR_correction\n    // In our units (rs = 1, GM = 0.5):\n    let r2 = r * r;\n    let r3 = r2 * r;\n    let gravity = -0.5 / r3 * pos;\n\n    // GR correction: perihelion precession term (3 * rs * L² / (2 * r⁵))\n    // This creates the characteristic frame-dragging spiral\n    let L_vec = cross(pos, p.velocity);\n    let L2 = dot(L_vec, L_vec);\n    let gr_correction = -1.5 * L2 / (r2 * r3) * pos;\n\n    let total_accel = gravity + gr_correction;\n\n    // ── Turbulence (curl noise in disk plane) ──\n    let noise_scale = 3.0;\n    let angle = atan2(pos.z, pos.x);\n    let n1 = simplex_noise_2d(vec2<f32>(\n        angle * noise_scale + params.time_val * 0.2,\n        r * noise_scale * 0.5,\n    ));\n    let n2 = simplex_noise_2d(vec2<f32>(\n        r * noise_scale * 0.3 + params.time_val * 0.15,\n        angle * noise_scale * 1.5 + 100.0,\n    ));\n    // Curl: perpendicular to gradient\n    let turb_radial = (n1 - 0.5) * 2.0;\n    let turb_tangential = (n2 - 0.5) * 2.0;\n    let radial_dir = normalize(vec3<f32>(pos.x, 0.0, pos.z) + vec3<f32>(1e-8));\n    let tangent_dir = vec3<f32>(-radial_dir.z, 0.0, radial_dir.x);\n    let turbulence_force = (radial_dir * turb_radial + tangent_dir * turb_tangential\n        + vec3<f32>(0.0, (n1 - 0.5) * 0.5, 0.0))\n        * params.turbulence * 0.01;\n\n    // ── Disk confinement (soft push toward y=0) ──\n    // Moderate pull — particles bob meaningfully above and below the\n    // plane (so the two-layer top/bottom split has signal), but they\n    // don't drift so far that they leave the disk's volumetric extent.\n    // The scatter shader culls particles outside |y| < 0.24*r anyway,\n    // so this just keeps the population concentrated where it counts.\n    let disk_push = vec3<f32>(0.0, -pos.y * 1.5, 0.0);\n\n    // ── Velocity update (Verlet) ──\n    p.velocity += (total_accel + turbulence_force + disk_push) * dt;\n\n    // Light damping to prevent energy buildup from turbulence\n    p.velocity *= 0.9995;\n\n    // ── Position update ──\n    p.position += p.velocity * dt;\n\n    // ── Age ──\n    p.age += params.dt;\n\n    // ── Kill conditions ──\n    let new_r = length(p.position);\n    // Consumed by event horizon\n    if new_r < 1.2 {\n        p.life = 0.0;\n    }\n    // Escaped too far\n    if new_r > params.disk_outer * 2.0 {\n        p.life = 0.0;\n    }\n    // No age cap. Particles live until they actually fall into the hole\n    // or escape — killing healthy orbiting particles by age was emptying\n    // the inner disk, since freshly-respawned particles take time to\n    // spiral inward and the old spawn zone (0.8..1.0 of outer) meant\n    // nothing ever populated the inner radii in the first place.\n\n    // ── Color based on radius (temperature) ──\n    let t = clamp((new_r - params.disk_inner) / (params.disk_outer - params.disk_inner), 0.0, 1.0);\n    let inner_col = vec3<f32>(1.0, 0.95, 0.85);\n    let mid_col = vec3<f32>(1.0, 0.55, 0.15);\n    let outer_col = vec3<f32>(0.6, 0.12, 0.02);\n    var col: vec3<f32>;\n    if t < 0.5 {\n        col = mix(inner_col, mid_col, t * 2.0);\n    } else {\n        col = mix(mid_col, outer_col, (t - 0.5) * 2.0);\n    }\n    // Brighten particles near horizon (gravitational blueshift / heating)\n    let heat = exp(-(new_r - 1.5) * 0.5) * 2.0;\n    col += vec3<f32>(0.5, 0.3, 0.1) * heat;\n\n    p.color = vec4<f32>(col, 1.0);\n\n    particles[idx] = p;\n}\n",
+      "title": "Schwarzschild Orbit Integrator"
     },
     {
       "id": 4,
+      "nodeId": "splat",
       "typeId": "node.wgsl_compute",
-      "handle": "splat", "nodeId": "splat",
-      "wgslSource": "// Black Hole \u2014 Polar Particle Scatter\n//\n// Splatters particle positions onto a 2D polar-mapped density texture.\n//   X axis = angle (0..2\u03c0 \u2192 0..width)\n//   Y axis = radius (disk_inner..disk_outer \u2192 0..height)\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life:     f32,\n    age:      f32,\n    color:    vec4<f32>,\n};\n\nstruct ScatterUniforms {\n    active_count: u32,\n    tex_w: u32,\n    tex_h: u32,\n    scaled_energy: u32,\n    disk_inner: f32,\n    disk_outer: f32,\n    _pad0: f32,\n    _pad1: f32,\n};\n\n@group(0) @binding(0) var<storage, read> particles: array<Particle>;\n@group(0) @binding(1) var<storage, read_write> accum_top: array<atomic<u32>>;\n@group(0) @binding(2) var<storage, read_write> accum_bottom: array<atomic<u32>>;\n@group(0) @binding(3) var<uniform> params: ScatterUniforms;\n\n@compute @workgroup_size(256)\nfn splat(@builtin(global_invocation_id) gid: vec3<u32>) {\n    if gid.x >= params.active_count {\n        return;\n    }\n\n    let p = particles[gid.x];\n    if p.life < 0.5 {\n        return;\n    }\n\n    let pos = p.position;\n    let r = length(vec2<f32>(pos.x, pos.z));\n\n    if r < params.disk_inner || r > params.disk_outer {\n        return;\n    }\n\n    // Vertical cull. The deflection bake's volumetric integral uses a\n    // Gaussian profile with half-thickness 0.12*r \u2014 beyond ~2 sigma the\n    // contribution is negligible. Without this cull, particles that\n    // drift far above or below the plane still splat into their (angle,\n    // radius) cell and create phantom radial streaks because they\n    // persistently illuminate a single polar column from outside the\n    // disk volume.\n    let half_thick = 0.24 * r;\n    if abs(pos.y) > half_thick {\n        return;\n    }\n\n    let angle = atan2(pos.z, pos.x) + 3.14159265;\n    let angle_norm = angle / 6.28318530;\n    let r_norm = (r - params.disk_inner) / (params.disk_outer - params.disk_inner);\n\n    let px = u32(angle_norm * f32(params.tex_w)) % params.tex_w;\n    let py = u32(r_norm * f32(params.tex_h)) % params.tex_h;\n    let idx = py * params.tex_w + px;\n\n    // Two-layer polar: split by signed disk-plane height. Particles above the\n    // plane go into the top texture, below go into the bottom. The display\n    // shader blends them with a bias so each disk crossing favors its own\n    // side, giving the disk a sense of thickness.\n    if pos.y >= 0.0 {\n        atomicAdd(&accum_top[idx], params.scaled_energy);\n    } else {\n        atomicAdd(&accum_bottom[idx], params.scaled_energy);\n    }\n}\n",
+      "handle": "splat",
       "params": {
         "active_count": {
           "type": "Float",
@@ -490,301 +512,607 @@
           "type": "Float",
           "value": 1024.0
         }
-      }
+      },
+      "wgslSource": "// Black Hole — Polar Particle Scatter\n//\n// Splatters particle positions onto a 2D polar-mapped density texture.\n//   X axis = angle (0..2π → 0..width)\n//   Y axis = radius (disk_inner..disk_outer → 0..height)\n\nstruct Particle {\n    position: vec3<f32>,\n    velocity: vec3<f32>,\n    life:     f32,\n    age:      f32,\n    color:    vec4<f32>,\n};\n\nstruct ScatterUniforms {\n    active_count: u32,\n    tex_w: u32,\n    tex_h: u32,\n    scaled_energy: u32,\n    disk_inner: f32,\n    disk_outer: f32,\n    _pad0: f32,\n    _pad1: f32,\n};\n\n@group(0) @binding(0) var<storage, read> particles: array<Particle>;\n@group(0) @binding(1) var<storage, read_write> accum_top: array<atomic<u32>>;\n@group(0) @binding(2) var<storage, read_write> accum_bottom: array<atomic<u32>>;\n@group(0) @binding(3) var<uniform> params: ScatterUniforms;\n\n@compute @workgroup_size(256)\nfn splat(@builtin(global_invocation_id) gid: vec3<u32>) {\n    if gid.x >= params.active_count {\n        return;\n    }\n\n    let p = particles[gid.x];\n    if p.life < 0.5 {\n        return;\n    }\n\n    let pos = p.position;\n    let r = length(vec2<f32>(pos.x, pos.z));\n\n    if r < params.disk_inner || r > params.disk_outer {\n        return;\n    }\n\n    // Vertical cull. The deflection bake's volumetric integral uses a\n    // Gaussian profile with half-thickness 0.12*r — beyond ~2 sigma the\n    // contribution is negligible. Without this cull, particles that\n    // drift far above or below the plane still splat into their (angle,\n    // radius) cell and create phantom radial streaks because they\n    // persistently illuminate a single polar column from outside the\n    // disk volume.\n    let half_thick = 0.24 * r;\n    if abs(pos.y) > half_thick {\n        return;\n    }\n\n    let angle = atan2(pos.z, pos.x) + 3.14159265;\n    let angle_norm = angle / 6.28318530;\n    let r_norm = (r - params.disk_inner) / (params.disk_outer - params.disk_inner);\n\n    let px = u32(angle_norm * f32(params.tex_w)) % params.tex_w;\n    let py = u32(r_norm * f32(params.tex_h)) % params.tex_h;\n    let idx = py * params.tex_w + px;\n\n    // Two-layer polar: split by signed disk-plane height. Particles above the\n    // plane go into the top texture, below go into the bottom. The display\n    // shader blends them with a bias so each disk crossing favors its own\n    // side, giving the disk a sense of thickness.\n    if pos.y >= 0.0 {\n        atomicAdd(&accum_top[idx], params.scaled_energy);\n    } else {\n        atomicAdd(&accum_bottom[idx], params.scaled_energy);\n    }\n}\n",
+      "title": "Polar Density Scatter"
     },
     {
-      "id": 5,
+      "id": 6,
+      "nodeId": "resolve_top",
+      "typeId": "node.resolve_accumulator",
+      "handle": "resolve_top",
+      "params": {
+        "fixed_point_scale": {
+          "type": "Float",
+          "value": 4096.0
+        }
+      },
+      "title": "Resolve Density (Top)"
+    },
+    {
+      "id": 7,
+      "nodeId": "resolve_bottom",
+      "typeId": "node.resolve_accumulator",
+      "handle": "resolve_bottom",
+      "params": {
+        "fixed_point_scale": {
+          "type": "Float",
+          "value": 4096.0
+        }
+      },
+      "title": "Resolve Density (Bottom)"
+    },
+    {
+      "id": 8,
+      "nodeId": "display",
       "typeId": "node.wgsl_compute",
-      "handle": "deflection", "nodeId": "deflection",
-      "wgslSource": "// Black Hole \u2014 Kerr Deflection Map\n// @pure\n// Params-only kernel (no time, no texture reads, no state): the memoizer\n// re-dispatches the ~150-step geodesic trace only when a camera/spin/scale\n// param actually moves, instead of every frame.\n//\n// Traces null geodesics in Kerr spacetime (spinning black hole).\n// At spin=0, reduces exactly to Schwarzschild.\n//\n// Physics:\n//   - Schwarzschild gravitational acceleration: -1.5 h\u00b2/r\u2075 pos\n//   - Kerr frame-dragging: gravitomagnetic force a/r\u00b3 cross(\u0177, vel)\n//   - Boyer-Lindquist radius for horizon check (oblate geometry)\n//   - Event horizon: r_H = 0.5(1 + \u221a(1 - a\u00b2)) in our units (r_s = 1)\n//\n// Output 1: (final_r, disk1_r, cos_angle1, sin_angle1)\n// Output 2: (vol_accum, disk2_r, cos_angle2, sin_angle2)\n// Output 3: (sky_dir.xyz, escaped_flag)\n\nstruct Uniforms {\n    aspect: f32,\n    cam_dist: f32,\n    tilt_rad: f32,\n    rotate_rad: f32,\n    steps: f32,\n    uv_scale: f32,\n    spin: f32,\n    cam_velocity: f32,\n    cam_freefall: f32,\n    _pad0: f32,\n    _pad1: f32,\n    _pad2: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: Uniforms;\n@group(0) @binding(1) var output1: texture_storage_2d<rgba16float, write>;\n@group(0) @binding(2) var output2: texture_storage_2d<rgba16float, write>;\n@group(0) @binding(3) var output3: texture_storage_2d<rgba16float, write>;\n\n// Fixed generous crossing bounds \u2014 covers full param ranges\nconst CROSS_INNER: f32 = 0.5;\nconst CROSS_OUTER: f32 = 25.0;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output1);\n    if gid.x >= dims.x || gid.y >= dims.y {\n        return;\n    }\n\n    let uv = (vec2<f32>(f32(gid.x), f32(gid.y)) + 0.5) / vec2<f32>(f32(dims.x), f32(dims.y));\n    let ndc = (uv * 2.0 - 1.0) * u.uv_scale;\n    let screen = vec2<f32>(ndc.x * u.aspect, -ndc.y);\n\n    // \u2500\u2500 Kerr spin setup (needed up front for camera physics horizon clamp) \u2500\u2500\n    let a = u.spin;\n    let a2 = a * a;\n    // Event horizon: r_H = M + \u221a(M\u00b2 - a\u00b2M\u00b2) where M=0.5 (r_s = 1)\n    // = 0.5(1 + \u221a(1 - a\u00b2))\n    let r_horizon = 0.5 * (1.0 + sqrt(max(1.0 - a2, 0.0)));\n    let spin_axis = vec3<f32>(0.0, 1.0, 0.0);\n\n    // \u2500\u2500 Camera physics \u2500\u2500\n    // The camera is allowed to fly through the event horizon for the trippy\n    // \"fall into a black hole\" effect. The clamp here is purely numerical\n    // safety to keep ratios finite very near the singularity \u2014 physical\n    // correctness is not enforced inside the horizon (real observers can't\n    // hover there, but this is a visual tool).\n    let safe_cam_dist = max(u.cam_dist, 0.05);\n    let camera_inside_horizon = safe_cam_dist < r_horizon;\n\n    // ZAMO (Zero Angular Momentum Observer) frame correction.\n    // Outside the horizon: the proper-frame solid angle subtended by infinity\n    // shrinks by \u2248 \u221a(1 \u2212 r_s/r), so the aperture widens by 1/that to keep\n    // distant features at a consistent angular size as the camera descends.\n    // Inside the horizon: 1 \u2212 r_s/r is negative, the max() floor keeps the\n    // metric factor at its minimum (0.05), giving a fully-saturated wide\n    // aperture (~5\u00d7) for the \"fallen in\" view.\n    let metric_factor = sqrt(max(1.0 - 1.0 / safe_cam_dist, 0.05));\n    let fov_factor = 1.2 / metric_factor;\n\n    // Gravitational redshift between observer at safe_cam_dist and infinity.\n    // Stored multiplied into final_r so the display pass can dim escaping\n    // light by the correct amount when the camera is deep in the well.\n    let redshift_factor = metric_factor;\n\n    let cos_tilt = cos(u.tilt_rad);\n    let sin_tilt = sin(u.tilt_rad);\n    let cos_rot = cos(u.rotate_rad);\n    let sin_rot = sin(u.rotate_rad);\n\n    let cam_pos = vec3<f32>(\n        safe_cam_dist * cos_tilt * cos_rot,\n        safe_cam_dist * sin_tilt,\n        safe_cam_dist * cos_tilt * sin_rot,\n    );\n    let fwd = normalize(-cam_pos);\n    let world_up = vec3<f32>(0.0, 1.0, 0.0);\n    let right = normalize(cross(fwd, world_up));\n    let up = cross(right, fwd);\n\n    var ray_dir = normalize(fwd + screen.x * right * fov_factor + screen.y * up * fov_factor);\n\n    // \u2500\u2500 Relativistic aberration \u2500\u2500\n    // Compose ZAMO \u2192 freefall-observer frame with a pure SR boost.\n    // The observer's velocity is radial-inward (v\u0302 = fwd). In the\n    // moving observer's frame, rays are pulled toward the forward\n    // direction, so to convert a moving-frame ray to its ZAMO-frame\n    // equivalent we use the INVERSE aberration transform:\n    //\n    //     cos \u03b8 = (cos \u03b8' \u2212 \u03b2) / (1 \u2212 \u03b2 cos \u03b8')\n    //\n    // where \u03b8 is the angle between the ray and v\u0302 in the ZAMO frame\n    // and \u03b8' is the same angle in the moving frame.\n    //\n    // Cinematic mode: \u03b2 = user slider (cam_velocity).\n    // Freefall mode: \u03b2 = \u221a(r_s/r) (radial infall from rest at infinity),\n    // clamped to 0.99 to keep the formula well-defined.\n    var beta = u.cam_velocity;\n    if u.cam_freefall > 0.5 {\n        beta = clamp(sqrt(1.0 / safe_cam_dist), 0.0, 0.99);\n    }\n    if beta > 1e-4 {\n        let v_dir = fwd; // radial-inward at cam_pos\n        let cos_tp = dot(ray_dir, v_dir);\n        let denom = 1.0 - beta * cos_tp;\n        let cos_t = (cos_tp - beta) / denom;\n        // Perpendicular component scaling: sin \u03b8 / sin \u03b8'. Derivable\n        // from requiring |ray_dir_static| = 1.\n        let sin_tp2 = max(1.0 - cos_tp * cos_tp, 0.0);\n        let sin_t2 = max(1.0 - cos_t * cos_t, 0.0);\n        let perp_scale = select(\n            1.0,\n            sqrt(sin_t2 / sin_tp2),\n            sin_tp2 > 1e-8,\n        );\n        let ray_perp = ray_dir - v_dir * cos_tp;\n        ray_dir = normalize(v_dir * cos_t + ray_perp * perp_scale);\n    }\n\n    var pos = cam_pos;\n    var vel = ray_dir;\n    let h_vec = cross(pos, vel);\n    let h2 = dot(h_vec, h_vec);\n\n    let max_steps = i32(u.steps);\n    let escape_r = max(safe_cam_dist * 3.0, 40.0);\n    let base_step = max(safe_cam_dist * 0.02, 0.15);\n\n    var prev_y = pos.y;\n    var final_r = 0.0;\n    var absorbed = false;\n\n    var c1_r = 0.0; var c1_ca = 0.0; var c1_sa = 0.0;\n    var c2_r = 0.0; var c2_ca = 0.0; var c2_sa = 0.0;\n    var crossing_count = 0;\n    var vol_accum = 0.0;\n\n    for (var i = 0; i < max_steps; i++) {\n        let r = length(pos);\n\n        // Boyer-Lindquist radius (accounts for oblate Kerr horizon geometry)\n        let w2 = r * r - a2;\n        let r_bl = sqrt(max(0.5 * w2 + sqrt(max(0.25 * w2 * w2\n            + a2 * pos.y * pos.y, 0.0)), 1e-8));\n\n        // Singularity check \u2014 terminate any ray that reaches the center.\n        // This also prevents 1/r\u2075 NaNs in the gravitational acceleration.\n        if r < 0.1 { final_r = 0.0; absorbed = true; break; }\n\n        // Horizon absorption \u2014 only applied when the camera is OUTSIDE the\n        // horizon. If the camera is inside, every ray starts inside the\n        // horizon by definition, and we don't want them all self-absorbing\n        // at step 0; let them fall to the singularity instead.\n        if !camera_inside_horizon && r_bl < r_horizon {\n            final_r = 0.0; absorbed = true; break;\n        }\n\n        if r > escape_r { final_r = r; break; }\n        // Early escape: ray well beyond camera and moving outward \u2014 negligible bending\n        if r > max(safe_cam_dist * 2.0, 15.0) && dot(pos, vel) > 0.0 {\n            final_r = r; break;\n        }\n\n        let step = base_step * clamp(r * 0.1, 0.005, 2.0);\n\n        // \u2500\u2500 Schwarzschild gravitational acceleration \u2500\u2500\n        let r2 = r * r;\n        let r5 = r2 * r2 * r;\n        let accel_grav = -1.5 * h2 / r5 * pos;\n\n        // \u2500\u2500 Kerr frame-dragging (gravitomagnetic force) \u2500\u2500\n        // Photons are dragged in the direction of black hole rotation.\n        // Force \u221d a/r\u00b3, direction = cross(spin_axis, vel).\n        // At a=0 this is zero \u2192 identical to Schwarzschild.\n        let r3 = r2 * r;\n        let accel_drag = a / r3 * cross(spin_axis, vel);\n\n        let accel = accel_grav + accel_drag;\n\n        // Verlet first half-step\n        vel += accel * step * 0.5;\n        pos += vel * step;\n\n        // Verlet second half-step (recompute at new position)\n        let r_new = length(pos);\n        let r2_new = r_new * r_new;\n        let r5_new = r2_new * r2_new * r_new;\n        let accel_grav2 = -1.5 * h2 / r5_new * pos;\n        let r3_new = r2_new * r_new;\n        let accel_drag2 = a / r3_new * cross(spin_axis, vel);\n        vel += (accel_grav2 + accel_drag2) * step * 0.5;\n\n        // \u2500\u2500 Volumetric density accumulation \u2500\u2500\n        // Gaussian vertical profile: rays near the disk plane accumulate density.\n        // Path integral gives volumetric thickness for edge-on viewing.\n        let disk_r_xz = length(vec2<f32>(pos.x, pos.z));\n        if disk_r_xz > CROSS_INNER && disk_r_xz < CROSS_OUTER {\n            let half_thick = 0.12 * disk_r_xz;\n            let y_norm = pos.y / half_thick;\n            vol_accum += exp(-y_norm * y_norm * 2.0) * step;\n        }\n\n        // \u2500\u2500 Disk crossing detection \u2500\u2500\n        let cur_y = pos.y;\n        if prev_y * cur_y < 0.0 {\n            let frac = abs(prev_y) / (abs(prev_y) + abs(cur_y) + 1e-8);\n            let cross_pos = pos - vel * step * (1.0 - frac);\n            let cross_r = length(cross_pos);\n\n            if cross_r > CROSS_INNER && cross_r < CROSS_OUTER {\n                let angle = atan2(cross_pos.z, cross_pos.x);\n                let ca = cos(angle);\n                let sa = sin(angle);\n\n                if crossing_count == 0 {\n                    c1_r = cross_r; c1_ca = ca; c1_sa = sa;\n                } else if crossing_count == 1 {\n                    c2_r = cross_r; c2_ca = ca; c2_sa = sa;\n                }\n                crossing_count++;\n            }\n        }\n        prev_y = cur_y;\n        final_r = r;\n    }\n\n    // Apply gravitational redshift to the escape radius \u2014 the photon ring\n    // and far-field intensity dim by metric_factor when the camera is deep\n    // in the well.\n    let final_r_redshifted = final_r * redshift_factor;\n    textureStore(output1, gid.xy, vec4<f32>(final_r_redshifted, c1_r, c1_ca, c1_sa));\n    textureStore(output2, gid.xy, vec4<f32>(vol_accum, c2_r, c2_ca, c2_sa));\n\n    if absorbed {\n        textureStore(output3, gid.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));\n    } else {\n        let sky_dir = normalize(vel);\n        textureStore(output3, gid.xy, vec4<f32>(sky_dir, 1.0));\n    }\n}\n",
-      "outputCanvasScales": {
-        "output1": [
-          1,
-          4
+      "handle": "display",
+      "wgslSource": "// Black Hole — Cinematic Display (dual crossing + gravitationally lensed star field)\n//\n// Deflection map layout:\n//   output1: (final_r, disk1_r, cos_angle1, sin_angle1)\n//   output2: (vol_accum, disk2_r, cos_angle2, sin_angle2)\n//   output3: (sky_dir.xyz, escaped_flag)\n\nstruct Uniforms {\n    time_val: f32,\n    disk_inner: f32,\n    disk_outer: f32,\n    disk_glow: f32,\n    orbit_angle: f32,\n    stars_brightness: f32,\n    spin: f32,\n    particle_strength: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: Uniforms;\n@group(0) @binding(1) var deflection1: texture_2d<f32>;\n@group(0) @binding(2) var deflection2: texture_2d<f32>;\n@group(0) @binding(3) var s_linear: sampler;\n@group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;\n@group(0) @binding(5) var sky_dir_tex: texture_2d<f32>;\n@group(0) @binding(6) var particle_density_top: texture_2d<f32>;\n@group(0) @binding(7) var particle_density_bottom: texture_2d<f32>;\n\n// Sample particle density at a disk hit point. Polar coords:\n//   X = angle / 2π (wrapped)\n//   Y = (r - inner) / (outer - inner) (clamped)\n//\n// `near_bias` selects which side of the disk plane this hit favors:\n//   1.0 = top-biased, 0.0 = bottom-biased. The other side still\n//   contributes (at 0.6×) so the disk feels volumetric instead of\n//   showing only one face.\n//\n// The polar density textures are now pre-blurred by a separable\n// gaussian compute pass before display reads them, so single-tap\n// bilinear sampling is sufficient — no inline blur needed. Inner\n// cells still need an area-correction weight because per-cell\n// arc length grows with r, and without it inner clumps still spike\n// brighter per screen pixel than outer ones for the same particle\n// count.\nfn sample_particle_density(\n    disk_r: f32, cos_a: f32, sin_a: f32, near_bias: f32,\n) -> f32 {\n    let angle = atan2(sin_a, cos_a);\n    let ang_norm = fract(angle / 6.28318530 + 1.0);\n    let r_norm = clamp(\n        (disk_r - u.disk_inner) / (u.disk_outer - u.disk_inner),\n        0.0, 1.0,\n    );\n    let uv = vec2<f32>(ang_norm, r_norm);\n    let d_top = textureSampleLevel(particle_density_top, s_linear, uv, 0.0).r;\n    let d_bot = textureSampleLevel(particle_density_bottom, s_linear, uv, 0.0).r;\n    let near_w = mix(0.6, 1.0, near_bias);\n    let far_w  = mix(1.0, 0.6, near_bias);\n    let raw = d_top * near_w + d_bot * far_w;\n    let area_w = smoothstep(0.0, 0.4, r_norm);\n    return raw * area_w;\n}\n\n// ── Hash functions ──\n\nfn hash21(p: vec2<f32>) -> f32 {\n    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);\n    p3 += dot(p3, p3.yzx + 33.33);\n    return fract((p3.x + p3.y) * p3.z);\n}\n\nfn noise2d(p: vec2<f32>) -> f32 {\n    let i = floor(p);\n    let f = fract(p);\n    let u2 = f * f * (3.0 - 2.0 * f);\n    return mix(\n        mix(hash21(i), hash21(i + vec2<f32>(1.0, 0.0)), u2.x),\n        mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), u2.x),\n        u2.y,\n    );\n}\n\nfn fbm(p: vec2<f32>) -> f32 {\n    var val = noise2d(p) * 0.5;\n    val += noise2d(p * 2.03 + vec2<f32>(1.7, -1.3)) * 0.25;\n    val += noise2d(p * 4.07 + vec2<f32>(3.4, -2.6)) * 0.125;\n    return val;\n}\n\n// ── Procedural star field ──\n\nfn star_layer(theta: f32, phi: f32, scale: f32, threshold: f32,\n              intensity_mult: f32, seed: f32) -> vec3<f32> {\n    let uv = vec2<f32>(phi * scale * 0.15915, theta * scale * 0.31831);\n    let cell = floor(uv);\n    let f = fract(uv);\n\n    var light = vec3<f32>(0.0);\n\n    for (var j = -1; j <= 1; j++) {\n        for (var i = -1; i <= 1; i++) {\n            let neighbor = cell + vec2<f32>(f32(i), f32(j));\n            let h = hash21(neighbor + seed);\n            if h > threshold {\n                let sx = hash21(neighbor * 1.273 + seed + 7.0);\n                let sy = hash21(neighbor * 2.178 + seed + 13.0);\n                let d = f - vec2<f32>(f32(i), f32(j)) - vec2<f32>(sx, sy);\n                let dist2 = dot(d, d);\n\n                // Steeper power law — many faint, very few bright\n                let norm_bright = (h - threshold) / (1.0 - threshold);\n                let star_intensity = pow(norm_bright, 1.5) * intensity_mult;\n\n                // Tight point spread — sharp pinpoints, not blobs\n                let core = exp(-dist2 * 6000.0);\n                let halo = exp(-dist2 * 800.0) * norm_bright * norm_bright * 0.06;\n\n                // Desaturated spectral colors — subtle tint, mostly white\n                let temp = hash21(neighbor * 3.46 + seed + 27.0);\n                var star_col: vec3<f32>;\n                if temp > 0.82 {\n                    star_col = vec3<f32>(0.88, 0.92, 1.15);  // O/B cool blue tint\n                } else if temp > 0.55 {\n                    star_col = vec3<f32>(0.97, 0.98, 1.05);  // A/F near-white\n                } else if temp > 0.25 {\n                    star_col = vec3<f32>(1.0, 0.97, 0.93);   // G solar\n                } else {\n                    star_col = vec3<f32>(1.05, 0.92, 0.82);  // K/M warm tint\n                }\n\n                light += star_col * star_intensity * (core + halo);\n            }\n        }\n    }\n    return light;\n}\n\nfn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {\n    if brightness < 0.001 { return vec3<f32>(0.0); }\n\n    let theta = acos(clamp(dir.y, -1.0, 1.0));\n    let phi = atan2(dir.z, dir.x) + 3.14159265;\n\n    var stars = vec3<f32>(0.0);\n\n    // Layer 1: bright stars\n    stars += star_layer(theta, phi, 20.0, 0.82, 3.0, 0.0);\n\n    // Layer 2: medium density\n    stars += star_layer(theta, phi, 50.0, 0.80, 1.2, 100.0);\n\n    // Layer 3: dense field\n    stars += star_layer(theta, phi, 100.0, 0.84, 0.5, 200.0);\n\n    // Layer 4: faint background dust\n    stars += star_layer(theta, phi, 180.0, 0.88, 0.15, 300.0);\n\n    return stars * brightness;\n}\n\n// ── Accretion disk shading ──\n\nfn disk_opacity_from_r(r: f32) -> f32 {\n    // Inner edge fades close to horizon for plunging-region glow.\n    // Outer edge tightened: previously this fade ran from disk_outer*0.7\n    // to disk_outer*1.5, painting a wide warm halo 50% beyond the\n    // nominal radius. Against bright stars the halo became a visible\n    // \"thicker band outside the disk\". Tightened to (0.95, 1.05) so\n    // the disk ends close to disk_outer with just enough antialiasing\n    // softness to avoid a hard pixel edge.\n    let inner_fade = smoothstep(u.disk_inner * 0.25, u.disk_inner * 1.3, r);\n    let outer_fade = 1.0 - smoothstep(u.disk_outer * 0.95, u.disk_outer * 1.05, r);\n    return inner_fade * outer_fade;\n}\n\nfn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f32> {\n    let disk_range = u.disk_outer - u.disk_inner;\n    let t = clamp((disk_r - u.disk_inner) / disk_range, 0.0, 1.0);\n    let ring_r = t;\n    // Compute r_norm normally — DO NOT clamp. The previous max(.., 1.0)\n    // clamp produced a step function at the boundary that turned\n    // ripples in the gaussian-blurred c1_r into radial brightness\n    // spikes around the silhouette. Brightness is bounded at the END\n    // of this function with a smooth output cap that preserves the\n    // continuity of r_falloff across the boundary.\n    let r_norm = disk_r / u.disk_inner;\n\n    // Reconstruct angle\n    let base_angle = atan2(sin_a, cos_a);\n\n    // ── Structure angle: gentle differential shear for noise ──\n    let shear = u.time_val * 0.05 / sqrt(r_norm);\n    let angle_struct = base_angle + shear + u.orbit_angle;\n    let cs = cos(angle_struct);\n    let ss = sin(angle_struct);\n\n    // ── Doppler beaming (fixed in camera frame) ──\n    let fd_boost = u.spin * 0.3 / (r_norm * r_norm * r_norm);\n    let v_orb = 0.45 * inverseSqrt(r_norm) + u.spin * 0.12 / (r_norm * r_norm);\n    let raw_doppler = pow(max(1.0 + v_orb * cos(base_angle), 0.05), 3.0);\n    let doppler = mix(1.0, raw_doppler, 0.6);\n\n    // ── Temperature gradient (noise-perturbed for organic color variation) ──\n    let t_warp = fbm(vec2<f32>(cs * 2.0 + ring_r * 1.5, ss * 1.5 + 50.0));\n    let tc = clamp(t + (t_warp - 0.4) * 0.25, 0.0, 1.0);\n\n    let inner_col = vec3<f32>(1.0, 0.95, 0.9);\n    let mid1_col = vec3<f32>(1.0, 0.65, 0.3);\n    let mid2_col = vec3<f32>(0.85, 0.3, 0.06);\n    let outer_col = vec3<f32>(0.35, 0.04, 0.0);\n\n    var base_col: vec3<f32>;\n    if tc < 0.15 {\n        base_col = mix(inner_col, mid1_col, tc / 0.15);\n    } else if tc < 0.45 {\n        base_col = mix(mid1_col, mid2_col, (tc - 0.15) / 0.3);\n    } else {\n        base_col = mix(mid2_col, outer_col, (tc - 0.45) / 0.55);\n    }\n\n    // Radial intensity\n    let r_falloff = u.disk_glow * 0.5 / (r_norm * r_norm);\n\n    // ── Domain-warped FBM density ──\n    let warp_x = noise2d(vec2<f32>(cs * 2.0 + ring_r + 10.0, ss * 2.0 + 20.0)) - 0.5;\n    let warp_y = noise2d(vec2<f32>(cs * 2.0 + ring_r + 30.0, ss * 2.0 + 40.0)) - 0.5;\n    let wcs = cs + warp_x * 1.5;\n    let wss = ss + warp_y * 1.5;\n\n    // Large-scale: spiral arms, hot spots\n    let density_large = fbm(vec2<f32>(\n        wcs * 4.0 + wss * 3.0 + ring_r * 1.5,\n        wss * 3.5 - wcs * 2.0 + 5.0,\n    ));\n    // Medium-scale: turbulent eddies, dark lanes\n    let density_med = fbm(vec2<f32>(\n        wcs * 8.0 + wss * 5.0 + ring_r * 2.0 + 15.0,\n        wss * 6.0 + wcs * 3.0 + 25.0,\n    ));\n\n    let density = density_large * 0.55 + density_med * 0.45;\n    let density_mod = smoothstep(0.15, 0.6, density);\n\n    // Inner edge glow — wider spread for volumetric feel\n    let inner_glow = exp(-(t * t) * 4.0) * 1.2;\n\n    // Plunging region: gas inside ISCO spiraling into the hole.\n    let plunge = max(1.0 - r_norm, 0.0);\n    let redshift = exp(-plunge * 3.0);\n    let plunge_col = vec3<f32>(0.8, 0.25, 0.03) * plunge * redshift * 2.0;\n\n    var emission = base_col * r_falloff * doppler\n        * (density_mod * 0.75 + 0.25)\n        * (1.0 + inner_glow)\n        + plunge_col;\n\n    if is_secondary {\n        emission *= 0.4;\n    }\n\n    // Hue-preserving emission cap. Instead of clamping r_norm or\n    // hard-fading boundary pixels (both of which produce visible\n    // step transitions and radial spikes from gaussian blur ripples),\n    // bound the maximum brightness at the output and scale all\n    // channels by the same ratio so warm color is preserved. The\n    // shoulder is smooth so r_falloff's natural curve stays\n    // continuous across the boundary — no spikes.\n    let max_b = max(emission.r, max(emission.g, emission.b));\n    let cap = 6.0;\n    if max_b > cap {\n        // Soft rolloff above cap — Reinhard-style asymptote\n        let new_max = cap + (max_b - cap) / (1.0 + (max_b - cap) / cap);\n        emission = emission * (new_max / max_b);\n    }\n\n    return emission;\n}\n\n// ── Main ──\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output);\n    if gid.x >= dims.x || gid.y >= dims.y {\n        return;\n    }\n\n    let uv = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5)\n        / vec2<f32>(f32(dims.x), f32(dims.y));\n\n    // ── Sample pre-blurred deflection textures ──\n    // The H+V separable gaussian compute passes already ran over the\n    // deflection bake at quarter resolution, so by the time we get\n    // here the textures contain a true 21-tap σ=4 gaussian-blurred\n    // version of the deflection data. One bilinear tap each — the\n    // entire wide-blur cost was paid at quarter-res.\n    let d1 = textureSampleLevel(deflection1, s_linear, uv, 0.0);\n    let d2 = textureSampleLevel(deflection2, s_linear, uv, 0.0);\n    let sky = textureSampleLevel(sky_dir_tex, s_linear, uv, 0.0);\n\n    let final_r = d1.r;\n    let c1_r = d1.g;\n    let c1_ca = d1.b;\n    let c1_sa = d1.a;\n    let c1_op = disk_opacity_from_r(c1_r);\n    let c2_r = d2.g;\n    let c2_ca = d2.b;\n    let c2_sa = d2.a;\n\n    // ── Star field background ──\n    // sky.w is the escaped/absorbed flag from the deflection bake — 1.0\n    // for rays that escaped, 0.0 for rays absorbed by the horizon. The\n    // 5×5 gaussian above produces fractional values across the shadow\n    // boundary; smoothstep gives a soft shadow edge instead of a hard\n    // pixelated cutoff. The previous `if sky.w > 0.3` was the source\n    // of the \"blocky shadow\" — the gaussian was working, we were just\n    // re-thresholding it back into a binary signal.\n    var color = vec3<f32>(0.0);\n    let escape_w = smoothstep(0.15, 0.65, sky.w);\n    if escape_w > 0.001 {\n        color = star_field(normalize(sky.xyz), u.stars_brightness) * escape_w;\n    }\n    var total_opacity = 0.0;\n\n    // ── First crossing (front disk) ──\n    // c1_mag2 = squared magnitude of (cos_a, sin_a) — ~1.0 for a real\n    // crossing, 0 for a non-crossing pixel. The 5×5 gaussian blur over\n    // the quarter-res deflection bake produces fractional values at\n    // boundaries; smoothstep gives a soft silhouette edge so the disk\n    // fades into the star field instead of cutting hard.\n    let c1_mag2 = c1_ca * c1_ca + c1_sa * c1_sa;\n    let c1_visible = smoothstep(0.25, 0.85, c1_mag2);\n    let c1_op_eff = c1_op * c1_visible;\n    if c1_r > 0.1 && c1_op_eff > 0.001 {\n        var disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op_eff;\n        if u.particle_strength > 0.001 {\n            // First crossing is the front disk — bias toward the top layer.\n            // Clamp the boost so polar cell clumps can't produce extreme\n            // wedge spikes that ACES can't compress without losing color.\n            let d1 = sample_particle_density(c1_r, c1_ca, c1_sa, 1.0);\n            let boost = min(d1 * u.particle_strength * 2.5, 1.2);\n            disk_col = disk_col * (1.0 + boost);\n        }\n        color = color * (1.0 - c1_op_eff * 0.85) + disk_col;\n        total_opacity = c1_op_eff;\n    }\n\n    // ── Second crossing (lensed back) ──\n    let c2_mag2 = c2_ca * c2_ca + c2_sa * c2_sa;\n    let c2_visible = smoothstep(0.25, 0.85, c2_mag2);\n    if c2_r > 0.1 && c2_visible > 0.001 {\n        let c2_op = disk_opacity_from_r(c2_r) * c2_visible;\n        let remaining = max(1.0 - total_opacity * 0.6, 0.0);\n        var disk_col = shade_disk(c2_r, c2_ca, c2_sa, true) * c2_op * remaining;\n        if u.particle_strength > 0.001 {\n            // Second crossing is the lensed back of the disk — bias toward bottom.\n            let d2v = sample_particle_density(c2_r, c2_ca, c2_sa, 0.0);\n            let boost = min(d2v * u.particle_strength * 2.5, 1.2);\n            disk_col = disk_col * (1.0 + boost);\n        }\n        color = color * (1.0 - c2_op * remaining * 0.5) + disk_col;\n        total_opacity = clamp(total_opacity + c2_op * 0.5, 0.0, 1.0);\n    }\n\n    // ── Photon ring (visible even over disk, softens shadow boundary) ──\n    if final_r > 1.0 && final_r < 5.0 {\n        let ring = exp(-(final_r - 1.5) * (final_r - 1.5) * 6.0);\n        let ring_vis = ring * mix(0.6, 0.15, clamp(total_opacity, 0.0, 1.0));\n        color += vec3<f32>(0.9, 0.85, 0.7) * ring_vis;\n    }\n\n    // ── Volumetric emission (path integral through disk atmosphere) ──\n    // The deflection bake stores `vol_accum` — a Gaussian-weighted line\n    // integral of the disk's vertical thickness profile along the ray.\n    // BUT vol_accum is non-zero for any ray that passes near the disk\n    // plane, even rays that miss the disk entirely (because the\n    // Gaussian half-thickness extends in y by 0.12*r). Then the\n    // gaussian blur on d2.r smears those values further outward,\n    // producing a soft warm halo around the disk that becomes obvious\n    // when stars are bright (high contrast with the dark sky behind).\n    //\n    // Gate vol_emit by c1_visible so it only contributes where the\n    // ray actually crosses the disk silhouette.\n    let vol = d2.r;\n    if vol > 0.01 && c1_visible > 0.001 {\n        let vol_opacity = 1.0 - exp(-vol * 0.3);\n        let vol_r = select(c1_r, (u.disk_inner + u.disk_outer) * 0.5, c1_r < 0.1);\n        let vol_t = clamp(\n            (vol_r - u.disk_inner) / (u.disk_outer - u.disk_inner), 0.0, 1.0);\n        let vol_col = mix(\n            vec3<f32>(1.0, 0.85, 0.6),\n            vec3<f32>(0.5, 0.12, 0.02),\n            vol_t,\n        );\n        let vol_fade = smoothstep(0.0, 0.15, vol);\n        var vol_emit = vol_col * vol_opacity * vol_fade * u.disk_glow * 0.15\n            * c1_visible;\n        if u.particle_strength > 0.001 && c1_r > 0.1 && c1_mag2 > 0.25 {\n            // Sample both layers symmetrically — volumetric emission spans\n            // the full disk thickness, so neither side is \"near\" or \"far\".\n            let dv = sample_particle_density(c1_r, c1_ca, c1_sa, 0.5);\n            let boost = min(dv * u.particle_strength * 2.0, 1.0);\n            vol_emit = vol_emit * (1.0 + boost);\n        }\n        color += vol_emit;\n    }\n\n    // ── HDR output ──\n    // No tonemapping in this shader. The output buffer is Rgba16Float\n    // and the rest of the MANIFOLD pipeline (bloom prefilter at 0.42,\n    // halation, EDR display presenter) is fully HDR-aware. Bright\n    // disk regions are emitted with R/G/B values well above 1.0; bloom\n    // catches them as highlights and EDR displays them at cinematic\n    // brightness. Tonemapping inside this shader was the source of\n    // the white-blowout bug — it pre-compressed every value down to\n    // ~1.0 and forced channel saturation to converge on (1,1,1).\n    //\n    // Sanity floor only — guard against any NaN or negative leakage.\n    color = max(color, vec3<f32>(0.0));\n\n    textureStore(output, gid.xy, vec4<f32>(color, 1.0));\n}\n",
+      "title": "Cinematic Display Compositor"
+    },
+    {
+      "id": 22,
+      "nodeId": "Camera Setup",
+      "typeId": "group",
+      "handle": "Camera Setup",
+      "group": {
+        "interface": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "tiltRad",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "rotateRad",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "uvScale",
+              "portType": "Scalar(F32)"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 19,
+            "nodeId": "tilt_deg_to_rad",
+            "typeId": "node.affine_scalar",
+            "handle": "tilt_deg_to_rad",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 15.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.017453292
+              }
+            }
+          },
+          {
+            "id": 20,
+            "nodeId": "rotate_deg_to_rad",
+            "typeId": "node.affine_scalar",
+            "handle": "rotate_deg_to_rad",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "offset": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "scale": {
+                "type": "Float",
+                "value": 0.017453292
+              }
+            }
+          },
+          {
+            "id": 21,
+            "nodeId": "scale_to_uv_scale",
+            "typeId": "node.math",
+            "handle": "scale_to_uv_scale",
+            "params": {
+              "a": {
+                "type": "Float",
+                "value": 1.0
+              },
+              "b": {
+                "type": "Float",
+                "value": 0.0
+              },
+              "op": {
+                "type": "Enum",
+                "value": 9
+              }
+            }
+          },
+          {
+            "id": 23,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 24,
+            "typeId": "system.group_output"
+          }
         ],
-        "output2": [
-          1,
-          4
+        "wires": [
+          {
+            "fromNode": 19,
+            "fromPort": "out",
+            "toNode": 24,
+            "toPort": "tiltRad"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "out",
+            "toNode": 24,
+            "toPort": "rotateRad"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "out",
+            "toNode": 24,
+            "toPort": "uvScale"
+          }
         ],
-        "output3": [
-          1,
-          4
+        "tint": [
+          0.15,
+          0.25,
+          0.35,
+          1.0
         ]
       }
     },
     {
-      "id": 6,
-      "typeId": "node.resolve_accumulator",
-      "handle": "resolve_top", "nodeId": "resolve_top",
-      "params": {
-        "fixed_point_scale": {
-          "type": "Float",
-          "value": 4096.0
-        }
+      "id": 23,
+      "nodeId": "Geodesic Deflection",
+      "typeId": "group",
+      "handle": "Geodesic Deflection",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "aspect",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "rotateRad",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "tiltRad",
+              "portType": "Scalar(F32)"
+            },
+            {
+              "name": "uvScale",
+              "portType": "Scalar(F32)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "diskCrossingFront",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "diskCrossingLensed",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "skyDirection",
+              "portType": "Texture2D"
+            }
+          ]
+        },
+        "nodes": [
+          {
+            "id": 5,
+            "nodeId": "deflection",
+            "typeId": "node.wgsl_compute",
+            "handle": "deflection",
+            "wgslSource": "// Black Hole — Kerr Deflection Map\n// @pure\n// Params-only kernel (no time, no texture reads, no state): the memoizer\n// re-dispatches the ~150-step geodesic trace only when a camera/spin/scale\n// param actually moves, instead of every frame.\n//\n// Traces null geodesics in Kerr spacetime (spinning black hole).\n// At spin=0, reduces exactly to Schwarzschild.\n//\n// Physics:\n//   - Schwarzschild gravitational acceleration: -1.5 h²/r⁵ pos\n//   - Kerr frame-dragging: gravitomagnetic force a/r³ cross(ŷ, vel)\n//   - Boyer-Lindquist radius for horizon check (oblate geometry)\n//   - Event horizon: r_H = 0.5(1 + √(1 - a²)) in our units (r_s = 1)\n//\n// Output 1: (final_r, disk1_r, cos_angle1, sin_angle1)\n// Output 2: (vol_accum, disk2_r, cos_angle2, sin_angle2)\n// Output 3: (sky_dir.xyz, escaped_flag)\n\nstruct Uniforms {\n    aspect: f32,\n    cam_dist: f32,\n    tilt_rad: f32,\n    rotate_rad: f32,\n    steps: f32,\n    uv_scale: f32,\n    spin: f32,\n    cam_velocity: f32,\n    cam_freefall: f32,\n    _pad0: f32,\n    _pad1: f32,\n    _pad2: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: Uniforms;\n@group(0) @binding(1) var output1: texture_storage_2d<rgba16float, write>;\n@group(0) @binding(2) var output2: texture_storage_2d<rgba16float, write>;\n@group(0) @binding(3) var output3: texture_storage_2d<rgba16float, write>;\n\n// Fixed generous crossing bounds — covers full param ranges\nconst CROSS_INNER: f32 = 0.5;\nconst CROSS_OUTER: f32 = 25.0;\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output1);\n    if gid.x >= dims.x || gid.y >= dims.y {\n        return;\n    }\n\n    let uv = (vec2<f32>(f32(gid.x), f32(gid.y)) + 0.5) / vec2<f32>(f32(dims.x), f32(dims.y));\n    let ndc = (uv * 2.0 - 1.0) * u.uv_scale;\n    let screen = vec2<f32>(ndc.x * u.aspect, -ndc.y);\n\n    // ── Kerr spin setup (needed up front for camera physics horizon clamp) ──\n    let a = u.spin;\n    let a2 = a * a;\n    // Event horizon: r_H = M + √(M² - a²M²) where M=0.5 (r_s = 1)\n    // = 0.5(1 + √(1 - a²))\n    let r_horizon = 0.5 * (1.0 + sqrt(max(1.0 - a2, 0.0)));\n    let spin_axis = vec3<f32>(0.0, 1.0, 0.0);\n\n    // ── Camera physics ──\n    // The camera is allowed to fly through the event horizon for the trippy\n    // \"fall into a black hole\" effect. The clamp here is purely numerical\n    // safety to keep ratios finite very near the singularity — physical\n    // correctness is not enforced inside the horizon (real observers can't\n    // hover there, but this is a visual tool).\n    let safe_cam_dist = max(u.cam_dist, 0.05);\n    let camera_inside_horizon = safe_cam_dist < r_horizon;\n\n    // ZAMO (Zero Angular Momentum Observer) frame correction.\n    // Outside the horizon: the proper-frame solid angle subtended by infinity\n    // shrinks by ≈ √(1 − r_s/r), so the aperture widens by 1/that to keep\n    // distant features at a consistent angular size as the camera descends.\n    // Inside the horizon: 1 − r_s/r is negative, the max() floor keeps the\n    // metric factor at its minimum (0.05), giving a fully-saturated wide\n    // aperture (~5×) for the \"fallen in\" view.\n    let metric_factor = sqrt(max(1.0 - 1.0 / safe_cam_dist, 0.05));\n    let fov_factor = 1.2 / metric_factor;\n\n    // Gravitational redshift between observer at safe_cam_dist and infinity.\n    // Stored multiplied into final_r so the display pass can dim escaping\n    // light by the correct amount when the camera is deep in the well.\n    let redshift_factor = metric_factor;\n\n    let cos_tilt = cos(u.tilt_rad);\n    let sin_tilt = sin(u.tilt_rad);\n    let cos_rot = cos(u.rotate_rad);\n    let sin_rot = sin(u.rotate_rad);\n\n    let cam_pos = vec3<f32>(\n        safe_cam_dist * cos_tilt * cos_rot,\n        safe_cam_dist * sin_tilt,\n        safe_cam_dist * cos_tilt * sin_rot,\n    );\n    let fwd = normalize(-cam_pos);\n    let world_up = vec3<f32>(0.0, 1.0, 0.0);\n    let right = normalize(cross(fwd, world_up));\n    let up = cross(right, fwd);\n\n    var ray_dir = normalize(fwd + screen.x * right * fov_factor + screen.y * up * fov_factor);\n\n    // ── Relativistic aberration ──\n    // Compose ZAMO → freefall-observer frame with a pure SR boost.\n    // The observer's velocity is radial-inward (v̂ = fwd). In the\n    // moving observer's frame, rays are pulled toward the forward\n    // direction, so to convert a moving-frame ray to its ZAMO-frame\n    // equivalent we use the INVERSE aberration transform:\n    //\n    //     cos θ = (cos θ' − β) / (1 − β cos θ')\n    //\n    // where θ is the angle between the ray and v̂ in the ZAMO frame\n    // and θ' is the same angle in the moving frame.\n    //\n    // Cinematic mode: β = user slider (cam_velocity).\n    // Freefall mode: β = √(r_s/r) (radial infall from rest at infinity),\n    // clamped to 0.99 to keep the formula well-defined.\n    var beta = u.cam_velocity;\n    if u.cam_freefall > 0.5 {\n        beta = clamp(sqrt(1.0 / safe_cam_dist), 0.0, 0.99);\n    }\n    if beta > 1e-4 {\n        let v_dir = fwd; // radial-inward at cam_pos\n        let cos_tp = dot(ray_dir, v_dir);\n        let denom = 1.0 - beta * cos_tp;\n        let cos_t = (cos_tp - beta) / denom;\n        // Perpendicular component scaling: sin θ / sin θ'. Derivable\n        // from requiring |ray_dir_static| = 1.\n        let sin_tp2 = max(1.0 - cos_tp * cos_tp, 0.0);\n        let sin_t2 = max(1.0 - cos_t * cos_t, 0.0);\n        let perp_scale = select(\n            1.0,\n            sqrt(sin_t2 / sin_tp2),\n            sin_tp2 > 1e-8,\n        );\n        let ray_perp = ray_dir - v_dir * cos_tp;\n        ray_dir = normalize(v_dir * cos_t + ray_perp * perp_scale);\n    }\n\n    var pos = cam_pos;\n    var vel = ray_dir;\n    let h_vec = cross(pos, vel);\n    let h2 = dot(h_vec, h_vec);\n\n    let max_steps = i32(u.steps);\n    let escape_r = max(safe_cam_dist * 3.0, 40.0);\n    let base_step = max(safe_cam_dist * 0.02, 0.15);\n\n    var prev_y = pos.y;\n    var final_r = 0.0;\n    var absorbed = false;\n\n    var c1_r = 0.0; var c1_ca = 0.0; var c1_sa = 0.0;\n    var c2_r = 0.0; var c2_ca = 0.0; var c2_sa = 0.0;\n    var crossing_count = 0;\n    var vol_accum = 0.0;\n\n    for (var i = 0; i < max_steps; i++) {\n        let r = length(pos);\n\n        // Boyer-Lindquist radius (accounts for oblate Kerr horizon geometry)\n        let w2 = r * r - a2;\n        let r_bl = sqrt(max(0.5 * w2 + sqrt(max(0.25 * w2 * w2\n            + a2 * pos.y * pos.y, 0.0)), 1e-8));\n\n        // Singularity check — terminate any ray that reaches the center.\n        // This also prevents 1/r⁵ NaNs in the gravitational acceleration.\n        if r < 0.1 { final_r = 0.0; absorbed = true; break; }\n\n        // Horizon absorption — only applied when the camera is OUTSIDE the\n        // horizon. If the camera is inside, every ray starts inside the\n        // horizon by definition, and we don't want them all self-absorbing\n        // at step 0; let them fall to the singularity instead.\n        if !camera_inside_horizon && r_bl < r_horizon {\n            final_r = 0.0; absorbed = true; break;\n        }\n\n        if r > escape_r { final_r = r; break; }\n        // Early escape: ray well beyond camera and moving outward — negligible bending\n        if r > max(safe_cam_dist * 2.0, 15.0) && dot(pos, vel) > 0.0 {\n            final_r = r; break;\n        }\n\n        let step = base_step * clamp(r * 0.1, 0.005, 2.0);\n\n        // ── Schwarzschild gravitational acceleration ──\n        let r2 = r * r;\n        let r5 = r2 * r2 * r;\n        let accel_grav = -1.5 * h2 / r5 * pos;\n\n        // ── Kerr frame-dragging (gravitomagnetic force) ──\n        // Photons are dragged in the direction of black hole rotation.\n        // Force ∝ a/r³, direction = cross(spin_axis, vel).\n        // At a=0 this is zero → identical to Schwarzschild.\n        let r3 = r2 * r;\n        let accel_drag = a / r3 * cross(spin_axis, vel);\n\n        let accel = accel_grav + accel_drag;\n\n        // Verlet first half-step\n        vel += accel * step * 0.5;\n        pos += vel * step;\n\n        // Verlet second half-step (recompute at new position)\n        let r_new = length(pos);\n        let r2_new = r_new * r_new;\n        let r5_new = r2_new * r2_new * r_new;\n        let accel_grav2 = -1.5 * h2 / r5_new * pos;\n        let r3_new = r2_new * r_new;\n        let accel_drag2 = a / r3_new * cross(spin_axis, vel);\n        vel += (accel_grav2 + accel_drag2) * step * 0.5;\n\n        // ── Volumetric density accumulation ──\n        // Gaussian vertical profile: rays near the disk plane accumulate density.\n        // Path integral gives volumetric thickness for edge-on viewing.\n        let disk_r_xz = length(vec2<f32>(pos.x, pos.z));\n        if disk_r_xz > CROSS_INNER && disk_r_xz < CROSS_OUTER {\n            let half_thick = 0.12 * disk_r_xz;\n            let y_norm = pos.y / half_thick;\n            vol_accum += exp(-y_norm * y_norm * 2.0) * step;\n        }\n\n        // ── Disk crossing detection ──\n        let cur_y = pos.y;\n        if prev_y * cur_y < 0.0 {\n            let frac = abs(prev_y) / (abs(prev_y) + abs(cur_y) + 1e-8);\n            let cross_pos = pos - vel * step * (1.0 - frac);\n            let cross_r = length(cross_pos);\n\n            if cross_r > CROSS_INNER && cross_r < CROSS_OUTER {\n                let angle = atan2(cross_pos.z, cross_pos.x);\n                let ca = cos(angle);\n                let sa = sin(angle);\n\n                if crossing_count == 0 {\n                    c1_r = cross_r; c1_ca = ca; c1_sa = sa;\n                } else if crossing_count == 1 {\n                    c2_r = cross_r; c2_ca = ca; c2_sa = sa;\n                }\n                crossing_count++;\n            }\n        }\n        prev_y = cur_y;\n        final_r = r;\n    }\n\n    // Apply gravitational redshift to the escape radius — the photon ring\n    // and far-field intensity dim by metric_factor when the camera is deep\n    // in the well.\n    let final_r_redshifted = final_r * redshift_factor;\n    textureStore(output1, gid.xy, vec4<f32>(final_r_redshifted, c1_r, c1_ca, c1_sa));\n    textureStore(output2, gid.xy, vec4<f32>(vol_accum, c2_r, c2_ca, c2_sa));\n\n    if absorbed {\n        textureStore(output3, gid.xy, vec4<f32>(0.0, 0.0, 0.0, 0.0));\n    } else {\n        let sky_dir = normalize(vel);\n        textureStore(output3, gid.xy, vec4<f32>(sky_dir, 1.0));\n    }\n}\n",
+            "title": "Geodesic Ray Trace",
+            "outputCanvasScales": {
+              "output1": [
+                1,
+                4
+              ],
+              "output2": [
+                1,
+                4
+              ],
+              "output3": [
+                1,
+                4
+              ]
+            }
+          },
+          {
+            "id": 9,
+            "nodeId": "blur_def1_h",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_def1_h",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 10,
+            "nodeId": "blur_def1_v",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_def1_v",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 11,
+            "nodeId": "blur_def2_h",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_def2_h",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 12,
+            "nodeId": "blur_def2_v",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_def2_v",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 13,
+            "nodeId": "blur_sky_h",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_sky_h",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 14,
+            "nodeId": "blur_sky_v",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_sky_v",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 24,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 25,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 5,
+            "fromPort": "output1",
+            "toNode": 9,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "output2",
+            "toNode": 11,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 11,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "output3",
+            "toNode": 13,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "out",
+            "toNode": 14,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "aspect",
+            "toNode": 5,
+            "toPort": "aspect"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "rotateRad",
+            "toNode": 5,
+            "toPort": "rotate_rad"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "tiltRad",
+            "toNode": 5,
+            "toPort": "tilt_rad"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "uvScale",
+            "toNode": 5,
+            "toPort": "uv_scale"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "out",
+            "toNode": 25,
+            "toPort": "diskCrossingFront"
+          },
+          {
+            "fromNode": 12,
+            "fromPort": "out",
+            "toNode": 25,
+            "toPort": "diskCrossingLensed"
+          },
+          {
+            "fromNode": 14,
+            "fromPort": "out",
+            "toNode": 25,
+            "toPort": "skyDirection"
+          }
+        ],
+        "tint": [
+          0.3,
+          0.2,
+          0.4,
+          1.0
+        ]
       }
     },
     {
-      "id": 7,
-      "typeId": "node.resolve_accumulator",
-      "handle": "resolve_bottom", "nodeId": "resolve_bottom",
-      "params": {
-        "fixed_point_scale": {
-          "type": "Float",
-          "value": 4096.0
-        }
-      }
-    },
-    {
-      "id": 8,
-      "typeId": "node.wgsl_compute",
-      "handle": "display", "nodeId": "display",
-      "wgslSource": "// Black Hole \u2014 Cinematic Display (dual crossing + gravitationally lensed star field)\n//\n// Deflection map layout:\n//   output1: (final_r, disk1_r, cos_angle1, sin_angle1)\n//   output2: (vol_accum, disk2_r, cos_angle2, sin_angle2)\n//   output3: (sky_dir.xyz, escaped_flag)\n\nstruct Uniforms {\n    time_val: f32,\n    disk_inner: f32,\n    disk_outer: f32,\n    disk_glow: f32,\n    orbit_angle: f32,\n    stars_brightness: f32,\n    spin: f32,\n    particle_strength: f32,\n};\n\n@group(0) @binding(0) var<uniform> u: Uniforms;\n@group(0) @binding(1) var deflection1: texture_2d<f32>;\n@group(0) @binding(2) var deflection2: texture_2d<f32>;\n@group(0) @binding(3) var s_linear: sampler;\n@group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;\n@group(0) @binding(5) var sky_dir_tex: texture_2d<f32>;\n@group(0) @binding(6) var particle_density_top: texture_2d<f32>;\n@group(0) @binding(7) var particle_density_bottom: texture_2d<f32>;\n\n// Sample particle density at a disk hit point. Polar coords:\n//   X = angle / 2\u03c0 (wrapped)\n//   Y = (r - inner) / (outer - inner) (clamped)\n//\n// `near_bias` selects which side of the disk plane this hit favors:\n//   1.0 = top-biased, 0.0 = bottom-biased. The other side still\n//   contributes (at 0.6\u00d7) so the disk feels volumetric instead of\n//   showing only one face.\n//\n// The polar density textures are now pre-blurred by a separable\n// gaussian compute pass before display reads them, so single-tap\n// bilinear sampling is sufficient \u2014 no inline blur needed. Inner\n// cells still need an area-correction weight because per-cell\n// arc length grows with r, and without it inner clumps still spike\n// brighter per screen pixel than outer ones for the same particle\n// count.\nfn sample_particle_density(\n    disk_r: f32, cos_a: f32, sin_a: f32, near_bias: f32,\n) -> f32 {\n    let angle = atan2(sin_a, cos_a);\n    let ang_norm = fract(angle / 6.28318530 + 1.0);\n    let r_norm = clamp(\n        (disk_r - u.disk_inner) / (u.disk_outer - u.disk_inner),\n        0.0, 1.0,\n    );\n    let uv = vec2<f32>(ang_norm, r_norm);\n    let d_top = textureSampleLevel(particle_density_top, s_linear, uv, 0.0).r;\n    let d_bot = textureSampleLevel(particle_density_bottom, s_linear, uv, 0.0).r;\n    let near_w = mix(0.6, 1.0, near_bias);\n    let far_w  = mix(1.0, 0.6, near_bias);\n    let raw = d_top * near_w + d_bot * far_w;\n    let area_w = smoothstep(0.0, 0.4, r_norm);\n    return raw * area_w;\n}\n\n// \u2500\u2500 Hash functions \u2500\u2500\n\nfn hash21(p: vec2<f32>) -> f32 {\n    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);\n    p3 += dot(p3, p3.yzx + 33.33);\n    return fract((p3.x + p3.y) * p3.z);\n}\n\nfn noise2d(p: vec2<f32>) -> f32 {\n    let i = floor(p);\n    let f = fract(p);\n    let u2 = f * f * (3.0 - 2.0 * f);\n    return mix(\n        mix(hash21(i), hash21(i + vec2<f32>(1.0, 0.0)), u2.x),\n        mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), u2.x),\n        u2.y,\n    );\n}\n\nfn fbm(p: vec2<f32>) -> f32 {\n    var val = noise2d(p) * 0.5;\n    val += noise2d(p * 2.03 + vec2<f32>(1.7, -1.3)) * 0.25;\n    val += noise2d(p * 4.07 + vec2<f32>(3.4, -2.6)) * 0.125;\n    return val;\n}\n\n// \u2500\u2500 Procedural star field \u2500\u2500\n\nfn star_layer(theta: f32, phi: f32, scale: f32, threshold: f32,\n              intensity_mult: f32, seed: f32) -> vec3<f32> {\n    let uv = vec2<f32>(phi * scale * 0.15915, theta * scale * 0.31831);\n    let cell = floor(uv);\n    let f = fract(uv);\n\n    var light = vec3<f32>(0.0);\n\n    for (var j = -1; j <= 1; j++) {\n        for (var i = -1; i <= 1; i++) {\n            let neighbor = cell + vec2<f32>(f32(i), f32(j));\n            let h = hash21(neighbor + seed);\n            if h > threshold {\n                let sx = hash21(neighbor * 1.273 + seed + 7.0);\n                let sy = hash21(neighbor * 2.178 + seed + 13.0);\n                let d = f - vec2<f32>(f32(i), f32(j)) - vec2<f32>(sx, sy);\n                let dist2 = dot(d, d);\n\n                // Steeper power law \u2014 many faint, very few bright\n                let norm_bright = (h - threshold) / (1.0 - threshold);\n                let star_intensity = pow(norm_bright, 1.5) * intensity_mult;\n\n                // Tight point spread \u2014 sharp pinpoints, not blobs\n                let core = exp(-dist2 * 6000.0);\n                let halo = exp(-dist2 * 800.0) * norm_bright * norm_bright * 0.06;\n\n                // Desaturated spectral colors \u2014 subtle tint, mostly white\n                let temp = hash21(neighbor * 3.46 + seed + 27.0);\n                var star_col: vec3<f32>;\n                if temp > 0.82 {\n                    star_col = vec3<f32>(0.88, 0.92, 1.15);  // O/B cool blue tint\n                } else if temp > 0.55 {\n                    star_col = vec3<f32>(0.97, 0.98, 1.05);  // A/F near-white\n                } else if temp > 0.25 {\n                    star_col = vec3<f32>(1.0, 0.97, 0.93);   // G solar\n                } else {\n                    star_col = vec3<f32>(1.05, 0.92, 0.82);  // K/M warm tint\n                }\n\n                light += star_col * star_intensity * (core + halo);\n            }\n        }\n    }\n    return light;\n}\n\nfn star_field(dir: vec3<f32>, brightness: f32) -> vec3<f32> {\n    if brightness < 0.001 { return vec3<f32>(0.0); }\n\n    let theta = acos(clamp(dir.y, -1.0, 1.0));\n    let phi = atan2(dir.z, dir.x) + 3.14159265;\n\n    var stars = vec3<f32>(0.0);\n\n    // Layer 1: bright stars\n    stars += star_layer(theta, phi, 20.0, 0.82, 3.0, 0.0);\n\n    // Layer 2: medium density\n    stars += star_layer(theta, phi, 50.0, 0.80, 1.2, 100.0);\n\n    // Layer 3: dense field\n    stars += star_layer(theta, phi, 100.0, 0.84, 0.5, 200.0);\n\n    // Layer 4: faint background dust\n    stars += star_layer(theta, phi, 180.0, 0.88, 0.15, 300.0);\n\n    return stars * brightness;\n}\n\n// \u2500\u2500 Accretion disk shading \u2500\u2500\n\nfn disk_opacity_from_r(r: f32) -> f32 {\n    // Inner edge fades close to horizon for plunging-region glow.\n    // Outer edge tightened: previously this fade ran from disk_outer*0.7\n    // to disk_outer*1.5, painting a wide warm halo 50% beyond the\n    // nominal radius. Against bright stars the halo became a visible\n    // \"thicker band outside the disk\". Tightened to (0.95, 1.05) so\n    // the disk ends close to disk_outer with just enough antialiasing\n    // softness to avoid a hard pixel edge.\n    let inner_fade = smoothstep(u.disk_inner * 0.25, u.disk_inner * 1.3, r);\n    let outer_fade = 1.0 - smoothstep(u.disk_outer * 0.95, u.disk_outer * 1.05, r);\n    return inner_fade * outer_fade;\n}\n\nfn shade_disk(disk_r: f32, cos_a: f32, sin_a: f32, is_secondary: bool) -> vec3<f32> {\n    let disk_range = u.disk_outer - u.disk_inner;\n    let t = clamp((disk_r - u.disk_inner) / disk_range, 0.0, 1.0);\n    let ring_r = t;\n    // Compute r_norm normally \u2014 DO NOT clamp. The previous max(.., 1.0)\n    // clamp produced a step function at the boundary that turned\n    // ripples in the gaussian-blurred c1_r into radial brightness\n    // spikes around the silhouette. Brightness is bounded at the END\n    // of this function with a smooth output cap that preserves the\n    // continuity of r_falloff across the boundary.\n    let r_norm = disk_r / u.disk_inner;\n\n    // Reconstruct angle\n    let base_angle = atan2(sin_a, cos_a);\n\n    // \u2500\u2500 Structure angle: gentle differential shear for noise \u2500\u2500\n    let shear = u.time_val * 0.05 / sqrt(r_norm);\n    let angle_struct = base_angle + shear + u.orbit_angle;\n    let cs = cos(angle_struct);\n    let ss = sin(angle_struct);\n\n    // \u2500\u2500 Doppler beaming (fixed in camera frame) \u2500\u2500\n    let fd_boost = u.spin * 0.3 / (r_norm * r_norm * r_norm);\n    let v_orb = 0.45 * inverseSqrt(r_norm) + u.spin * 0.12 / (r_norm * r_norm);\n    let raw_doppler = pow(max(1.0 + v_orb * cos(base_angle), 0.05), 3.0);\n    let doppler = mix(1.0, raw_doppler, 0.6);\n\n    // \u2500\u2500 Temperature gradient (noise-perturbed for organic color variation) \u2500\u2500\n    let t_warp = fbm(vec2<f32>(cs * 2.0 + ring_r * 1.5, ss * 1.5 + 50.0));\n    let tc = clamp(t + (t_warp - 0.4) * 0.25, 0.0, 1.0);\n\n    let inner_col = vec3<f32>(1.0, 0.95, 0.9);\n    let mid1_col = vec3<f32>(1.0, 0.65, 0.3);\n    let mid2_col = vec3<f32>(0.85, 0.3, 0.06);\n    let outer_col = vec3<f32>(0.35, 0.04, 0.0);\n\n    var base_col: vec3<f32>;\n    if tc < 0.15 {\n        base_col = mix(inner_col, mid1_col, tc / 0.15);\n    } else if tc < 0.45 {\n        base_col = mix(mid1_col, mid2_col, (tc - 0.15) / 0.3);\n    } else {\n        base_col = mix(mid2_col, outer_col, (tc - 0.45) / 0.55);\n    }\n\n    // Radial intensity\n    let r_falloff = u.disk_glow * 0.5 / (r_norm * r_norm);\n\n    // \u2500\u2500 Domain-warped FBM density \u2500\u2500\n    let warp_x = noise2d(vec2<f32>(cs * 2.0 + ring_r + 10.0, ss * 2.0 + 20.0)) - 0.5;\n    let warp_y = noise2d(vec2<f32>(cs * 2.0 + ring_r + 30.0, ss * 2.0 + 40.0)) - 0.5;\n    let wcs = cs + warp_x * 1.5;\n    let wss = ss + warp_y * 1.5;\n\n    // Large-scale: spiral arms, hot spots\n    let density_large = fbm(vec2<f32>(\n        wcs * 4.0 + wss * 3.0 + ring_r * 1.5,\n        wss * 3.5 - wcs * 2.0 + 5.0,\n    ));\n    // Medium-scale: turbulent eddies, dark lanes\n    let density_med = fbm(vec2<f32>(\n        wcs * 8.0 + wss * 5.0 + ring_r * 2.0 + 15.0,\n        wss * 6.0 + wcs * 3.0 + 25.0,\n    ));\n\n    let density = density_large * 0.55 + density_med * 0.45;\n    let density_mod = smoothstep(0.15, 0.6, density);\n\n    // Inner edge glow \u2014 wider spread for volumetric feel\n    let inner_glow = exp(-(t * t) * 4.0) * 1.2;\n\n    // Plunging region: gas inside ISCO spiraling into the hole.\n    let plunge = max(1.0 - r_norm, 0.0);\n    let redshift = exp(-plunge * 3.0);\n    let plunge_col = vec3<f32>(0.8, 0.25, 0.03) * plunge * redshift * 2.0;\n\n    var emission = base_col * r_falloff * doppler\n        * (density_mod * 0.75 + 0.25)\n        * (1.0 + inner_glow)\n        + plunge_col;\n\n    if is_secondary {\n        emission *= 0.4;\n    }\n\n    // Hue-preserving emission cap. Instead of clamping r_norm or\n    // hard-fading boundary pixels (both of which produce visible\n    // step transitions and radial spikes from gaussian blur ripples),\n    // bound the maximum brightness at the output and scale all\n    // channels by the same ratio so warm color is preserved. The\n    // shoulder is smooth so r_falloff's natural curve stays\n    // continuous across the boundary \u2014 no spikes.\n    let max_b = max(emission.r, max(emission.g, emission.b));\n    let cap = 6.0;\n    if max_b > cap {\n        // Soft rolloff above cap \u2014 Reinhard-style asymptote\n        let new_max = cap + (max_b - cap) / (1.0 + (max_b - cap) / cap);\n        emission = emission * (new_max / max_b);\n    }\n\n    return emission;\n}\n\n// \u2500\u2500 Main \u2500\u2500\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n    let dims = textureDimensions(output);\n    if gid.x >= dims.x || gid.y >= dims.y {\n        return;\n    }\n\n    let uv = vec2<f32>(f32(gid.x) + 0.5, f32(gid.y) + 0.5)\n        / vec2<f32>(f32(dims.x), f32(dims.y));\n\n    // \u2500\u2500 Sample pre-blurred deflection textures \u2500\u2500\n    // The H+V separable gaussian compute passes already ran over the\n    // deflection bake at quarter resolution, so by the time we get\n    // here the textures contain a true 21-tap \u03c3=4 gaussian-blurred\n    // version of the deflection data. One bilinear tap each \u2014 the\n    // entire wide-blur cost was paid at quarter-res.\n    let d1 = textureSampleLevel(deflection1, s_linear, uv, 0.0);\n    let d2 = textureSampleLevel(deflection2, s_linear, uv, 0.0);\n    let sky = textureSampleLevel(sky_dir_tex, s_linear, uv, 0.0);\n\n    let final_r = d1.r;\n    let c1_r = d1.g;\n    let c1_ca = d1.b;\n    let c1_sa = d1.a;\n    let c1_op = disk_opacity_from_r(c1_r);\n    let c2_r = d2.g;\n    let c2_ca = d2.b;\n    let c2_sa = d2.a;\n\n    // \u2500\u2500 Star field background \u2500\u2500\n    // sky.w is the escaped/absorbed flag from the deflection bake \u2014 1.0\n    // for rays that escaped, 0.0 for rays absorbed by the horizon. The\n    // 5\u00d75 gaussian above produces fractional values across the shadow\n    // boundary; smoothstep gives a soft shadow edge instead of a hard\n    // pixelated cutoff. The previous `if sky.w > 0.3` was the source\n    // of the \"blocky shadow\" \u2014 the gaussian was working, we were just\n    // re-thresholding it back into a binary signal.\n    var color = vec3<f32>(0.0);\n    let escape_w = smoothstep(0.15, 0.65, sky.w);\n    if escape_w > 0.001 {\n        color = star_field(normalize(sky.xyz), u.stars_brightness) * escape_w;\n    }\n    var total_opacity = 0.0;\n\n    // \u2500\u2500 First crossing (front disk) \u2500\u2500\n    // c1_mag2 = squared magnitude of (cos_a, sin_a) \u2014 ~1.0 for a real\n    // crossing, 0 for a non-crossing pixel. The 5\u00d75 gaussian blur over\n    // the quarter-res deflection bake produces fractional values at\n    // boundaries; smoothstep gives a soft silhouette edge so the disk\n    // fades into the star field instead of cutting hard.\n    let c1_mag2 = c1_ca * c1_ca + c1_sa * c1_sa;\n    let c1_visible = smoothstep(0.25, 0.85, c1_mag2);\n    let c1_op_eff = c1_op * c1_visible;\n    if c1_r > 0.1 && c1_op_eff > 0.001 {\n        var disk_col = shade_disk(c1_r, c1_ca, c1_sa, false) * c1_op_eff;\n        if u.particle_strength > 0.001 {\n            // First crossing is the front disk \u2014 bias toward the top layer.\n            // Clamp the boost so polar cell clumps can't produce extreme\n            // wedge spikes that ACES can't compress without losing color.\n            let d1 = sample_particle_density(c1_r, c1_ca, c1_sa, 1.0);\n            let boost = min(d1 * u.particle_strength * 2.5, 1.2);\n            disk_col = disk_col * (1.0 + boost);\n        }\n        color = color * (1.0 - c1_op_eff * 0.85) + disk_col;\n        total_opacity = c1_op_eff;\n    }\n\n    // \u2500\u2500 Second crossing (lensed back) \u2500\u2500\n    let c2_mag2 = c2_ca * c2_ca + c2_sa * c2_sa;\n    let c2_visible = smoothstep(0.25, 0.85, c2_mag2);\n    if c2_r > 0.1 && c2_visible > 0.001 {\n        let c2_op = disk_opacity_from_r(c2_r) * c2_visible;\n        let remaining = max(1.0 - total_opacity * 0.6, 0.0);\n        var disk_col = shade_disk(c2_r, c2_ca, c2_sa, true) * c2_op * remaining;\n        if u.particle_strength > 0.001 {\n            // Second crossing is the lensed back of the disk \u2014 bias toward bottom.\n            let d2v = sample_particle_density(c2_r, c2_ca, c2_sa, 0.0);\n            let boost = min(d2v * u.particle_strength * 2.5, 1.2);\n            disk_col = disk_col * (1.0 + boost);\n        }\n        color = color * (1.0 - c2_op * remaining * 0.5) + disk_col;\n        total_opacity = clamp(total_opacity + c2_op * 0.5, 0.0, 1.0);\n    }\n\n    // \u2500\u2500 Photon ring (visible even over disk, softens shadow boundary) \u2500\u2500\n    if final_r > 1.0 && final_r < 5.0 {\n        let ring = exp(-(final_r - 1.5) * (final_r - 1.5) * 6.0);\n        let ring_vis = ring * mix(0.6, 0.15, clamp(total_opacity, 0.0, 1.0));\n        color += vec3<f32>(0.9, 0.85, 0.7) * ring_vis;\n    }\n\n    // \u2500\u2500 Volumetric emission (path integral through disk atmosphere) \u2500\u2500\n    // The deflection bake stores `vol_accum` \u2014 a Gaussian-weighted line\n    // integral of the disk's vertical thickness profile along the ray.\n    // BUT vol_accum is non-zero for any ray that passes near the disk\n    // plane, even rays that miss the disk entirely (because the\n    // Gaussian half-thickness extends in y by 0.12*r). Then the\n    // gaussian blur on d2.r smears those values further outward,\n    // producing a soft warm halo around the disk that becomes obvious\n    // when stars are bright (high contrast with the dark sky behind).\n    //\n    // Gate vol_emit by c1_visible so it only contributes where the\n    // ray actually crosses the disk silhouette.\n    let vol = d2.r;\n    if vol > 0.01 && c1_visible > 0.001 {\n        let vol_opacity = 1.0 - exp(-vol * 0.3);\n        let vol_r = select(c1_r, (u.disk_inner + u.disk_outer) * 0.5, c1_r < 0.1);\n        let vol_t = clamp(\n            (vol_r - u.disk_inner) / (u.disk_outer - u.disk_inner), 0.0, 1.0);\n        let vol_col = mix(\n            vec3<f32>(1.0, 0.85, 0.6),\n            vec3<f32>(0.5, 0.12, 0.02),\n            vol_t,\n        );\n        let vol_fade = smoothstep(0.0, 0.15, vol);\n        var vol_emit = vol_col * vol_opacity * vol_fade * u.disk_glow * 0.15\n            * c1_visible;\n        if u.particle_strength > 0.001 && c1_r > 0.1 && c1_mag2 > 0.25 {\n            // Sample both layers symmetrically \u2014 volumetric emission spans\n            // the full disk thickness, so neither side is \"near\" or \"far\".\n            let dv = sample_particle_density(c1_r, c1_ca, c1_sa, 0.5);\n            let boost = min(dv * u.particle_strength * 2.0, 1.0);\n            vol_emit = vol_emit * (1.0 + boost);\n        }\n        color += vol_emit;\n    }\n\n    // \u2500\u2500 HDR output \u2500\u2500\n    // No tonemapping in this shader. The output buffer is Rgba16Float\n    // and the rest of the MANIFOLD pipeline (bloom prefilter at 0.42,\n    // halation, EDR display presenter) is fully HDR-aware. Bright\n    // disk regions are emitted with R/G/B values well above 1.0; bloom\n    // catches them as highlights and EDR displays them at cinematic\n    // brightness. Tonemapping inside this shader was the source of\n    // the white-blowout bug \u2014 it pre-compressed every value down to\n    // ~1.0 and forced channel saturation to converge on (1,1,1).\n    //\n    // Sanity floor only \u2014 guard against any NaN or negative leakage.\n    color = max(color, vec3<f32>(0.0));\n\n    textureStore(output, gid.xy, vec4<f32>(color, 1.0));\n}\n"
-    },
-    {
-      "id": 9,
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_def1_h", "nodeId": "blur_def1_h",
-      "params": {
-        "kernel_size": {
-          "type": "Enum",
-          "value": 1
+      "id": 24,
+      "nodeId": "Particle Density Blur",
+      "typeId": "group",
+      "handle": "Particle Density Blur",
+      "group": {
+        "interface": {
+          "inputs": [
+            {
+              "name": "densityTopRaw",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "densityBottomRaw",
+              "portType": "Texture2D"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "densityTop",
+              "portType": "Texture2D"
+            },
+            {
+              "name": "densityBottom",
+              "portType": "Texture2D"
+            }
+          ]
         },
-        "axis": {
-          "type": "Enum",
-          "value": 0
-        },
-        "step": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
-    },
-    {
-      "id": 10,
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_def1_v", "nodeId": "blur_def1_v",
-      "params": {
-        "kernel_size": {
-          "type": "Enum",
-          "value": 1
-        },
-        "axis": {
-          "type": "Enum",
-          "value": 1
-        },
-        "step": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
-    },
-    {
-      "id": 11,
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_def2_h", "nodeId": "blur_def2_h",
-      "params": {
-        "kernel_size": {
-          "type": "Enum",
-          "value": 1
-        },
-        "axis": {
-          "type": "Enum",
-          "value": 0
-        },
-        "step": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
-    },
-    {
-      "id": 12,
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_def2_v", "nodeId": "blur_def2_v",
-      "params": {
-        "kernel_size": {
-          "type": "Enum",
-          "value": 1
-        },
-        "axis": {
-          "type": "Enum",
-          "value": 1
-        },
-        "step": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
-    },
-    {
-      "id": 13,
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_sky_h", "nodeId": "blur_sky_h",
-      "params": {
-        "kernel_size": {
-          "type": "Enum",
-          "value": 1
-        },
-        "axis": {
-          "type": "Enum",
-          "value": 0
-        },
-        "step": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
-    },
-    {
-      "id": 14,
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_sky_v", "nodeId": "blur_sky_v",
-      "params": {
-        "kernel_size": {
-          "type": "Enum",
-          "value": 1
-        },
-        "axis": {
-          "type": "Enum",
-          "value": 1
-        },
-        "step": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
-    },
-    {
-      "id": 15,
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_pd_top_h", "nodeId": "blur_pd_top_h",
-      "params": {
-        "kernel_size": {
-          "type": "Enum",
-          "value": 1
-        },
-        "axis": {
-          "type": "Enum",
-          "value": 0
-        },
-        "step": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
-    },
-    {
-      "id": 16,
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_pd_top_v", "nodeId": "blur_pd_top_v",
-      "params": {
-        "kernel_size": {
-          "type": "Enum",
-          "value": 1
-        },
-        "axis": {
-          "type": "Enum",
-          "value": 1
-        },
-        "step": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
-    },
-    {
-      "id": 17,
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_pd_bot_h", "nodeId": "blur_pd_bot_h",
-      "params": {
-        "kernel_size": {
-          "type": "Enum",
-          "value": 1
-        },
-        "axis": {
-          "type": "Enum",
-          "value": 0
-        },
-        "step": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
-    },
-    {
-      "id": 18,
-      "typeId": "node.gaussian_blur",
-      "handle": "blur_pd_bot_v", "nodeId": "blur_pd_bot_v",
-      "params": {
-        "kernel_size": {
-          "type": "Enum",
-          "value": 1
-        },
-        "axis": {
-          "type": "Enum",
-          "value": 1
-        },
-        "step": {
-          "type": "Float",
-          "value": 1.0
-        }
-      }
-    },
-    {
-      "id": 19,
-      "typeId": "node.affine_scalar",
-      "handle": "tilt_deg_to_rad", "nodeId": "tilt_deg_to_rad",
-      "params": {
-        "a": {
-          "type": "Float",
-          "value": 15.0
-        },
-        "scale": {
-          "type": "Float",
-          "value": 0.017453292519943295
-        },
-        "offset": {
-          "type": "Float",
-          "value": 0.0
-        }
-      }
-    },
-    {
-      "id": 20,
-      "typeId": "node.affine_scalar",
-      "handle": "rotate_deg_to_rad", "nodeId": "rotate_deg_to_rad",
-      "params": {
-        "a": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "scale": {
-          "type": "Float",
-          "value": 0.017453292519943295
-        },
-        "offset": {
-          "type": "Float",
-          "value": 0.0
-        }
-      }
-    },
-    {
-      "id": 21,
-      "typeId": "node.math",
-      "handle": "scale_to_uv_scale", "nodeId": "scale_to_uv_scale",
-      "params": {
-        "a": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "b": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "op": {
-          "type": "Enum",
-          "value": 9
-        }
+        "nodes": [
+          {
+            "id": 15,
+            "nodeId": "blur_pd_top_h",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_pd_top_h",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 16,
+            "nodeId": "blur_pd_top_v",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_pd_top_v",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 17,
+            "nodeId": "blur_pd_bot_h",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_pd_bot_h",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 0
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 18,
+            "nodeId": "blur_pd_bot_v",
+            "typeId": "node.gaussian_blur",
+            "handle": "blur_pd_bot_v",
+            "params": {
+              "axis": {
+                "type": "Enum",
+                "value": 1
+              },
+              "kernel_size": {
+                "type": "Enum",
+                "value": 1
+              },
+              "step": {
+                "type": "Float",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "id": 25,
+            "typeId": "system.group_input"
+          },
+          {
+            "id": 26,
+            "typeId": "system.group_output"
+          }
+        ],
+        "wires": [
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 16,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 17,
+            "fromPort": "out",
+            "toNode": 18,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "densityTopRaw",
+            "toNode": 15,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "densityBottomRaw",
+            "toNode": 17,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "densityTop"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "densityBottom"
+          }
+        ],
+        "tint": [
+          0.35,
+          0.3,
+          0.25,
+          1.0
+        ]
       }
     }
   ],
@@ -792,7 +1120,7 @@
     {
       "fromNode": 0,
       "fromPort": "aspect",
-      "toNode": 5,
+      "toNode": 23,
       "toPort": "aspect"
     },
     {
@@ -820,22 +1148,22 @@
       "toPort": "tex_h"
     },
     {
-      "fromNode": 19,
-      "fromPort": "out",
-      "toNode": 5,
-      "toPort": "tilt_rad"
+      "fromNode": 22,
+      "fromPort": "tiltRad",
+      "toNode": 23,
+      "toPort": "tiltRad"
     },
     {
-      "fromNode": 20,
-      "fromPort": "out",
-      "toNode": 5,
-      "toPort": "rotate_rad"
+      "fromNode": 22,
+      "fromPort": "rotateRad",
+      "toNode": 23,
+      "toPort": "rotateRad"
     },
     {
-      "fromNode": 21,
-      "fromPort": "out",
-      "toNode": 5,
-      "toPort": "uv_scale"
+      "fromNode": 22,
+      "fromPort": "uvScale",
+      "toNode": 23,
+      "toPort": "uvScale"
     },
     {
       "fromNode": 2,
@@ -862,92 +1190,44 @@
       "toPort": "accum"
     },
     {
-      "fromNode": 5,
-      "fromPort": "output1",
-      "toNode": 9,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 9,
-      "fromPort": "out",
-      "toNode": 10,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "out",
+      "fromNode": 23,
+      "fromPort": "diskCrossingFront",
       "toNode": 8,
       "toPort": "deflection1"
     },
     {
-      "fromNode": 5,
-      "fromPort": "output2",
-      "toNode": 11,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 11,
-      "fromPort": "out",
-      "toNode": 12,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 12,
-      "fromPort": "out",
+      "fromNode": 23,
+      "fromPort": "diskCrossingLensed",
       "toNode": 8,
       "toPort": "deflection2"
     },
     {
-      "fromNode": 5,
-      "fromPort": "output3",
-      "toNode": 13,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 13,
-      "fromPort": "out",
-      "toNode": 14,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 14,
-      "fromPort": "out",
+      "fromNode": 23,
+      "fromPort": "skyDirection",
       "toNode": 8,
       "toPort": "sky_dir_tex"
     },
     {
       "fromNode": 6,
       "fromPort": "density",
-      "toNode": 15,
-      "toPort": "in"
+      "toNode": 24,
+      "toPort": "densityTopRaw"
     },
     {
-      "fromNode": 15,
-      "fromPort": "out",
-      "toNode": 16,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 16,
-      "fromPort": "out",
+      "fromNode": 24,
+      "fromPort": "densityTop",
       "toNode": 8,
       "toPort": "particle_density_top"
     },
     {
       "fromNode": 7,
       "fromPort": "density",
-      "toNode": 17,
-      "toPort": "in"
+      "toNode": 24,
+      "toPort": "densityBottomRaw"
     },
     {
-      "fromNode": 17,
-      "fromPort": "out",
-      "toNode": 18,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 18,
-      "fromPort": "out",
+      "fromNode": 24,
+      "fromPort": "densityBottom",
       "toNode": 8,
       "toPort": "particle_density_bottom"
     },
