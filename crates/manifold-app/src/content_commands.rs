@@ -533,6 +533,20 @@ impl ContentThread {
                 self.refresh_preset_overlay_if_changed();
             }
 
+            // ── Live value write (no structural maintenance) ───────
+            ContentCommand::MutateProjectLive(f) => {
+                // Card-slider / opacity / macro drags land here, once per
+                // mouse-move event. They write only `param_values` / settings
+                // scalars — read fresh each frame by every consumer — so the
+                // renderer re-notify, Ableton listener rebuild, and preset
+                // overlay refresh the structural `MutateProject` arm runs are
+                // all dead weight here. Skipping them keeps a slider drag at the
+                // cost of the value write, never project-scale work on the tick.
+                if let Some(p) = self.engine.project_mut() {
+                    f(p);
+                }
+            }
+
             // ── Clipboard ─────────────────────────────────────────
             ContentCommand::CopyClips { clip_ids, region } => {
                 if let Some(p) = self.engine.project() {

@@ -83,7 +83,26 @@ pub enum ContentCommand {
 
     // ── Direct project mutation ────────────────────────────────────
     /// Closure runs on the content thread with &mut Project access.
+    ///
+    /// After running the closure the handler re-syncs the renderer caches
+    /// (video library), Ableton listeners, and the forked-preset overlay —
+    /// the structural maintenance a closure that adds clips / forks a preset /
+    /// recalibrates a mapping needs. Use this when the mutation may change
+    /// anything beyond a live scalar value.
     MutateProject(Box<dyn FnOnce(&mut Project) + Send>),
+
+    /// Maintenance-free twin of [`MutateProject`] for the live-performance
+    /// instrument: per-mouse-move scalar writes from card-slider / opacity /
+    /// macro drags. The closure runs and nothing else does — no renderer
+    /// re-notify, no Ableton listener rebuild, no preset-overlay fingerprint.
+    ///
+    /// Those writes only touch `param_values` / settings scalars, which every
+    /// consumer already reads fresh each frame, so none of that bookkeeping
+    /// applies. Keeping it off this path means a slider drag costs exactly the
+    /// value write, never project-scale work on the render tick. A mutation that
+    /// changes structure (clips, forks, mappings, video library) must use
+    /// [`MutateProject`] instead so the caches stay in sync.
+    MutateProjectLive(Box<dyn FnOnce(&mut Project) + Send>),
 
     // ── Percussion ─────────────────────────────────────────────────
     /// Trigger percussion import pipeline with the selected audio/JSON file path.

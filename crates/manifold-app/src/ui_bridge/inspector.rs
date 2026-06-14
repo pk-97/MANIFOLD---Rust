@@ -58,7 +58,7 @@ fn graph_env_dual_edit<F>(
     let t = target.clone();
     ContentCommand::send(
         content_tx,
-        ContentCommand::MutateProject(Box::new(move |p| {
+        ContentCommand::MutateProjectLive(Box::new(move |p| {
             p.with_preset_graph_mut(&t, |inst| {
                 if let Some(env) = inst
                     .envelopes
@@ -98,7 +98,7 @@ fn graph_driver_dual_edit<F>(
     let t = target.clone();
     ContentCommand::send(
         content_tx,
-        ContentCommand::MutateProject(Box::new(move |p| {
+        ContentCommand::MutateProjectLive(Box::new(move |p| {
             p.with_preset_graph_mut(&t, |inst| {
                 if let Some(driver) = inst
                     .drivers
@@ -326,7 +326,7 @@ pub(super) fn dispatch_inspector(
             manifold_core::macro_bank::MacroBank::apply_macro(project, idx, val);
             ContentCommand::send(
                 content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::MutateProjectLive(Box::new(move |p| {
                     manifold_core::macro_bank::MacroBank::apply_macro(p, idx, val);
                 })),
             );
@@ -388,7 +388,7 @@ pub(super) fn dispatch_inspector(
             let v = *val;
             ContentCommand::send(
                 content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
+                ContentCommand::MutateProjectLive(Box::new(move |p| {
                     p.settings.master_opacity = v;
                 })),
             );
@@ -536,7 +536,7 @@ pub(super) fn dispatch_inspector(
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(
                     content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
+                    ContentCommand::MutateProjectLive(Box::new(move |p| {
                         if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
                             layer.opacity = v;
                         }
@@ -946,7 +946,7 @@ pub(super) fn dispatch_inspector(
                 let t = target.clone();
                 ContentCommand::send(
                     content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
+                    ContentCommand::MutateProjectLive(Box::new(move |p| {
                         p.with_preset_graph_mut(&t, |inst| {
                             if let Some(slot) = inst.param_id_to_value_index(pid.as_ref()) {
                                 inst.set_base_param(slot, v);
