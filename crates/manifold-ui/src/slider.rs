@@ -7,6 +7,16 @@ use crate::tree::UITree;
 pub const DEFAULT_LABEL_WIDTH: f32 = 60.0;
 pub const VALUE_WIDTH: f32 = 60.0;
 pub const GAP: f32 = 4.0;
+
+/// Label-column width that grows with the row, so widening a card gives the
+/// param *name* more room instead of pouring every extra pixel into the track.
+/// Floored at `DEFAULT_LABEL_WIDTH` (narrow timeline cards stay unchanged) and
+/// capped so a very wide inspector doesn't starve the track. Right-aligned
+/// labels overflow-left cleanly, so the wider cell only ever helps legibility.
+pub const MAX_LABEL_WIDTH: f32 = 160.0;
+pub fn label_width_for_row(row_w: f32) -> f32 {
+    (row_w * 0.28).clamp(DEFAULT_LABEL_WIDTH, MAX_LABEL_WIDTH)
+}
 pub const TRACK_RADIUS: f32 = 2.0;
 const FILL_INSET: f32 = 1.0;
 const THUMB_WIDTH: f32 = 8.0;

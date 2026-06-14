@@ -1222,10 +1222,10 @@ impl ParamCardPanel {
         } else {
             0.0
         };
-        // Match the timeline/inspector card exactly: same label width in both
-        // contexts. Right-aligned labels overflow-left cleanly, so the wider
-        // Author cell only made the editor card's rows diverge from the timeline.
-        let label_width = crate::slider::DEFAULT_LABEL_WIDTH;
+        // Label column grows with the row so a wide inspector card gives the
+        // param name more room (not just a longer track). Floored at the
+        // default, so narrow timeline cards keep the timeline's width exactly.
+        let label_width = crate::slider::label_width_for_row(w - PADDING * 2.0);
         let slider_w = w - PADDING * 2.0 - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0 - chevron_lane;
 
         for i in 0..self.param_info.len() {
@@ -1475,8 +1475,8 @@ impl ParamCardPanel {
             };
             let slider_w =
                 content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0 - chevron_lane;
-            // Same label width as the timeline card (see build_effect_sliders).
-            let label_width = crate::slider::DEFAULT_LABEL_WIDTH;
+            // Same growth rule as the effect card (see build_effect_sliders).
+            let label_width = crate::slider::label_width_for_row(content_w);
 
             for i in 0..self.param_info.len() {
                 let info = self.param_info[i].clone();
