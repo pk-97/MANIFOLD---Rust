@@ -373,8 +373,8 @@ pub struct ParamCardPanel {
     driver_btn_ids: Vec<i32>,
     envelope_btn_ids: Vec<i32>,
     driver_config_ids: Vec<Option<DriverConfigIds>>,
-    /// Per-param envelope drawer — the single "Amount" depth slider.
-    envelope_config_ids: Vec<Option<EnvelopeConfigIds>>,
+    /// Per-param orange envelope target handle on the slider track (when armed).
+    target_ids: Vec<Option<EnvelopeTargetIds>>,
     trim_ids: Vec<Option<TrimHandleIds>>,
     ableton_trim_ids: Vec<Option<TrimHandleIds>>,
     ableton_config_ids: Vec<Option<AbletonConfigIds>>,
@@ -451,7 +451,7 @@ impl ParamCardPanel {
             driver_btn_ids: Vec::new(),
             envelope_btn_ids: Vec::new(),
             driver_config_ids: Vec::new(),
-            envelope_config_ids: Vec::new(),
+            target_ids: Vec::new(),
             trim_ids: Vec::new(),
             ableton_trim_ids: Vec::new(),
             ableton_config_ids: Vec::new(),
@@ -518,8 +518,8 @@ impl ParamCardPanel {
         self.envelope_btn_ids = vec![-1; n];
         self.driver_config_ids = Vec::new();
         self.driver_config_ids.resize_with(n, || None);
-        self.envelope_config_ids = Vec::new();
-        self.envelope_config_ids.resize_with(n, || None);
+        self.target_ids = Vec::new();
+        self.target_ids.resize_with(n, || None);
         self.trim_ids = Vec::new();
         self.trim_ids.resize_with(n, || None);
         self.ableton_trim_ids = Vec::new();
@@ -771,17 +771,8 @@ impl ParamCardPanel {
         {
             h += DRIVER_CONFIG_HEIGHT;
         }
-        if self
-            .state
-            .mod_state
-            .envelope_expanded
-            .get(i)
-            .copied()
-            .unwrap_or(false)
-        {
-            // The envelope drawer is a single "Amount" slider row.
-            h += ENV_CONFIG_HEIGHT;
-        }
+        // An armed envelope adds no drawer — its target handle is an overlay on
+        // the slider track, so it contributes no row height.
         if self.param_info[i].ableton_display.is_some() {
             h += ABL_CONFIG_HEIGHT;
         }
@@ -1249,10 +1240,10 @@ impl ParamCardPanel {
             );
             self.slider_ids[i] = row.slider;
             self.trim_ids[i] = row.trim;
+            self.target_ids[i] = row.target;
             self.ableton_trim_ids[i] = row.ableton_trim;
             self.envelope_btn_ids[i] = row.envelope_btn;
             self.driver_btn_ids[i] = row.driver_btn;
-            self.envelope_config_ids[i] = row.envelope_config;
             self.driver_config_ids[i] = row.driver_config;
             self.ableton_config_ids[i] = row.ableton_config;
             // Mapping-drawer chevron at the row's right edge (Author + mappable).
@@ -1543,10 +1534,10 @@ impl ParamCardPanel {
                     );
                     self.slider_ids[i] = row.slider;
                     self.trim_ids[i] = row.trim;
+                    self.target_ids[i] = row.target;
                     self.ableton_trim_ids[i] = row.ableton_trim;
                     self.envelope_btn_ids[i] = row.envelope_btn;
                     self.driver_btn_ids[i] = row.driver_btn;
-                    self.envelope_config_ids[i] = row.envelope_config;
                     self.driver_config_ids[i] = row.driver_config;
                     self.ableton_config_ids[i] = row.ableton_config;
                     // Mapping-drawer chevron at the row's right edge (Author +
@@ -2111,19 +2102,13 @@ impl ParamCardPanel {
     pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
         let target = self.param_target();
 
-        // 1. Envelope "Amount" depth slider (in the expanded drawer). Drives
-        //    `target_normalized` through the same Target* command path the old
-        //    on-track handle used — so undo/redo and the dual-edit are unchanged.
-        for (pi, env_cfg) in self.envelope_config_ids.iter().enumerate() {
-            if let Some(c) = env_cfg
-                && node_id == c.amount_slider.track
+        // 1. Envelope target handle (the orange grab bar on the slider track).
+        for (pi, etarget) in self.target_ids.iter().enumerate() {
+            if let Some(t) = etarget
+                && node_id as i32 == t.target_bar_id
             {
                 self.drag.dragging_target_param = pi as i32;
-                let norm = BitmapSlider::x_to_normalized(c.amount_slider.track_rect, pos.x);
-                return vec![
-                    PanelAction::TargetSnapshot(target, self.pid_at(pi)),
-                    PanelAction::TargetChanged(target, self.pid_at(pi), norm),
-                ];
+                return vec![PanelAction::TargetSnapshot(target, self.pid_at(pi))];
             }
         }
 
@@ -2174,7 +2159,8 @@ impl ParamCardPanel {
             }
             if let Some(ids) = slider
                 && (node_id == ids.track || {
-                    // Also accept clicks on the driver trim bar / fill children.
+                    // Also accept clicks on the driver trim bar / fill / target
+                    // handle nodes that overlay this track.
                     self.trim_ids
                         .get(pi)
                         .and_then(|t| t.as_ref())
@@ -2183,6 +2169,11 @@ impl ParamCardPanel {
                                 || node_id as i32 == t.min_bar_id
                                 || node_id as i32 == t.max_bar_id
                         })
+                        || self
+                            .target_ids
+                            .get(pi)
+                            .and_then(|t| t.as_ref())
+                            .is_some_and(|t| node_id as i32 == t.target_bar_id)
                 })
             {
                 // If driver is expanded, check proximity to trim handles before falling through to param drag
@@ -2231,7 +2222,33 @@ impl ParamCardPanel {
                     }
                 }
 
-                // No trim handle nearby — normal param slider drag
+                // If the envelope is armed, the orange target handle gets an ~8px
+                // proximity catch-zone so it's grabbable by feel on the track.
+                if self
+                    .state
+                    .mod_state
+                    .envelope_expanded
+                    .get(pi)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
+                    let base_x = ids.track_rect.x + OVERLAY_INSET;
+                    let tgt = self
+                        .state
+                        .mod_state
+                        .target_norm
+                        .get(pi)
+                        .copied()
+                        .unwrap_or(1.0);
+                    let target_center = base_x + tgt * usable;
+                    if (pos.x - target_center).abs() < 8.0 {
+                        self.drag.dragging_target_param = pi as i32;
+                        return vec![PanelAction::TargetSnapshot(target, self.pid_at(pi))];
+                    }
+                }
+
+                // No trim/target handle nearby — normal param slider drag
                 self.drag.dragging_param = pi as i32;
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                 let info = &self.param_info[pi];
@@ -2253,17 +2270,26 @@ impl ParamCardPanel {
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         let ei = self.effect_index;
 
-        // Envelope "Amount" depth slider drag — update the drawer slider's fill
-        // + value cell, dispatch the Target change (same command path as before).
+        // Envelope target handle drag — update depth, reposition the orange bar
+        // along the parameter's own track, dispatch the Target change.
         if self.drag.dragging_target_param >= 0 {
             let pi = self.drag.dragging_target_param as usize;
-            if let Some(cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref()) {
-                let norm = BitmapSlider::x_to_normalized(cfg.amount_slider.track_rect, pos.x)
-                    .clamp(0.0, 1.0);
+            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
+                let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
                 if let Some(v) = self.state.mod_state.target_norm.get_mut(pi) {
                     *v = norm;
                 }
-                BitmapSlider::update_value(tree, &cfg.amount_slider, norm, &format!("{norm:.2}"));
+                if let Some(t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
+                    let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
+                    let base_x = slider.track_rect.x + OVERLAY_INSET;
+                    let bar_x = base_x + norm * usable - TARGET_BAR_W * 0.5;
+                    let bar_h = slider.track_rect.height + 4.0;
+                    let bar_y = slider.track_rect.y - 2.0;
+                    tree.set_bounds(
+                        t.target_bar_id as u32,
+                        Rect::new(bar_x, bar_y, TARGET_BAR_W, bar_h),
+                    );
+                }
                 let pid = self.pid_at(pi);
                 return match self.kind {
                     ParamCardKind::Effect => vec![PanelAction::TargetChanged(GraphParamTarget::Effect(ei), pid, norm)],
@@ -2847,8 +2873,8 @@ mod tests {
         panel.state.mod_state.envelope_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        // The expanded envelope drawer is the single "Amount" slider.
-        assert!(panel.envelope_config_ids[0].is_some());
+        // Arming the envelope adds the orange target handle on the slider track.
+        assert!(panel.target_ids[0].is_some());
     }
 
     // ── Generator-card fixtures + tests ───────────────────────────

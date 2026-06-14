@@ -33,13 +33,11 @@ pub(crate) const WAVEFORM_COUNT: usize = 5;
 
 pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 
-// Envelope drawer = one "Amount" slider row (depth). A single row + padding.
-pub(crate) const ENV_CONFIG_HEIGHT: f32 = 30.0;
-pub(crate) const ENV_ROW_HEIGHT: f32 = 22.0;
-pub(crate) const ENV_AMOUNT_LABEL_W: f32 = 50.0;
-pub(crate) const ENV_PAD_H: f32 = 5.0;
-
+// The envelope arms a single in-context affordance: an orange target handle on
+// the parameter's own slider track (its depth — the card's "Amount"). No drawer,
+// no extra height — the decay feel is fixed.
 pub(crate) const TRIM_BAR_W: f32 = 4.0;
+pub(crate) const TARGET_BAR_W: f32 = 6.0;
 pub(crate) const OVERLAY_INSET: f32 = 1.0;
 
 pub(crate) const BEAT_DIV_LABELS: [&str; BEAT_DIV_COUNT] = [
@@ -61,10 +59,11 @@ pub(crate) struct DriverConfigIds {
     pub(crate) reverse_btn_id: i32,
 }
 
-pub(crate) struct EnvelopeConfigIds {
-    pub(crate) _container_id: i32,
-    /// The single "Amount" slider — the envelope's depth (`target_normalized`).
-    pub(crate) amount_slider: SliderNodeIds,
+/// The orange envelope target handle on a parameter's slider track — sets the
+/// depth (`target_normalized`) the envelope pulls the value toward, shown in the
+/// parameter's own range.
+pub(crate) struct EnvelopeTargetIds {
+    pub(crate) target_bar_id: i32,
 }
 
 pub(crate) struct TrimHandleIds {
@@ -501,52 +500,39 @@ pub(crate) fn build_driver_config(
     }
 }
 
-pub(crate) fn build_envelope_config(
+/// Orange envelope target handle on a parameter's slider track. Sits at the
+/// `target_normalized` position across the track — the depth the envelope pulls
+/// the value toward, read in the parameter's own range. Grabbable by feel via
+/// the proximity catch-zone in the panel's pointer-down handler.
+pub(crate) fn build_envelope_target(
     tree: &mut UITree,
-    parent: i32,
-    x: f32,
-    y: f32,
-    w: f32,
+    track_parent: i32,
+    track_rect: Rect,
     mod_state: &ParamModState,
     param_idx: usize,
-) -> EnvelopeConfigIds {
-    let container_id = tree.add_panel(
-        parent,
-        x,
-        y,
-        w,
-        ENV_CONFIG_HEIGHT,
+) -> EnvelopeTargetIds {
+    let usable = track_rect.width - OVERLAY_INSET * 2.0;
+    let norm = mod_state.target_norm.get(param_idx).copied().unwrap_or(0.5);
+    let bar_x = track_rect.x + OVERLAY_INSET + norm * usable - TARGET_BAR_W * 0.5;
+    let bar_h = track_rect.height + 4.0;
+    let bar_y = track_rect.y - 2.0;
+
+    let target_bar_id = tree.add_button(
+        track_parent,
+        bar_x,
+        bar_y,
+        TARGET_BAR_W,
+        bar_h,
         UIStyle {
-            bg_color: color::CONFIG_BG_C32,
-            corner_radius: 2.0,
+            bg_color: color::ENVELOPE_ACTIVE_C32,
+            hover_bg_color: color::TARGET_BAR_HOVER_C32,
+            corner_radius: 1.0,
             ..UIStyle::default()
         },
+        "",
     ) as i32;
 
-    let sx = x + ENV_PAD_H;
-    let row_y = y + 4.0;
-    let slider_w = w - ENV_PAD_H * 2.0;
-
-    // Single "Amount" slider — the envelope's depth (`target_normalized`, 0-1).
-    // On a clip trigger the parameter snaps this far toward its offset, then
-    // decays back over the fixed feel.
-    let amount = mod_state.target_norm.get(param_idx).copied().unwrap_or(1.0);
-    let amount_slider = BitmapSlider::build(
-        tree,
-        container_id,
-        Rect::new(sx, row_y, slider_w, ENV_ROW_HEIGHT),
-        Some("Amount"),
-        amount,
-        &format!("{:.2}", amount),
-        &SliderColors::envelope(),
-        FONT_SIZE,
-        ENV_AMOUNT_LABEL_W,
-    );
-
-    EnvelopeConfigIds {
-        _container_id: container_id,
-        amount_slider,
-    }
+    EnvelopeTargetIds { target_bar_id }
 }
 
 pub(crate) fn build_trim_handles(
@@ -848,10 +834,11 @@ pub(crate) enum AbletonConfigClick {
 pub(crate) struct ParamRowIds {
     pub(crate) slider: Option<SliderNodeIds>,
     pub(crate) trim: Option<TrimHandleIds>,
+    /// Orange envelope target handle on the slider track (when armed).
+    pub(crate) target: Option<EnvelopeTargetIds>,
     pub(crate) ableton_trim: Option<TrimHandleIds>,
     pub(crate) envelope_btn: i32,
     pub(crate) driver_btn: i32,
-    pub(crate) envelope_config: Option<EnvelopeConfigIds>,
     pub(crate) driver_config: Option<DriverConfigIds>,
     pub(crate) ableton_config: Option<AbletonConfigIds>,
     /// `y` after this row's slider + any expanded driver/envelope/Ableton
@@ -897,10 +884,10 @@ pub(crate) fn build_param_row(
     let mut ids = ParamRowIds {
         slider: None,
         trim: None,
+        target: None,
         ableton_trim: None,
         envelope_btn: -1,
         driver_btn: -1,
-        envelope_config: None,
         driver_config: None,
         ableton_config: None,
         new_cy: cy,
@@ -944,8 +931,17 @@ pub(crate) fn build_param_row(
         ));
     }
 
-    // The envelope's depth is no longer a handle on the slider track — it's the
-    // "Amount" slider in the expanded drawer below.
+    // Envelope target handle on the slider track (when the envelope is armed) —
+    // the orange grab bar that sets the depth in the parameter's own range.
+    if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
+        ids.target = Some(build_envelope_target(
+            tree,
+            slider.track as i32,
+            slider.track_rect,
+            mod_state,
+            i,
+        ));
+    }
 
     // Ableton trim handles (when the param has an Ableton mapping).
     if let Some((amin, amax)) = info.ableton_range {
@@ -997,13 +993,8 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
-    // Envelope config drawer — a single "Amount" (depth) slider.
-    if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
-        ids.envelope_config = Some(build_envelope_config(
-            tree, parent, x, cy, config_w, mod_state, i,
-        ));
-        cy += ENV_CONFIG_HEIGHT;
-    }
+    // The armed envelope adds no drawer — its only control is the orange target
+    // handle on the slider track above; the decay feel is fixed.
 
     // Driver config drawer.
     if mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
