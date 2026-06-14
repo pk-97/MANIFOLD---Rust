@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "StylizedFeedback",
-  "description": "Feedback trails built from a simple cascade. The source image mixes with the prior frame delayed by one render, which gets zoomed and rotated, scaled by Amount, vignetted to hide edge artifacts from the transform, then Screen-blended back over the fresh input. The Amount slider gates the feedback intensity; Zoom and Rotate are direct transforms applied to history. The loop closes when the blended result recirculates through the feedback node's 1-frame delay, building persistent trails from the motion.",
+  "description": "Feedback trails built from a simple cascade. The source image mixes with the prior frame delayed by one render, which gets zoomed and rotated, scaled by Amount, vignetted to hide edge artifacts from the transform, then Max-blended back over the fresh input. The Amount slider gates the feedback intensity; Zoom and Rotate are direct transforms applied to history. The loop closes when the blended result recirculates through the feedback node's 1-frame delay, building persistent trails from the motion.",
   "presetMetadata": {
     "id": "StylizedFeedback",
     "displayName": "Stylized Feedback",
@@ -174,10 +174,10 @@
         },
         "mode": {
           "type": "Enum",
-          "value": 1
+          "value": 3
         }
       },
-      "title": "Screen Blend"
+      "title": "Max Blend"
     },
     {
       "id": 6,

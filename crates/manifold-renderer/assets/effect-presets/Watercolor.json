@@ -277,13 +277,17 @@
           "type": "Enum",
           "value": 0
         },
-        "radius": {
+        "kernel_size": {
+          "type": "Enum",
+          "value": 0
+        },
+        "step": {
           "type": "Float",
-          "value": 10.0
+          "value": 2.5
         },
         "radius_mode": {
           "type": "Enum",
-          "value": 2
+          "value": 0
         }
       }
     },
@@ -297,13 +301,17 @@
           "type": "Enum",
           "value": 1
         },
-        "radius": {
+        "kernel_size": {
+          "type": "Enum",
+          "value": 0
+        },
+        "step": {
           "type": "Float",
-          "value": 10.0
+          "value": 2.5
         },
         "radius_mode": {
           "type": "Enum",
-          "value": 2
+          "value": 0
         }
       }
     },
