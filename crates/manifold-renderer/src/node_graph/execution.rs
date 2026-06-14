@@ -18,7 +18,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::backend::{Backend, MockBackend};
 use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
 use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, NodeInstanceId};
-use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId};
+use crate::node_graph::execution_plan::{ExecutionPlan, ExecutionStep, ResourceId};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::state_store::{OwnerKey, StateStore};
@@ -298,6 +298,32 @@ impl Executor {
     /// the host turns it on, runs a frame, reads the textures, turns it off.
     pub fn set_dump_all(&mut self, on: bool) {
         self.dump_all = on;
+    }
+
+    /// Record every Texture2D / Array output of `step` into the dump buffers,
+    /// pinning each texture's identity NOW (before the end-of-frame feedback
+    /// swap rebinds slots — see [`dump_resources`](Self::dump_resources)).
+    /// Called both for steps that executed this frame and for steps that
+    /// skipped (memoized / data-skipped) but whose held output slots still
+    /// carry valid content, so a static subgraph keeps its zero-cost skip yet
+    /// still shows a current thumbnail. Caller gates on `self.dump_all`.
+    fn record_dump_outputs(&mut self, plan: &ExecutionPlan, step: &ExecutionStep) {
+        for &(port, res) in &step.outputs {
+            match plan.resource_type(res) {
+                Some(t) if t.is_texture_2d() => {
+                    let tex = self
+                        .backend
+                        .slot_for(res)
+                        .and_then(|s| self.backend.texture_2d(s))
+                        .cloned();
+                    self.dump_resources.push((step.node, port, res, tex));
+                }
+                Some(crate::node_graph::ports::PortType::Array(_)) => {
+                    self.dump_array_resources.push((step.node, port, res));
+                }
+                _ => {}
+            }
+        }
     }
 
     /// `(node, output_port, resource, texture)` for every Texture2D output
@@ -723,11 +749,13 @@ impl Executor {
             // Skipped exactly like the mux short-circuit above — no acquire,
             // no evaluate, no free_after — so consumers read the prior write.
             // Diagnostic modes force-dirty: attribution profiling wants real
-            // per-step cost, dump wants every output recorded, and the
-            // preview path resolves its capture inside the execute body.
+            // per-step cost, and the preview path resolves its capture inside
+            // the execute body. Dump mode does NOT force-dirty — a memoized
+            // step's held output slot still holds the valid texture, so the
+            // skip records it from that slot (below) instead of paying a
+            // re-execute just to capture an unchanged thumbnail.
             let force_dirty = self.profile_force_all_live
                 || self.profiling
-                || self.dump_all
                 || self.preview_target == Some(step.node);
             self.wired_scratch.clear();
             for &(port_name, _) in &step.inputs {
@@ -752,6 +780,17 @@ impl Executor {
                     .iter()
                     .all(|&(_, res)| self.backend.slot_for(res).is_some())
             {
+                // The held output is unchanged but still valid — capture it for
+                // the dump so a static subgraph keeps its zero-cost skip yet
+                // shows a current thumbnail. Slots are guaranteed bound here:
+                // the memo guard above required slot_for(res).is_some(). Safe
+                // against the feedback-swap hazard because only PURE nodes reach
+                // this skip (step_hoistable → is_pure), so the held slot is this
+                // frame's content — a stateful/feedback node, whose held slot can
+                // be the pre-swap buffer, never memo-skips.
+                if self.dump_all {
+                    self.record_dump_outputs(plan, step);
+                }
                 continue;
             }
 
@@ -793,6 +832,18 @@ impl Executor {
                     } else {
                         for &(_, res) in &step.outputs {
                             self.empty_resources.insert(res);
+                        }
+                        // Held outputs carry this node's empty state — still
+                        // record them so the dump stays complete across the
+                        // data-driven skip (matches the memo-skip above). Slots
+                        // are bound here too: the two-frame empty guard (empty
+                        // this frame AND last) means the node executed and wrote
+                        // its outputs on the first empty frame before it could
+                        // start skipping. No explicit slot-bound check is needed
+                        // — if one were somehow unbound, record_dump_outputs
+                        // reads None (a blank cell), never a panic.
+                        if self.dump_all {
+                            self.record_dump_outputs(plan, step);
                         }
                         continue;
                     }
@@ -1109,28 +1160,11 @@ impl Executor {
 
             // Dump capture: record every Texture2D output of this step so the
             // host can read them all after the frame (the release loop skips
-            // every release while dumping, so they all survive).
+            // every release while dumping, so they all survive). The identity
+            // is pinned NOW, before the end-of-frame feedback swap rebinds
+            // slots — see record_dump_outputs / dump_resources.
             if self.dump_all {
-                for &(port, res) in &step.outputs {
-                    match plan.resource_type(res) {
-                        Some(t) if t.is_texture_2d() => {
-                            // Pin the texture identity NOW, before the
-                            // end-of-frame feedback swap rebinds slots. Cloning
-                            // is a retain bump; dump mode already holds every
-                            // resource past the frame, so the buffer stays live.
-                            let tex = self
-                                .backend
-                                .slot_for(res)
-                                .and_then(|s| self.backend.texture_2d(s))
-                                .cloned();
-                            self.dump_resources.push((step.node, port, res, tex));
-                        }
-                        Some(crate::node_graph::ports::PortType::Array(_)) => {
-                            self.dump_array_resources.push((step.node, port, res));
-                        }
-                        _ => {}
-                    }
-                }
+                self.record_dump_outputs(plan, step);
             }
 
             // 4. Release dead resources. `dims` must match the
@@ -1719,6 +1753,48 @@ mod tests {
         exec.set_dump_all(false);
         exec.execute_frame(&mut g, &plan, frame_time());
         assert!(exec.dump_resources().is_empty());
+    }
+
+    /// Dump mode records a memoized node's output WITHOUT re-running it: a pure
+    /// producer executes once, then on the next dump frame its held texture is
+    /// captured from the slot rather than recomputed. This is the editor-atlas
+    /// win — opening the graph editor must not force every static node to
+    /// re-render 60×/s just to fill a thumbnail.
+    #[test]
+    fn dump_records_memoized_node_without_reexecuting() {
+        let evals = Arc::new(Mutex::new(0));
+        let mut g = Graph::new();
+        // Pure producer → consumer, so the producer's output gets a resource
+        // (a dangling output gets none and never enters the dump).
+        let producer = g.add_node(Box::new(PureCountingNode::new(true, evals.clone())));
+        let consumer =
+            g.add_node(Box::new(PureCountingNode::with_input(true, Arc::new(Mutex::new(0)))));
+        g.connect((producer, "out"), (consumer, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+
+        exec.set_dump_all(true);
+
+        // Frame 1: producer executes and is recorded.
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(*evals.lock().unwrap(), 1);
+        assert!(
+            exec.dump_resources().iter().any(|(n, _, _, _)| *n == producer),
+            "producer recorded on its executing frame"
+        );
+
+        // Frame 2: producer is clean → memo-skips (no re-execute) but is STILL
+        // recorded from its held output slot.
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert_eq!(
+            *evals.lock().unwrap(),
+            1,
+            "memoized node must not re-execute just to fill the dump"
+        );
+        assert!(
+            exec.dump_resources().iter().any(|(n, _, _, _)| *n == producer),
+            "memoized producer still recorded from its held slot"
+        );
     }
 
     #[test]
