@@ -874,10 +874,11 @@ impl Application {
         self.graph_editor = None;
         self.graph_canvas = None;
         // Stop per-node thumbnail capture on the content thread now the editor
-        // is gone, so a live show pays nothing for it.
-        if self.node_atlas_enabled_sent {
-            self.send_content_cmd(ContentCommand::SetNodeAtlasEnabled(false));
-            self.node_atlas_enabled_sent = false;
+        // is gone, so a live show pays nothing for it. An empty visible set
+        // turns the atlas dump off.
+        if !self.last_atlas_visible_sent.is_empty() {
+            self.send_content_cmd(ContentCommand::SetNodeAtlasVisible(Vec::new()));
+            self.last_atlas_visible_sent.clear();
         }
         // Clear the Phase 4 caches alongside — `watched_graph_target`
         // is the gate for the palette being active and the sole identity

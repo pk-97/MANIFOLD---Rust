@@ -7,7 +7,7 @@ use crate::uniform_arena::UniformArena;
 use ahash::AHashMap;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
-use manifold_core::{Beats, ClipId, PresetTypeId, LayerId, Seconds};
+use manifold_core::{Beats, ClipId, PresetTypeId, LayerId, NodeId, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_playback::renderer::ClipRenderer;
 use std::any::Any;
@@ -173,22 +173,34 @@ impl GeneratorRenderer {
         }
     }
 
-    /// Clear preview capture on every layer's generator (no preview active).
+    /// Clear preview capture AND the thumbnail-atlas dump on every layer's
+    /// generator (no preview active). Clearing the dump here too means a closed
+    /// editor leaves no generator dumping — a live show pays nothing — without
+    /// depending on the unfused→fused executor rebuild to reset it.
     pub fn clear_preview(&mut self) {
         self.preview_layer = None;
         for state in self.layer_generators.values_mut() {
             state.generator.set_preview_node(None);
+            state.generator.clear_dump_set();
         }
     }
 
-    /// Enable/disable a full-graph dump on the generator at `layer_id` — every
-    /// node output is captured this frame, for the per-node thumbnail atlas. The
-    /// generator side of the effect compositor's `set_dump_request`; the watched
-    /// layer is already kept unfused by [`Self::set_preview_node`], so the
+    /// Set the per-node thumbnail-atlas dump to the editor's currently-visible
+    /// nodes on the watched `layer_id`, and CLEAR it on every other layer.
+    /// Empty `visible` = atlas off. Touching every layer (mirroring
+    /// [`Self::set_preview_node`]) means switching the watched generator, or
+    /// scrolling to an empty scope, can't leave a stale dump running on a
+    /// non-watched layer — generator dump state is fully explicit each frame, so
+    /// a live show never carries it regardless of the executor rebuild gate.
+    /// The watched layer is kept unfused by [`Self::set_preview_node`], so the
     /// per-node textures the dump reads exist.
-    pub fn set_dump(&mut self, layer_id: &LayerId, on: bool) {
-        if let Some(state) = self.layer_generators.get_mut(layer_id) {
-            state.generator.set_dump_all(on);
+    pub fn set_dump_visible(&mut self, layer_id: &LayerId, visible: &[NodeId]) {
+        for (lid, state) in self.layer_generators.iter_mut() {
+            if lid == layer_id && !visible.is_empty() {
+                state.generator.set_dump_visible(None, visible);
+            } else {
+                state.generator.clear_dump_set();
+            }
         }
     }
 

@@ -222,9 +222,10 @@ pub struct Application {
     #[cfg(target_os = "macos")]
     pub(crate) ui_node_atlas_textures:
         [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
-    /// Whether the content thread currently has atlas capture enabled — dedups
-    /// the `SetNodeAtlasEnabled` command so it sends only on change.
-    pub(crate) node_atlas_enabled_sent: bool,
+    /// Last atlas visible-node set sent to the content thread — dedups the
+    /// `SetNodeAtlasVisible` command so it sends only when the visible scope
+    /// (or topology) changes, not every frame. Empty = atlas off / editor closed.
+    pub(crate) last_atlas_visible_sent: Vec<manifold_core::NodeId>,
     pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) atlas_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
@@ -483,7 +484,7 @@ impl Application {
             node_atlas_texture_bridge: None,
             #[cfg(target_os = "macos")]
             ui_node_atlas_textures: [None, None, None],
-            node_atlas_enabled_sent: false,
+            last_atlas_visible_sent: Vec::new(),
             blit_pipeline: None,
             blit_sampler: None,
             atlas_pipeline: None,

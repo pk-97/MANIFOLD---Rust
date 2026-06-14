@@ -470,10 +470,11 @@ pub struct LayerCompositor {
     /// [`Self::preview_texture`].
     preview_request: Option<(EffectId, Option<NodeId>)>,
 
-    /// One-shot "dump every output" request for an effect, applied to its chain
-    /// before the next `render`. The content layer reads [`Self::dump_textures`]
-    /// after that frame and clears it. `None` = no dump pending.
-    dump_request: Option<EffectId>,
+    /// Dump request applied to the watched effect's chain before the next
+    /// `render` — either the Cmd+D whole-graph disk dump or the editor's
+    /// visible-only thumbnail atlas. The content layer reads
+    /// [`Self::dump_textures`] after that frame. `None` = no dump pending.
+    dump_request: Option<crate::compositor::DumpRequest>,
 }
 
 /// Distinct owner_key for the LED master effect chain — must not collide with
@@ -596,8 +597,24 @@ impl LayerCompositor {
                     }
                     None => cg.clear_preview_target(),
                 }
-                // Enable dump only on the chain holding the requested effect.
-                cg.set_dump(dump.as_ref());
+                // Enable the dump only on the chain holding the requested
+                // effect. Cmd+D dumps the whole graph; the editor atlas dumps
+                // only the visible nodes. The two modes are mutually exclusive,
+                // so each clears the other.
+                match &dump {
+                    Some(crate::compositor::DumpRequest::All(eid)) => {
+                        cg.set_dump(Some(eid));
+                        cg.clear_dump_set();
+                    }
+                    Some(crate::compositor::DumpRequest::Visible(eid, nodes)) => {
+                        cg.set_dump(None);
+                        cg.set_dump_visible(Some(eid), nodes);
+                    }
+                    None => {
+                        cg.set_dump(None);
+                        cg.clear_dump_set();
+                    }
+                }
             }
         };
         apply(&mut self.master_effect_chain);
@@ -2032,12 +2049,12 @@ impl Compositor for LayerCompositor {
         Vec::new()
     }
 
-    fn set_dump_request(&mut self, effect_id: Option<EffectId>) {
-        self.dump_request = effect_id;
+    fn set_dump_request(&mut self, request: Option<crate::compositor::DumpRequest>) {
+        self.dump_request = request;
     }
 
     fn dump_textures(&self) -> Vec<crate::compositor::DumpTextureRef<'_>> {
-        let Some(effect_id) = self.dump_request.as_ref() else {
+        let Some(effect_id) = self.dump_request.as_ref().map(|r| r.effect_id()) else {
             return Vec::new();
         };
         // The watched effect lives in exactly one screen chain; find it and
@@ -2057,7 +2074,7 @@ impl Compositor for LayerCompositor {
     }
 
     fn dump_arrays(&self) -> Vec<crate::compositor::ArrayDump<'_>> {
-        let Some(effect_id) = self.dump_request.as_ref() else {
+        let Some(effect_id) = self.dump_request.as_ref().map(|r| r.effect_id()) else {
             return Vec::new();
         };
         let chains = std::iter::once(&self.master_effect_chain)

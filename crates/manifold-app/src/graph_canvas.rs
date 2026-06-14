@@ -316,8 +316,10 @@ fn port_kind_is_image(kind: &PortKindSnapshot) -> bool {
 /// The stable [`NodeId`] whose captured texture a node previews, or `None` for a
 /// node that emits no image. Ordinary node → its own id (if it has an image
 /// output); group → the inner producer of its primary output. See
-/// [`NodeView::preview_node_id`].
-fn node_preview_target(n: &NodeSnapshot) -> Option<manifold_core::NodeId> {
+/// [`NodeView::preview_node_id`]. `pub(crate)` so the host can build the
+/// thumbnail-atlas visible set (the nodes the canvas asks thumbnails for) from
+/// the current scope's nodes.
+pub(crate) fn node_preview_target(n: &NodeSnapshot) -> Option<manifold_core::NodeId> {
     if let Some(body) = n.group.as_deref() {
         let port = group_primary_output_port(&n.outputs)?;
         group_output_producer(body, port)

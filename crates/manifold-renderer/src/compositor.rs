@@ -87,6 +87,27 @@ impl<'a> CompositorFrame<'a> {
 /// texture)`. The strings are owned; the texture borrows the compositor.
 pub type DumpTextureRef<'a> = (String, String, String, &'a manifold_gpu::GpuTexture);
 
+/// What to capture from the watched effect's chain on the next `render`.
+/// `All` is the Cmd+D one-shot disk dump (every node). `Visible` is the
+/// continuous editor thumbnail atlas — only the nodes the canvas can currently
+/// show, so a collapsed group or off-scope subgraph costs nothing.
+#[derive(Debug, Clone)]
+pub enum DumpRequest {
+    /// Dump every node output of `EffectId` (Cmd+D → disk).
+    All(EffectId),
+    /// Dump only these nodes of `EffectId` (editor atlas → on-canvas thumbnails).
+    Visible(EffectId, Vec<NodeId>),
+}
+
+impl DumpRequest {
+    /// The effect whose chain this request targets — both variants carry it.
+    pub fn effect_id(&self) -> &EffectId {
+        match self {
+            DumpRequest::All(eid) | DumpRequest::Visible(eid, _) => eid,
+        }
+    }
+}
+
 /// One dumped `Array` (storage-buffer) output for inspection: identity, the
 /// live buffer, the per-item byte stride, and the channel layout as
 /// `(name, kind, byte_offset)` where `kind` ∈ {`f32`,`i32`,`u32`,`vec2f`,
@@ -158,9 +179,10 @@ pub trait Compositor: Send {
         Vec::new()
     }
 
-    /// Request a one-shot "dump every output" of effect `effect_id` on the next
-    /// `render`, or clear it. Default no-op. See [`Self::dump_textures`].
-    fn set_dump_request(&mut self, _effect_id: Option<EffectId>) {}
+    /// Request a dump (whole-graph Cmd+D or visible-only atlas) on the next
+    /// `render`, or clear it with `None`. Default no-op. See
+    /// [`DumpRequest`] and [`Self::dump_textures`].
+    fn set_dump_request(&mut self, _request: Option<DumpRequest>) {}
 
     /// After a `render` with a dump requested, every captured Texture2D output
     /// of the watched effect as `(node_id, port, type_id, texture)`. Default

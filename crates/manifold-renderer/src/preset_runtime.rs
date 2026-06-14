@@ -2250,10 +2250,56 @@ impl PresetRuntime {
     /// Enable one-shot "dump every output" mode iff this chain holds
     /// `dump_effect`; otherwise disable it. Call each frame with the requested
     /// effect (or `None`) so only the watched effect's chain pays the cost.
+    /// This is the Cmd+D disk dump (whole graph); the editor thumbnail atlas
+    /// uses [`Self::set_dump_visible`] instead (only the visible nodes).
     pub fn set_dump(&mut self, dump_effect: Option<&EffectId>) {
         let on =
             dump_effect.is_some_and(|eid| self.effect_nodes.iter().any(|s| &s.effect_id == eid));
         self.executor.set_dump_all(on);
+    }
+
+    /// Set (or clear) the continuous thumbnail-atlas dump for this chain —
+    /// record only the nodes the editor canvas can currently show, resolved
+    /// from their stable [`NodeId`]s to runtime instances via the owning slot's
+    /// `node_map`. A `visible` id that names a selected group resolves to its
+    /// primary-output producer via `group_preview_map`, mirroring
+    /// [`Self::set_preview_target`]. `effect_id` selects the owning effect slot;
+    /// pass `None` for a generator runtime (one graph, every slot eligible). A
+    /// chain that doesn't hold the requested effect clears its set, so only the
+    /// watched chain pays. Hidden / off-scope nodes are simply absent from the
+    /// set, so they keep memoization and their textures recycle (sub-changes
+    /// A + B).
+    pub fn set_dump_visible(&mut self, effect_id: Option<&EffectId>, visible: &[NodeId]) {
+        let mut set: ahash::AHashSet<NodeInstanceId> = ahash::AHashSet::new();
+        let mut matched = effect_id.is_none();
+        for slot in &self.effect_nodes {
+            if let Some(eid) = effect_id {
+                if &slot.effect_id != eid {
+                    continue;
+                }
+                matched = true;
+            }
+            for nid in visible {
+                if let Some((_, instance)) =
+                    slot.node_map.iter().find(|(mapped, _)| mapped == nid)
+                {
+                    set.insert(*instance);
+                } else if let Some((_, producer, _)) =
+                    slot.group_preview_map.iter().find(|(group, _, _)| group == nid)
+                    && let Some((_, instance)) =
+                        slot.node_map.iter().find(|(mapped, _)| mapped == producer)
+                {
+                    set.insert(*instance);
+                }
+            }
+        }
+        self.executor.set_dump_set(if matched { Some(set) } else { None });
+    }
+
+    /// Clear any thumbnail-atlas dump set on this chain (atlas off, or this
+    /// chain isn't the watched one).
+    pub fn clear_dump_set(&mut self) {
+        self.executor.set_dump_set(None);
     }
 
     /// After a `run` with dump mode on, every captured Texture2D output that

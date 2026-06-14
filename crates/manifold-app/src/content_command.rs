@@ -254,10 +254,13 @@ pub enum ContentCommand {
     /// flips the toggle under the preview.
     SetNodePreviewNormalize(bool),
 
-    /// Enable/disable per-node thumbnail capture into the editor's atlas. Sent
-    /// `true` while the graph editor is open (throttled), `false` when it closes,
-    /// so a live show pays nothing for it.
-    SetNodeAtlasEnabled(bool),
+    /// The nodes the editor canvas can currently show, for per-node thumbnail
+    /// capture into the atlas. Sent (deduped) while the graph editor is open —
+    /// changes only on scope descend/ascend or topology edits — and as an empty
+    /// vec when the editor closes. Only these nodes are captured, so hidden /
+    /// off-scope / collapsed-group nodes cost nothing; empty = atlas off, so a
+    /// live show pays nothing.
+    SetNodeAtlasVisible(Vec<manifold_core::NodeId>),
 
     /// Dump every node output of the currently-watched effect to a temp folder
     /// as 16-bit linear PNGs + a manifest, for visual inspection. One-shot;

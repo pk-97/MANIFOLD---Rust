@@ -119,14 +119,32 @@ pub struct Executor {
     /// Same for the previewed node's scalar OUTPUT ports — the live signal the
     /// node is producing (an LFO's current value, a math result).
     preview_scalar_outputs: Vec<(String, f32)>,
-    /// Authoring-time "dump every output" mode. When set, the executor
-    /// preserves ALL resources past the frame (skips every `free_after`) and
-    /// records each node's Texture2D outputs in [`dump_resources`], so the
+    /// Authoring-time "dump EVERY output" mode (the Cmd+D one-shot disk dump).
+    /// When set, every node's outputs are recorded in [`dump_resources`] so the
     /// host can read them all from one frame and write them to disk. One-shot,
-    /// off by default — costs nothing on the live path.
+    /// off by default — costs nothing on the live path. For the continuous
+    /// editor thumbnail atlas, prefer [`dump_set`] (records only the nodes the
+    /// canvas can show) instead of dumping the whole flattened graph.
     dump_all: bool,
+    /// Continuous "dump only THESE nodes" mode — the editor thumbnail atlas.
+    /// `Some(set)` records only the listed nodes (the canvas's currently-visible
+    /// scope), so a collapsed group or an off-scope subgraph costs nothing:
+    /// hidden nodes keep their memoization and their textures recycle through
+    /// the pool. `None` = atlas off. Coexists with [`dump_all`] via
+    /// [`should_dump`](Self::should_dump) (Cmd+D still dumps everything).
+    dump_set: Option<ahash::AHashSet<NodeInstanceId>>,
+    /// Resources recorded into the dump this frame, so the release loop can pin
+    /// exactly those past the frame (their slots must not be reacquired and
+    /// overwritten before the host reads them) and recycle everything else.
+    /// Populated by [`record_dump_outputs`](Self::record_dump_outputs), cleared
+    /// at frame start. Replaces the old "skip every free_after while dumping"
+    /// blanket pin — under [`dump_all`] this still pins every recorded output,
+    /// but under [`dump_set`] only the visible nodes' outputs are held.
+    dump_pinned_resources: ahash::AHashSet<ResourceId>,
     /// `(node, output_port, resource, texture)` for every Texture2D output
-    /// produced this frame while [`dump_all`] is set. Cleared and repopulated
+    /// recorded this frame by a node in the dump scope (see
+    /// [`should_dump`](Self::should_dump): all under `dump_all`, or only the
+    /// visible nodes under `dump_set`). Cleared and repopulated
     /// each frame. Read after `execute_frame_*` via [`dump_resources`].
     ///
     /// The texture is a clone (retain bump) captured at the moment the producer
@@ -259,6 +277,8 @@ impl Executor {
             preview_scalar_inputs: Vec::new(),
             preview_scalar_outputs: Vec::new(),
             dump_all: false,
+            dump_set: None,
+            dump_pinned_resources: ahash::AHashSet::new(),
             dump_resources: Vec::new(),
             dump_array_resources: Vec::new(),
             preview_debug_last: None,
@@ -292,21 +312,42 @@ impl Executor {
         self.profile_force_all_live = on;
     }
 
-    /// Enable/disable "dump every output" mode for the NEXT frame. When on,
-    /// the executor preserves every resource past the frame and records all
-    /// Texture2D outputs in [`dump_resources`](Self::dump_resources). One-shot:
-    /// the host turns it on, runs a frame, reads the textures, turns it off.
+    /// Enable/disable "dump EVERY output" mode for the NEXT frame (the Cmd+D
+    /// disk dump). When on, every node's Texture2D/Array outputs are recorded in
+    /// [`dump_resources`](Self::dump_resources) and each recorded resource is
+    /// held past the frame (pinned via [`dump_pinned_resources`], so its slot
+    /// isn't reacquired and overwritten before the host reads it). One-shot: the
+    /// host turns it on, runs a frame, reads the textures, turns it off. For the
+    /// continuous editor atlas use [`set_dump_set`](Self::set_dump_set) instead.
     pub fn set_dump_all(&mut self, on: bool) {
         self.dump_all = on;
     }
 
+    /// Set (or clear) the continuous thumbnail-atlas dump set — the nodes the
+    /// editor canvas can currently show. `Some(set)` records only those nodes;
+    /// `None` turns the atlas dump off. Coexists with [`set_dump_all`]; the
+    /// Cmd+D one-shot still dumps everything. Call per frame on the watched
+    /// chain (see `PresetRuntime::set_dump_visible`).
+    pub fn set_dump_set(&mut self, set: Option<ahash::AHashSet<NodeInstanceId>>) {
+        self.dump_set = set;
+    }
+
+    /// Whether `node`'s outputs should be recorded into the dump this frame:
+    /// everything under the Cmd+D `dump_all`, or only the listed nodes under
+    /// the atlas `dump_set`. False on the live path (both off).
+    fn should_dump(&self, node: NodeInstanceId) -> bool {
+        self.dump_all || self.dump_set.as_ref().is_some_and(|s| s.contains(&node))
+    }
+
     /// Record every Texture2D / Array output of `step` into the dump buffers,
     /// pinning each texture's identity NOW (before the end-of-frame feedback
-    /// swap rebinds slots — see [`dump_resources`](Self::dump_resources)).
-    /// Called both for steps that executed this frame and for steps that
-    /// skipped (memoized / data-skipped) but whose held output slots still
-    /// carry valid content, so a static subgraph keeps its zero-cost skip yet
-    /// still shows a current thumbnail. Caller gates on `self.dump_all`.
+    /// swap rebinds slots — see [`dump_resources`](Self::dump_resources)) and
+    /// marking each recorded resource in [`dump_pinned_resources`] so the
+    /// release loop holds it past the frame. Called both for steps that
+    /// executed this frame and for steps that skipped (memoized / data-skipped)
+    /// but whose held output slots still carry valid content, so a static
+    /// subgraph keeps its zero-cost skip yet still shows a current thumbnail.
+    /// Caller gates on [`should_dump`](Self::should_dump).
     fn record_dump_outputs(&mut self, plan: &ExecutionPlan, step: &ExecutionStep) {
         for &(port, res) in &step.outputs {
             match plan.resource_type(res) {
@@ -317,9 +358,11 @@ impl Executor {
                         .and_then(|s| self.backend.texture_2d(s))
                         .cloned();
                     self.dump_resources.push((step.node, port, res, tex));
+                    self.dump_pinned_resources.insert(res);
                 }
                 Some(crate::node_graph::ports::PortType::Array(_)) => {
                     self.dump_array_resources.push((step.node, port, res));
+                    self.dump_pinned_resources.insert(res);
                 }
                 _ => {}
             }
@@ -668,6 +711,7 @@ impl Executor {
         self.preview_scalar_outputs.clear();
         self.dump_resources.clear();
         self.dump_array_resources.clear();
+        self.dump_pinned_resources.clear();
         if self.profiling {
             self.step_profiles.clear();
         }
@@ -788,7 +832,7 @@ impl Executor {
                 // this skip (step_hoistable → is_pure), so the held slot is this
                 // frame's content — a stateful/feedback node, whose held slot can
                 // be the pre-swap buffer, never memo-skips.
-                if self.dump_all {
+                if self.should_dump(step.node) {
                     self.record_dump_outputs(plan, step);
                 }
                 continue;
@@ -842,7 +886,7 @@ impl Executor {
                         // start skipping. No explicit slot-bound check is needed
                         // — if one were somehow unbound, record_dump_outputs
                         // reads None (a blank cell), never a panic.
-                        if self.dump_all {
+                        if self.should_dump(step.node) {
                             self.record_dump_outputs(plan, step);
                         }
                         continue;
@@ -1158,12 +1202,11 @@ impl Executor {
                 }
             }
 
-            // Dump capture: record every Texture2D output of this step so the
-            // host can read them all after the frame (the release loop skips
-            // every release while dumping, so they all survive). The identity
-            // is pinned NOW, before the end-of-frame feedback swap rebinds
-            // slots — see record_dump_outputs / dump_resources.
-            if self.dump_all {
+            // Dump capture: record this step's Texture2D/Array outputs if it's
+            // in the dump scope (Cmd+D everything, or the atlas's visible set).
+            // The identity is pinned NOW, before the end-of-frame feedback swap
+            // rebinds slots — see record_dump_outputs / dump_resources.
+            if self.should_dump(step.node) {
                 self.record_dump_outputs(plan, step);
             }
 
@@ -1173,9 +1216,15 @@ impl Executor {
             // is held back so its texture survives for a post-frame read; it
             // returns to the pool next frame (re-resolved at the top).
             for &res_id in &step.free_after {
-                // Dump mode preserves everything for a one-frame read; preview
-                // preserves just the watched node's output.
-                if self.dump_all || self.preview_resource == Some(res_id) {
+                // A recorded dump output is held past the frame so the host can
+                // read it before its slot is reacquired and overwritten; the
+                // preview-captured resource the same. Everything else — hidden
+                // nodes' outputs under the atlas, and all non-dumped resources —
+                // recycles through the pool as normal. This is sub-change B: the
+                // atlas pins only what it shows, not the whole graph.
+                if self.dump_pinned_resources.contains(&res_id)
+                    || self.preview_resource == Some(res_id)
+                {
                     continue;
                 }
                 // Held (memo-latched) resources never appear in `free_after`
@@ -1795,6 +1844,49 @@ mod tests {
             exec.dump_resources().iter().any(|(n, _, _, _)| *n == producer),
             "memoized producer still recorded from its held slot"
         );
+    }
+
+    /// The atlas dump_set records ONLY the listed nodes. A hidden / off-scope
+    /// node (here `b`) is skipped entirely — the editor captures only what the
+    /// canvas can show. This is sub-change A: visible-set scoping.
+    #[test]
+    fn dump_set_records_only_listed_nodes() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut g = Graph::new();
+        let a = g.add_node(Box::new(RecordingNode::new(
+            "a",
+            vec![],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        let b = g.add_node(Box::new(RecordingNode::new(
+            "b",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        let c = g.add_node(Box::new(RecordingNode::new(
+            "c",
+            vec![input("in", PortType::Texture2D, true)],
+            vec![output("out", PortType::Texture2D)],
+            log.clone(),
+        )));
+        g.connect((a, "out"), (b, "in")).unwrap();
+        g.connect((b, "out"), (c, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let mut exec = Executor::with_mock();
+
+        // Only `a` is "visible" on the canvas.
+        exec.set_dump_set(Some([a].into_iter().collect()));
+        exec.execute_frame(&mut g, &plan, frame_time());
+        let nodes: Vec<_> = exec.dump_resources().iter().map(|(n, _, _, _)| *n).collect();
+        assert!(nodes.contains(&a), "listed node recorded");
+        assert!(!nodes.contains(&b), "unlisted (hidden) node NOT recorded");
+
+        // Clearing the set turns the atlas dump off entirely.
+        exec.set_dump_set(None);
+        exec.execute_frame(&mut g, &plan, frame_time());
+        assert!(exec.dump_resources().is_empty(), "no dump set, no records");
     }
 
     #[test]

@@ -237,10 +237,12 @@ pub struct ContentPipeline {
     /// IOSurface bridge for the node-output preview path.
     #[cfg(target_os = "macos")]
     node_preview_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
-    /// When set, capture every node output of the watched effect into the
+    /// The nodes the editor canvas can currently show — captured into the
     /// thumbnail atlas this frame. Set by the UI only while the graph editor is
-    /// open (throttled), so it costs nothing during a live show.
-    node_atlas_enabled: bool,
+    /// open; empty when closed, so a live show pays nothing. Only these nodes
+    /// are dumped, so hidden / off-scope / collapsed-group nodes cost nothing
+    /// (sub-change A).
+    node_atlas_visible: Vec<NodeId>,
     /// Triple-buffered IOSurface textures for the per-node thumbnail atlas — one
     /// big texture packed as an `ATLAS_GRID`×`ATLAS_GRID` cell grid, each cell a
     /// node's downscaled output. The canvas samples one cell per node.
@@ -403,7 +405,7 @@ impl ContentPipeline {
             node_preview_textures: [None, None, None],
             #[cfg(target_os = "macos")]
             node_preview_bridge: None,
-            node_atlas_enabled: false,
+            node_atlas_visible: Vec::new(),
             #[cfg(target_os = "macos")]
             node_atlas_textures: [None, None, None],
             #[cfg(target_os = "macos")]
@@ -879,10 +881,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.node_atlas_bridge = Some(bridge);
     }
 
-    /// Enable/disable per-node thumbnail capture into the atlas. The UI sets this
-    /// only while the graph editor is open (throttled), so a live show pays nothing.
-    pub fn set_node_atlas_enabled(&mut self, on: bool) {
-        self.node_atlas_enabled = on;
+    /// Set the nodes the editor canvas can currently show, for per-node
+    /// thumbnail capture. The UI sets this (deduped) only while the graph editor
+    /// is open, and an empty vec when it closes — so a live show pays nothing.
+    pub fn set_node_atlas_visible(&mut self, visible: Vec<NodeId>) {
+        self.node_atlas_visible = visible;
     }
 
     /// The `(node_id, cell_index)` layout from the last atlas capture.
@@ -1016,7 +1019,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.last_live_node_params.clear();
         // Whether a node-thumbnail capture block actually wrote the atlas this
         // frame. The triple-buffered atlas front is published ONLY when this is
-        // set — publishing on every `node_atlas_enabled` frame (even ones whose
+        // set — publishing on every atlas-on frame (even ones whose
         // dump came back empty during setup lag or while the watched layer
         // wasn't rendering) flips the UI to a freshly-cleared, all-transparent
         // surface + empty layout, which is the editor's "strobe to black".
@@ -1083,7 +1086,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         match &self.node_preview_generator {
                             Some((layer_id, node_id)) => {
                                 gen_renderer.set_preview_node(layer_id, node_id.as_ref());
-                                gen_renderer.set_dump(layer_id, self.node_atlas_enabled);
+                                gen_renderer.set_dump_visible(layer_id, &self.node_atlas_visible);
                             }
                             None => gen_renderer.clear_preview(),
                         }
@@ -1148,7 +1151,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             #[cfg(target_os = "macos")]
             {
                 let mut gen_layout: Option<Vec<(NodeId, u32)>> = None;
-                if self.node_atlas_enabled
+                if !self.node_atlas_visible.is_empty()
                     && let Some((layer_id, _)) = self.node_preview_generator.clone()
                     && let (Some(atlas), Some(raw), Some(sampler)) = (
                         self.node_atlas_textures[self.write_surface_index].as_ref(),
@@ -1319,16 +1322,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // output this frame. Cheap clone; `None` clears (no preview).
             self.compositor
                 .set_preview_request(self.node_preview_request.clone());
-            // Enable a dump on the watched effect's chain this frame — for the
-            // one-shot Cmd+D disk dump, or continuously while the thumbnail atlas
-            // is on (both read the same captured per-node textures).
-            let atlas_effect = if self.node_atlas_enabled {
-                self.node_preview_request.as_ref().map(|(e, _)| e.clone())
+            // Enable a dump on the watched effect's chain this frame. The Cmd+D
+            // one-shot dumps the whole graph; the thumbnail atlas dumps only the
+            // canvas's visible nodes. Cmd+D takes precedence when both are
+            // pending (both read the same captured per-node textures).
+            let dump_request = if let Some((eid, _)) = pending_dump.as_ref() {
+                Some(manifold_renderer::compositor::DumpRequest::All(eid.clone()))
+            } else if !self.node_atlas_visible.is_empty() {
+                self.node_preview_request.as_ref().map(|(e, _)| {
+                    manifold_renderer::compositor::DumpRequest::Visible(
+                        e.clone(),
+                        self.node_atlas_visible.clone(),
+                    )
+                })
             } else {
                 None
             };
-            self.compositor
-                .set_dump_request(pending_dump.as_ref().map(|(e, _)| e.clone()).or(atlas_effect));
+            self.compositor.set_dump_request(dump_request);
 
             let _compositor_tex = self.compositor.render(&mut gpu_comp, &frame);
         }
@@ -1469,7 +1479,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             #[cfg(target_os = "macos")]
             {
                 let mut eff_layout: Option<Vec<(NodeId, u32)>> = None;
-                if self.node_atlas_enabled
+                if !self.node_atlas_visible.is_empty()
                     && self.node_preview_request.is_some()
                     && let (Some(atlas), Some(raw), Some(sampler)) = (
                         self.node_atlas_textures[self.write_surface_index].as_ref(),

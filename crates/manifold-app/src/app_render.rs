@@ -2712,12 +2712,31 @@ impl Application {
             self.last_preview_node = preview_node;
         }
 
-        // Keep per-node thumbnail capture on while the editor is open (deduped).
-        if !self.node_atlas_enabled_sent {
+        // Send the canvas's currently-visible nodes (deduped) so the content
+        // thread captures thumbnails only for what's on screen — hidden /
+        // off-scope / collapsed-group nodes cost nothing. The set is the whole
+        // current scope level (what the atlas shows), so it changes only on a
+        // scope descend/ascend or a topology edit, not on pan/zoom.
+        let visible_nodes: Vec<manifold_core::NodeId> = match (
+            self.graph_canvas.as_ref(),
+            self.content_state.active_graph_snapshot.as_deref(),
+        ) {
+            (Some(canvas), Some(snap)) => {
+                let (nodes, _) =
+                    crate::graph_canvas::resolve_level(snap, canvas.scope_path())
+                        .unwrap_or((&snap.nodes, &snap.wires));
+                nodes
+                    .iter()
+                    .filter_map(crate::graph_canvas::node_preview_target)
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        if visible_nodes != self.last_atlas_visible_sent {
             self.send_content_cmd(
-                crate::content_command::ContentCommand::SetNodeAtlasEnabled(true),
+                crate::content_command::ContentCommand::SetNodeAtlasVisible(visible_nodes.clone()),
             );
-            self.node_atlas_enabled_sent = true;
+            self.last_atlas_visible_sent = visible_nodes;
         }
 
         let Some(gpu) = &self.gpu else { return };
