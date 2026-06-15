@@ -3901,8 +3901,11 @@ mod user_binding_tests {
         // Control: same effect, zoom = 0.3, identity binding → inner sees 0.3.
         let mut control = make_default(PresetTypeId::STYLIZED_FEEDBACK);
         control.param_values[1] = ParamSlot::exposed(0.3); // zoom is static slot 1
+        // Build unfused (pass the effect as the watched preview) so the inner
+        // affine node survives for inspection — region fusion would otherwise
+        // fold it into a single kernel and the handle would vanish.
         let mut cg0 =
-            PresetRuntime::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256, None, None)
+            PresetRuntime::try_build(std::slice::from_ref(&control), &[], &primitives, &device, None, 256, 256, Some(&control.id), None)
                 .expect("control chain builds");
         apply(&mut cg0, &control.param_values);
         let slot0 = &cg0.effect_nodes[0];
@@ -3924,7 +3927,7 @@ mod user_binding_tests {
         fx.graph_version = fx.graph_version.wrapping_add(1);
         fx.graph_structure_version = fx.graph_structure_version.wrapping_add(1);
         let mut cg =
-            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, None, None)
+            PresetRuntime::try_build(std::slice::from_ref(&fx), &[], &primitives, &device, None, 256, 256, Some(&fx.id), None)
                 .expect("reshaped chain builds");
         apply(&mut cg, &fx.param_values);
         let slot = &cg.effect_nodes[0];
@@ -4626,18 +4629,16 @@ mod generator_runtime_tests {
         let mut g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
             .expect("Lissajous preset must load");
 
+        // Address inner nodes by stable node_id (grouping prefixes handles,
+        // node_id survives the flatten the loader applies).
         let mux_x_id = g
             .graph
-            .handles()
-            .find(|(h, _)| *h == "mux_x")
-            .map(|(_, id)| id)
-            .expect("Lissajous declares a `mux_x` handle");
+            .instance_by_node_id(&manifold_core::NodeId::new("mux_x"))
+            .expect("Lissajous declares a `mux_x` node");
         let mux_y_id = g
             .graph
-            .handles()
-            .find(|(h, _)| *h == "mux_y")
-            .map(|(_, id)| id)
-            .expect("Lissajous declares a `mux_y` handle");
+            .instance_by_node_id(&manifold_core::NodeId::new("mux_y"))
+            .expect("Lissajous declares a `mux_y` node");
 
         g.apply_param_values(&[
             0.13, 0.09, 0.07, 0.002, 1.0, 1.0, 0.0, 1.0, 0.1, 1.0, 1.0,
@@ -5483,8 +5484,16 @@ mod chain_fusion_tests {
         let pc = ctx(w, h);
 
         // StylizedFeedback (node.feedback trail in the StateStore) followed
-        // by a ColorGrade — a realistic dial-in chain.
-        let fb = make_default(PresetTypeId::STYLIZED_FEEDBACK);
+        // by a ColorGrade — a realistic dial-in chain. Drive `rotate` so the
+        // feedback trail genuinely evolves frame-to-frame: at the default
+        // (zoom 0.95, rotate 0) a static self-similar gradient hits a
+        // fixed point in one frame, so the output would be frame-invariant
+        // and neither the harvest nor the sensitivity check would prove
+        // anything. Rotation makes the prev spiral, so frame 1 ≠ frame 9.
+        let mut fb = make_default(PresetTypeId::STYLIZED_FEEDBACK);
+        set_param(&mut fb, "amount", 1.0);
+        set_param(&mut fb, "rotate", 10.0);
+        set_param(&mut fb, "zoom", 0.9);
         let mut cg = make_default(PresetTypeId::COLOR_GRADE);
         set_param(&mut cg, "amount", 1.0);
         set_param(&mut cg, "gain", 1.1);

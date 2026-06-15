@@ -39,11 +39,25 @@ const PARTIAL_SHADERS: &[&str] = &[
     "fbm_per_instance.wgsl",
     "instance_position_jitter.wgsl",
     "instance_rotation_jitter.wgsl",
+    // Specialization templates whose missing symbols are injected at
+    // pipeline creation: `gaussian_blur_variable_width` has its
+    // QUALITY_LEVEL / WEIGHTING_MODE consts replaced by the preprocessor;
+    // `radial_burst_force_field` has `noise_common.wgsl` (→ `simplex3d`)
+    // prepended. The composed forms are validated at pipeline creation and
+    // exercised by the bundled-preset execute tests.
+    "gaussian_blur_variable_width.wgsl",
+    "radial_burst_force_field.wgsl",
 ];
 
 fn is_partial(path: &std::path::Path) -> bool {
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        PARTIAL_SHADERS.contains(&name)
+        // `*_body.wgsl` are `primitive!`-macro body fragments: the macro wraps
+        // them with the struct/uniform/helper preamble (`Element`,
+        // `BodyOutputs`, injected `simplex3d`, etc.) at pipeline creation, so
+        // they reference symbols that only exist post-composition and cannot
+        // validate standalone. The composed shader is validated when its
+        // pipeline is built and run by the execute-one-frame tests.
+        name.ends_with("_body.wgsl") || PARTIAL_SHADERS.contains(&name)
     } else {
         false
     }

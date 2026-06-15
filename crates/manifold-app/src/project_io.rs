@@ -7,7 +7,6 @@
 //!
 //! Unity's IProjectIOHost callback interface maps to return values —
 //! ProjectIOAction tells the caller (Application) what side-effects to apply.
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
@@ -96,6 +95,10 @@ pub struct ProjectIOAction {
     /// New project path to set as current (for window title, save, etc.).
     pub set_project_path: Option<PathBuf>,
     /// Flash the save button (visual feedback).
+    // Set by save paths; the UI flash that reads it is part of the Unity
+    // port not yet wired up. Scoped allow so the rest of this struct still
+    // trips dead-code.
+    #[allow(dead_code)]
     pub flash_save: bool,
     /// Commands to record in the undo stack.
     pub record_commands: Vec<Box<dyn Command>>,
@@ -129,6 +132,8 @@ impl ProjectIOService {
     }
 
     /// Unity ProjectIOService.LastOpenedProjectPath (line 49).
+    // Ported service method; its Application wrapper isn't wired yet.
+    #[allow(dead_code)]
     pub fn last_opened_project_path(&self) -> Option<&str> {
         self.last_opened_project_path.as_deref()
     }
@@ -270,6 +275,9 @@ impl ProjectIOService {
     // ── Save Project ────────────────────────────────────────────────
 
     /// Unity ProjectIOService.OnSaveProject (lines 175-194).
+    // Ported save path; the live save currently routes elsewhere. Kept for
+    // the in-progress port integration.
+    #[allow(dead_code)]
     pub fn save_project(
         &self,
         project: &mut Project,
@@ -629,6 +637,8 @@ impl ProjectIOService {
     }
 
     /// Process a project file drop (routes through shared open_project_from_path).
+    // Ported drop handler; its Application wrapper isn't wired yet.
+    #[allow(dead_code)]
     pub fn process_dropped_project_file(
         &mut self,
         path: &Path,

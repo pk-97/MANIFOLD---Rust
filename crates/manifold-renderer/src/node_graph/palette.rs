@@ -216,6 +216,7 @@ mod tests {
                 "Cycle Table Row",
                 "Envelope Decay",
                 "Envelope Follower (A/R)",
+                "Filter Detections",
                 "Frequency Ratio",
                 "Inject Burst",
                 "LFO",

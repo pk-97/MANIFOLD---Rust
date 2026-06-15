@@ -11,7 +11,6 @@
 //! Note: `io_surface` crate is deprecated in favor of `objc2-io-surface`.
 //! Migration planned but deferred — too risky for this pass.
 #![allow(deprecated)]
-#![allow(dead_code)]
 
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -212,6 +211,9 @@ impl SharedTextureBridge {
     /// Get the raw IOSurfaceRef pointer for a surface index.
     /// Used for direct CALayer display (zero-copy, pixel-perfect).
     /// The returned pointer is valid as long as no resize occurs.
+    // Direct-CALayer display path isn't wired to this accessor yet; scoped
+    // allow so the rest of the module still trips dead-code.
+    #[allow(dead_code)]
     pub fn raw_io_surface(&self, index: usize) -> *const std::ffi::c_void {
         let guard = self.io_surfaces.read();
         guard[index].as_concrete_TypeRef() as *const std::ffi::c_void

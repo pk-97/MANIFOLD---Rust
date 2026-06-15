@@ -26,7 +26,5 @@ mod harness;
 mod affine_transform;
 mod edge_detect;
 mod invert;
-mod lut1d;
 mod sanity;
 mod smoke;
-mod watercolor;

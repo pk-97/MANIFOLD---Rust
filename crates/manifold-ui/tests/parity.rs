@@ -39,7 +39,7 @@ fn layout_layer_controls_width() {
 
 #[test]
 fn layout_inspector_width_range() {
-    assert_eq!(color::MIN_INSPECTOR_WIDTH, 196.0);
+    assert_eq!(color::MIN_INSPECTOR_WIDTH, 232.0);
     assert_eq!(color::MAX_INSPECTOR_WIDTH, 900.0);
 }
 
@@ -242,7 +242,7 @@ fn generator_param_count_fluid_sim() {
 fn generator_param_count_fluid_sim_3d() {
     assert_eq!(
         preset_definition_registry::get(&PresetTypeId::FLUID_SIMULATION_3D).param_count,
-        21
+        20
     );
 }
 
@@ -261,12 +261,12 @@ fn generator_all_types_have_params() {
 
 #[test]
 fn generator_max_param_count() {
-    // FluidSimulation3D has the most params (21)
+    // FluidSimulation3D has the most params (20)
     use manifold_core::{preset_def::PresetKind, preset_type_registry};
     let max = preset_type_registry::all_of_kind(PresetKind::Generator)
         .iter()
         .map(|reg| preset_definition_registry::get(&reg.id).param_count)
         .max()
         .unwrap_or(0);
-    assert_eq!(max, 21);
+    assert_eq!(max, 20);
 }

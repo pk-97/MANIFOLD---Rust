@@ -2453,14 +2453,16 @@ fn render_generator_8_frames(
     target
 }
 
-/// Remove the `reset_trigger` wire feeding `seed_handle` — a `@reset_gated`
+/// Remove the `reset_trigger` wire feeding `seed_node_id` — a `@reset_gated`
 /// kernel with that input unwired runs every frame (the gate is inert). Used to
-/// build the "ungated" baseline for the seed-gate equivalence proofs.
-fn strip_reset_wire(def: &mut EffectGraphDef, seed_handle: &str) {
+/// build the "ungated" baseline for the seed-gate equivalence proofs. Addresses
+/// the node by stable `node_id` (the def must be flattened first — grouping
+/// nests the seed node and prefixes its handle, but `node_id` survives).
+fn strip_reset_wire(def: &mut EffectGraphDef, seed_node_id: &str) {
     let Some(id) = def
         .nodes
         .iter()
-        .find(|n| n.handle.as_deref() == Some(seed_handle))
+        .find(|n| n.node_id.as_str() == seed_node_id)
         .map(|n| n.id)
     else {
         return;
@@ -2484,11 +2486,15 @@ fn particletext_seed_gate_matches_ungated() {
         &manifold_core::PresetTypeId::new("ParticleText"),
     )
     .expect("ParticleText bundled");
-    let gated: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    // Flatten so the grouped seed node lifts to the top level; address it by
+    // stable node_id (grouping prefixes handles, node_id survives).
+    let gated: EffectGraphDef =
+        manifold_core::flatten::flatten_groups(&serde_json::from_str(&json).unwrap())
+            .expect("flattens");
     let seed_id = gated
         .nodes
         .iter()
-        .find(|n| n.handle.as_deref() == Some("seed_pattern"))
+        .find(|n| n.node_id.as_str() == "seed_pattern")
         .map(|n| n.id)
         .expect("seed_pattern node");
     assert!(
@@ -2687,7 +2693,7 @@ fn metallicglass_optional_input_fusion_matches_unfused() {
     let pick_unfused = |d: &EffectGraphDef| {
         d.nodes
             .iter()
-            .find(|n| n.handle.as_deref() == Some("edge_clamp"))
+            .find(|n| n.node_id.as_str() == "edge_clamp")
             .map(|n| n.id)
             .expect("edge_clamp present")
     };
@@ -2739,13 +2745,16 @@ fn particletext_fp32_flow_field_fused_matches_unfused() {
         &manifold_core::PresetTypeId::new("ParticleText"),
     )
     .expect("ParticleText bundled");
-    let mut def: EffectGraphDef = serde_json::from_str(&json).unwrap();
-    for handle in ["grad", "grad_scaled", "grad_rotate"] {
+    // Flatten so grouped nodes lift to the top level; address by stable node_id.
+    let mut def: EffectGraphDef =
+        manifold_core::flatten::flatten_groups(&serde_json::from_str(&json).unwrap())
+            .expect("flattens");
+    for node_id in ["grad", "grad_scaled", "grad_rotate"] {
         let node = def
             .nodes
             .iter_mut()
-            .find(|n| n.handle.as_deref() == Some(handle))
-            .unwrap_or_else(|| panic!("ParticleText carries node `{handle}`"));
+            .find(|n| n.node_id.as_str() == node_id)
+            .unwrap_or_else(|| panic!("ParticleText carries node `{node_id}`"));
         node.output_formats.insert("out".to_string(), "rgba32float".to_string());
     }
     // Shrink the particle pool ~80×: the flow-field region under test is
@@ -2763,10 +2772,10 @@ fn particletext_fp32_flow_field_fused_matches_unfused() {
         panic!("ParticleText fp32 flow field should fuse under tier-6 space propagation");
     };
     // Sanity: the flow-field pointwise pair actually folded away.
-    for handle in ["grad_scaled", "grad_rotate"] {
+    for node_id in ["grad_scaled", "grad_rotate"] {
         assert!(
-            !fused.nodes.iter().any(|n| n.handle.as_deref() == Some(handle)),
-            "`{handle}` should be fused away"
+            !fused.nodes.iter().any(|n| n.node_id.as_str() == node_id),
+            "`{node_id}` should be fused away"
         );
     }
 
@@ -2778,7 +2787,7 @@ fn particletext_fp32_flow_field_fused_matches_unfused() {
     let by_unfused = |d: &EffectGraphDef| {
         d.nodes
             .iter()
-            .find(|n| n.handle.as_deref() == Some("grad_rotate"))
+            .find(|n| n.node_id.as_str() == "grad_rotate")
             .map(|n| n.id)
             .expect("grad_rotate")
     };
@@ -3486,11 +3495,15 @@ fn fluidsim3d_seed_gate_matches_ungated() {
         &manifold_core::PresetTypeId::new("FluidSimulation3D"),
     )
     .expect("FluidSimulation3D bundled");
-    let gated: EffectGraphDef = serde_json::from_str(&json).unwrap();
+    // Flatten so the grouped seed node lifts to the top level; address it by
+    // stable node_id (grouping prefixes handles, node_id survives).
+    let gated: EffectGraphDef =
+        manifold_core::flatten::flatten_groups(&serde_json::from_str(&json).unwrap())
+            .expect("flattens");
     let seed_id = gated
         .nodes
         .iter()
-        .find(|n| n.handle.as_deref() == Some("seed_pattern"))
+        .find(|n| n.node_id.as_str() == "seed_pattern")
         .map(|n| n.id)
         .expect("seed_pattern node");
     assert!(

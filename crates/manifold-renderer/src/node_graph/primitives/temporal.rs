@@ -109,6 +109,13 @@ struct FeedbackState {
     swap: bool,
     width: u32,
     height: u32,
+    /// Set by `run` on the frame it (re)allocates the persistent slot from
+    /// the seed. `late_capture` honours it by skipping its capture/swap for
+    /// that one frame — otherwise it would snapshot the pre-producer `in`
+    /// slot (stale / black) over the seed we just installed, turning a
+    /// seeded chain into a seed↔zero oscillation. Cleared after the skip so
+    /// the next frame captures normally.
+    just_allocated: bool,
 }
 
 impl NodeState for FeedbackState {}
@@ -230,7 +237,11 @@ impl Primitive for Feedback {
                 state_format,
                 &mut self.cross_format_copy_fp32,
             );
-            store.insert(node_id, owner_key, FeedbackState { swap, width, height });
+            store.insert(
+                node_id,
+                owner_key,
+                FeedbackState { swap, width, height, just_allocated: true },
+            );
         }
 
         // Reset-on-trigger: if `reset_trigger` is wired and its
@@ -282,15 +293,23 @@ impl Primitive for Feedback {
         // If `run` short-circuited before allocating state (zero-dim
         // out_tex), there's nothing to capture into yet. Pull the mode +
         // dims out and release the state borrow before touching ctx again.
-        let Some((swap, width, height)) = ctx
+        let store = ctx
             .state
             .as_deref_mut()
-            .expect("Feedback::late_capture requires a StateStore")
-            .get::<FeedbackState>(node_id, owner_key)
-            .map(|s| (s.swap, s.width, s.height))
-        else {
+            .expect("Feedback::late_capture requires a StateStore");
+        let Some(state) = store.get::<FeedbackState>(node_id, owner_key) else {
             return;
         };
+        let (swap, width, height) = (state.swap, state.width, state.height);
+        // Skip the capture on the frame `run` (re)seeded from `seed`: the
+        // persistent `out`/state already holds the seed, and `in` at this
+        // point is the pre-producer (stale / black) slot. Capturing it would
+        // clobber the seed and collapse the bootstrap into a seed↔zero
+        // flicker. Re-arm for normal capture next frame.
+        if state.just_allocated {
+            state.just_allocated = false;
+            return;
+        }
 
         if swap {
             // Zero-copy: swap the persistent `out` and back-edge slots'
