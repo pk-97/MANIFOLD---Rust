@@ -489,6 +489,7 @@ pub struct RemovedExposure {
     drivers: Vec<ParameterDriver>,
     ableton_mappings: Vec<crate::ableton_mapping::AbletonParamMapping>,
     envelopes: Vec<ParamEnvelope>,
+    audio_mods: Vec<crate::audio_mod::ParameterAudioMod>,
 }
 
 impl Serialize for ParamSlot {
@@ -630,6 +631,11 @@ pub struct PresetInstance {
     /// instance the envelope sits on is the target). `None` when unused.
     pub envelopes: Option<Vec<ParamEnvelope>>,
     pub ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
+    /// Per-instance audio modulations, keyed by `param_id`. The fourth
+    /// modulation source, parallel to `drivers`/`envelopes`/`ableton_mappings`:
+    /// drives a param from a named audio send. `None` when unused. See
+    /// `docs/AUDIO_MODULATION_DESIGN.md`.
+    pub audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
     pub group_id: Option<EffectGroupId>,
 
     /// Per-instance graph topology override. `None` means "use the
@@ -1149,6 +1155,9 @@ impl Serialize for PresetInstance {
         if self.ableton_mappings.is_some() {
             field_count += 1;
         }
+        if self.audio_mods.is_some() {
+            field_count += 1;
+        }
         if self.group_id.is_some() {
             field_count += 1;
         }
@@ -1211,6 +1220,9 @@ impl Serialize for PresetInstance {
         if let Some(m) = &self.ableton_mappings {
             s.serialize_field("abletonMappings", m)?;
         }
+        if let Some(a) = &self.audio_mods {
+            s.serialize_field("audioMods", a)?;
+        }
         if let Some(g) = &self.group_id {
             s.serialize_field("groupId", g)?;
         }
@@ -1259,6 +1271,9 @@ impl PresetInstance {
         if self.ableton_mappings.is_some() {
             field_count += 1;
         }
+        if self.audio_mods.is_some() {
+            field_count += 1;
+        }
         if self.graph.is_some() {
             field_count += 1;
         }
@@ -1293,6 +1308,9 @@ impl PresetInstance {
         }
         if let Some(m) = &self.ableton_mappings {
             s.serialize_field("abletonMappings", m)?;
+        }
+        if let Some(a) = &self.audio_mods {
+            s.serialize_field("audioMods", a)?;
         }
         if let Some(g) = &self.graph {
             s.serialize_field("graph", g)?;
@@ -1405,6 +1423,8 @@ impl<'de> Deserialize<'de> for PresetInstance {
             #[serde(default)]
             ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
             #[serde(default)]
+            audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
+            #[serde(default)]
             group_id: Option<EffectGroupId>,
             #[serde(default)]
             graph: Option<EffectGraphDef>,
@@ -1479,6 +1499,7 @@ impl<'de> Deserialize<'de> for PresetInstance {
             drivers: raw.drivers,
             envelopes: raw.envelopes,
             ableton_mappings: raw.ableton_mappings,
+            audio_mods: raw.audio_mods,
             group_id: raw.group_id,
             graph: raw.graph,
             graph_version: 0,
@@ -1513,6 +1534,8 @@ struct GeneratorInstanceRaw {
     envelopes: Option<Vec<ParamEnvelope>>,
     #[serde(default)]
     ableton_mappings: Option<Vec<crate::ableton_mapping::AbletonParamMapping>>,
+    #[serde(default)]
+    audio_mods: Option<Vec<crate::audio_mod::ParameterAudioMod>>,
     /// The generator's per-instance graph override. Lives on the generator
     /// `PresetInstance` now (graph-home unification) exactly like an effect's
     /// `graph`; older projects carried it on the layer (`generatorGraph`) and
@@ -1550,6 +1573,7 @@ impl GeneratorInstanceRaw {
             drivers: self.drivers,
             envelopes: self.envelopes,
             ableton_mappings: self.ableton_mappings,
+            audio_mods: self.audio_mods,
             group_id: None,
             graph: self.graph,
             graph_version: 0,
@@ -1647,6 +1671,7 @@ impl PresetInstance {
             drivers: None,
             envelopes: None,
             ableton_mappings: None,
+            audio_mods: None,
             group_id: None,
             graph: None,
             graph_version: 0,
@@ -1674,6 +1699,7 @@ impl PresetInstance {
             drivers: None,
             envelopes: None,
             ableton_mappings: None,
+            audio_mods: None,
             group_id: None,
             graph: None,
             graph_version: 0,
@@ -2490,6 +2516,13 @@ impl PresetInstance {
                 .filter(|e| e.param_id == id)
                 .cloned()
                 .collect();
+            let audio_mods = self
+                .audio_mods
+                .iter()
+                .flatten()
+                .filter(|a| a.param_id == id)
+                .cloned()
+                .collect();
             captured.push(RemovedExposure {
                 meta_param_index,
                 value_index,
@@ -2500,6 +2533,7 @@ impl PresetInstance {
                 drivers,
                 ableton_mappings,
                 envelopes,
+                audio_mods,
             });
         }
         if captured.is_empty() {
@@ -2536,6 +2570,7 @@ impl PresetInstance {
         prune_automation_by_ids(&mut self.drivers, &ids, |d| &*d.param_id);
         prune_automation_by_ids(&mut self.ableton_mappings, &ids, |m| &*m.param_id);
         prune_automation_by_ids(&mut self.envelopes, &ids, |e| &*e.param_id);
+        prune_automation_by_ids(&mut self.audio_mods, &ids, |a| &*a.param_id);
         captured
     }
 
@@ -2592,6 +2627,11 @@ impl PresetInstance {
                     .get_or_insert_with(Vec::new)
                     .extend(r.envelopes.iter().cloned());
             }
+            if !r.audio_mods.is_empty() {
+                self.audio_mods
+                    .get_or_insert_with(Vec::new)
+                    .extend(r.audio_mods.iter().cloned());
+            }
         }
     }
 
@@ -2618,6 +2658,11 @@ impl PresetInstance {
                 orphans.insert(e.param_id.to_string());
             }
         }
+        for a in self.audio_mods.iter().flatten() {
+            if self.param_id_to_value_index(&a.param_id).is_none() {
+                orphans.insert(a.param_id.to_string());
+            }
+        }
         if orphans.is_empty() {
             return RemovedAutomation::default();
         }
@@ -2627,6 +2672,7 @@ impl PresetInstance {
                 &m.param_id
             }),
             envelopes: take_automation_by_ids(&mut self.envelopes, &orphans, |e| &e.param_id),
+            audio_mods: take_automation_by_ids(&mut self.audio_mods, &orphans, |a| &a.param_id),
         }
     }
 
@@ -2647,6 +2693,11 @@ impl PresetInstance {
                 .get_or_insert_with(Vec::new)
                 .extend(removed.envelopes);
         }
+        if !removed.audio_mods.is_empty() {
+            self.audio_mods
+                .get_or_insert_with(Vec::new)
+                .extend(removed.audio_mods);
+        }
     }
 
     /// Get the drivers list, creating it if None.
@@ -2656,11 +2707,32 @@ impl PresetInstance {
         }
         self.drivers.as_mut().unwrap()
     }
+
+    /// Get the audio-mods list, creating it if None.
+    pub fn audio_mods_mut(&mut self) -> &mut Vec<crate::audio_mod::ParameterAudioMod> {
+        if self.audio_mods.is_none() {
+            self.audio_mods = Some(Vec::new());
+        }
+        self.audio_mods.as_mut().unwrap()
+    }
+
+    /// Find the audio modulation for a given param id, if any.
+    pub fn find_audio_mod(&self, param_id: &str) -> Option<&crate::audio_mod::ParameterAudioMod> {
+        self.audio_mods
+            .as_ref()
+            .and_then(|v| v.iter().find(|a| a.param_id == param_id))
+    }
+
+    /// True if this instance carries any audio modulation.
+    pub fn has_audio_mods(&self) -> bool {
+        self.audio_mods.as_ref().is_some_and(|v| !v.is_empty())
+    }
 }
 
 /// Drop every element of an optional automation list whose key is in `ids`,
-/// collapsing the list to `None` when it empties. Shared by the three
-/// per-instance automation homes (drivers / Ableton mappings / envelopes).
+/// collapsing the list to `None` when it empties. Shared by the four
+/// per-instance automation homes (drivers / Ableton mappings / envelopes /
+/// audio mods).
 fn prune_automation_by_ids<T>(
     opt: &mut Option<Vec<T>>,
     ids: &std::collections::HashSet<&str>,
@@ -2707,6 +2779,7 @@ pub struct RemovedAutomation {
     drivers: Vec<ParameterDriver>,
     ableton_mappings: Vec<crate::ableton_mapping::AbletonParamMapping>,
     envelopes: Vec<ParamEnvelope>,
+    audio_mods: Vec<crate::audio_mod::ParameterAudioMod>,
 }
 
 /// Implement ParamSource for PresetInstance.
@@ -3828,6 +3901,7 @@ mod tests {
             drivers: None,
             envelopes: None,
             ableton_mappings: None,
+            audio_mods: None,
             group_id: None,
             graph: None,
             graph_version: 0,
@@ -3891,6 +3965,7 @@ mod tests {
             drivers: None,
             envelopes: None,
             ableton_mappings: None,
+            audio_mods: None,
             group_id: None,
             graph: None,
             graph_version: 0,

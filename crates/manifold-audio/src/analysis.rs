@@ -30,6 +30,10 @@
 //! Only **band energy** (3 perceptual bands) today. The frame struct and worker
 //! are built around a feature *seam*: adding onset/pitch later is a new field on
 //! [`SendFeatures`] plus an extractor in the worker loop — no plumbing change.
+//!
+//! [`SendFeatures`] is defined in `manifold-core` (the modulation evaluator
+//! reads it without depending on this audio/CoreAudio stack); the worker fills
+//! it here.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,6 +44,8 @@ use ringbuf::HeapRb;
 use ringbuf::traits::{Consumer as ConsumerTrait, Observer as ObserverTrait, Producer as ProducerTrait, Split};
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
+
+pub use manifold_core::audio_features::SendFeatures;
 
 use crate::capture::AudioConsumer;
 
@@ -76,17 +82,6 @@ impl Default for SendSpec {
     fn default() -> Self {
         Self { channels: Vec::new(), gain_db: 0.0 }
     }
-}
-
-/// Extracted features for one send in one frame. v1 carries band energy only;
-/// new features (onset, pitch_hz, pitch_delta_st, pitch_confidence) become new
-/// fields here without touching the worker/reader plumbing.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SendFeatures {
-    /// Relative energy in [low, mid, high] bands. Amplitude-like (RMS of the
-    /// windowed band magnitude), **pre-shaping** — the modulation layer's
-    /// range/curve/attack-release maps this to a slider. Not normalized to 0–1.
-    pub band_energy: [f32; 3],
 }
 
 /// A snapshot of every send's features at one analysis instant. `Copy` and

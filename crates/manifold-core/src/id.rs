@@ -45,6 +45,16 @@ pub struct MarkerId(Arc<str>);
 #[serde(transparent)]
 pub struct NodeId(Arc<str>);
 
+/// Audio send identifier — wraps a short UUID string. Minted when a send is
+/// created in the project's `AudioSetup` and **stable for the life of the
+/// send**: relabeling or re-routing the send does not change it. This is the
+/// identity an `AudioModSource` on a slider stores, so a slider keeps tracking
+/// its send regardless of label or channel changes. See
+/// `docs/AUDIO_MODULATION_DESIGN.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AudioSendId(Arc<str>);
+
 // ── Macro for shared impls ──
 
 macro_rules! impl_id_type {
@@ -150,6 +160,7 @@ impl_id_type!(EffectGroupId);
 impl_id_type!(EffectId);
 impl_id_type!(MarkerId);
 impl_id_type!(NodeId);
+impl_id_type!(AudioSendId);
 
 #[cfg(test)]
 mod tests {

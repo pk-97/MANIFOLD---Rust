@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod ableton_mapping;
+pub mod audio_features;
+pub mod audio_mod;
+pub mod audio_setup;
 pub mod clip;
 pub mod color;
 pub mod effect_graph_def;
@@ -39,7 +42,10 @@ pub use color::Color;
 pub use effects::{EffectContainer, ParamSource};
 pub use graph_target::GraphTarget;
 pub use preset_type_id::PresetTypeId;
-pub use id::{ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
+pub use audio_features::{AudioFeatureSnapshot, SendFeatures};
+pub use audio_mod::{AudioBand, AudioFeature, AudioModShape, AudioModSource, ParameterAudioMod};
+pub use audio_setup::{AudioSend, AudioSetup, SendAnalysisConfig};
+pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
 pub use layer::OverlapAction;
 pub use macro_bank::{
     MACRO_COUNT, MacroBank, MacroCurve, MacroMapping, MacroMappingTarget, MacroSlot,

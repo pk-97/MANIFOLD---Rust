@@ -49,6 +49,12 @@ pub struct Project {
     pub video_library: VideoLibrary,
     #[serde(default, rename = "midiConfig")]
     pub midi_config: MidiMappingConfig,
+    /// Audio input routing + named sends for audio modulation. Parallel to
+    /// `midi_config`. Skipped on serialize when empty so projects that never
+    /// configured audio round-trip byte-identically. See
+    /// `docs/AUDIO_MODULATION_DESIGN.md`.
+    #[serde(default, skip_serializing_if = "crate::audio_setup::AudioSetup::is_empty")]
+    pub audio_setup: crate::audio_setup::AudioSetup,
     #[serde(default)]
     pub settings: ProjectSettings,
     #[serde(default)]
@@ -930,6 +936,38 @@ impl Project {
         None
     }
 
+    /// Whether any enabled audio modulation exists anywhere in the project —
+    /// the gate the content thread uses to decide whether to run audio capture
+    /// at all. Walks master effects, every layer's effects and clip effects,
+    /// and every layer's generator instance. Cheap (most instances carry no
+    /// audio mods, short-circuiting on the `Option`).
+    pub fn has_active_audio_mods(&self) -> bool {
+        fn inst_has(fx: &crate::effects::PresetInstance) -> bool {
+            fx.audio_mods
+                .as_ref()
+                .is_some_and(|v| v.iter().any(|a| a.enabled))
+        }
+        if self.settings.master_effects.iter().any(inst_has) {
+            return true;
+        }
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref()
+                && effects.iter().any(inst_has)
+            {
+                return true;
+            }
+            for clip in &layer.clips {
+                if clip.effects.iter().any(inst_has) {
+                    return true;
+                }
+            }
+            if layer.gen_params().is_some_and(inst_has) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Run `f` against the [`crate::effects::PresetInstance`] that a
     /// [`crate::graph_target::GraphTarget`] resolves to, returning its
     /// result (`None` if the target doesn't resolve). The one entry point
@@ -1187,6 +1225,7 @@ impl Default for Project {
             timeline: Timeline::default(),
             video_library: VideoLibrary::default(),
             midi_config: MidiMappingConfig::default(),
+            audio_setup: crate::audio_setup::AudioSetup::default(),
             settings: ProjectSettings::default(),
             tempo_map: TempoMap::default(),
             recording_provenance: RecordingProvenance::default(),
