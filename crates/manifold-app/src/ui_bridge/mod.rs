@@ -184,6 +184,12 @@ pub fn dispatch(
         | PanelAction::AudioModSetSource(..)
         | PanelAction::AudioModRemove(..)
         | PanelAction::AudioModNewSend(..)
+        | PanelAction::AudioSetDevice(..)
+        | PanelAction::AudioAddSend
+        | PanelAction::AudioRemoveSend(..)
+        | PanelAction::AudioRenameSend(..)
+        | PanelAction::AudioSetSendChannels(..)
+        | PanelAction::AudioSetSendGain(..)
         | PanelAction::TrimChanged(..)
         | PanelAction::TargetChanged(..)
         | PanelAction::TrimSnapshot(..)

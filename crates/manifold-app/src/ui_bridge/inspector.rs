@@ -14,6 +14,10 @@ use manifold_editing::commands::audio_mod::{
     AddAudioModCommand, RemoveAudioModCommand, SetAudioModSourceCommand,
     ToggleAudioModEnabledCommand,
 };
+use manifold_editing::commands::audio_setup::{
+    AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand,
+    SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendGainCommand,
+};
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
     ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
@@ -267,6 +271,22 @@ fn preset_source_def(
     // makes the def reproduce them on a later add/import/load.
     inst.snapshot_values_into_def(&mut def);
     Some((def, preset_id))
+}
+
+/// Apply a project-level audio-setup command locally and forward it to the
+/// content thread. The shared tail for every Audio Setup action (they all
+/// mutate `project.audio_setup` and need no target resolution).
+fn audio_setup_command(
+    project: &mut Project,
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    mut cmd: Box<dyn manifold_editing::command::Command + Send>,
+) -> DispatchResult {
+    cmd.execute(project);
+    crate::content_command::ContentCommand::send(
+        content_tx,
+        crate::content_command::ContentCommand::Execute(cmd),
+    );
+    DispatchResult::structural()
 }
 
 pub(super) fn dispatch_inspector(
@@ -1153,6 +1173,64 @@ pub(super) fn dispatch_inspector(
             boxed.execute(project);
             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
+        }
+
+        // ── Audio Setup (project-level send routing) ──────────────
+        PanelAction::AudioSetDevice(name) => {
+            let old = project.audio_setup.device_name.clone();
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioInputDeviceCommand::new(old, name.clone())),
+            )
+        }
+        PanelAction::AudioAddSend => {
+            let send = manifold_core::audio_setup::AudioSend::new(format!(
+                "Audio {}",
+                project.audio_setup.sends.len() + 1
+            ));
+            audio_setup_command(project, content_tx, Box::new(AddAudioSendCommand::new(send)))
+        }
+        PanelAction::AudioRemoveSend(id) => audio_setup_command(
+            project,
+            content_tx,
+            Box::new(RemoveAudioSendCommand::new(id.clone())),
+        ),
+        PanelAction::AudioRenameSend(id, label) => {
+            let old = project
+                .audio_setup
+                .find_send(id)
+                .map(|s| s.label.clone())
+                .unwrap_or_default();
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(RenameAudioSendCommand::new(id.clone(), old, label.clone())),
+            )
+        }
+        PanelAction::AudioSetSendChannels(id, ch) => {
+            let old = project
+                .audio_setup
+                .find_send(id)
+                .map(|s| s.channels.clone())
+                .unwrap_or_default();
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioSendChannelsCommand::new(id.clone(), old, ch.clone())),
+            )
+        }
+        PanelAction::AudioSetSendGain(id, g) => {
+            let old = project
+                .audio_setup
+                .find_send(id)
+                .map(|s| s.gain_db)
+                .unwrap_or(0.0);
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioSendGainCommand::new(id.clone(), old, *g)),
+            )
         }
         PanelAction::EnvelopeToggle(gpt, param_id) => {
             // Envelope-home unification: the envelope rides on the resolved

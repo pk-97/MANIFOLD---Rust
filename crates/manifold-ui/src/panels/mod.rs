@@ -218,6 +218,20 @@ pub enum PanelAction {
     /// Create a new audio send (default routing) and point this param's audio
     /// modulation at it — the "＋" in the drawer's send selector.
     AudioModNewSend(GraphParamTarget, manifold_core::effects::ParamId),
+
+    // ── Audio Setup panel (project-level send routing) ──
+    /// Set (or clear) the capture input device.
+    AudioSetDevice(Option<String>),
+    /// Add a new empty send.
+    AudioAddSend,
+    /// Remove a send by id.
+    AudioRemoveSend(manifold_core::AudioSendId),
+    /// Rename a send.
+    AudioRenameSend(manifold_core::AudioSendId, String),
+    /// Set a send's input channels (downmixed to mono for analysis).
+    AudioSetSendChannels(manifold_core::AudioSendId, Vec<u16>),
+    /// Set a send's gain trim (dB).
+    AudioSetSendGain(manifold_core::AudioSendId, f32),
     TrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
     /// Snapshot trim state before drag (for undo).
     TrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
