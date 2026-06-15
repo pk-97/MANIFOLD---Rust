@@ -198,13 +198,41 @@ Separate from the per-slider drawer, a central **Audio Setup** panel edits the `
 
 The earlier `mapping_popover` "no text field on this surface" note is specific to the immediate-mode graph canvas and does not apply here — `UITree` panels have full text editing.
 
+### 10.2 Drawer API — abstract before adding the fourth drawer (decided 2026-06-15)
+
+The per-slider audio drawer is **not** built as a fourth hand-rolled copy of the driver/envelope/Ableton machinery. Each existing drawer today re-implements id allocation, layout math, hit-testing, draw, a `RowClick` variant, and the effect-vs-generator action fork (in `param_slider_shared.rs` + the 3112-line `param_card.rs`). A fourth copy is the wrong direction, and an API only the audio drawer uses (leaving three bespoke) is worse — five patterns.
+
+**Design.** A drawer is a declarative list of controls under a slider. Every control in the three existing drawers is one of a small set:
+- **Segmented** — N buttons, one active (driver beat-div grid, waveform grid)
+- **Toggle** — (reverse / dot / triplet / Ableton invert)
+- **Slider** — (envelope decay; audio attack / release / range / sensitivity)
+- **Dropdown** — dynamic option list (new: the audio send picker)
+
+```rust
+enum DrawerControl { Segmented{labels, selected}, Toggle{on}, Slider{range, value}, Dropdown{options, selected} }
+struct DrawerSpec { rows: Vec<Vec<DrawerControl>> }
+// builder: DrawerSpec -> UITree nodes + laid-out rects (the UITree-coupled part)
+// hit-test: click -> (row, control_index, sub-value)  (pure, unit-testable)
+```
+
+The drawer owns layout + hit-testing generically; the caller maps `(control_index, value)` onto a `ParameterAudioMod` / driver / envelope edit. This collapses `DriverConfigIds` / `EnvelopeConfigIds` / `AbletonConfigIds` and the parallel `ParamModState` vectors into one mechanism; the audio drawer is then just another `DrawerSpec`.
+
+**Sequence (each step compiles and is independently verifiable):**
+1. Drawer API core: control specs → layout → hit-test, with unit tests. New module, no regression risk.
+2. Migrate **envelope** (one slider — simplest) onto it as proof.
+3. Migrate **Ableton** (status + invert toggle).
+4. Migrate **driver** (the segmented grids — hardest).
+5. Audio drawer as a `DrawerSpec` (send Dropdown + feature Segmented/Dropdown + shaping Sliders), wired through the unified action path.
+
+Pixel-identical render of the migrated driver/envelope drawers must be confirmed with the app running (the layout/hit-test core is unit-tested, but the UITree/scissor integration is not).
+
 ## 11. Build order
 
 1. **Analysis core (manifold-audio, isolated + unit-testable).** A `FeatureFrame` (keyed by send), an `AudioFeatureWorker` that takes the ring consumer + a send→channel map, drains blocks, downmixes per send, computes band energy, and publishes latest-wins frames through a second `ringbuf` SPSC channel. Touches no app/recording/GPU code; tested with synthetic samples. This is the foundation and the first commit.
 2. **Audio Setup model.** `AudioSetup` / `AudioSend` / `AudioSendId` / `SendAnalysisConfig` on the project; serialization; missing-device load policy; `EditingService` commands to add/label/route/delete sends.
 3. **Capture lifecycle.** `ContentPipeline` owns the always-on capture device + worker, gated on (sends exist ∧ a slider references one), configured from `AudioSetup`. Content-thread reads latest frame each tick — temporary log to prove frames arrive end-to-end.
 4. **Modulation model + evaluation.** `ParameterAudioMod` / `AudioModSource` / `AudioModShape` / `AudioFeature` on `PresetInstance`; content-thread evaluation writing effective values; serialization + legacy/orphan policy; `EditingService` command.
-5. **UI.** Audio Setup panel (§10.1), then the per-slider drawer (§10) with send + shape rows and a live meter.
+5. **UI.** First the **drawer API** (§10.2) — build the abstraction + migrate the three existing drawers onto it — then the per-slider audio drawer as a `DrawerSpec`, plus the Audio Setup panel (§10.1). Building the audio drawer before the abstraction would mean a fourth duplicate of the drawer machinery, so the API comes first.
 6. **Onset feature.** Add the onset extractor and `Onset` feature; exercise trigger-style mapping.
 7. **(v2) Ridge tracker.** Port synchrosqueezing into a per-send pitch extractor producing `pitch_hz` / `pitch_delta_st` / `pitch_confidence`, gated by `SendAnalysisConfig`; add the features to the enum and drawer. No changes to the model or UI plumbing — that is the point of the seam.
 
