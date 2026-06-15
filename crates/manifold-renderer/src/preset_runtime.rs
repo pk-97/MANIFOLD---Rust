@@ -1195,7 +1195,6 @@ impl PresetRuntime {
             let effective_def: &EffectGraphDef = fx.graph.as_ref().unwrap_or(base_view.canonical_def);
             let fused_view: Option<&LoadedPresetView> =
                 if crate::node_graph::freeze::install::should_render_fused(
-                    crate::node_graph::freeze::install::FuseTarget::Effect(fx.effect_type()),
                     preview_effect == Some(&fx.id),
                 ) {
                     crate::node_graph::freeze::install::fused_view_for(effective_def, base_view)

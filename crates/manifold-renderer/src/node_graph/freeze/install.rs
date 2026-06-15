@@ -82,44 +82,30 @@ pub fn freeze_enabled() -> bool {
     })
 }
 
-/// Which kind of card the fusion gate is being asked about. Carries the type
-/// id so [`should_render_fused`] can consult the matching per-device perf
-/// verdict — `should_fuse` for effects, `should_fuse_generator` for generators.
-pub enum FuseTarget<'a> {
-    Effect(&'a PresetTypeId),
-    Generator(&'a PresetTypeId),
-}
-
 /// The single home for the "should we attempt to fuse this card?" decision,
 /// shared by the effect chain build ([`crate::effect_chain_graph`]) and the
 /// generator registry ([`crate::generators::registry`]). Folding it here keeps
 /// the watched-target override from drifting into a third copy.
 ///
-/// The decision is: fuse only when fusion is enabled this process, the card
-/// isn't the *watched* target (open in the graph editor — kept unfused so
-/// per-node output preview can sample inner-node textures and edits render
-/// live), and the device's perf gate kept the fused kernel for this type.
+/// The decision is structural, not measured: fuse whenever fusion is enabled
+/// this process and the card isn't the *watched* target (open in the graph
+/// editor — kept unfused so per-node output preview can sample inner-node
+/// textures and edits render live). *Which* atoms actually fuse is then decided
+/// entirely by the region partition ([`super::region::partition_regions`], gated
+/// on `MIN_REGION_LEN`): a card with no fusable region simply gets `None` back
+/// from [`fused_view_for`] and renders unfused. There is no per-device GPU
+/// timing — the partition's structure (chains of ≥2 pointwise atoms collapse,
+/// gathers/boundaries cut) is the cost model, so the decision is instant,
+/// deterministic, and resolution-independent, and works identically for shipped,
+/// edited, and brand-new graphs.
 ///
 /// Note there is no `has_override` veto: an edited/created graph is no longer
 /// special-cased to unfused. Its *content* is fused on demand via
 /// [`fused_view_for`] / [`fused_generator_def_for`], keyed by the def itself —
 /// so it fuses on editor-close exactly like a shipped shape. While the editor is
 /// open it's the watched target, which `is_watched` already keeps unfused.
-///
-/// What stays per-path and is deliberately *not* unified: how the fused variant
-/// is loaded (an effect `LoadedPresetView` spliced into the chain vs a generator
-/// `EffectGraphDef` through `from_def`). This function is upstream of the
-/// verdict logic — it only reads the existing verdicts, never recomputes them.
-pub fn should_render_fused(target: FuseTarget<'_>, is_watched: bool) -> bool {
-    if !freeze_enabled() || is_watched {
-        return false;
-    }
-    match target {
-        FuseTarget::Effect(t) => crate::node_graph::freeze::perf_gate::should_fuse(t),
-        FuseTarget::Generator(t) => {
-            crate::node_graph::freeze::perf_gate::should_fuse_generator(t)
-        }
-    }
+pub fn should_render_fused(is_watched: bool) -> bool {
+    freeze_enabled() && !is_watched
 }
 
 /// Fused [`LoadedPresetView`] for an effect *type* — the canonical (shipped)
@@ -290,78 +276,6 @@ fn compile_fused_view(
     Some(Box::leak(Box::new(fused)))
 }
 
-// ===========================================================================
-// Per-region perf-gate hooks. The gate explores REGION MASKS per card (greedy
-// leave-one-out at tune time) and, when a partial mask wins, seeds the content
-// cache so every future `fused_view_for(canonical_def)` returns the measured
-// winner. Candidate views built here are uncached (one leak per candidate per
-// tune — bounded, a few KB each, startup-only).
-// ===========================================================================
-
-/// Build the fused view for effect `id`'s CANONICAL def under a region mask,
-/// without touching the cache. `None` when nothing fuses under that mask.
-pub(crate) fn masked_view_by_id(
-    id: &PresetTypeId,
-    registry: &PrimitiveRegistry,
-    mask: &[bool],
-) -> Option<&'static LoadedPresetView> {
-    let base = crate::node_graph::loaded_preset_view_by_id(id)?;
-    let fused = fuse_view_parts(
-        base.canonical_def,
-        base.bindings,
-        &base.type_id,
-        base.skip_mode,
-        registry,
-        Some(mask),
-    )?;
-    Some(Box::leak(Box::new(fused)))
-}
-
-/// Seed the content cache so `fused_view_for` over effect `id`'s canonical def
-/// returns `view` — the gate's measured winner. Content-thread only (the cache
-/// is thread-local there, like every fuse/tune path).
-pub(crate) fn override_canonical_fused_view(
-    id: &PresetTypeId,
-    view: Option<&'static LoadedPresetView>,
-) {
-    let Some(base) = crate::node_graph::loaded_preset_view_by_id(id) else {
-        return;
-    };
-    let key = def_content_key(base.canonical_def);
-    FUSED_EFFECT_CACHE.with(|c| {
-        c.borrow_mut().insert(key, view);
-    });
-}
-
-/// Generator twin of [`masked_view_by_id`] — the fused generator def for `id`'s
-/// canonical shape under a region mask, uncached.
-pub(crate) fn masked_generator_def_by_id(
-    id: &PresetTypeId,
-    registry: &PrimitiveRegistry,
-    mask: &[bool],
-) -> Option<&'static EffectGraphDef> {
-    let json = crate::node_graph::bundled_presets::bundled_preset_json(id)?;
-    let def: EffectGraphDef = serde_json::from_str(&json).ok()?;
-    fuse_generator_def_masked(&def, registry, Some(mask)).map(|d| &*Box::leak(Box::new(d)))
-}
-
-/// Generator twin of [`override_canonical_fused_view`].
-pub(crate) fn override_canonical_fused_generator_def(
-    id: &PresetTypeId,
-    def_override: Option<&'static EffectGraphDef>,
-) {
-    let Some(json) = crate::node_graph::bundled_presets::bundled_preset_json(id) else {
-        return;
-    };
-    let Ok(def) = serde_json::from_str::<EffectGraphDef>(&json) else {
-        return;
-    };
-    let key = def_content_key(&def);
-    FUSED_GENERATOR_CACHE.with(|c| {
-        c.borrow_mut().insert(key, def_override);
-    });
-}
-
 /// Generator twin of [`fused_view_for`]: a generator carries its modulation
 /// bindings inside `def.preset_metadata.bindings`, so fusing is self-contained
 /// (no separate `base`). Content-keyed, compile-on-miss, negative-cached.
@@ -416,13 +330,13 @@ pub struct SegmentView {
 
 /// Lookup outcome for a segment this frame.
 pub enum SegmentLookup {
-    /// Compiled, measured, won its gate — splice it.
+    /// Compiled and spliceable — render through the fused segment.
     Ready(&'static SegmentView),
-    /// Compile/measure in flight on the worker — render per-card, a later
-    /// rebuild swaps in.
+    /// Codegen in flight on the worker — render per-card, a later rebuild
+    /// swaps in.
     Pending,
-    /// Refused (no seam-spanning region, stranded binding, build failure, or
-    /// measured loss) — render per-card, permanently for this content.
+    /// Refused (no seam-spanning region, stranded binding, or build failure) —
+    /// render per-card, permanently for this content.
     Refused,
 }
 
@@ -507,17 +421,15 @@ fn segment_worker() -> &'static SegmentWorker {
         std::thread::Builder::new()
             .name("chain-fusion-worker".into())
             .spawn(move || {
-                // Worker-owned registry + device: codegen is pure CPU; the
-                // gate measurement renders on this device's own queue so a
-                // live frame is never stalled (it may briefly share GPU time
-                // — bounded, one-off per novel segment, while the chain is
-                // already at per-card fallback performance).
+                // Segment codegen is pure CPU (the fuse decision is structural —
+                // the region partition — so there's no measurement). It runs off
+                // the content thread only to keep a big concat's partition + WGSL
+                // build off the live frame; no GPU device is needed.
                 let registry = PrimitiveRegistry::with_builtin();
-                let device = manifold_gpu::GpuDevice::new();
                 while let Ok(job) = rx_job.recv() {
                     let card_refs: Vec<(&EffectGraphDef, &'static LoadedPresetView)> =
                         job.cards.iter().map(|(d, v)| (d, *v)).collect();
-                    let view = compile_segment_view(&card_refs, &registry, Some(&device));
+                    let view = compile_segment_view(&card_refs, &registry);
                     if tx_res.send(SegmentResult { key: job.key, view }).is_err() {
                         return;
                     }
@@ -605,13 +517,13 @@ pub fn fused_segment_view_for(
     SegmentLookup::Pending
 }
 
-/// Compile (and, when a device is supplied, gate-measure) one segment. Pure
-/// codegen + an isolated measurement — runs on the worker in production and
-/// synchronously in tests (`device: None` skips the gate).
+/// Compile one segment: concat the member cards, fuse the seam-spanning regions
+/// the partition finds, retarget bindings. Pure CPU codegen — the fuse decision
+/// is structural (the region partition), so there is no GPU measurement. Runs on
+/// the codegen worker in production and synchronously in tests.
 pub(crate) fn compile_segment_view(
     cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
     registry: &PrimitiveRegistry,
-    gate_device: Option<&manifold_gpu::GpuDevice>,
 ) -> Option<&'static SegmentView> {
     let defs: Vec<&EffectGraphDef> = cards.iter().map(|(d, _)| *d).collect();
     let concat = super::segment::concat_defs(&defs)?;
@@ -656,87 +568,9 @@ pub(crate) fn compile_segment_view(
         })
         .collect();
 
-    let mut fused = fuse_canonical_def_masked(&concat, registry, None, &bound_targets)?;
+    let fused = fuse_canonical_def_masked(&concat, registry, None, &bound_targets)?;
     if !fused_def_builds(&fused.def, registry, &fused.expected_spaces) {
         return None;
-    }
-
-    // Per-region gate, segment edition. The honest baseline is the PRODUCTION
-    // fallback — each card through its per-card FUSED kernel (gate verdicts
-    // respected), concatenated — not the raw atom dispatches, which would let
-    // a segment win against a strawman. Same margins as every card verdict.
-    // The gate explores region MASKS over the segment partition (the same
-    // greedy leave-one-out card tuning uses), so one net-loss region — often
-    // a per-card-tuned-off region now living inside the concat — can't drag
-    // the whole segment to refused. The winning partial mask becomes the
-    // segment's def, so the live path renders exactly the measured winner.
-    if let Some(device) = gate_device {
-        let n = canonical_region_count(&concat, registry);
-        let cache_key = segment_key(cards);
-        let device_name = device.device_name();
-
-        // A verdict measured on this EXACT segment content on a prior launch.
-        // The key is content-derived, so a persisted entry can only ever be
-        // applied to the same graph it was measured on — change a card or the
-        // wiring and the key changes, missing the cache and re-measuring. On a
-        // hit we skip the (expensive, 4K) gate measurement and rebuild from the
-        // recorded mask; codegen below is cheap.
-        use super::verdict_cache::{Kind, Verdict};
-        let win_mask: Vec<bool> = match super::verdict_cache::lookup(Kind::Segment, &device_name, cache_key) {
-            Some(Verdict::DontFuse) => return None,
-            Some(Verdict::Fuse(mask)) if mask.len() == n => mask,
-            // No verdict (or a cached mask whose length no longer matches the
-            // partition — codegen drift a version bump missed): measure now and
-            // persist the result for next launch.
-            _ => {
-                let baseline = segment_baseline_def(cards).unwrap_or_else(|| concat.clone());
-                let mut fused_for_mask = |mask: &[bool]| -> Option<EffectGraphDef> {
-                    if mask.iter().all(|&on| on) {
-                        return Some(fused.def.clone());
-                    }
-                    let cand =
-                        fuse_canonical_def_masked(&concat, registry, Some(mask), &bound_targets)?;
-                    if !fused_def_builds(&cand.def, registry, &cand.expected_spaces) {
-                        return None;
-                    }
-                    Some(cand.def.clone())
-                };
-                match super::perf_gate::measure_segment_masked(
-                    device,
-                    registry,
-                    &baseline,
-                    n,
-                    &mut fused_for_mask,
-                ) {
-                    Some(mask) => {
-                        super::verdict_cache::record(
-                            Kind::Segment,
-                            &device_name,
-                            cache_key,
-                            Verdict::Fuse(mask.clone()),
-                        );
-                        mask
-                    }
-                    None => {
-                        super::verdict_cache::record(
-                            Kind::Segment,
-                            &device_name,
-                            cache_key,
-                            Verdict::DontFuse,
-                        );
-                        return None;
-                    }
-                }
-            }
-        };
-        if !win_mask.iter().all(|&on| on) {
-            // Partial winner: rebuild the final FusedDef from the mask so the
-            // retarget map below matches the def that actually splices.
-            fused = fuse_canonical_def_masked(&concat, registry, Some(&win_mask), &bound_targets)?;
-            if !fused_def_builds(&fused.def, registry, &fused.expected_spaces) {
-                return None;
-            }
-        }
     }
 
     let surviving: AHashSet<String> = fused
@@ -785,51 +619,7 @@ pub(crate) fn compile_segment_view(
 }
 
 /// The production-fallback chain as one def: each card swapped for its
-/// per-card FUSED def when the type's gate verdict says it renders fused
-/// (mask-seeded winners apply on the content thread; on the worker the
-/// per-card fuse is mask-less — segment members are pointwise cards where
-/// masks don't arise), else its unfused def. Concatenated, this has exactly
-/// the per-card chain's dispatch + seam round-trip structure, so it is the
-/// honest gate baseline.
-fn segment_baseline_def(
-    cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
-) -> Option<EffectGraphDef> {
-    let baseline_defs: Vec<&EffectGraphDef> = cards
-        .iter()
-        .map(|(def, view)| {
-            if super::perf_gate::should_fuse(&view.type_id) {
-                fused_view_for(def, view).map(|v| v.canonical_def).unwrap_or(*def)
-            } else {
-                *def
-            }
-        })
-        .collect();
-    super::segment::concat_defs(&baseline_defs)
-}
-
-/// Profiling hook (freeze-profile `chain`): compile a segment from canonical
-/// card defs and measure unfused (per-card-equivalent dispatches) vs fused on
-/// `device`, bypassing cache and verdict storage. Returns `(unfused_ms,
-/// fused_ms)` at the tune resolution, `None` when the segment refuses to
-/// compile.
-pub fn profile_segment_by_ids(
-    type_ids: &[PresetTypeId],
-    device: &manifold_gpu::GpuDevice,
-) -> Option<(f64, f64)> {
-    let registry = PrimitiveRegistry::with_builtin();
-    let cards: Vec<(&EffectGraphDef, &'static LoadedPresetView)> = type_ids
-        .iter()
-        .map(|id| {
-            let view = crate::node_graph::loaded_preset_view_by_id(id)?;
-            Some((view.canonical_def, view))
-        })
-        .collect::<Option<_>>()?;
-    let baseline = segment_baseline_def(&cards)?;
-    let view = compile_segment_view(&cards, &registry, None)?;
-    super::perf_gate::profile_segment(device, &registry, &baseline, view.def)
-}
-
-/// Test/tooling hook: compile a segment synchronously (no gate) and seed the
+/// Test/tooling hook: compile a segment synchronously and seed the
 /// content-thread cache, so integration tests exercise the Ready path without
 /// the worker's asynchrony.
 #[cfg(test)]
@@ -837,7 +627,7 @@ pub(crate) fn seed_segment_cache_for_test(
     cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
     registry: &PrimitiveRegistry,
 ) -> Option<&'static SegmentView> {
-    let view = compile_segment_view(cards, registry, None);
+    let view = compile_segment_view(cards, registry);
     let key = segment_key(cards);
     SEGMENT_CACHE.with(|c| {
         c.borrow_mut().insert(key, view);
@@ -1270,8 +1060,9 @@ pub(crate) fn fuse_canonical_def(
 }
 
 /// How many fusable regions the canonical def partitions into (after the same
-/// flatten the fuse performs). The perf gate uses this to size its per-region
-/// exploration mask; 0 ⇒ nothing to gate.
+/// flatten the fuse performs). 0 ⇒ nothing fuses. Test-only since the structural
+/// fuse path consumes the partition directly rather than its count.
+#[cfg(test)]
 pub(crate) fn canonical_region_count(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> usize {
     let Ok(flattened) = manifold_core::flatten::flatten_groups(def) else {
         return 0;
@@ -1906,22 +1697,16 @@ mod tests {
     #[test]
     fn shared_gate_keeps_watched_target_unfused_both_arms() {
         // The single home for the fuse-or-not decision. The watched
-        // (open-in-editor) target must force unfused regardless of the perf
-        // verdict — it short-circuits before it — so per-node preview can sample
-        // inner-node textures and edits render live. The effect and generator
-        // arms share this exact logic so the override can't drift between paths.
-        // (There is intentionally no `has_override` veto — an edited graph fuses
-        // by content via `fused_view_for`; while open it's the watched target.)
-        let ty = PresetTypeId::new("ColorGrade");
-        // Not watched: fuses (freeze is on in this test binary; untuned perf is
-        // optimistic, so the verdict is `true`).
-        assert!(should_render_fused(FuseTarget::Effect(&ty), false));
+        // (open-in-editor) target must force unfused so per-node preview can
+        // sample inner-node textures and edits render live; otherwise fusion is
+        // on (freeze enabled this test binary) and *which* atoms fuse is left to
+        // the region partition. (There is intentionally no `has_override` veto —
+        // an edited graph fuses by content via `fused_view_for`; while open it's
+        // the watched target.)
+        // Not watched → attempt fusion.
+        assert!(should_render_fused(false));
         // Watched → never fused.
-        assert!(!should_render_fused(FuseTarget::Effect(&ty), true));
-
-        // Same contract on the generator arm — proves it's one decision, not two.
-        let gty = PresetTypeId::new("DigitalPlants");
-        assert!(!should_render_fused(FuseTarget::Generator(&gty), true));
+        assert!(!should_render_fused(true));
     }
 
     #[test]

@@ -99,25 +99,6 @@ fn resource_for_output(
     None
 }
 
-/// Forward `log::info!`/`warn!` to stderr so the perf gate's per-verdict tune
-/// lines (which go through the `log` crate, not `println!`) are visible from
-/// this bin. The app installs env_logger; this bin has no logger otherwise.
-struct StderrLogger;
-
-impl log::Log for StderrLogger {
-    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-        metadata.level() <= log::Level::Info
-    }
-    fn log(&self, record: &log::Record<'_>) {
-        if self.enabled(record.metadata()) {
-            eprintln!("[{}] {}", record.level(), record.args());
-        }
-    }
-    fn flush(&self) {}
-}
-
-static STDERR_LOGGER: StderrLogger = StderrLogger;
-
 fn main() {
     let registry = PrimitiveRegistry::with_builtin();
     let device = GpuDevice::new();
@@ -128,47 +109,6 @@ fn main() {
     if args.first().map(String::as_str) == Some("attribute") {
         let names: Vec<&str> = args[1..].iter().map(String::as_str).collect();
         profile_attribution(&registry, &device, &names);
-        return;
-    }
-    // `chain [Type Type ...]` → chain-fusion before/after: measure the named
-    // cards (default: a representative pointwise chain) rendered as separate
-    // per-card-equivalent dispatches vs ONE fused cross-card segment, at the
-    // tune resolution. The seam round-trip economics, measured.
-    if args.first().map(String::as_str) == Some("chain") {
-        use manifold_core::PresetTypeId;
-        let ids: Vec<PresetTypeId> = if args.len() > 1 {
-            args[1..].iter().map(|s| PresetTypeId::from_string(s.clone())).collect()
-        } else {
-            vec![
-                PresetTypeId::COLOR_GRADE,
-                PresetTypeId::INVERT_COLORS,
-                PresetTypeId::new("HdrBoost"),
-            ]
-        };
-        let names: Vec<&str> = ids.iter().map(|i| i.as_str()).collect();
-        println!("--- chain fusion: {} @ 4K, real GPU time ---", names.join(" → "));
-        match manifold_renderer::node_graph::freeze::install::profile_segment_by_ids(
-            &ids, &device,
-        ) {
-            Some((unfused, fused)) => {
-                println!("  per-card (seam round-trips): {unfused:.3} ms/frame");
-                println!("  fused segment (one region):  {fused:.3} ms/frame");
-                println!(
-                    "  {:.2}x, {:.3} ms saved/frame",
-                    unfused / fused,
-                    unfused - fused
-                );
-            }
-            None => println!("  segment refused to compile (no seam-spanning region?)"),
-        }
-        return;
-    }
-    // `tune` → run ONLY the startup perf-gate tuning and print every verdict
-    // (validation mode for gate measurement changes — fast, skips the sweeps).
-    if args.first().map(String::as_str) == Some("tune") {
-        let _ = log::set_logger(&STDERR_LOGGER);
-        log::set_max_level(log::LevelFilter::Info);
-        profile_perf_gate(&device);
         return;
     }
     // `poolstats` → synthetic reproduction of the texture-pool canvas-change leak
@@ -300,7 +240,6 @@ fn main() {
     profile_synthetic_pointwise(&device);
     profile_fused_colorgrade(&registry, &device);
     profile_auto_fused_colorgrade(&registry, &device);
-    profile_perf_gate(&device);
     profile_generators(&registry, &device);
     profile_fluidsim_particle_sweep(&registry, &device);
     profile_synthetic_buffer(&device);
@@ -627,27 +566,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
     println!(
         "speedup climbing with N → buffer fusion pays (saves re-reads/writes + dispatch overhead); \
          ~flat → in-place aliasing leaves no round-trip to remove (per design Phase-0)."
-    );
-}
-
-/// Exercise the production perf gate end-to-end: run the startup tuner on this
-/// device (measure fused vs unfused for every fusable effect, decide per the
-/// §12.5 margin) and report its verdicts — the same path `LayerCompositor::new`
-/// runs at launch. Confirms the gate produces a FUSE verdict for ColorGrade on
-/// this hardware (and would veto a non-paying fusion on another).
-fn profile_perf_gate(device: &GpuDevice) {
-    use manifold_renderer::node_graph::freeze::perf_gate;
-
-    println!("\n--- perf gate: startup tune verdicts (device: {}) ---", device.device_name());
-    perf_gate::tune_all(device);
-    println!("  tuned: {}", perf_gate::is_tuned());
-    println!(
-        "  ColorGrade -> {}",
-        if perf_gate::should_fuse(&PresetTypeId::new("ColorGrade")) {
-            "FUSE"
-        } else {
-            "keep unfused"
-        }
     );
 }
 
