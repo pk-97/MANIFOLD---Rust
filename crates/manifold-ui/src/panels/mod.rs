@@ -1,4 +1,5 @@
 pub mod ableton_picker;
+pub mod audio_setup_panel;
 pub mod browser_popup;
 pub mod clip_chrome;
 pub mod copy_to_clipboard_label;
