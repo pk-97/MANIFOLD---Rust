@@ -10,6 +10,10 @@ use manifold_editing::commands::drivers::{
     AddDriverCommand, ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand, ChangeTrimCommand,
     ToggleDriverEnabledCommand, ToggleDriverReversedCommand,
 };
+use manifold_editing::commands::audio_mod::{
+    AddAudioModCommand, RemoveAudioModCommand, SetAudioModSourceCommand,
+    ToggleAudioModEnabledCommand,
+};
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
     ChangeGraphParamCommand, RemoveEffectCommand, ReorderEffectCommand, ReorderEffectGroupCommand,
@@ -1028,6 +1032,94 @@ pub(super) fn dispatch_inspector(
                     };
                     Box::new(AddDriverCommand::new(driver_target, driver))
                 };
+            boxed.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            DispatchResult::structural()
+        }
+        PanelAction::AudioModToggle(gpt, param_id) => {
+            let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            else {
+                return DispatchResult::structural();
+            };
+            // Existing mod's enabled state, read off the resolved instance.
+            let existing = project
+                .with_preset_graph_mut(&target, |inst| {
+                    inst.find_audio_mod(param_id.as_ref()).map(|a| a.enabled)
+                })
+                .flatten();
+            let driver_target = DriverTarget::from(&target);
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                if let Some(old) = existing {
+                    Box::new(ToggleAudioModEnabledCommand::new(
+                        driver_target,
+                        param_id.clone(),
+                        old,
+                        !old,
+                    ))
+                } else {
+                    // Arm: assign the project's first audio send. No sends → inert
+                    // (the audio button stays a no-op until the Audio Setup defines one).
+                    let Some(send_id) = project.audio_setup.sends.first().map(|s| s.id.clone())
+                    else {
+                        return DispatchResult::structural();
+                    };
+                    let m = manifold_core::audio_mod::ParameterAudioMod::new(
+                        param_id.clone(),
+                        send_id,
+                        manifold_core::AudioFeature::default(),
+                    );
+                    Box::new(AddAudioModCommand::new(driver_target, m))
+                };
+            boxed.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            DispatchResult::structural()
+        }
+        PanelAction::AudioModSetSource(gpt, param_id, send_id, feature) => {
+            let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            else {
+                return DispatchResult::structural();
+            };
+            let old_source = project
+                .with_preset_graph_mut(&target, |inst| {
+                    inst.find_audio_mod(param_id.as_ref()).map(|a| a.source.clone())
+                })
+                .flatten();
+            let driver_target = DriverTarget::from(&target);
+            let new_source = manifold_core::audio_mod::AudioModSource {
+                send_id: send_id.clone(),
+                feature: *feature,
+            };
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                if let Some(old) = old_source {
+                    Box::new(SetAudioModSourceCommand::new(
+                        driver_target,
+                        param_id.clone(),
+                        old,
+                        new_source,
+                    ))
+                } else {
+                    let m = manifold_core::audio_mod::ParameterAudioMod::new(
+                        param_id.clone(),
+                        send_id.clone(),
+                        *feature,
+                    );
+                    Box::new(AddAudioModCommand::new(driver_target, m))
+                };
+            boxed.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            DispatchResult::structural()
+        }
+        PanelAction::AudioModRemove(gpt, param_id) => {
+            let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            else {
+                return DispatchResult::structural();
+            };
+            let driver_target = DriverTarget::from(&target);
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                Box::new(RemoveAudioModCommand::new(driver_target, param_id.clone()));
             boxed.execute(project);
             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()

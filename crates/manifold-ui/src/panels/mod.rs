@@ -201,6 +201,20 @@ pub enum PanelAction {
     DriverToggle(GraphParamTarget, manifold_core::effects::ParamId),
     EnvelopeToggle(GraphParamTarget, manifold_core::effects::ParamId),
     DriverConfig(GraphParamTarget, manifold_core::effects::ParamId, DriverConfigAction),
+    /// Arm/disarm audio modulation on a param. Arming assigns the project's
+    /// first audio send with a default feature; re-clicking toggles enabled.
+    /// No-op when no sends exist (the audio button is inert until the Audio
+    /// Setup defines one). See `docs/AUDIO_MODULATION_DESIGN.md`.
+    AudioModToggle(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Set an audio modulation's source: which send + which feature.
+    AudioModSetSource(
+        GraphParamTarget,
+        manifold_core::effects::ParamId,
+        manifold_core::AudioSendId,
+        manifold_core::AudioFeature,
+    ),
+    /// Remove the audio modulation from a param.
+    AudioModRemove(GraphParamTarget, manifold_core::effects::ParamId),
     TrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
     /// Snapshot trim state before drag (for undo).
     TrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
