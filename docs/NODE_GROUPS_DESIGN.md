@@ -1,5 +1,7 @@
 # Node Groups — Implementation Spec
 
+<!-- index: Implementation spec for node groups: the flattener as a pure EffectGraphDef transform, boundary nodes, constraints. The authoritative spec behind GROUPING_GRAPHS. -->
+
 Status: **planned, not started.** Authored 2026-06-01 for a later ultracode build session.
 Scope owner: Peter. Companion docs: `NODE_GRAPH_SYSTEM.md`, `EFFECT_RUNTIME_UNIFICATION.md`,
 `PRIMITIVE_LIBRARY_DESIGN.md`.

@@ -1,5 +1,7 @@
 # Graph Editor — UX Build Brief (2026-06-13)
 
+<!-- index: Scope for the next UI/UX pass on the graph editor — the surface has fallen behind the stable compiler/runtime and reads as a dev build. -->
+
 Scope for the next UI/UX pass on the graph editor. The compiler/runtime is stable
 and fast; the editor surface has fallen behind and reads as a dev build. This brief
 is the durable, code-verified scope. Every claim below was checked against the

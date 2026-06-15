@@ -95,6 +95,8 @@ Write code directly in the main context by default. Only spawn an agent for genu
 
 ## Reference docs (read on-demand)
 
+[docs/README.md](docs/README.md) is the generated index of every active doc (one line each) — scan it to discover what exists. Closed/historical docs live in `docs/archive/`. The table below is the curated must-reads.
+
 | Doc | When to read |
 |---|---|
 | `docs/MANIFOLD_GPU_ARCHITECTURE.md` | GPU, effects, generators, textures, compute, uniform layout, texture formats |

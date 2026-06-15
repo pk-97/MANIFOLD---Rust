@@ -1,5 +1,7 @@
 # Preset Instance Collapse Plan — finish the effect/generator unification
 
+<!-- index: Active plan to finish effect/generator unification by collapsing EffectInstance/GeneratorParamState into one PresetInstance. Attempt-#8 design + historical record. -->
+
 > **⚠️ STATUS BANNER (2026-06-09, grep-verified).** This doc is the attempt-#8 design + historical record, NOT the live status. The authoritative current-state map is [`PRESET_FORK_INVENTORY.md`](PRESET_FORK_INVENTORY.md) (see its "2026-06-09 full-tree audit" section). Reality since this doc: the instance/runtime/registry/storage collapse LANDED — one `PresetInstance` (no `EffectInstance`/`GeneratorParamState`), one `PresetRuntime`, one `PresetContext`, one definition registry, `ParamMapping` deleted, the generator mirror dances collapsed into the shared `mirror_effect_side`. The "Remaining"/"deferred" lists below are mostly done. The one real fork that REMAINS is the inspector card shell in `manifold-ui/src/panels/param_card.rs` (six paired `_effect`/`_generator` methods) plus the un-collapsed Ableton **Map** action — see the inventory doc.
 
 **Status (historical):** IN PROGRESS (attempt #8). Phases 0–3 landed (each on its own branch,

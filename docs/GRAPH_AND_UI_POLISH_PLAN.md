@@ -1,5 +1,7 @@
 # Graph Editor + UI Polish — Plan / Handoff
 
+<!-- index: Planning and handoff doc for the graph-editor + UI polish campaign: design guardrails, the work threads, and remaining passes. -->
+
 Working doc capturing everything from the long planning session, so a fresh chat can
 pick it up. Three threads: (A) the preset-grouping campaign that shipped, (B) making
 grouped graphs actually readable, (C) polishing the existing UI — plus the design

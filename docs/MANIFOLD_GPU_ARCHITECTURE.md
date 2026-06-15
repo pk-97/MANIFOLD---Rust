@@ -4,6 +4,8 @@ description: manifold-gpu crate architecture — native Metal on all threads, ze
 type: project
 ---
 
+<!-- index: The manifold-gpu native Metal backend: async compute, function constants, texture pool, uniform layout, texture formats. Read before touching shaders or uniforms. -->
+
 ## Decision: 2026-03-25 (objc2-metal migration completed 2026-04-19)
 
 Purpose-built `manifold-gpu` crate on typed `objc2-metal` bindings. Native Metal on all threads (content + UI). Zero wgpu anywhere in the codebase. Zero dependency on the unmaintained gfx-rs `metal` crate, `objc 0.2`, or `block 0.1`.

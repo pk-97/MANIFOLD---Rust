@@ -1,5 +1,7 @@
 # Node Groups — Editor UI/UX Spec
 
+<!-- index: Editor UI/UX spec for node groups (snapshot nesting, navigation, group/ungroup). Phases A-C shipped, D dropped, E pending. -->
+
 Status: **Phases A–C shipped; D dropped; E pending** (authored 2026-06-02, status
 corrected 2026-06-13). Phases A–C (snapshot nesting, read-only navigation +
 breadcrumb, marquee select + collapse/ungroup) are built. **Phase D (interface

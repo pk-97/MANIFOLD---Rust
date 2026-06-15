@@ -1,5 +1,7 @@
 # Development Reference
 
+<!-- index: Quick reference grab-bag: texture formats, math gotchas, module layout, and the ui_bridge split. Facts you reach for mid-task. -->
+
 ## Texture Format Mapping
 
 | Format | Metal (manifold-gpu) | Notes |

@@ -1,5 +1,7 @@
 # Node-Id Targeting — bindings reference identity, not name
 
+<!-- index: Bindings address inner nodes by stable NodeId, not display handle. Cutover done; node_id defaults to handle at load. -->
+
 ## STATUS: COMPLETE (2026-06-02)
 
 Landed on `node-graph-system` (commits `ba0c9f4f` → `265b7b68`). The cutover is done: bindings

@@ -1,5 +1,7 @@
 # Editor Reorg — Build Brief (autonomous session, 2026-06-01)
 
+<!-- index: Historical build brief for the 2026-06 three-lane editor reorg (shipped). Superseded by GRAPH_EDITOR_UX_BUILD_BRIEF for current work. -->
+
 > **Historical (as of 2026-06-13).** The three-lane layout this brief built has
 > shipped. For the editor's current state and the remaining UX work, see
 > `docs/GRAPH_EDITOR_UX_BUILD_BRIEF.md`. Kept for the reuse map and the affine-fold

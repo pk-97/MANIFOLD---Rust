@@ -1,5 +1,7 @@
 # Node Groups — Canvas Build (continuation handoff)
 
+<!-- index: Continuation handoff for the node-groups canvas (render, navigate, select, group/ungroup, edit-inside-a-group). Built 2026-06-02, awaiting visual pass. -->
+
 Status: **BUILT — awaiting Peter's visual pass.** The canvas is implemented end to end
 (render + navigate + select + group/ungroup + edit-inside-a-group). Built 2026-06-02 across four
 test-gated commits on branch `node-groups`. What remains is Peter's eyeball pass and Layer-4 polish
