@@ -938,9 +938,11 @@ impl Project {
 
     /// Whether any enabled audio modulation exists anywhere in the project —
     /// the gate the content thread uses to decide whether to run audio capture
-    /// at all. Walks master effects, every layer's effects and clip effects,
-    /// and every layer's generator instance. Cheap (most instances carry no
-    /// audio mods, short-circuiting on the `Option`).
+    /// at all. Walks the same instance set the modulation pipeline evaluates:
+    /// master effects, every layer's effects, and every layer's generator
+    /// instance (NOT clip effects, which the pipeline neither resets nor
+    /// modulates). Cheap — most instances carry no audio mods, short-circuiting
+    /// on the `Option`.
     pub fn has_active_audio_mods(&self) -> bool {
         fn inst_has(fx: &crate::effects::PresetInstance) -> bool {
             fx.audio_mods
@@ -955,11 +957,6 @@ impl Project {
                 && effects.iter().any(inst_has)
             {
                 return true;
-            }
-            for clip in &layer.clips {
-                if clip.effects.iter().any(inst_has) {
-                    return true;
-                }
             }
             if layer.gen_params().is_some_and(inst_has) {
                 return true;

@@ -15,7 +15,11 @@
 //! feel. The level is a pure function of beats-into-clip, so the walk holds no
 //! per-frame envelope state — a clip loop re-triggers naturally as elapsed resets.
 
-use manifold_core::Beats;
+use std::collections::HashMap;
+
+use manifold_core::audio_features::{AudioFeatureSnapshot, SendFeatures};
+use manifold_core::id::AudioSendId;
+use manifold_core::{Beats, Seconds};
 use manifold_core::effects::{PresetInstance, ParamEnvelope, ParameterDriver};
 use manifold_core::preset_definition_registry;
 use manifold_core::project::Project;
@@ -308,6 +312,8 @@ pub fn evaluate_all_envelopes(
 pub fn evaluate_modulation(
     project: &mut Project,
     current_beat: Beats,
+    dt: Seconds,
+    audio: &AudioFeatureSnapshot,
     timing_scratch: &mut Vec<(Beats, Beats)>,
 ) -> bool {
     // Phase 1: Reset all effective values to base
@@ -315,6 +321,11 @@ pub fn evaluate_modulation(
 
     // Phase 2: Evaluate LFO drivers
     let any_driven = evaluate_all_drivers(project, current_beat);
+
+    // Phase 2.5: Evaluate audio modulations (live audio → effective). Driver-
+    // like (sets the value), so it runs alongside drivers and before the
+    // additive envelope phase. Inert when no audio features are present.
+    let any_audio = evaluate_all_audio_mods(project, audio, dt);
 
     // Pre-compute per-layer active clip timing for envelope phases.
     // Avoids O(total_clips) scan in each envelope function.
@@ -325,7 +336,119 @@ pub fn evaluate_modulation(
     // instance — see evaluate_all_envelopes.
     let any_enveloped = evaluate_all_envelopes(project, timing_scratch);
 
-    any_driven || any_enveloped
+    any_driven || any_audio || any_enveloped
+}
+
+// =====================================================================
+// Phase 2.5: Evaluate audio modulations (live audio features → effective)
+// =====================================================================
+
+/// Evaluate every audio modulation on master effects, layer effects, and
+/// generator params, using the latest per-send feature `snapshot`. Returns true
+/// if any modulation wrote a value (compositor should be marked dirty).
+///
+/// Walks the same instance set as the driver pass (master + layer effects +
+/// generators) — NOT clip effects, which the modulation pipeline does not reset
+/// or evaluate. A modulation whose send no longer resolves (deleted send, or no
+/// features yet) is skipped, leaving its param at the base value from
+/// `reset_all_effectives` — the orphan policy, matching drivers/envelopes.
+pub fn evaluate_all_audio_mods(
+    project: &mut Project,
+    snapshot: &AudioFeatureSnapshot,
+    dt: Seconds,
+) -> bool {
+    if snapshot.is_empty() || project.audio_setup.sends.is_empty() {
+        return false;
+    }
+
+    // Resolve send id → features once (owned), from the AudioSetup's send order
+    // (the worker's frame index). Built under an immutable borrow that ends
+    // before the mutable instance walk below.
+    let mut by_send: HashMap<AudioSendId, SendFeatures> = HashMap::new();
+    for (i, send) in project.audio_setup.sends.iter().enumerate() {
+        if let Some(f) = snapshot.get(i) {
+            by_send.insert(send.id.clone(), *f);
+        }
+    }
+    if by_send.is_empty() {
+        return false;
+    }
+
+    let mut any = false;
+
+    for fx in project.settings.master_effects.iter_mut() {
+        if evaluate_instance_audio_mods(fx, &by_send, dt) {
+            any = true;
+        }
+    }
+    for layer in project.timeline.layers.iter_mut() {
+        if let Some(effects) = &mut layer.effects {
+            for fx in effects.iter_mut() {
+                if evaluate_instance_audio_mods(fx, &by_send, dt) {
+                    any = true;
+                }
+            }
+        }
+        if let Some(gp) = layer.gen_params_mut()
+            && evaluate_instance_audio_mods(gp, &by_send, dt)
+        {
+            any = true;
+        }
+    }
+
+    any
+}
+
+/// Evaluate every audio modulation on a single instance. Returns true if any
+/// wrote a value.
+fn evaluate_instance_audio_mods(
+    fx: &mut PresetInstance,
+    by_send: &HashMap<AudioSendId, SendFeatures>,
+    dt: Seconds,
+) -> bool {
+    if !fx.enabled {
+        return false;
+    }
+    if !fx.has_audio_mods() {
+        return false;
+    }
+    let def = match preset_definition_registry::try_get(fx.effect_type()) {
+        Some(d) => d,
+        None => return false,
+    };
+
+    // Pass 1 (immutable): resolve each enabled mod to its slot + raw feature.
+    let mods = fx.audio_mods.as_ref().unwrap();
+    let work: Vec<(usize, usize, f32, f32, f32)> = mods
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.enabled)
+        .filter_map(|(mi, m)| {
+            let features = by_send.get(&m.source.send_id)?;
+            let resolved =
+                manifold_core::effects::resolve_param_in(&def, fx, m.param_id.as_ref())?;
+            if resolved.idx >= fx.param_values.len() {
+                return None;
+            }
+            let raw = m.source.feature.extract(features);
+            Some((mi, resolved.idx, resolved.min, resolved.max, raw))
+        })
+        .collect();
+    if work.is_empty() {
+        return false;
+    }
+
+    // Pass 2 (mutable): shape (advancing the follower state) and write.
+    let dt_s = dt.0 as f32;
+    for (mi, idx, min, max, raw) in work {
+        let out_norm = {
+            let mods = fx.audio_mods.as_mut().unwrap();
+            let shape = mods[mi].shape;
+            shape.apply(raw, dt_s, &mut mods[mi].smoothed)
+        };
+        fx.param_values[idx].value = min + (max - min) * out_norm;
+    }
+    true
 }
 
 /// Per-layer active clip timing: (elapsed, duration).
@@ -632,5 +755,111 @@ mod tests {
         let mut project = project_with(layer);
         let timing = vec![(Beats(0.0), Beats(8.0))];
         assert!(!evaluate_all_envelopes(&mut project, &timing));
+    }
+
+    // ── audio modulation ─────────────────────────────────────────────────
+
+    use manifold_core::audio_features::{AudioFeatureSnapshot, SendFeatures};
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioModShape, ParameterAudioMod};
+    use manifold_core::audio_setup::AudioSend;
+    use manifold_core::id::AudioSendId;
+    use manifold_core::Seconds;
+
+    /// A project: one effect layer with `TestEnvFx`, plus an AudioSetup with a
+    /// single send "Bass". Returns (project, send_id).
+    fn project_with_audio_send() -> (Project, AudioSendId) {
+        let mut project = project_with(layer_with_one_effect());
+        let send = AudioSend::new("Bass");
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+        (project, send_id)
+    }
+
+    /// A snapshot with one send whose low band reads `low`.
+    fn snapshot_low(low: f32) -> AudioFeatureSnapshot {
+        AudioFeatureSnapshot {
+            sends: vec![SendFeatures {
+                band_energy: [low, 0.0, 0.0],
+                ..Default::default()
+            }],
+        }
+    }
+
+    /// Attach an audio mod on `amount` reading the send's low band, snapping
+    /// instantly (no smoothing) over the full range.
+    fn attach_full_range_low_mod(project: &mut Project, send_id: &AudioSendId) {
+        let mut m = ParameterAudioMod::new(
+            "amount".into(),
+            send_id.clone(),
+            AudioFeature::BandEnergy(AudioBand::Low),
+        );
+        m.shape = AudioModShape {
+            attack_ms: 0.0,
+            release_ms: 0.0,
+            ..Default::default()
+        };
+        project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods_mut()
+            .push(m);
+    }
+
+    #[test]
+    fn audio_mod_drives_param_from_band_energy() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+
+        let snap = snapshot_low(1.0);
+        let active = evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016));
+        assert!(active, "an audio mod with signal reports modulation");
+
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        // amount range 0..1, full-range mapping, raw 1.0 → 1.0.
+        assert!(
+            (fx.param_values[0].value - 1.0).abs() < 1e-6,
+            "amount driven to 1.0, got {}",
+            fx.param_values[0].value
+        );
+    }
+
+    #[test]
+    fn audio_mod_inert_when_send_missing_from_snapshot() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+
+        // Empty snapshot → no features → no write.
+        let empty = AudioFeatureSnapshot::default();
+        assert!(!evaluate_all_audio_mods(&mut project, &empty, Seconds(0.016)));
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        assert_eq!(fx.param_values[0].value, 0.0, "param untouched");
+    }
+
+    #[test]
+    fn audio_mod_skipped_when_disabled() {
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+        project.timeline.layers[0].effects.as_mut().unwrap()[0]
+            .audio_mods
+            .as_mut()
+            .unwrap()[0]
+            .enabled = false;
+
+        let snap = snapshot_low(1.0);
+        assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016)));
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        assert_eq!(fx.param_values[0].value, 0.0);
+    }
+
+    #[test]
+    fn audio_mod_orphaned_send_leaves_param_at_base() {
+        // A mod referencing a send id that isn't in the setup is inert.
+        let mut project = project_with(layer_with_one_effect());
+        attach_full_range_low_mod(&mut project, &AudioSendId::new("ghost"));
+        // Setup has a different send, so the snapshot's send 0 won't match.
+        project.audio_setup.sends.push(AudioSend::new("Other"));
+
+        let snap = snapshot_low(1.0);
+        assert!(!evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016)));
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        assert_eq!(fx.param_values[0].value, 0.0);
     }
 }

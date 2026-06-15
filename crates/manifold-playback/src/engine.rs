@@ -153,6 +153,11 @@ pub struct PlaybackEngine {
     sync_start_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for modulation active clip timing.
     modulation_timing_scratch: Vec<(Beats, Beats)>,
+    /// Latest per-send audio features, refreshed each tick by the content
+    /// thread (which owns the capture/analysis worker) via
+    /// [`Self::set_audio_snapshot`]. Empty when audio modulation is inactive, in
+    /// which case the audio phase of the modulation pipeline is a no-op.
+    audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot,
     /// Frame count when timeline_active_scratch was last populated.
     /// Used to skip redundant re-queries within the same frame.
     timeline_query_frame: u64,
@@ -232,6 +237,7 @@ impl PlaybackEngine {
             live_slot_refs_scratch: Vec::with_capacity(8),
             sync_start_scratch: Vec::with_capacity(4),
             modulation_timing_scratch: Vec::with_capacity(64),
+            audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot::default(),
             timeline_query_frame: u64::MAX, // sentinel: never matches a real frame
             became_ready_list: Vec::with_capacity(8),
             clips_to_stop_drift: Vec::with_capacity(8),
@@ -267,6 +273,17 @@ impl PlaybackEngine {
     }
     pub fn current_beat(&self) -> Beats {
         Beats(self.current_beat)
+    }
+
+    /// Install the latest per-send audio features for the modulation pipeline.
+    /// Called by the content thread each tick (before `tick`) with the worker's
+    /// most recent frame; an empty snapshot disables the audio phase. Moves the
+    /// snapshot in to avoid a per-frame clone.
+    pub fn set_audio_snapshot(
+        &mut self,
+        snapshot: manifold_core::audio_features::AudioFeatureSnapshot,
+    ) {
+        self.audio_snapshot = snapshot;
     }
     pub fn current_beat_f64(&self) -> f64 {
         self.current_beat
@@ -683,8 +700,15 @@ impl PlaybackEngine {
         // 7. Evaluate modulation pipeline (LFO drivers + ADSR envelopes).
         //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
+        let audio = &self.audio_snapshot;
         let modulation_dirty = if let Some(project) = &mut self.project {
-            crate::modulation::evaluate_modulation(project, Beats(self.current_beat), &mut timing)
+            crate::modulation::evaluate_modulation(
+                project,
+                Beats(self.current_beat),
+                ctx.dt_seconds,
+                audio,
+                &mut timing,
+            )
         } else {
             false
         };
@@ -744,19 +768,24 @@ impl PlaybackEngine {
         // 3. Evaluate modulation pipeline even when stopped (for scrub preview / inspector).
         //    Port of C# DriverController — runs in all states.
         let mut timing = std::mem::take(&mut self.modulation_timing_scratch);
-        let modulation_dirty = if let Some(project) = &mut self.project {
-            let dirty = crate::modulation::evaluate_modulation(
-                project,
-                Beats(self.current_beat),
-                &mut timing,
-            );
-            if dirty {
-                self.mark_compositor_dirty(ctx.realtime_now);
+        let dirty = {
+            let audio = &self.audio_snapshot;
+            if let Some(project) = &mut self.project {
+                crate::modulation::evaluate_modulation(
+                    project,
+                    Beats(self.current_beat),
+                    ctx.dt_seconds,
+                    audio,
+                    &mut timing,
+                )
+            } else {
+                false
             }
-            dirty
-        } else {
-            false
         };
+        if dirty {
+            self.mark_compositor_dirty(ctx.realtime_now);
+        }
+        let modulation_dirty = dirty;
         self.modulation_timing_scratch = timing;
 
         // 4. Filter ready clips for compositor.
