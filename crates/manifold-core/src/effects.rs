@@ -608,7 +608,7 @@ pub struct PresetInstance {
     /// declaration order; the remaining slots correspond to
     /// [`Self::user_param_bindings`] in declaration order. After the
     /// bindings unification (Phases 1–4 of
-    /// `docs/BINDINGS_UNIFICATION_PLAN.md`) this layout maps directly
+    /// `docs/archive/BINDINGS_UNIFICATION_PLAN.md`) this layout maps directly
     /// onto the renderer's `EffectSlot.bindings[i]` — no parallel
     /// structure to keep in sync. Resolve `ParamId → index` via
     /// [`Self::param_id_to_value_index`]; that helper is the single

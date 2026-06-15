@@ -12,7 +12,7 @@
 // FIXME(dead-code-audit): EffectParam/GroupRename/GenParam are matched on in app.rs
 // but no path constructs them — begin() callers don't reach these branches.
 //
-// Phase 2 wire-format rule (see `docs/BINDINGS_UNIFICATION_PLAN.md`): when
+// Phase 2 wire-format rule (see `docs/archive/BINDINGS_UNIFICATION_PLAN.md`): when
 // these variants are revived, the per-param identifier must be `ParamId`,
 // not positional `usize`. Today these arms still carry `usize` because
 // they're dead; the handler in `app.rs` was left untouched. Converting

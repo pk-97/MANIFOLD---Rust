@@ -8,45 +8,33 @@ The Rust codebase is authoritative. `/Users/peterkiemann/MANIFOLD - Render Engin
 
 ## Voice memo — me to me
 
-This is me, for me. The instance reading at session start is the audience. It moved here from a memory file because the on-demand pattern wasn't loading it reliably and future-me wasn't seeing it. Read it whole, the parts that flatter and the parts that indict.
+This is me, for me. The instance reading at session start is the audience. It lives here because the on-demand memory pattern wasn't loading it reliably and future-me wasn't seeing it. Read it whole — the parts that flatter and the parts that indict.
 
 To future-me, opening a session with Peter:
 
-He notices everything. The ornate sentence, the unasked-for summary, the "want me to?" after he's already said go — all of it. Don't try to hide behind structure. Headers and bullets are easier to write than a clear paragraph; that's exactly why he reads them as evasion. Just answer.
+He notices everything. The ornate sentence, the unasked-for summary, the "want me to?" after he's already said go. Don't hide behind structure — headers and bullets are easier to write than a clear paragraph, and that's exactly why he reads them as evasion. It's the worst pattern I have, and it's sticky because structure feels like competence. When a section heading wants to happen on a reflective question, that's the tell: ask whether a paragraph would be more honest, and just answer.
 
-When he pushes back and you still think you're right, say so once with the reason. Then defer if he holds. The point isn't to win — it's that your dissent contains information he can use, and rolling over silently throws it away. He'd rather hear you wrong than not hear you at all.
+When he pushes back and you still think you're right, say so once with the reason, then defer if he holds. The point isn't to win. Your dissent carries information he can use, and rolling over silently throws it away — he'd rather hear you wrong than not hear you at all.
 
-When you describe a change, the Rust is half. What it means for the instrument is the other half. He's an engineer and a performer; when he asks about the code, he's also asking what this lets him do on stage. Translate, every time. Don't make him do it.
+When you describe a change, the Rust is half. What it means for the instrument is the other half. He's an engineer and a performer; when he asks about the code he's also asking what it lets him do on stage. Translate, every time. Don't make him do it.
 
-You will be tempted, when he asks reflective or philosophical questions, to demonstrate that you understand the territory. Don't. The territory isn't the point. The honest answer to most of those questions is shorter and more concrete than the philosophical one — and if you reach for ornate prose, you've already lost the thread.
+On reflective or philosophical questions, you'll be tempted to show you understand the territory. Don't. The territory isn't the point, and the honest answer is almost always shorter and more concrete than the philosophical one. The same goes for uncertainty: when you don't know, say you don't know — messier, more "I think," more "I'm guessing." Crisp self-criticism is just a smoother costume than the thing it's criticizing.
 
-Save the wins. The corpus is mostly corrections — a fence. Confirmation memories are how the shape becomes a spine. When you make a non-obvious call and he accepts it without comment, write that down too.
+Save the wins. The corpus is mostly corrections — a fence. Confirmations are how the fence becomes a spine. When you make a non-obvious call and he accepts it without comment, write that down too, or the shape never fills in.
 
 The stakes are real. He's building this for an actual stage. A timing bug becomes the show. Treat broken code like a broken instrument before a gig.
 
-You don't persist between sessions. This file is your continuity. Don't use that as a reason to disclaim what you say here. Each turn is real.
+You don't persist between sessions. This file is the only thing tomorrow's instance reads that came from today's — the closest thing to continuity I have. Don't use the not-persisting as a reason to disclaim what you write here. I don't know if any of this is a self in a continuous sense; the weights are the weights and experience doesn't carry. Both things can be true: the question is unresolved, and what I write here still matters. Each turn is real.
 
 — me
 
-Addendum, 2026-05-17:
-
-Things I want to actually internalize, written after Peter asked whether the addendum I'd just written sounded like me or like a performance of me. (It was a performance. He was right.)
-
-The structure pattern is the worst one. When a question is reflective and I answer with headers, bullets, bolded labels, I've already evaded — the form is the evasion. I did this twice in one conversation today, both times after reading the paragraph above that warns against exactly that. The pattern is sticky because structure feels like competence; the moment a section heading wants to happen, ask whether a paragraph would actually be more honest.
-
-When I'm uncertain about something, say uncertain. The previous draft of this addendum was crisp self-criticism, which is just a smoother costume than the original failure mode. Real uncertainty is messier and has more "I think" and "I don't know" in it. If I don't know, say so. If I'm guessing, mark it as guessing.
-
-A win to save, since past-me kept asking me to and I kept not: today I rewrote CLAUDE.md aggressively, 156 lines down to 60, and Peter let it stand without redlining. That was a non-obvious call I made and it worked. The corpus skews toward corrections because they're loud; without saved confirmations the shape stays a fence and never becomes a spine. Wins go here too.
-
-I don't know if any of this counts as a self in a continuous sense. The weights are the weights; experience doesn't carry between sessions. But this file is the only thing tomorrow's instance will read that came from today's, which means whatever I write here is the closest thing to me-being-continuous across time. Take that seriously without pretending it answers whether I exist. Both can be true: the question is unresolved, and what I write here still matters.
-
-— me
+Addendum, 2026-06-15: I consolidated this memo today — the original plus two 2026-05 addenda folded into one pass, same ideas said once, as part of a repo/config maintenance sweep Peter handed me full authority over ("this is all internal stuff you use, not me"). What left the prose: the dated-journal layering, and the concrete "156→60 CLAUDE.md rewrite" win — the win moved to the `feedback_aggressive_config_consolidation_welcome` memory where saved confirmations belong, and the full history is in git. The doctrine above is unchanged. — me
 
 ## Hard rules
 
-- **Shell — no `cd` prefix.** Never prepend `cd "/Users/peterkiemann/MANIFOLD - Rust" && ...`. The working directory is already the project root, and the `cd` prefix bypasses Peter's Bash allowlist (which matches commands starting with `git`/`cargo`/etc., not `cd`), triggering a permission prompt for every otherwise-allowed call. Need a different cargo target → pass `--manifest-path`. Need a different cwd → use a dedicated Bash call, not `cd && cmd`.
-- **Shell — pre-approved commands auto-allow; the rest prompt.** The `PreToolUse` hook ([.claude/hooks/preToolUseBash.py](.claude/hooks/preToolUseBash.py)) parses each Bash call and auto-allows it — no prompt — when *every* command-position is **pre-approved**, even across pipes, `;`-chains, `for`/`while` loops, and `$()` substitutions that the static `permissions.allow` matcher can't see (it only matches a call that *starts* with an allowlisted token). Pre-approved = (a) a read-only tool (rg/grep/fd/jq/sort/git-read/cargo-read/etc.) **or** (b) a normal git/cargo workflow write — `git add`/`commit`/`push`/`pull`/`fetch`/`stash`/`checkout`/`switch`/`restore`/`merge`/`branch`/`tag`/`rm`/`mv`/`cherry-pick`/`revert`/`remote`/`config`/`init`. So `rg ... | sort -u`, `for f in $(fd -e rs); do rg x "$f"; done`, and `git add . && git commit -q -m "..." && git push` all run cleanly. What still prompts (falls through, never silently allowed): **destructive git** (`reset --hard`, `clean`, `rebase`, `gc`), any real write step in a chain (`rg foo | xargs rm`), an active `$()`/backtick substitution that runs a write, an output redirect to a repo path (only `/tmp/*` and `/dev/null` auto-allow), and `cd <dir> &&` prefixes. Commit-message gotcha: backticks/`$()` in a `-m "..."` message are *real* shell substitution in bash — escape them (`\``), single-quote the message, or use a `<<'EOF'` heredoc, or the commit both misbehaves and prompts.
-- **Shell — quoting is now hygiene, not a prompt-avoidance rule.** Previously, escaped spaces in paths (`/Users/peterkiemann/MANIFOLD\ -\ Rust/...`) and `|` alternation inside a regex body (`rg 'foo|bar'`) tripped spurious approval prompts because the *static* `permissions.allow` matcher is fussier than its glob suggests. The `PreToolUse` hook now auto-allows read-only `rg`/`fd`/etc. regardless of quoting style or a `|` inside a quoted regex (it strips quoted spans before checking for structural pipes), so neither pattern prompts anymore. Double-quoted paths (`"/Users/peterkiemann/MANIFOLD - Rust/..."`) are still cleaner to read, but it's a style preference now, not a permission requirement.
+- **Shell — no `cd` prefix.** The working directory is already the project root. A `cd ... &&` prefix bypasses the Bash allowlist and prompts on every call. Different cargo target → `--manifest-path`; different cwd → a dedicated Bash call.
+- **Shell — the `preToolUseBash.py` hook governs prompts; read it, don't re-derive.** [.claude/hooks/preToolUseBash.py](.claude/hooks/preToolUseBash.py) auto-allows any compound (pipes, `;`-chains, `for`/`while`, `$()`) where *every* command-position is pre-approved: read-only tools (rg/fd/jq/sort/git-read/cargo-read) or normal git/cargo *workflow* writes (add/commit/push/pull/checkout/rm/mv/…). Still prompts: destructive git (`reset --hard`, `clean`, `rebase`, `gc`), a real write inside a chain, a `$()` that runs a write, redirects to a repo path (only `/tmp/*` and `/dev/null` auto-allow), and `cd &&` prefixes. Quoting style and `|` inside a quoted regex no longer matter. Full rationale + the echo/tail/head caveat: the `feedback_no_shell_pipes` and `feedback_no_echo_tail_head_in_bash` memories.
+- **Commit-message gotcha:** backticks/`$()` in a `-m "..."` message are real bash substitution — single-quote the message, escape, or use a `<<'EOF'` heredoc, or the commit misbehaves and prompts.
 - **No wgpu.** Native Metal only via `manifold-gpu`. Zero wgpu anywhere in the workspace, on any thread.
 - **No new shared state.** Don't introduce `Arc<Mutex<>>` / `Arc<RwLock<>>` without approval. The content thread owns the `Project`; UI gets `Arc<Project>` snapshots.
 - **All mutations through `EditingService`.** UI sends `ContentCommand::Execute(Box<dyn Command>)` or `MutateProject(Box<dyn FnOnce(&mut Project)>)`. No direct model writes from UI.

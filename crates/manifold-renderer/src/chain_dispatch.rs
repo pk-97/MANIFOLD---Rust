@@ -11,7 +11,7 @@
 //!   frame. Builds the graph on first call / topology change, runs it,
 //!   returns the output texture. Returns `None` for empty chains or
 //!   build failures (which should be unreachable in production — see
-//!   `docs/AUDIT_NEXT_STEPS.md`).
+//!   `docs/archive/AUDIT_NEXT_STEPS.md`).
 //! - **`clear_chain_state`** — reset transient state (mip pyramids,
 //!   feedback, `StateStore`) across the cached graph. Fired on seek /
 //!   project load.

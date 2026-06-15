@@ -3,7 +3,7 @@
 //! that actually consume the values.
 //!
 //! See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 and
-//! `docs/BINDINGS_UNIFICATION_PLAN.md` for the full design.
+//! `docs/archive/BINDINGS_UNIFICATION_PLAN.md` for the full design.
 //!
 //! ## Two layers, one runtime
 //!
