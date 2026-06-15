@@ -384,7 +384,7 @@
       "handle": "feedback_color",
       "nodeId": "feedback_color",
       "outputFormats": {
-        "out": "rgba32float"
+        "out": "rgba16float"
       }
     },
     {
@@ -393,7 +393,7 @@
       "handle": "feedback_velocity",
       "nodeId": "feedback_velocity",
       "outputFormats": {
-        "out": "rgba32float"
+        "out": "rgba16float"
       }
     },
     {
