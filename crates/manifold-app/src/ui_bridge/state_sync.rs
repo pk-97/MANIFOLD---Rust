@@ -11,7 +11,7 @@ use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::param_card::{
     ParamCardConfig, ParamCardKind, ParamCardStringInfo, ParamInfo,
 };
-use manifold_ui::panels::param_slider_shared::AbletonMappingDisplay;
+use manifold_ui::panels::param_slider_shared::{AbletonMappingDisplay, AudioCardState};
 use manifold_ui::panels::viewport::TrackInfo;
 
 use crate::app::SelectionState;
@@ -1072,7 +1072,8 @@ pub fn sync_inspector_data(
     selection: &SelectionState,
 ) {
     // Master effects → inspector (envelopes ride on each instance)
-    let master_configs = effects_to_configs(&project.settings.master_effects, OscScope::Master);
+    let mut master_configs = effects_to_configs(&project.settings.master_effects, OscScope::Master);
+    attach_audio_sends(&mut master_configs, &project.audio_setup);
     ui.inspector.configure_master_effects(&master_configs);
 
     // Active layer effects + gen params → inspector
@@ -1080,11 +1081,12 @@ pub fn sync_inspector_data(
         if let Some(layer) = project.timeline.layers.get(idx) {
             // Layer effects — envelopes ride on each effect instance now.
             let lid = layer.layer_id.as_str();
-            let layer_effects = layer
+            let mut layer_effects = layer
                 .effects
                 .as_ref()
                 .map(|e| effects_to_configs(e, OscScope::Layer(lid)))
                 .unwrap_or_default();
+            attach_audio_sends(&mut layer_effects, &project.audio_setup);
             ui.inspector.configure_layer_effects(&layer_effects);
 
             // Generator params — find clip's string_params for text fields.
@@ -1095,7 +1097,7 @@ pub fn sync_inspector_data(
                 .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
                 .or_else(|| layer.clips.first())
                 .and_then(|c| c.string_params.as_ref());
-            let gen_config = layer
+            let mut gen_config = layer
                 .gen_params()
                 .filter(|gp| *gp.generator_type() != PresetTypeId::NONE)
                 .map(|gp| {
@@ -1106,6 +1108,9 @@ pub fn sync_inspector_data(
                         layer.generator_graph(),
                     )
                 });
+            if let Some(c) = gen_config.as_mut() {
+                attach_audio_sends(std::slice::from_mut(c), &project.audio_setup);
+            }
             let layer_id = layer.layer_id.clone();
             ui.inspector
                 .configure_gen_params(gen_config.as_ref(), Some(layer_id));
@@ -1359,6 +1364,59 @@ fn build_card_modulation(
     m
 }
 
+/// Build the per-param audio-modulation display state for a card from the
+/// instance's `audio_mods`. The card-level send list (`send_labels`/`send_ids`)
+/// is filled separately by [`attach_audio_sends`] (it needs the project's
+/// `AudioSetup`, which this per-instance builder doesn't carry).
+fn build_audio_card_state(
+    inst: &PresetInstance,
+    n: usize,
+    resolve: impl Fn(&str) -> Option<usize>,
+) -> AudioCardState {
+    use manifold_core::audio_mod::{AudioBand, AudioFeature};
+    let mut a = AudioCardState {
+        active: vec![false; n],
+        send_id: vec![None; n],
+        feature_idx: vec![0; n],
+        send_labels: Vec::new(),
+        send_ids: Vec::new(),
+    };
+    for am in inst.audio_mods.iter().flatten() {
+        if !am.enabled {
+            continue;
+        }
+        let Some(pi) = resolve(am.param_id.as_ref()).filter(|&pi| pi < n) else {
+            continue;
+        };
+        a.active[pi] = true;
+        a.send_id[pi] = Some(am.source.send_id.clone());
+        a.feature_idx[pi] = match am.source.feature {
+            AudioFeature::BandEnergy(AudioBand::Low) => 0,
+            AudioFeature::BandEnergy(AudioBand::Mid) => 1,
+            AudioFeature::BandEnergy(AudioBand::High) => 2,
+            AudioFeature::Onset => 3,
+            // v2 features have no card option yet; show the default.
+            AudioFeature::Pitch | AudioFeature::PitchDelta => 0,
+        };
+    }
+    a
+}
+
+/// Stamp the card-level available-send list (labels + ids) onto every card
+/// config, from the project's `AudioSetup`. One pass after the configs are
+/// built, so the per-instance builders stay project-agnostic.
+fn attach_audio_sends(configs: &mut [ParamCardConfig], setup: &manifold_core::audio_setup::AudioSetup) {
+    if setup.sends.is_empty() {
+        return;
+    }
+    let labels: Vec<String> = setup.sends.iter().map(|s| s.label.clone()).collect();
+    let ids: Vec<manifold_core::AudioSendId> = setup.sends.iter().map(|s| s.id.clone()).collect();
+    for c in configs.iter_mut() {
+        c.audio.send_labels = labels.clone();
+        c.audio.send_ids = ids.clone();
+    }
+}
+
 /// Thin adapter: build a card config for each effect in `effects`, skipping
 /// any whose preset def is missing. The real work is the unified
 /// [`preset_to_config`].
@@ -1428,6 +1486,7 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
         driver_reversed: vec![],
         driver_dotted: vec![],
         driver_triplet: vec![],
+        audio: Default::default(),
     }
 }
 
@@ -1633,6 +1692,7 @@ fn preset_to_config(
     let n = params.len();
 
     let m = build_card_modulation(inst, n, |id| id_to_index.get(id).copied());
+    let audio = build_audio_card_state(inst, n, |id| id_to_index.get(id).copied());
 
     // String params are a generator-only surface (text inputs, font dropdowns),
     // sourced from the registry def.
@@ -1708,6 +1768,7 @@ fn preset_to_config(
         driver_reversed: m.driver_reversed,
         driver_dotted: m.driver_dotted,
         driver_triplet: m.driver_triplet,
+        audio,
     })
 }
 

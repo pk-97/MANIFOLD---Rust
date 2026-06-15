@@ -174,6 +174,9 @@ pub struct ParamCardConfig {
     pub driver_dotted: Vec<bool>,
     /// Per-param driver triplet modifier active.
     pub driver_triplet: Vec<bool>,
+    /// Audio-modulation state (per-param active/send/feature + card-level send
+    /// list). Bundled so the config grows by one field.
+    pub audio: super::param_slider_shared::AudioCardState,
 }
 
 // ── Layout constants ─────────────────────────────────────────────
@@ -375,6 +378,10 @@ pub struct ParamCardPanel {
     driver_btn_ids: Vec<i32>,
     envelope_btn_ids: Vec<i32>,
     driver_config_ids: Vec<Option<DriverConfigIds>>,
+    /// Per-param "A" audio-mod button node id.
+    audio_btn_ids: Vec<i32>,
+    /// Per-param audio drawer ids + send count (for click resolution).
+    audio_configs: Vec<Option<(crate::panels::drawer::DrawerIds, usize)>>,
     /// Per-param orange envelope target handle on the slider track (when armed).
     target_ids: Vec<Option<EnvelopeTargetIds>>,
     /// Per-param envelope drawer — the single "Decay" slider (when armed).
@@ -455,6 +462,8 @@ impl ParamCardPanel {
             driver_btn_ids: Vec::new(),
             envelope_btn_ids: Vec::new(),
             driver_config_ids: Vec::new(),
+            audio_btn_ids: Vec::new(),
+            audio_configs: Vec::new(),
             target_ids: Vec::new(),
             envelope_config_ids: Vec::new(),
             trim_ids: Vec::new(),
@@ -513,6 +522,7 @@ impl ParamCardPanel {
             &config.driver_dotted,
             &config.driver_triplet,
         );
+        self.state.mod_state.sync_audio(n, &config.audio);
         self.osc_addresses = config
             .params
             .iter()
@@ -524,6 +534,9 @@ impl ParamCardPanel {
         self.envelope_btn_ids = vec![-1; n];
         self.driver_config_ids = Vec::new();
         self.driver_config_ids.resize_with(n, || None);
+        self.audio_btn_ids = vec![-1; n];
+        self.audio_configs = Vec::new();
+        self.audio_configs.resize_with(n, || None);
         self.target_ids = Vec::new();
         self.target_ids.resize_with(n, || None);
         self.envelope_config_ids = Vec::new();
@@ -1226,7 +1239,8 @@ impl ParamCardPanel {
         // param name more room (not just a longer track). Floored at the
         // default, so narrow timeline cards keep the timeline's width exactly.
         let label_width = crate::slider::label_width_for_row(w - PADDING * 2.0);
-        let slider_w = w - PADDING * 2.0 - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0 - chevron_lane;
+        // Three buttons in the lane now: E (envelope), → (driver), A (audio).
+        let slider_w = w - PADDING * 2.0 - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 3.0 - chevron_lane;
 
         for i in 0..self.param_info.len() {
             // Hidden params: leave slider_ids[i] = None and skip widget
@@ -1265,6 +1279,8 @@ impl ParamCardPanel {
             self.driver_btn_ids[i] = row.driver_btn;
             self.driver_config_ids[i] = row.driver_config;
             self.ableton_config_ids[i] = row.ableton_config;
+            self.audio_btn_ids[i] = row.audio_btn;
+            self.audio_configs[i] = row.audio_config;
             // Mapping-drawer chevron at the row's right edge (Author + mappable).
             // A subtle ">" that opens the sideways range/scale/offset/invert/
             // curve drawer for this binding. Sits past the D/E buttons in the
@@ -1474,7 +1490,7 @@ impl ParamCardPanel {
                 0.0
             };
             let slider_w =
-                content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 2.0 - chevron_lane;
+                content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 3.0 - chevron_lane;
             // Same growth rule as the effect card (see build_effect_sliders).
             let label_width = crate::slider::label_width_for_row(content_w);
 
@@ -1560,6 +1576,8 @@ impl ParamCardPanel {
                     self.driver_btn_ids[i] = row.driver_btn;
                     self.driver_config_ids[i] = row.driver_config;
                     self.ableton_config_ids[i] = row.ableton_config;
+                    self.audio_btn_ids[i] = row.audio_btn;
+                    self.audio_configs[i] = row.audio_config;
                     // Mapping-drawer chevron at the row's right edge (Author +
                     // mappable) — identical to the effect card. Opens the same
                     // sideways range/scale/offset/invert/curve drawer; click
@@ -1912,6 +1930,32 @@ impl ParamCardPanel {
         self.param_info[pi].param_id.clone()
     }
 
+    /// Build an `AudioModSetSource` action for a param, combining the current
+    /// send + feature selection (from `mod_state`) with the one dimension the
+    /// click changed. Empty when no send resolves (nothing to point at).
+    fn audio_set_source_action(
+        &self,
+        target: GraphParamTarget,
+        pi: usize,
+        send_override: Option<usize>,
+        feature_override: Option<usize>,
+    ) -> Vec<PanelAction> {
+        let ms = &self.state.mod_state;
+        let send_k = send_override
+            .map(|k| k as i32)
+            .unwrap_or_else(|| ms.audio_send_idx.get(pi).copied().unwrap_or(-1));
+        let Some(send_id) = (send_k >= 0)
+            .then(|| ms.audio_send_ids.get(send_k as usize).cloned())
+            .flatten()
+        else {
+            return vec![];
+        };
+        let feat_idx = feature_override
+            .unwrap_or_else(|| ms.audio_feature_idx.get(pi).copied().unwrap_or(0) as usize);
+        let feature = super::param_slider_shared::audio_feature_from_index(feat_idx);
+        vec![PanelAction::AudioModSetSource(target, self.pid_at(pi), send_id, feature)]
+    }
+
     pub fn handle_click(&mut self, node_id: u32) -> Vec<PanelAction> {
         match self.kind {
             ParamCardKind::Effect => self.handle_click_effect(node_id),
@@ -1952,6 +1996,8 @@ impl ParamCardPanel {
             &self.envelope_btn_ids,
             &self.driver_config_ids,
             &self.ableton_config_ids,
+            &self.audio_btn_ids,
+            &self.audio_configs,
             &self.slider_ids,
             &self.osc_addresses,
             &self.param_info,
@@ -1968,6 +2014,18 @@ impl ParamCardPanel {
                 }
                 RowClick::AbletonInvert(pi) => {
                     vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
+                }
+                RowClick::AudioToggle(pi) => {
+                    vec![PanelAction::AudioModToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
+                }
+                RowClick::AudioNewSend(pi) => {
+                    vec![PanelAction::AudioModNewSend(GraphParamTarget::Effect(ei), self.pid_at(pi))]
+                }
+                RowClick::AudioSelectSend(pi, k) => {
+                    self.audio_set_source_action(GraphParamTarget::Effect(ei), pi, Some(k), None)
+                }
+                RowClick::AudioSelectFeature(pi, f) => {
+                    self.audio_set_source_action(GraphParamTarget::Effect(ei), pi, None, Some(f))
                 }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi] {
@@ -2057,6 +2115,8 @@ impl ParamCardPanel {
             &self.envelope_btn_ids,
             &self.driver_config_ids,
             &self.ableton_config_ids,
+            &self.audio_btn_ids,
+            &self.audio_configs,
             &self.slider_ids,
             &self.osc_addresses,
             &self.param_info,
@@ -2071,6 +2131,18 @@ impl ParamCardPanel {
                 }
                 RowClick::AbletonInvert(pi) => {
                     vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Generator, self.pid_at(pi))]
+                }
+                RowClick::AudioToggle(pi) => {
+                    vec![PanelAction::AudioModToggle(GraphParamTarget::Generator, self.pid_at(pi))]
+                }
+                RowClick::AudioNewSend(pi) => {
+                    vec![PanelAction::AudioModNewSend(GraphParamTarget::Generator, self.pid_at(pi))]
+                }
+                RowClick::AudioSelectSend(pi, k) => {
+                    self.audio_set_source_action(GraphParamTarget::Generator, pi, Some(k), None)
+                }
+                RowClick::AudioSelectFeature(pi, f) => {
+                    self.audio_set_source_action(GraphParamTarget::Generator, pi, None, Some(f))
                 }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi] {
@@ -2730,6 +2802,7 @@ mod tests {
             driver_reversed: vec![false; n],
             driver_dotted: vec![false; n],
             driver_triplet: vec![false; n],
+            audio: Default::default(),
         }
     }
 
@@ -3023,6 +3096,7 @@ mod tests {
             driver_reversed: vec![false; 3],
             driver_dotted: vec![false; 3],
             driver_triplet: vec![false; 3],
+            audio: Default::default(),
         }
     }
 

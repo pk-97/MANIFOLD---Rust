@@ -215,6 +215,9 @@ pub enum PanelAction {
     ),
     /// Remove the audio modulation from a param.
     AudioModRemove(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Create a new audio send (default routing) and point this param's audio
+    /// modulation at it — the "＋" in the drawer's send selector.
+    AudioModNewSend(GraphParamTarget, manifold_core::effects::ParamId),
     TrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
     /// Snapshot trim state before drag (for undo).
     TrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),

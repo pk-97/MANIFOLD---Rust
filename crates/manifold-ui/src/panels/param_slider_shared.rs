@@ -24,6 +24,11 @@ pub(crate) const FONT_SIZE: u16 = color::FONT_BODY;
 pub(crate) const DE_BUTTON_SIZE: f32 = 20.0;
 pub(crate) const DE_BUTTON_GAP: f32 = 2.0;
 
+/// Active tint for the audio-modulation ("A") button + drawer — a teal, kept
+/// distinct from the driver (blue) and envelope (orange) actives.
+pub(crate) const AUDIO_MOD_ACTIVE_C32: crate::node::Color32 =
+    crate::node::Color32::new(90, 200, 160, 255);
+
 pub(crate) const DRIVER_CONFIG_HEIGHT: f32 = 56.0;
 pub(crate) const DRIVER_ROW_HEIGHT: f32 = 22.0;
 pub(crate) const BEAT_DIV_SPACING: f32 = 1.0;
@@ -131,6 +136,57 @@ pub struct ParamModState {
     pub driver_reversed: Vec<bool>,
     pub driver_dotted: Vec<bool>,
     pub driver_triplet: Vec<bool>,
+
+    // ── Audio modulation (per-param + card-level send list) ──
+    /// Per-param: an audio modulation exists and is enabled (button highlight +
+    /// drawer auto-expands, mirroring the driver).
+    pub audio_active: Vec<bool>,
+    /// Per-param: index of the selected send in [`Self::audio_send_labels`], or
+    /// -1 if the mod's send no longer resolves.
+    pub audio_send_idx: Vec<i32>,
+    /// Per-param: selected feature index (see [`AUDIO_FEATURE_LABELS`]).
+    pub audio_feature_idx: Vec<i32>,
+    /// Card-level: available send labels (same for every row on the card).
+    pub audio_send_labels: Vec<String>,
+    /// Card-level: send ids parallel to `audio_send_labels` — turns a selected
+    /// drawer index into the id an `AudioModSetSource` command needs.
+    pub audio_send_ids: Vec<manifold_core::AudioSendId>,
+}
+
+/// Map a feature button index (see [`AUDIO_FEATURE_LABELS`]) to its
+/// `AudioFeature`. Out-of-range falls back to low-band energy.
+pub(crate) fn audio_feature_from_index(idx: usize) -> manifold_core::AudioFeature {
+    use manifold_core::audio_mod::{AudioBand, AudioFeature};
+    match idx {
+        0 => AudioFeature::BandEnergy(AudioBand::Low),
+        1 => AudioFeature::BandEnergy(AudioBand::Mid),
+        2 => AudioFeature::BandEnergy(AudioBand::High),
+        3 => AudioFeature::Onset,
+        _ => AudioFeature::BandEnergy(AudioBand::Low),
+    }
+}
+
+/// The four feature options exposed in the per-slider audio drawer, in button
+/// order. Index maps to an `AudioFeature` in the card's click handler.
+pub(crate) const AUDIO_FEATURE_LABELS: [&str; 4] = ["Lo", "Mid", "Hi", "On"];
+
+/// Audio-modulation display state for one card, assembled in `state_sync` and
+/// applied to [`ParamModState`] via [`ParamModState::sync_audio`]. Bundled so
+/// `ParamCardConfig` gains one field, not five.
+#[derive(Debug, Default, Clone)]
+pub struct AudioCardState {
+    /// Per-param: mod exists and is enabled.
+    pub active: Vec<bool>,
+    /// Per-param: the mod's send id, if any. Resolved to an index into
+    /// `send_ids` by [`ParamModState::sync_audio`].
+    pub send_id: Vec<Option<manifold_core::AudioSendId>>,
+    /// Per-param: selected feature index (0..3).
+    pub feature_idx: Vec<i32>,
+    /// Card-level: available send labels.
+    pub send_labels: Vec<String>,
+    /// Card-level: send ids parallel to `send_labels` — what the click handler
+    /// turns a selected index into for the `AudioModSetSource` command.
+    pub send_ids: Vec<manifold_core::AudioSendId>,
 }
 
 impl ParamModState {
@@ -147,7 +203,29 @@ impl ParamModState {
             driver_reversed: vec![false; param_count],
             driver_dotted: vec![false; param_count],
             driver_triplet: vec![false; param_count],
+            audio_active: vec![false; param_count],
+            audio_send_idx: vec![-1; param_count],
+            audio_feature_idx: vec![0; param_count],
+            audio_send_labels: Vec::new(),
+            audio_send_ids: Vec::new(),
         }
+    }
+
+    /// Sync audio-modulation display state from the card config.
+    pub fn sync_audio(&mut self, n: usize, audio: &AudioCardState) {
+        for i in 0..n {
+            self.audio_active[i] = audio.active.get(i).copied().unwrap_or(false);
+            self.audio_feature_idx[i] = audio.feature_idx.get(i).copied().unwrap_or(0);
+            self.audio_send_idx[i] = audio
+                .send_id
+                .get(i)
+                .and_then(|o| o.as_ref())
+                .and_then(|sid| audio.send_ids.iter().position(|s| s == sid))
+                .map(|p| p as i32)
+                .unwrap_or(-1);
+        }
+        self.audio_send_labels = audio.send_labels.clone();
+        self.audio_send_ids = audio.send_ids.clone();
     }
 
     /// Sync driver/envelope/trim/target/decay state from config vectors.
@@ -916,10 +994,16 @@ pub(crate) struct ParamRowIds {
     pub(crate) ableton_trim: Option<TrimHandleIds>,
     pub(crate) envelope_btn: i32,
     pub(crate) driver_btn: i32,
+    /// The "A" audio-modulation button (right of the driver button).
+    pub(crate) audio_btn: i32,
     /// Envelope drawer (the single "Decay" slider).
     pub(crate) envelope_config: Option<EnvelopeConfigIds>,
     pub(crate) driver_config: Option<DriverConfigIds>,
     pub(crate) ableton_config: Option<AbletonConfigIds>,
+    /// Audio-modulation drawer (send + feature selectors) and its send count,
+    /// kept so click resolution can split the flat button index into
+    /// send / new-send / feature regions.
+    pub(crate) audio_config: Option<(crate::panels::drawer::DrawerIds, usize)>,
     /// `y` after this row's slider + any expanded driver/envelope/Ableton
     /// drawers — the caller continues the next row from here.
     pub(crate) new_cy: f32,
@@ -967,9 +1051,11 @@ pub(crate) fn build_param_row(
         ableton_trim: None,
         envelope_btn: -1,
         driver_btn: -1,
+        audio_btn: -1,
         envelope_config: None,
         driver_config: None,
         ableton_config: None,
+        audio_config: None,
         new_cy: cy,
     };
     let mut cy = cy;
@@ -1071,6 +1157,19 @@ pub(crate) fn build_param_row(
         "\u{2192}", // →
     ) as i32;
 
+    // Audio-modulation button — third in the lane, right of the driver button.
+    let audio_active = mod_state.audio_active.get(i).copied().unwrap_or(false);
+    let audio_btn_x = drv_btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP;
+    ids.audio_btn = tree.add_button(
+        parent,
+        audio_btn_x,
+        btn_y,
+        DE_BUTTON_SIZE,
+        DE_BUTTON_SIZE,
+        de_btn_style(audio_active, AUDIO_MOD_ACTIVE_C32),
+        "A",
+    ) as i32;
+
     cy += ROW_HEIGHT + ROW_SPACING;
 
     // Envelope drawer — a single "Decay" slider. Depth is the orange target
@@ -1103,6 +1202,36 @@ pub(crate) fn build_param_row(
         cy += ABL_CONFIG_HEIGHT;
     }
 
+    // Audio-modulation drawer — auto-shows while a mod is active (mirrors the
+    // driver). Two rows: send selector (existing sends + a "＋" to create one)
+    // and feature selector. Built on the shared drawer API.
+    if audio_active {
+        use crate::panels::drawer::{self, DrawerButton, DrawerRow, DrawerSpec};
+        let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
+        let send_count = mod_state.audio_send_labels.len();
+        let mut send_buttons: Vec<DrawerButton> = mod_state
+            .audio_send_labels
+            .iter()
+            .enumerate()
+            .map(|(k, label)| DrawerButton::new(label.clone(), k as i32 == send_sel))
+            .collect();
+        send_buttons.push(DrawerButton::new("\u{FF0B}", false)); // ＋ new send
+        let feat_sel = mod_state.audio_feature_idx.get(i).copied().unwrap_or(0);
+        let feat_buttons: Vec<DrawerButton> = AUDIO_FEATURE_LABELS
+            .iter()
+            .enumerate()
+            .map(|(k, l)| DrawerButton::new(*l, k as i32 == feat_sel))
+            .collect();
+        let spec = DrawerSpec {
+            rows: vec![DrawerRow::Buttons(send_buttons), DrawerRow::Buttons(feat_buttons)],
+            btn_font_size: config_font,
+            slider_font_size: FONT_SIZE,
+        };
+        let dids = drawer::build(tree, parent, x, cy, config_w, &spec);
+        cy += dids.height;
+        ids.audio_config = Some((dids, send_count));
+    }
+
     ids.new_cy = cy;
     ids
 }
@@ -1122,6 +1251,14 @@ pub(crate) enum RowClick {
     DriverConfig(usize, DriverConfigAction),
     /// The Ableton-config invert button (param index).
     AbletonInvert(usize),
+    /// The "A" audio-modulation button (param index) — arm/disarm.
+    AudioToggle(usize),
+    /// A send button in the audio drawer (param index, send index).
+    AudioSelectSend(usize, usize),
+    /// The "＋" new-send button in the audio drawer (param index).
+    AudioNewSend(usize),
+    /// A feature button in the audio drawer (param index, feature index).
+    AudioSelectFeature(usize, usize),
     /// The slider's param label, when it carries an OSC address to copy
     /// (param index). The caller performs the copied-flash side effect and
     /// reads `osc_addresses[pi]`.
@@ -1145,6 +1282,8 @@ pub(crate) fn match_param_row_click(
     envelope_btn_ids: &[i32],
     driver_config_ids: &[Option<DriverConfigIds>],
     ableton_config_ids: &[Option<AbletonConfigIds>],
+    audio_btn_ids: &[i32],
+    audio_configs: &[Option<(crate::panels::drawer::DrawerIds, usize)>],
     slider_ids: &[Option<SliderNodeIds>],
     osc_addresses: &[Option<String>],
     param_info: &[ParamInfo],
@@ -1191,6 +1330,31 @@ pub(crate) fn match_param_row_click(
         check_ableton_config_click(id, ableton_config_ids)
     {
         return Some(RowClick::AbletonInvert(pi));
+    }
+
+    // Audio "A" buttons (skip toggle/trigger params).
+    for (pi, &btn_id) in audio_btn_ids.iter().enumerate() {
+        if is_unmodulatable(pi) {
+            continue;
+        }
+        if id == btn_id {
+            return Some(RowClick::AudioToggle(pi));
+        }
+    }
+
+    // Audio drawer buttons: flat index splits into send / new-send / feature.
+    for (pi, cfg) in audio_configs.iter().enumerate() {
+        if let Some((dids, send_count)) = cfg
+            && let Some(flat) = dids.resolve_button(id)
+        {
+            return Some(if flat < *send_count {
+                RowClick::AudioSelectSend(pi, flat)
+            } else if flat == *send_count {
+                RowClick::AudioNewSend(pi)
+            } else {
+                RowClick::AudioSelectFeature(pi, flat - send_count - 1)
+            });
+        }
     }
 
     // Slider label → copy OSC address (only when one exists for this slot).

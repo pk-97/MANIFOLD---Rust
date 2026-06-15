@@ -1124,6 +1124,36 @@ pub(super) fn dispatch_inspector(
             ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             DispatchResult::structural()
         }
+        PanelAction::AudioModNewSend(gpt, param_id) => {
+            let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            else {
+                return DispatchResult::structural();
+            };
+            // Create a new send (default mono routing) and point this param's
+            // audio mod at it — one undo step. Auto-labeled "Audio N".
+            let send = manifold_core::audio_setup::AudioSend::new(format!(
+                "Audio {}",
+                project.audio_setup.sends.len() + 1
+            ));
+            let send_id = send.id.clone();
+            let driver_target = DriverTarget::from(&target);
+            let new_mod = manifold_core::audio_mod::ParameterAudioMod::new(
+                param_id.clone(),
+                send_id,
+                manifold_core::AudioFeature::default(),
+            );
+            let cmds: Vec<Box<dyn manifold_editing::command::Command>> = vec![
+                Box::new(manifold_editing::commands::audio_setup::AddAudioSendCommand::new(send)),
+                Box::new(AddAudioModCommand::new(driver_target, new_mod)),
+            ];
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(
+                manifold_editing::command::CompositeCommand::new(cmds, "New Audio Send".into()),
+            );
+            boxed.execute(project);
+            ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            DispatchResult::structural()
+        }
         PanelAction::EnvelopeToggle(gpt, param_id) => {
             // Envelope-home unification: the envelope rides on the resolved
             // instance (keyed by param_id) for effects and generators alike.
