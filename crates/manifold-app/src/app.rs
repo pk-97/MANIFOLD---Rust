@@ -505,7 +505,7 @@ impl Application {
             graph_editor_geometry: None,
             graph_canvas: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
-            node_preview_normalize: true,
+            node_preview_normalize: false,
             editor_card: {
                 // The editor lane is the authoring surface: Author chrome
                 // (no cog / drag-reorder / perform-mapping menu, plus the
@@ -1909,7 +1909,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 cached_project_snapshot: None,
                 watched_graph_target: None,
                 preview_graph_node: None,
-                node_preview_normalize: true,
+                node_preview_normalize: false,
                 cached_graph_snapshot: None,
                 mod_scratch: crate::content_state::ModulationSnapshot::empty(),
                 cached_midi_clock_position: Arc::from(""),

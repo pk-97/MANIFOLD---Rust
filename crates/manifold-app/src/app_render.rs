@@ -3104,12 +3104,10 @@ impl Application {
         // A pending jump-to-node centres now that `set_snapshot` has laid the
         // canvas out for this frame's scope (no-op until the target is present).
         if let Some(canvas) = self.graph_canvas.as_mut() {
-            canvas.resolve_pending_focus(crate::graph_canvas::Rect::new(
-                canvas_x,
-                0.0,
-                canvas_width,
-                logical_h as f32,
-            ));
+            let vp = crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, logical_h as f32);
+            canvas.resolve_pending_focus(vp);
+            // Frame the whole level on editor open / scope change (camera only).
+            canvas.apply_pending_fit(vp);
         }
 
         // ── Build frame: clear, then draw the canvas + sidebar ──

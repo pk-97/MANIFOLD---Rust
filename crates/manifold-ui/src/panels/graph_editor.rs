@@ -467,8 +467,8 @@ pub struct GraphEditorPanel {
     wire_driven_keys: HashSet<(String, String)>,
     /// Whether the node-output preview pane is applying auto-gain /
     /// normalization. Mirrors the app-side state (pushed in each `configure`);
-    /// drives the preview toggle's checkmark. Default off only until the first
-    /// `configure` lands the real value (app default is on).
+    /// drives the preview toggle's checkmark. Default off until the first
+    /// `configure` lands the real value (app default is also off).
     normalize_preview: bool,
     /// Value inspector for a previewed non-image node, or `None` when the
     /// preview is an image (or nothing is previewed). When `Some`, the top of

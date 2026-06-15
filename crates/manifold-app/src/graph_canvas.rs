@@ -1091,6 +1091,13 @@ pub struct GraphCanvas {
     /// later, after `set_snapshot` has rebuilt the (possibly newly-entered)
     /// level so the node's position is known. `None` when nothing is pending.
     pending_focus: Option<u32>,
+    /// Request to frame the whole level (zoom-to-fit) on the next viewport-aware
+    /// present. Set when the canvas is created (editor open) and on every scope
+    /// change (group enter/exit, breadcrumb jump), consumed by
+    /// [`Self::apply_pending_fit`] once the level has finite-positioned nodes —
+    /// same retry-next-frame contract as [`Self::pending_focus`]. Non-destructive:
+    /// it only moves the camera, never node positions.
+    fit_pending: bool,
     /// Lowercased find-a-node query. Non-empty dims nodes whose title/handle
     /// doesn't contain it and brightens the matches, so a name jumps out of a
     /// busy graph. Empty = no search active. Set live by the editor's search box.
@@ -1139,6 +1146,7 @@ impl GraphCanvas {
             format_on_enter: false,
             spark_history: ahash::AHashMap::new(),
             pending_focus: None,
+            fit_pending: true,
             node_search: String::new(),
             debug_overlay: false,
         }
@@ -1659,6 +1667,60 @@ impl GraphCanvas {
         self.pending_focus = None;
     }
 
+    /// Apply a pending zoom-to-fit (set on editor open / scope change) once the
+    /// level is laid out. A pending jump-to-node wins — it's an explicit target,
+    /// so we drop the fit rather than fight it. Called by the editor present path
+    /// alongside [`Self::resolve_pending_focus`]; no-op until then.
+    pub fn apply_pending_fit(&mut self, viewport: Rect) {
+        if !self.fit_pending {
+            return;
+        }
+        if self.pending_focus.is_some() {
+            self.fit_pending = false;
+            return;
+        }
+        if self.zoom_to_fit(viewport) {
+            self.fit_pending = false;
+        }
+    }
+
+    /// Frame every laid-out node in the viewport: the largest zoom whose node
+    /// bounding box (plus margin) fits the canvas, centred. Capped at 1.0 so a
+    /// sparse graph doesn't balloon. Returns `false` — leaving the request
+    /// pending — until the level has at least one finite-positioned node (a
+    /// scope rebuild may still be in flight). Camera-only; never moves a node.
+    fn zoom_to_fit(&mut self, viewport: Rect) -> bool {
+        let (mut min_x, mut min_y) = (f32::INFINITY, f32::INFINITY);
+        let (mut max_x, mut max_y) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for n in &self.nodes {
+            if !n.pos_graph.0.is_finite() || !n.pos_graph.1.is_finite() {
+                continue;
+            }
+            min_x = min_x.min(n.pos_graph.0);
+            min_y = min_y.min(n.pos_graph.1);
+            max_x = max_x.max(n.pos_graph.0 + NODE_WIDTH);
+            max_y = max_y.max(n.pos_graph.1 + n.height());
+        }
+        if !min_x.is_finite() {
+            return false; // nothing laid out yet — retry next frame
+        }
+        let bbox_w = (max_x - min_x).max(1.0);
+        let bbox_h = (max_y - min_y).max(1.0);
+        // Margin so nodes don't kiss the canvas edge. Matches the zoom clamp
+        // used by scroll-wheel zoom (lower bound) and caps fit at 1.0.
+        const FIT_MARGIN: f32 = 40.0;
+        let content_w = (viewport.w - 2.0 * FIT_MARGIN).max(1.0);
+        let content_h = (viewport.h - HEADER_HEIGHT - 2.0 * FIT_MARGIN).max(1.0);
+        self.zoom = (content_w / bbox_w).min(content_h / bbox_h).clamp(0.25, 1.0);
+        // Centre the bbox: invert `to_screen` so the bbox centre lands at the
+        // canvas content centre. `screen = origin + (graph + pan) * zoom`.
+        let bbox_cx = (min_x + max_x) * 0.5;
+        let bbox_cy = (min_y + max_y) * 0.5;
+        self.pan.0 = viewport.w * 0.5 / self.zoom - bbox_cx;
+        self.pan.1 = (viewport.h - HEADER_HEIGHT) * 0.5 / self.zoom - bbox_cy;
+        true
+    }
+
     // ── Group navigation (scope) ────────────────────────────────────
 
     /// The current view scope as a path of group node ids (empty = root).
@@ -1691,6 +1753,8 @@ impl GraphCanvas {
         // Auto-format this group the first time we open it (handled in the next
         // set_snapshot, and only if it has no saved layout).
         self.format_on_enter = true;
+        // Frame the entered level once its nodes are laid out.
+        self.fit_pending = true;
     }
 
     /// Pop one level back toward the root. Returns `true` if it moved (there
@@ -1701,6 +1765,7 @@ impl GraphCanvas {
             self.scope_titles.pop();
             group_log!("exit group {left}: scope now {:?}", self.scope);
             self.selected.clear();
+            self.fit_pending = true;
             true
         } else {
             false
@@ -1716,6 +1781,7 @@ impl GraphCanvas {
             self.scope.truncate(depth);
             self.scope_titles.truncate(depth);
             self.selected.clear();
+            self.fit_pending = true;
         }
     }
 
@@ -2724,6 +2790,16 @@ impl GraphCanvas {
             self.draw_ghost_wire(ui, viewport, *from_node, from_port);
         }
 
+        // Nodes draw on the Overlay layer so they sit *above* the wires
+        // (Base). The renderer batches all of a layer's rects before its
+        // lines, so node bodies (rects) and wires (lines) on the same layer
+        // would force every wire to paint over every body — the over-draw
+        // that made connections cross the face of a node and its preview.
+        // Splitting them across layers makes wires route behind nodes, the
+        // standard node-editor read. The node-output thumbnail blit (a later
+        // present pass) is already topmost, so it stays correctly over wires.
+        ui.push_layer(Layer::Overlay);
+
         // Nodes: everything else first, then the hovered node, then the
         // selected nodes last, so the node(s) you're working on are never
         // buried under their neighbours in a dense graph.
@@ -2744,7 +2820,7 @@ impl GraphCanvas {
             }
         }
 
-        // Live rubber-band rectangle while marquee-selecting.
+        // Live rubber-band rectangle while marquee-selecting — over the nodes.
         if let DragMode::Marquee { origin_screen } = &self.drag_mode {
             let (ox, oy) = *origin_screen;
             let (cx, cy) = self.cursor;
@@ -2754,6 +2830,8 @@ impl GraphCanvas {
             let h = (cy - oy).abs();
             ui.draw_bordered_rect(x, y, w, h, MARQUEE_FILL, 0.0, 1.0, MARQUEE_BORDER);
         }
+
+        ui.pop_layer();
 
         // Hover tooltip: the node's friendly summary, or — when the cursor is
         // over a param row — that param's help line. Drawn above the nodes but

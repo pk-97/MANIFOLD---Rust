@@ -129,9 +129,10 @@ pub struct ContentThread {
     /// any. Combined with `watched_graph_target` each frame to drive the
     /// per-node output capture. `None` = no preview.
     pub preview_graph_node: Option<manifold_core::NodeId>,
-    /// Whether the node-output preview applies auto-gain/normalization. On by
-    /// default; toggled from the editor's preview pane. Pushed to the pipeline
-    /// each frame. Node preview only — never affects the live render.
+    /// Whether the node-output preview applies auto-gain/normalization. Off by
+    /// default; toggled from the editor's preview pane ("Smart preview"). Pushed
+    /// to the pipeline each frame. Node preview only — never affects the live
+    /// render.
     pub node_preview_normalize: bool,
     /// Cached editor-canvas snapshot for the watched effect or generator.
     ///

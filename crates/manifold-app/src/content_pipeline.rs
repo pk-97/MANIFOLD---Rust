@@ -440,7 +440,7 @@ impl ContentPipeline {
             node_preview_normal_pipeline: None,
             #[cfg(target_os = "macos")]
             node_preview_depth_pipeline: None,
-            node_preview_normalize: true,
+            node_preview_normalize: false,
             #[cfg(target_os = "macos")]
             recording_session: None,
             led_grid_size: (
