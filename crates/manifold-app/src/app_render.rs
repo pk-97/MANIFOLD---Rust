@@ -3226,13 +3226,37 @@ impl Application {
                         let Some(&cell) = layout.get(&node_id) else {
                             continue;
                         };
+                        // Clip the strip rect to the canvas viewport so a node
+                        // straddling an edge can't blit its thumbnail over the
+                        // param column (left) or the preview sidebar (right).
+                        // Crop the source UVs by the same fraction the rect lost
+                        // on each side so the visible part stays 1:1 instead of
+                        // squashing the whole image into the clipped rect.
+                        if bw <= 0.0 || bh <= 0.0 {
+                            continue;
+                        }
+                        let clip_l = (vp.x - bx).max(0.0);
+                        let clip_r = (bx + bw - (vp.x + vp.w)).max(0.0);
+                        let clip_t = (vp.y - by).max(0.0);
+                        let clip_b = (by + bh - (vp.y + vp.h)).max(0.0);
+                        let cbw = bw - clip_l - clip_r;
+                        let cbh = bh - clip_t - clip_b;
+                        if cbw <= 0.0 || cbh <= 0.0 {
+                            continue;
+                        }
+                        let cbx = bx + clip_l;
+                        let cby = by + clip_t;
                         let gx = (cell % crate::content_pipeline::ATLAS_GRID) as f32;
                         let gy = (cell / crate::content_pipeline::ATLAS_GRID) as f32;
+                        let u0 = gx * inv + half_tx;
+                        let v0 = gy * inv + half_ty;
+                        let du = inv - 2.0 * half_tx;
+                        let dv = inv - 2.0 * half_ty;
                         let cell_uv = [
-                            gx * inv + half_tx,
-                            gy * inv + half_ty,
-                            inv - 2.0 * half_tx,
-                            inv - 2.0 * half_ty,
+                            u0 + du * (clip_l / bw),
+                            v0 + dv * (clip_t / bh),
+                            du * (cbw / bw),
+                            dv * (cbh / bh),
                         ];
                         let mut bytes = [0u8; 16];
                         for (k, v) in cell_uv.iter().enumerate() {
@@ -3255,7 +3279,7 @@ impl Application {
                                     data: &bytes,
                                 },
                             ],
-                            (bx * sf, by * sf, bw * sf, bh * sf),
+                            (cbx * sf, cby * sf, cbw * sf, cbh * sf),
                             manifold_gpu::GpuLoadAction::Load,
                             "Node Thumbnail",
                         );
