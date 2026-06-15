@@ -146,6 +146,12 @@ pub struct ContentThread {
     // ── Reusable modulation scratch (flat buffer — zero alloc after first frame) ──
     pub mod_scratch: crate::content_state::ModulationSnapshot,
 
+    /// Audio-modulation capture runtime — owns the live audio capture device +
+    /// feature worker and feeds the engine its per-send feature snapshot each
+    /// tick. Idle (no device open) until the project has an active audio
+    /// modulation. See [`crate::audio_mod_runtime`].
+    pub audio_mod_runtime: crate::audio_mod_runtime::AudioModRuntime,
+
     // ── Cached ContentState strings (Arc<str> — clone = refcount bump, zero alloc) ──
     pub cached_midi_clock_position: Arc<str>,
     pub cached_midi_clock_device: Arc<str>,
@@ -546,6 +552,12 @@ impl ContentThread {
 
         #[cfg(feature = "profiling")]
         let _sync_controllers_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        // 3d. Audio modulation: reconcile capture against the project (on change)
+        // and feed the engine the latest per-send feature snapshot. Must run
+        // BEFORE engine.tick() (the modulation pipeline reads the snapshot).
+        self.audio_mod_runtime
+            .update(&mut self.engine, self.editing_service.data_version());
 
         // 4. Tick engine
         #[cfg(feature = "profiling")]

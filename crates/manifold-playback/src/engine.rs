@@ -275,15 +275,16 @@ impl PlaybackEngine {
         Beats(self.current_beat)
     }
 
-    /// Install the latest per-send audio features for the modulation pipeline.
-    /// Called by the content thread each tick (before `tick`) with the worker's
-    /// most recent frame; an empty snapshot disables the audio phase. Moves the
-    /// snapshot in to avoid a per-frame clone.
-    pub fn set_audio_snapshot(
+    /// Mutable access to the audio-feature snapshot the modulation pipeline
+    /// reads. The content thread (which owns the capture/analysis worker) fills
+    /// this in place each tick before `tick` — reusing the `Vec` capacity keeps
+    /// the per-frame feed allocation-free. An empty snapshot disables the audio
+    /// phase. Kept here (rather than passed via `TickContext`) because the
+    /// engine, not the content thread, owns the project the pipeline mutates.
+    pub fn audio_snapshot_mut(
         &mut self,
-        snapshot: manifold_core::audio_features::AudioFeatureSnapshot,
-    ) {
-        self.audio_snapshot = snapshot;
+    ) -> &mut manifold_core::audio_features::AudioFeatureSnapshot {
+        &mut self.audio_snapshot
     }
     pub fn current_beat_f64(&self) -> f64 {
         self.current_beat

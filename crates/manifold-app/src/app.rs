@@ -1912,6 +1912,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 node_preview_normalize: false,
                 cached_graph_snapshot: None,
                 mod_scratch: crate::content_state::ModulationSnapshot::empty(),
+                audio_mod_runtime: crate::audio_mod_runtime::AudioModRuntime::default(),
                 cached_midi_clock_position: Arc::from(""),
                 cached_midi_clock_device: Arc::from(""),
                 cached_osc_timecode: Arc::from(""),
