@@ -65,7 +65,7 @@ Addendum, 2026-06-15: I consolidated this memo today — the original plus two 2
 | `manifold-native` | Native plugin FFI (`DepthEstimator`, `BlobDetector`) |
 | `manifold-profiler` | Profiling and instrumentation |
 | `manifold-led` | DMX/Art-Net LED output |
-| `manifold-audio` | Stub — placeholder for future work |
+| `manifold-audio` | CoreAudio input capture (`cpal`) → lock-free ring buffer; consumed by recording, and (planned) the audio-modulation worker. See `docs/AUDIO_MODULATION_DESIGN.md` |
 | `manifold-app` | winit entry, Application, ContentThread, ContentPipeline |
 
 Dependencies: `core` and `gpu` have none. `editing`/`playback`/`ui`/`io` depend on `core`. `renderer` depends on `core` + `gpu` + `native` + `playback` + `ui`. `media` depends on `core` + `playback` + `gpu`. `led` depends on `gpu`. `app` depends on all.

@@ -18,10 +18,3 @@ block2 = "0.6"
 
 [lints]
 workspace = true
-
-# `manifold-audio` is the stub crate (per CLAUDE.md crate table) —
-# placeholder for future DSP work. `rustfft` is pre-declared so the
-# stub already has its anticipated math dep wired; cargo-machete sees
-# it as unused today, correctly. Drop the ignore once real consumers land.
-[package.metadata.cargo-machete]
-ignored = ["rustfft"]
