@@ -2,6 +2,7 @@ pub mod ableton_picker;
 pub mod browser_popup;
 pub mod clip_chrome;
 pub mod copy_to_clipboard_label;
+pub mod drawer;
 pub mod dropdown;
 pub mod footer;
 pub mod graph_editor;

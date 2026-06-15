@@ -1,0 +1,286 @@
+//! Declarative drawer API for parameter-slider sub-panels.
+//!
+//! A "drawer" is the small downward sub-panel that opens under an effect-card
+//! slider — the driver (LFO) config, the envelope decay slider, the Ableton
+//! invert toggle, and (incoming) the audio-modulation controls. Historically
+//! each was hand-built: bespoke id-allocation, layout math, hit-testing, and
+//! draw, duplicated four ways across `param_slider_shared.rs` and
+//! `param_card.rs`. This module is the single abstraction they share.
+//!
+//! A drawer is described declaratively as a stack of [`DrawerRow`]s; [`build`]
+//! turns the spec into `UITree` nodes (the coupled part) and returns a
+//! [`DrawerIds`] whose [`DrawerIds::resolve_button`] maps a clicked node id back
+//! to a flat control index. The caller owns the meaning of that index (it maps
+//! it onto a driver / envelope / audio-mod edit), so the layout + hit-test logic
+//! lives here once.
+//!
+//! See `docs/AUDIO_MODULATION_DESIGN.md` §10.2.
+
+use crate::node::*;
+use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
+use crate::tree::UITree;
+
+use super::param_slider_shared::config_btn_style;
+
+/// Layout constants — match the existing driver/envelope drawers so a migrated
+/// drawer renders identically.
+const PAD_H: f32 = 5.0;
+const ROW_H: f32 = 22.0;
+const ROW_GAP: f32 = 4.0;
+const TOP_PAD: f32 = 4.0;
+const BTN_GAP: f32 = 1.0;
+
+/// One labeled button in a [`DrawerRow::Buttons`] row.
+pub struct DrawerButton {
+    pub label: String,
+    pub active: bool,
+}
+
+impl DrawerButton {
+    pub fn new(label: impl Into<String>, active: bool) -> Self {
+        Self { label: label.into(), active }
+    }
+}
+
+/// One row of a drawer.
+pub enum DrawerRow {
+    /// A horizontal group of buttons, widths proportional to label length so
+    /// mixed-width labels ("1/32" vs "1") don't cramp — the rule the driver
+    /// beat-division row established. Each button is one addressable control.
+    Buttons(Vec<DrawerButton>),
+    /// A full-width value slider. Not click-addressed (the panel's existing
+    /// slider-drag path handles it via the returned [`SliderNodeIds`]).
+    Slider {
+        label: String,
+        /// Normalized fill 0..1.
+        norm: f32,
+        /// Display text shown in the slider's value field.
+        value_text: String,
+        colors: SliderColors,
+        /// Width reserved for the leading label.
+        label_w: f32,
+    },
+}
+
+/// A drawer described as a stack of rows.
+pub struct DrawerSpec {
+    pub rows: Vec<DrawerRow>,
+    /// Font size for buttons.
+    pub btn_font_size: u16,
+    /// Font size for slider labels/values.
+    pub slider_font_size: u16,
+}
+
+impl DrawerSpec {
+    /// Total height this spec occupies (container height), given its rows.
+    pub fn height(&self) -> f32 {
+        let n = self.rows.len();
+        if n == 0 {
+            return 0.0;
+        }
+        TOP_PAD * 2.0 + ROW_H * n as f32 + ROW_GAP * (n as f32 - 1.0)
+    }
+}
+
+/// The `UITree` node ids a built drawer produced, plus the mapping needed to
+/// resolve a click. Buttons are enumerated **flat across all rows in order**
+/// (row 0's buttons first, then row 1's, …) — that flat index is what
+/// [`Self::resolve_button`] returns and what the caller maps to an action.
+pub struct DrawerIds {
+    pub container: i32,
+    /// Node id per flat button index.
+    button_ids: Vec<i32>,
+    /// Slider node ids, in row order (one per `Slider` row).
+    pub sliders: Vec<SliderNodeIds>,
+    /// Total height the drawer occupied.
+    pub height: f32,
+}
+
+impl DrawerIds {
+    /// Flat control index of the button with this node id, if any.
+    pub fn resolve_button(&self, id: i32) -> Option<usize> {
+        self.button_ids.iter().position(|&b| b == id)
+    }
+
+    /// Number of addressable buttons.
+    pub fn button_count(&self) -> usize {
+        self.button_ids.len()
+    }
+}
+
+/// Proportional widths for a row of buttons: weight each by `label.len() + 1`
+/// so fraction labels get room and integer labels give it back. Returns the
+/// per-button widths summing to `content_w`.
+fn proportional_widths(labels: &[&str], content_w: f32) -> Vec<f32> {
+    let weights: Vec<f32> = labels.iter().map(|l| l.chars().count() as f32 + 1.0).collect();
+    let total: f32 = weights.iter().sum::<f32>().max(1.0);
+    weights.iter().map(|w| content_w * w / total).collect()
+}
+
+/// Build a drawer's `UITree` nodes under `parent` at `(x, y)` spanning width
+/// `w`. Returns the created ids + the height consumed.
+pub fn build(
+    tree: &mut UITree,
+    parent: i32,
+    x: f32,
+    y: f32,
+    w: f32,
+    spec: &DrawerSpec,
+) -> DrawerIds {
+    let height = spec.height();
+    let container = tree.add_panel(
+        parent,
+        x,
+        y,
+        w,
+        height,
+        UIStyle {
+            bg_color: crate::color::CONFIG_BG_C32,
+            corner_radius: 2.0,
+            ..UIStyle::default()
+        },
+    ) as i32;
+
+    let mut button_ids: Vec<i32> = Vec::new();
+    let mut sliders: Vec<SliderNodeIds> = Vec::new();
+    let avail_w = w - PAD_H * 2.0;
+    let mut row_y = y + TOP_PAD;
+
+    for row in &spec.rows {
+        match row {
+            DrawerRow::Buttons(buttons) => {
+                let labels: Vec<&str> = buttons.iter().map(|b| b.label.as_str()).collect();
+                let content_w = avail_w - BTN_GAP * (buttons.len().max(1) as f32 - 1.0);
+                let widths = proportional_widths(&labels, content_w);
+                let mut cx = x + PAD_H;
+                for (b, bw) in buttons.iter().zip(widths.iter()) {
+                    let id = tree.add_button(
+                        container,
+                        cx,
+                        row_y,
+                        *bw,
+                        ROW_H,
+                        config_btn_style(b.active, spec.btn_font_size),
+                        &b.label,
+                    ) as i32;
+                    button_ids.push(id);
+                    cx += bw + BTN_GAP;
+                }
+            }
+            DrawerRow::Slider {
+                label,
+                norm,
+                value_text,
+                colors,
+                label_w,
+            } => {
+                let sx = x + PAD_H;
+                let slider_w = w - PAD_H * 2.0;
+                let ids = BitmapSlider::build(
+                    tree,
+                    container,
+                    Rect::new(sx, row_y, slider_w, ROW_H),
+                    Some(label.as_str()),
+                    norm.clamp(0.0, 1.0),
+                    value_text.as_str(),
+                    colors,
+                    spec.slider_font_size,
+                    *label_w,
+                );
+                sliders.push(ids);
+            }
+        }
+        row_y += ROW_H + ROW_GAP;
+    }
+
+    DrawerIds {
+        container,
+        button_ids,
+        sliders,
+        height,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buttons(labels: &[(&str, bool)]) -> DrawerRow {
+        DrawerRow::Buttons(labels.iter().map(|(l, a)| DrawerButton::new(*l, *a)).collect())
+    }
+
+    #[test]
+    fn flat_button_indexing_across_rows() {
+        // Mirror the driver drawer: row1 = 11 beat divs, row2 = dot/triplet/5
+        // waves/rev (8). Flat indices 0..10 then 11..18.
+        let spec = DrawerSpec {
+            rows: vec![
+                buttons(&[
+                    ("1/32", false), ("1/16", false), ("1/8", false), ("1/4", true),
+                    ("1/2", false), ("1", false), ("2", false), ("4", false),
+                    ("8", false), ("16", false), ("32", false),
+                ]),
+                buttons(&[
+                    (".", false), ("T", false), ("Sin", true), ("Tri", false),
+                    ("Saw", false), ("Sqr", false), ("Rnd", false), ("Rev", false),
+                ]),
+            ],
+            btn_font_size: 10,
+            slider_font_size: 11,
+        };
+
+        let mut tree = UITree::new();
+        let root = tree.add_panel(-1, 0.0, 0.0, 400.0, 200.0, UIStyle::default()) as i32;
+        let ids = build(&mut tree, root, 0.0, 0.0, 240.0, &spec);
+
+        assert_eq!(ids.button_count(), 19, "11 + 8 buttons");
+
+        // The first button of row 2 (".") is flat index 11.
+        let dot_node = ids.button_ids[11];
+        assert_eq!(ids.resolve_button(dot_node), Some(11));
+        // Last button ("Rev") is flat index 18.
+        let rev_node = ids.button_ids[18];
+        assert_eq!(ids.resolve_button(rev_node), Some(18));
+        // An unrelated id resolves to nothing.
+        assert_eq!(ids.resolve_button(999_999), None);
+    }
+
+    #[test]
+    fn slider_row_yields_a_slider_not_a_button() {
+        let spec = DrawerSpec {
+            rows: vec![DrawerRow::Slider {
+                label: "Decay".into(),
+                norm: 0.25,
+                value_text: "2.00".into(),
+                colors: SliderColors::envelope(),
+                label_w: 50.0,
+            }],
+            btn_font_size: 10,
+            slider_font_size: 11,
+        };
+        let mut tree = UITree::new();
+        let root = tree.add_panel(-1, 0.0, 0.0, 400.0, 200.0, UIStyle::default()) as i32;
+        let ids = build(&mut tree, root, 0.0, 0.0, 240.0, &spec);
+
+        assert_eq!(ids.button_count(), 0);
+        assert_eq!(ids.sliders.len(), 1);
+    }
+
+    #[test]
+    fn height_accounts_for_rows_and_gaps() {
+        let one = DrawerSpec {
+            rows: vec![buttons(&[("a", false)])],
+            btn_font_size: 10,
+            slider_font_size: 11,
+        };
+        let two = DrawerSpec {
+            rows: vec![buttons(&[("a", false)]), buttons(&[("b", false)])],
+            btn_font_size: 10,
+            slider_font_size: 11,
+        };
+        assert!(two.height() > one.height());
+        // Empty spec is zero height.
+        let empty = DrawerSpec { rows: vec![], btn_font_size: 10, slider_font_size: 11 };
+        assert_eq!(empty.height(), 0.0);
+    }
+}
