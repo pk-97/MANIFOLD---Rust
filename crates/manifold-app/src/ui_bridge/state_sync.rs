@@ -1071,6 +1071,30 @@ pub fn sync_inspector_data(
     active_layer: Option<usize>,
     selection: &SelectionState,
 ) {
+    // Audio Setup modal — refresh its device + send list while it's open.
+    // Device enumeration is a CoreAudio call, so gate it on the panel being
+    // visible (it's a rare, user-opened modal).
+    if ui.audio_setup_panel.is_open() {
+        use manifold_ui::panels::audio_setup_panel::AudioSendRow;
+        let devices = manifold_audio::capture::AudioCaptureDevice::list_devices()
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        let sends = project
+            .audio_setup
+            .sends
+            .iter()
+            .map(|s| AudioSendRow {
+                id: s.id.clone(),
+                label: s.label.clone(),
+                channel: s.channels.first().copied().unwrap_or(0),
+                gain_db: s.gain_db,
+            })
+            .collect();
+        ui.audio_setup_panel
+            .configure(devices, project.audio_setup.device_name.clone(), sends);
+    }
+
     // Master effects → inspector (envelopes ride on each instance)
     let mut master_configs = effects_to_configs(&project.settings.master_effects, OscScope::Master);
     attach_audio_sends(&mut master_configs, &project.audio_setup);

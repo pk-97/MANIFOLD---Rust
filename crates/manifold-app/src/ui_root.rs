@@ -138,6 +138,7 @@ pub struct UIRoot {
     pub viewport: TimelineViewportPanel,
     pub dropdown: DropdownPanel,
     pub browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel,
+    pub audio_setup_panel: manifold_ui::panels::audio_setup_panel::AudioSetupPanel,
     pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
 
     /// Project-embedded ("forked") presets surfaced into the Add pickers, kept
@@ -256,6 +257,7 @@ impl UIRoot {
             viewport: TimelineViewportPanel::new(),
             dropdown: DropdownPanel::new(),
             browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel::new(),
+            audio_setup_panel: manifold_ui::panels::audio_setup_panel::AudioSetupPanel::new(),
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
             embedded_presets: Vec::new(),
             embedded_presets_fingerprint: 0,
@@ -579,6 +581,9 @@ impl UIRoot {
         if self.browser_popup.is_open() {
             self.browser_popup.build(&mut self.tree);
         }
+        if self.audio_setup_panel.is_open() {
+            self.audio_setup_panel.build(&mut self.tree, self.screen_width, self.screen_height);
+        }
 
         self.ableton_picker
             .set_screen_size(self.screen_width, self.screen_height);
@@ -615,6 +620,9 @@ impl UIRoot {
             .set_screen_size(self.screen_width, self.screen_height);
         if self.browser_popup.is_open() {
             self.browser_popup.build(&mut self.tree);
+        }
+        if self.audio_setup_panel.is_open() {
+            self.audio_setup_panel.build(&mut self.tree, self.screen_width, self.screen_height);
         }
 
         self.ableton_picker
@@ -842,6 +850,40 @@ impl UIRoot {
                     consumed = true;
                 }
 
+                if consumed {
+                    continue;
+                }
+            }
+
+            // Global: ⌘⇧A toggles the Audio Setup panel (open or close).
+            if let UIEvent::KeyDown { key: Key::A, modifiers, .. } = event
+                && modifiers.command
+                && modifiers.shift
+            {
+                self.audio_setup_panel.toggle();
+                self.overlay_dirty = true;
+                continue;
+            }
+
+            // Audio Setup modal — handle its clicks + escape before lower panels.
+            if self.audio_setup_panel.is_open() {
+                let mut consumed = false;
+                if let UIEvent::KeyDown { key: Key::Escape, .. } = event {
+                    self.audio_setup_panel.close();
+                    self.overlay_dirty = true;
+                    consumed = true;
+                }
+                if let UIEvent::Click { node_id, .. } = event {
+                    if let Some(action) = self.audio_setup_panel.handle_click(*node_id as i32) {
+                        actions.push(action);
+                        self.overlay_dirty = true;
+                        consumed = true;
+                    } else if self.audio_setup_panel.owns_node(*node_id as i32) {
+                        // Close button or modal background — swallow, no action.
+                        self.overlay_dirty = true;
+                        consumed = true;
+                    }
+                }
                 if consumed {
                     continue;
                 }

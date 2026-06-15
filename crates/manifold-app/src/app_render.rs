@@ -938,6 +938,12 @@ impl Application {
         // Consume deferred structural sync flag (set by keyboard shortcuts)
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;
+        // Keep the inspector sync running every frame the Audio Setup modal is
+        // open, so it re-reads the device + send list (its data lives behind the
+        // otherwise-gated structural sync).
+        if self.ws.ui_root.audio_setup_panel.is_open() {
+            needs_structural_sync = true;
+        }
         let mut needs_resolution_resize = false;
         let prev_active_layer = self.active_layer_id.clone();
         let prev_sel_version = self.selection.selection_version;

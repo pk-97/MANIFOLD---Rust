@@ -290,10 +290,25 @@ impl AudioSetupPanel {
         ) as i32;
     }
 
-    /// The panel's background node id — the caller treats a click on it (or any
-    /// child) as "inside the modal" to swallow click-through.
-    pub fn background_id(&self) -> i32 {
-        self.bg_id
+    /// Whether `id` is any node this panel owns (background or an interactive
+    /// control) — the caller swallows such clicks so they don't fall through to
+    /// the canvas behind the modal.
+    pub fn owns_node(&self, id: i32) -> bool {
+        if id == self.bg_id
+            || id == self.close_id
+            || id == self.device_prev_id
+            || id == self.device_next_id
+            || id == self.add_send_id
+        {
+            return true;
+        }
+        self.send_ids.iter().any(|r| {
+            id == r.ch_minus
+                || id == r.ch_plus
+                || id == r.gain_minus
+                || id == r.gain_plus
+                || id == r.delete
+        })
     }
 
     /// Resolve a clicked node id to a [`PanelAction`], or `None` if it hit
