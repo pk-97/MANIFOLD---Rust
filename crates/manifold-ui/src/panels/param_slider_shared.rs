@@ -161,17 +161,19 @@ pub struct ParamModState {
 pub(crate) fn audio_feature_from_index(idx: usize) -> manifold_core::AudioFeature {
     use manifold_core::audio_mod::{AudioBand, AudioFeature};
     match idx {
-        0 => AudioFeature::BandEnergy(AudioBand::Low),
-        1 => AudioFeature::BandEnergy(AudioBand::Mid),
-        2 => AudioFeature::BandEnergy(AudioBand::High),
-        3 => AudioFeature::Onset,
-        _ => AudioFeature::BandEnergy(AudioBand::Low),
+        0 => AudioFeature::Amplitude,
+        1 => AudioFeature::BandEnergy(AudioBand::Low),
+        2 => AudioFeature::BandEnergy(AudioBand::Mid),
+        3 => AudioFeature::BandEnergy(AudioBand::High),
+        4 => AudioFeature::Onset,
+        _ => AudioFeature::Amplitude,
     }
 }
 
-/// The four feature options exposed in the per-slider audio drawer, in button
-/// order. Index maps to an `AudioFeature` in the card's click handler.
-pub(crate) const AUDIO_FEATURE_LABELS: [&str; 4] = ["Lo", "Mid", "Hi", "On"];
+/// The feature options exposed in the per-slider audio drawer, in button order.
+/// Index maps to an `AudioFeature` in the card's click handler. "Amp" is the
+/// overall level (the default); Lo/Mid/Hi are the energy bands; On is onset.
+pub(crate) const AUDIO_FEATURE_LABELS: [&str; 5] = ["Amp", "Lo", "Mid", "Hi", "On"];
 
 /// Audio-modulation display state for one card, assembled in `state_sync` and
 /// applied to [`ParamModState`] via [`ParamModState::sync_audio`]. Bundled so

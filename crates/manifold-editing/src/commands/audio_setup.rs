@@ -170,38 +170,6 @@ impl Command for SetAudioSendChannelsCommand {
     }
 }
 
-/// Set a send's gain trim (dB).
-#[derive(Debug)]
-pub struct SetAudioSendGainCommand {
-    id: AudioSendId,
-    old: f32,
-    new: f32,
-}
-
-impl SetAudioSendGainCommand {
-    pub fn new(id: AudioSendId, old: f32, new: f32) -> Self {
-        Self { id, old, new }
-    }
-}
-
-impl Command for SetAudioSendGainCommand {
-    fn execute(&mut self, project: &mut Project) {
-        if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
-            s.gain_db = self.new;
-        }
-    }
-
-    fn undo(&mut self, project: &mut Project) {
-        if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
-            s.gain_db = self.old;
-        }
-    }
-
-    fn description(&self) -> &str {
-        "Set Audio Send Gain"
-    }
-}
-
 /// Set a send's analysis config (which extractors run for it).
 #[derive(Debug)]
 pub struct SetAudioSendAnalysisCommand {

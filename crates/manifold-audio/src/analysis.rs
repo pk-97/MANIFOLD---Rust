@@ -69,19 +69,11 @@ const OUTPUT_RING_CAPACITY: usize = 16;
 
 /// One send's routing + analysis config, as the worker needs it. The project's
 /// `AudioSend` (in `manifold-core`) is resolved down to this at the wiring layer.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SendSpec {
     /// Device input channels to downmix to mono for this send. Out-of-range
     /// channels (≥ device channel count) are ignored at runtime.
     pub channels: Vec<u16>,
-    /// Per-send trim in decibels, applied to the downmixed mono signal.
-    pub gain_db: f32,
-}
-
-impl Default for SendSpec {
-    fn default() -> Self {
-        Self { channels: Vec::new(), gain_db: 0.0 }
-    }
 }
 
 /// A snapshot of every send's features at one analysis instant. `Copy` and
@@ -196,7 +188,6 @@ impl Drop for AudioFeatureWorker {
 /// Per-send running state on the worker thread.
 struct SendState {
     channels: Vec<u16>,
-    gain_lin: f32,
     /// Samples accumulating toward the next FFT window.
     accum: Vec<f32>,
     features: SendFeatures,
@@ -227,7 +218,6 @@ impl WorkerLoop {
             .into_iter()
             .map(|s| SendState {
                 channels: s.channels,
-                gain_lin: 10f32.powf(s.gain_db / 20.0),
                 accum: Vec::with_capacity(FFT_SIZE),
                 features: SendFeatures::default(),
             })
@@ -282,7 +272,7 @@ impl WorkerLoop {
 
         for frame in samples[..usable].chunks_exact(ch) {
             for send in &mut self.sends {
-                let mono = downmix(frame, &send.channels) * send.gain_lin;
+                let mono = downmix(frame, &send.channels);
                 send.accum.push(mono);
                 if send.accum.len() >= FFT_SIZE {
                     send.features.band_energy = self.analyzer.analyze(&send.accum[..FFT_SIZE]);
@@ -452,7 +442,7 @@ mod tests {
         let pushed = prod.push_slice(&tone);
         assert_eq!(pushed, tone.len());
 
-        let sends = vec![SendSpec { channels: vec![0], gain_db: 0.0 }];
+        let sends = vec![SendSpec { channels: vec![0] }];
         let (mut worker, mut reader) =
             AudioFeatureWorker::spawn(cons, SR, /* device_channels */ 1, sends);
 

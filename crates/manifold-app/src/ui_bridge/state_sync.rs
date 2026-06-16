@@ -1085,7 +1085,6 @@ pub fn sync_inspector_data(
                 id: s.id.clone(),
                 label: s.label.clone(),
                 channel: s.channels.first().copied().unwrap_or(0),
-                gain_db: s.gain_db,
             })
             .collect();
         ui.audio_setup_panel
@@ -1412,11 +1411,12 @@ fn build_audio_card_state(
         a.active[pi] = true;
         a.send_id[pi] = Some(am.source.send_id.clone());
         a.feature_idx[pi] = match am.source.feature {
-            AudioFeature::BandEnergy(AudioBand::Low) => 0,
-            AudioFeature::BandEnergy(AudioBand::Mid) => 1,
-            AudioFeature::BandEnergy(AudioBand::High) => 2,
-            AudioFeature::Onset => 3,
-            // v2 features have no card option yet; show the default.
+            AudioFeature::Amplitude => 0,
+            AudioFeature::BandEnergy(AudioBand::Low) => 1,
+            AudioFeature::BandEnergy(AudioBand::Mid) => 2,
+            AudioFeature::BandEnergy(AudioBand::High) => 3,
+            AudioFeature::Onset => 4,
+            // v2 features have no card option yet; show the default ("Amp").
             AudioFeature::Pitch | AudioFeature::PitchDelta => 0,
         };
     }

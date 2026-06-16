@@ -239,8 +239,6 @@ pub enum PanelAction {
     AudioRenameSend(manifold_core::AudioSendId, String),
     /// Set a send's input channels (downmixed to mono for analysis).
     AudioSetSendChannels(manifold_core::AudioSendId, Vec<u16>),
-    /// Set a send's gain trim (dB).
-    AudioSetSendGain(manifold_core::AudioSendId, f32),
     TrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
     /// Snapshot trim state before drag (for undo).
     TrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),

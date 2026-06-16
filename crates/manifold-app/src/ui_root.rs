@@ -92,11 +92,6 @@ pub(crate) fn build_picker_session(
     AbletonPickerSession { rack_tracks }
 }
 
-/// Highest 0-based input channel an Audio Setup send can route to (64 channels,
-/// covering large multichannel interfaces). The channel dropdown lists `0..=`
-/// this; the picker downmixes the chosen channel to mono for analysis.
-const AUDIO_SEND_MAX_CHANNEL: u16 = 63;
-
 /// What the currently-open dropdown is selecting for.
 #[derive(Debug, Clone)]
 pub enum DropdownContext {
@@ -1255,9 +1250,14 @@ impl UIRoot {
                 true
             }
             PanelAction::AudioSendChannelClicked(send_id) => {
-                // 1-based labels; index k → 0-based channel k. The dropdown
-                // scrolls, so listing the full routing range is fine.
-                let items: Vec<DropdownItem> = (0..=AUDIO_SEND_MAX_CHANNEL)
+                // List only the channels the selected device actually has. Fall
+                // back to mono if the device is absent / can't report its config.
+                let device = self.audio_setup_panel.current_device();
+                let count = manifold_audio::capture::AudioCaptureDevice::device_channels(device)
+                    .unwrap_or(1)
+                    .max(1);
+                // 1-based labels; index k → 0-based channel k.
+                let items: Vec<DropdownItem> = (0..count)
                     .map(|ch| DropdownItem::new(&format!("Channel {}", ch + 1)))
                     .collect();
                 self.open_dropdown_at(

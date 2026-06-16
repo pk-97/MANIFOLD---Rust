@@ -55,9 +55,6 @@ pub struct AudioSend {
     /// means the send produces silence until the user routes it.
     #[serde(default)]
     pub channels: Vec<u16>,
-    /// Per-send trim in decibels, applied to the downmixed signal.
-    #[serde(default)]
-    pub gain_db: f32,
     /// Which extractors run for this send.
     #[serde(default)]
     pub analysis: SendAnalysisConfig,
@@ -70,7 +67,6 @@ impl AudioSend {
             id: AudioSendId::new(short_id()),
             label: label.into(),
             channels: Vec::new(),
-            gain_db: 0.0,
             analysis: SendAnalysisConfig::default(),
         }
     }
@@ -168,7 +164,6 @@ mod tests {
             sends: vec![AudioSend::new("Bass")],
         };
         setup.sends[0].channels = vec![2];
-        setup.sends[0].gain_db = -3.0;
         setup.sends[0].analysis.pitch = true;
 
         let json = serde_json::to_string(&setup).unwrap();

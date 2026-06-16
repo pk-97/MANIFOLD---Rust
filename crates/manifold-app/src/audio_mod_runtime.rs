@@ -8,7 +8,7 @@
 //! Lifecycle is **gated and self-healing**: capture runs only while the project
 //! has at least one enabled audio modulation and at least one send. The device
 //! and worker rebuild when the capture-relevant config changes (device or any
-//! send's channels/gain) — a relabel alone does not restart capture. A missing
+//! send's channels) — a relabel alone does not restart capture. A missing
 //! device leaves capture dark until the user re-points it (the remappable
 //! device policy), rather than failing the tick.
 
@@ -23,20 +23,16 @@ use manifold_playback::engine::PlaybackEngine;
 #[derive(Clone, PartialEq, Default)]
 struct CaptureSignature {
     device_name: Option<String>,
-    /// `(channels, gain_db)` per send in send order — the order is significant
-    /// because it is the worker's frame index.
-    sends: Vec<(Vec<u16>, f32)>,
+    /// Channels per send in send order — the order is significant because it is
+    /// the worker's frame index.
+    sends: Vec<Vec<u16>>,
 }
 
 impl CaptureSignature {
     fn from_setup(setup: &AudioSetup) -> Self {
         Self {
             device_name: setup.device_name.clone(),
-            sends: setup
-                .sends
-                .iter()
-                .map(|s| (s.channels.clone(), s.gain_db))
-                .collect(),
+            sends: setup.sends.iter().map(|s| s.channels.clone()).collect(),
         }
     }
 }
@@ -119,7 +115,6 @@ impl AudioModRuntime {
             .iter()
             .map(|s| SendSpec {
                 channels: s.channels.clone(),
-                gain_db: s.gain_db,
             })
             .collect();
         let send_count = specs.len();

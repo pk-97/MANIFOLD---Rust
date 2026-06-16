@@ -26,28 +26,33 @@ pub enum AudioBand {
     High,
 }
 
-/// Which extracted feature of a send drives the modulation. v1 exposes
-/// `BandEnergy` and `Onset`; `Pitch`/`PitchDelta` arrive with the v2 ridge
-/// tracker and slot in here without touching the model or plumbing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Which extracted feature of a send drives the modulation. `Amplitude` (the
+/// default) is the simple overall level; `BandEnergy` and `Onset` are the
+/// v1 band features; `Pitch`/`PitchDelta` arrive with the v2 ridge tracker and
+/// slot in here without touching the model or plumbing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioFeature {
+    /// Overall broadband level — the quadrature sum of the three energy bands.
+    /// The bands partition the spectrum, so `sqrt(low² + mid² + high²)` is the
+    /// input's true RMS amplitude. No separate extractor: it reuses the band
+    /// energies the worker already computes. The default feature.
+    #[default]
+    Amplitude,
     BandEnergy(AudioBand),
     Onset,
     Pitch,
     PitchDelta,
 }
 
-impl Default for AudioFeature {
-    fn default() -> Self {
-        AudioFeature::BandEnergy(AudioBand::Low)
-    }
-}
-
 impl AudioFeature {
     /// Pull this feature's scalar out of a send's features.
     pub fn extract(self, f: &SendFeatures) -> f32 {
         match self {
+            AudioFeature::Amplitude => {
+                let b = f.band_energy;
+                (b[0] * b[0] + b[1] * b[1] + b[2] * b[2]).sqrt()
+            }
             AudioFeature::BandEnergy(AudioBand::Low) => f.band_energy[0],
             AudioFeature::BandEnergy(AudioBand::Mid) => f.band_energy[1],
             AudioFeature::BandEnergy(AudioBand::High) => f.band_energy[2],
@@ -209,6 +214,14 @@ mod tests {
         assert_eq!(AudioFeature::BandEnergy(AudioBand::High).extract(&f), 0.3);
         assert_eq!(AudioFeature::Onset.extract(&f), 0.9);
         assert_eq!(AudioFeature::PitchDelta.extract(&f), -2.5);
+        // Amplitude is the quadrature sum of the three bands (broadband RMS).
+        let amp = AudioFeature::Amplitude.extract(&f);
+        assert!((amp - (0.01f32 + 0.04 + 0.09).sqrt()).abs() < 1e-6, "got {amp}");
+    }
+
+    #[test]
+    fn amplitude_is_the_default_feature() {
+        assert_eq!(AudioFeature::default(), AudioFeature::Amplitude);
     }
 
     #[test]

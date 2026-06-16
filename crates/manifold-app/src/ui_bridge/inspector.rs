@@ -16,7 +16,7 @@ use manifold_editing::commands::audio_mod::{
 };
 use manifold_editing::commands::audio_setup::{
     AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand,
-    SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendGainCommand,
+    SetAudioInputDeviceCommand, SetAudioSendChannelsCommand,
 };
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
@@ -1218,18 +1218,6 @@ pub(super) fn dispatch_inspector(
                 project,
                 content_tx,
                 Box::new(SetAudioSendChannelsCommand::new(id.clone(), old, ch.clone())),
-            )
-        }
-        PanelAction::AudioSetSendGain(id, g) => {
-            let old = project
-                .audio_setup
-                .find_send(id)
-                .map(|s| s.gain_db)
-                .unwrap_or(0.0);
-            audio_setup_command(
-                project,
-                content_tx,
-                Box::new(SetAudioSendGainCommand::new(id.clone(), old, *g)),
             )
         }
         PanelAction::EnvelopeToggle(gpt, param_id) => {

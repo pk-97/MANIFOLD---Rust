@@ -31,11 +31,6 @@ const PAD: f32 = 10.0;
 const STEP_W: f32 = 22.0;
 const BTN_FONT: u16 = color::FONT_LABEL;
 
-/// Gain trim bounds (dB) and step.
-const GAIN_MIN: f32 = -24.0;
-const GAIN_MAX: f32 = 24.0;
-const GAIN_STEP: f32 = 1.0;
-
 /// One send's display data, supplied by `configure`.
 #[derive(Clone, Debug)]
 pub struct AudioSendRow {
@@ -43,15 +38,12 @@ pub struct AudioSendRow {
     pub label: String,
     /// First routed channel (the panel edits a single channel per send in v1).
     pub channel: u16,
-    pub gain_db: f32,
 }
 
 /// Per-send interactive node ids.
 #[derive(Default, Clone)]
 struct SendRowIds {
     ch_dropdown: i32,
-    gain_minus: i32,
-    gain_plus: i32,
     delete: i32,
 }
 
@@ -85,6 +77,12 @@ impl AudioSetupPanel {
 
     pub fn close(&mut self) {
         self.open = false;
+    }
+
+    /// The currently selected input device name (`None` = system default). The
+    /// app reads this to scope the channel dropdown to the device's channels.
+    pub fn current_device(&self) -> Option<&str> {
+        self.current_device.as_deref()
     }
 
     /// Update the data the panel renders. Called from `state_sync` on a
@@ -187,38 +185,18 @@ impl AudioSetupPanel {
         // Send rows: label | [ Ch N ▼ ] | − dB + | ×
         self.send_ids = vec![SendRowIds::default(); rows];
         for (i, send) in self.sends.iter().enumerate() {
-            let mut rx = inner_x;
-            tree.add_label(self.bg_id, rx, cy, 70.0, ROW_H, &send.label, label_style());
-            rx += 74.0;
+            tree.add_label(self.bg_id, inner_x, cy, 70.0, ROW_H, &send.label, label_style());
 
             // Channel dropdown (1-based display; channel 0 shows as "Ch 1").
             self.send_ids[i].ch_dropdown = tree.add_button(
                 self.bg_id,
-                rx,
+                inner_x + 74.0,
                 cy,
                 78.0,
                 ROW_H,
                 dropdown_trigger_style(),
                 &format!("Ch {}   \u{25BC}", send.channel + 1),
             ) as i32;
-            rx += 78.0 + 8.0;
-
-            // Gain stepper: − [value] +
-            self.send_ids[i].gain_minus =
-                tree.add_button(self.bg_id, rx, cy, STEP_W, ROW_H, btn_style(false), "\u{2212}") as i32; // −
-            rx += STEP_W;
-            tree.add_label(
-                self.bg_id,
-                rx,
-                cy,
-                52.0,
-                ROW_H,
-                &format!("{:+.0} dB", send.gain_db),
-                value_style(),
-            );
-            rx += 52.0;
-            self.send_ids[i].gain_plus =
-                tree.add_button(self.bg_id, rx, cy, STEP_W, ROW_H, btn_style(false), "\u{002B}") as i32; // +
 
             // Delete (right-aligned).
             self.send_ids[i].delete = tree.add_button(
@@ -256,12 +234,9 @@ impl AudioSetupPanel {
         {
             return true;
         }
-        self.send_ids.iter().any(|r| {
-            id == r.ch_dropdown
-                || id == r.gain_minus
-                || id == r.gain_plus
-                || id == r.delete
-        })
+        self.send_ids
+            .iter()
+            .any(|r| id == r.ch_dropdown || id == r.delete)
     }
 
     /// Resolve a clicked node id to a [`PanelAction`], or `None` if it hit
@@ -291,14 +266,6 @@ impl AudioSetupPanel {
             if id == ids.ch_dropdown {
                 // App opens the channel dropdown anchored to this trigger.
                 return Some(PanelAction::AudioSendChannelClicked(send.id.clone()));
-            }
-            if id == ids.gain_minus {
-                let g = (send.gain_db - GAIN_STEP).max(GAIN_MIN);
-                return Some(PanelAction::AudioSetSendGain(send.id.clone(), g));
-            }
-            if id == ids.gain_plus {
-                let g = (send.gain_db + GAIN_STEP).min(GAIN_MAX);
-                return Some(PanelAction::AudioSetSendGain(send.id.clone(), g));
             }
         }
         None
@@ -382,15 +349,6 @@ fn label_style() -> UIStyle {
     }
 }
 
-fn value_style() -> UIStyle {
-    UIStyle {
-        text_color: Color32::new(210, 210, 216, 255),
-        font_size: color::FONT_LABEL,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
-    }
-}
-
 /// A dropdown trigger — a bordered field showing the current value with a ▼
 /// caret, the standard "click to choose" affordance.
 fn dropdown_trigger_style() -> UIStyle {
@@ -418,8 +376,8 @@ mod tests {
         p.configure(
             None,
             vec![
-                AudioSendRow { id: AudioSendId::new("s1"), label: "Audio 1".into(), channel: 0, gain_db: 0.0 },
-                AudioSendRow { id: AudioSendId::new("s2"), label: "Audio 2".into(), channel: 2, gain_db: -3.0 },
+                AudioSendRow { id: AudioSendId::new("s1"), label: "Audio 1".into(), channel: 0 },
+                AudioSendRow { id: AudioSendId::new("s2"), label: "Audio 2".into(), channel: 2 },
             ],
         );
         p
@@ -445,16 +403,6 @@ mod tests {
         match p.handle_click(ch_dropdown) {
             Some(PanelAction::AudioSendChannelClicked(id)) => assert_eq!(id.as_str(), "s2"),
             other => panic!("expected channel dropdown open, got {other:?}"),
-        }
-
-        // Gain - on send 2 (-3 → -4).
-        let gain_minus = p.send_ids[1].gain_minus;
-        match p.handle_click(gain_minus) {
-            Some(PanelAction::AudioSetSendGain(id, g)) => {
-                assert_eq!(id.as_str(), "s2");
-                assert!((g - (-4.0)).abs() < 1e-6);
-            }
-            other => panic!("expected gain set, got {other:?}"),
         }
 
         // Delete send 1.
