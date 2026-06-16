@@ -223,6 +223,9 @@ pub enum PanelAction {
     /// Create a new audio send (default routing) and point this param's audio
     /// modulation at it — the "＋" in the drawer's send selector.
     AudioModNewSend(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Toggle an audio modulation's invert flag (`AudioModShape::invert`) — the
+    /// drawer's "Inv" button (loud → low).
+    AudioModSetInvert(GraphParamTarget, manifold_core::effects::ParamId),
 
     // ── Audio Setup panel (project-level send routing) ──
     /// Open the input-device dropdown (anchored to the clicked trigger).

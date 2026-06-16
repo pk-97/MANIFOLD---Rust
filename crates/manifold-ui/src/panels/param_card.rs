@@ -2067,6 +2067,9 @@ impl ParamCardPanel {
                 RowClick::AudioSelectFeature(pi, f) => {
                     self.audio_set_source_action(GraphParamTarget::Effect(ei), pi, None, Some(f))
                 }
+                RowClick::AudioToggleInvert(pi) => {
+                    vec![PanelAction::AudioModSetInvert(GraphParamTarget::Effect(ei), self.pid_at(pi))]
+                }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi] {
                         self.copied_flash.trigger(ids.label as u32);
@@ -2183,6 +2186,9 @@ impl ParamCardPanel {
                 }
                 RowClick::AudioSelectFeature(pi, f) => {
                     self.audio_set_source_action(GraphParamTarget::Generator, pi, None, Some(f))
+                }
+                RowClick::AudioToggleInvert(pi) => {
+                    vec![PanelAction::AudioModSetInvert(GraphParamTarget::Generator, self.pid_at(pi))]
                 }
                 RowClick::LabelCopy(pi) => {
                     if let Some(ids) = &self.slider_ids[pi] {

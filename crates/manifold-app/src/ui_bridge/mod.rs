@@ -184,6 +184,7 @@ pub fn dispatch(
         | PanelAction::AudioModSetSource(..)
         | PanelAction::AudioModRemove(..)
         | PanelAction::AudioModNewSend(..)
+        | PanelAction::AudioModSetInvert(..)
         | PanelAction::AudioSetDevice(..)
         | PanelAction::AudioAddSend
         | PanelAction::AudioRemoveSend(..)

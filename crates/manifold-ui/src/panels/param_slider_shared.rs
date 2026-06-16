@@ -154,6 +154,9 @@ pub struct ParamModState {
     /// drives only this slice of the param's range.
     pub audio_range_min: Vec<f32>,
     pub audio_range_max: Vec<f32>,
+    /// Per-param: audio-mod invert (`AudioModShape::invert`) — drives the "Inv"
+    /// toggle in the drawer (loud → low).
+    pub audio_invert: Vec<bool>,
     /// Card-level: available send labels (same for every row on the card).
     pub audio_send_labels: Vec<String>,
     /// Card-level: send ids parallel to `audio_send_labels` — turns a selected
@@ -195,6 +198,8 @@ pub struct AudioCardState {
     /// Per-param: the mod's output sub-range (`AudioModShape::range_min/max`).
     pub range_min: Vec<f32>,
     pub range_max: Vec<f32>,
+    /// Per-param: the mod's invert flag (`AudioModShape::invert`).
+    pub invert: Vec<bool>,
     /// Card-level: available send labels.
     pub send_labels: Vec<String>,
     /// Card-level: send ids parallel to `send_labels` — what the click handler
@@ -221,6 +226,7 @@ impl ParamModState {
             audio_feature_idx: vec![0; param_count],
             audio_range_min: vec![0.0; param_count],
             audio_range_max: vec![1.0; param_count],
+            audio_invert: vec![false; param_count],
             audio_send_labels: Vec::new(),
             audio_send_ids: Vec::new(),
         }
@@ -233,6 +239,7 @@ impl ParamModState {
             self.audio_feature_idx[i] = audio.feature_idx.get(i).copied().unwrap_or(0);
             self.audio_range_min[i] = audio.range_min.get(i).copied().unwrap_or(0.0);
             self.audio_range_max[i] = audio.range_max.get(i).copied().unwrap_or(1.0);
+            self.audio_invert[i] = audio.invert.get(i).copied().unwrap_or(false);
             self.audio_send_idx[i] = audio
                 .send_id
                 .get(i)
@@ -1201,11 +1208,15 @@ pub(crate) fn build_param_row(
             .collect();
         send_buttons.push(DrawerButton::new("\u{002B}", false)); // + new send
         let feat_sel = mod_state.audio_feature_idx.get(i).copied().unwrap_or(0);
-        let feat_buttons: Vec<DrawerButton> = AUDIO_FEATURE_LABELS
+        let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
+        let mut feat_buttons: Vec<DrawerButton> = AUDIO_FEATURE_LABELS
             .iter()
             .enumerate()
             .map(|(k, l)| DrawerButton::new(*l, k as i32 == feat_sel))
             .collect();
+        // Trailing invert toggle (loud → low). Its flat index sits one past the
+        // features, so the click handler reads it as feature == LABELS.len().
+        feat_buttons.push(DrawerButton::new("Inv", invert_on));
         let spec = DrawerSpec {
             rows: vec![
                 DrawerRow::Buttons { buttons: send_buttons, width: ButtonWidth::Proportional },
@@ -1246,6 +1257,8 @@ pub(crate) enum RowClick {
     AudioNewSend(usize),
     /// A feature button in the audio drawer (param index, feature index).
     AudioSelectFeature(usize, usize),
+    /// The "Inv" invert toggle in the audio drawer (param index).
+    AudioToggleInvert(usize),
     /// The slider's param label, when it carries an OSC address to copy
     /// (param index). The caller performs the copied-flash side effect and
     /// reads `osc_addresses[pi]`.
@@ -1339,7 +1352,13 @@ pub(crate) fn match_param_row_click(
             } else if flat == *send_count {
                 RowClick::AudioNewSend(pi)
             } else {
-                RowClick::AudioSelectFeature(pi, flat - send_count - 1)
+                // Feature buttons, then a trailing "Inv" toggle one past them.
+                let feat = flat - send_count - 1;
+                if feat == AUDIO_FEATURE_LABELS.len() {
+                    RowClick::AudioToggleInvert(pi)
+                } else {
+                    RowClick::AudioSelectFeature(pi, feat)
+                }
             });
         }
     }
