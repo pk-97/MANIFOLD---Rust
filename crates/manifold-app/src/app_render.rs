@@ -938,12 +938,6 @@ impl Application {
         // Consume deferred structural sync flag (set by keyboard shortcuts)
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;
-        // Keep the inspector sync running every frame the Audio Setup modal is
-        // open, so it re-reads the device + send list (its data lives behind the
-        // otherwise-gated structural sync).
-        if self.ws.ui_root.audio_setup_panel.is_open() {
-            needs_structural_sync = true;
-        }
         let mut needs_resolution_resize = false;
         let prev_active_layer = self.active_layer_id.clone();
         let prev_sel_version = self.selection.selection_version;
@@ -1009,13 +1003,17 @@ impl Application {
                     continue;
                 }
                 PanelAction::OpenAudioSetup => {
-                    // Toggle the modal and flag the overlay for rebuild. The
-                    // overlay driver builds it at the tail of the tree this same
-                    // tick (overlay_dirty → visual scroll rebuild → build_overlays)
-                    // and the draw pass renders it from overlay_draw — so it
-                    // appears immediately, no full rebuild needed.
+                    // Toggle the modal and flag a one-shot structural sync. The
+                    // panel's device + send list lives behind sync_inspector_data
+                    // (gated on this flag), so the sync populates it this frame,
+                    // then build() rebuilds the overlay with data. While the panel
+                    // stays open nothing re-fires — the overlay nodes persist and
+                    // the draw pass redraws them from overlay_draw — so opening it
+                    // costs one rebuild, not a per-frame one. Subsequent send /
+                    // device edits each return DispatchResult::structural(), which
+                    // re-runs this same path to refresh the panel.
                     self.ws.ui_root.audio_setup_panel.toggle();
-                    self.ws.ui_root.overlay_dirty = true;
+                    needs_structural_sync = true;
                     continue;
                 }
                 PanelAction::OpenGeneratorGraphEditor => {

@@ -893,15 +893,17 @@ impl UIRoot {
                 self.last_right_click_pos = *pos;
             }
 
-            // Global: ⌘⇧A toggles the Audio Setup panel (open or close). An open
-            // trigger, so it runs before overlay routing — otherwise the modal,
-            // once open, would capture the keystroke and it couldn't toggle shut.
+            // Global: ⌘⇧A toggles the Audio Setup panel. Emit the same action the
+            // "audio" button does so the single app-side handler owns the toggle
+            // plus its one-shot data sync — rather than toggling here and leaving
+            // the panel's device/send list unpopulated. Handled before overlay
+            // routing so an open modal can't capture the keystroke and block it
+            // from toggling shut.
             if let UIEvent::KeyDown { key: Key::A, modifiers, .. } = event
                 && modifiers.command
                 && modifiers.shift
             {
-                self.audio_setup_panel.toggle();
-                self.overlay_dirty = true;
+                actions.push(PanelAction::OpenAudioSetup);
                 continue;
             }
 
