@@ -807,6 +807,19 @@ impl ParamCardPanel {
         if self.param_info[i].ableton_display.is_some() {
             h += ABL_CONFIG_HEIGHT;
         }
+        // The audio-modulation drawer auto-shows while a mod is armed (same gate
+        // `build_param_row` uses), so reserve its height — otherwise the card is
+        // too short and the drawer draws past its bounds into the next row.
+        if self
+            .state
+            .mod_state
+            .audio_active
+            .get(i)
+            .copied()
+            .unwrap_or(false)
+        {
+            h += crate::panels::param_slider_shared::audio_config_height();
+        }
         h
     }
 
@@ -3195,5 +3208,21 @@ mod tests {
 
         assert!(expanded_h > base_h);
         assert!((expanded_h - base_h - DRIVER_CONFIG_HEIGHT).abs() < 0.1);
+    }
+
+    #[test]
+    fn gen_compute_height_with_audio_drawer_expanded() {
+        // Arming an audio mod auto-shows the per-param audio drawer; the card
+        // must reserve its height or the drawer draws past the card bounds.
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&gen_config());
+
+        let base_h = panel.compute_height();
+        panel.state.mod_state.audio_active[0] = true;
+        let expanded_h = panel.compute_height();
+
+        assert!(expanded_h > base_h);
+        let audio_h = crate::panels::param_slider_shared::audio_config_height();
+        assert!((expanded_h - base_h - audio_h).abs() < 0.1);
     }
 }

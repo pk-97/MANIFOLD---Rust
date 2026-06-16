@@ -38,6 +38,13 @@ pub(crate) const WAVEFORM_COUNT: usize = 5;
 
 pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 
+/// Height of the per-param audio-modulation drawer — a send-selector row and a
+/// feature-selector row (see `build_param_row`). Derived from the shared drawer
+/// metrics so the card's reserved height can't drift from what's actually drawn.
+pub(crate) fn audio_config_height() -> f32 {
+    crate::panels::drawer::uniform_rows_height(2)
+}
+
 // Arming the envelope shows two controls: the orange target handle on the
 // parameter's own track (the value it's pulled toward) and a single "Decay"
 // slider in a one-row drawer (how fast it falls back).
@@ -1107,7 +1114,7 @@ pub(crate) fn build_param_row(
             .enumerate()
             .map(|(k, label)| DrawerButton::new(label.clone(), k as i32 == send_sel))
             .collect();
-        send_buttons.push(DrawerButton::new("\u{FF0B}", false)); // ＋ new send
+        send_buttons.push(DrawerButton::new("\u{002B}", false)); // + new send
         let feat_sel = mod_state.audio_feature_idx.get(i).copied().unwrap_or(0);
         let feat_buttons: Vec<DrawerButton> = AUDIO_FEATURE_LABELS
             .iter()

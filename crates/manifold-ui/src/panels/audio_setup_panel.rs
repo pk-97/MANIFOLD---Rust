@@ -193,11 +193,11 @@ impl AudioSetupPanel {
             STEP_W,
             TITLE_H,
             btn_style(false),
-            "\u{2715}", // ✕
+            "\u{00D7}", // × close
         ) as i32;
         cy += TITLE_H;
 
-        // Device row: ◂ [name] ▸
+        // Device row: ◀ [name] ▶
         tree.add_label(
             self.bg_id,
             inner_x,
@@ -214,7 +214,7 @@ impl AudioSetupPanel {
             STEP_W,
             ROW_H,
             btn_style(false),
-            "\u{25C2}", // ◂
+            "\u{25C0}", // ◀ prev
         ) as i32;
         tree.add_label(
             self.bg_id,
@@ -232,11 +232,11 @@ impl AudioSetupPanel {
             STEP_W,
             ROW_H,
             btn_style(false),
-            "\u{25B8}", // ▸
+            "\u{25B6}", // ▶ next
         ) as i32;
         cy += ROW_H + ROW_GAP;
 
-        // Send rows: label | Ch ◂ N ▸ | Gain ◂ dB ▸ | ✕
+        // Send rows: label | Ch ◀ N ▶ | Gain ◀ dB ▶ | ×
         self.send_ids = vec![SendRowIds::default(); rows];
         for (i, send) in self.sends.iter().enumerate() {
             let mut rx = inner_x;
@@ -245,7 +245,7 @@ impl AudioSetupPanel {
 
             // Channel stepper.
             self.send_ids[i].ch_minus =
-                tree.add_button(self.bg_id, rx, cy, STEP_W, ROW_H, btn_style(false), "\u{25C2}") as i32;
+                tree.add_button(self.bg_id, rx, cy, STEP_W, ROW_H, btn_style(false), "\u{25C0}") as i32;
             rx += STEP_W;
             tree.add_label(
                 self.bg_id,
@@ -258,12 +258,12 @@ impl AudioSetupPanel {
             );
             rx += 42.0;
             self.send_ids[i].ch_plus =
-                tree.add_button(self.bg_id, rx, cy, STEP_W, ROW_H, btn_style(false), "\u{25B8}") as i32;
+                tree.add_button(self.bg_id, rx, cy, STEP_W, ROW_H, btn_style(false), "\u{25B6}") as i32;
             rx += STEP_W + 8.0;
 
             // Gain stepper.
             self.send_ids[i].gain_minus =
-                tree.add_button(self.bg_id, rx, cy, STEP_W, ROW_H, btn_style(false), "\u{25C2}") as i32;
+                tree.add_button(self.bg_id, rx, cy, STEP_W, ROW_H, btn_style(false), "\u{25C0}") as i32;
             rx += STEP_W;
             tree.add_label(
                 self.bg_id,
@@ -276,7 +276,7 @@ impl AudioSetupPanel {
             );
             rx += 52.0;
             self.send_ids[i].gain_plus =
-                tree.add_button(self.bg_id, rx, cy, STEP_W, ROW_H, btn_style(false), "\u{25B8}") as i32;
+                tree.add_button(self.bg_id, rx, cy, STEP_W, ROW_H, btn_style(false), "\u{25B6}") as i32;
 
             // Delete (right-aligned).
             self.send_ids[i].delete = tree.add_button(
@@ -286,7 +286,7 @@ impl AudioSetupPanel {
                 STEP_W,
                 ROW_H,
                 btn_style(false),
-                "\u{2715}",
+                "\u{00D7}",
             ) as i32;
             cy += ROW_H + ROW_GAP;
         }

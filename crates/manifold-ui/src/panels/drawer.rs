@@ -146,6 +146,17 @@ impl DrawerSpec {
     }
 }
 
+/// Container height for a drawer of `n` uniform button/slider rows (no status
+/// strips). Lets a caller reserve vertical space for a drawer it isn't itself
+/// building — keeps card-height math in sync with [`DrawerSpec::height`]
+/// without constructing a throwaway spec.
+pub(crate) fn uniform_rows_height(n: usize) -> f32 {
+    if n == 0 {
+        return 0.0;
+    }
+    TOP_PAD * 2.0 + ROW_H * n as f32 + ROW_GAP * (n as f32 - 1.0)
+}
+
 /// The `UITree` node ids a built drawer produced, plus the mapping needed to
 /// resolve a click. Buttons are enumerated **flat across all rows in order**
 /// (row 0's buttons first, then row 1's, …) — that flat index is what
