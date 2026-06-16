@@ -19,8 +19,12 @@
 /// them, so adding one does not disturb the plumbing.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SendFeatures {
-    /// Relative energy in [low, mid, high] perceptual bands. Amplitude-like
-    /// (pre-shaping); the modulation shaper maps it to a slider.
+    /// Overall RMS level of the analysis block, normalized **0..1** (samples are
+    /// −1..1, so their RMS is in range by construction). This is the `Amplitude`
+    /// feature — a true level the shaper maps straight onto a slider's range.
+    pub amplitude: f32,
+    /// Relative energy in [low, mid, high] perceptual bands. An unnormalized FFT
+    /// magnitude (not 0..1) — the shaper's sensitivity scales it.
     pub band_energy: [f32; 3],
     /// Transient trigger, 0..1 impulse that decays (v1 extractor pending).
     pub onset: f32,

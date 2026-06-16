@@ -275,6 +275,8 @@ impl WorkerLoop {
                 let mono = downmix(frame, &send.channels);
                 send.accum.push(mono);
                 if send.accum.len() >= FFT_SIZE {
+                    // Overall level: RMS of the raw (unwindowed) block, 0..1.
+                    send.features.amplitude = block_rms(&send.accum[..FFT_SIZE]);
                     send.features.band_energy = self.analyzer.analyze(&send.accum[..FFT_SIZE]);
                     send.accum.clear();
                     updated = true;
@@ -303,6 +305,16 @@ impl WorkerLoop {
         // the newest each tick and another frame follows in ~21 ms.
         let _ = self.producer.try_push(frame);
     }
+}
+
+/// RMS level of one block of mono samples. For input in [-1, 1] this is in
+/// 0..1 by construction — the natural "overall amplitude" of the block.
+fn block_rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum_sq: f32 = samples.iter().map(|&s| s * s).sum();
+    (sum_sq / samples.len() as f32).sqrt()
 }
 
 /// Downmix the channels of one interleaved frame to a single mono sample
@@ -399,6 +411,16 @@ mod tests {
     }
 
     #[test]
+    fn block_rms_is_normalized_0_to_1() {
+        assert_eq!(block_rms(&[0.0; 64]), 0.0);
+        // Constant full-scale → RMS = 1.0 (the ceiling).
+        assert!((block_rms(&[1.0; 64]) - 1.0).abs() < 1e-6);
+        // Full-scale sine → RMS ≈ 1/√2 ≈ 0.707, comfortably inside 0..1.
+        let r = block_rms(&sine(1000.0, FFT_SIZE));
+        assert!((r - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.02, "got {r}");
+    }
+
+    #[test]
     fn downmix_averages_selected_channels() {
         // 2ch interleaved frame: ch0 = 1.0, ch1 = 0.0.
         let frame = [1.0, 0.0];
@@ -463,6 +485,13 @@ mod tests {
             s.band_energy[1] > s.band_energy[0] && s.band_energy[1] > s.band_energy[2],
             "1 kHz tone should land in mid band: {:?}",
             s.band_energy,
+        );
+        // Overall amplitude is the normalized RMS — a full-scale tone reads
+        // ≈0.707, always inside 0..1 (unlike the unnormalized band energy).
+        assert!(
+            s.amplitude > 0.5 && s.amplitude <= 1.0,
+            "full-scale tone RMS in 0..1: {}",
+            s.amplitude,
         );
     }
 }

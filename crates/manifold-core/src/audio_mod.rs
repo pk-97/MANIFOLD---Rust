@@ -33,10 +33,9 @@ pub enum AudioBand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioFeature {
-    /// Overall broadband level — the quadrature sum of the three energy bands.
-    /// The bands partition the spectrum, so `sqrt(low² + mid² + high²)` is the
-    /// input's true RMS amplitude. No separate extractor: it reuses the band
-    /// energies the worker already computes. The default feature.
+    /// Overall input level — the RMS of the analysis block, normalized 0..1
+    /// (the worker computes it from the raw samples). The shaper maps this
+    /// straight onto the target slider's range. The default feature.
     #[default]
     Amplitude,
     BandEnergy(AudioBand),
@@ -49,10 +48,7 @@ impl AudioFeature {
     /// Pull this feature's scalar out of a send's features.
     pub fn extract(self, f: &SendFeatures) -> f32 {
         match self {
-            AudioFeature::Amplitude => {
-                let b = f.band_energy;
-                (b[0] * b[0] + b[1] * b[1] + b[2] * b[2]).sqrt()
-            }
+            AudioFeature::Amplitude => f.amplitude,
             AudioFeature::BandEnergy(AudioBand::Low) => f.band_energy[0],
             AudioFeature::BandEnergy(AudioBand::Mid) => f.band_energy[1],
             AudioFeature::BandEnergy(AudioBand::High) => f.band_energy[2],
@@ -204,6 +200,7 @@ mod tests {
     #[test]
     fn extract_selects_the_right_scalar() {
         let f = SendFeatures {
+            amplitude: 0.42,
             band_energy: [0.1, 0.2, 0.3],
             onset: 0.9,
             pitch_hz: 110.0,
@@ -214,9 +211,8 @@ mod tests {
         assert_eq!(AudioFeature::BandEnergy(AudioBand::High).extract(&f), 0.3);
         assert_eq!(AudioFeature::Onset.extract(&f), 0.9);
         assert_eq!(AudioFeature::PitchDelta.extract(&f), -2.5);
-        // Amplitude is the quadrature sum of the three bands (broadband RMS).
-        let amp = AudioFeature::Amplitude.extract(&f);
-        assert!((amp - (0.01f32 + 0.04 + 0.09).sqrt()).abs() < 1e-6, "got {amp}");
+        // Amplitude reads the worker's normalized 0..1 RMS level directly.
+        assert_eq!(AudioFeature::Amplitude.extract(&f), 0.42);
     }
 
     #[test]
