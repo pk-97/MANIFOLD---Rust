@@ -617,6 +617,13 @@ pub enum PanelAction {
     AbletonTrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
     AbletonTrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
     AbletonTrimCommit(GraphParamTarget, manifold_core::effects::ParamId),
+
+    // Audio-mod trim handles (green) — the audio output sub-range
+    // (`AudioModShape::range_min/range_max`). Mirrors the Ableton trim triad:
+    // snapshot on grab (for undo), changed during the drag, commit on release.
+    AudioTrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    AudioTrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
+    AudioTrimCommit(GraphParamTarget, manifold_core::effects::ParamId),
     AbletonMacroTrimSnapshot(usize),                                      // slot_idx
     AbletonMacroTrimChanged(usize, f32, f32),                             // slot_idx, min, max
     AbletonMacroTrimCommit(usize),                                        // slot_idx

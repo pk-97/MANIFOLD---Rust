@@ -24,10 +24,10 @@ pub(crate) const FONT_SIZE: u16 = color::FONT_BODY;
 pub(crate) const DE_BUTTON_SIZE: f32 = 20.0;
 pub(crate) const DE_BUTTON_GAP: f32 = 2.0;
 
-/// Active tint for the audio-modulation ("A") button + drawer — a teal, kept
-/// distinct from the driver (blue) and envelope (orange) actives.
-pub(crate) const AUDIO_MOD_ACTIVE_C32: crate::node::Color32 =
-    crate::node::Color32::new(90, 200, 160, 255);
+/// Active tint for the audio-modulation ("A") button + drawer — a clean green,
+/// kept distinct from the driver (teal) and envelope (orange) actives. Shares
+/// the audio trim-handle green so the whole audio-mod identity reads as one.
+pub(crate) const AUDIO_MOD_ACTIVE_C32: crate::node::Color32 = color::AUDIO_TRIM_BAR_C32;
 
 // Total height of the driver drawer container (two button rows + pads). The
 // per-row metrics (row height, button gap, horizontal pad) now live in the
@@ -149,6 +149,11 @@ pub struct ParamModState {
     pub audio_send_idx: Vec<i32>,
     /// Per-param: selected feature index (see [`AUDIO_FEATURE_LABELS`]).
     pub audio_feature_idx: Vec<i32>,
+    /// Per-param: audio-mod output sub-range (the green trim handles), 0..1 of the
+    /// slider's travel. Mirrors `trim_min`/`trim_max` for drivers — the audio
+    /// drives only this slice of the param's range.
+    pub audio_range_min: Vec<f32>,
+    pub audio_range_max: Vec<f32>,
     /// Card-level: available send labels (same for every row on the card).
     pub audio_send_labels: Vec<String>,
     /// Card-level: send ids parallel to `audio_send_labels` — turns a selected
@@ -187,6 +192,9 @@ pub struct AudioCardState {
     pub send_id: Vec<Option<manifold_core::AudioSendId>>,
     /// Per-param: selected feature index (0..3).
     pub feature_idx: Vec<i32>,
+    /// Per-param: the mod's output sub-range (`AudioModShape::range_min/max`).
+    pub range_min: Vec<f32>,
+    pub range_max: Vec<f32>,
     /// Card-level: available send labels.
     pub send_labels: Vec<String>,
     /// Card-level: send ids parallel to `send_labels` — what the click handler
@@ -211,6 +219,8 @@ impl ParamModState {
             audio_active: vec![false; param_count],
             audio_send_idx: vec![-1; param_count],
             audio_feature_idx: vec![0; param_count],
+            audio_range_min: vec![0.0; param_count],
+            audio_range_max: vec![1.0; param_count],
             audio_send_labels: Vec::new(),
             audio_send_ids: Vec::new(),
         }
@@ -221,6 +231,8 @@ impl ParamModState {
         for i in 0..n {
             self.audio_active[i] = audio.active.get(i).copied().unwrap_or(false);
             self.audio_feature_idx[i] = audio.feature_idx.get(i).copied().unwrap_or(0);
+            self.audio_range_min[i] = audio.range_min.get(i).copied().unwrap_or(0.0);
+            self.audio_range_max[i] = audio.range_max.get(i).copied().unwrap_or(1.0);
             self.audio_send_idx[i] = audio
                 .send_id
                 .get(i)
@@ -280,6 +292,11 @@ pub(crate) struct ParamDragState {
     pub(crate) dragging_decay_param: i32,
     pub(crate) dragging_ableton_trim_param: i32,
     pub(crate) dragging_ableton_trim_is_min: bool,
+    /// The green audio-mod trim range (`AudioModShape::range_min/max`) on the
+    /// track. Parallel to the driver/Ableton trim drags above — same mechanism,
+    /// a different modulator's range.
+    pub(crate) dragging_audio_trim_param: i32,
+    pub(crate) dragging_audio_trim_is_min: bool,
 }
 
 impl ParamDragState {
@@ -292,6 +309,8 @@ impl ParamDragState {
             dragging_decay_param: -1,
             dragging_ableton_trim_param: -1,
             dragging_ableton_trim_is_min: false,
+            dragging_audio_trim_param: -1,
+            dragging_audio_trim_is_min: false,
         }
     }
 
@@ -301,7 +320,49 @@ impl ParamDragState {
             || self.dragging_target_param >= 0
             || self.dragging_decay_param >= 0
             || self.dragging_ableton_trim_param >= 0
+            || self.dragging_audio_trim_param >= 0
     }
+}
+
+/// Reposition a trim overlay's three nodes (fill + min/max bars) along a slider
+/// track for a new `[min, max]`. The pixel math is identical for driver,
+/// Ableton, and audio trims — this is the single copy they all share, so a
+/// layout tweak lands once instead of drifting across three near-identical
+/// blocks.
+pub(crate) fn reposition_trim_bars(
+    tree: &mut UITree,
+    track_rect: Rect,
+    ids: &TrimHandleIds,
+    new_min: f32,
+    new_max: f32,
+) {
+    let usable = track_rect.width - OVERLAY_INSET * 2.0;
+    let base_x = track_rect.x + OVERLAY_INSET;
+    let fill_x = base_x + new_min * usable;
+    let fill_w = (new_max - new_min) * usable;
+    let fill_h = track_rect.height - OVERLAY_INSET * 2.0;
+    tree.set_bounds(
+        ids.fill_id as u32,
+        Rect::new(fill_x, track_rect.y + OVERLAY_INSET, fill_w, fill_h),
+    );
+    tree.set_bounds(
+        ids.min_bar_id as u32,
+        Rect::new(
+            base_x + new_min * usable - TRIM_BAR_W * 0.5,
+            track_rect.y,
+            TRIM_BAR_W,
+            track_rect.height,
+        ),
+    );
+    tree.set_bounds(
+        ids.max_bar_id as u32,
+        Rect::new(
+            base_x + new_max * usable - TRIM_BAR_W * 0.5,
+            track_rect.y,
+            TRIM_BAR_W,
+            track_rect.height,
+        ),
+    );
 }
 
 // ── Shared helper functions ─────────────────────────────────────
@@ -893,6 +954,9 @@ pub(crate) struct ParamRowIds {
     /// Orange envelope target handle on the slider track (when armed).
     pub(crate) target: Option<EnvelopeTargetIds>,
     pub(crate) ableton_trim: Option<TrimHandleIds>,
+    /// Green audio-mod trim handles on the slider track (when an audio mod is
+    /// armed) — the output sub-range the audio drives.
+    pub(crate) audio_trim: Option<TrimHandleIds>,
     pub(crate) envelope_btn: i32,
     pub(crate) driver_btn: i32,
     /// The "A" audio-modulation button (right of the driver button).
@@ -948,6 +1012,7 @@ pub(crate) fn build_param_row(
     let mut ids = ParamRowIds {
         slider: None,
         trim: None,
+        audio_trim: None,
         target: None,
         ableton_trim: None,
         envelope_btn: -1,
@@ -1021,6 +1086,24 @@ pub(crate) fn build_param_row(
             color::ABL_TRIM_BAR_C32,
             color::ABL_TRIM_BAR_HOVER_C32,
             color::ABL_TRIM_FILL_C32,
+        ));
+    }
+
+    // Green audio-mod trim handles (when an audio mod is armed) — the output
+    // sub-range the audio drives. Drawn on top of any driver/Ableton handles so
+    // all active modulators show their range at once, told apart by color.
+    if mod_state.audio_active.get(i).copied().unwrap_or(false) {
+        let amin = mod_state.audio_range_min.get(i).copied().unwrap_or(0.0);
+        let amax = mod_state.audio_range_max.get(i).copied().unwrap_or(1.0);
+        ids.audio_trim = Some(build_trim_handles_explicit(
+            tree,
+            slider.track as i32,
+            slider.track_rect,
+            amin,
+            amax,
+            color::AUDIO_TRIM_BAR_C32,
+            color::AUDIO_TRIM_BAR_HOVER_C32,
+            color::AUDIO_TRIM_FILL_C32,
         ));
     }
 

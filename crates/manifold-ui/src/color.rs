@@ -441,6 +441,13 @@ pub const ABL_TRIM_BAR_C32: Color32 = Color32::new(140, 80, 200, 255);
 pub const ABL_TRIM_BAR_HOVER_C32: Color32 = Color32::new(165, 105, 225, 255);
 pub const ABL_TRIM_FILL_C32: Color32 = Color32::new(140, 80, 200, 38);
 pub const ABL_BADGE_C32: Color32 = Color32::new(140, 80, 200, 255);
+
+// Audio-modulation trim handles + active tint — a clean green, kept distinct
+// from the driver's teal so both handle sets read apart when drawn on one
+// slider at once. Mirrors the driver/Ableton trim constant trio.
+pub const AUDIO_TRIM_BAR_C32: Color32 = Color32::new(72, 199, 116, 255);
+pub const AUDIO_TRIM_BAR_HOVER_C32: Color32 = Color32::new(97, 219, 141, 255);
+pub const AUDIO_TRIM_FILL_C32: Color32 = Color32::new(72, 199, 116, 38);
 /// Pink badge + header tint for effect cards whose per-card graph
 /// override (`PresetInstance.graph`) is set. Visually distinct from
 /// DRV/ENV/ABL.

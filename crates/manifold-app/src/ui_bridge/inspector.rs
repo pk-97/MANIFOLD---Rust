@@ -11,7 +11,7 @@ use manifold_editing::commands::drivers::{
     ToggleDriverEnabledCommand, ToggleDriverReversedCommand,
 };
 use manifold_editing::commands::audio_mod::{
-    AddAudioModCommand, RemoveAudioModCommand, SetAudioModSourceCommand,
+    AddAudioModCommand, RemoveAudioModCommand, SetAudioModShapeCommand, SetAudioModSourceCommand,
     ToggleAudioModEnabledCommand,
 };
 use manifold_editing::commands::audio_setup::{
@@ -114,6 +114,49 @@ fn graph_driver_dual_edit<F>(
                     .and_then(|ds| ds.iter_mut().find(|d| d.param_id == pid))
                 {
                     edit2(driver);
+                }
+            });
+        })),
+    );
+}
+
+/// Live dual-edit of one audio modulation, mirroring [`graph_driver_dual_edit`]
+/// for the green trim-handle drag: applies `edit` to the matching
+/// `ParameterAudioMod` on both the UI-thread project mirror and (via
+/// `MutateProjectLive`) the content thread, so the handle tracks under the
+/// cursor without an undo entry per frame (the undo command lands on commit).
+fn graph_audio_mod_dual_edit<F>(
+    project: &mut Project,
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    target: &manifold_core::GraphTarget,
+    param_id: manifold_core::effects::ParamId,
+    edit: F,
+) where
+    F: Fn(&mut manifold_core::audio_mod::ParameterAudioMod) + Clone + Send + 'static,
+{
+    use crate::content_command::ContentCommand;
+    project.with_preset_graph_mut(target, |inst| {
+        if let Some(m) = inst
+            .audio_mods
+            .as_mut()
+            .and_then(|ms| ms.iter_mut().find(|a| a.param_id == param_id))
+        {
+            edit(m);
+        }
+    });
+    let edit2 = edit.clone();
+    let pid = param_id.clone();
+    let t = target.clone();
+    ContentCommand::send(
+        content_tx,
+        ContentCommand::MutateProjectLive(Box::new(move |p| {
+            p.with_preset_graph_mut(&t, |inst| {
+                if let Some(m) = inst
+                    .audio_mods
+                    .as_mut()
+                    .and_then(|ms| ms.iter_mut().find(|a| a.param_id == pid))
+                {
+                    edit2(m);
                 }
             });
         })),
@@ -1410,6 +1453,71 @@ pub(super) fn dispatch_inspector(
                         old_max,
                         new_min,
                         new_max,
+                    );
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            *active_inspector_drag = None;
+            DispatchResult::handled()
+        }
+
+        // ── Audio-mod trim handles (green): live range edit + undo on commit ──
+        PanelAction::AudioTrimChanged(gpt, param_id, min, max) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let mn = *min;
+                let mx = *max;
+                graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
+                    m.shape.range_min = mn;
+                    m.shape.range_max = mx;
+                });
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioTrimSnapshot(gpt, param_id) => {
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let range = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.audio_mods
+                            .as_ref()
+                            .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
+                            .map(|m| (m.shape.range_min, m.shape.range_max))
+                    })
+                    .flatten();
+                if let Some(range) = range {
+                    *trim_snapshot = Some(range);
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioTrimCommit(gpt, param_id) => {
+            if let Some((old_min, old_max)) = trim_snapshot.take()
+                && let Some(target) =
+                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let new_shape = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.audio_mods
+                            .as_ref()
+                            .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
+                            .map(|m| m.shape)
+                    })
+                    .flatten();
+                if let Some(new_shape) = new_shape
+                    && ((old_min - new_shape.range_min).abs() > f32::EPSILON
+                        || (old_max - new_shape.range_max).abs() > f32::EPSILON)
+                {
+                    let mut old_shape = new_shape;
+                    old_shape.range_min = old_min;
+                    old_shape.range_max = old_max;
+                    let cmd = SetAudioModShapeCommand::new(
+                        DriverTarget::from(&target),
+                        param_id.clone(),
+                        old_shape,
+                        new_shape,
                     );
                     ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                 }

@@ -1398,6 +1398,8 @@ fn build_audio_card_state(
         active: vec![false; n],
         send_id: vec![None; n],
         feature_idx: vec![0; n],
+        range_min: vec![0.0; n],
+        range_max: vec![1.0; n],
         send_labels: Vec::new(),
         send_ids: Vec::new(),
     };
@@ -1410,6 +1412,8 @@ fn build_audio_card_state(
         };
         a.active[pi] = true;
         a.send_id[pi] = Some(am.source.send_id.clone());
+        a.range_min[pi] = am.shape.range_min;
+        a.range_max[pi] = am.shape.range_max;
         a.feature_idx[pi] = match am.source.feature {
             AudioFeature::Amplitude => 0,
             AudioFeature::BandEnergy(AudioBand::Low) => 1,
