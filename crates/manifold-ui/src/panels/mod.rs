@@ -92,6 +92,9 @@ pub enum PanelAction {
     SetAudioInputDevice(String),
     ToggleMonitor,
     EnterPerformMode,
+    /// Open (toggle) the Audio Setup panel — the central place to route audio
+    /// in and define named sends. Header button; also bound to ⌘⇧A.
+    OpenAudioSetup,
 
     // Footer
     CycleQuantize,

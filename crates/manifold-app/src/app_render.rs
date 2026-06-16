@@ -1008,6 +1008,11 @@ impl Application {
                     self.pending_toggle_output = true;
                     continue;
                 }
+                PanelAction::OpenAudioSetup => {
+                    self.ws.ui_root.audio_setup_panel.toggle();
+                    self.ws.ui_root.overlay_dirty = true;
+                    continue;
+                }
                 PanelAction::OpenGeneratorGraphEditor => {
                     // Ask the content thread to snapshot the active
                     // layer's generator graph and set the unified

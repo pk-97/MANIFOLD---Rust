@@ -1930,6 +1930,19 @@ impl ParamCardPanel {
         self.param_info[pi].param_id.clone()
     }
 
+    /// The "A" audio-mod button action. With no sends defined yet, arming has
+    /// nothing to point at, so the button opens the Audio Setup panel rather
+    /// than silently doing nothing — the user lands where they can create a
+    /// send, then comes back and arms. Once a send exists it arms/disarms the
+    /// mod as usual (the dispatch assigns the project's first send).
+    fn audio_toggle_action(&self, target: GraphParamTarget, pi: usize) -> Vec<PanelAction> {
+        if self.state.mod_state.audio_send_ids.is_empty() {
+            vec![PanelAction::OpenAudioSetup]
+        } else {
+            vec![PanelAction::AudioModToggle(target, self.pid_at(pi))]
+        }
+    }
+
     /// Build an `AudioModSetSource` action for a param, combining the current
     /// send + feature selection (from `mod_state`) with the one dimension the
     /// click changed. Empty when no send resolves (nothing to point at).
@@ -2016,7 +2029,7 @@ impl ParamCardPanel {
                     vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::AudioToggle(pi) => {
-                    vec![PanelAction::AudioModToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
+                    self.audio_toggle_action(GraphParamTarget::Effect(ei), pi)
                 }
                 RowClick::AudioNewSend(pi) => {
                     vec![PanelAction::AudioModNewSend(GraphParamTarget::Effect(ei), self.pid_at(pi))]
@@ -2133,7 +2146,7 @@ impl ParamCardPanel {
                     vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Generator, self.pid_at(pi))]
                 }
                 RowClick::AudioToggle(pi) => {
-                    vec![PanelAction::AudioModToggle(GraphParamTarget::Generator, self.pid_at(pi))]
+                    self.audio_toggle_action(GraphParamTarget::Generator, pi)
                 }
                 RowClick::AudioNewSend(pi) => {
                     vec![PanelAction::AudioModNewSend(GraphParamTarget::Generator, self.pid_at(pi))]

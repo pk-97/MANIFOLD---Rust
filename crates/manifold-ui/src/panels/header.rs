@@ -20,6 +20,7 @@ const PROGRESS_BAR_INSET: f32 = 5.0;
 
 const ZOOM_BUTTON_W: f32 = 28.0;
 const ZOOM_LABEL_W: f32 = 70.0;
+const AUDIO_BUTTON_W: f32 = 60.0;
 const MONITOR_BUTTON_W: f32 = 60.0;
 const PERFORM_BUTTON_W: f32 = 60.0;
 
@@ -49,6 +50,7 @@ struct HeaderLayout {
     zoom_out: Rect,
     zoom_label: Rect,
     zoom_in: Rect,
+    audio_button: Rect,
     monitor_button: Rect,
     perform_button: Rect,
 }
@@ -95,6 +97,10 @@ impl HeaderLayout {
         self.perform_button = Rect::new(rx, elem_y, PERFORM_BUTTON_W, elem_h);
         rx -= GROUP_SPACING;
 
+        rx -= AUDIO_BUTTON_W;
+        self.audio_button = Rect::new(rx, elem_y, AUDIO_BUTTON_W, elem_h);
+        rx -= GROUP_SPACING;
+
         rx -= ZOOM_BUTTON_W;
         self.zoom_in = Rect::new(rx, elem_y, ZOOM_BUTTON_W, elem_h);
 
@@ -120,6 +126,7 @@ pub struct HeaderPanel {
     zoom_label_id: i32,
     zoom_out_id: i32,
     zoom_in_id: i32,
+    audio_btn_id: i32,
     monitor_btn_id: i32,
     perform_btn_id: i32,
 
@@ -149,6 +156,7 @@ impl HeaderPanel {
             zoom_label_id: -1,
             zoom_out_id: -1,
             zoom_in_id: -1,
+            audio_btn_id: -1,
             monitor_btn_id: -1,
             perform_btn_id: -1,
             project_name: "My Project".into(),
@@ -272,6 +280,9 @@ impl HeaderPanel {
         }
         if id == self.zoom_in_id {
             return vec![PanelAction::ZoomIn];
+        }
+        if id == self.audio_btn_id {
+            return vec![PanelAction::OpenAudioSetup];
         }
         if id == self.monitor_btn_id {
             return vec![PanelAction::ToggleMonitor];
@@ -438,6 +449,16 @@ impl Panel for HeaderPanel {
             "+",
         ) as i32;
 
+        self.audio_btn_id = tree.add_button(
+            bg,
+            self.layout.audio_button.x,
+            self.layout.audio_button.y,
+            self.layout.audio_button.width,
+            self.layout.audio_button.height,
+            self.perform_style(),
+            "Audio",
+        ) as i32;
+
         self.monitor_btn_id = tree.add_button(
             bg,
             self.layout.monitor_button.x,
@@ -495,7 +516,19 @@ mod tests {
         assert!(panel.zoom_out_id >= 0);
         assert!(panel.zoom_in_id >= 0);
         assert!(panel.monitor_btn_id >= 0);
-        assert!(tree.count() >= 10); // bg + 9 elements
+        assert!(panel.audio_btn_id >= 0);
+        assert!(tree.count() >= 11); // bg + 10 elements
+    }
+
+    #[test]
+    fn handle_click_audio_opens_setup() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = HeaderPanel::new();
+        panel.build(&mut tree, &layout);
+
+        let a = panel.handle_click(panel.audio_btn_id as u32);
+        assert!(matches!(a[0], PanelAction::OpenAudioSetup));
     }
 
     #[test]

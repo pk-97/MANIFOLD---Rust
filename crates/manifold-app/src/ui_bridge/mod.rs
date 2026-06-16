@@ -384,6 +384,7 @@ pub fn dispatch(
         | PanelAction::EffectMappingAffineChanged { .. }
         | PanelAction::EffectMappingAffineCommit { .. }
         | PanelAction::EffectMappingGotoNode { .. }
+        | PanelAction::OpenAudioSetup
         | PanelAction::RevertEffectGraph => DispatchResult::handled(),
     }
 }

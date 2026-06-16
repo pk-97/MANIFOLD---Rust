@@ -29,10 +29,10 @@ pub(crate) const DE_BUTTON_GAP: f32 = 2.0;
 pub(crate) const AUDIO_MOD_ACTIVE_C32: crate::node::Color32 =
     crate::node::Color32::new(90, 200, 160, 255);
 
+// Total height of the driver drawer container (two button rows + pads). The
+// per-row metrics (row height, button gap, horizontal pad) now live in the
+// shared `drawer` module, which builds this drawer.
 pub(crate) const DRIVER_CONFIG_HEIGHT: f32 = 56.0;
-pub(crate) const DRIVER_ROW_HEIGHT: f32 = 22.0;
-pub(crate) const BEAT_DIV_SPACING: f32 = 1.0;
-pub(crate) const DRIVER_PAD_H: f32 = 5.0;
 pub(crate) const BEAT_DIV_COUNT: usize = 11;
 pub(crate) const WAVEFORM_COUNT: usize = 5;
 
@@ -42,8 +42,6 @@ pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 // parameter's own track (the value it's pulled toward) and a single "Decay"
 // slider in a one-row drawer (how fast it falls back).
 pub(crate) const ENV_CONFIG_HEIGHT: f32 = 30.0;
-pub(crate) const ENV_ROW_HEIGHT: f32 = 22.0;
-pub(crate) const ENV_PAD_H: f32 = 5.0;
 pub(crate) const ENV_DECAY_LABEL_W: f32 = 50.0;
 /// Decay slider full-scale, in beats (0 → this).
 pub(crate) const ENV_DECAY_MAX: f32 = 8.0;
@@ -95,8 +93,6 @@ pub(crate) struct TrimHandleIds {
 
 pub(crate) struct AbletonConfigIds {
     pub(crate) _container_id: i32,
-    pub(crate) _status_dot_id: i32,
-    pub(crate) _macro_label_id: i32,
     pub(crate) invert_btn_id: i32,
 }
 
@@ -465,18 +461,7 @@ pub(crate) fn build_driver_config(
     param_idx: usize,
     btn_font_size: u16,
 ) -> DriverConfigIds {
-    let container_id = tree.add_panel(
-        parent,
-        x,
-        y,
-        w,
-        DRIVER_CONFIG_HEIGHT,
-        UIStyle {
-            bg_color: color::CONFIG_BG_C32,
-            corner_radius: 2.0,
-            ..UIStyle::default()
-        },
-    ) as i32;
+    use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
 
     let active_div = mod_state
         .driver_beat_div_idx
@@ -505,97 +490,46 @@ pub(crate) fn build_driver_config(
         .unwrap_or(false);
     let no_mod = !is_dotted && !is_triplet;
 
-    let row1_y = y + 4.0;
-    let avail_w = w - DRIVER_PAD_H * 2.0;
-    // Beat-division labels are mixed-width ("1/32" vs "1"). A uniform button
-    // width forces the fraction labels to cramp while the integer labels waste
-    // space. Weight each button by its label length so the fractions get the
-    // room they need and the integers give it back — keeps all 11 on one row
-    // (no extra height on the live surface) and stops "1/32" clipping.
-    let content_w = avail_w - BEAT_DIV_SPACING * (BEAT_DIV_COUNT as f32 - 1.0);
-    let weights: [f32; BEAT_DIV_COUNT] =
-        std::array::from_fn(|j| BEAT_DIV_LABELS[j].chars().count() as f32 + 1.0);
-    let total_weight: f32 = weights.iter().sum();
-    let mut cx = x + DRIVER_PAD_H;
+    // Row 1: 11 beat-division buttons, proportional width — fraction labels
+    // ("1/32") need more room than integers ("1"), so weighting by label length
+    // keeps all 11 on one row without "1/32" clipping.
+    let beat_div_buttons: Vec<DrawerButton> = (0..BEAT_DIV_COUNT)
+        .map(|j| DrawerButton::new(BEAT_DIV_LABELS[j], j as i32 == active_div && no_mod))
+        .collect();
 
-    let mut beat_div_btn_ids = [-1i32; BEAT_DIV_COUNT];
-    for j in 0..BEAT_DIV_COUNT {
-        let active = j as i32 == active_div && no_mod;
-        let btn_w = content_w * weights[j] / total_weight;
-        beat_div_btn_ids[j] = tree.add_button(
-            container_id,
-            cx,
-            row1_y,
-            btn_w,
-            DRIVER_ROW_HEIGHT,
-            config_btn_style(active, btn_font_size),
-            BEAT_DIV_LABELS[j],
-        ) as i32;
-        cx += btn_w + BEAT_DIV_SPACING;
-    }
-
-    let row2_y = row1_y + DRIVER_ROW_HEIGHT + 4.0;
-    cx = x + DRIVER_PAD_H;
-
-    // Row 2: [.] [T] [Sin] [Tri] [Saw] [Sqr] [Rnd] [Rev]
-    // 8 buttons total, proportional width like beat divs
-    let row2_count = 2 + WAVEFORM_COUNT + 1; // dot, triplet, 5 waveforms, rev
-    let wave_btn_w = (avail_w - BEAT_DIV_SPACING * (row2_count as f32 - 1.0)) / row2_count as f32;
-
-    let dot_btn_id = tree.add_button(
-        container_id,
-        cx,
-        row2_y,
-        wave_btn_w,
-        DRIVER_ROW_HEIGHT,
-        config_btn_style(is_dotted, btn_font_size),
-        ".",
-    ) as i32;
-    cx += wave_btn_w + BEAT_DIV_SPACING;
-
-    let triplet_btn_id = tree.add_button(
-        container_id,
-        cx,
-        row2_y,
-        wave_btn_w,
-        DRIVER_ROW_HEIGHT,
-        config_btn_style(is_triplet, btn_font_size),
-        "T",
-    ) as i32;
-    cx += wave_btn_w + BEAT_DIV_SPACING;
-
-    let mut wave_btn_ids = [-1i32; WAVEFORM_COUNT];
-    for (j, btn_id) in wave_btn_ids.iter_mut().enumerate() {
-        let active = j as i32 == active_wave;
-        let style = config_btn_style(active, btn_font_size);
-        // PUA marker U+E000..U+E004 — UIRenderer draws the SDF waveform icon
+    // Row 2: [.] [T] [Sin] [Tri] [Saw] [Sqr] [Rnd] [Rev] — uniform width.
+    // The waveform glyphs are PUA markers U+E000..U+E004 (the UIRenderer draws
+    // the SDF waveform icon); dot/triplet/reverse are modifier toggles.
+    let mut row2_buttons: Vec<DrawerButton> =
+        vec![DrawerButton::new(".", is_dotted), DrawerButton::new("T", is_triplet)];
+    for j in 0..WAVEFORM_COUNT {
         let icon_char = char::from_u32(0xE000 + j as u32).unwrap();
-        let mut icon_text = String::new();
-        icon_text.push(icon_char);
-        *btn_id = tree.add_button(
-            container_id,
-            cx,
-            row2_y,
-            wave_btn_w,
-            DRIVER_ROW_HEIGHT,
-            style,
-            &icon_text,
-        ) as i32;
-        cx += wave_btn_w + BEAT_DIV_SPACING;
+        row2_buttons.push(DrawerButton::new(icon_char.to_string(), j as i32 == active_wave));
     }
+    row2_buttons.push(DrawerButton::new("Rev", is_reversed));
 
-    let reverse_btn_id = tree.add_button(
-        container_id,
-        cx,
-        row2_y,
-        wave_btn_w,
-        DRIVER_ROW_HEIGHT,
-        config_btn_style(is_reversed, btn_font_size),
-        "Rev",
-    ) as i32;
+    let spec = DrawerSpec {
+        rows: vec![
+            DrawerRow::Buttons { buttons: beat_div_buttons, width: ButtonWidth::Proportional },
+            DrawerRow::Buttons { buttons: row2_buttons, width: ButtonWidth::Uniform },
+        ],
+        btn_font_size,
+        slider_font_size: FONT_SIZE,
+    };
+    let dids = drawer::build(tree, parent, x, y, w, &spec);
+
+    // Reconstruct the typed ids from the flat button list: row 1 is indices
+    // 0..BEAT_DIV_COUNT; row 2 is dot, triplet, WAVEFORM_COUNT waves, reverse.
+    let ids = dids.button_ids();
+    let beat_div_btn_ids: [i32; BEAT_DIV_COUNT] = std::array::from_fn(|j| ids[j]);
+    let dot_btn_id = ids[BEAT_DIV_COUNT];
+    let triplet_btn_id = ids[BEAT_DIV_COUNT + 1];
+    let wave_base = BEAT_DIV_COUNT + 2;
+    let wave_btn_ids: [i32; WAVEFORM_COUNT] = std::array::from_fn(|j| ids[wave_base + j]);
+    let reverse_btn_id = ids[wave_base + WAVEFORM_COUNT];
 
     DriverConfigIds {
-        _container_id: container_id,
+        _container_id: dids.container,
         beat_div_btn_ids,
         dot_btn_id,
         triplet_btn_id,
@@ -651,41 +585,33 @@ pub(crate) fn build_envelope_config(
     mod_state: &ParamModState,
     param_idx: usize,
 ) -> EnvelopeConfigIds {
-    let container_id = tree.add_panel(
-        parent,
-        x,
-        y,
-        w,
-        ENV_CONFIG_HEIGHT,
-        UIStyle {
-            bg_color: color::CONFIG_BG_C32,
-            corner_radius: 2.0,
-            ..UIStyle::default()
-        },
-    ) as i32;
+    use crate::panels::drawer::{self, DrawerRow, DrawerSpec};
 
-    let sx = x + ENV_PAD_H;
-    let row_y = y + 4.0;
-    let slider_w = w - ENV_PAD_H * 2.0;
     let decay = mod_state
         .env_decay
         .get(param_idx)
         .copied()
         .unwrap_or(DEFAULT_ENV_DECAY);
-    let decay_slider = BitmapSlider::build(
-        tree,
-        container_id,
-        Rect::new(sx, row_y, slider_w, ENV_ROW_HEIGHT),
-        Some("Decay"),
-        (decay / ENV_DECAY_MAX).clamp(0.0, 1.0),
-        &format!("{decay:.2}"),
-        &SliderColors::envelope(),
-        FONT_SIZE,
-        ENV_DECAY_LABEL_W,
-    );
+    let spec = DrawerSpec {
+        rows: vec![DrawerRow::Slider {
+            label: "Decay".into(),
+            norm: (decay / ENV_DECAY_MAX).clamp(0.0, 1.0),
+            value_text: format!("{decay:.2}"),
+            colors: SliderColors::envelope(),
+            label_w: ENV_DECAY_LABEL_W,
+        }],
+        btn_font_size: FONT_SIZE,
+        slider_font_size: FONT_SIZE,
+    };
+    let dids = drawer::build(tree, parent, x, y, w, &spec);
+    let decay_slider = dids
+        .sliders
+        .into_iter()
+        .next()
+        .expect("envelope drawer has one slider row");
 
     EnvelopeConfigIds {
-        _container_id: container_id,
+        _container_id: dids.container,
         decay_slider,
     }
 }
@@ -874,61 +800,19 @@ pub(crate) fn build_ableton_config(
     w: f32,
     display: &AbletonMappingDisplay,
 ) -> AbletonConfigIds {
-    let container_id = tree.add_panel(
-        parent,
-        x,
-        y,
-        w,
-        ABL_CONFIG_HEIGHT,
-        UIStyle {
-            bg_color: color::CONFIG_BG_C32,
-            corner_radius: 2.0,
-            ..UIStyle::default()
-        },
-    ) as i32;
+    use crate::panels::drawer::{self, DrawerRow, DrawerSpec, StatusDot, StatusStrip, TrailingButton};
 
-    let dot_size = 6.0_f32;
-    let pad = 6.0_f32;
-    let dot_y = y + (ABL_CONFIG_HEIGHT - dot_size) * 0.5;
     let dot_color = match display.status {
         AbletonMappingStatus::Active => color::STATUS_DOT_GREEN,
         AbletonMappingStatus::Dormant => color::STATUS_DOT_YELLOW,
         AbletonMappingStatus::Ambiguous => color::STATUS_BAD,
     };
-    let status_dot_id = tree.add_panel(
-        container_id,
-        x + pad,
-        dot_y,
-        dot_size,
-        dot_size,
-        UIStyle {
-            bg_color: dot_color,
-            corner_radius: dot_size * 0.5,
-            ..UIStyle::default()
-        },
-    ) as i32;
 
-    // INV button (right-aligned)
-    let inv_btn_w = 28.0_f32;
-    let inv_btn_h = 16.0_f32;
-    let inv_btn_x = x + w - pad - inv_btn_w;
-    let inv_btn_y = y + (ABL_CONFIG_HEIGHT - inv_btn_h) * 0.5;
-    let invert_btn_id = tree.add_button(
-        container_id,
-        inv_btn_x,
-        inv_btn_y,
-        inv_btn_w,
-        inv_btn_h,
-        config_btn_style_colored(display.inverted, color::ABL_BADGE_C32, color::FONT_CAPTION),
-        "INV",
-    ) as i32;
-
-    // Compose the label as "macro_name  ·  track > device" so the user
-    // can see the actual stored target rack at a glance. This makes
-    // corrupted mappings (where the stored target doesn't match what
-    // was originally mapped) immediately visible without changing any
-    // routing — the values still flow wherever the resolver landed,
-    // but the user can audit it from the effect card.
+    // Compose the label as "macro_name  ·  track > device" so the user can see
+    // the actual stored target rack at a glance. This makes corrupted mappings
+    // (where the stored target doesn't match what was originally mapped)
+    // immediately visible without changing any routing — the values still flow
+    // wherever the resolver landed, but the user can audit it from the card.
     let composite_label = if display.track_name.is_empty() && display.device_name.is_empty() {
         display.macro_name.clone()
     } else {
@@ -937,28 +821,36 @@ pub(crate) fn build_ableton_config(
             display.macro_name, display.track_name, display.device_name
         )
     };
-    let label_x = x + pad + dot_size + 4.0;
-    let label_y = y + (ABL_CONFIG_HEIGHT - 12.0) * 0.5;
-    let label_w = inv_btn_x - label_x - 4.0;
-    let macro_label_id = tree.add_label(
-        container_id,
-        label_x,
-        label_y,
-        label_w,
-        12.0,
-        &composite_label,
-        UIStyle {
-            text_color: color::TEXT_DIMMED_C32,
-            font_size: color::FONT_CAPTION,
-            text_align: TextAlign::Left,
-            ..UIStyle::default()
-        },
-    ) as i32;
+
+    // The strip's row height is the container height minus the drawer's top/
+    // bottom pad; the API centers each element within the row, reproducing the
+    // original metrics (6px dot, 28×16 INV, 12px label) exactly.
+    let spec = DrawerSpec {
+        rows: vec![DrawerRow::Status(StatusStrip {
+            height: ABL_CONFIG_HEIGHT - drawer::TOP_PAD * 2.0,
+            dot: Some(StatusDot { size: 6.0, color: dot_color }),
+            label: composite_label,
+            label_color: color::TEXT_DIMMED_C32,
+            label_font: color::FONT_CAPTION,
+            trailing: Some(TrailingButton {
+                label: "INV".into(),
+                width: 28.0,
+                height: 16.0,
+                style: config_btn_style_colored(
+                    display.inverted,
+                    color::ABL_BADGE_C32,
+                    color::FONT_CAPTION,
+                ),
+            }),
+        })],
+        btn_font_size: color::FONT_CAPTION,
+        slider_font_size: FONT_SIZE,
+    };
+    let dids = drawer::build(tree, parent, x, y, w, &spec);
+    let invert_btn_id = dids.button_ids()[0];
 
     AbletonConfigIds {
-        _container_id: container_id,
-        _status_dot_id: status_dot_id,
-        _macro_label_id: macro_label_id,
+        _container_id: dids.container,
         invert_btn_id,
     }
 }
@@ -1206,7 +1098,7 @@ pub(crate) fn build_param_row(
     // driver). Two rows: send selector (existing sends + a "＋" to create one)
     // and feature selector. Built on the shared drawer API.
     if audio_active {
-        use crate::panels::drawer::{self, DrawerButton, DrawerRow, DrawerSpec};
+        use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
         let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
         let send_count = mod_state.audio_send_labels.len();
         let mut send_buttons: Vec<DrawerButton> = mod_state
@@ -1223,7 +1115,10 @@ pub(crate) fn build_param_row(
             .map(|(k, l)| DrawerButton::new(*l, k as i32 == feat_sel))
             .collect();
         let spec = DrawerSpec {
-            rows: vec![DrawerRow::Buttons(send_buttons), DrawerRow::Buttons(feat_buttons)],
+            rows: vec![
+                DrawerRow::Buttons { buttons: send_buttons, width: ButtonWidth::Proportional },
+                DrawerRow::Buttons { buttons: feat_buttons, width: ButtonWidth::Proportional },
+            ],
             btn_font_size: config_font,
             slider_font_size: FONT_SIZE,
         };
