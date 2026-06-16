@@ -1,6 +1,6 @@
 # Overlay System Design
 
-Status: **proposed** (2026-06-16). No code yet. This doc is the contract to agree before building.
+Status: **SHIPPED** (2026-06-16). The overlay driver is live; the old hand-rolled enumerations and the Audio Setup workaround are deleted. See the "Status" section for the as-built notes and where the implementation diverged from this design. The second pass (declarative top-level content) is still open.
 
 ## Why
 
@@ -103,13 +103,19 @@ Found by implementing the trait against the actual code, not just asserting it:
 
 - **`Overlay` is standalone**, not a `Panel` supertrait. The modal panels (audio_setup, browser_popup, ableton_picker, dropdown) don't implement `Panel` — they have bespoke build/click APIs. Forcing `: Panel` would mean a second, fake implementation.
 - **The driver captures node ranges**, not the overlays. It brackets `build_at` with `tree.count()` to record each overlay's `[start, end)`. Audio Setup, for one, tracks no `first_node`/`node_count` today — pushing that onto every overlay would be busywork.
-- **Overlays must own their resolution context.** Dropdown selection lowers through `dropdown_context` and Ableton selection through `ableton_picker_context`, both stored on `UIRoot` today. For `on_event` to be self-contained (return the final `Vec<PanelAction>`), those contexts move *into* their panels, set at `open()`. This is the largest follow-up refactor; Audio Setup needed none of it (its `handle_click` already returns `PanelAction` directly), which is why it's the proof-of-concept.
-- **Modality classification:** Modal + backdrop = browser_popup, ableton_picker, audio_setup; Modeless = dropdown, perf_hud. (Audio Setup gains a real full-screen backdrop it lacked before — today its "background" node only covers the panel itself, so clicks outside leak through.)
+- **Context-dependent overlays stash, they don't own their context** (REVISED from the original "move context into the panel" plan). Moving `dropdown_context` into the dropdown widget would drag app-layer caches (`display_resolutions`, device lists, `dropdown.item_label`) across the crate boundary — a layering violation. So the dropdown and Ableton picker keep their context on `UIRoot` and **stash their raw selection** (`take_pending_action` / `take_pending_selection`); the app-side driver drains and lowers it. Only fully self-contained overlays (audio_setup, browser_popup, perf HUD) form `PanelAction`s inside `on_event`.
+- **Modality classification:** `Modal { dim_background: true }` = audio_setup (driver adds a scrim — its own bg only covers the panel); `Modal { dim_background: false }` = browser_popup, ableton_picker (they build their own backdrop); `Modeless` = dropdown, perf HUD.
+- **No `OverlayStack`, no `close()` on the trait.** A fixed z-ordered `OverlayId::Z_ORDER` filtered by `is_open()` replaced the dynamic stack (modals are mutually exclusive in practice; the HUD just sits at the bottom). Overlays self-close inside `on_event`; the driver only reads `is_open()`, so the trait needs no `close()` hook.
+- **Escape routes through the driver.** The keyboard path consumes Escape before it reaches `process_events`, so `UIRoot::escape_overlays()` synthesizes an Escape and runs it through `route_overlay_event`. The input-handler escape chain's Levels 0–1 collapsed into one `dismiss_top_overlay()` host call.
 
-### Status
+### Status — SHIPPED 2026-06-16
 
-- **Landed (foundation):** `Overlay` trait + `Modality`/`Anchor`/`OverlayResponse` + `compute_overlay_rect` in [crates/manifold-ui/src/panels/overlay.rs](../crates/manifold-ui/src/panels/overlay.rs); `Overlay` implemented for `AudioSetupPanel` as the proof (additive — the old `build(tree, w, h)` stays until the driver lands). Compiles under `-D warnings`; panel tests green.
-- **Next:** impl `Overlay` for the other four (with the dropdown/picker context moves), then `OverlayId` + `OverlayStack` + the driver, then the atomic cutover.
+As built (commits on `audio-modulation`): `feat(overlay): Overlay trait + types foundation` → `finalize trait + Overlay impls for perf HUD and browser popup` → `atomic cutover — one driver owns overlay build/draw/input`.
+
+- **Driver** lives on `UIRoot`: `overlay_mut` (exhaustive `OverlayId` dispatch), `build_overlays` (build at tree tail + scrim + record `overlay_draw` ranges), `route_overlay_event` + `drain_overlay_selections` (input + stash lowering), `escape_overlays`.
+- **Draw** ([app_render.rs](../crates/manifold-app/src/app_render.rs) Pass 5) renders `overlay_draw` ranges on `Layer::Overlay` — build and draw share one source. The HUD-cutoff chain, the popup if/else, the `needs_rebuild`-on-toggle workaround, and `prev_audio_setup_open` are deleted.
+- Verified: `cargo check --workspace` + `clippy -D warnings` clean; 270+ lib tests pass; app launches without panic.
+- **Open (second pass):** declarative top-level content (below).
 
 ## Migration plan (one cutover, no half-state)
 
