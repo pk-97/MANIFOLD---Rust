@@ -30,7 +30,7 @@ use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand, PasteGeneratorCommand,
 };
-use manifold_ui::{DriverConfigAction, GraphParamTarget, InspectorTab, PanelAction};
+use manifold_ui::{DriverConfigAction, GraphParamTarget, InspectorTab, PanelAction, TrimKind};
 
 use super::DispatchResult;
 use super::{resolve_effects_mut, resolve_effects_read};
@@ -1401,16 +1401,62 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::TrimChanged(gpt, param_id, min, max) => {
+        // Live trim-range edit for driver / Ableton / audio — one arm,
+        // `TrimKind` selects the backing store. Each kind keeps the exact
+        // edit it had before the unification (driver dual-edit, audio dual-edit,
+        // Ableton mapping local + content-sync).
+        PanelAction::TrimChanged(kind, gpt, param_id, min, max) => {
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
                 let mn = *min;
                 let mx = *max;
-                graph_driver_dual_edit(project, content_tx, &target, param_id.clone(), move |d| {
-                    d.trim_min = mn;
-                    d.trim_max = mx;
-                });
+                match kind {
+                    TrimKind::Driver => {
+                        graph_driver_dual_edit(project, content_tx, &target, param_id.clone(), move |d| {
+                            d.trim_min = mn;
+                            d.trim_max = mx;
+                        });
+                    }
+                    TrimKind::Audio => {
+                        graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
+                            m.shape.range_min = mn;
+                            m.shape.range_max = mx;
+                        });
+                    }
+                    TrimKind::Ableton => {
+                        if let Some(mapping_target) =
+                            ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+                        {
+                            // Local edit + content sync both route through the
+                            // shared locate-fork, so they can't split (effects
+                            // locate by effect_type — first match — on both
+                            // sides now).
+                            if let Some(ms) = project
+                                .ableton_param_mappings_mut(&mapping_target)
+                                .and_then(|opt| opt.as_mut())
+                                && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
+                            {
+                                m.range_min = mn;
+                                m.range_max = mx;
+                            }
+                            let mt = mapping_target.clone();
+                            let pid = param_id.clone();
+                            ContentCommand::send(
+                                content_tx,
+                                ContentCommand::MutateProject(Box::new(move |p| {
+                                    if let Some(ms) =
+                                        p.ableton_param_mappings_mut(&mt).and_then(|opt| opt.as_mut())
+                                        && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
+                                    {
+                                        m.range_min = mn;
+                                        m.range_max = mx;
+                                    }
+                                })),
+                            );
+                        }
+                    }
+                }
             }
             DispatchResult::handled()
         }
@@ -1438,119 +1484,107 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Modulation undo: snapshot/commit ────────────────────────
-        PanelAction::TrimSnapshot(gpt, param_id) => {
+        // Snapshot the kind's pre-drag range into the shared `trim_snapshot`.
+        // Only one trim handle drags at a time, so one slot serves all kinds.
+        PanelAction::TrimSnapshot(kind, gpt, param_id) => {
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
             {
-                let trim = project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.drivers
-                            .as_ref()
-                            .and_then(|ds| ds.iter().find(|d| d.param_id == *param_id))
-                            .map(|d| (d.trim_min, d.trim_max))
-                    })
-                    .flatten();
-                if let Some(trim) = trim {
-                    *trim_snapshot = Some(trim);
-                }
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::TrimCommit(gpt, param_id) => {
-            if let Some((old_min, old_max)) = trim_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                let info = project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.drivers
-                            .as_ref()
-                            .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
-                            .map(|di| {
-                                let d = &inst.drivers.as_ref().unwrap()[di];
-                                (di, d.trim_min, d.trim_max)
-                            })
-                    })
-                    .flatten();
-                if let Some((di, new_min, new_max)) = info
-                    && ((old_min - new_min).abs() > f32::EPSILON
-                        || (old_max - new_max).abs() > f32::EPSILON)
-                {
-                    let cmd = ChangeTrimCommand::new(
-                        DriverTarget::from(&target),
-                        di,
-                        old_min,
-                        old_max,
-                        new_min,
-                        new_max,
-                    );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                }
-            }
-            *active_inspector_drag = None;
-            DispatchResult::handled()
-        }
-
-        // ── Audio-mod trim handles (green): live range edit + undo on commit ──
-        PanelAction::AudioTrimChanged(gpt, param_id, min, max) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                let mn = *min;
-                let mx = *max;
-                graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
-                    m.shape.range_min = mn;
-                    m.shape.range_max = mx;
-                });
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::AudioTrimSnapshot(gpt, param_id) => {
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                let range = project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.audio_mods
-                            .as_ref()
-                            .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
-                            .map(|m| (m.shape.range_min, m.shape.range_max))
-                    })
-                    .flatten();
+                let range = match kind {
+                    TrimKind::Driver => project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.drivers
+                                .as_ref()
+                                .and_then(|ds| ds.iter().find(|d| d.param_id == *param_id))
+                                .map(|d| (d.trim_min, d.trim_max))
+                        })
+                        .flatten(),
+                    TrimKind::Audio => project
+                        .with_preset_graph_mut(&target, |inst| {
+                            inst.audio_mods
+                                .as_ref()
+                                .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
+                                .map(|m| (m.shape.range_min, m.shape.range_max))
+                        })
+                        .flatten(),
+                    // Ableton trim undo is wired in Phase 2; no snapshot yet.
+                    TrimKind::Ableton => None,
+                };
                 if let Some(range) = range {
                     *trim_snapshot = Some(range);
                 }
             }
             DispatchResult::handled()
         }
-        PanelAction::AudioTrimCommit(gpt, param_id) => {
-            if let Some((old_min, old_max)) = trim_snapshot.take()
-                && let Some(target) =
-                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-            {
-                let new_shape = project
-                    .with_preset_graph_mut(&target, |inst| {
-                        inst.audio_mods
-                            .as_ref()
-                            .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
-                            .map(|m| m.shape)
-                    })
-                    .flatten();
-                if let Some(new_shape) = new_shape
-                    && ((old_min - new_shape.range_min).abs() > f32::EPSILON
-                        || (old_max - new_shape.range_max).abs() > f32::EPSILON)
-                {
-                    let mut old_shape = new_shape;
-                    old_shape.range_min = old_min;
-                    old_shape.range_max = old_max;
-                    let cmd = SetAudioModShapeCommand::new(
-                        DriverTarget::from(&target),
-                        param_id.clone(),
-                        old_shape,
-                        new_shape,
-                    );
-                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+        PanelAction::TrimCommit(kind, gpt, param_id) => {
+            match kind {
+                TrimKind::Driver => {
+                    if let Some((old_min, old_max)) = trim_snapshot.take()
+                        && let Some(target) = resolve_graph_target(
+                            gpt, editor_target, effective_tab, active_layer, selection, project,
+                        )
+                    {
+                        let info = project
+                            .with_preset_graph_mut(&target, |inst| {
+                                inst.drivers
+                                    .as_ref()
+                                    .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
+                                    .map(|di| {
+                                        let d = &inst.drivers.as_ref().unwrap()[di];
+                                        (di, d.trim_min, d.trim_max)
+                                    })
+                            })
+                            .flatten();
+                        if let Some((di, new_min, new_max)) = info
+                            && ((old_min - new_min).abs() > f32::EPSILON
+                                || (old_max - new_max).abs() > f32::EPSILON)
+                        {
+                            let cmd = ChangeTrimCommand::new(
+                                DriverTarget::from(&target),
+                                di,
+                                old_min,
+                                old_max,
+                                new_min,
+                                new_max,
+                            );
+                            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        }
+                    }
                 }
+                TrimKind::Audio => {
+                    if let Some((old_min, old_max)) = trim_snapshot.take()
+                        && let Some(target) = resolve_graph_target(
+                            gpt, editor_target, effective_tab, active_layer, selection, project,
+                        )
+                    {
+                        let new_shape = project
+                            .with_preset_graph_mut(&target, |inst| {
+                                inst.audio_mods
+                                    .as_ref()
+                                    .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
+                                    .map(|m| m.shape)
+                            })
+                            .flatten();
+                        if let Some(new_shape) = new_shape
+                            && ((old_min - new_shape.range_min).abs() > f32::EPSILON
+                                || (old_max - new_shape.range_max).abs() > f32::EPSILON)
+                        {
+                            let mut old_shape = new_shape;
+                            old_shape.range_min = old_min;
+                            old_shape.range_max = old_max;
+                            let cmd = SetAudioModShapeCommand::new(
+                                DriverTarget::from(&target),
+                                param_id.clone(),
+                                old_shape,
+                                new_shape,
+                            );
+                            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        }
+                    }
+                }
+                // Ableton trim commit is a no-op in Phase 1 — undo is wired in
+                // Phase 2. The live edit already landed via `TrimChanged`.
+                TrimKind::Ableton => {}
             }
             *active_inspector_drag = None;
             DispatchResult::handled()
@@ -2151,47 +2185,8 @@ pub(super) fn dispatch_inspector(
         // Picker open is consumed by try_open_dropdown — never reaches dispatch.
         PanelAction::OpenAbletonPickerForMacro(_) => DispatchResult::handled(),
 
-        // Ableton trim handles — update range_min/range_max on the mapping.
-        PanelAction::AbletonTrimChanged(gpt, param_id, min, max) => {
-            let min = *min;
-            let max = *max;
-            if let Some(target) =
-                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-                && let Some(mapping_target) =
-                    ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
-            {
-                // Local edit + content sync both route through the shared
-                // locate-fork, so they can't split (effects locate by
-                // effect_type — first match — on both sides now).
-                if let Some(ms) = project
-                    .ableton_param_mappings_mut(&mapping_target)
-                    .and_then(|opt| opt.as_mut())
-                    && let Some(m) = ms.iter_mut().find(|m| m.param_id == *param_id)
-                {
-                    m.range_min = min;
-                    m.range_max = max;
-                }
-                let mt = mapping_target.clone();
-                let pid = param_id.clone();
-                ContentCommand::send(
-                    content_tx,
-                    ContentCommand::MutateProject(Box::new(move |p| {
-                        if let Some(ms) =
-                            p.ableton_param_mappings_mut(&mt).and_then(|opt| opt.as_mut())
-                            && let Some(m) = ms.iter_mut().find(|m| m.param_id == pid)
-                        {
-                            m.range_min = min;
-                            m.range_max = max;
-                        }
-                    })),
-                );
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::AbletonTrimSnapshot(..) | PanelAction::AbletonTrimCommit(..) => {
-            // Trim snapshots/commits for undo are deferred to a future iteration.
-            DispatchResult::handled()
-        }
+        // Driver / Ableton / audio trim handles are unified into the
+        // `Trim{Changed,Snapshot,Commit}(TrimKind, …)` arms above.
 
         PanelAction::AbletonMacroTrimChanged(slot_idx, min, max) => {
             let slot_idx = *slot_idx;

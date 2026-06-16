@@ -17,7 +17,7 @@
 
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
-use super::{GraphParamTarget, PanelAction};
+use super::{GraphParamTarget, PanelAction, TrimKind};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -2230,9 +2230,76 @@ impl ParamCardPanel {
         Vec::new()
     }
 
+    /// The trim-handle node ids for a modulator kind. The three kinds keep
+    /// separate id vectors (they overlay the same track simultaneously), and
+    /// this is the one place a `TrimKind` selects between them.
+    fn trim_ids_for(&self, kind: TrimKind) -> &[Option<TrimHandleIds>] {
+        match kind {
+            TrimKind::Driver => &self.trim_ids,
+            TrimKind::Ableton => &self.ableton_trim_ids,
+            TrimKind::Audio => &self.audio_trim_ids,
+        }
+    }
+
+    /// The current `[min, max]` output sub-range a kind's trim handles
+    /// represent at param index `pi`. Driver/audio read card `mod_state` and
+    /// default to the full range; Ableton reads the mapping range on
+    /// `param_info` and returns `None` when the param has no mapping — the old
+    /// `ableton_range` guard, preserved so an Ableton drag can't proceed
+    /// without a mapping to edit.
+    fn trim_range(&self, kind: TrimKind, pi: usize) -> Option<(f32, f32)> {
+        match kind {
+            TrimKind::Driver => Some((
+                self.state.mod_state.trim_min.get(pi).copied().unwrap_or(0.0),
+                self.state.mod_state.trim_max.get(pi).copied().unwrap_or(1.0),
+            )),
+            TrimKind::Ableton => self.param_info[pi].ableton_range,
+            TrimKind::Audio => Some((
+                self.state
+                    .mod_state
+                    .audio_range_min
+                    .get(pi)
+                    .copied()
+                    .unwrap_or(0.0),
+                self.state
+                    .mod_state
+                    .audio_range_max
+                    .get(pi)
+                    .copied()
+                    .unwrap_or(1.0),
+            )),
+        }
+    }
+
+    /// Write a kind's live trim range at param index `pi` back to its card-side
+    /// store during a drag. The mirror of [`trim_range`].
+    fn set_trim_range(&mut self, kind: TrimKind, pi: usize, min: f32, max: f32) {
+        match kind {
+            TrimKind::Driver => {
+                if let Some(v) = self.state.mod_state.trim_min.get_mut(pi) {
+                    *v = min;
+                }
+                if let Some(v) = self.state.mod_state.trim_max.get_mut(pi) {
+                    *v = max;
+                }
+            }
+            TrimKind::Ableton => {
+                self.param_info[pi].ableton_range = Some((min, max));
+            }
+            TrimKind::Audio => {
+                if let Some(v) = self.state.mod_state.audio_range_min.get_mut(pi) {
+                    *v = min;
+                }
+                if let Some(v) = self.state.mod_state.audio_range_max.get_mut(pi) {
+                    *v = max;
+                }
+            }
+        }
+    }
+
     /// Unified pointer-down hit-testing for both card kinds. Steps 1-4 grab the
     /// modulation widgets (the envelope target handle, the envelope decay slider,
-    /// driver trim bars, Ableton trim bars); step 5 is the param slider, with the
+    /// driver/Ableton/audio trim bars); step 5 is the param slider, with the
     /// proximity catch-zones for the target handle and driver trim handles. The
     /// emitted target comes from `param_target()`, so effect and generator share
     /// one path; toggle/trigger rows (generator-only, no slider widget) are
@@ -2265,52 +2332,27 @@ impl ParamCardPanel {
             }
         }
 
-        // 3. Trim bars.
-        for (pi, trim) in self.trim_ids.iter().enumerate() {
-            if let Some(t) = trim {
-                if node_id as i32 == t.min_bar_id {
-                    self.drag.dragging_trim_param = pi as i32;
-                    self.drag.dragging_trim_is_min = true;
-                    return vec![PanelAction::TrimSnapshot(target, self.pid_at(pi))];
-                }
-                if node_id as i32 == t.max_bar_id {
-                    self.drag.dragging_trim_param = pi as i32;
-                    self.drag.dragging_trim_is_min = false;
-                    return vec![PanelAction::TrimSnapshot(target, self.pid_at(pi))];
-                }
-            }
-        }
-
-        // 4. Ableton trim bars.
-        for (pi, trim) in self.ableton_trim_ids.iter().enumerate() {
-            if let Some(t) = trim {
-                if node_id as i32 == t.min_bar_id {
-                    self.drag.dragging_ableton_trim_param = pi as i32;
-                    self.drag.dragging_ableton_trim_is_min = true;
-                    return vec![PanelAction::AbletonTrimSnapshot(target, self.pid_at(pi))];
-                }
-                if node_id as i32 == t.max_bar_id {
-                    self.drag.dragging_ableton_trim_param = pi as i32;
-                    self.drag.dragging_ableton_trim_is_min = false;
-                    return vec![PanelAction::AbletonTrimSnapshot(target, self.pid_at(pi))];
+        // 3. Trim bars — driver, Ableton, and audio share one hit-test;
+        // `TrimKind` records which modulator's range was grabbed. The probe
+        // order (driver → Ableton → audio) matches the old three-loop order.
+        let mut trim_hit: Option<(TrimKind, usize, bool)> = None;
+        'trim: for kind in [TrimKind::Driver, TrimKind::Ableton, TrimKind::Audio] {
+            for (pi, trim) in self.trim_ids_for(kind).iter().enumerate() {
+                if let Some(t) = trim {
+                    if node_id as i32 == t.min_bar_id {
+                        trim_hit = Some((kind, pi, true));
+                        break 'trim;
+                    }
+                    if node_id as i32 == t.max_bar_id {
+                        trim_hit = Some((kind, pi, false));
+                        break 'trim;
+                    }
                 }
             }
         }
-
-        // 4b. Audio-mod trim bars (green) — the audio output sub-range.
-        for (pi, trim) in self.audio_trim_ids.iter().enumerate() {
-            if let Some(t) = trim {
-                if node_id as i32 == t.min_bar_id {
-                    self.drag.dragging_audio_trim_param = pi as i32;
-                    self.drag.dragging_audio_trim_is_min = true;
-                    return vec![PanelAction::AudioTrimSnapshot(target, self.pid_at(pi))];
-                }
-                if node_id as i32 == t.max_bar_id {
-                    self.drag.dragging_audio_trim_param = pi as i32;
-                    self.drag.dragging_audio_trim_is_min = false;
-                    return vec![PanelAction::AudioTrimSnapshot(target, self.pid_at(pi))];
-                }
-            }
+        if let Some((kind, pi, is_min)) = trim_hit {
+            self.drag.dragging_trim = Some((kind, pi, is_min));
+            return vec![PanelAction::TrimSnapshot(kind, target, self.pid_at(pi))];
         }
 
         // 5. Param slider tracks. Toggle/trigger rows have no slider widget, so
@@ -2379,15 +2421,13 @@ impl ParamCardPanel {
                     let dist_max = (pos.x - max_center).abs();
 
                     if dist_min < hit_zone && dist_min <= dist_max {
-                        self.drag.dragging_trim_param = pi as i32;
-                        self.drag.dragging_trim_is_min = true;
+                        self.drag.dragging_trim = Some((TrimKind::Driver, pi, true));
                         let _ = trim;
-                        return vec![PanelAction::TrimSnapshot(target, self.pid_at(pi))];
+                        return vec![PanelAction::TrimSnapshot(TrimKind::Driver, target, self.pid_at(pi))];
                     }
                     if dist_max < hit_zone {
-                        self.drag.dragging_trim_param = pi as i32;
-                        self.drag.dragging_trim_is_min = false;
-                        return vec![PanelAction::TrimSnapshot(target, self.pid_at(pi))];
+                        self.drag.dragging_trim = Some((TrimKind::Driver, pi, false));
+                        return vec![PanelAction::TrimSnapshot(TrimKind::Driver, target, self.pid_at(pi))];
                     }
                 }
 
@@ -2487,147 +2527,44 @@ impl ParamCardPanel {
             }
         }
 
-        // Trim bar drag — update state, reposition bar nodes, dispatch action
-        if self.drag.dragging_trim_param >= 0 {
-            let pi = self.drag.dragging_trim_param as usize;
-            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
-                let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                let tmin = self
-                    .state
-                    .mod_state
-                    .trim_min
-                    .get(pi)
-                    .copied()
-                    .unwrap_or(0.0);
-                let tmax = self
-                    .state
-                    .mod_state
-                    .trim_max
-                    .get(pi)
-                    .copied()
-                    .unwrap_or(1.0);
-                let (new_min, new_max) = if self.drag.dragging_trim_is_min {
-                    (norm.min(tmax), tmax)
-                } else {
-                    (tmin, norm.max(tmin))
-                };
-                if let Some(v) = self.state.mod_state.trim_min.get_mut(pi) {
-                    *v = new_min;
-                }
-                if let Some(v) = self.state.mod_state.trim_max.get_mut(pi) {
-                    *v = new_max;
-                }
+        // Trim bar drag (driver / Ableton / audio) — one path. Read the kind's
+        // current range, clamp the dragged edge, write it back, reposition the
+        // bars, emit the change. The clamp and `reposition_trim_bars` are
+        // identical across kinds (`x_to_normalized` pre-clamps to [0,1], so the
+        // old `norm.min`/`norm.clamp` spellings coincide); only the backing
+        // store differs, and `TrimKind` selects it via the trim accessors.
+        if let Some((kind, pi, is_min)) = self.drag.dragging_trim
+            && let Some(track_rect) = self
+                .slider_ids
+                .get(pi)
+                .and_then(|s| s.as_ref())
+                .map(|s| s.track_rect)
+            && let Some((cur_min, cur_max)) = self.trim_range(kind, pi)
+        {
+            let norm = BitmapSlider::x_to_normalized(track_rect, pos.x);
+            let (new_min, new_max) = if is_min {
+                (norm.min(cur_max), cur_max)
+            } else {
+                (cur_min, norm.max(cur_min))
+            };
+            self.set_trim_range(kind, pi, new_min, new_max);
 
-                // Visual update: reposition trim bar nodes in the tree.
-                if let Some(t) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
-                    super::param_slider_shared::reposition_trim_bars(
-                        tree,
-                        slider.track_rect,
-                        t,
-                        new_min,
-                        new_max,
-                    );
-                }
-
-                let pid = self.pid_at(pi);
-                return match self.kind {
-                    ParamCardKind::Effect => {
-                        vec![PanelAction::TrimChanged(GraphParamTarget::Effect(ei), pid, new_min, new_max)]
-                    }
-                    ParamCardKind::Generator => {
-                        vec![PanelAction::TrimChanged(GraphParamTarget::Generator, pid, new_min, new_max)]
-                    }
-                };
+            // Visual update: reposition this kind's trim bar nodes in the tree.
+            if let Some(t) = self.trim_ids_for(kind).get(pi).and_then(|t| t.as_ref()).copied() {
+                super::param_slider_shared::reposition_trim_bars(
+                    tree, track_rect, &t, new_min, new_max,
+                );
             }
-        }
 
-        // Ableton trim bar drag
-        if self.drag.dragging_ableton_trim_param >= 0 {
-            let pi = self.drag.dragging_ableton_trim_param as usize;
-            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref())
-                && let Some((cur_min, cur_max)) = self.param_info[pi].ableton_range
-            {
-                let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                let (new_min, new_max) = if self.drag.dragging_ableton_trim_is_min {
-                    (norm.clamp(0.0, cur_max), cur_max)
-                } else {
-                    (cur_min, norm.clamp(cur_min, 1.0))
-                };
-                self.param_info[pi].ableton_range = Some((new_min, new_max));
-
-                if let Some(t) = self.ableton_trim_ids.get(pi).and_then(|t| t.as_ref()) {
-                    super::param_slider_shared::reposition_trim_bars(
-                        tree,
-                        slider.track_rect,
-                        t,
-                        new_min,
-                        new_max,
-                    );
+            let pid = self.pid_at(pi);
+            return match self.kind {
+                ParamCardKind::Effect => {
+                    vec![PanelAction::TrimChanged(kind, GraphParamTarget::Effect(ei), pid, new_min, new_max)]
                 }
-
-                let pid = self.pid_at(pi);
-                return match self.kind {
-                    ParamCardKind::Effect => {
-                        vec![PanelAction::AbletonTrimChanged(GraphParamTarget::Effect(ei), pid, new_min, new_max)]
-                    }
-                    ParamCardKind::Generator => {
-                        vec![PanelAction::AbletonTrimChanged(GraphParamTarget::Generator, pid, new_min, new_max)]
-                    }
-                };
-            }
-        }
-
-        // Audio-mod trim bar drag (green) — clamp + reposition like the driver
-        // trim, but read/write the audio range and emit the audio action.
-        if self.drag.dragging_audio_trim_param >= 0 {
-            let pi = self.drag.dragging_audio_trim_param as usize;
-            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
-                let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                let amin = self
-                    .state
-                    .mod_state
-                    .audio_range_min
-                    .get(pi)
-                    .copied()
-                    .unwrap_or(0.0);
-                let amax = self
-                    .state
-                    .mod_state
-                    .audio_range_max
-                    .get(pi)
-                    .copied()
-                    .unwrap_or(1.0);
-                let (new_min, new_max) = if self.drag.dragging_audio_trim_is_min {
-                    (norm.min(amax), amax)
-                } else {
-                    (amin, norm.max(amin))
-                };
-                if let Some(v) = self.state.mod_state.audio_range_min.get_mut(pi) {
-                    *v = new_min;
+                ParamCardKind::Generator => {
+                    vec![PanelAction::TrimChanged(kind, GraphParamTarget::Generator, pid, new_min, new_max)]
                 }
-                if let Some(v) = self.state.mod_state.audio_range_max.get_mut(pi) {
-                    *v = new_max;
-                }
-                if let Some(t) = self.audio_trim_ids.get(pi).and_then(|t| t.as_ref()) {
-                    super::param_slider_shared::reposition_trim_bars(
-                        tree,
-                        slider.track_rect,
-                        t,
-                        new_min,
-                        new_max,
-                    );
-                }
-
-                let pid = self.pid_at(pi);
-                return match self.kind {
-                    ParamCardKind::Effect => {
-                        vec![PanelAction::AudioTrimChanged(GraphParamTarget::Effect(ei), pid, new_min, new_max)]
-                    }
-                    ParamCardKind::Generator => {
-                        vec![PanelAction::AudioTrimChanged(GraphParamTarget::Generator, pid, new_min, new_max)]
-                    }
-                };
-            }
+            };
         }
 
         // Param slider drag
@@ -2682,31 +2619,11 @@ impl ParamCardPanel {
                 ParamCardKind::Generator => vec![PanelAction::EnvDecayCommit(GraphParamTarget::Generator, pid)],
             };
         }
-        if self.drag.dragging_trim_param >= 0 {
-            let pi = self.drag.dragging_trim_param as usize;
-            self.drag.dragging_trim_param = -1;
+        if let Some((kind, pi, _)) = self.drag.dragging_trim.take() {
             let pid = self.pid_at(pi);
             return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::TrimCommit(GraphParamTarget::Effect(ei), pid)],
-                ParamCardKind::Generator => vec![PanelAction::TrimCommit(GraphParamTarget::Generator, pid)],
-            };
-        }
-        if self.drag.dragging_ableton_trim_param >= 0 {
-            let pi = self.drag.dragging_ableton_trim_param as usize;
-            self.drag.dragging_ableton_trim_param = -1;
-            let pid = self.pid_at(pi);
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::AbletonTrimCommit(GraphParamTarget::Effect(ei), pid)],
-                ParamCardKind::Generator => vec![PanelAction::AbletonTrimCommit(GraphParamTarget::Generator, pid)],
-            };
-        }
-        if self.drag.dragging_audio_trim_param >= 0 {
-            let pi = self.drag.dragging_audio_trim_param as usize;
-            self.drag.dragging_audio_trim_param = -1;
-            let pid = self.pid_at(pi);
-            return match self.kind {
-                ParamCardKind::Effect => vec![PanelAction::AudioTrimCommit(GraphParamTarget::Effect(ei), pid)],
-                ParamCardKind::Generator => vec![PanelAction::AudioTrimCommit(GraphParamTarget::Generator, pid)],
+                ParamCardKind::Effect => vec![PanelAction::TrimCommit(kind, GraphParamTarget::Effect(ei), pid)],
+                ParamCardKind::Generator => vec![PanelAction::TrimCommit(kind, GraphParamTarget::Generator, pid)],
             };
         }
         if self.drag.dragging_param >= 0 {

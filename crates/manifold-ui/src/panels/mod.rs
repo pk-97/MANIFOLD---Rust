@@ -52,6 +52,24 @@ pub enum GraphParamTarget {
     Generator,
 }
 
+/// Which modulator's output sub-range a trim-handle drag is editing. The three
+/// kinds share one drag path, one set of `Trim*` actions, and one
+/// [`reposition_trim_bars`](param_slider_shared::reposition_trim_bars) layout
+/// helper; they differ only in which backing store the live drag reads/writes
+/// (card-side) and which undo command the commit records (app-side):
+///
+/// | kind | card-side source | project store | commit command |
+/// |------|------------------|---------------|----------------|
+/// | `Driver`  | `mod_state.trim_min/max`          | `Driver.trim_min/max`        | `ChangeTrimCommand`        |
+/// | `Ableton` | `param_info[pi].ableton_range`    | mapping `range_min/max`      | `ChangeAbletonTrimCommand` |
+/// | `Audio`   | `mod_state.audio_range_min/max`   | `AudioModShape.range_min/max`| `SetAudioModShapeCommand`  |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrimKind {
+    Driver,
+    Ableton,
+    Audio,
+}
+
 /// Actions that panels emit to be handled by the app layer.
 /// Panels never touch the engine directly — they fire actions
 /// that the app wires to PlaybackEngine/EditingService.
@@ -242,11 +260,14 @@ pub enum PanelAction {
     AudioRenameSend(manifold_core::AudioSendId, String),
     /// Set a send's input channels (downmixed to mono for analysis).
     AudioSetSendChannels(manifold_core::AudioSendId, Vec<u16>),
-    TrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
+    /// A modulator output sub-range handle moved during a drag. `TrimKind`
+    /// selects which modulator (driver / Ableton / audio) — the three formerly
+    /// parallel `*TrimChanged` variants are one path now.
+    TrimChanged(TrimKind, GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
     /// Snapshot trim state before drag (for undo).
-    TrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    TrimSnapshot(TrimKind, GraphParamTarget, manifold_core::effects::ParamId),
     /// Commit trim drag (record undo command).
-    TrimCommit(GraphParamTarget, manifold_core::effects::ParamId),
+    TrimCommit(TrimKind, GraphParamTarget, manifold_core::effects::ParamId),
     /// Envelope target (orange handle / `target_normalized`) changed.
     TargetChanged(GraphParamTarget, manifold_core::effects::ParamId, f32),
     /// Snapshot target before drag (for undo).
@@ -611,22 +632,10 @@ pub enum PanelAction {
     UnmapMacroAbleton(usize),
     OpenAbletonPickerForMacro(usize),
 
-    // Ableton trim handles (range_min / range_max adjustment).
-    // Effect-side variants carry `param_id` (Phase 2 — see the per-param
-    // action block above for the rationale). Gen-side and macro-side
-    // keep their positional indices: generators have a single static
-    // tier with no user-exposed extensions, and macro slots are
-    // structurally positional in the 8-slot macro bank.
-    AbletonTrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
-    AbletonTrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
-    AbletonTrimCommit(GraphParamTarget, manifold_core::effects::ParamId),
-
-    // Audio-mod trim handles (green) — the audio output sub-range
-    // (`AudioModShape::range_min/range_max`). Mirrors the Ableton trim triad:
-    // snapshot on grab (for undo), changed during the drag, commit on release.
-    AudioTrimSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
-    AudioTrimChanged(GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
-    AudioTrimCommit(GraphParamTarget, manifold_core::effects::ParamId),
+    // Driver / Ableton / audio trim handles are unified into the `Trim*`
+    // triad above (carrying `TrimKind`). Macro-slot trims stay separate: they
+    // live on the macro bank, addressed by a positional `slot_idx`, not a
+    // graph param.
     AbletonMacroTrimSnapshot(usize),                                      // slot_idx
     AbletonMacroTrimChanged(usize, f32, f32),                             // slot_idx, min, max
     AbletonMacroTrimCommit(usize),                                        // slot_idx

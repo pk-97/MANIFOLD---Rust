@@ -6,6 +6,7 @@
 //! single source of truth for them.
 
 use super::DriverConfigAction;
+use super::TrimKind;
 use super::param_card::ParamInfo;
 use crate::color;
 use crate::node::*;
@@ -92,6 +93,7 @@ pub(crate) struct EnvelopeConfigIds {
     pub(crate) decay_slider: SliderNodeIds,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct TrimHandleIds {
     pub(crate) fill_id: i32,
     pub(crate) min_bar_id: i32,
@@ -291,43 +293,32 @@ impl ParamModState {
 /// Drag tracking state for the unified `ParamCardPanel` (both kinds).
 pub(crate) struct ParamDragState {
     pub(crate) dragging_param: i32,
-    pub(crate) dragging_trim_param: i32,
-    pub(crate) dragging_trim_is_min: bool,
+    /// The active modulator trim-range drag, if any: `(kind, param_index,
+    /// is_min)`. The three formerly parallel driver/Ableton/audio drag slots
+    /// are one slot now — only one trim handle is ever dragged at a time, and
+    /// [`TrimKind`] records which modulator's range it is.
+    pub(crate) dragging_trim: Option<(TrimKind, usize, bool)>,
     /// The envelope target (orange handle / `target_normalized`) on the track.
     pub(crate) dragging_target_param: i32,
     /// The envelope decay slider (`decay_beats`) in the drawer.
     pub(crate) dragging_decay_param: i32,
-    pub(crate) dragging_ableton_trim_param: i32,
-    pub(crate) dragging_ableton_trim_is_min: bool,
-    /// The green audio-mod trim range (`AudioModShape::range_min/max`) on the
-    /// track. Parallel to the driver/Ableton trim drags above — same mechanism,
-    /// a different modulator's range.
-    pub(crate) dragging_audio_trim_param: i32,
-    pub(crate) dragging_audio_trim_is_min: bool,
 }
 
 impl ParamDragState {
     pub(crate) fn new() -> Self {
         Self {
             dragging_param: -1,
-            dragging_trim_param: -1,
-            dragging_trim_is_min: false,
+            dragging_trim: None,
             dragging_target_param: -1,
             dragging_decay_param: -1,
-            dragging_ableton_trim_param: -1,
-            dragging_ableton_trim_is_min: false,
-            dragging_audio_trim_param: -1,
-            dragging_audio_trim_is_min: false,
         }
     }
 
     pub(crate) fn is_dragging(&self) -> bool {
         self.dragging_param >= 0
-            || self.dragging_trim_param >= 0
+            || self.dragging_trim.is_some()
             || self.dragging_target_param >= 0
             || self.dragging_decay_param >= 0
-            || self.dragging_ableton_trim_param >= 0
-            || self.dragging_audio_trim_param >= 0
     }
 }
 
