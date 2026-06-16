@@ -25,14 +25,16 @@ Keep the typed fields (preserves each overlay's specific `open(args)` and typed 
 
 ```rust
 /// A floating, dismissable surface drawn above the main UI on Layer::Overlay.
+/// Standalone, NOT `: Panel` — the modal panels don't implement Panel, and the
+/// driver captures node ranges itself (brackets build_at with tree.count()), so
+/// no node_range() on the trait.
 pub trait Overlay {
     fn is_open(&self) -> bool;
     fn modality(&self) -> Modality;
     fn anchor(&self) -> Anchor;
     fn desired_size(&self) -> Vec2;                 // anchor + this → rect via one helper
-    fn build(&mut self, tree: &mut UITree, rect: Rect);
-    fn node_range(&self) -> (usize, usize);         // for draw + hit-test (already on Panel)
-    fn handle_event(&mut self, ev: &UIEvent, tree: &mut UITree) -> OverlayResponse;
+    fn build_at(&mut self, tree: &mut UITree, rect: Rect);
+    fn on_event(&mut self, ev: &UIEvent, tree: &mut UITree) -> OverlayResponse;
     fn close(&mut self);
 }
 
@@ -95,6 +97,20 @@ The HUD becomes a `Modeless` overlay that never consumes input (always `Ignored`
 
 Nothing special. `audio_setup_panel` is `OverlayId::AudioSetup`; opening it pushes the stack; the driver builds, backdrops, draws, and routes its input. There is no separate "remember to add it to the render pass" step, because there is no per-overlay render code anymore.
 
+## Refinements from validating against real panels (2026-06-16)
+
+Found by implementing the trait against the actual code, not just asserting it:
+
+- **`Overlay` is standalone**, not a `Panel` supertrait. The modal panels (audio_setup, browser_popup, ableton_picker, dropdown) don't implement `Panel` — they have bespoke build/click APIs. Forcing `: Panel` would mean a second, fake implementation.
+- **The driver captures node ranges**, not the overlays. It brackets `build_at` with `tree.count()` to record each overlay's `[start, end)`. Audio Setup, for one, tracks no `first_node`/`node_count` today — pushing that onto every overlay would be busywork.
+- **Overlays must own their resolution context.** Dropdown selection lowers through `dropdown_context` and Ableton selection through `ableton_picker_context`, both stored on `UIRoot` today. For `on_event` to be self-contained (return the final `Vec<PanelAction>`), those contexts move *into* their panels, set at `open()`. This is the largest follow-up refactor; Audio Setup needed none of it (its `handle_click` already returns `PanelAction` directly), which is why it's the proof-of-concept.
+- **Modality classification:** Modal + backdrop = browser_popup, ableton_picker, audio_setup; Modeless = dropdown, perf_hud. (Audio Setup gains a real full-screen backdrop it lacked before — today its "background" node only covers the panel itself, so clicks outside leak through.)
+
+### Status
+
+- **Landed (foundation):** `Overlay` trait + `Modality`/`Anchor`/`OverlayResponse` + `compute_overlay_rect` in [crates/manifold-ui/src/panels/overlay.rs](../crates/manifold-ui/src/panels/overlay.rs); `Overlay` implemented for `AudioSetupPanel` as the proof (additive — the old `build(tree, w, h)` stays until the driver lands). Compiles under `-D warnings`; panel tests green.
+- **Next:** impl `Overlay` for the other four (with the dropdown/picker context moves), then `OverlayId` + `OverlayStack` + the driver, then the atomic cutover.
+
 ## Migration plan (one cutover, no half-state)
 
 Per the no-interim-stopgaps rule, all five overlays move onto the system in a single change — not some-on/some-off.
@@ -112,8 +128,8 @@ Manual run-skill pass per overlay: open / draw / dismiss-by-Escape / dismiss-by-
 
 **Declarative top-level content** — the "easy to *implement*" half. Generalize the [drawer DSL](../crates/manifold-ui/src/panels/drawer.rs) (today scoped to slider sub-panels) upward so a settings page is "declare rows," not a bespoke `build_nodes()`. Separable, most open-ended; do it after the stack is proven by this migration. This first pass delivers "reason about" + "safe" fully and "easy to implement" partially (registration is trivial; content is still bespoke until the DSL lands).
 
-## Open questions (need Peter's call before coding)
+## Decisions (signed off 2026-06-16)
 
-1. **Modeless click-outside:** dropdown click-outside today dismisses — does the click *also* fall through to the panel beneath (e.g. select a clip), or only dismiss? Pick one rule for all modeless overlays.
-2. **perf HUD in the stack** vs special-cased always-top modeless. In-stack is cleaner and kills the coupling; confirm it should never sit above a true modal (it shouldn't).
-3. **Anchor::ToNode across rebuilds:** node ids change on rebuild, so anchors recompute each build from the live node — confirm that's acceptable (it is for click-anchored popups; matters only if an anchor node can disappear while the overlay stays open).
+1. **Modeless click-outside: dismiss only.** A click outside a modeless overlay dismisses it and is consumed — it does NOT fall through to the panel beneath.
+2. **perf HUD folds into the stack** as a non-capturing modeless overlay, pinned to the *bottom* of the overlay z-order (a true modal always draws on top of it). This removes the render-sweep coupling that caused the Audio Setup bug. Implementation note: overlays carry a z-tier so a persistent low overlay (HUD) can't end up above a later-opened modal regardless of toggle order.
+3. **Anchors recompute each rebuild** from the live anchor (cheap; no cached rect).

@@ -15,10 +15,12 @@
 use manifold_core::AudioSendId;
 
 use crate::color;
+use crate::input::{Key, UIEvent};
 use crate::node::*;
 use crate::tree::UITree;
 
 use super::PanelAction;
+use super::overlay::{Anchor, Modality, Overlay, OverlayResponse};
 
 // ── Layout ──
 const PANEL_W: f32 = 360.0;
@@ -124,21 +126,32 @@ impl AudioSetupPanel {
         self.current_device.clone().unwrap_or_else(|| "System Default".to_string())
     }
 
+    /// Total body height for the configured send count.
+    fn body_height(&self) -> f32 {
+        let rows = self.sends.len();
+        TITLE_H
+            + ROW_H // device row
+            + ROW_GAP
+            + (ROW_H + ROW_GAP) * rows as f32
+            + ROW_H // add-send button
+            + PAD * 2.0
+    }
+
     /// Build the modal's nodes, centered in a `(width, height)` viewport.
     pub fn build(&mut self, tree: &mut UITree, viewport_w: f32, viewport_h: f32) {
         if !self.open {
             return;
         }
-        let rows = self.sends.len();
-        let body_h = TITLE_H
-            + ROW_H // device row
-            + ROW_GAP
-            + (ROW_H + ROW_GAP) * rows as f32
-            + ROW_H // add-send button
-            + PAD * 2.0;
+        let body_h = self.body_height();
         let x = ((viewport_w - PANEL_W) * 0.5).max(0.0);
         let y = ((viewport_h - body_h) * 0.5).max(0.0);
+        self.build_nodes(tree, x, y);
+    }
 
+    /// Build the modal's nodes with the panel's top-left at `(x, y)`.
+    fn build_nodes(&mut self, tree: &mut UITree, x: f32, y: f32) {
+        let rows = self.sends.len();
+        let body_h = self.body_height();
         self.bg_id = tree.add_panel(
             -1,
             x,
@@ -355,6 +368,56 @@ impl AudioSetupPanel {
             }
         }
         None
+    }
+}
+
+impl Overlay for AudioSetupPanel {
+    fn is_open(&self) -> bool {
+        self.open
+    }
+
+    fn modality(&self) -> Modality {
+        Modality::Modal { dim_background: true }
+    }
+
+    fn anchor(&self) -> Anchor {
+        Anchor::Centered
+    }
+
+    fn desired_size(&self) -> Vec2 {
+        Vec2::new(PANEL_W, self.body_height())
+    }
+
+    fn build_at(&mut self, tree: &mut UITree, rect: Rect) {
+        if !self.open {
+            return;
+        }
+        self.build_nodes(tree, rect.x, rect.y);
+    }
+
+    fn on_event(&mut self, event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {
+        match event {
+            UIEvent::KeyDown { key: Key::Escape, .. } => OverlayResponse::Dismiss(Vec::new()),
+            UIEvent::Click { node_id, .. } => {
+                let id = *node_id as i32;
+                if id == self.close_id {
+                    OverlayResponse::Dismiss(Vec::new())
+                } else if let Some(action) = self.handle_click_inner(id) {
+                    OverlayResponse::Consumed(vec![action])
+                } else if self.owns_node(id) {
+                    // Panel background or a non-action control — swallow, stay open.
+                    OverlayResponse::Consumed(Vec::new())
+                } else {
+                    // Click landed on the dim backdrop / outside the panel — dismiss.
+                    OverlayResponse::Dismiss(Vec::new())
+                }
+            }
+            _ => OverlayResponse::Ignored,
+        }
+    }
+
+    fn close(&mut self) {
+        self.open = false;
     }
 }
 
