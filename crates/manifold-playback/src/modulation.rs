@@ -862,4 +862,75 @@ mod tests {
         let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
         assert_eq!(fx.param_values[0].value, 0.0);
     }
+
+    /// Overlay a recalibrated range on a STOCK param via the instance's graph
+    /// `preset_metadata` — exactly what the chevron popover writes. The registry
+    /// def still owns the param; this only narrows its range on this instance.
+    fn override_stock_param_range(inst: &mut PresetInstance, param_id: &str, min: f32, max: f32) {
+        use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef, PresetMetadata};
+        let graph = inst.graph.get_or_insert_with(|| EffectGraphDef {
+            version: 0,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: Vec::new(),
+            wires: Vec::new(),
+        });
+        let meta = graph.preset_metadata.get_or_insert_with(|| PresetMetadata {
+            id: PresetTypeId::new(""),
+            display_name: String::new(),
+            category: String::new(),
+            osc_prefix: String::new(),
+            legacy_discriminant: None,
+            available: true,
+            is_line_based: false,
+            params: Vec::new(),
+            bindings: Vec::new(),
+            skip_mode: Default::default(),
+            param_aliases: Vec::new(),
+            value_aliases: Vec::new(),
+            string_params: Vec::new(),
+            string_bindings: Vec::new(),
+        });
+        meta.params.push(ParamSpecDef {
+            id: param_id.to_string(),
+            name: param_id.to_string(),
+            min,
+            max,
+            default_value: 0.0,
+            whole_numbers: false,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: Vec::new(),
+            format_string: None,
+            osc_suffix: String::new(),
+            curve: Default::default(),
+            invert: false,
+        });
+    }
+
+    #[test]
+    fn audio_mod_respects_recalibrated_range_override() {
+        // Narrow `amount`'s range to 0..0.5 on this instance (what the chevron
+        // popover writes to preset_metadata). A full-signal audio mod must cap at
+        // the override max 0.5, not the catalog max 1.0 — the resolver is
+        // override-first, so a recalibrated slider bounds the modulator too.
+        let (mut project, send_id) = project_with_audio_send();
+        attach_full_range_low_mod(&mut project, &send_id);
+        override_stock_param_range(
+            &mut project.timeline.layers[0].effects.as_mut().unwrap()[0],
+            "amount",
+            0.0,
+            0.5,
+        );
+
+        let snap = snapshot_low(1.0);
+        assert!(evaluate_all_audio_mods(&mut project, &snap, Seconds(0.016)));
+        let fx = &project.timeline.layers[0].effects.as_ref().unwrap()[0];
+        assert!(
+            (fx.param_values[0].value - 0.5).abs() < 1e-6,
+            "full signal caps at the recalibrated max 0.5, got {}",
+            fx.param_values[0].value,
+        );
+    }
 }

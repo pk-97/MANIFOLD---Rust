@@ -186,25 +186,39 @@ pub fn resolve_param_in(
     fx: &PresetInstance,
     id: &str,
 ) -> Option<ResolvedParam> {
+    // The per-instance reshape override — the recalibrated range the chevron
+    // popover writes into the graph's `preset_metadata`. This is the SAME
+    // authority the card slider (the state_sync overlay) and the inspector
+    // (`resolve_param_range`) already resolve from. The modulation resolver must
+    // read it too: returning the catalog range here is what let a driver /
+    // envelope / audio mod overshoot a recalibrated slider, since all three
+    // funnel through this one function. Override-first, catalog as the base.
+    let override_range = |id: &str| -> Option<(f32, f32)> {
+        fx.graph
+            .as_ref()
+            .and_then(|g| g.preset_metadata.as_ref())
+            .and_then(|m| m.params.iter().find(|p| p.id == id))
+            .map(|s| (s.min, s.max))
+    };
+
     if let Some(&idx) = def.id_to_index.get(id) {
         let pd = &def.param_defs[idx];
+        // Range from the override when present, else the registry def. idx and
+        // `whole_numbers` always come from the registry — the popover edits the
+        // range, never the slot position or the integral-ness.
+        let (min, max) = override_range(id).unwrap_or((pd.min, pd.max));
         return Some(ResolvedParam {
             idx,
-            min: pd.min,
-            max: pd.max,
+            min,
+            max,
             whole_numbers: pd.whole_numbers || pd.value_labels.is_some(),
         });
     }
     let (j, b) = fx.user_added_bindings().enumerate().find(|(_, b)| b.id == id)?;
-    // Range comes from the binding's declared `ParamSpecDef` range (the preset
-    // is the single source now — the per-instance reshape note is gone), else 0..1.
-    let (min, max) = fx
-        .graph
-        .as_ref()
-        .and_then(|g| g.preset_metadata.as_ref())
-        .and_then(|m| m.params.iter().find(|p| p.id == id))
-        .map(|s| (s.min, s.max))
-        .unwrap_or((0.0, 1.0));
+    // User-tail range comes from the binding's declared `ParamSpecDef` range (the
+    // preset is the single source now — the per-instance reshape note is gone),
+    // else 0..1.
+    let (min, max) = override_range(id).unwrap_or((0.0, 1.0));
     Some(ResolvedParam {
         idx: def.param_count + j,
         min,
