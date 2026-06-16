@@ -225,6 +225,10 @@ pub enum PanelAction {
     AudioModNewSend(GraphParamTarget, manifold_core::effects::ParamId),
 
     // ── Audio Setup panel (project-level send routing) ──
+    /// Open the input-device dropdown (anchored to the clicked trigger).
+    AudioSetupDeviceClicked,
+    /// Open a send's input-channel dropdown (anchored to the clicked trigger).
+    AudioSendChannelClicked(manifold_core::AudioSendId),
     /// Set (or clear) the capture input device.
     AudioSetDevice(Option<String>),
     /// Add a new empty send.

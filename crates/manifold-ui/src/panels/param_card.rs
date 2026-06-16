@@ -1943,15 +1943,22 @@ impl ParamCardPanel {
         self.param_info[pi].param_id.clone()
     }
 
-    /// The "A" audio-mod button action. With no sends defined yet, arming has
-    /// nothing to point at, so the button opens the Audio Setup panel rather
-    /// than silently doing nothing — the user lands where they can create a
-    /// send, then comes back and arms. Once a send exists it arms/disarms the
-    /// mod as usual (the dispatch assigns the project's first send).
+    /// The "A" audio-mod button action — always opens (arms) or closes
+    /// (disarms) this param's audio drawer, never the Audio Setup modal. With no
+    /// sends defined yet, arming auto-creates the project's first send and points
+    /// this param at it in one undo step, so the drawer opens populated and ready
+    /// (the user routes/renames sends in Audio Setup afterward). The drawer's own
+    /// "+" adds further sends.
     fn audio_toggle_action(&self, target: GraphParamTarget, pi: usize) -> Vec<PanelAction> {
-        if self.state.mod_state.audio_send_ids.is_empty() {
-            vec![PanelAction::OpenAudioSetup]
+        let ms = &self.state.mod_state;
+        if ms.audio_active.get(pi).copied().unwrap_or(false) {
+            // Already armed → disarm (closes the drawer), regardless of sends.
+            vec![PanelAction::AudioModToggle(target, self.pid_at(pi))]
+        } else if ms.audio_send_ids.is_empty() {
+            // Not armed, no send to point at → create the first send + arm.
+            vec![PanelAction::AudioModNewSend(target, self.pid_at(pi))]
         } else {
+            // Not armed, sends exist → arm at the project's first send.
             vec![PanelAction::AudioModToggle(target, self.pid_at(pi))]
         }
     }

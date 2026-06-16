@@ -28,12 +28,15 @@ enum OverlayId {
 impl OverlayId {
     /// Bottom → top: later = higher z (drawn last / on top, first to receive
     /// input). The perf HUD sits at the bottom so a real modal always covers it.
+    /// The dropdown sits on top: it's a transient selection surface opened *from*
+    /// another overlay (e.g. the Audio Setup modal's device/channel pickers), so
+    /// it must render above whatever spawned it.
     const Z_ORDER: [OverlayId; 5] = [
         OverlayId::PerfHud,
-        OverlayId::Dropdown,
         OverlayId::AudioSetup,
         OverlayId::BrowserPopup,
         OverlayId::AbletonPicker,
+        OverlayId::Dropdown,
     ];
 }
 
@@ -89,6 +92,11 @@ pub(crate) fn build_picker_session(
     AbletonPickerSession { rack_tracks }
 }
 
+/// Highest 0-based input channel an Audio Setup send can route to (64 channels,
+/// covering large multichannel interfaces). The channel dropdown lists `0..=`
+/// this; the picker downmixes the chosen channel to mono for analysis.
+const AUDIO_SEND_MAX_CHANNEL: u16 = 63;
+
 /// What the currently-open dropdown is selecting for.
 #[derive(Debug, Clone)]
 pub enum DropdownContext {
@@ -107,6 +115,8 @@ pub enum DropdownContext {
     MacroSlotContext(usize),  // macro_index (right-click on macro slider)
     GenStringParamDropdown(usize), // string_param_index (dropdown selector)
     AudioInputDevice,         // audio input device selection for live recording
+    AudioSetupDevice,         // Audio Setup modal: capture input device
+    AudioSendChannel(manifold_core::AudioSendId), // Audio Setup: a send's input channel
 }
 
 /// Fine-grained tracking of what scroll-related state changed.
@@ -844,6 +854,11 @@ impl UIRoot {
     ) {
         self.dropdown_context = Some(context);
         self.dropdown.open(items, trigger, 120.0, &mut self.tree);
+        // Force an overlay rebuild so the just-opened dropdown is recorded into
+        // `overlay_draw` and drawn this frame — essential when the trigger lives
+        // inside another overlay (e.g. the Audio Setup modal), where the click is
+        // consumed by the overlay driver and wouldn't otherwise dirty the tree.
+        self.overlay_dirty = true;
     }
 
     /// Refresh the embedded-preset list surfaced into the Add pickers from the
@@ -1223,6 +1238,35 @@ impl UIRoot {
                 self.open_dropdown_at(DropdownContext::AudioInputDevice, items, trigger);
                 true
             }
+            PanelAction::AudioSetupDeviceClicked => {
+                // Enumerate capture devices on demand for the Audio Setup modal.
+                self.audio_input_device_names =
+                    manifold_audio::capture::AudioCaptureDevice::list_devices()
+                        .into_iter()
+                        .map(|d| d.name)
+                        .collect();
+                let mut items: Vec<DropdownItem> = vec![DropdownItem::new("System Default")];
+                items.extend(
+                    self.audio_input_device_names
+                        .iter()
+                        .map(|name| DropdownItem::new(name)),
+                );
+                self.open_dropdown_at(DropdownContext::AudioSetupDevice, items, trigger);
+                true
+            }
+            PanelAction::AudioSendChannelClicked(send_id) => {
+                // 1-based labels; index k → 0-based channel k. The dropdown
+                // scrolls, so listing the full routing range is fine.
+                let items: Vec<DropdownItem> = (0..=AUDIO_SEND_MAX_CHANNEL)
+                    .map(|ch| DropdownItem::new(&format!("Channel {}", ch + 1)))
+                    .collect();
+                self.open_dropdown_at(
+                    DropdownContext::AudioSendChannel(send_id.clone()),
+                    items,
+                    trigger,
+                );
+                true
+            }
             PanelAction::SelectClkDevice => {
                 if self.midi_device_names.is_empty() {
                     log::info!("[UIRoot] No MIDI devices available for CLK selection");
@@ -1565,6 +1609,20 @@ impl UIRoot {
                         .get(device_idx)
                         .map(|name| PanelAction::SetAudioInputDevice(name.clone()))
                 }
+            }
+            DropdownContext::AudioSetupDevice => {
+                if index == 0 {
+                    // "System Default" → clear the explicit device.
+                    Some(PanelAction::AudioSetDevice(None))
+                } else {
+                    self.audio_input_device_names
+                        .get(index - 1)
+                        .map(|name| PanelAction::AudioSetDevice(Some(name.clone())))
+                }
+            }
+            DropdownContext::AudioSendChannel(send_id) => {
+                // index k → 0-based channel k (downmixed to mono for analysis).
+                Some(PanelAction::AudioSetSendChannels(send_id, vec![index as u16]))
             }
             DropdownContext::CardContext(gpt) => {
                 // Label-matched: Copy/Paste are generator-only + conditional, so

@@ -1071,15 +1071,12 @@ pub fn sync_inspector_data(
     active_layer: Option<usize>,
     selection: &SelectionState,
 ) {
-    // Audio Setup modal — refresh its device + send list while it's open.
-    // Device enumeration is a CoreAudio call, so gate it on the panel being
-    // visible (it's a rare, user-opened modal).
+    // Audio Setup modal — refresh its current device + send list while it's
+    // open. The device *list* is enumerated lazily by the app when the device
+    // dropdown opens (a CoreAudio call), so this sync just mirrors the selected
+    // device name and the project's sends — no per-sync enumeration.
     if ui.audio_setup_panel.is_open() {
         use manifold_ui::panels::audio_setup_panel::AudioSendRow;
-        let devices = manifold_audio::capture::AudioCaptureDevice::list_devices()
-            .into_iter()
-            .map(|d| d.name)
-            .collect();
         let sends = project
             .audio_setup
             .sends
@@ -1092,7 +1089,7 @@ pub fn sync_inspector_data(
             })
             .collect();
         ui.audio_setup_panel
-            .configure(devices, project.audio_setup.device_name.clone(), sends);
+            .configure(project.audio_setup.device_name.clone(), sends);
     }
 
     // Master effects → inspector (envelopes ride on each instance)
