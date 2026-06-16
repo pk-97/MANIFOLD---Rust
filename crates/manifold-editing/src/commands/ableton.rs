@@ -174,3 +174,87 @@ fn set_trim(project: &mut Project, target: &AbletonMappingTarget, min: f32, max:
         m.range_max = max;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::Command;
+    use manifold_core::ableton_mapping::{
+        AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus,
+    };
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::id::EffectId;
+    use manifold_core::PresetTypeId;
+    use std::borrow::Cow;
+
+    fn mapping(param: &'static str, min: f32, max: f32) -> AbletonParamMapping {
+        AbletonParamMapping {
+            param_id: Cow::Borrowed(param),
+            address: AbletonMacroAddress {
+                track_id: 0,
+                device_id: 0,
+                param_id: 0,
+                device_identity: AbletonDeviceIdentity {
+                    device_class_name: "InstrumentGroupDevice".to_string(),
+                },
+                track_name: "Bass".to_string(),
+                device_name: "Rack".to_string(),
+                macro_name: "Filter".to_string(),
+            },
+            range_min: min,
+            range_max: max,
+            inverted: false,
+            legacy_param_index: None,
+            last_value: 0.0,
+            status: AbletonMappingStatus::Active,
+        }
+    }
+
+    #[test]
+    fn macro_slot_trim_round_trips() {
+        let mut project = Project::default();
+        project.settings.macro_bank.slots[0].ableton_mapping = Some(mapping("macro", 0.2, 0.8));
+
+        let mut cmd = ChangeAbletonTrimCommand::new(
+            AbletonMappingTarget::MacroSlot { slot_index: 0 },
+            0.2,
+            0.8,
+            0.4,
+            0.6,
+        );
+        cmd.execute(&mut project);
+        let m = project.settings.macro_bank.slots[0].ableton_mapping.as_ref().unwrap();
+        assert!((m.range_min - 0.4).abs() < f32::EPSILON);
+        assert!((m.range_max - 0.6).abs() < f32::EPSILON);
+
+        cmd.undo(&mut project);
+        let m = project.settings.macro_bank.slots[0].ableton_mapping.as_ref().unwrap();
+        assert!((m.range_min - 0.2).abs() < f32::EPSILON);
+        assert!((m.range_max - 0.8).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn master_effect_trim_round_trips() {
+        let mut project = Project::default();
+        let mut fx = PresetInstance::new(PresetTypeId::new("Bloom"));
+        fx.id = EffectId::new("fx-1");
+        fx.ableton_mappings = Some(vec![mapping("amount", 0.0, 1.0)]);
+        project.settings.master_effects.push(fx);
+
+        let target = AbletonMappingTarget::MasterEffect {
+            effect_type: PresetTypeId::new("Bloom"),
+            param_id: Cow::Borrowed("amount"),
+        };
+        let mut cmd = ChangeAbletonTrimCommand::new(target, 0.0, 1.0, 0.25, 0.75);
+
+        cmd.execute(&mut project);
+        let m = &project.settings.master_effects[0].ableton_mappings.as_ref().unwrap()[0];
+        assert!((m.range_min - 0.25).abs() < f32::EPSILON);
+        assert!((m.range_max - 0.75).abs() < f32::EPSILON);
+
+        cmd.undo(&mut project);
+        let m = &project.settings.master_effects[0].ableton_mappings.as_ref().unwrap()[0];
+        assert!((m.range_min - 0.0).abs() < f32::EPSILON);
+        assert!((m.range_max - 1.0).abs() < f32::EPSILON);
+    }
+}

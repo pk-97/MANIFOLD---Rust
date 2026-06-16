@@ -5,6 +5,7 @@ use manifold_core::effects::{PresetInstance, ParamEnvelope, ParameterDriver};
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_core::{Beats, LayerId, Seconds};
+use manifold_editing::commands::ableton::ChangeAbletonTrimCommand;
 use manifold_editing::commands::clip::{ChangeClipLoopCommand, SlipClipCommand};
 use manifold_editing::commands::drivers::{
     AddDriverCommand, ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand, ChangeTrimCommand,
@@ -1507,8 +1508,16 @@ pub(super) fn dispatch_inspector(
                                 .map(|m| (m.shape.range_min, m.shape.range_max))
                         })
                         .flatten(),
-                    // Ableton trim undo is wired in Phase 2; no snapshot yet.
-                    TrimKind::Ableton => None,
+                    TrimKind::Ableton => {
+                        ableton_mapping_target(&target, effective_tab, active_layer, project, param_id)
+                            .and_then(|mt| {
+                                project
+                                    .ableton_param_mappings(&mt)
+                                    .and_then(|opt| opt.as_ref())
+                                    .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
+                                    .map(|m| (m.range_min, m.range_max))
+                            })
+                    }
                 };
                 if let Some(range) = range {
                     *trim_snapshot = Some(range);
@@ -1582,9 +1591,35 @@ pub(super) fn dispatch_inspector(
                         }
                     }
                 }
-                // Ableton trim commit is a no-op in Phase 1 — undo is wired in
-                // Phase 2. The live edit already landed via `TrimChanged`.
-                TrimKind::Ableton => {}
+                // Ableton trim now records undo like driver/audio: the live
+                // edit already landed via `TrimChanged`, so the command just
+                // re-applies the same range and captures the pre-drag range for
+                // undo. One step per drag (snapshot on grab, commit on release).
+                TrimKind::Ableton => {
+                    if let Some((old_min, old_max)) = trim_snapshot.take()
+                        && let Some(target) = resolve_graph_target(
+                            gpt, editor_target, effective_tab, active_layer, selection, project,
+                        )
+                        && let Some(mt) = ableton_mapping_target(
+                            &target, effective_tab, active_layer, project, param_id,
+                        )
+                    {
+                        let new = project
+                            .ableton_param_mappings(&mt)
+                            .and_then(|opt| opt.as_ref())
+                            .and_then(|ms| ms.iter().find(|m| m.param_id == *param_id))
+                            .map(|m| (m.range_min, m.range_max));
+                        if let Some((new_min, new_max)) = new
+                            && ((old_min - new_min).abs() > f32::EPSILON
+                                || (old_max - new_max).abs() > f32::EPSILON)
+                        {
+                            let cmd = ChangeAbletonTrimCommand::new(
+                                mt, old_min, old_max, new_min, new_max,
+                            );
+                            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                        }
+                    }
+                }
             }
             *active_inspector_drag = None;
             DispatchResult::handled()
@@ -2211,7 +2246,41 @@ pub(super) fn dispatch_inspector(
             );
             DispatchResult::handled()
         }
-        PanelAction::AbletonMacroTrimSnapshot(_) | PanelAction::AbletonMacroTrimCommit(_) => {
+        PanelAction::AbletonMacroTrimSnapshot(slot_idx) => {
+            if let Some(range) = project
+                .settings
+                .macro_bank
+                .slots
+                .get(*slot_idx)
+                .and_then(|s| s.ableton_mapping.as_ref())
+                .map(|m| (m.range_min, m.range_max))
+            {
+                *trim_snapshot = Some(range);
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AbletonMacroTrimCommit(slot_idx) => {
+            use manifold_core::ableton_mapping::AbletonMappingTarget;
+            if let Some((old_min, old_max)) = trim_snapshot.take()
+                && let Some((new_min, new_max)) = project
+                    .settings
+                    .macro_bank
+                    .slots
+                    .get(*slot_idx)
+                    .and_then(|s| s.ableton_mapping.as_ref())
+                    .map(|m| (m.range_min, m.range_max))
+                && ((old_min - new_min).abs() > f32::EPSILON
+                    || (old_max - new_max).abs() > f32::EPSILON)
+            {
+                let cmd = ChangeAbletonTrimCommand::new(
+                    AbletonMappingTarget::MacroSlot { slot_index: *slot_idx },
+                    old_min,
+                    old_max,
+                    new_min,
+                    new_max,
+                );
+                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+            }
             DispatchResult::handled()
         }
 
