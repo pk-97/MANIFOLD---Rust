@@ -6,7 +6,10 @@
 //! different layout, interaction, and rendering model.
 
 use super::InspectorTab;
+use super::PanelAction;
+use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 use crate::color;
+use crate::input::{Key, UIEvent};
 use crate::node::Color32;
 use crate::node::*;
 use crate::scroll_container::ScrollContainer;
@@ -755,5 +758,91 @@ fn category_color(category: &str) -> Color32 {
         "Filmic" => CAT_FILMIC,
         "Surveillance" => CAT_SURVEILLANCE,
         _ => TEXT_DIM,
+    }
+}
+
+impl Overlay for BrowserPopupPanel {
+    fn is_open(&self) -> bool {
+        self.is_open()
+    }
+
+    fn modality(&self) -> Modality {
+        // The popup builds its own full-screen backdrop node, so the driver
+        // must not add a second scrim.
+        Modality::Modal {
+            dim_background: false,
+        }
+    }
+
+    fn anchor(&self) -> Anchor {
+        // Click-anchored and content-sized; positions itself in build().
+        Anchor::SelfManaged
+    }
+
+    fn desired_size(&self) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement) {
+        self.set_screen_size(placement.screen.x, placement.screen.y);
+        self.build(tree);
+    }
+
+    fn on_event(&mut self, event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {
+        if !self.is_open() {
+            return OverlayResponse::Ignored;
+        }
+        match event {
+            UIEvent::KeyDown { key: Key::Escape, .. } => {
+                self.handle_escape();
+                OverlayResponse::Consumed(Vec::new())
+            }
+            UIEvent::Click { node_id, .. } => {
+                if self.is_search_bar(*node_id) {
+                    return OverlayResponse::Consumed(vec![PanelAction::BrowserSearchClicked]);
+                }
+                match self.handle_click(*node_id) {
+                    Some(BrowserPopupAction::Selected {
+                        type_id,
+                        mode,
+                        tab,
+                        layer_id,
+                    }) => {
+                        let action = match mode {
+                            BrowserPopupMode::Effect => PanelAction::AddEffect(
+                                tab,
+                                manifold_core::PresetTypeId::from_string(type_id),
+                            ),
+                            BrowserPopupMode::Generator => PanelAction::SetGenType(
+                                layer_id,
+                                manifold_core::PresetTypeId::from_string(type_id),
+                            ),
+                            // Node mode is editor-window only; never reached on
+                            // the main-window overlay path.
+                            BrowserPopupMode::Node => {
+                                return OverlayResponse::Consumed(Vec::new());
+                            }
+                        };
+                        OverlayResponse::Consumed(vec![action])
+                    }
+                    Some(BrowserPopupAction::Paste) => {
+                        OverlayResponse::Consumed(vec![PanelAction::PasteEffects])
+                    }
+                    // Dismissed (incl. backdrop), or an internal chip/category
+                    // click that needs a rebuild — consume so the modal swallows
+                    // it and the driver re-runs build_at next tick.
+                    _ => OverlayResponse::Consumed(Vec::new()),
+                }
+            }
+            UIEvent::Scroll { delta, .. } => {
+                self.handle_scroll(delta.y);
+                OverlayResponse::Consumed(Vec::new())
+            }
+            _ => OverlayResponse::Ignored,
+        }
+    }
+
+    fn close(&mut self) {
+        self.close();
     }
 }

@@ -21,13 +21,25 @@ use super::PanelAction;
 /// How an overlay relates to the UI beneath it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Modality {
-    /// Captures all input. A click outside the overlay's own nodes dismisses
-    /// it. `dim_background` adds a full-screen scrim node beneath the overlay.
+    /// Captures all input: even an event the overlay `Ignored` does not fall
+    /// through to lower overlays / panels. `dim_background` adds a full-screen
+    /// scrim node beneath the overlay. The overlay closes itself (sets its open
+    /// flag false) on an outside / backdrop click; the driver then pops it.
     Modal { dim_background: bool },
-    /// Floats above the UI. Only consumes clicks on its own nodes; a click
-    /// elsewhere dismisses it (dismiss-only — the click is consumed, not
-    /// passed through). The perf HUD is a modeless overlay that never consumes.
+    /// Floats above the UI. An `Ignored` event falls through to lower panels
+    /// (so the perf HUD, which never consumes, is click-through). Overlays that
+    /// want dismiss-on-outside-click (the dropdown) close themselves inside
+    /// `on_event` and return `Consumed`.
     Modeless,
+}
+
+/// Screen corner for [`Anchor::Corner`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
 }
 
 /// Where an overlay positions itself. The driver resolves this to a screen rect
@@ -36,22 +48,38 @@ pub enum Modality {
 pub enum Anchor {
     /// Centered in the screen (settings-dialog style).
     Centered,
+    /// Pinned to a screen corner with a margin (the perf HUD).
+    Corner { corner: Corner, margin: f32 },
     /// Top-left pinned to a screen point (click-anchored popups).
     At(Vec2),
     /// Just below a tree node (the driver supplies the node's rect).
     ToNode(i32),
     /// An explicit rect, used verbatim (no clamping).
     Fixed(Rect),
+    /// The overlay positions itself in `build_at` from `OverlayPlacement.screen`
+    /// (content-sized, click-anchored popups that already clamp internally:
+    /// browser popup, Ableton picker, dropdown). The driver passes a zero rect.
+    SelfManaged,
 }
 
-/// The result of routing one event to an overlay.
+/// What the driver hands an overlay's `build_at`: the resolved placement rect
+/// (for placed overlays — `Centered`/`Corner`/`At`/`ToNode`/`Fixed`) and the
+/// full screen size (for `SelfManaged` overlays that position themselves).
+#[derive(Debug, Clone, Copy)]
+pub struct OverlayPlacement {
+    pub rect: Rect,
+    pub screen: Vec2,
+}
+
+/// The result of routing one event to an overlay. Overlays manage their own
+/// open/close state; the driver pops any overlay whose `is_open()` flips false.
 pub enum OverlayResponse {
-    /// Not this overlay's event — the driver tries the next overlay / panels.
+    /// Not this overlay's event. Modeless → driver tries lower overlays/panels;
+    /// Modal → driver still captures it (no fall-through).
     Ignored,
-    /// Consumed; emit these actions and keep the overlay open.
+    /// Consumed; emit these actions (may be empty). The driver stops the walk
+    /// and flags an overlay rebuild.
     Consumed(Vec<PanelAction>),
-    /// Consumed; emit these actions and close the overlay afterwards.
-    Dismiss(Vec<PanelAction>),
 }
 
 /// A top-level floating surface driven uniformly by the app-layer overlay
@@ -68,18 +96,18 @@ pub trait Overlay {
     /// Where the overlay wants to sit.
     fn anchor(&self) -> Anchor;
 
-    /// The overlay's size in logical pixels (may depend on content).
+    /// The overlay's size in logical pixels (may depend on content). Unused for
+    /// `SelfManaged` overlays.
     fn desired_size(&self) -> Vec2;
 
-    /// Build the overlay's nodes into `tree` at the driver-resolved `rect`.
-    /// Only called when `is_open()`.
-    fn build_at(&mut self, tree: &mut UITree, rect: Rect);
+    /// Build the overlay's nodes into `tree`. Only called when `is_open()`.
+    fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement);
 
     /// Route one event. The driver walks open overlays top-of-stack first and
-    /// stops at the first non-`Ignored` response.
+    /// stops at the first non-`Ignored` response (or the first Modal).
     fn on_event(&mut self, event: &UIEvent, tree: &mut UITree) -> OverlayResponse;
 
-    /// Close the overlay (called by the driver on `Dismiss` and on Escape).
+    /// Close the overlay (called by the driver on Escape at the top of stack).
     fn close(&mut self);
 }
 
@@ -87,6 +115,7 @@ pub trait Overlay {
 /// stays fully visible. One place for the edge-clamp math every overlay used to
 /// hand-roll. `anchor_node_rect` is the resolved rect of an [`Anchor::ToNode`]
 /// target (the driver looks it up in the tree); ignored for other anchors.
+/// `SelfManaged` returns a zero-origin rect — those overlays ignore it.
 pub fn compute_overlay_rect(
     anchor: &Anchor,
     size: Vec2,
@@ -101,11 +130,24 @@ pub fn compute_overlay_rect(
             ((screen.x - size.x) * 0.5).max(0.0),
             ((screen.y - size.y) * 0.5).max(0.0),
         ),
+        Anchor::Corner { corner, margin } => {
+            let m = *margin;
+            let x = match corner {
+                Corner::TopLeft | Corner::BottomLeft => m,
+                Corner::TopRight | Corner::BottomRight => screen.x - size.x - m,
+            };
+            let y = match corner {
+                Corner::TopLeft | Corner::TopRight => m,
+                Corner::BottomLeft | Corner::BottomRight => screen.y - size.y - m,
+            };
+            (x, y)
+        }
         Anchor::At(p) => (p.x, p.y),
         Anchor::ToNode(_) => {
             let nr = anchor_node_rect.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
             (nr.x, nr.y + nr.height)
         }
+        Anchor::SelfManaged => return Rect::new(0.0, 0.0, size.x, size.y),
         Anchor::Fixed(_) => unreachable!("handled above"),
     };
     // Edge-clamp so the overlay does not spill off the right / bottom.

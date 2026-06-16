@@ -20,7 +20,7 @@ use crate::node::*;
 use crate::tree::UITree;
 
 use super::PanelAction;
-use super::overlay::{Anchor, Modality, Overlay, OverlayResponse};
+use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 
 // ── Layout ──
 const PANEL_W: f32 = 360.0;
@@ -388,28 +388,33 @@ impl Overlay for AudioSetupPanel {
         Vec2::new(PANEL_W, self.body_height())
     }
 
-    fn build_at(&mut self, tree: &mut UITree, rect: Rect) {
+    fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement) {
         if !self.open {
             return;
         }
-        self.build_nodes(tree, rect.x, rect.y);
+        self.build_nodes(tree, placement.rect.x, placement.rect.y);
     }
 
     fn on_event(&mut self, event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {
         match event {
-            UIEvent::KeyDown { key: Key::Escape, .. } => OverlayResponse::Dismiss(Vec::new()),
+            UIEvent::KeyDown { key: Key::Escape, .. } => {
+                self.open = false;
+                OverlayResponse::Consumed(Vec::new())
+            }
             UIEvent::Click { node_id, .. } => {
                 let id = *node_id as i32;
                 if id == self.close_id {
-                    OverlayResponse::Dismiss(Vec::new())
+                    self.open = false;
+                    OverlayResponse::Consumed(Vec::new())
                 } else if let Some(action) = self.handle_click_inner(id) {
                     OverlayResponse::Consumed(vec![action])
                 } else if self.owns_node(id) {
                     // Panel background or a non-action control — swallow, stay open.
                     OverlayResponse::Consumed(Vec::new())
                 } else {
-                    // Click landed on the dim backdrop / outside the panel — dismiss.
-                    OverlayResponse::Dismiss(Vec::new())
+                    // Click landed on the dim backdrop / outside the panel — close.
+                    self.open = false;
+                    OverlayResponse::Consumed(Vec::new())
                 }
             }
             _ => OverlayResponse::Ignored,

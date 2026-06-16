@@ -1,3 +1,4 @@
+use super::overlay::{Anchor, Corner, Modality, Overlay, OverlayPlacement, OverlayResponse};
 use super::{Panel, PanelAction};
 /// Performance HUD overlay panel.
 /// 1:1 port of Unity PerformanceHUDPanel.cs (493 lines).
@@ -403,8 +404,11 @@ impl PerfHudPanel {
     }
 }
 
-impl Panel for PerfHudPanel {
-    fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
+impl PerfHudPanel {
+    /// Build the HUD nodes with its top-left at `(x, y)` and track the node
+    /// range. Shared by `Panel::build` (positions bottom-right from layout) and
+    /// `Overlay::build_at` (positions from the driver-resolved rect).
+    fn build_at_xy(&mut self, tree: &mut UITree, x: f32, y: f32) {
         self.first_node = tree.count();
         if !self.visible {
             self.node_count = 0;
@@ -412,10 +416,6 @@ impl Panel for PerfHudPanel {
             self.render_graph_bar_ids.clear();
             return;
         }
-
-        // Position: bottom-right corner
-        let x = layout.screen_width - HUD_WIDTH - PAD;
-        let y = layout.screen_height - HUD_HEIGHT - PAD;
 
         // Background
         tree.add_panel(
@@ -509,6 +509,14 @@ impl Panel for PerfHudPanel {
 
         self.node_count = tree.count() - self.first_node;
     }
+}
+
+impl Panel for PerfHudPanel {
+    fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
+        let x = layout.screen_width - HUD_WIDTH - PAD;
+        let y = layout.screen_height - HUD_HEIGHT - PAD;
+        self.build_at_xy(tree, x, y);
+    }
 
     fn update(&mut self, tree: &mut UITree) {
         self.push_values(tree);
@@ -516,5 +524,41 @@ impl Panel for PerfHudPanel {
 
     fn handle_event(&mut self, _event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         Vec::new()
+    }
+}
+
+impl Overlay for PerfHudPanel {
+    fn is_open(&self) -> bool {
+        self.visible
+    }
+
+    fn modality(&self) -> Modality {
+        Modality::Modeless
+    }
+
+    fn anchor(&self) -> Anchor {
+        // Same bottom-right placement the layout-driven build used; the driver
+        // resolves Corner+margin to (screen - size - PAD).
+        Anchor::Corner {
+            corner: Corner::BottomRight,
+            margin: PAD,
+        }
+    }
+
+    fn desired_size(&self) -> Vec2 {
+        Vec2::new(HUD_WIDTH, HUD_HEIGHT)
+    }
+
+    fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement) {
+        self.build_at_xy(tree, placement.rect.x, placement.rect.y);
+    }
+
+    fn on_event(&mut self, _event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {
+        // The HUD never consumes input — modeless + always-Ignored = click-through.
+        OverlayResponse::Ignored
+    }
+
+    fn close(&mut self) {
+        self.visible = false;
     }
 }
