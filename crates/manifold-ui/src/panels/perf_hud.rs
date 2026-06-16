@@ -557,8 +557,4 @@ impl Overlay for PerfHudPanel {
         // The HUD never consumes input — modeless + always-Ignored = click-through.
         OverlayResponse::Ignored
     }
-
-    fn close(&mut self) {
-        self.visible = false;
-    }
 }

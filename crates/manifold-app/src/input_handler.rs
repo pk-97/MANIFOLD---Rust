@@ -75,16 +75,13 @@ impl InputHandler {
             return true;
         }
 
-        // ── Escape — 5-level priority chain (Unity lines 224-232) ──
+        // ── Escape — priority chain (Unity lines 224-232) ──
         if matches!(logical_key, Key::Named(NamedKey::Escape)) {
-            // Level 0: browser popup (highest z-order modal)
-            if host.is_browser_popup_open() {
-                host.dismiss_browser_popup();
-                return true;
-            }
-            // Level 1: dismiss context menu / dropdown
-            if host.has_context_menu() {
-                host.dismiss_context_menu();
+            // Level 0: dismiss the top-most open overlay (modal or dropdown).
+            // One call covers every modal + context menu via the overlay driver;
+            // the perf HUD is modeless and won't consume, so Escape falls
+            // through to selection clearing when only the HUD is up.
+            if host.dismiss_top_overlay() {
                 return true;
             }
             // Level 2: inspector has focus → clear effect selection

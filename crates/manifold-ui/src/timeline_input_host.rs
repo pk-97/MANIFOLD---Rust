@@ -184,17 +184,11 @@ pub trait TimelineInputHost {
     /// Start offline video export with current project settings.
     fn start_export(&mut self);
 
-    /// Dismiss any open context menu / dropdown.
-    fn dismiss_context_menu(&mut self);
-
-    /// Whether a context menu is currently open.
-    fn has_context_menu(&self) -> bool;
-
-    /// Whether the effect/generator browser popup is currently open.
-    fn is_browser_popup_open(&self) -> bool;
-
-    /// Dismiss the browser popup.
-    fn dismiss_browser_popup(&mut self);
+    /// Route an Escape through the overlay driver, dismissing the top-most open
+    /// dismissable overlay (modal or dropdown). Returns true if one handled it.
+    /// The perf HUD is modeless and does not, so Escape then falls through to
+    /// selection clearing.
+    fn dismiss_top_overlay(&mut self) -> bool;
 
     /// Get the current grid step in beats (from viewport zoom level).
     fn grid_step(&self) -> f32;

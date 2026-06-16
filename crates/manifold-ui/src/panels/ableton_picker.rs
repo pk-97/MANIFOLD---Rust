@@ -12,7 +12,9 @@ use manifold_core::ableton_mapping::{
     AbletonDeviceIdentity, AbletonMacroAddress, is_default_macro_name,
 };
 
+use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 use crate::color;
+use crate::input::{Key, UIEvent};
 use crate::node::*;
 use crate::tree::UITree;
 
@@ -136,6 +138,11 @@ pub struct AbletonPickerPopup {
     macro_item_ids: Vec<(i32, AbletonMacroAddress)>,
     first_node: usize,
     node_count: usize,
+    /// Selection captured by `Overlay::on_event`, drained by the app-layer
+    /// overlay driver and lowered against `UIRoot`'s picker context. The picker
+    /// can't form the `MapParamToAbleton` action itself — the context (which
+    /// param / macro slot) lives on `UIRoot`.
+    pending_selection: Option<AbletonMacroAddress>,
 }
 
 impl Default for AbletonPickerPopup {
@@ -160,7 +167,14 @@ impl AbletonPickerPopup {
             macro_item_ids: Vec::new(),
             first_node: 0,
             node_count: 0,
+            pending_selection: None,
         }
+    }
+
+    /// Drain the macro address selected since the last call (set by
+    /// `Overlay::on_event`). The app lowers it against its picker context.
+    pub fn take_pending_selection(&mut self) -> Option<AbletonMacroAddress> {
+        self.pending_selection.take()
     }
 
     pub fn is_open(&self) -> bool {
@@ -642,5 +656,55 @@ impl AbletonPickerPopup {
         }
         self.popup_x = x;
         self.popup_y = y;
+    }
+}
+
+impl Overlay for AbletonPickerPopup {
+    fn is_open(&self) -> bool {
+        self.is_open
+    }
+
+    fn modality(&self) -> Modality {
+        // Builds its own backdrop, so the driver must not add a second scrim.
+        Modality::Modal {
+            dim_background: false,
+        }
+    }
+
+    fn anchor(&self) -> Anchor {
+        // Click-anchored and content-sized; positions itself in build().
+        Anchor::SelfManaged
+    }
+
+    fn desired_size(&self) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement) {
+        self.set_screen_size(placement.screen.x, placement.screen.y);
+        self.build(tree);
+    }
+
+    fn on_event(&mut self, event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {
+        if !self.is_open {
+            return OverlayResponse::Ignored;
+        }
+        match event {
+            UIEvent::KeyDown { key: Key::Escape, .. } => {
+                self.handle_escape();
+                OverlayResponse::Consumed(Vec::new())
+            }
+            UIEvent::Click { node_id, .. } => {
+                if let Some(AbletonPickerAction::Selected(addr)) = self.handle_click(*node_id) {
+                    // Stash; the app drains and lowers against its picker context.
+                    self.pending_selection = Some(addr);
+                }
+                // Dismissed / track-select / internal clicks all resolve inside
+                // handle_click — consume so the modal swallows them and the
+                // driver re-runs build_at (track-select repaints the right col).
+                OverlayResponse::Consumed(Vec::new())
+            }
+            _ => OverlayResponse::Ignored,
+        }
     }
 }

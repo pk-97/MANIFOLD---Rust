@@ -104,11 +104,10 @@ pub trait Overlay {
     fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement);
 
     /// Route one event. The driver walks open overlays top-of-stack first and
-    /// stops at the first non-`Ignored` response (or the first Modal).
+    /// stops at the first non-`Ignored` response (or the first Modal). Overlays
+    /// manage their own open/close state here (self-close on Escape / outside
+    /// click); the driver only reads `is_open()`, so there is no `close()` hook.
     fn on_event(&mut self, event: &UIEvent, tree: &mut UITree) -> OverlayResponse;
-
-    /// Close the overlay (called by the driver on Escape at the top of stack).
-    fn close(&mut self);
 }
 
 /// Resolve an [`Anchor`] + size to an on-screen rect, clamped so the overlay
@@ -158,4 +157,95 @@ pub fn compute_overlay_rect(
         y = (screen.y - size.y).max(0.0);
     }
     Rect::new(x.max(0.0), y.max(0.0), size.x, size.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn screen() -> Vec2 {
+        Vec2::new(1000.0, 800.0)
+    }
+
+    #[test]
+    fn centered_places_in_middle() {
+        let r = compute_overlay_rect(&Anchor::Centered, Vec2::new(200.0, 100.0), screen(), None);
+        assert!((r.x - 400.0).abs() < 0.01);
+        assert!((r.y - 350.0).abs() < 0.01);
+        assert_eq!(r.width, 200.0);
+        assert_eq!(r.height, 100.0);
+    }
+
+    #[test]
+    fn corner_bottom_right_with_margin() {
+        let r = compute_overlay_rect(
+            &Anchor::Corner {
+                corner: Corner::BottomRight,
+                margin: 8.0,
+            },
+            Vec2::new(250.0, 394.0),
+            screen(),
+            None,
+        );
+        assert!((r.x - (1000.0 - 250.0 - 8.0)).abs() < 0.01);
+        assert!((r.y - (800.0 - 394.0 - 8.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn corner_top_left_with_margin() {
+        let r = compute_overlay_rect(
+            &Anchor::Corner {
+                corner: Corner::TopLeft,
+                margin: 10.0,
+            },
+            Vec2::new(100.0, 50.0),
+            screen(),
+            None,
+        );
+        assert!((r.x - 10.0).abs() < 0.01);
+        assert!((r.y - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn at_point_clamps_to_screen() {
+        // Anchored near the right/bottom edge → clamps so it stays on-screen.
+        let r = compute_overlay_rect(
+            &Anchor::At(Vec2::new(950.0, 780.0)),
+            Vec2::new(200.0, 100.0),
+            screen(),
+            None,
+        );
+        assert!((r.x - 800.0).abs() < 0.01);
+        assert!((r.y - 700.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn fixed_is_verbatim_no_clamp() {
+        let fixed = Rect::new(12.0, 34.0, 56.0, 78.0);
+        let r = compute_overlay_rect(&Anchor::Fixed(fixed), Vec2::ZERO, screen(), None);
+        assert_eq!(r.x, 12.0);
+        assert_eq!(r.y, 34.0);
+        assert_eq!(r.width, 56.0);
+        assert_eq!(r.height, 78.0);
+    }
+
+    #[test]
+    fn self_managed_returns_zero_origin() {
+        let r = compute_overlay_rect(&Anchor::SelfManaged, Vec2::new(10.0, 10.0), screen(), None);
+        assert_eq!(r.x, 0.0);
+        assert_eq!(r.y, 0.0);
+    }
+
+    #[test]
+    fn to_node_anchors_below_node() {
+        let node = Rect::new(100.0, 200.0, 50.0, 20.0);
+        let r = compute_overlay_rect(
+            &Anchor::ToNode(7),
+            Vec2::new(40.0, 30.0),
+            screen(),
+            Some(node),
+        );
+        assert!((r.x - 100.0).abs() < 0.01);
+        assert!((r.y - 220.0).abs() < 0.01); // node.y + node.height
+    }
 }

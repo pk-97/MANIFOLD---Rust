@@ -420,10 +420,6 @@ impl Overlay for AudioSetupPanel {
             _ => OverlayResponse::Ignored,
         }
     }
-
-    fn close(&mut self) {
-        self.open = false;
-    }
 }
 
 fn btn_style(active: bool) -> UIStyle {
@@ -522,5 +518,21 @@ mod tests {
         // Close button toggles closed and yields no action.
         assert!(p.handle_click(p.close_id).is_none());
         assert!(!p.is_open());
+    }
+
+    #[test]
+    fn overlay_escape_self_closes() {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        let resp = p.on_event(
+            &UIEvent::KeyDown {
+                node_id: 0,
+                key: Key::Escape,
+                modifiers: crate::input::Modifiers::default(),
+            },
+            &mut tree,
+        );
+        assert!(matches!(resp, OverlayResponse::Consumed(_)));
+        assert!(!p.is_open(), "Escape should self-close the modal");
     }
 }

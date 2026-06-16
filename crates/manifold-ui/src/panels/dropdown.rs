@@ -10,6 +10,7 @@
 //! 3. Acting on the returned `DropdownAction`.
 //! 4. The dropdown auto-dismisses on selection or click-outside.
 
+use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 use crate::color;
 use crate::input::UIEvent;
 use crate::node::*;
@@ -111,6 +112,10 @@ pub struct DropdownPanel {
     color_grid: Vec<Color32>,
     color_grid_cols: usize,
     color_swatch_ids: Vec<i32>,
+    /// Action captured by `Overlay::on_event`, drained by the app-layer overlay
+    /// driver. Selection lowering (`DropdownContext` → `PanelAction`) needs
+    /// `UIRoot`'s cached device/resolution lists, so it stays app-side.
+    pending_action: Option<DropdownAction>,
 }
 
 impl DropdownPanel {
@@ -136,7 +141,14 @@ impl DropdownPanel {
             color_grid: Vec::new(),
             color_grid_cols: 0,
             color_swatch_ids: Vec::new(),
+            pending_action: None,
         }
+    }
+
+    /// Drain the action captured since the last call (set by `Overlay::on_event`).
+    /// The app lowers `Selected`/`ColorSelected` against its dropdown context.
+    pub fn take_pending_action(&mut self) -> Option<DropdownAction> {
+        self.pending_action.take()
     }
 
     pub fn is_open(&self) -> bool {
@@ -683,6 +695,48 @@ impl DropdownPanel {
 impl Default for DropdownPanel {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Overlay for DropdownPanel {
+    fn is_open(&self) -> bool {
+        self.is_open
+    }
+
+    fn modality(&self) -> Modality {
+        // Floats; a click outside dismisses it (handled inside handle_event,
+        // which returns Some(Dismissed) and self-closes).
+        Modality::Modeless
+    }
+
+    fn anchor(&self) -> Anchor {
+        // Positions itself from its stored anchor + screen size.
+        Anchor::SelfManaged
+    }
+
+    fn desired_size(&self) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement) {
+        self.set_screen_size(placement.screen.x, placement.screen.y);
+        self.rebuild_nodes(tree);
+    }
+
+    fn on_event(&mut self, event: &UIEvent, tree: &mut UITree) -> OverlayResponse {
+        if !self.is_open {
+            return OverlayResponse::Ignored;
+        }
+        match self.handle_event(event, tree) {
+            // Selection/dismiss lowering happens app-side (needs UIRoot context
+            // + caches); stash the raw action for the driver to drain.
+            Some(action) => {
+                self.pending_action = Some(action);
+                OverlayResponse::Consumed(Vec::new())
+            }
+            // Hover / arrow-nav: not consumed → modeless fall-through.
+            None => OverlayResponse::Ignored,
+        }
     }
 }
 

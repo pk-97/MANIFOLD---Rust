@@ -941,17 +941,8 @@ impl Application {
         // Keep the inspector sync running every frame the Audio Setup modal is
         // open, so it re-reads the device + send list (its data lives behind the
         // otherwise-gated structural sync).
-        let audio_setup_open = self.ws.ui_root.audio_setup_panel.is_open();
-        if audio_setup_open {
+        if self.ws.ui_root.audio_setup_panel.is_open() {
             needs_structural_sync = true;
-        }
-        // Opening or closing the modal is a structural tree change — force a
-        // full rebuild on the transition so the panel actually appears/clears
-        // this frame (the partial overlay-refresh path doesn't draw a freshly
-        // opened top-level modal). Covers every toggle path.
-        if audio_setup_open != self.prev_audio_setup_open {
-            self.needs_rebuild = true;
-            self.prev_audio_setup_open = audio_setup_open;
         }
         let mut needs_resolution_resize = false;
         let prev_active_layer = self.active_layer_id.clone();
@@ -1018,16 +1009,13 @@ impl Application {
                     continue;
                 }
                 PanelAction::OpenAudioSetup => {
-                    // Toggling a top-level modal is a structural tree change, so
-                    // force a full rebuild on THIS tick — the UI rebuilds on
-                    // demand (no idle ticks), so the panel must be built in the
-                    // same tick the click arrives or it won't appear until the
-                    // next unrelated input. (⌘⇧A/Escape/✕ paths are caught
-                    // same-tick by the open-state check near the top of the
-                    // tick, since they're handled before this loop runs.)
+                    // Toggle the modal and flag the overlay for rebuild. The
+                    // overlay driver builds it at the tail of the tree this same
+                    // tick (overlay_dirty → visual scroll rebuild → build_overlays)
+                    // and the draw pass renders it from overlay_draw — so it
+                    // appears immediately, no full rebuild needed.
                     self.ws.ui_root.audio_setup_panel.toggle();
-                    self.prev_audio_setup_open = self.ws.ui_root.audio_setup_panel.is_open();
-                    self.needs_rebuild = true;
+                    self.ws.ui_root.overlay_dirty = true;
                     continue;
                 }
                 PanelAction::OpenGeneratorGraphEditor => {
@@ -2519,7 +2507,7 @@ impl Application {
             // text, slider drags, etc.). Overlay nodes (perf HUD, dropdowns,
             // popups) are excluded — they render every frame via the overlay
             // pass and don't need the full offscreen re-render.
-            let panel_end = self.ws.ui_root.perf_hud.first_node();
+            let panel_end = self.ws.ui_root.overlay_region_start;
             if self.ws.ui_root.tree.has_dirty_in_range(0, panel_end) {
                 self.ws.offscreen_dirty = true;
             }
@@ -3623,10 +3611,12 @@ impl Application {
 
         // Pass 5: Overlay UI (playhead, HUD, dropdowns, text)
         if let Some(ui) = &mut self.ui_renderer {
-            // Waveform/stem lane buttons
+            // Waveform/stem lane buttons (Base layer, before the overlays).
+            // Bounded by overlay_region_start — the overlays live past it and
+            // are drawn separately below.
             let wf_first = self.ws.ui_root.waveform_lane.first_node();
             let sl_first = self.ws.ui_root.stem_lanes.first_node();
-            let overlay_end = self.ws.ui_root.perf_hud.first_node();
+            let overlay_end = self.ws.ui_root.overlay_region_start;
             let overlay_start = if wf_first != usize::MAX {
                 Some(wf_first)
             } else if sl_first != usize::MAX {
@@ -3653,45 +3643,22 @@ impl Application {
                 );
             }
 
-            // Perf HUD — floats over timeline content including the playhead.
-            // (Before the layer system, rendering it here silently dropped
-            // the playhead rect and the waveform-lane batches above: each
-            // traversal cleared the previous one's scissor batches.)
-            if self.ws.ui_root.perf_hud.is_visible() {
-                let hud_start = self.ws.ui_root.perf_hud.first_node();
-                let hud_end = if self.ws.ui_root.dropdown.is_open() {
-                    self.ws.ui_root.dropdown.first_node()
-                } else if self.ws.ui_root.browser_popup.is_open() {
-                    self.ws.ui_root.browser_popup.first_node()
-                } else if self.ws.ui_root.ableton_picker.is_open() {
-                    self.ws.ui_root.ableton_picker.first_node()
-                } else {
-                    usize::MAX
-                };
+            // Top-level overlays (perf HUD, dropdown, modals) — built by the
+            // overlay driver at the tail of the tree, drawn here in z-order on
+            // the Overlay layer. One source (overlay_draw, recorded at build)
+            // for build and draw, so they cannot drift. Each range in its own
+            // push/pop for scissor isolation.
+            for &(start, end) in &self.ws.ui_root.overlay_draw {
                 ui.push_layer(Layer::Overlay);
-                ui.render_tree_range(&self.ws.ui_root.tree, hud_start, hud_end);
+                ui.render_tree_range(&self.ws.ui_root.tree, start, end);
                 ui.pop_layer();
             }
 
-            // Popups — Overlay layer, after the HUD so an open popup sits on
-            // top of it (insertion order within a layer is z-order).
+            // Effect card drag ghost + text input — top of the Overlay layer.
             ui.push_layer(Layer::Overlay);
-            if self.ws.ui_root.dropdown.is_open() {
-                let start = self.ws.ui_root.dropdown.first_node();
-                ui.render_tree_range(&self.ws.ui_root.tree, start, usize::MAX);
-            } else if self.ws.ui_root.browser_popup.is_open() {
-                let start = self.ws.ui_root.browser_popup.first_node();
-                ui.render_tree_range(&self.ws.ui_root.tree, start, usize::MAX);
-            } else if self.ws.ui_root.ableton_picker.is_open() {
-                let start = self.ws.ui_root.ableton_picker.first_node();
-                ui.render_tree_range(&self.ws.ui_root.tree, start, usize::MAX);
-            }
-
-            // Effect card drag ghost
             if let Some(start) = self.ws.ui_root.inspector.card_drag_first_node() {
                 ui.render_tree_range(&self.ws.ui_root.tree, start, usize::MAX);
             }
-
             // Text input overlay — last on Overlay, so it tops everything.
             if self.text_input.active {
                 render_text_input_overlay(&self.text_input, &self.frame_timer, ui);

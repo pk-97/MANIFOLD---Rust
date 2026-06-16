@@ -7,7 +7,35 @@
 use manifold_playback::ableton_bridge::AbletonSession;
 use manifold_ui::input::{Key, Modifiers, PointerAction, UIEvent};
 use manifold_ui::node::{Rect, Vec2};
+use manifold_ui::panels::overlay::{
+    Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, compute_overlay_rect,
+};
 use manifold_ui::*;
+
+/// The top-level overlays, in bottom→top z-order. The single registry the
+/// overlay driver (build / draw / input) iterates — adding an overlay means a
+/// field, an `overlay_mut` arm, and a `Z_ORDER` entry, and the exhaustive match
+/// then forces the wiring. See `docs/OVERLAY_SYSTEM_DESIGN.md`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OverlayId {
+    PerfHud,
+    Dropdown,
+    AudioSetup,
+    BrowserPopup,
+    AbletonPicker,
+}
+
+impl OverlayId {
+    /// Bottom → top: later = higher z (drawn last / on top, first to receive
+    /// input). The perf HUD sits at the bottom so a real modal always covers it.
+    const Z_ORDER: [OverlayId; 5] = [
+        OverlayId::PerfHud,
+        OverlayId::Dropdown,
+        OverlayId::AudioSetup,
+        OverlayId::BrowserPopup,
+        OverlayId::AbletonPicker,
+    ];
+}
 
 /// Convert an AbletonSession into the picker's thin data struct.
 pub(crate) fn build_picker_session(
@@ -241,6 +269,15 @@ pub struct UIRoot {
     /// Set when the Ableton picker opens — drained by app_render to send
     /// `AbletonRediscover` on the content thread so the picker shows fresh data.
     pub ableton_rediscovery_needed: bool,
+
+    /// Node ranges `[start, end)` of each open overlay, in z-order, recorded by
+    /// `build_overlays`. The draw pass renders these on `Layer::Overlay` — so
+    /// build and draw share one source and cannot drift (the bug class this
+    /// system eliminates).
+    pub overlay_draw: Vec<(usize, usize)>,
+    /// Tree index where the overlay region begins (after all scroll panels).
+    /// The waveform/stem-lane overlay render uses this as its upper bound.
+    pub overlay_region_start: usize,
 }
 
 impl UIRoot {
@@ -294,6 +331,8 @@ impl UIRoot {
             ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup::new(),
             ableton_picker_context: None,
             ableton_rediscovery_needed: false,
+            overlay_draw: Vec::new(),
+            overlay_region_start: 0,
         }
     }
 
@@ -568,28 +607,10 @@ impl UIRoot {
             }
         }
 
-        self.perf_hud.build(&mut self.tree, &self.layout);
-
-        self.dropdown
-            .set_screen_size(self.screen_width, self.screen_height);
-        if self.dropdown.is_open() {
-            self.dropdown.rebuild_nodes(&mut self.tree);
-        }
-
-        self.browser_popup
-            .set_screen_size(self.screen_width, self.screen_height);
-        if self.browser_popup.is_open() {
-            self.browser_popup.build(&mut self.tree);
-        }
-        if self.audio_setup_panel.is_open() {
-            self.audio_setup_panel.build(&mut self.tree, self.screen_width, self.screen_height);
-        }
-
-        self.ableton_picker
-            .set_screen_size(self.screen_width, self.screen_height);
-        if self.ableton_picker.is_open() {
-            self.ableton_picker.build(&mut self.tree);
-        }
+        // All top-level overlays (perf HUD + dropdown + modals) build at the
+        // tail of the tree via the single overlay driver — one enumeration for
+        // build, draw, and input. See build_overlays / route_overlay_event.
+        self.build_overlays();
     }
 
     /// Internal: build viewport + remaining scroll panels (skip layer headers).
@@ -608,28 +629,171 @@ impl UIRoot {
             }
         }
 
-        self.perf_hud.build(&mut self.tree, &self.layout);
+        // Overlays build at the tail of the tree via the single driver.
+        self.build_overlays();
+    }
 
-        self.dropdown
-            .set_screen_size(self.screen_width, self.screen_height);
-        if self.dropdown.is_open() {
-            self.dropdown.rebuild_nodes(&mut self.tree);
-        }
+    // ── Overlay driver ──────────────────────────────────────────────
+    // One enumeration of the top-level overlays for build, draw, and input.
+    // The exhaustive `overlay_mut` match is what makes "built but never drawn"
+    // unrepresentable. See docs/OVERLAY_SYSTEM_DESIGN.md.
 
-        self.browser_popup
-            .set_screen_size(self.screen_width, self.screen_height);
-        if self.browser_popup.is_open() {
-            self.browser_popup.build(&mut self.tree);
+    /// The overlay for an id. The exhaustive match forces every new overlay to
+    /// be wired into the driver.
+    fn overlay_mut(&mut self, id: OverlayId) -> &mut dyn Overlay {
+        match id {
+            OverlayId::PerfHud => &mut self.perf_hud,
+            OverlayId::Dropdown => &mut self.dropdown,
+            OverlayId::AudioSetup => &mut self.audio_setup_panel,
+            OverlayId::BrowserPopup => &mut self.browser_popup,
+            OverlayId::AbletonPicker => &mut self.ableton_picker,
         }
-        if self.audio_setup_panel.is_open() {
-            self.audio_setup_panel.build(&mut self.tree, self.screen_width, self.screen_height);
-        }
+    }
 
-        self.ableton_picker
-            .set_screen_size(self.screen_width, self.screen_height);
-        if self.ableton_picker.is_open() {
-            self.ableton_picker.build(&mut self.tree);
+    /// Build every open overlay into the tree, bottom→top, recording each one's
+    /// node range for the draw pass. A modal that requests a dim background gets
+    /// a full-screen scrim node first (and a click on it dismisses the modal,
+    /// since the scrim is not one of the modal's own nodes).
+    fn build_overlays(&mut self) {
+        let screen = Vec2::new(self.screen_width, self.screen_height);
+        // Take the tree out so `overlay_mut` (which borrows all of self) can run
+        // alongside tree writes — standard disjoint-borrow split.
+        let mut tree = std::mem::replace(&mut self.tree, UITree::new());
+        let region_start = tree.count();
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for id in OverlayId::Z_ORDER {
+            let ov = self.overlay_mut(id);
+            if !ov.is_open() {
+                continue;
+            }
+            let start = tree.count();
+            if let Modality::Modal {
+                dim_background: true,
+            } = ov.modality()
+            {
+                tree.add_panel(
+                    -1,
+                    0.0,
+                    0.0,
+                    screen.x,
+                    screen.y,
+                    manifold_ui::node::UIStyle {
+                        bg_color: manifold_ui::node::Color32::new(0, 0, 0, 120),
+                        ..manifold_ui::node::UIStyle::default()
+                    },
+                );
+            }
+            let anchor = ov.anchor();
+            let size = ov.desired_size();
+            let node_rect = if let Anchor::ToNode(nid) = anchor {
+                Some(tree.get_bounds(nid as u32))
+            } else {
+                None
+            };
+            let rect = compute_overlay_rect(&anchor, size, screen, node_rect);
+            ov.build_at(&mut tree, OverlayPlacement { rect, screen });
+            ranges.push((start, tree.count()));
         }
+        self.tree = tree;
+        self.overlay_region_start = region_start;
+        self.overlay_draw = ranges;
+    }
+
+    /// Route one event to the open overlays, top→bottom. Returns true if an
+    /// overlay consumed it (or a modal captured it), so the caller skips the
+    /// lower panels. Stashed selections are lowered by `drain_overlay_selections`.
+    fn route_overlay_event(&mut self, event: &UIEvent, actions: &mut Vec<PanelAction>) -> bool {
+        let mut tree = std::mem::replace(&mut self.tree, UITree::new());
+        let mut consumed = false;
+        for id in OverlayId::Z_ORDER.iter().rev() {
+            let ov = self.overlay_mut(*id);
+            if !ov.is_open() {
+                continue;
+            }
+            match ov.on_event(event, &mut tree) {
+                OverlayResponse::Consumed(acts) => {
+                    actions.extend(acts);
+                    consumed = true;
+                    break;
+                }
+                OverlayResponse::Ignored => {
+                    if matches!(ov.modality(), Modality::Modal { .. }) {
+                        // A modal captures everything — no fall-through below it.
+                        consumed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        self.tree = tree;
+        if consumed {
+            self.overlay_dirty = true;
+        }
+        consumed
+    }
+
+    /// Lower any selection an overlay stashed during `route_overlay_event` into
+    /// a `PanelAction`. The dropdown and Ableton picker can't form their actions
+    /// themselves — the resolving context lives on `UIRoot` (the dropdown also
+    /// needs cached device / resolution lists).
+    fn drain_overlay_selections(&mut self, actions: &mut Vec<PanelAction>) {
+        if let Some(dd_action) = self.dropdown.take_pending_action() {
+            match dd_action {
+                DropdownAction::Selected(index) => {
+                    if let Some(ctx) = self.dropdown_context.take()
+                        && let Some(action) = self.dropdown_to_action(ctx, index)
+                    {
+                        actions.push(action);
+                    }
+                }
+                DropdownAction::ColorSelected(color_idx) => {
+                    if let Some(ctx) = self.dropdown_context.take()
+                        && let Some(action) = self.dropdown_color_to_action(ctx, color_idx)
+                    {
+                        actions.push(action);
+                    }
+                }
+                DropdownAction::Dismissed => {
+                    // Disabled-item clicks send Dismissed but keep the dropdown
+                    // open — only clear context once it actually closed.
+                    if !self.dropdown.is_open() {
+                        self.dropdown_context = None;
+                    }
+                }
+            }
+        }
+        if let Some(addr) = self.ableton_picker.take_pending_selection()
+            && let Some(ctx) = self.ableton_picker_context.take()
+        {
+            use manifold_ui::panels::ableton_picker::AbletonPickerContext;
+            actions.push(match ctx {
+                AbletonPickerContext::Param { gpt, param_id } => {
+                    PanelAction::MapParamToAbleton(gpt, param_id, addr)
+                }
+                AbletonPickerContext::MacroSlot { slot_idx } => {
+                    PanelAction::MapMacroToAbleton(slot_idx, addr)
+                }
+            });
+        }
+    }
+
+    /// Route an Escape through the overlay driver. The keyboard path consumes
+    /// Escape before it reaches `process_events`, so the input-handler escape
+    /// chain calls this. Returns true if an open, dismissable overlay handled it
+    /// — the perf HUD (modeless, never-consuming) does not, so Escape falls
+    /// through to selection clearing when only the HUD is up.
+    pub fn escape_overlays(&mut self) -> bool {
+        let event = UIEvent::KeyDown {
+            node_id: 0,
+            key: Key::Escape,
+            modifiers: Modifiers::default(),
+        };
+        let mut actions = Vec::new();
+        let consumed = self.route_overlay_event(&event, &mut actions);
+        if consumed {
+            self.drain_overlay_selections(&mut actions);
+        }
+        consumed
     }
 
     /// Handle a resize event. Rebuilds all panels.
@@ -729,133 +893,9 @@ impl UIRoot {
                 self.last_right_click_pos = *pos;
             }
 
-            // Ableton picker popup — highest z-order (opened from dropdown).
-            if self.ableton_picker.is_open() {
-                use manifold_ui::panels::ableton_picker::AbletonPickerAction;
-                let mut consumed = false;
-
-                if let UIEvent::KeyDown {
-                    key: Key::Escape, ..
-                } = event
-                    && self.ableton_picker.handle_escape().is_some()
-                {
-                    self.overlay_dirty = true;
-                    consumed = true;
-                }
-
-                if let UIEvent::Click { node_id, .. } = event {
-                    if let Some(picker_action) = self.ableton_picker.handle_click(*node_id) {
-                        match picker_action {
-                            AbletonPickerAction::Selected(addr) => {
-                                if let Some(ctx) = self.ableton_picker_context.take() {
-                                    use manifold_ui::panels::ableton_picker::AbletonPickerContext;
-                                    match ctx {
-                                        AbletonPickerContext::Param { gpt, param_id } => {
-                                            actions.push(PanelAction::MapParamToAbleton(
-                                                gpt, param_id, addr,
-                                            ));
-                                        }
-                                        AbletonPickerContext::MacroSlot { slot_idx } => {
-                                            actions.push(PanelAction::MapMacroToAbleton(
-                                                slot_idx, addr,
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                            AbletonPickerAction::Dismissed => {}
-                        }
-                        self.overlay_dirty = true;
-                        consumed = true;
-                    } else if self.ableton_picker.contains_node(*node_id) {
-                        // Track-selection click — redraw right column next frame.
-                        self.overlay_dirty = true;
-                        consumed = true;
-                    }
-                }
-
-                if consumed {
-                    continue;
-                }
-            }
-
-            // Browser popup gets first crack (higher z-order than dropdown).
-            if self.browser_popup.is_open() {
-                use manifold_ui::panels::browser_popup::{BrowserPopupAction, BrowserPopupMode};
-                let mut consumed = false;
-
-                // Escape key
-                if let UIEvent::KeyDown {
-                    key: Key::Escape, ..
-                } = event
-                    && self.browser_popup.handle_escape().is_some()
-                {
-                    self.overlay_dirty = true;
-                    consumed = true;
-                }
-
-                // Click events
-                if let UIEvent::Click { node_id, .. } = event {
-                    // Search bar click → open text input
-                    if self.browser_popup.is_search_bar(*node_id) {
-                        actions.push(PanelAction::BrowserSearchClicked);
-                        consumed = true;
-                    } else {
-                        if let Some(bp_action) = self.browser_popup.handle_click(*node_id) {
-                            match bp_action {
-                                BrowserPopupAction::Selected {
-                                    type_id,
-                                    mode,
-                                    tab,
-                                    layer_id,
-                                } => match mode {
-                                    BrowserPopupMode::Effect => {
-                                        actions.push(PanelAction::AddEffect(
-                                            tab,
-                                            manifold_core::PresetTypeId::from_string(type_id),
-                                        ));
-                                    }
-                                    BrowserPopupMode::Generator => {
-                                        actions.push(PanelAction::SetGenType(
-                                            layer_id,
-                                            manifold_core::PresetTypeId::from_string(type_id),
-                                        ));
-                                    }
-                                    // Node mode is editor-window only; the
-                                    // main-window popup never opens it.
-                                    BrowserPopupMode::Node => {}
-                                },
-                                BrowserPopupAction::Paste => {
-                                    actions.push(PanelAction::PasteEffects);
-                                }
-                                BrowserPopupAction::Dismissed => {}
-                                // Editor-window only; never reached here.
-                                BrowserPopupAction::NodeSelected { .. } => {}
-                            }
-                            self.overlay_dirty = true;
-                            consumed = true;
-                        } else if self.browser_popup.contains_node(*node_id) {
-                            // Internal popup click (category chip, background, etc.)
-                            // Consume so it doesn't leak to panels below.
-                            self.overlay_dirty = true;
-                            consumed = true;
-                        }
-                    }
-                }
-
-                // Scroll events within the popup
-                if let UIEvent::Scroll { delta, .. } = event {
-                    self.browser_popup.handle_scroll(delta.y);
-                    self.overlay_dirty = true;
-                    consumed = true;
-                }
-
-                if consumed {
-                    continue;
-                }
-            }
-
-            // Global: ⌘⇧A toggles the Audio Setup panel (open or close).
+            // Global: ⌘⇧A toggles the Audio Setup panel (open or close). An open
+            // trigger, so it runs before overlay routing — otherwise the modal,
+            // once open, would capture the keystroke and it couldn't toggle shut.
             if let UIEvent::KeyDown { key: Key::A, modifiers, .. } = event
                 && modifiers.command
                 && modifiers.shift
@@ -865,58 +905,12 @@ impl UIRoot {
                 continue;
             }
 
-            // Audio Setup modal — handle its clicks + escape before lower panels.
-            if self.audio_setup_panel.is_open() {
-                let mut consumed = false;
-                if let UIEvent::KeyDown { key: Key::Escape, .. } = event {
-                    self.audio_setup_panel.close();
-                    self.overlay_dirty = true;
-                    consumed = true;
-                }
-                if let UIEvent::Click { node_id, .. } = event {
-                    if let Some(action) = self.audio_setup_panel.handle_click(*node_id as i32) {
-                        actions.push(action);
-                        self.overlay_dirty = true;
-                        consumed = true;
-                    } else if self.audio_setup_panel.owns_node(*node_id as i32) {
-                        // Close button or modal background — swallow, no action.
-                        self.overlay_dirty = true;
-                        consumed = true;
-                    }
-                }
-                if consumed {
-                    continue;
-                }
-            }
-
-            // Dropdown gets first crack at all events.
-            if self.dropdown.is_open()
-                && let Some(dd_action) = self.dropdown.handle_event(event, &mut self.tree)
-            {
-                match dd_action {
-                    DropdownAction::Selected(index) => {
-                        if let Some(ctx) = self.dropdown_context.take()
-                            && let Some(action) = self.dropdown_to_action(ctx, index)
-                        {
-                            actions.push(action);
-                        }
-                    }
-                    DropdownAction::ColorSelected(color_idx) => {
-                        if let Some(ctx) = self.dropdown_context.take()
-                            && let Some(action) = self.dropdown_color_to_action(ctx, color_idx)
-                        {
-                            actions.push(action);
-                        }
-                    }
-                    DropdownAction::Dismissed => {
-                        // Only clear context if dropdown actually closed
-                        // (disabled item clicks send Dismissed but keep dropdown open)
-                        if !self.dropdown.is_open() {
-                            self.dropdown_context = None;
-                        }
-                    }
-                }
-                continue; // Event consumed by dropdown.
+            // All open overlays (dropdown, modals, perf HUD) get first crack at
+            // the event through the single driver. If one consumes it (or a modal
+            // captures it), lower any stashed selection and skip the panels below.
+            if self.route_overlay_event(event, &mut actions) {
+                self.drain_overlay_selections(&mut actions);
+                continue;
             }
 
             // Route to panels.

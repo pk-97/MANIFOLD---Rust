@@ -430,12 +430,6 @@ pub struct Application {
     /// Set by keyboard shortcuts that mutate project data (undo, delete, etc.).
     /// Consumed by tick_and_render to trigger sync_project_data + rebuild.
     pub(crate) needs_structural_sync: bool,
-    /// Previous-frame open state of the Audio Setup modal. Opening or closing a
-    /// top-level modal is a structural tree change (a whole subtree appears or
-    /// disappears), so a state change here forces a full rebuild — the partial
-    /// overlay-refresh path doesn't reliably draw a freshly-opened modal. This
-    /// catches every toggle path (header button, "A" button, ⌘⇧A, Escape, ✕).
-    pub(crate) prev_audio_setup_open: bool,
 }
 
 impl Application {
@@ -606,7 +600,6 @@ impl Application {
             needs_rebuild: false,
             scroll_dirty: crate::ui_root::ScrollDirty::default(),
             needs_structural_sync: false,
-            prev_audio_setup_open: false,
         }
     }
 

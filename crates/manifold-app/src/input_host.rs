@@ -1094,21 +1094,8 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.pending_export = true;
     }
 
-    fn dismiss_context_menu(&mut self) {
-        self.ui_root.dropdown.close(&mut self.ui_root.tree);
-    }
-
-    fn has_context_menu(&self) -> bool {
-        self.ui_root.dropdown.is_open()
-    }
-
-    fn is_browser_popup_open(&self) -> bool {
-        self.ui_root.browser_popup.is_open()
-    }
-
-    fn dismiss_browser_popup(&mut self) {
-        self.ui_root.browser_popup.close();
-        self.ui_root.overlay_dirty = true;
+    fn dismiss_top_overlay(&mut self) -> bool {
+        self.ui_root.escape_overlays()
     }
 
     fn grid_step(&self) -> f32 {

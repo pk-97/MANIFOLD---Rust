@@ -841,8 +841,4 @@ impl Overlay for BrowserPopupPanel {
             _ => OverlayResponse::Ignored,
         }
     }
-
-    fn close(&mut self) {
-        self.close();
-    }
 }
