@@ -1266,38 +1266,98 @@ impl GraphCanvas {
         &self.node_search
     }
 
-    /// Visible previewable nodes as `(capture node_id, strip_x, strip_y,
-    /// strip_w, strip_h)` in screen space — the 16:9 preview-strip region the
-    /// present pass blits each node's atlas thumbnail into. The `node_id` is the
-    /// *capture* id ([`NodeView::preview_node_id`]): a node's own id, or for a
-    /// group the inner node producing its output — so groups preview too,
-    /// reusing the producer's existing atlas cell. Nodes with no image output
-    /// emit nothing. Culls off-canvas nodes.
-    pub fn visible_node_thumbnails(
-        &self,
-        viewport: Rect,
-    ) -> Vec<(manifold_core::NodeId, f32, f32, f32, f32)> {
-        let mut out = Vec::new();
+    /// Visible previewable nodes' thumbnail placements ([`NodeThumb`]) in screen
+    /// space — the 16:9 preview-strip region the present pass blits each node's
+    /// atlas thumbnail into. The id is the *capture* id
+    /// ([`NodeView::preview_node_id`]): a node's own id, or for a group the inner
+    /// node producing its output — so groups preview too, reusing the producer's
+    /// existing atlas cell. Nodes with no image output emit nothing.
+    ///
+    /// The thumbnail blit is a raw GPU pass that sits *outside* the UI's layer
+    /// system, so it can't lean on `push_layer` for z-order; it gets the same
+    /// occlusion the layered node bodies already have, computed here instead.
+    /// Each strip is clipped to the canvas body (so it never paints over the
+    /// breadcrumb header, palette, or sidebar) and then has every node drawn on
+    /// top of it subtracted, so a node's preview never bleeds out from under the
+    /// node stacked above it. `vis == full` for an unobstructed node; a fully
+    /// occluded or off-canvas node emits nothing.
+    pub fn visible_node_thumbnails(&self, viewport: Rect) -> Vec<NodeThumb> {
         let header = NODE_HEADER_HEIGHT * self.zoom;
         let pad = PREVIEW_PAD * self.zoom;
-        for node in &self.nodes {
+        let strip_w = PREVIEW_IMG_W * self.zoom;
+        let strip_h = PREVIEW_IMG_H * self.zoom;
+        if strip_h <= 1.0 {
+            return Vec::new();
+        }
+
+        // The canvas body: the lane below the breadcrumb header bar and between
+        // the palette (left) and sidebar (right) — `viewport` is already the
+        // canvas lane, so its left/right edges are those panels. The breadcrumb
+        // is an overlay above the canvas, so trim it off the top.
+        let body = Rect::new(
+            viewport.x,
+            viewport.y + HEADER_HEIGHT,
+            viewport.w,
+            (viewport.h - HEADER_HEIGHT).max(0.0),
+        );
+
+        // Nodes painted later read on top, so a thumbnail is occluded by every
+        // node *after* it here. Mirror `draw_node`'s order exactly: unhovered /
+        // unselected first, then the hovered node, then the selected ones — the
+        // node you're working on is drawn last and therefore on top.
+        let mut order: Vec<&NodeView> = Vec::with_capacity(self.nodes.len());
+        for n in &self.nodes {
+            if !self.selected.contains(&n.id) && self.hovered != Some(n.id) {
+                order.push(n);
+            }
+        }
+        if let Some(h) = self.hovered
+            && !self.selected.contains(&h)
+            && let Some(n) = self.find_node(h)
+        {
+            order.push(n);
+        }
+        for &s in &self.selected {
+            if let Some(n) = self.find_node(s) {
+                order.push(n);
+            }
+        }
+
+        let body_rect = |n: &NodeView| -> Rect {
+            let (sx, sy) = self.to_screen(viewport, n.pos_graph.0, n.pos_graph.1);
+            Rect::new(sx, sy, NODE_WIDTH * self.zoom, n.height() * self.zoom)
+        };
+
+        let mut out = Vec::new();
+        for (i, &node) in order.iter().enumerate() {
             let Some(capture_id) = node.preview_node_id.clone() else {
                 continue;
             };
-            let (sx, sy) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
-            let sw = NODE_WIDTH * self.zoom;
-            let sh = node.height() * self.zoom;
-            if sx + sw < viewport.x
-                || sx > viewport.x + viewport.w
-                || sy + sh < viewport.y
-                || sy > viewport.y + viewport.h
-            {
+            let nb = body_rect(node);
+            let full = Rect::new(nb.x + pad, nb.y + header + pad, strip_w, strip_h);
+            // Clip to the canvas body (subsumes the off-canvas cull).
+            let Some(mut vis) = rect_intersect(full, body) else {
                 continue;
+            };
+            // Subtract every node stacked on top of this one. Each step keeps
+            // the largest single bleed-free sub-rect, so the result is clipped
+            // away from all of them.
+            let mut visible = true;
+            for &other in &order[i + 1..] {
+                match occlude_rect(vis, body_rect(other)) {
+                    Some(r) => vis = r,
+                    None => {
+                        visible = false;
+                        break;
+                    }
+                }
             }
-            let strip_w = PREVIEW_IMG_W * self.zoom;
-            let strip_h = PREVIEW_IMG_H * self.zoom;
-            if strip_h > 1.0 {
-                out.push((capture_id, sx + pad, sy + header + pad, strip_w, strip_h));
+            if visible && vis.w > 0.0 && vis.h > 0.0 {
+                out.push(NodeThumb {
+                    id: capture_id,
+                    full,
+                    vis,
+                });
             }
         }
         out
@@ -3522,6 +3582,55 @@ impl Rect {
     }
 }
 
+/// One node's output-preview thumbnail placement for the editor present pass.
+/// `full` is the whole 16:9 strip rect (where the image *would* draw if nothing
+/// obscured it); `vis` is the sub-rect actually on screen after clipping to the
+/// canvas body and subtracting any node painted on top. The present pass blits
+/// the atlas cell into `vis`, cropping its UVs by `vis` relative to `full` so
+/// the visible part stays 1:1 rather than squashing the whole image into a
+/// clipped rect. `vis == full` for an unobstructed node.
+pub struct NodeThumb {
+    pub id: manifold_core::NodeId,
+    pub full: Rect,
+    pub vis: Rect,
+}
+
+/// Intersect two rects; `None` when they don't overlap.
+fn rect_intersect(a: Rect, b: Rect) -> Option<Rect> {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.w).min(b.x + b.w);
+    let y1 = (a.y + a.h).min(b.y + b.h);
+    (x1 > x0 && y1 > y0).then(|| Rect::new(x0, y0, x1 - x0, y1 - y0))
+}
+
+/// Subtract occluder `o` from `t`, returning the largest single axis-aligned
+/// sub-rect of `t` that excludes the overlap — the clean way to keep a node's
+/// preview from bleeding out from under a node painted on top of it without
+/// splitting the blit into several rects. Returns `t` unchanged when `o` doesn't
+/// touch it, and `None` when `o` covers `t` entirely.
+fn occlude_rect(t: Rect, o: Rect) -> Option<Rect> {
+    let ix0 = t.x.max(o.x);
+    let iy0 = t.y.max(o.y);
+    let ix1 = (t.x + t.w).min(o.x + o.w);
+    let iy1 = (t.y + t.h).min(o.y + o.h);
+    if ix0 >= ix1 || iy0 >= iy1 {
+        return Some(t); // no overlap
+    }
+    // The four margin strips of `t` outside the overlap. Each excludes the full
+    // extent of the overlap on one axis, so any one is bleed-free; keep the
+    // one with the most area.
+    [
+        Rect::new(t.x, t.y, (ix0 - t.x).max(0.0), t.h), // left
+        Rect::new(ix1, t.y, (t.x + t.w - ix1).max(0.0), t.h), // right
+        Rect::new(t.x, t.y, t.w, (iy0 - t.y).max(0.0)), // top
+        Rect::new(t.x, iy1, t.w, (t.y + t.h - iy1).max(0.0)), // bottom
+    ]
+    .into_iter()
+    .filter(|r| r.w > 0.0 && r.h > 0.0)
+    .max_by(|a, b| (a.w * a.h).total_cmp(&(b.w * b.h)))
+}
+
 fn canvas_to_viewport(canvas: Rect) -> Rect {
     Rect {
         x: canvas.x,
@@ -3831,15 +3940,17 @@ mod tests {
         // its own id, since that inner node is the cell already in the atlas.
         assert_eq!(thumbs.len(), 3, "two image nodes + the group via its producer");
         assert!(
-            thumbs.iter().any(|(id, ..)| id.as_str() == "inner"),
+            thumbs.iter().any(|t| t.id.as_str() == "inner"),
             "the group previews its inner output producer"
         );
         assert!(
-            thumbs.iter().all(|(id, ..)| id.as_str() != "tweak"),
+            thumbs.iter().all(|t| t.id.as_str() != "tweak"),
             "a group is never keyed to its own id — always its producer's"
         );
-        // Each preview-strip rect is the 16:9 image area and has positive size.
-        assert!(thumbs.iter().all(|(_, _, _, w, h)| *w > 0.0 && *h > 0.0));
+        // Each preview-strip rect is the 16:9 image area and has positive size,
+        // and with nothing stacked on top the visible rect equals the full one.
+        assert!(thumbs.iter().all(|t| t.full.w > 0.0 && t.full.h > 0.0));
+        assert!(thumbs.iter().all(|t| t.vis.w > 0.0 && t.vis.h > 0.0));
     }
 
     #[test]
