@@ -1086,8 +1086,9 @@ impl UIRoot {
         }
 
         // Intercept dropdown-triggering actions and open dropdowns here
-        // (where we have access to the tree for node bounds).
-        let popup_open_before = self.browser_popup.is_open();
+        // (where we have access to the tree for node bounds). try_open_dropdown
+        // marks the overlay layer dirty on any open, so the just-opened menu /
+        // popup is rebuilt and drawn this frame.
         let mut filtered = Vec::with_capacity(actions.len());
         for action in actions {
             if self.try_open_dropdown(&action, last_click_node) {
@@ -1097,17 +1098,29 @@ impl UIRoot {
             filtered.push(action);
         }
 
-        // If a popup was just opened, flag for rebuild so nodes appear this frame.
-        if !popup_open_before && (self.browser_popup.is_open() || self.ableton_picker.is_open()) {
+        filtered
+    }
+
+    /// If the action opens an overlay (a dropdown, a right-click context menu, the
+    /// browser popup, or the Ableton picker), open it and return true (action
+    /// consumed). Marks the overlay layer dirty on any open so `build_overlays`
+    /// runs and the overlay is recorded into `overlay_draw` and drawn this frame —
+    /// context menus (`open_context` / `open_context_with_colors`) don't flag this
+    /// themselves the way `open_dropdown_at` does, so without it the right-click
+    /// menus open in state but are never built or drawn (the bug after the overlay
+    /// driver cutover). Covers both call sites: `process_events` and the
+    /// after-the-fact `intercept_overlay_actions` for viewport right-clicks.
+    fn try_open_dropdown(&mut self, action: &PanelAction, click_node: i32) -> bool {
+        let opened = self.try_open_dropdown_inner(action, click_node);
+        if opened {
             self.overlay_dirty = true;
         }
-
-        filtered
+        opened
     }
 
     /// If the action is a dropdown trigger, open the dropdown anchored to the
     /// clicked button and return true (action consumed). Otherwise return false.
-    fn try_open_dropdown(&mut self, action: &PanelAction, click_node: i32) -> bool {
+    fn try_open_dropdown_inner(&mut self, action: &PanelAction, click_node: i32) -> bool {
         let right_click_pos = self.last_right_click_pos;
         let trigger = if click_node >= 0 {
             self.tree.get_bounds(click_node as u32)
