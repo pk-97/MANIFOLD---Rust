@@ -941,8 +941,17 @@ impl Application {
         // Keep the inspector sync running every frame the Audio Setup modal is
         // open, so it re-reads the device + send list (its data lives behind the
         // otherwise-gated structural sync).
-        if self.ws.ui_root.audio_setup_panel.is_open() {
+        let audio_setup_open = self.ws.ui_root.audio_setup_panel.is_open();
+        if audio_setup_open {
             needs_structural_sync = true;
+        }
+        // Opening or closing the modal is a structural tree change — force a
+        // full rebuild on the transition so the panel actually appears/clears
+        // this frame (the partial overlay-refresh path doesn't draw a freshly
+        // opened top-level modal). Covers every toggle path.
+        if audio_setup_open != self.prev_audio_setup_open {
+            self.needs_rebuild = true;
+            self.prev_audio_setup_open = audio_setup_open;
         }
         let mut needs_resolution_resize = false;
         let prev_active_layer = self.active_layer_id.clone();
@@ -1009,8 +1018,16 @@ impl Application {
                     continue;
                 }
                 PanelAction::OpenAudioSetup => {
+                    // Toggling a top-level modal is a structural tree change, so
+                    // force a full rebuild on THIS tick — the UI rebuilds on
+                    // demand (no idle ticks), so the panel must be built in the
+                    // same tick the click arrives or it won't appear until the
+                    // next unrelated input. (⌘⇧A/Escape/✕ paths are caught
+                    // same-tick by the open-state check near the top of the
+                    // tick, since they're handled before this loop runs.)
                     self.ws.ui_root.audio_setup_panel.toggle();
-                    self.ws.ui_root.overlay_dirty = true;
+                    self.prev_audio_setup_open = self.ws.ui_root.audio_setup_panel.is_open();
+                    self.needs_rebuild = true;
                     continue;
                 }
                 PanelAction::OpenGeneratorGraphEditor => {
