@@ -2328,6 +2328,14 @@ impl Application {
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
         self.ws.ui_root.update();
 
+        // 6·audio. Live per-send level meters in the Audio Setup modal — in-place
+        // node resize from the latest content-state levels, no rebuild.
+        if self.ws.ui_root.audio_setup_panel.is_open() {
+            let count = self.content_state.audio_send_count;
+            let levels = self.content_state.audio_send_levels;
+            self.ws.ui_root.update_audio_meters(&levels[..count]);
+        }
+
         // 6a. Update waveform lane overlay (position for dirty-checking)
         {
             let scroll_x = self.ws.ui_root.viewport.scroll_x_beats().as_f32()

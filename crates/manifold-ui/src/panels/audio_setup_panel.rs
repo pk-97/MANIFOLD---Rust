@@ -54,6 +54,13 @@ struct SendRowIds {
     ch_dropdown: i32,
     stereo: i32,
     delete: i32,
+    /// Level-meter fill node + its full-scale geometry, resized in place each
+    /// frame by [`AudioSetupPanel::update_meters`] (no rebuild).
+    meter_fill: i32,
+    meter_x: f32,
+    meter_y: f32,
+    meter_w: f32,
+    meter_h: f32,
 }
 
 /// The Audio Setup modal panel.
@@ -313,15 +320,45 @@ impl AudioSetupPanel {
 
             // Channel dropdown fills the gap, showing the resolved name(s).
             let ch_x = label_x + LABEL_W + 4.0;
+            let ch_w = (stereo_x - 4.0 - ch_x).max(40.0);
             self.send_ids[i].ch_dropdown = tree.add_button(
                 self.bg_id,
                 ch_x,
                 cy,
-                (stereo_x - 4.0 - ch_x).max(40.0),
+                ch_w,
                 ROW_H,
                 dropdown_trigger_style(),
                 &format!("{}   \u{25BC}", send.channel_label),
             ) as i32;
+
+            // Level meter: a thin track under the channel dropdown with a fill
+            // node resized each frame from the live send level. Identity-colored.
+            let meter_h = 2.0;
+            let meter_x = ch_x;
+            let meter_y = cy + ROW_H - meter_h;
+            let meter_w = ch_w;
+            tree.add_panel(
+                self.bg_id,
+                meter_x,
+                meter_y,
+                meter_w,
+                meter_h,
+                UIStyle { bg_color: Color32::new(40, 40, 46, 255), ..UIStyle::default() },
+            );
+            let fill = tree.add_panel(
+                self.bg_id,
+                meter_x,
+                meter_y,
+                0.0, // width set per frame by update_meters
+                meter_h,
+                UIStyle { bg_color: super::audio_send_color(&send.id), ..UIStyle::default() },
+            ) as i32;
+            self.send_ids[i].meter_fill = fill;
+            self.send_ids[i].meter_x = meter_x;
+            self.send_ids[i].meter_y = meter_y;
+            self.send_ids[i].meter_w = meter_w;
+            self.send_ids[i].meter_h = meter_h;
+
             cy += ROW_H + ROW_GAP;
         }
 
@@ -351,6 +388,24 @@ impl AudioSetupPanel {
         self.send_ids
             .iter()
             .any(|r| id == r.label || id == r.ch_dropdown || id == r.stereo || id == r.delete)
+    }
+
+    /// Resize each send's meter fill from live levels (RMS 0..1). Called every
+    /// frame while open — mutates existing nodes in place, no rebuild. Levels are
+    /// indexed by send order. A small visual gain makes quiet signals legible.
+    pub fn update_meters(&self, tree: &mut UITree, levels: &[f32]) {
+        for (i, ids) in self.send_ids.iter().enumerate() {
+            if ids.meter_fill < 0 {
+                continue;
+            }
+            let level = levels.get(i).copied().unwrap_or(0.0);
+            let shown = (level * 2.5).clamp(0.0, 1.0); // ~ -8 dB reaches full scale
+            let w = ids.meter_w * shown;
+            tree.set_bounds(
+                ids.meter_fill as u32,
+                Rect::new(ids.meter_x, ids.meter_y, w, ids.meter_h),
+            );
+        }
     }
 
     /// Whether a send is currently routed as a stereo pair (≥2 channels).

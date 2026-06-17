@@ -1055,6 +1055,17 @@ impl ContentThread {
             .clone()
             .and_then(|t| self.graph_snapshot(&t));
 
+        // Per-send audio levels for the Audio Setup meters (RMS amplitude 0..1).
+        let mut audio_send_levels = [0.0f32; manifold_audio::analysis::MAX_SENDS];
+        let audio_snapshot = self.engine.audio_snapshot();
+        let audio_send_count = audio_snapshot.sends.len().min(audio_send_levels.len());
+        for (dst, f) in audio_send_levels
+            .iter_mut()
+            .zip(audio_snapshot.sends.iter().take(audio_send_count))
+        {
+            *dst = f.amplitude;
+        }
+
         let state = ContentState {
             current_beat: self.engine.current_beat(),
             current_time: self.engine.current_time(),
@@ -1122,6 +1133,8 @@ impl ContentThread {
                 .is_some_and(|s| s.is_receiving_clock()),
             midi_clock_device_name: self.cached_midi_clock_device.clone(),
             midi_device_names: self.last_sent_midi_device_names.clone(),
+            audio_send_levels,
+            audio_send_count,
             osc_sender_enabled: self.transport_controller.osc_sender_enabled,
             osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
             osc_timecode_display: self.cached_osc_timecode.clone(),

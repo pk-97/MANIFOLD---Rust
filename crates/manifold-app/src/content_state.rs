@@ -81,6 +81,11 @@ pub struct ContentState {
     pub midi_clock_device_name: Arc<str>,
     /// Available MIDI input device names for the CLK device dropdown.
     pub midi_device_names: Arc<[String]>,
+    /// Live per-send audio levels (RMS amplitude 0..1), indexed by send order.
+    /// Fixed-size + count so it rides the snapshot with no per-frame alloc.
+    pub audio_send_levels: [f32; manifold_audio::analysis::MAX_SENDS],
+    /// Number of valid entries in [`Self::audio_send_levels`].
+    pub audio_send_count: usize,
     pub osc_sender_enabled: bool,
     pub osc_receiving_timecode: bool,
     pub osc_timecode_display: Arc<str>,
@@ -373,6 +378,8 @@ impl Default for ContentState {
             midi_clock_receiving: false,
             midi_clock_device_name: Arc::from(""),
             midi_device_names: Arc::from([]),
+            audio_send_levels: [0.0; manifold_audio::analysis::MAX_SENDS],
+            audio_send_count: 0,
             osc_sender_enabled: false,
             osc_receiving_timecode: false,
             osc_timecode_display: Arc::from(""),

@@ -1906,6 +1906,15 @@ impl UIRoot {
         self.perf_hud.update(&mut self.tree);
     }
 
+    /// Resize the Audio Setup level meters from live per-send levels. Cheap
+    /// in-place node updates each frame while the modal is open — no rebuild.
+    pub fn update_audio_meters(&mut self, levels: &[f32]) {
+        if !self.audio_setup_panel.is_open() {
+            return;
+        }
+        self.audio_setup_panel.update_meters(&mut self.tree, levels);
+    }
+
     /// Push waveform/stem lane node visibility and style to UITree.
     /// Called from app_render after syncing mute/solo/stems_available state.
     /// Separate from update() because app_render must sync state first.

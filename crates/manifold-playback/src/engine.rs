@@ -286,6 +286,10 @@ impl PlaybackEngine {
     ) -> &mut manifold_core::audio_features::AudioFeatureSnapshot {
         &mut self.audio_snapshot
     }
+    /// Read the current per-send audio feature snapshot (for UI meters).
+    pub fn audio_snapshot(&self) -> &manifold_core::audio_features::AudioFeatureSnapshot {
+        &self.audio_snapshot
+    }
     pub fn current_beat_f64(&self) -> f64 {
         self.current_beat
     }
