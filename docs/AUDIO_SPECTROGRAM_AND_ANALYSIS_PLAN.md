@@ -8,12 +8,9 @@ Design determined in session 2026-06-17. **Status: plan only — nothing here is
 
 ## 1. Goal, for the instrument
 
-Two intertwined goals:
+**This plan's deliverable: a per-send VQT spectrogram in the Audio Setup panel** — with the modulation's band (and later the tracked pitch ridge) drawn on it, so the performer can *see* where their kick/bass lands and calibrate against it — plus the `TexturePane` graphics API it needs to get a live GPU texture onscreen.
 
-1. **Make audio modulation actually usable and intelligent.** Today the worker computes only `amplitude` (RMS) and `band_energy` (a mis-scaled 3-band FFT). `onset` and all pitch fields exist but read zero — so the headline thesis (a bassline's *pitch movement* drives a visual parameter) is unbuilt, and the drawer's `On` button does nothing. We build it out: fix band energy, add onset, then port synchrosqueeze pitch tracking.
-2. **Give the performer a way to dial it in.** A per-send **VQT spectrogram** in the Audio Setup panel, with the modulation's band (and later the tracked pitch ridge) drawn on it, so you can *see* where your kick/bass lands and calibrate against it.
-
-The spectrogram is the forcing function; the analysis depth is the end goal. They converge: the same VQT that draws the spectrogram is the engine that extracts pitch in v2.
+It sits inside a larger initiative to make audio modulation usable and intelligent. Today the worker computes only `amplitude` (RMS) and `band_energy` (a mis-scaled 3-band FFT); `onset` and all pitch fields read zero, so the headline thesis (a bassline's *pitch movement* drives a visual parameter) is unbuilt. **That analysis depth — band-energy fix, onset, synchrosqueeze pitch — is owned by a separate analysis agent (§2), not this plan.** The two converge: the same VQT engine that draws the spectrogram is what extracts pitch, so we render the columns that effort produces.
 
 ## 2. Decisions
 
@@ -22,6 +19,10 @@ The spectrogram is the forcing function; the analysis depth is the end goal. The
 - **Reuse the Analyzer's CQT pipeline.** It already runs on `manifold-gpu` (path dep), including `GpuFft` and a full synchrosqueeze ridge tracker. Factor the reusable parts into a shared `manifold-spectral` crate.
 - **Producer is worker-side, not present-pass.** (See §4.1.)
 - **Build the "live texture in a UI region" API properly** (`TexturePane`, §5) — this is the "graphics API upgrade." Built fresh for the spectrogram (its first consumer). **Scope cut:** we do *not* retrofit the existing inline blits (node-preview, master-out, thumbnails) or migrate the VST onto it — those keep their current copy-pasted form and their latent resize hazard for now (§3). `TexturePane` is the clean path forward for new consumers, not a consolidation pass over old ones.
+- **Ownership boundary (this plan vs the analysis agent).** A separate agent owns audio *analysis tools and techniques* — the DSP. To avoid two agents editing the worker / DSP crate, the split is:
+  - **Analysis agent owns:** `manifold-spectral` (the CQT/VQT kernels, GPU FFT, and the synchrosqueeze ridge), the worker-side feature extraction, the band-energy scaling fix, onset, and all pitch features.
+  - **This plan owns:** the `TexturePane` graphics API, the Audio Setup spectrogram scope (rendering columns → texture, overlays), and the per-send gain UI/routing.
+  - **The seam is a column stream:** the worker publishes, latest-wins, per-hop **VQT magnitude columns for the selected send**, gated on the Audio Setup panel being open. We consume and render them; we don't compute them.
 
 ## 3. Verified findings (2026-06-17, checked against code)
 
@@ -77,36 +78,37 @@ The bottom primitive is a single `blit_texture_pane` helper (collapses the per-c
 
 ## 6. Build plan — phases in optimal order
 
-**Critical path: 3 → 5 → 7 → 8.** Phases 0, 4(gain), and 5 hang off it without blocking. The spectrogram ships at Phase 4; v2 is an independent follow-on.
+### Dependencies owned by the analysis agent (not us)
+- **`manifold-spectral`** — extract `cqt.rs` + `gpu_cqt.rs` + `spectrum_line.wgsl` + the dB/colormap/column logic; reuse the Analyzer's CPU unit tests; leave egui-GL behind.
+- **Worker column producer** — the worker computes per-hop VQT magnitude columns for the selected send, gated on Audio Setup open, published latest-wins. N_FFT/hop tuned for this use.
+- (Their wider remit: band-energy scaling fix, onset, synchrosqueeze pitch — all of which the spectrogram benefits from but does not implement.)
 
-### Phase 0 — Independent quick wins (no deps)
-1. Band-energy scaling fix (÷N² + Hann); update tests.
-2. Drawer cleanup: remove the "+" send button; "A"-with-no-sends → `OpenAudioSetup`; delete the dead `AudioNewSend`/`AudioModNewSend` path. Unit-test the drawer hit-test.
+These two are the **column-stream contract** we build against. If they aren't ready when we are, we can stand up a minimal stub producer to unblock rendering, then drop it.
 
-### Phase 1 — Foundations (parallelizable)
-3. Extract `manifold-spectral`: `cqt.rs` + `gpu_cqt.rs` + `spectrum_line.wgsl` + dB/colormap/column logic; reuse the Analyzer's CPU unit tests. Leave egui-GL behind. VST not migrated yet.
-4. Per-send **gain**: `gain_db` on `AudioSend` + `SendSpec` + worker downmix; panel control; `EditingService` command; serialization.
+### This plan's phases
 
-### Phase 2 — Worker-side producer (deps: 3)
-5. Extend the worker to compute VQT columns for the selected send, gated on Audio Setup open, published latest-wins. Tune N_FFT/hop for modulation use.
+**Critical path: 1 → 3 → 4** (after the column stream exists). Phases 0 and 2(gain) hang off it without blocking. The spectrogram ships at Phase 3.
 
-### Phase 3 — Texture-pane API, de-risked on one consumer
-6. `blit_texture_pane` helper — collapse the three existing inline blits' boilerplate.
-7. `TexturePane` + safe `current()` (`Local` + `Bridged`). Spectrogram is first user as `Local`/worker-fed.
+#### Phase 0 — Quick win (no deps)
+1. Drawer cleanup: remove the "+" send button; "A"-with-no-sends → `OpenAudioSetup`; delete the dead `AudioNewSend`/`AudioModNewSend` path. Unit-test the drawer hit-test.
 
-### Phase 4 — Spectrogram in Audio Setup (deps: 5, 7; + 4 for usefulness)
-8. Panel: send-selection state + reserved scope rect + cheap fullscreen draw → `GpuTexture` → blit via `TexturePane`.
-9. Overlays: band dividers + log-freq axis; show the post-gain signal. Verify with the app running.
+#### Phase 1 — Texture-pane graphics API
+2. `blit_texture_pane` helper — collapse the inline blit boilerplate into one call.
+3. `TexturePane` + safe `current()` (`Local` + `Bridged` sources). Spectrogram is its first user as `Local`/worker-fed.
 
-### Phase 5 — v2 intelligence (deps: 3, 5)
-10. Onset: spectral flux off the transform; wire the `On` feature live.
-11. Pitch / pitch-delta / confidence: port the synchrosqueeze ridge; per-send opt-in via `SendAnalysisConfig`; ridge overlay on the waterfall.
+#### Phase 2 — Per-send gain (calibration prerequisite)
+4. `gain_db` on `AudioSend` + `SendSpec` + worker downmix; panel control; `EditingService` command; serialization. (The worker-downmix part coordinates with the analysis agent — it's the one shared touch-point.)
 
-**Out of scope (deliberately cut):** retrofitting the existing inline blits onto `TexturePane`, a pane registry, a format-generic bridge, and migrating the VST onto `manifold-spectral`. The focus is the spectrogram + the `TexturePane` graphics API it needs — not a consolidation pass over the rest of the app. These remain available as a future cleanup if a second `TexturePane` consumer ever justifies them.
+#### Phase 3 — Spectrogram in Audio Setup (deps: 3, the column stream; + 4 for usefulness)
+5. Panel: send-selection state + reserved scope rect + cheap fullscreen draw of the published columns → `GpuTexture` → blit via `TexturePane`.
+6. Overlays: band dividers + log-freq axis; show the post-gain signal. Verify with the app running.
 
-## 7. Open questions
+**Out of scope (deliberately cut):** all v2 analysis (onset, pitch, synchrosqueeze) → analysis agent. And from the graphics side: retrofitting the existing inline blits onto `TexturePane`, a pane registry, a format-generic bridge, migrating the VST onto `manifold-spectral`. Available as future cleanup if a second `TexturePane` consumer justifies it.
 
-- **N_FFT / hop for modulation use.** The Analyzer's 65536/256 is tuned for a wide visual window; pick a lighter pair for per-send calibration.
+## 7. Open questions (ours)
+
 - **Where the cheap render pass runs.** Worker-side into an IOSurface (needs the bridge) vs UI-side from published columns (`Local`, no bridge). The column ring crossing threads is the deciding factor; lean `Local` if columns are small enough to publish latest-wins.
 - **Gain as project content vs rig preference** — same question the device selection faced; default to project content with the send.
-- **Per-send cost ceiling for v2** — how many sends can run the ridge tracker before the worker falls behind (bounded by per-send opt-in).
+- **Column-stream shape** — the exact contract with the analysis agent: column length (bin count), value domain (raw magnitude vs pre-converted dB), and rate. Settle jointly before either side commits.
+
+(Analysis-side questions — N_FFT/hop, per-send ridge-tracker cost ceiling — belong to the analysis agent.)
