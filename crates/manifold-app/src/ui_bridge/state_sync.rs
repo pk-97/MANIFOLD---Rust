@@ -1093,8 +1093,27 @@ pub fn sync_inspector_data(
                 channels: s.channels.clone(),
             })
             .collect();
+
+        // Surface a reliability warning: an explicitly-chosen device that won't
+        // resolve or reads offline, else a blocked mic permission.
+        let status_warning = if let Some(d) = &project.audio_setup.device {
+            match &device {
+                None => Some(format!("\u{26A0} \"{}\" is offline or unplugged", d.name)),
+                Some(info) if !info.is_alive => {
+                    Some(format!("\u{26A0} \"{}\" is offline", info.name))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+        .or_else(|| {
+            (!manifold_audio::permission::status().is_usable())
+                .then(|| "\u{26A0} Microphone access blocked — check System Settings".to_string())
+        });
+
         ui.audio_setup_panel
-            .configure(project.audio_setup.device.clone(), sends);
+            .configure(project.audio_setup.device.clone(), sends, status_warning);
     }
 
     // Master effects → inspector (envelopes ride on each instance)

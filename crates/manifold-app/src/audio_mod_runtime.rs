@@ -51,20 +51,57 @@ struct AudioModCapture {
 
 /// Content-thread-owned runtime that reconciles capture against the project and
 /// feeds the engine its feature snapshot.
-#[derive(Default)]
 pub struct AudioModRuntime {
     capture: Option<AudioModCapture>,
     /// Last project data-version reconciled against — reconcile only runs when
     /// the project changed, not every frame.
     last_version: u64,
+    /// Device directory, used to resolve the stored device ref to an openable
+    /// name and to hold the hot-plug subscription.
+    directory: Box<dyn manifold_audio::directory::AudioDeviceDirectory>,
+    /// Set by the hot-plug listener (on a HAL thread) when the device set or
+    /// default device changes; drained each tick to force a re-resolve.
+    devices_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Hot-plug subscription guard — unregisters the listener on drop.
+    _hotplug_sub: manifold_audio::directory::Subscription,
+    /// Whether we've already triggered the one-time mic permission prompt.
+    mic_access_requested: bool,
+}
+
+impl Default for AudioModRuntime {
+    fn default() -> Self {
+        use std::sync::atomic::Ordering;
+        let directory = manifold_audio::directory::system_directory();
+        let devices_dirty = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = devices_dirty.clone();
+        // The callback fires on an arbitrary HAL thread — only flip an atomic.
+        let sub = directory.subscribe(Box::new(move || flag.store(true, Ordering::Relaxed)));
+        Self {
+            capture: None,
+            last_version: 0,
+            directory,
+            devices_dirty,
+            _hotplug_sub: sub,
+            mic_access_requested: false,
+        }
+    }
 }
 
 impl AudioModRuntime {
-    /// Reconcile the capture lifecycle (only when the project changed) and feed
-    /// the engine the latest feature snapshot. Call once per tick, before
-    /// `engine.tick`.
+    /// Reconcile the capture lifecycle (when the project changed, or a device
+    /// hot-plugged) and feed the engine the latest feature snapshot. Call once
+    /// per tick, before `engine.tick`.
     pub fn update(&mut self, engine: &mut PlaybackEngine, data_version: u64) {
-        if data_version != self.last_version {
+        let hotplugged = self
+            .devices_dirty
+            .swap(false, std::sync::atomic::Ordering::Relaxed);
+        if data_version != self.last_version || hotplugged {
+            if hotplugged {
+                // A device appeared/vanished/changed — drop capture so reconcile
+                // rebuilds against the current hardware (the stored ref is
+                // unchanged, so signature alone wouldn't trigger a rebuild).
+                self.capture = None;
+            }
             self.reconcile(engine.project());
             self.last_version = data_version;
         }
@@ -110,24 +147,41 @@ impl AudioModRuntime {
         // streams on one device during the swap.
         self.capture = None;
 
+        // Trigger the one-time mic permission prompt if undecided, and warn
+        // clearly if it's blocked — otherwise built-in-mic capture is silently
+        // zero. Status is app-global, so this is harmless for virtual devices.
+        match manifold_audio::permission::status() {
+            manifold_audio::permission::MicPermission::NotDetermined
+                if !self.mic_access_requested =>
+            {
+                manifold_audio::permission::request_microphone_access();
+                self.mic_access_requested = true;
+            }
+            manifold_audio::permission::MicPermission::Denied => {
+                log::warn!(
+                    "[AudioMod] Microphone access is denied — any send routed to the \
+                     built-in mic will be silent. Grant access in System Settings → \
+                     Privacy & Security → Microphone."
+                );
+            }
+            _ => {}
+        }
+
         // Resolve the stored device reference (UID, name fallback) to the
         // current openable device name. A configured-but-absent device leaves
         // capture dark (remappable policy); `None` = system default input.
         let device_name: Option<String> = match &project.audio_setup.device {
-            Some(dev_ref) => {
-                let dir = manifold_audio::directory::system_directory();
-                match dir.resolve(dev_ref.uid_opt(), Some(&dev_ref.name)) {
-                    Some(info) => Some(info.name),
-                    None => {
-                        log::warn!(
-                            "[AudioMod] Saved audio device '{}' not present; audio \
-                             modulation idle until it returns or is re-pointed",
-                            dev_ref.name
-                        );
-                        return;
-                    }
+            Some(dev_ref) => match self.directory.resolve(dev_ref.uid_opt(), Some(&dev_ref.name)) {
+                Some(info) => Some(info.name),
+                None => {
+                    log::warn!(
+                        "[AudioMod] Saved audio device '{}' not present; audio \
+                         modulation idle until it returns or is re-pointed",
+                        dev_ref.name
+                    );
+                    return;
                 }
-            }
+            },
             None => None,
         };
         let specs: Vec<SendSpec> = project

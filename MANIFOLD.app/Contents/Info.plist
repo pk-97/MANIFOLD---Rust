@@ -12,5 +12,7 @@
     <string>1.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>MANIFOLD captures audio input to drive visual parameters from live audio (audio modulation) and to record performances.</string>
 </dict>
 </plist>

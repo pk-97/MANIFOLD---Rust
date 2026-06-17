@@ -58,6 +58,9 @@ pub struct AudioSetupPanel {
     // Configured data.
     current_device: Option<AudioDeviceRef>,
     sends: Vec<AudioSendRow>,
+    /// A reliability warning to surface below the device row (device offline,
+    /// mic permission blocked), or `None` when all is well.
+    status_warning: Option<String>,
     // Node ids (set by `build`).
     bg_id: i32,
     close_id: i32,
@@ -94,9 +97,15 @@ impl AudioSetupPanel {
     /// structural sync while the panel is open. The device list itself is
     /// enumerated lazily by the app when the device dropdown opens, so it isn't
     /// passed here.
-    pub fn configure(&mut self, current_device: Option<AudioDeviceRef>, sends: Vec<AudioSendRow>) {
+    pub fn configure(
+        &mut self,
+        current_device: Option<AudioDeviceRef>,
+        sends: Vec<AudioSendRow>,
+        status_warning: Option<String>,
+    ) {
         self.current_device = current_device;
         self.sends = sends;
+        self.status_warning = status_warning;
     }
 
     fn device_label(&self) -> String {
@@ -109,9 +118,11 @@ impl AudioSetupPanel {
     /// Total body height for the configured send count.
     fn body_height(&self) -> f32 {
         let rows = self.sends.len();
+        let warning = if self.status_warning.is_some() { ROW_H + ROW_GAP } else { 0.0 };
         TITLE_H
             + ROW_H // device row
             + ROW_GAP
+            + warning
             + (ROW_H + ROW_GAP) * rows as f32
             + ROW_H // add-send button
             + PAD * 2.0
@@ -189,6 +200,25 @@ impl AudioSetupPanel {
             &format!("{}   \u{25BC}", self.device_label()), // value … ▼
         ) as i32;
         cy += ROW_H + ROW_GAP;
+
+        // Reliability warning (device offline / mic blocked), if any.
+        if let Some(warning) = &self.status_warning {
+            tree.add_label(
+                self.bg_id,
+                inner_x,
+                cy,
+                inner_w,
+                ROW_H,
+                warning,
+                UIStyle {
+                    text_color: Color32::new(232, 168, 92, 255), // amber
+                    font_size: color::FONT_LABEL,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            cy += ROW_H + ROW_GAP;
+        }
 
         // Send rows: label | [ channel name ▼ ] | ×
         self.send_ids = vec![SendRowIds::default(); rows];
@@ -397,6 +427,7 @@ mod tests {
                     channel_label: "MacBook Mic".into(),
                 },
             ],
+            None,
         );
         p
     }
