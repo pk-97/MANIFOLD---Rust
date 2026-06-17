@@ -14,12 +14,14 @@ cpal = "0.15"
 ringbuf = "0.4"
 rustfft = "6"
 
-# macOS ScreenCaptureKit FFI (per-app audio capture) + CoreAudio device directory
+# macOS CoreAudio FFI: device directory (channel names, UIDs, hot-plug),
+# process-tap capture (system + per-app output), and the mic-permission gate.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSError", "NSString", "NSArray", "NSObjCRuntime"] }
+# NSValue → NSNumber, used to pass process object ids into CATapDescription.
+objc2-foundation = { version = "0.3", features = ["NSError", "NSString", "NSArray", "NSObjCRuntime", "NSValue"] }
 block2 = "0.6"
-# CFString/CFArray handling for the CoreAudio device directory (channel names, UIDs).
+# CFString/CFArray/CFDictionary for the device directory + aggregate-device descriptions.
 core-foundation = "0.10"
 
 [lints]

@@ -77,6 +77,49 @@ impl DeviceInfo {
     }
 }
 
+/// An opaque, platform-defined handle for a live tap target (a process).
+///
+/// Produced by the directory ([`AudioDeviceDirectory::list_audio_apps`] /
+/// [`resolve_app`](AudioDeviceDirectory::resolve_app)) and consumed by the same
+/// platform's capture backend ([`crate::capture::CaptureSource::Apps`]). Its
+/// meaning is platform-private — a CoreAudio process `AudioObjectID` on macOS, a
+/// PID on Windows, a PipeWire node id on Linux — and it is **never persisted**
+/// (it isn't stable across launches) nor interpreted above the platform
+/// boundary. Stable app identity is the bundle id on [`AppAudioSource`].
+pub type TapHandle = u64;
+
+/// Which output-tap capture modes the current platform/OS supports. The UI gates
+/// the "System Audio" / "Applications" menu sections on these so unsupported
+/// platforms simply don't offer them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TapCapabilities {
+    /// Capturing the whole system output mix is available.
+    pub system_audio: bool,
+    /// Capturing a single application's audio is available.
+    pub app_audio: bool,
+}
+
+/// One application that can be tapped for its audio output.
+///
+/// `bundle_id` is the stable persisted identity (stored in `AudioDeviceRef.uid`
+/// for an `App` source); `handle` is the live, non-persisted platform process
+/// handle used to actually open the tap. An app that quits and relaunches keeps
+/// its `bundle_id` but gets a fresh `handle`, so capture re-resolves by bundle
+/// id each time it rebuilds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppAudioSource {
+    /// Stable application identity (e.g. "com.ableton.live"). Persisted.
+    pub bundle_id: String,
+    /// Display name (e.g. "Ableton Live 12"). Falls back to the bundle id.
+    pub name: String,
+    /// Current process id — for display/diagnostics only, not identity.
+    pub pid: i32,
+    /// Live platform process handle for opening the tap. Not persisted.
+    pub handle: TapHandle,
+    /// Whether the process is currently producing output audio.
+    pub is_alive: bool,
+}
+
 /// RAII handle for a hot-plug subscription. Dropping it unregisters the
 /// listener. Keep it alive for as long as you want change notifications.
 #[must_use = "dropping the Subscription immediately unregisters the listener"]
@@ -117,6 +160,17 @@ pub trait AudioDeviceDirectory: Send + Sync {
     /// returned [`Subscription`] unregisters on drop.
     fn subscribe(&self, on_change: Box<dyn Fn() + Send + Sync>) -> Subscription;
 
+    /// Subscribe to **process-list** changes — an app that produces audio
+    /// launching or quitting. Kept separate from [`subscribe`](Self::subscribe)
+    /// on purpose: only an app tap cares, so the runtime can re-resolve an app
+    /// source without churning a device or system-audio capture every time some
+    /// unrelated app starts or stops audio. Same callback contract as
+    /// [`subscribe`](Self::subscribe). Default: inert (platforms without app
+    /// tapping never fire it).
+    fn subscribe_processes(&self, _on_change: Box<dyn Fn() + Send + Sync>) -> Subscription {
+        Subscription::inert()
+    }
+
     /// Resolve a stored UID to the device's current openable name (what cpal
     /// needs to open the stream). `None` if no live device carries that UID.
     /// Default implementation derives it from [`Self::list_input_devices`].
@@ -125,6 +179,26 @@ pub trait AudioDeviceDirectory: Send + Sync {
             .into_iter()
             .find(|d| d.uid == uid)
             .map(|d| d.name)
+    }
+
+    /// Which output-tap modes this platform supports. Default: none — only a
+    /// backend that implements tapping overrides this.
+    fn tap_capabilities(&self) -> TapCapabilities {
+        TapCapabilities::default()
+    }
+
+    /// Enumerate applications currently tappable for their audio output, for the
+    /// "Applications" menu section. Re-queried on demand (dropdown open / process
+    /// hot-plug). Default: empty (platform without app-audio tapping).
+    fn list_audio_apps(&self) -> Vec<AppAudioSource> {
+        Vec::new()
+    }
+
+    /// Resolve a stored app bundle id to its current live tap source, or `None`
+    /// if the app isn't running (the tap stays dark until it returns — the same
+    /// remappable policy as a missing device). Default: never resolves.
+    fn resolve_app(&self, _bundle_id: &str) -> Option<AppAudioSource> {
+        None
     }
 
     /// Resolve a device by UID, falling back to an exact name match when the UID
