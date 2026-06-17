@@ -399,9 +399,10 @@ struct SendState {
     /// Hops remaining in each band's onset refractory window — after a transient
     /// fires, suppress re-fire until this elapses. Order [Full, Low, Mid, High].
     transient_refractory: [u8; 4],
-    /// Previous hop's relative flux per band — for rising-edge onset detection
-    /// (fire only when flux crosses UP through the threshold, not while above it).
-    onset_prev_rel: [f32; 4],
+    /// Per-band running mean of band energy — the onset detector's adaptive
+    /// baseline. A transient is energy spiking above this by `ONSET_RATIO`, so the
+    /// trigger self-calibrates to the music's level instead of a fixed threshold.
+    energy_avg: [f32; 4],
     /// Whether `prev_col` holds a real column yet (skips the startup flux spike).
     has_prev: bool,
     /// Per-band spectral-centroid height-from-bottom (0..1) for the scope overlay,
@@ -501,7 +502,7 @@ impl WorkerLoop {
                 col: vec![0.0; nb],
                 prev_col: vec![0.0; nb],
                 transient_refractory: [0; 4],
-                onset_prev_rel: [0.0; 4],
+                energy_avg: [0.0; 4],
                 has_prev: false,
                 centroid_yfb: [-1.0; 4],
                 features: SendFeatures::default(),
@@ -756,22 +757,24 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
 
 // ── Onset (transient) detection ──────────────────────────────────────────
 //
-// Dead simple and deterministic: a transient is a burst of NEW energy in the
-// band. The detection function is relative spectral flux — `positive_flux ÷
-// energy`, the fraction of the band's energy that just appeared (0..1, so it's
-// level-independent and needs no per-band scaling or adaptive baseline). A kick
-// is a big chunk of new low-end energy → high relative flux; steady content
-// (held note, sustained bass) barely changes → low. Fire on the RISING EDGE
-// through `ONSET_THRESH` (crossing up, not every hop above it) on a loud band,
-// then a refractory debounces the multi-hop attack. That's the whole detector —
-// no followers, no envelope, no adaptive baseline. Flux is the right signal
-// because it tracks the kick's new energy directly, where band-RMS amplitude
-// diluted it across ~100 bins.
+// Simple, deterministic, and self-calibrating: a transient is band energy
+// spiking above its OWN running mean by `ONSET_RATIO`. The mean tracks the
+// music's level, so the trigger adapts automatically instead of fighting a
+// fixed threshold that's right for one song and wrong for the next — a kick
+// jumps well above the recent mean whether the track is quiet or loud; a steady
+// or held note sits at the mean (ratio ≈ 1). The refractory both debounces the
+// multi-hop attack and outlasts the mean's catch-up, so a held note fires once
+// (the ratio curve crosses back under `ONSET_RATIO` at a fixed hop count,
+// independent of level). Energy is the SUM over the band, so a kick isn't
+// diluted the way band-RMS amplitude was.
 
-/// Relative flux (new energy ÷ band energy) a rising edge must cross to count as
-/// an onset. THE single sensitivity knob — lower catches softer transients but
-/// risks busy/textured material crossing it; higher is stricter.
-const ONSET_THRESH: f32 = 0.35;
+/// How far band energy must exceed its running mean to fire. THE sensitivity
+/// knob — lower catches softer kicks, higher is stricter.
+const ONSET_RATIO: f32 = 1.4;
+/// Per-hop smoothing of the energy mean (~50 ms at hop ≈ 5.3 ms): slow enough
+/// that a kick spikes above it, fast enough that a held note settles within the
+/// refractory.
+const ENERGY_AVG_COEFF: f32 = 0.1;
 /// A transient only fires on a band loud enough to matter — `amplitude` is the
 /// band's level on the colourmap's 0..1 dB scale (≈ −53 dBFS here).
 const ONSET_AMP_GATE: f32 = 0.12;
@@ -780,9 +783,11 @@ const ONSET_DECAY: f32 = 0.85;
 /// Below this band energy, relative flux reads 0 — avoids the flux ÷ energy ratio
 /// blowing up on near-silence.
 const FLUX_ENERGY_GATE: f32 = 1e-4;
-/// Refractory after an onset (~42 ms at hop ≈ 5.3 ms) so one attack reads as one
-/// spike; caps the rate at ~24/s, ample for any kick pattern.
-const ONSET_REFRACTORY_HOPS: u8 = 8;
+/// Refractory after an onset (~74 ms at hop ≈ 5.3 ms). Debounces the attack AND
+/// outlasts the energy mean's catch-up on a held note (the ratio drops back under
+/// `ONSET_RATIO` by ~13 hops regardless of level), so a held note fires once.
+/// Caps the rate at ~13/s — ample for any kick pattern.
+const ONSET_REFRACTORY_HOPS: u8 = 14;
 /// Pink-tilt slope the scope colourmap applies (dB/oct). Must stay equal to
 /// `manifold_spectral`'s `PINK_SLOPE_DB_PER_OCT` so the worker's reductions and
 /// presence gate evaluate the exact tilted dB the user sees painted.
@@ -959,19 +964,23 @@ fn reduce_send(
             -1.0
         };
 
-        if have_prev {
-            // Relative flux = the fraction of the band's energy that just appeared.
-            // It's the onset signal AND the liveliness reading.
-            let rel = relative_flux(r.flux, r.energy);
-            bf.liveliness = if loud { rel } else { 0.0 };
+        // Energy mean tracks every hop — including warm-up — so firing arms with
+        // a settled baseline (`avg` is the PAST mean; the current energy is
+        // compared to it, then folded in).
+        let avg = send.energy_avg[bi];
+        send.energy_avg[bi] = avg + (r.energy - avg) * ENERGY_AVG_COEFF;
 
-            // Transient: relative flux crossing UP through ONSET_THRESH on a loud
-            // band — the rising edge, not every hop it stays above, so busy
-            // content that sits above the threshold fires once, not continuously.
-            // A refractory then debounces the multi-hop attack.
-            let crossed = rel > ONSET_THRESH && send.onset_prev_rel[bi] <= ONSET_THRESH;
+        if have_prev {
+            // Liveliness self-scales with density (relative flux).
+            bf.liveliness = if loud { relative_flux(r.flux, r.energy) } else { 0.0 };
+
+            // Transient: band energy spiking above its running mean by ONSET_RATIO
+            // on a loud band. A kick jumps well above the mean; a steady note sits
+            // at it. The refractory debounces the attack and outlasts the mean's
+            // catch-up, so a held note fires once.
             let refractory = &mut send.transient_refractory[bi];
-            let triggered = loud && *refractory == 0 && crossed;
+            let triggered =
+                loud && *refractory == 0 && avg > 1e-9 && r.energy > avg * ONSET_RATIO;
             if triggered {
                 bf.transients = 1.0;
                 *refractory = ONSET_REFRACTORY_HOPS;
@@ -979,7 +988,6 @@ fn reduce_send(
                 bf.transients *= ONSET_DECAY;
                 *refractory = refractory.saturating_sub(1);
             }
-            send.onset_prev_rel[bi] = rel;
         }
     }
 }
@@ -1104,7 +1112,7 @@ mod tests {
             col,
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
-            onset_prev_rel: [0.0; 4],
+            energy_avg: [0.0; 4],
             has_prev: false,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1215,7 +1223,7 @@ mod tests {
             col: tone.clone(),
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
-            onset_prev_rel: [0.0; 4],
+            energy_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1272,7 +1280,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
-            onset_prev_rel: [0.0; 4],
+            energy_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1324,7 +1332,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
-            onset_prev_rel: [0.0; 4],
+            energy_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
