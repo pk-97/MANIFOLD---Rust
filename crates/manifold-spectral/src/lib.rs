@@ -67,7 +67,13 @@ pub struct SpectrogramConfig {
 impl Default for SpectrogramConfig {
     fn default() -> Self {
         Self {
-            n_fft: 16_384,
+            // 4096-pt window (~85 ms): the scope AND the per-send feature
+            // detection share this one transform, so they stay in sync — the
+            // user sees exactly the bands that modulate. The deep-bass kernels
+            // clamp to n_fft (≈12 Hz/bin at the low end), trading a little
+            // low-frequency resolution for transient latency low enough to be
+            // usable as a live modulation source.
+            n_fft: 4096,
             fmin: 10.0,
             fmax: 22_000.0,
             bpo: 24,

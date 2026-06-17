@@ -42,29 +42,11 @@ use std::time::Duration;
 
 use ringbuf::HeapRb;
 use ringbuf::traits::{Consumer as ConsumerTrait, Observer as ObserverTrait, Producer as ProducerTrait, Split};
-use rustfft::num_complex::Complex;
-use rustfft::{Fft, FftPlanner};
 
 pub use manifold_core::audio_features::SendFeatures;
 use manifold_spectral::{CqtTransform, SpectrogramConfig};
 
 use crate::capture::AudioConsumer;
-
-/// FFT window for band-energy analysis. At 48 kHz one window is ~21 ms; the
-/// feature path slides it by [`HOP_SIZE`] (50% overlap) so a new analysis lands
-/// every ~10.7 ms — finer than the 60 fps (~16 ms) content tick, and a transient
-/// straddling a window boundary no longer splits its flux across two windows.
-const FFT_SIZE: usize = 1024;
-
-/// Hop between successive feature windows — 50% of [`FFT_SIZE`]. Hann satisfies
-/// constant-overlap-add at this hop, so the signal is weighted uniformly across
-/// frames (no per-hop analysis ripple).
-const HOP_SIZE: usize = FFT_SIZE / 2;
-
-/// Upper edge of the low band / lower edge of the mid band (Hz).
-const LOW_HZ: f32 = 250.0;
-/// Upper edge of the mid band / lower edge of the high band (Hz).
-const MID_HZ: f32 = 2000.0;
 
 /// Maximum number of sends the worker tracks. Keeps [`FeatureFrame`] `Copy` and
 /// alloc-free so it can ride the SPSC ring without per-frame heap churn.
@@ -390,30 +372,33 @@ impl Drop for AudioFeatureWorker {
 
 // ── Worker loop internals ───────────────────────────────────────────────
 
-/// Per-send running state on the worker thread.
+/// Per-send running state on the worker thread. Every send now runs the same
+/// variable-Q transform the scope draws (one shared [`CqtTransform`]); features
+/// and the spectrogram are the *same* analysis, so "what you see is what
+/// modulates" holds per send.
 struct SendState {
     channels: Vec<u16>,
     /// Linear input gain, refreshed from the [`GainBank`] once per drain.
     gain: f32,
-    /// Samples accumulating toward the next FFT window.
-    accum: Vec<f32>,
-    /// Previous window's tilted magnitude spectrum (`0..=nyquist`). One hop back,
-    /// 50%-overlapping with the current window; used for the transient flux.
-    prev_mags: Vec<f32>,
-    /// The window *two* hops back — a full [`FFT_SIZE`] behind the current one, so
-    /// disjoint from it. Liveliness diffs against this to keep its
-    /// flux-over-a-full-window scaling identical to the pre-overlap path.
-    prev2_mags: Vec<f32>,
+    /// Rolling post-gain mono window, newest at the end. The VQT runs on its tail
+    /// (zero-padded until it fills, so features fade in over one window rather
+    /// than blacking out) every hop.
+    window: Vec<f32>,
+    /// Post-gain mono samples accumulated since the last VQT hop.
+    since_hop: usize,
+    /// Latest *tilted* VQT column (per-bin pink weight applied, matching the
+    /// scope's colourmap), `num_bins` long. The domain every reduction reads.
+    col: Vec<f32>,
+    /// Previous column (one hop back) — the transient/liveliness flux baseline.
+    prev_col: Vec<f32>,
     /// Per-band running average of flux — the adaptive onset threshold tracks it.
     /// Indexed in `AudioBand` order [Full, Low, Mid, High].
     flux_avg: [f32; 4],
     /// Hops remaining in each band's onset refractory window. Non-zero suppresses
     /// re-firing so one hit reads as a single decaying spike, not a burst.
     transient_refractory: [u8; 4],
-    /// Windows analyzed so far. Flux features are held at 0 until a valid
-    /// predecessor exists (≥2 for transients, ≥3 for liveliness's 2-hop diff), so
-    /// arming audio-mod doesn't fire a spurious onset off the zero-init spectrum.
-    windows_done: u32,
+    /// Whether `prev_col` holds a real column yet (skips the startup flux spike).
+    has_prev: bool,
     features: SendFeatures,
 }
 
@@ -424,47 +409,49 @@ struct WorkerLoop {
     sends: Vec<SendState>,
     /// Live per-send gain, written by the content thread, read here each drain.
     gains: Arc<GainBank>,
-    /// Live Low/Mid/High crossovers, read each drain; a change re-splits the
-    /// analyzer's bands (no capture restart).
+    /// Live Low/Mid/High crossovers, read each drain; a change re-splits every
+    /// send's bands (no capture restart).
     crossovers: Arc<CrossoverBank>,
-    /// Last crossovers applied to the analyzer, to skip the recompute when
-    /// unchanged.
+    /// Last crossovers applied, to skip the band-edge recompute when unchanged.
     last_crossovers: (f32, f32),
-    analyzer: SpectralAnalyzer,
-    // ── Spectrogram column producer (one tapped send) ──
+    /// The one variable-Q transform every send shares — the same transform the
+    /// scope draws. Its kernels are read-only; the worker is single-threaded, so
+    /// its FFT scratch is reused for each send in turn.
+    cqt: CqtTransform,
     sample_rate: f32,
     spec_config: SpectrogramConfig,
     spec_num_bins: usize,
+    /// VQT window length (`spec_config.n_fft`) and hop, cached.
+    n_fft: usize,
+    hop: usize,
+    /// Per-bin pink-tilt weight (linear multiplier) matching the scope's
+    /// colourmap. Applied to the raw VQT magnitudes so every reduction — and the
+    /// presence gate — reads the exact tilted dB the user sees. `num_bins` long.
+    tilt_w: Vec<f32>,
+    /// Band-presence floor as a linear tilted-magnitude threshold: a bin clears it
+    /// iff it would be drawn non-black (display dB > `db_min`). From `db_min`.
+    presence_lin: f32,
+    /// Cached band edges (VQT bin indices) for the current crossovers: Low =
+    /// `0..low_bin`, Mid = `low_bin..mid_bin`, High = `mid_bin..num_bins`.
+    low_bin: usize,
+    mid_bin: usize,
+    // ── Spectrogram column producer (the tapped send drives the scope) ──
     /// Which send to produce columns for, `-1` = none. Read from `tap` each drain.
     tap: Arc<SpectrogramTap>,
     column_producer: ringbuf::HeapProd<f32>,
     /// Per-column overlay scalars ([`SCOPE_SCALAR_STRIDE`] per column: centroid-
-    /// height + a per-band onset for Low/Mid/High), produced in lockstep with
-    /// `column_producer`. Drives the scope's centroid trace + colour-coded
-    /// transient ticks.
+    /// height + a per-band onset for Low/Mid/High), in lockstep with
+    /// `column_producer`. The onsets ARE the tapped send's Low/Mid/High
+    /// transients, so the red ticks and the modulation source are identical.
     scalar_producer: ringbuf::HeapProd<f32>,
-    /// Previous scope column's magnitudes, for the per-band onset (flux).
-    prev_spec_col: Vec<f32>,
-    /// Whether `prev_spec_col` holds a real column yet (skips the startup spike).
-    spec_has_prev: bool,
-    /// Running average of the scope column flux per band [Low, Mid, High] — each
-    /// band's onset threshold tracks its own average.
-    spec_flux_avg: [f32; 3],
-    /// Hops remaining in each scope band's tick refractory [Low, Mid, High].
-    spec_refractory: [u8; 3],
-    /// Decaying onset impulse per band [Low, Mid, High] for the scope.
-    spec_onset: [f32; 3],
-    /// Built lazily on the first active tap (kernel construction is one FFT per
-    /// bin — paid once, only if the spectrogram is ever opened).
-    cqt: Option<CqtTransform>,
-    /// Rolling post-gain mono window of the tapped send (newest at the end).
-    spec_window: Vec<f32>,
-    /// Samples accumulated since the last column was emitted.
-    spec_since_hop: usize,
-    /// Last-seen tap, to detect a selection change (resets the window).
+    /// Last-seen tap, to detect a selection change (resets the tapped send).
     spec_tapped: i32,
-    /// Reusable per-column magnitude scratch (`spec_num_bins` long).
-    spec_col: Vec<f32>,
+    /// `n_fft` scratch for the VQT input (window tail, zero-padded at the front
+    /// while the window fills, so features fade in over one window).
+    vqt_in: Vec<f32>,
+    /// `num_bins` scratch for the raw (untilted) VQT magnitudes — pushed to the
+    /// scope ring as-is, since the shader applies the display tilt itself.
+    vqt_raw: Vec<f32>,
     /// Leftover interleaved samples that didn't complete a frame last drain.
     /// Retains its allocation across drains (never moved out), so stashing the
     /// remainder each tick is realloc-free in steady state.
@@ -493,26 +480,34 @@ impl WorkerLoop {
         spec_config: SpectrogramConfig,
         spec_num_bins: usize,
     ) -> Self {
+        let nb = spec_num_bins.max(1);
+        let n_fft = spec_config.n_fft;
+        let hop = spec_config.hop.max(1);
         let sends = specs
             .into_iter()
             .map(|s| SendState {
                 channels: s.channels,
                 gain: 1.0,
-                accum: Vec::with_capacity(FFT_SIZE),
-                prev_mags: vec![0.0; FFT_SIZE / 2 + 1],
-                prev2_mags: vec![0.0; FFT_SIZE / 2 + 1],
+                window: Vec::with_capacity(n_fft + WINDOW_BACKLOG_HOPS * hop),
+                since_hop: 0,
+                col: vec![0.0; nb],
+                prev_col: vec![0.0; nb],
                 flux_avg: [0.0; 4],
                 transient_refractory: [0; 4],
-                windows_done: 0,
+                has_prev: false,
                 features: SendFeatures::default(),
             })
             .collect();
 
-        // Start the analyzer at the bank's crossovers so the first window is
-        // already split correctly (rather than at the defaults for one drain).
+        let sr = sample_rate as f32;
+        let cqt = spec_config.build_transform(sr);
+        let tilt_w = tilt_weights(&spec_config, sr, nb);
+        // A bin is "present" iff its tilted display level clears db_min — i.e.
+        // is drawn non-black. db = 20·log10(tilted_mag), so the linear threshold
+        // is 10^(db_min/20).
+        let presence_lin = 10.0f32.powf(spec_config.db_min / 20.0);
         let (init_low, init_mid) = crossovers.get();
-        let mut analyzer = SpectralAnalyzer::new(sample_rate);
-        analyzer.set_crossovers(init_low, init_mid);
+        let (low_bin, mid_bin) = band_edges(&spec_config, sr, nb, init_low, init_mid);
 
         Self {
             consumer,
@@ -522,25 +517,24 @@ impl WorkerLoop {
             gains,
             crossovers,
             last_crossovers: (init_low, init_mid),
-            analyzer,
-            sample_rate: sample_rate as f32,
+            cqt,
+            sample_rate: sr,
             spec_config,
             spec_num_bins,
+            n_fft,
+            hop,
+            tilt_w,
+            presence_lin,
+            low_bin,
+            mid_bin,
             tap,
             column_producer,
             scalar_producer,
-            prev_spec_col: vec![0.0; spec_num_bins.max(1)],
-            spec_has_prev: false,
-            spec_flux_avg: [0.0; 3],
-            spec_refractory: [0; 3],
-            spec_onset: [0.0; 3],
-            cqt: None,
-            spec_window: Vec::new(),
-            spec_since_hop: 0,
             spec_tapped: -1,
-            spec_col: vec![0.0; spec_num_bins.max(1)],
-            carry: Vec::with_capacity(FFT_SIZE),
-            work: Vec::with_capacity(4096 + FFT_SIZE),
+            vqt_in: vec![0.0; n_fft],
+            vqt_raw: vec![0.0; nb],
+            carry: Vec::with_capacity(4096),
+            work: Vec::with_capacity(4096 + n_fft),
             drain_buf: vec![0.0; 4096],
             seq: 0,
         }
@@ -588,112 +582,48 @@ impl WorkerLoop {
         let mut updated = false;
 
         // Refresh each send's live gain once per drain (the bank is lock-free;
-        // a gain edit lands here without a capture restart). Disjoint fields, so
-        // the mutable `sends` borrow and the `gains` read don't conflict.
+        // a gain edit lands here without a capture restart).
         for (i, send) in self.sends.iter_mut().enumerate() {
             send.gain = self.gains.get_linear(i);
         }
 
-        // Re-split the analysis bands if the crossovers moved (a drag in the
-        // Audio Setup scope). Cheap compare-and-skip — the recompute is a few
-        // bin lookups, paid only on an actual change.
+        // Re-split the bands if the crossovers moved (a drag in the Audio Setup
+        // scope). Cheap compare-and-skip — a couple of bin lookups, paid only on
+        // an actual change. The same edges feed every send and the scope.
         let xover = self.crossovers.get();
         if xover != self.last_crossovers {
-            self.analyzer.set_crossovers(xover.0, xover.1);
+            let (lo, mi) =
+                band_edges(&self.spec_config, self.sample_rate, self.spec_num_bins.max(1), xover.0, xover.1);
+            self.low_bin = lo;
+            self.mid_bin = mi;
             self.last_crossovers = xover;
         }
 
-        // Which send (if any) feeds the spectrogram this drain. A change resets
-        // the rolling window so the scope doesn't splice two sources.
+        // Which send feeds the scope. Each send owns its own window + feature
+        // state, so a tap change just redirects the column stream — no splice
+        // reset needed (the new source's columns are already its own).
         let tapped = self.tap.selected();
-        if tapped != self.spec_tapped {
-            self.spec_window.clear();
-            self.spec_since_hop = 0;
-            self.spec_tapped = tapped;
-            // Reset the scope's per-column onset state so a new source doesn't
-            // inherit the old one's flux baseline / impulse.
-            self.spec_has_prev = false;
-            self.spec_flux_avg = [0.0; 3];
-            self.spec_refractory = [0; 3];
-            self.spec_onset = [0.0; 3];
-        }
+        self.spec_tapped = tapped;
 
+        // Accumulate post-gain mono into each send's rolling window.
         for frame in work[..usable].chunks_exact(ch) {
-            for (i, send) in self.sends.iter_mut().enumerate() {
+            for send in self.sends.iter_mut() {
                 let mono = downmix(frame, &send.channels) * send.gain;
-                if i as i32 == tapped {
-                    self.spec_window.push(mono);
-                    self.spec_since_hop += 1;
-                }
-                send.accum.push(mono);
-                if send.accum.len() >= FFT_SIZE {
-                    // One FFT, then the same five detectors run on every band.
-                    // analyze() applies the perceptual tilt once and returns the
-                    // stateless reductions (amplitude/brightness/noisiness) per
-                    // band; liveliness/transients are stateful and read the tilted
-                    // `mags` the analyzer just left, never a second transform.
-                    let reductions = self.analyzer.analyze(&send.accum[..FFT_SIZE]);
-                    let mags = &self.analyzer.mags;
-                    send.windows_done = send.windows_done.saturating_add(1);
-                    let wd = send.windows_done;
-                    for (bi, &(lo, hi)) in self.analyzer.band_bins.iter().enumerate() {
-                        let bf = &mut send.features.bands[bi];
-                        bf.amplitude = reductions[bi].amplitude;
-                        bf.brightness = reductions[bi].brightness;
-                        bf.noisiness = reductions[bi].noisiness;
-
-                        // Transients: a flux spike (vs the previous, 50%-overlapping
-                        // window) above the band's running average fires a unit
-                        // impulse; otherwise it decays. Needs one valid predecessor.
-                        // Gated on band presence (so a silent band can't free-run on
-                        // noise) and a refractory window (so one hit is one spike).
-                        if wd >= 2 {
-                            let (flux, _) = band_flux_energy(mags, &send.prev_mags, lo, hi);
-                            let refractory = &mut send.transient_refractory[bi];
-                            let present = bf.amplitude >= BAND_PRESENCE_GATE;
-                            let triggered = present
-                                && *refractory == 0
-                                && flux > send.flux_avg[bi] * ONSET_RATIO
-                                && flux > ONSET_FLOOR;
-                            if triggered {
-                                bf.transients = 1.0;
-                                *refractory = ONSET_REFRACTORY_HOPS;
-                            } else {
-                                bf.transients *= ONSET_DECAY;
-                                *refractory = refractory.saturating_sub(1);
-                            }
-                            // Track the average only while the band is present, so a
-                            // silent stretch doesn't drag the baseline down to noise
-                            // and make the next real hit hyper-sensitive.
-                            if present {
-                                send.flux_avg[bi] += (flux - send.flux_avg[bi]) * FLUX_AVG_COEFF;
-                            }
-                        }
-
-                        // Liveliness (relative flux) self-scales with density. It
-                        // diffs the window two hops back — disjoint from the current
-                        // one — so its scale matches the pre-overlap full-window flux.
-                        if wd >= 3 {
-                            let (flux2, energy2) =
-                                band_flux_energy(mags, &send.prev2_mags, lo, hi);
-                            bf.liveliness = relative_flux(flux2, energy2);
-                        }
-                    }
-                    // Rotate history one hop: prev2 ← prev ← current.
-                    send.prev2_mags.copy_from_slice(&send.prev_mags);
-                    send.prev_mags.copy_from_slice(mags);
-
-                    // Slide the window by one hop (50% overlap), keeping the tail.
-                    send.accum.drain(0..HOP_SIZE);
-                    updated = true;
-                }
+                send.window.push(mono);
+                send.since_hop += 1;
             }
         }
 
-        // Emit spectrogram columns for the tapped send (post-gain mono).
-        if tapped >= 0 {
-            self.produce_spectrogram_columns();
+        // Run the owed VQT hops per send. `sends` is taken out so the per-send
+        // loop can borrow the shared transform, scratch, and scope producers on
+        // `self` without aliasing.
+        let mut sends = std::mem::take(&mut self.sends);
+        for (i, send) in sends.iter_mut().enumerate() {
+            if self.process_send_hops(send, i as i32 == tapped) {
+                updated = true;
+            }
         }
+        self.sends = sends;
 
         // Stash the partial frame remainder for next drain. `carry` kept its
         // allocation, so this is realloc-free once warmed.
@@ -707,150 +637,86 @@ impl WorkerLoop {
         updated
     }
 
-    /// Run the VQT over the rolling window every `hop` samples, pushing each
-    /// resulting magnitude column to the worker→UI ring. Builds the transform
-    /// lazily on first use (kernel construction is one FFT per bin).
-    fn produce_spectrogram_columns(&mut self) {
-        let cqt = self
-            .cqt
-            .get_or_insert_with(|| self.spec_config.build_transform(self.sample_rate));
-        let n_fft = cqt.n_fft();
-        let hop = self.spec_config.hop.max(1);
+    /// Run any VQT hops one send has accumulated, updating its five per-band
+    /// features from the same variable-Q column the scope draws. When `tapped`,
+    /// also push the raw column + onset scalars to the scope rings — the scalars
+    /// ARE this send's Low/Mid/High transients, so the red ticks and the
+    /// modulation source are one and the same. Returns whether a hop was run.
+    fn process_send_hops(&mut self, send: &mut SendState, tapped: bool) -> bool {
+        let n_fft = self.n_fft;
+        let hop = self.hop;
+        let nb = self.spec_num_bins.max(1);
 
-        // Bound the rolling window: keep at most one full window plus one hop of
-        // lookahead, so `drain` is realloc-free in steady state.
-        let cap = n_fft + hop;
-        if self.spec_window.len() > cap {
-            let excess = self.spec_window.len() - cap;
-            self.spec_window.drain(0..excess);
+        // Bound the window to one full window plus a small backlog, so `drain` is
+        // realloc-free and a brief stall doesn't lose distinct columns.
+        let cap = n_fft + WINDOW_BACKLOG_HOPS * hop;
+        if send.window.len() > cap {
+            let excess = send.window.len() - cap;
+            send.window.drain(0..excess);
         }
 
-        if self.spec_window.len() < n_fft {
-            return;
+        let owed = send.since_hop / hop;
+        if owed == 0 {
+            return false;
         }
-
-        // Columns owed since the last emit. Each is a window ending `hop` samples
-        // later than the previous, so the oldest one we can form must still have
-        // a full `n_fft` behind it — the retained buffer (capped at `n_fft + hop`)
-        // bounds how many DISTINCT columns exist. A startup/stall backlog that
-        // exceeds that is collapsed: emitting it would re-analyse the same static
-        // window and paint a run of identical columns (the left-edge smear), so we
-        // drop the columns we have no distinct data for instead of duplicating.
-        let owed = self.spec_since_hop / hop;
-        let avail = 1 + (self.spec_window.len() - n_fft) / hop;
-        let emit = owed.min(avail);
-
-        // CQT bin boundaries for the Low/Mid/High split, from the live crossovers
-        // (the same edges the FFT analysis uses). VQT bins are geometric:
-        // bin(f) = bpo·log2(f / fmin). A band's onset is its own slice of flux.
-        let nb = self.spec_num_bins;
-        let fmin = self.spec_config.fmin.max(1.0);
-        let bpo = self.spec_config.bpo as f32;
-        let bin_of = |hz: f32| {
-            ((bpo * (hz / fmin).max(1e-6).log2()).round() as i64).clamp(1, nb as i64 - 1) as usize
+        // Distinct columns we can actually form. Before the window fills we still
+        // emit one (zero-padded) so features fade in over a window rather than
+        // blacking out; a stall backlog beyond what we retain is collapsed.
+        let avail = if send.window.len() >= n_fft {
+            1 + (send.window.len() - n_fft) / hop
+        } else {
+            1
         };
-        let low_bin = bin_of(self.last_crossovers.0);
-        let mid_bin = bin_of(self.last_crossovers.1).max(low_bin + 1).min(nb.saturating_sub(1));
-
-        // Band-presence floor, in the exact tilted-dB domain the spectrogram
-        // shader paints. Per bin the shader draws `10·log10(mag) + tilt`, where
-        // `tilt = slope · log2(fmax/fmin) · (0.5 − uv.y)` and a bin is black at
-        // or below `db_min`. The worker holds the same static config, so it can
-        // reproduce that gate exactly: a band may tick only if at least one of
-        // its bins is drawn non-black. This replaces the old relative
-        // energy-share test, which fired on sub-floor (black) bass because it
-        // ignored both the absolute floor and the pink tilt that cuts the lows.
+        let emit = owed.min(avail);
         let db_min = self.spec_config.db_min;
-        let tilt_k = SCOPE_TILT_DB_PER_OCT
-            * (self.spec_config.effective_fmax(self.sample_rate) / fmin).log2();
-        let inv_nb = if nb > 1 { 1.0 / (nb - 1) as f32 } else { 0.0 };
+        let db_max = self.spec_config.db_max;
 
         for j in (0..emit).rev() {
-            let end = self.spec_window.len() - j * hop;
-            cqt.process_magnitudes(&self.spec_window[end - n_fft..end], &mut self.spec_col);
-
-            // Per-column overlay scalars. Centroid = the magnitude-weighted mean
-            // bin, as height-from-bottom (0..1) — VQT bins are geometric, so this
-            // is already the log-frequency centre the shader draws. Per-band onset
-            // = a flux impulse vs the previous column, thresholded on that band's
-            // running average. All advance every column (continuity) even if the
-            // ring is full and the push below is skipped.
-            let (mut num, mut den) = (0.0f32, 0.0f32);
-            let mut flux = [0.0f32; 3];
-            // Peak displayed dB per band (tilted, matching the shader). A band is
-            // "present" iff its loudest bin clears `db_min` — i.e. is painted.
-            let mut peak_db = [f32::NEG_INFINITY; 3];
-            for (i, &m) in self.spec_col.iter().enumerate() {
-                num += i as f32 * m;
-                den += m;
-                let band = if i < low_bin {
-                    0
-                } else if i < mid_bin {
-                    1
-                } else {
-                    2
-                };
-                // Match the shader exactly: power = mag², dB = 10·log10(power)
-                // = 20·log10(mag), then the pink tilt added on top.
-                let tilt = tilt_k * (i as f32 * inv_nb - 0.5);
-                let db = 10.0 * (m * m + 1e-18).log10() + tilt;
-                if db > peak_db[band] {
-                    peak_db[band] = db;
-                }
-                if self.spec_has_prev {
-                    let d = (m - self.prev_spec_col[i]).max(0.0);
-                    flux[band] += d;
-                }
+            // Window slice ending `j` hops before the newest sample, zero-padded
+            // at the front while the window is still filling.
+            let end = send.window.len().saturating_sub(j * hop);
+            let start = end.saturating_sub(n_fft);
+            let seg = &send.window[start..end];
+            let pad = n_fft - seg.len();
+            for v in self.vqt_in[..pad].iter_mut() {
+                *v = 0.0;
             }
-            let centroid_yfb = if den > 1e-9 && nb > 1 {
-                (num / den / (nb - 1) as f32).clamp(0.0, 1.0)
-            } else {
-                -1.0
-            };
-            if self.spec_has_prev {
-                // A band fires only if it's actually drawn on the scope — its
-                // loudest bin must clear the same `db_min` floor the colourmap
-                // uses. An all-black band (sub-floor bass) can't tick.
-                for b in 0..3 {
-                    let f = flux[b];
-                    let present = peak_db[b] > db_min;
-                    let triggered = present
-                        && self.spec_refractory[b] == 0
-                        && f > self.spec_flux_avg[b] * ONSET_RATIO
-                        && f > ONSET_FLOOR;
-                    if triggered {
-                        self.spec_onset[b] = 1.0;
-                        self.spec_refractory[b] = ONSET_REFRACTORY_HOPS;
-                    } else {
-                        self.spec_onset[b] *= ONSET_DECAY;
-                        self.spec_refractory[b] = self.spec_refractory[b].saturating_sub(1);
-                    }
-                    if present {
-                        self.spec_flux_avg[b] += (f - self.spec_flux_avg[b]) * FLUX_AVG_COEFF;
-                    }
-                }
-            }
-            self.prev_spec_col.copy_from_slice(&self.spec_col);
-            self.spec_has_prev = true;
+            self.vqt_in[pad..].copy_from_slice(seg);
+            self.cqt.process_magnitudes(&self.vqt_in, &mut self.vqt_raw);
 
-            // Whole-column push only, in lockstep with its scalars — if either
-            // ring can't fit, drop both (the scope skips a frame) rather than
-            // desync the streams.
-            if self.column_producer.vacant_len() >= self.spec_num_bins
+            // Tilt the raw magnitudes into the feature/flux column (the exact
+            // per-bin pink weight the colourmap uses), then reduce all five
+            // features per band off it.
+            for (c, (&raw, &w)) in send.col.iter_mut().zip(self.vqt_raw.iter().zip(self.tilt_w.iter())) {
+                *c = raw * w;
+            }
+            reduce_send(send, nb, self.low_bin, self.mid_bin, self.presence_lin, db_min, db_max);
+            send.prev_col.copy_from_slice(&send.col);
+            // Flux features only arm once the window has actually filled — a
+            // zero-padded warm-up column differs from the next as content fills
+            // in, and that ramp must not read as a transient.
+            send.has_prev = send.window.len() >= n_fft;
+
+            // The tapped send drives the scope: push the raw column (the shader
+            // applies its own display tilt) and the overlay scalars — centroid
+            // plus this send's Low/Mid/High transients as the onset ticks.
+            if tapped
+                && self.column_producer.vacant_len() >= self.spec_num_bins
                 && self.scalar_producer.vacant_len() >= SCOPE_SCALAR_STRIDE
             {
-                self.column_producer.push_slice(&self.spec_col);
+                let centroid_yfb = centroid_height(&self.vqt_raw, nb);
+                self.column_producer.push_slice(&self.vqt_raw);
                 self.scalar_producer.push_slice(&[
                     centroid_yfb,
-                    self.spec_onset[0],
-                    self.spec_onset[1],
-                    self.spec_onset[2],
+                    send.features.bands[1].transients,
+                    send.features.bands[2].transients,
+                    send.features.bands[3].transients,
                 ]);
             }
         }
-        // Consume the whole backlog (including the collapsed remainder) so it
-        // doesn't carry forward and re-smear on the next drain.
-        self.spec_since_hop -= owed * hop;
+        // Consume the whole backlog (including any collapsed remainder).
+        send.since_hop -= owed * hop;
+        true
     }
 
     fn emit_frame(&mut self) {
@@ -881,258 +747,236 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
     if n == 0 { 0.0 } else { acc / n as f32 }
 }
 
-/// Onset detection (derived from per-band flux). A window whose flux exceeds the
+/// Onset detection (derived from per-band flux). A column whose flux exceeds the
 /// band's running average by `ONSET_RATIO` (and clears `ONSET_FLOOR`) fires a
 /// unit impulse; between hits the impulse decays by `ONSET_DECAY` per hop, so a
 /// transient reads as a snappy spike that settles in ~100 ms. `ONSET_RATIO` is a
-/// self-ratio (flux vs its own running average), so it's invariant to the hop;
-/// the decay and the averaging coefficient are per-hop, so each is the √ of its
-/// old per-window value — at 2× the window rate (one hop ≈ 10.7 ms) that
-/// preserves the old 0.6/window ~100 ms settle and 0.1/window ~210 ms averaging.
+/// self-ratio (flux vs its own running average), so it's invariant to the hop
+/// rate; the decay and averaging coefficients are per-hop (hop ≈ 5.3 ms at the
+/// 256-sample VQT hop), tuned for a ~100 ms settle and ~150 ms averaging window.
 const ONSET_RATIO: f32 = 1.8;
 const ONSET_FLOOR: f32 = 1e-3;
-const ONSET_DECAY: f32 = 0.775; // √0.6 — per-hop; matches the old 0.6/window settle
+const ONSET_DECAY: f32 = 0.85; // per-hop; ~100 ms settle at hop ≈ 5.3 ms
 /// Smoothing of the running flux average the onset threshold tracks (per hop).
-const FLUX_AVG_COEFF: f32 = 0.05; // 1−√0.9 — per-hop; matches the old 0.1/window
+const FLUX_AVG_COEFF: f32 = 0.03; // per-hop; ~150 ms averaging at hop ≈ 5.3 ms
 /// Below this band energy, relative flux (liveliness) reads 0 — avoids the
 /// flux ÷ energy ratio blowing up on near-silence.
 const FLUX_ENERGY_GATE: f32 = 1e-4;
-/// Presence floor for the band detectors. Brightness/noisiness/transients all
-/// *characterize* a band — on one with no real content they'd describe the noise
-/// floor and report a plausible-but-meaningless value (noisiness worst: a flat
-/// noise floor reads as maximally noisy). Below this dB-normalized amplitude
-/// (≈ −51 dBFS RMS) the band is treated as silent and those three read 0, so a
-/// modulator mapped to e.g. Transients/Low stays quiet on material with no low
-/// end instead of free-running on noise. Amplitude itself is ungated — it's the
-/// honest energy reading the others lean on. The self-ratio onset threshold is a
-/// divide-guard, not an energy gate, which is why it needs this.
-const BAND_PRESENCE_GATE: f32 = 0.15;
-/// Hops a band's onset is suppressed after firing (~53 ms at one hop ≈ 10.7 ms).
-/// A kick can't physically retrigger every window; this kills the machine-gun
+/// Hops a band's onset is suppressed after firing (~53 ms at hop ≈ 5.3 ms). A
+/// kick can't physically retrigger every column; this kills the machine-gun
 /// re-fire that pins `transients` near 1 even on a single real hit.
-const ONSET_REFRACTORY_HOPS: u8 = 5;
+const ONSET_REFRACTORY_HOPS: u8 = 10;
 /// Pink-tilt slope the scope colourmap applies (dB/oct). Must stay equal to
-/// `manifold_spectral`'s `PINK_SLOPE_DB_PER_OCT` so the worker's band-presence
-/// gate evaluates the exact tilted dB the user sees painted — a band ticks only
-/// if at least one of its bins clears `db_min` (is drawn non-black). Gating on
-/// the displayed dB rather than a relative energy share is what stops a black,
-/// sub-floor bass band from free-running the low onset.
+/// `manifold_spectral`'s `PINK_SLOPE_DB_PER_OCT` so the worker's reductions and
+/// presence gate evaluate the exact tilted dB the user sees painted.
 const SCOPE_TILT_DB_PER_OCT: f32 = 3.0;
+/// Hops of rolling-window backlog each send keeps beyond one full window, so a
+/// brief drain stall doesn't drop distinct columns. ~85 ms at hop ≈ 5.3 ms.
+const WINDOW_BACKLOG_HOPS: usize = 16;
 
-/// dB floor for band-amplitude normalization: this many dB below the reference
-/// maps to 0.0, the reference itself to 1.0. Band amplitude is a raw magnitude
-/// with no natural ceiling, so it's dB-mapped into 0..1. The per-send input gain
-/// is the real calibration knob; this reference is a starting point to tune.
-const FEATURE_FLOOR_DB: f32 = -60.0;
-/// Band-amplitude RMS value treated as 0 dBFS. Per-bin full-scale magnitude is
-/// ~FFT_SIZE/4, so a fully-saturated band sits near there; this is a generous
-/// ceiling with headroom (band amplitude is the per-bin RMS, so it's band-size
-/// independent — Full and Low read on the same scale).
-const BAND_REF: f32 = 8.0;
+/// VQT band edges (bin indices) for the Low/Mid/High split at the given
+/// crossovers. VQT bins are geometric — `bin(f) = bpo·log2(f/fmin)` — so this is
+/// the same mapping the scope draws its divider lines with, which is why the
+/// bands the user sees and the bands that modulate are identical. Returns
+/// `(low_bin, mid_bin)`: Low = `0..low_bin`, Mid = `low_bin..mid_bin`, High =
+/// `mid_bin..num_bins`.
+fn band_edges(
+    cfg: &SpectrogramConfig,
+    _sample_rate: f32,
+    num_bins: usize,
+    low_hz: f32,
+    mid_hz: f32,
+) -> (usize, usize) {
+    let nb = num_bins.max(1);
+    let fmin = cfg.fmin.max(1.0);
+    let bpo = cfg.bpo as f32;
+    let bin_of = |hz: f32| {
+        ((bpo * (hz / fmin).max(1e-6).log2()).round() as i64).clamp(1, nb as i64 - 1) as usize
+    };
+    let low_bin = bin_of(low_hz).min(nb.saturating_sub(2).max(1));
+    let mid_bin = bin_of(mid_hz).max(low_bin + 1).min(nb.saturating_sub(1));
+    (low_bin, mid_bin)
+}
 
-/// Perceptual tilt applied once to the magnitude spectrum before every reduction
-/// (the analysis counterpart of the spectrogram's pink-noise tilt). A `+3 dB/oct`
-/// amplitude slope (≈ ×√(f/pivot)) flattens a 1/f spectrum, so highs aren't
-/// buried: brightness/amplitude track perceived balance, and noisiness measures
-/// flatness relative to pink (the right reference for music) rather than white.
-const TILT_SLOPE_DB_PER_OCT: f32 = 3.0;
-/// Pivot frequency where the tilt weight is unity.
-const TILT_PIVOT_HZ: f32 = 1000.0;
+/// Per-bin pink-tilt weight (a linear magnitude multiplier) matching the scope
+/// colourmap. The shader adds `slope · log2(fmax/fmin) · (0.5 − uv.y)` dB,
+/// centred over the displayed range; as a multiplier that's `10^(tilt_db/20)`.
+/// Bin `k` sits at `uv.y = 1 − k/(nb−1)`, so `0.5 − uv.y = k/(nb−1) − 0.5`.
+/// Applying it once to the raw magnitudes makes every reduction — and the
+/// presence gate — read the same tilted dB the user sees.
+fn tilt_weights(cfg: &SpectrogramConfig, sample_rate: f32, num_bins: usize) -> Vec<f32> {
+    let nb = num_bins.max(1);
+    let fmin = cfg.fmin.max(1.0);
+    let flr = (cfg.effective_fmax(sample_rate) / fmin).log2();
+    let inv = if nb > 1 { 1.0 / (nb - 1) as f32 } else { 0.0 };
+    (0..nb)
+        .map(|k| {
+            let tilt_db = SCOPE_TILT_DB_PER_OCT * flr * (k as f32 * inv - 0.5);
+            10.0f32.powf(tilt_db / 20.0)
+        })
+        .collect()
+}
 
-/// One band's stateless reductions from the (tilted) spectrum. Liveliness and
-/// transients are stateful and computed per-send by the caller from `mags`.
-#[derive(Clone, Copy, Debug, Default)]
-struct BandReduction {
+/// Magnitude-weighted centroid as normalised height-from-bottom (0..1) over a
+/// column. VQT bins are geometric, so the bin-index mean is already the
+/// log-frequency centre the shader draws. `-1` when the column is silent.
+fn centroid_height(col: &[f32], num_bins: usize) -> f32 {
+    let nb = num_bins.max(1);
+    let (mut num, mut den) = (0.0f32, 0.0f32);
+    for (i, &m) in col.iter().enumerate() {
+        num += i as f32 * m;
+        den += m;
+    }
+    if den > 1e-9 && nb > 1 {
+        (num / den / (nb - 1) as f32).clamp(0.0, 1.0)
+    } else {
+        -1.0
+    }
+}
+
+/// One band's reductions from a tilted VQT column plus the previous column.
+struct BandReduce {
     amplitude: f32,
     brightness: f32,
     noisiness: f32,
+    /// Loudest bin (tilted magnitude) — the presence test compares it to the
+    /// display floor: present ⇔ at least one bin is drawn non-black.
+    peak: f32,
+    /// Positive spectral flux vs the previous column (onset / liveliness input).
+    flux: f32,
+    /// Sum of current magnitudes (liveliness denominator).
+    energy: f32,
 }
 
-/// Windowed-FFT spectral analyzer. Shared across sends (stateless per call): it
-/// computes the magnitude spectrum, applies the perceptual tilt once, then
-/// reduces each band to amplitude/brightness/noisiness. The tilted spectrum is
-/// left in `mags` so the caller can compute per-band flux against the send's
-/// previous spectrum.
-struct SpectralAnalyzer {
-    fft: Arc<dyn Fft<f32>>,
-    window: Vec<f32>,
-    buffer: Vec<Complex<f32>>,
-    scratch: Vec<Complex<f32>>,
-    /// Inclusive bin ranges in `AudioBand` order: [Full, Low, Mid, High].
-    band_bins: [(usize, usize); 4],
-    /// Tilted magnitude per bin, `0..=nyquist`. Rewritten every `analyze` call;
-    /// read by the caller for per-band flux.
-    mags: Vec<f32>,
-    /// Center frequency (Hz) per bin, precomputed for centroid + band edges.
-    bin_hz: Vec<f32>,
-    /// Perceptual tilt weight per bin (applied to `mags`).
-    tilt: Vec<f32>,
-    nyquist_bin: usize,
-    /// Device sample rate (Hz) — needed to remap crossover frequencies to bins
-    /// when [`Self::set_crossovers`] is called live.
-    sample_rate: f32,
-}
-
-/// Inclusive bin ranges in `AudioBand` order [Full, Low, Mid, High] for the
-/// given crossover frequencies. Full spans `1..=nyquist` (DC skipped); Low/Mid/
-/// High are contiguous sub-ranges split at `low_hz` and `mid_hz`. Shared by
-/// construction and live [`SpectralAnalyzer::set_crossovers`] so the two can't
-/// drift.
-fn band_bins_for(sample_rate: f32, low_hz: f32, mid_hz: f32) -> [(usize, usize); 4] {
-    let nyquist_bin = FFT_SIZE / 2;
-    let bin_of =
-        |hz: f32| ((hz * FFT_SIZE as f32 / sample_rate).round() as usize).clamp(1, nyquist_bin);
-    let low_bin = bin_of(low_hz);
-    let mid_bin = bin_of(mid_hz).max(low_bin + 1).min(nyquist_bin);
-    [
-        (1, nyquist_bin),
-        (1, low_bin.saturating_sub(1).max(1)),
-        (low_bin, mid_bin.saturating_sub(1).max(low_bin)),
-        (mid_bin, nyquist_bin),
-    ]
-}
-
-impl SpectralAnalyzer {
-    fn new(sample_rate: u32) -> Self {
-        let fft = FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE);
-        let scratch_len = fft.get_inplace_scratch_len();
-
-        // Hann window.
-        let window = (0..FFT_SIZE)
-            .map(|i| {
-                let x = std::f32::consts::PI * 2.0 * i as f32 / FFT_SIZE as f32;
-                0.5 - 0.5 * x.cos()
-            })
-            .collect();
-
-        let nyquist_bin = FFT_SIZE / 2;
-        let band_bins = band_bins_for(sample_rate as f32, LOW_HZ, MID_HZ);
-
-        let bin_hz: Vec<f32> = (0..=nyquist_bin)
-            .map(|b| b as f32 * sample_rate as f32 / FFT_SIZE as f32)
-            .collect();
-
-        // Pink tilt: weight = (f/pivot)^k, where k turns the dB/oct slope into an
-        // amplitude exponent (20·log10(weight) = slope·log2(f/pivot)). DC → 0.
-        let k = TILT_SLOPE_DB_PER_OCT / (20.0 * std::f32::consts::LOG10_2);
-        let tilt: Vec<f32> = bin_hz
-            .iter()
-            .map(|&f| if f > 0.0 { (f / TILT_PIVOT_HZ).powf(k) } else { 0.0 })
-            .collect();
-
-        Self {
-            fft,
-            window,
-            buffer: vec![Complex::new(0.0, 0.0); FFT_SIZE],
-            scratch: vec![Complex::new(0.0, 0.0); scratch_len],
-            band_bins,
-            mags: vec![0.0; nyquist_bin + 1],
-            bin_hz,
-            tilt,
-            nyquist_bin,
-            sample_rate: sample_rate as f32,
-        }
-    }
-
-    /// Re-split the Low/Mid/High bands at new crossover frequencies. Cheap (a
-    /// few bin lookups); the worker calls it only when the project's crossovers
-    /// change, so analysis retunes live with no capture restart. Full band is
-    /// unaffected.
-    fn set_crossovers(&mut self, low_hz: f32, mid_hz: f32) {
-        self.band_bins = band_bins_for(self.sample_rate, low_hz, mid_hz);
-    }
-
-    /// Analyze one full window of `FFT_SIZE` mono samples. Fills `self.mags` with
-    /// the tilted magnitude spectrum and returns the per-band stateless
-    /// reductions; the caller derives liveliness/transients from `self.mags`.
-    fn analyze(&mut self, samples: &[f32]) -> [BandReduction; 4] {
-        debug_assert_eq!(samples.len(), FFT_SIZE);
-        for (i, b) in self.buffer.iter_mut().enumerate() {
-            *b = Complex::new(samples[i] * self.window[i], 0.0);
-        }
-        self.fft.process_with_scratch(&mut self.buffer, &mut self.scratch);
-
-        // Tilted magnitude spectrum (perceptual weight applied once, here, so
-        // every downstream reduction sees identical data).
-        for bin in 0..=self.nyquist_bin {
-            self.mags[bin] = self.buffer[bin].norm() * self.tilt[bin];
-        }
-
-        let mut out = [BandReduction::default(); 4];
-        for (i, &(lo, hi)) in self.band_bins.iter().enumerate() {
-            out[i] = self.reduce_band(lo, hi);
-        }
-        out
-    }
-
-    /// Amplitude / brightness / noisiness over one inclusive bin range of the
-    /// tilted spectrum. Amplitude is the per-bin RMS (band-size independent),
-    /// dB-normalized; brightness is the log-mapped centroid across the band's own
-    /// frequency edges (so it uses the full 0..1 within the band); noisiness is
-    /// the geometric÷arithmetic mean (flatness).
-    fn reduce_band(&self, lo: usize, hi: usize) -> BandReduction {
-        let mut sum_sq = 0.0;
-        let mut num = 0.0;
-        let mut den = 0.0;
-        let mut log_sum = 0.0;
-        let mut lin_sum = 0.0;
-        for bin in lo..=hi {
-            let m = self.mags[bin];
-            sum_sq += m * m;
-            num += self.bin_hz[bin] * m;
-            den += m;
-            log_sum += m.max(1e-9).ln();
-            lin_sum += m;
-        }
-        let n = (hi - lo + 1) as f32;
-
-        let amplitude = db_normalize((sum_sq / n).sqrt(), BAND_REF);
-
-        // Brightness and noisiness describe *what* a present band sounds like. On a
-        // band with no real content the `> 1e-9` divide-guards still pass (noise
-        // floor easily clears them), so they'd characterize the noise — noisiness
-        // worst of all, since a flat floor reads as maximally noisy. Gate both on
-        // the band's own energy: below the presence floor there is no timbre to
-        // report, so both read 0.
-        let present = amplitude >= BAND_PRESENCE_GATE;
-
-        let lo_hz = self.bin_hz[lo].max(1.0);
-        let hi_hz = self.bin_hz[hi].max(lo_hz * 1.0001);
-        let brightness = if present && den > 1e-9 {
-            let c_hz = (num / den).clamp(lo_hz, hi_hz);
-            ((c_hz.ln() - lo_hz.ln()) / (hi_hz.ln() - lo_hz.ln())).clamp(0.0, 1.0)
-        } else {
-            0.0
+/// Reduce one half-open bin range `[lo, hi)` of a tilted VQT column to a band's
+/// amplitude / brightness / noisiness, plus the peak / flux / energy the stateful
+/// features need. Amplitude maps the band's RMS through the colourmap's own dB
+/// window (`db_min`…`db_max`), so a band's level reads on the same 0..1 scale it
+/// is painted with.
+fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_max: f32) -> BandReduce {
+    let hi = hi.min(col.len());
+    if lo >= hi {
+        return BandReduce {
+            amplitude: 0.0,
+            brightness: 0.0,
+            noisiness: 0.0,
+            peak: 0.0,
+            flux: 0.0,
+            energy: 0.0,
         };
-
-        let noisiness = if present && lin_sum > 1e-9 {
-            let geo = (log_sum / n).exp();
-            let arith = lin_sum / n;
-            (geo / arith).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-
-        BandReduction { amplitude, brightness, noisiness }
     }
-}
-
-/// Positive spectral flux and current energy over one inclusive bin range.
-/// `flux` is the sum of positive bin-to-bin magnitude increases; `energy` is the
-/// sum of current magnitudes. Liveliness is [`relative_flux`] of the two; onset
-/// detection thresholds `flux` against its per-band running average. One pass
-/// shared by the worker loop and the tests.
-fn band_flux_energy(cur: &[f32], prev: &[f32], lo: usize, hi: usize) -> (f32, f32) {
-    let mut flux = 0.0;
-    let mut energy = 0.0;
-    for bin in lo..=hi {
-        let d = cur[bin] - prev[bin];
+    let mut sum_sq = 0.0f32;
+    let mut num = 0.0f32;
+    let mut den = 0.0f32;
+    let mut log_sum = 0.0f32;
+    let mut lin_sum = 0.0f32;
+    let mut peak = 0.0f32;
+    let mut flux = 0.0f32;
+    let mut energy = 0.0f32;
+    for k in lo..hi {
+        let m = col[k];
+        sum_sq += m * m;
+        num += k as f32 * m;
+        den += m;
+        log_sum += m.max(1e-9).ln();
+        lin_sum += m;
+        if m > peak {
+            peak = m;
+        }
+        let d = m - prev[k];
         if d > 0.0 {
             flux += d;
         }
-        energy += cur[bin];
+        energy += m;
     }
-    (flux, energy)
+    let n = (hi - lo) as f32;
+
+    // Amplitude: band RMS, mapped through the colourmap's own dB window.
+    let rms = (sum_sq / n).sqrt();
+    let amplitude = if rms > 1e-9 {
+        ((20.0 * rms.log10() - db_min) / (db_max - db_min)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    // Brightness: log-frequency centroid within the band (geometric bins → the
+    // bin-index centroid is already log-frequency), spread across the band 0..1.
+    let brightness = if den > 1e-9 && hi > lo + 1 {
+        let c = (num / den).clamp(lo as f32, (hi - 1) as f32);
+        ((c - lo as f32) / (hi - 1 - lo) as f32).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    // Noisiness: spectral flatness (geometric ÷ arithmetic mean).
+    let noisiness = if lin_sum > 1e-9 {
+        let geo = (log_sum / n).exp();
+        let arith = lin_sum / n;
+        (geo / arith).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    BandReduce { amplitude, brightness, noisiness, peak, flux, energy }
+}
+
+/// Reduce one send's current tilted column into its five per-band features, using
+/// the previous column for the flux-based ones. Band order is [Full, Low, Mid,
+/// High]. A band is "present" iff its loudest bin clears `presence_lin` — i.e. is
+/// drawn non-black on the scope. Brightness / noisiness / transients / liveliness
+/// read 0 on an absent band (a modulator mapped there stays quiet on material
+/// that isn't present); amplitude is the honest level and is always reported.
+/// Flux features only run once a real predecessor exists ([`SendState::has_prev`],
+/// set only after the window has filled), so neither arming nor warm-up fires a
+/// spurious onset.
+fn reduce_send(
+    send: &mut SendState,
+    num_bins: usize,
+    low_bin: usize,
+    mid_bin: usize,
+    presence_lin: f32,
+    db_min: f32,
+    db_max: f32,
+) {
+    let bands = [
+        (0, num_bins),       // Full
+        (0, low_bin),        // Low
+        (low_bin, mid_bin),  // Mid
+        (mid_bin, num_bins), // High
+    ];
+    let have_prev = send.has_prev;
+    for (bi, &(lo, hi)) in bands.iter().enumerate() {
+        let r = band_reduce(&send.col, &send.prev_col, lo, hi, db_min, db_max);
+        let present = r.peak > presence_lin;
+        let bf = &mut send.features.bands[bi];
+        bf.amplitude = r.amplitude;
+        bf.brightness = if present { r.brightness } else { 0.0 };
+        bf.noisiness = if present { r.noisiness } else { 0.0 };
+
+        if have_prev {
+            // Transients: positive flux above the band's running average, gated on
+            // presence and a refractory window so one hit is one decaying spike.
+            let refractory = &mut send.transient_refractory[bi];
+            let triggered = present
+                && *refractory == 0
+                && r.flux > send.flux_avg[bi] * ONSET_RATIO
+                && r.flux > ONSET_FLOOR;
+            if triggered {
+                bf.transients = 1.0;
+                *refractory = ONSET_REFRACTORY_HOPS;
+            } else {
+                bf.transients *= ONSET_DECAY;
+                *refractory = refractory.saturating_sub(1);
+            }
+            // Track the average only while present, so a silent stretch doesn't
+            // drag the baseline down and make the next real hit hyper-sensitive.
+            if present {
+                send.flux_avg[bi] += (r.flux - send.flux_avg[bi]) * FLUX_AVG_COEFF;
+            }
+            // Liveliness (relative flux) self-scales with density.
+            bf.liveliness = if present { relative_flux(r.flux, r.energy) } else { 0.0 };
+        }
+    }
 }
 
 /// Relative flux = flux ÷ energy. Naturally 0..1 (each bin's positive change
@@ -1140,18 +984,6 @@ fn band_flux_energy(cur: &[f32], prev: &[f32], lo: usize, hi: usize) -> (f32, f3
 /// the ratio doesn't blow up.
 fn relative_flux(flux: f32, energy: f32) -> f32 {
     if energy > FLUX_ENERGY_GATE { (flux / energy).clamp(0.0, 1.0) } else { 0.0 }
-}
-
-/// Map a raw, unbounded amplitude-like feature to 0..1 on a dB scale: `reference`
-/// is treated as 0 dBFS (→ 1.0) and [`FEATURE_FLOOR_DB`] below it as 0.0. Used to
-/// bring the band energies and flux into the same 0..1 range as the bounded
-/// features.
-fn db_normalize(raw: f32, reference: f32) -> f32 {
-    if raw <= 1e-9 {
-        return 0.0;
-    }
-    let db = 20.0 * (raw / reference).log10();
-    ((db - FEATURE_FLOOR_DB) / -FEATURE_FLOOR_DB).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -1210,117 +1042,165 @@ mod tests {
             .collect()
     }
 
+    // ── VQT feature-path helpers (the same transform + tilt the worker uses) ──
+    fn cfg() -> SpectrogramConfig {
+        SpectrogramConfig::default()
+    }
+    fn nbins() -> usize {
+        cfg().num_bins(SR as f32)
+    }
+    fn nfft() -> usize {
+        cfg().n_fft
+    }
+    /// Run the shared VQT on a window of samples (right-aligned, zero-padded at
+    /// the front exactly as the worker does) and return the *tilted* column —
+    /// the domain every band reduction reads.
+    fn vqt_col(samples: &[f32]) -> Vec<f32> {
+        let c = cfg();
+        let nb = c.num_bins(SR as f32);
+        let mut t = c.build_transform(SR as f32);
+        let mut input = vec![0.0f32; c.n_fft];
+        let seg = if samples.len() >= c.n_fft {
+            &samples[samples.len() - c.n_fft..]
+        } else {
+            samples
+        };
+        let pad = c.n_fft - seg.len();
+        input[pad..].copy_from_slice(seg);
+        let mut raw = vec![0.0f32; nb];
+        t.process_magnitudes(&input, &mut raw);
+        let w = tilt_weights(&c, SR as f32, nb);
+        raw.iter().zip(w.iter()).map(|(&m, &wt)| m * wt).collect()
+    }
+    /// Per-band amplitude of a tilted column at the default crossovers.
+    fn band_amps(col: &[f32]) -> [f32; 4] {
+        let c = cfg();
+        let nb = c.num_bins(SR as f32);
+        let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
+        let prev = vec![0.0f32; nb];
+        let ranges = [(0, nb), (0, low_bin), (low_bin, mid_bin), (mid_bin, nb)];
+        let mut out = [0.0f32; 4];
+        for (i, &(lo, hi)) in ranges.iter().enumerate() {
+            out[i] = band_reduce(col, &prev, lo, hi, c.db_min, c.db_max).amplitude;
+        }
+        out
+    }
+    /// Drive `reduce_send` once on a tilted column (no predecessor → only the
+    /// stateless features) and return the resulting per-band features.
+    fn reduced(col: Vec<f32>) -> SendFeatures {
+        let c = cfg();
+        let nb = c.num_bins(SR as f32);
+        let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
+        let presence_lin = 10.0f32.powf(c.db_min / 20.0);
+        let mut s = SendState {
+            channels: vec![0],
+            gain: 1.0,
+            window: Vec::new(),
+            since_hop: 0,
+            col,
+            prev_col: vec![0.0f32; nb],
+            flux_avg: [0.0; 4],
+            transient_refractory: [0; 4],
+            has_prev: false,
+            features: SendFeatures::default(),
+        };
+        reduce_send(&mut s, nb, low_bin, mid_bin, presence_lin, c.db_min, c.db_max);
+        s.features
+    }
+
     #[test]
     fn band_amplitude_localizes_a_tone() {
         let (_full, low, mid, high) = bands();
-        let mut a = SpectralAnalyzer::new(SR);
+        let n = nfft();
 
-        let r = a.analyze(&sine(60.0, FFT_SIZE));
+        let r = band_amps(&vqt_col(&sine(60.0, n)));
         assert!(
-            r[low].amplitude > r[mid].amplitude && r[low].amplitude > r[high].amplitude,
-            "60 Hz should dominate the low band"
+            r[low] > r[mid] && r[low] > r[high],
+            "60 Hz should dominate the low band: {r:?}"
         );
-        let r = a.analyze(&sine(1000.0, FFT_SIZE));
+        let r = band_amps(&vqt_col(&sine(1000.0, n)));
         assert!(
-            r[mid].amplitude > r[low].amplitude && r[mid].amplitude > r[high].amplitude,
-            "1 kHz should dominate the mid band"
+            r[mid] > r[low] && r[mid] > r[high],
+            "1 kHz should dominate the mid band: {r:?}"
         );
-        let r = a.analyze(&sine(6000.0, FFT_SIZE));
+        let r = band_amps(&vqt_col(&sine(6000.0, n)));
         assert!(
-            r[high].amplitude > r[low].amplitude && r[high].amplitude > r[mid].amplitude,
-            "6 kHz should dominate the high band"
+            r[high] > r[low] && r[high] > r[mid],
+            "6 kHz should dominate the high band: {r:?}"
         );
     }
 
     #[test]
     fn silence_reads_near_zero() {
-        let mut a = SpectralAnalyzer::new(SR);
-        let r = a.analyze(&vec![0.0; FFT_SIZE]);
-        assert!(r.iter().all(|b| b.amplitude < 1e-6), "silence amplitude ~0");
+        let r = band_amps(&vqt_col(&vec![0.0; nfft()]));
+        assert!(r.iter().all(|&a| a < 1e-6), "silence amplitude ~0: {r:?}");
     }
 
     #[test]
     fn brightness_rises_with_a_higher_tone() {
-        let (full, ..) = bands();
-        let mut a = SpectralAnalyzer::new(SR);
-        let dark = a.analyze(&sine(100.0, FFT_SIZE))[full].brightness;
-        let bright = a.analyze(&sine(5000.0, FFT_SIZE))[full].brightness;
+        let c = cfg();
+        let nb = nbins();
+        let prev = vec![0.0f32; nb];
+        let n = nfft();
+        let dark = band_reduce(&vqt_col(&sine(100.0, n)), &prev, 0, nb, c.db_min, c.db_max).brightness;
+        let bright = band_reduce(&vqt_col(&sine(5000.0, n)), &prev, 0, nb, c.db_min, c.db_max).brightness;
         assert!(bright > dark, "5 kHz brighter than 100 Hz: {dark} vs {bright}");
         assert!((0.0..=1.0).contains(&dark) && (0.0..=1.0).contains(&bright), "0..1");
     }
 
     #[test]
     fn noisiness_separates_tone_from_noise() {
-        let (full, ..) = bands();
-        let mut a = SpectralAnalyzer::new(SR);
-        let tone = a.analyze(&sine(1000.0, FFT_SIZE))[full].noisiness;
-        let noisy = a.analyze(&noise(FFT_SIZE))[full].noisiness;
+        let c = cfg();
+        let nb = nbins();
+        let prev = vec![0.0f32; nb];
+        let n = nfft();
+        let tone = band_reduce(&vqt_col(&sine(1000.0, n)), &prev, 0, nb, c.db_min, c.db_max).noisiness;
+        let noisy = band_reduce(&vqt_col(&noise(n)), &prev, 0, nb, c.db_min, c.db_max).noisiness;
         assert!(noisy > tone, "noise flatter than a tone: {tone} vs {noisy}");
     }
 
     #[test]
     fn empty_bands_report_no_timbre() {
-        // A pure 1 kHz tone fills the mid band; low and high hold only the FFT
-        // window's leakage — i.e. no real content. The presence gate must zero
-        // their brightness/noisiness so a modulator mapped there reads silent
-        // rather than describing the noise floor (regression: noisiness used to
-        // pin near 1 on an empty band, since a flat floor reads as max-flat).
+        // A pure 1 kHz tone fills the mid band; low and high hold only VQT
+        // leakage — no real content. The presence gate must zero their
+        // brightness/noisiness so a modulator mapped there reads silent rather
+        // than describing the noise floor.
         let (_full, low, mid, high) = bands();
-        let mut a = SpectralAnalyzer::new(SR);
-        let r = a.analyze(&sine(1000.0, FFT_SIZE));
-        assert!(r[mid].amplitude >= BAND_PRESENCE_GATE, "mid band is present");
-        for &b in &[low, high] {
-            assert!(r[b].amplitude < BAND_PRESENCE_GATE, "empty band below gate");
-            assert_eq!(r[b].brightness, 0.0, "empty band brightness gated to 0");
-            assert_eq!(r[b].noisiness, 0.0, "empty band noisiness gated to 0");
+        let f = reduced(vqt_col(&sine(1000.0, nfft())));
+        assert!(f.bands[mid].amplitude > 0.0, "mid band is present");
+        for b in [low, high] {
+            assert_eq!(f.bands[b].brightness, 0.0, "empty band brightness gated to 0");
+            assert_eq!(f.bands[b].noisiness, 0.0, "empty band noisiness gated to 0");
         }
     }
 
     #[test]
     fn relative_flux_fires_on_change_not_steady_state() {
-        let (full, ..) = bands();
-        let mut a = SpectralAnalyzer::new(SR);
-        let (lo, hi) = a.band_bins[full];
-        let silence = vec![0.0; FFT_SIZE / 2 + 1];
+        let c = cfg();
+        let nb = nbins();
+        let col = vqt_col(&sine(1000.0, nfft()));
         // Energy appearing against silence → near-max relative flux.
-        a.analyze(&sine(1000.0, FFT_SIZE));
-        let (flux, energy) = band_flux_energy(&a.mags, &silence, lo, hi);
-        let onset = relative_flux(flux, energy);
+        let zeros = vec![0.0f32; nb];
+        let r = band_reduce(&col, &zeros, 0, nb, c.db_min, c.db_max);
+        let onset = relative_flux(r.flux, r.energy);
         assert!(onset > 0.5, "energy from silence → high relative flux: {onset}");
         // The same spectrum twice → ~0 change.
-        let prev = a.mags.clone();
-        a.analyze(&sine(1000.0, FFT_SIZE));
-        let (flux2, energy2) = band_flux_energy(&a.mags, &prev, lo, hi);
-        let steady = relative_flux(flux2, energy2);
+        let r2 = band_reduce(&col, &col, 0, nb, c.db_min, c.db_max);
+        let steady = relative_flux(r2.flux, r2.energy);
         assert!(steady < 0.1, "steady tone → low relative flux: {steady}");
     }
 
     #[test]
-    fn set_crossovers_moves_band_edges() {
-        let mut a = SpectralAnalyzer::new(SR);
-        let (_f, _lo, _mid, high_default) = (
-            a.band_bins[0],
-            a.band_bins[1],
-            a.band_bins[2],
-            a.band_bins[3],
-        );
+    fn band_edges_move_with_crossovers() {
+        let c = cfg();
+        let nb = nbins();
+        let (_lo1, mid1) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
         // Raise the mid/high split: the High band must start at a higher bin.
-        a.set_crossovers(250.0, 6000.0);
-        let high_raised = a.band_bins[3];
-        assert!(
-            high_raised.0 > high_default.0,
-            "raising mid_hz should push the High band start up: {} -> {}",
-            high_default.0,
-            high_raised.0
-        );
-        // Full band is never touched by crossovers.
-        assert_eq!(a.band_bins[0], (1, FFT_SIZE / 2));
+        let (_lo2, mid2) = band_edges(&c, SR as f32, nb, 250.0, 6000.0);
+        assert!(mid2 > mid1, "raising mid_hz pushes the High band start up: {mid1} -> {mid2}");
         // Degenerate input (low ≥ mid) still yields ordered, non-empty bands.
-        a.set_crossovers(5000.0, 1000.0);
-        let (lo_a, lo_b) = a.band_bins[1];
-        let (mi_a, mi_b) = a.band_bins[2];
-        let (hi_a, hi_b) = a.band_bins[3];
-        assert!(lo_a <= lo_b && mi_a <= mi_b && hi_a <= hi_b, "bands stay ordered");
+        let (lo3, mid3) = band_edges(&c, SR as f32, nb, 5000.0, 1000.0);
+        assert!(mid3 > lo3 && mid3 < nb, "degenerate edges stay ordered: {lo3}..{mid3}/{nb}");
     }
 
     #[test]
@@ -1328,15 +1208,13 @@ mod tests {
         // The kick-detector premise: a low thump appearing produces far more flux
         // in the low band than the high band, so Transients@Low fires on it while
         // Transients@High stays quiet.
-        let (_full, low, _mid, high) = bands();
-        let mut a = SpectralAnalyzer::new(SR);
-        a.analyze(&vec![0.0; FFT_SIZE]); // silence baseline
-        let prev = a.mags.clone();
-        a.analyze(&sine(60.0, FFT_SIZE)); // a 60 Hz thump appears
-        let (lo_a, lo_b) = a.band_bins[low];
-        let (hi_a, hi_b) = a.band_bins[high];
-        let (low_flux, _) = band_flux_energy(&a.mags, &prev, lo_a, lo_b);
-        let (high_flux, _) = band_flux_energy(&a.mags, &prev, hi_a, hi_b);
+        let c = cfg();
+        let nb = nbins();
+        let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
+        let prev = vec![0.0f32; nb]; // silence baseline
+        let col = vqt_col(&sine(60.0, nfft())); // a 60 Hz thump appears
+        let low_flux = band_reduce(&col, &prev, 0, low_bin, c.db_min, c.db_max).flux;
+        let high_flux = band_reduce(&col, &prev, mid_bin, nb, c.db_min, c.db_max).flux;
         assert!(
             low_flux > high_flux * 4.0,
             "60 Hz thump flux: low {low_flux} should ≫ high {high_flux}"
@@ -1349,7 +1227,7 @@ mod tests {
         // worker, and confirm a frame arrives with energy in the mid band.
         let cap = SR as usize; // 1 s headroom
         let (mut prod, cons) = HeapRb::<f32>::new(cap).split();
-        let tone = sine(1000.0, FFT_SIZE * 4);
+        let tone = sine(1000.0, nfft() * 4);
         let pushed = prod.push_slice(&tone);
         assert_eq!(pushed, tone.len());
 
