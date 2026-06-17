@@ -50,9 +50,16 @@ use manifold_spectral::{CqtTransform, SpectrogramConfig};
 
 use crate::capture::AudioConsumer;
 
-/// FFT window for band-energy analysis. Non-overlapping; at 48 kHz one window
-/// is ~21 ms, comfortably finer than the 60 fps (~16 ms) content tick.
+/// FFT window for band-energy analysis. At 48 kHz one window is ~21 ms; the
+/// feature path slides it by [`HOP_SIZE`] (50% overlap) so a new analysis lands
+/// every ~10.7 ms — finer than the 60 fps (~16 ms) content tick, and a transient
+/// straddling a window boundary no longer splits its flux across two windows.
 const FFT_SIZE: usize = 1024;
+
+/// Hop between successive feature windows — 50% of [`FFT_SIZE`]. Hann satisfies
+/// constant-overlap-add at this hop, so the signal is weighted uniformly across
+/// frames (no per-hop analysis ripple).
+const HOP_SIZE: usize = FFT_SIZE / 2;
 
 /// Upper edge of the low band / lower edge of the mid band (Hz).
 const LOW_HZ: f32 = 250.0;
@@ -355,11 +362,20 @@ struct SendState {
     gain: f32,
     /// Samples accumulating toward the next FFT window.
     accum: Vec<f32>,
-    /// Previous window's tilted magnitude spectrum (`0..=nyquist`), for flux.
+    /// Previous window's tilted magnitude spectrum (`0..=nyquist`). One hop back,
+    /// 50%-overlapping with the current window; used for the transient flux.
     prev_mags: Vec<f32>,
+    /// The window *two* hops back — a full [`FFT_SIZE`] behind the current one, so
+    /// disjoint from it. Liveliness diffs against this to keep its
+    /// flux-over-a-full-window scaling identical to the pre-overlap path.
+    prev2_mags: Vec<f32>,
     /// Per-band running average of flux — the adaptive onset threshold tracks it.
     /// Indexed in `AudioBand` order [Full, Low, Mid, High].
     flux_avg: [f32; 4],
+    /// Windows analyzed so far. Flux features are held at 0 until a valid
+    /// predecessor exists (≥2 for transients, ≥3 for liveliness's 2-hop diff), so
+    /// arming audio-mod doesn't fire a spurious onset off the zero-init spectrum.
+    windows_done: u32,
     features: SendFeatures,
 }
 
@@ -429,7 +445,9 @@ impl WorkerLoop {
                 gain: 1.0,
                 accum: Vec::with_capacity(FFT_SIZE),
                 prev_mags: vec![0.0; FFT_SIZE / 2 + 1],
+                prev2_mags: vec![0.0; FFT_SIZE / 2 + 1],
                 flux_avg: [0.0; 4],
+                windows_done: 0,
                 features: SendFeatures::default(),
             })
             .collect();
@@ -548,27 +566,41 @@ impl WorkerLoop {
                     // `mags` the analyzer just left, never a second transform.
                     let reductions = self.analyzer.analyze(&send.accum[..FFT_SIZE]);
                     let mags = &self.analyzer.mags;
+                    send.windows_done = send.windows_done.saturating_add(1);
+                    let wd = send.windows_done;
                     for (bi, &(lo, hi)) in self.analyzer.band_bins.iter().enumerate() {
                         let bf = &mut send.features.bands[bi];
                         bf.amplitude = reductions[bi].amplitude;
                         bf.brightness = reductions[bi].brightness;
                         bf.noisiness = reductions[bi].noisiness;
 
-                        // Relative flux (liveliness) self-scales with density; the
-                        // raw flux drives the per-band onset threshold.
-                        let (flux, energy) = band_flux_energy(mags, &send.prev_mags, lo, hi);
-                        bf.liveliness = relative_flux(flux, energy);
+                        // Transients: a flux spike (vs the previous, 50%-overlapping
+                        // window) above the band's running average fires a unit
+                        // impulse; otherwise it decays. Needs one valid predecessor.
+                        if wd >= 2 {
+                            let (flux, _) = band_flux_energy(mags, &send.prev_mags, lo, hi);
+                            let triggered =
+                                flux > send.flux_avg[bi] * ONSET_RATIO && flux > ONSET_FLOOR;
+                            bf.transients =
+                                if triggered { 1.0 } else { bf.transients * ONSET_DECAY };
+                            send.flux_avg[bi] += (flux - send.flux_avg[bi]) * FLUX_AVG_COEFF;
+                        }
 
-                        // Transients: a flux spike above the band's running average
-                        // fires a unit impulse; otherwise the impulse decays.
-                        let triggered =
-                            flux > send.flux_avg[bi] * ONSET_RATIO && flux > ONSET_FLOOR;
-                        bf.transients = if triggered { 1.0 } else { bf.transients * ONSET_DECAY };
-                        send.flux_avg[bi] += (flux - send.flux_avg[bi]) * FLUX_AVG_COEFF;
+                        // Liveliness (relative flux) self-scales with density. It
+                        // diffs the window two hops back — disjoint from the current
+                        // one — so its scale matches the pre-overlap full-window flux.
+                        if wd >= 3 {
+                            let (flux2, energy2) =
+                                band_flux_energy(mags, &send.prev2_mags, lo, hi);
+                            bf.liveliness = relative_flux(flux2, energy2);
+                        }
                     }
+                    // Rotate history one hop: prev2 ← prev ← current.
+                    send.prev2_mags.copy_from_slice(&send.prev_mags);
                     send.prev_mags.copy_from_slice(mags);
 
-                    send.accum.clear();
+                    // Slide the window by one hop (50% overlap), keeping the tail.
+                    send.accum.drain(0..HOP_SIZE);
                     updated = true;
                 }
             }
@@ -667,13 +699,17 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
 
 /// Onset detection (derived from per-band flux). A window whose flux exceeds the
 /// band's running average by `ONSET_RATIO` (and clears `ONSET_FLOOR`) fires a
-/// unit impulse; between hits the impulse decays by `ONSET_DECAY` per window
-/// (~21 ms), so a transient reads as a snappy spike that settles in ~100 ms.
+/// unit impulse; between hits the impulse decays by `ONSET_DECAY` per hop, so a
+/// transient reads as a snappy spike that settles in ~100 ms. `ONSET_RATIO` is a
+/// self-ratio (flux vs its own running average), so it's invariant to the hop;
+/// the decay and the averaging coefficient are per-hop, so each is the √ of its
+/// old per-window value — at 2× the window rate (one hop ≈ 10.7 ms) that
+/// preserves the old 0.6/window ~100 ms settle and 0.1/window ~210 ms averaging.
 const ONSET_RATIO: f32 = 1.6;
 const ONSET_FLOOR: f32 = 1e-3;
-const ONSET_DECAY: f32 = 0.6;
-/// Smoothing of the running flux average the onset threshold tracks.
-const FLUX_AVG_COEFF: f32 = 0.1;
+const ONSET_DECAY: f32 = 0.775; // √0.6 — per-hop; matches the old 0.6/window settle
+/// Smoothing of the running flux average the onset threshold tracks (per hop).
+const FLUX_AVG_COEFF: f32 = 0.05; // 1−√0.9 — per-hop; matches the old 0.1/window
 /// Below this band energy, relative flux (liveliness) reads 0 — avoids the
 /// flux ÷ energy ratio blowing up on near-silence.
 const FLUX_ENERGY_GATE: f32 = 1e-4;
