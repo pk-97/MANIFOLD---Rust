@@ -33,14 +33,17 @@ struct Params {
     freq_log_ratio: f32,
     // Cursor frequency line (uv.y, 0 top → 1 bottom); negative hides it.
     cursor_y: f32,
-    _pad1: f32,
+    // Which band divider the cursor is over: 0 = low/mid, 1 = mid/high, < 0 none.
+    // The hovered divider's grip handle brightens to signal it's draggable.
+    hovered_divider: f32,
 };
 
 @group(0) @binding(0) var<storage, read> history: array<f32>;
 @group(0) @binding(1) var<uniform> p: Params;
-// Per-column overlay scalars, 2 per column: [centroid_yfb, onset]. Same column
-// layout as `history`. `centroid_yfb` is the spectral centroid as height-from-
-// bottom (0..1); < 0 hides it. `onset` is a 0..1 transient impulse.
+// Per-column overlay scalars, 4 per column: [centroid_yfb, onset_low, onset_mid,
+// onset_high]. Same column layout as `history`. `centroid_yfb` is the spectral
+// centroid as height-from-bottom (0..1); < 0 hides it. The three onsets are
+// 0..1 per-band transient impulses, drawn as colour-coded ticks.
 @group(0) @binding(2) var<storage, read> col_scalars: array<f32>;
 
 struct VertexOutput {
@@ -83,6 +86,34 @@ fn colormap(t_in: f32) -> vec3<f32> {
     return mix(c6, c7, (t - 0.90) / 0.10);
 }
 
+// Draw one band-divider line plus a grip handle at the left edge (the drag
+// affordance). `band_y` is height-from-bottom (0..1); `< 0` disables. When
+// `hovered`, the line and grip brighten and thicken so it reads as grabbable.
+fn divider(rgb: vec3<f32>, yfb: f32, ux: f32, band_y: f32, hovered: bool, ncols: f32) -> vec3<f32> {
+    if (band_y < 0.0) {
+        return rgb;
+    }
+    var out = rgb;
+    let line = vec3<f32>(0.88, 0.88, 0.93);
+    let near = abs(yfb - band_y);
+    let line_half = select(0.0022, 0.0034, hovered);
+    let line_a = select(0.6, 0.95, hovered);
+    if (near < line_half) {
+        out = mix(out, line, line_a);
+    }
+    // Grip handle: a chunky tab at the left edge, taller than the line, so it's
+    // an obvious grab target. Two notch gaps hint "draggable".
+    let handle_w = 16.0 / ncols;
+    let handle_h = select(0.012, 0.018, hovered);
+    if (ux < handle_w && near < handle_h) {
+        // Notch gaps: thin transparent slits across the tab.
+        let notch = (near > 0.004 && near < 0.006);
+        let a = select(select(0.92, 1.0, hovered), 0.25, notch);
+        out = mix(out, line, a);
+    }
+    return out;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let n_bins = p.num_bins;
@@ -122,22 +153,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         rgb = mix(rgb, head, 0.6);
     }
 
-    // Band dividers: a thin bright line at each split, blended over the image.
+    // Band dividers: a line + grip handle at each split (the drag affordance).
     let y_from_bottom = 1.0 - in.uv.y;
-    let line = vec3<f32>(0.85, 0.85, 0.90);
-    let half_px = 0.0015;
-    if (p.band_lo_y >= 0.0 && abs(y_from_bottom - p.band_lo_y) < half_px) {
-        rgb = mix(rgb, line, 0.7);
-    }
-    if (p.band_hi_y >= 0.0 && abs(y_from_bottom - p.band_hi_y) < half_px) {
-        rgb = mix(rgb, line, 0.7);
-    }
+    let ncols = f32(n_cols);
+    rgb = divider(rgb, y_from_bottom, in.uv.x, p.band_lo_y, p.hovered_divider == 0.0, ncols);
+    rgb = divider(rgb, y_from_bottom, in.uv.x, p.band_hi_y, p.hovered_divider == 1.0, ncols);
 
-    // Per-column overlays: the spectral-centroid trace and transient ticks.
-    // Both scroll with the waterfall because they're keyed by `col`, the same
-    // 1:1 column slot the magnitudes use.
-    let centroid_yfb = col_scalars[col * 2u];
-    let onset = col_scalars[col * 2u + 1u];
+    // Per-column overlays: the spectral-centroid trace and per-band transient
+    // ticks. Both scroll with the waterfall because they're keyed by `col`, the
+    // same 1:1 column slot the magnitudes use.
+    let centroid_yfb = col_scalars[col * 4u];
+    let on_low = col_scalars[col * 4u + 1u];
+    let on_mid = col_scalars[col * 4u + 2u];
+    let on_high = col_scalars[col * 4u + 3u];
     // Centroid trace: a magenta line tracking the column's centre of spectral
     // mass — "where the energy sits" over time. Soft-edged so it reads smooth.
     if (centroid_yfb >= 0.0) {
@@ -145,12 +173,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let w = clamp(1.0 - cd / 0.008, 0.0, 1.0);
         rgb = mix(rgb, vec3<f32>(1.0, 0.25, 0.85), w * 0.85);
     }
-    // Transient ticks: a short warm mark at the bottom edge on the columns where
-    // an onset actually fired. Gated near the impulse peak (the decay tail is
-    // hidden) so hits read as DISCRETE ticks, not a smeared ribbon, and kept low
-    // so they don't bury the sub-bass.
-    if (onset > 0.5 && in.uv.y > 0.955) {
-        rgb = mix(rgb, vec3<f32>(1.0, 0.85, 0.4), 0.8);
+    // Transient ticks: three stacked lanes at the bottom edge, one colour per
+    // band — Low = red (lowest lane), Mid = green, High = blue — so each band's
+    // onset rhythm reads separately. Gated near the impulse peak so hits stay
+    // discrete, not a smeared ribbon.
+    let lane = 0.014;
+    if (on_high > 0.5 && in.uv.y > 1.0 - lane * 3.0 && in.uv.y <= 1.0 - lane * 2.0) {
+        rgb = mix(rgb, vec3<f32>(0.40, 0.62, 1.0), 0.85);
+    }
+    if (on_mid > 0.5 && in.uv.y > 1.0 - lane * 2.0 && in.uv.y <= 1.0 - lane) {
+        rgb = mix(rgb, vec3<f32>(0.35, 1.0, 0.45), 0.85);
+    }
+    if (on_low > 0.5 && in.uv.y > 1.0 - lane) {
+        rgb = mix(rgb, vec3<f32>(1.0, 0.35, 0.30), 0.85);
     }
 
     // Cursor frequency locator: a faint horizontal line at the hovered freq,

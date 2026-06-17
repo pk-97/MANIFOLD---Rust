@@ -211,10 +211,11 @@ impl AudioModRuntime {
         }
     }
 
-    /// Drain the per-column overlay scalars `(centroid_yfb, onset)` produced
-    /// since the last call, oldest → newest and in lockstep with
-    /// [`Self::drain_spectrogram_columns`]. No-op when capture is inactive.
-    pub fn drain_spectrogram_scalars(&mut self, f: impl FnMut(f32, f32)) {
+    /// Drain the per-column overlay scalars `(centroid_yfb, [onset_low,
+    /// onset_mid, onset_high])` produced since the last call, oldest → newest and
+    /// in lockstep with [`Self::drain_spectrogram_columns`]. No-op when capture
+    /// is inactive.
+    pub fn drain_spectrogram_scalars(&mut self, f: impl FnMut(f32, [f32; 3])) {
         if let Some(cap) = &mut self.capture {
             cap.scalars.drain(f);
         }

@@ -24,6 +24,10 @@ const SHADER: &str = include_str!("shaders/spectrogram.wgsl");
 /// is never written while a prior frame's GPU read is outstanding.
 const BUFFER_ROTATION: usize = 3;
 
+/// Overlay scalars stored per spectrogram column: `[centroid_yfb, onset_low,
+/// onset_mid, onset_high]`. The shader reads the same stride.
+const SCALAR_STRIDE: usize = 4;
+
 /// Pink-noise spectral tilt (dB/octave) applied to the colourmap, matching the
 /// Analyzer VST's default weighting: pink noise reads as a flat field, so a
 /// real-world mix isn't dominated by its bass energy. Auto-centred over the
@@ -52,7 +56,9 @@ struct Params {
     /// Cursor frequency line position (uv.y, 0 top → 1 bottom); negative hides
     /// it. Drawn as a faint horizontal line so the hover readout has a locator.
     cursor_y: f32,
-    _pad1: f32,
+    /// Which band divider the cursor is over (drag affordance): `0` = low/mid,
+    /// `1` = mid/high, `< 0` = none. The shader brightens that line's grip.
+    hovered_divider: f32,
 }
 
 /// Sweep-fill spectrogram renderer. One per visible scope; sized to the scope's
@@ -64,10 +70,11 @@ pub struct Spectrogram {
     /// `num_cols * num_bins` magnitudes; a ring of columns. `head` is the next
     /// column to overwrite (also the shader's `write_index` — the sweep line).
     ring: Vec<f32>,
-    /// Parallel per-column overlay scalars, 2 per column: `[centroid_yfb, onset]`.
-    /// `centroid_yfb` is the spectral centroid as normalised height-from-bottom
-    /// (0..1, matching the bin axis); `< 0` hides the trace for that column.
-    /// `onset` is a 0..1 transient impulse, drawn as a tick on the time axis.
+    /// Parallel per-column overlay scalars, [`SCALAR_STRIDE`] per column:
+    /// `[centroid_yfb, onset_low, onset_mid, onset_high]`. `centroid_yfb` is the
+    /// spectral centroid as normalised height-from-bottom (0..1, matching the bin
+    /// axis); `< 0` hides the trace for that column. The three onsets are 0..1
+    /// transient impulses per band, drawn as colour-coded ticks on the time axis.
     /// Same ring layout as `ring`, written at `head`.
     col_scalars: Vec<f32>,
     head: usize,
@@ -102,8 +109,8 @@ impl Spectrogram {
                 b
             })
             .collect();
-        // Overlay scalar ring: 2 floats per column.
-        let scalar_elems = num_cols * 2;
+        // Overlay scalar ring: SCALAR_STRIDE floats per column.
+        let scalar_elems = num_cols * SCALAR_STRIDE;
         let scalar_bytes = (scalar_elems * std::mem::size_of::<f32>()) as u64;
         let scalar_bufs = (0..BUFFER_ROTATION)
             .map(|_| {
@@ -185,10 +192,10 @@ impl Spectrogram {
     ///
     /// `centroid_yfb` is the column's spectral centroid as normalised
     /// height-from-bottom (0..1); pass `< 0` to hide the trace for this column.
-    /// `onset` is a 0..1 transient impulse drawn as a tick on the time axis.
-    /// Stored in the parallel scalar ring at the same slot, so they scroll with
-    /// the waterfall.
-    pub fn push_column(&mut self, magnitudes: &[f32], centroid_yfb: f32, onset: f32) {
+    /// `onsets` is the per-band `[low, mid, high]` transient impulses (0..1),
+    /// drawn as colour-coded ticks on the time axis. Stored in the parallel
+    /// scalar ring at the same slot, so they scroll with the waterfall.
+    pub fn push_column(&mut self, magnitudes: &[f32], centroid_yfb: f32, onsets: [f32; 3]) {
         let base = self.head * self.num_bins;
         let dst = &mut self.ring[base..base + self.num_bins];
         let n = magnitudes.len().min(self.num_bins);
@@ -196,8 +203,11 @@ impl Spectrogram {
         for v in &mut dst[n..] {
             *v = 0.0;
         }
-        self.col_scalars[self.head * 2] = centroid_yfb;
-        self.col_scalars[self.head * 2 + 1] = onset;
+        let sbase = self.head * SCALAR_STRIDE;
+        self.col_scalars[sbase] = centroid_yfb;
+        self.col_scalars[sbase + 1] = onsets[0];
+        self.col_scalars[sbase + 2] = onsets[1];
+        self.col_scalars[sbase + 3] = onsets[2];
         self.head = (self.head + 1) % self.num_cols;
     }
 
@@ -208,6 +218,8 @@ impl Spectrogram {
     /// displayed range — the octave span the pink tilt is centred and scaled
     /// over; pass `0.0` to disable the tilt (Flat look). `cursor_y` draws a
     /// faint horizontal locator line (uv.y, 0 top → 1 bottom); negative hides it.
+    /// `hovered_divider` brightens a divider's grip handle (`0` low/mid, `1`
+    /// mid/high, `< 0` none) to signal it's draggable.
     pub fn render(
         &mut self,
         encoder: &mut GpuEncoder,
@@ -215,6 +227,7 @@ impl Spectrogram {
         band_ys: [f32; 2],
         freq_log_ratio: f32,
         cursor_y: f32,
+        hovered_divider: f32,
     ) {
         let slot = self.buf_frame % BUFFER_ROTATION;
         let buf = &self.bufs[slot];
@@ -248,7 +261,7 @@ impl Spectrogram {
             tilt_slope: if freq_log_ratio > 0.0 { PINK_SLOPE_DB_PER_OCT } else { 0.0 },
             freq_log_ratio,
             cursor_y,
-            _pad1: 0.0,
+            hovered_divider,
         };
         // SAFETY: `Params` is `#[repr(C)]` plain-old-data.
         let param_bytes = unsafe {

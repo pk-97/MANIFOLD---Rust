@@ -591,9 +591,9 @@ impl Application {
                         self.pending_spectrogram_columns.len().saturating_sub(MAX_PENDING_COLS * nb);
                     if excess > 0 {
                         self.pending_spectrogram_columns.drain(0..excess);
-                        // Drop the matching scalar pairs (2 per column).
+                        // Drop the matching scalar records (4 per column).
                         let cols = excess / nb;
-                        let scalar_excess = (cols * 2).min(self.pending_spectrogram_scalars.len());
+                        let scalar_excess = (cols * 4).min(self.pending_spectrogram_scalars.len());
                         self.pending_spectrogram_scalars.drain(0..scalar_excess);
                     }
                 }
@@ -3884,15 +3884,16 @@ impl Application {
             {
                 // Feed new columns (post-gain magnitudes from the worker), each
                 // exactly once, then clear — see `pending_spectrogram_columns`.
-                // The overlay scalars ride in lockstep (2 per column); a column
-                // with no matching pair (shouldn't happen) gets the hide sentinel.
-                let mut scalars = self.pending_spectrogram_scalars.chunks_exact(2);
+                // The overlay scalars ride in lockstep (4 per column); a column
+                // with no matching record (shouldn't happen) gets the hide
+                // sentinel.
+                let mut scalars = self.pending_spectrogram_scalars.chunks_exact(4);
                 for col in self.pending_spectrogram_columns.chunks_exact(num_bins) {
-                    let (centroid, onset) = match scalars.next() {
-                        Some(s) => (s[0], s[1]),
-                        None => (-1.0, 0.0),
+                    let (centroid, onsets) = match scalars.next() {
+                        Some(s) => (s[0], [s[1], s[2], s[3]]),
+                        None => (-1.0, [0.0; 3]),
                     };
-                    spectrogram.push_column(col, centroid, onset);
+                    spectrogram.push_column(col, centroid, onsets);
                 }
                 self.pending_spectrogram_columns.clear();
                 self.pending_spectrogram_scalars.clear();
@@ -3912,15 +3913,32 @@ impl Application {
                 // (centred on the geometric-mean freq). 0 disables it.
                 let freq_log_ratio =
                     if fmin > 0.0 && fmax > fmin { (fmax / fmin).log2() } else { 0.0 };
+                let lo_yfb = y_of(self.content_state.spectrogram_low_hz);
+                let hi_yfb = y_of(self.content_state.spectrogram_mid_hz);
+                // Which divider the cursor is over, for the grip-handle hover
+                // affordance: compare the cursor's uv.y (top-down) to each line's
+                // (the shader's `band_*_y` are from the bottom, so flip).
+                let hovered_divider = if scope_cursor_y < 0.0 {
+                    -1.0
+                } else {
+                    let d_lo = (scope_cursor_y - (1.0 - lo_yfb)).abs();
+                    let d_hi = (scope_cursor_y - (1.0 - hi_yfb)).abs();
+                    const HOVER_UV: f32 = 0.02;
+                    if d_lo < HOVER_UV && d_lo <= d_hi {
+                        0.0
+                    } else if d_hi < HOVER_UV {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                };
                 spectrogram.render(
                     &mut encoder,
                     &target,
-                    [
-                        y_of(self.content_state.spectrogram_low_hz),
-                        y_of(self.content_state.spectrogram_mid_hz),
-                    ],
+                    [lo_yfb, hi_yfb],
                     freq_log_ratio,
                     scope_cursor_y,
+                    hovered_divider,
                 );
 
                 // Blit through the unified TexturePane path (logical rect + scale).

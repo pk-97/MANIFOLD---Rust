@@ -209,6 +209,10 @@ impl FeatureReader {
 /// every frame; this only matters if the UI stalls (then oldest columns drop).
 const COLUMN_RING_COLS: usize = 128;
 
+/// Overlay scalars per spectrogram column: `[centroid_yfb, onset_low,
+/// onset_mid, onset_high]`. The shader reads the same stride.
+const SCOPE_SCALAR_STRIDE: usize = 4;
+
 /// Live control for the spectrogram tap, shared content thread → worker. The
 /// content thread sets which send (by index) the worker should produce VQT
 /// columns for; `-1` = none (no spectrogram work). Lock-free, like [`GainBank`].
@@ -266,24 +270,26 @@ impl ColumnReader {
     }
 }
 
-/// Read end of the worker's per-column overlay-scalar stream: 2 floats per
-/// column, `[centroid_yfb, onset]`, produced in lockstep with [`ColumnReader`]
-/// (same column count, same order).
+/// Read end of the worker's per-column overlay-scalar stream:
+/// [`SCOPE_SCALAR_STRIDE`] floats per column, `[centroid_yfb, onset_low,
+/// onset_mid, onset_high]`, produced in lockstep with [`ColumnReader`] (same
+/// column count, same order).
 pub struct ScalarReader {
     cons: ringbuf::HeapCons<f32>,
-    scratch: [f32; 2],
+    scratch: [f32; SCOPE_SCALAR_STRIDE],
 }
 
 impl ScalarReader {
-    /// Pop every complete scalar pair available, calling `f(centroid_yfb, onset)`
-    /// in arrival order (oldest → newest).
-    pub fn drain(&mut self, mut f: impl FnMut(f32, f32)) {
-        while self.cons.occupied_len() >= 2 {
+    /// Pop every complete scalar record available, calling
+    /// `f(centroid_yfb, [onset_low, onset_mid, onset_high])` in arrival order
+    /// (oldest → newest).
+    pub fn drain(&mut self, mut f: impl FnMut(f32, [f32; 3])) {
+        while self.cons.occupied_len() >= SCOPE_SCALAR_STRIDE {
             let got = self.cons.pop_slice(&mut self.scratch);
-            if got < 2 {
+            if got < SCOPE_SCALAR_STRIDE {
                 break;
             }
-            f(self.scratch[0], self.scratch[1]);
+            f(self.scratch[0], [self.scratch[1], self.scratch[2], self.scratch[3]]);
         }
     }
 }
@@ -334,10 +340,11 @@ impl AudioFeatureWorker {
             scratch: vec![0.0; num_bins.max(1)],
         };
 
-        // Overlay-scalar ring: 2 floats per column, sized to match the column
-        // ring's column capacity so they never desync.
-        let (scalar_prod, scalar_cons) = HeapRb::<f32>::new((2 * COLUMN_RING_COLS).max(1)).split();
-        let scalar_reader = ScalarReader { cons: scalar_cons, scratch: [0.0; 2] };
+        // Overlay-scalar ring: SCOPE_SCALAR_STRIDE floats per column, sized to
+        // match the column ring's column capacity so they never desync.
+        let (scalar_prod, scalar_cons) =
+            HeapRb::<f32>::new((SCOPE_SCALAR_STRIDE * COLUMN_RING_COLS).max(1)).split();
+        let scalar_reader = ScalarReader { cons: scalar_cons, scratch: [0.0; SCOPE_SCALAR_STRIDE] };
 
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = running.clone();
@@ -428,18 +435,20 @@ struct WorkerLoop {
     /// Which send to produce columns for, `-1` = none. Read from `tap` each drain.
     tap: Arc<SpectrogramTap>,
     column_producer: ringbuf::HeapProd<f32>,
-    /// Per-column overlay scalars (2 per column: centroid-height, onset),
-    /// produced in lockstep with `column_producer`. Drives the scope's scrolling
-    /// centroid trace + transient ticks.
+    /// Per-column overlay scalars ([`SCOPE_SCALAR_STRIDE`] per column: centroid-
+    /// height + a per-band onset for Low/Mid/High), produced in lockstep with
+    /// `column_producer`. Drives the scope's centroid trace + colour-coded
+    /// transient ticks.
     scalar_producer: ringbuf::HeapProd<f32>,
-    /// Previous scope column's magnitudes, for the per-column onset (flux).
+    /// Previous scope column's magnitudes, for the per-band onset (flux).
     prev_spec_col: Vec<f32>,
     /// Whether `prev_spec_col` holds a real column yet (skips the startup spike).
     spec_has_prev: bool,
-    /// Running average of the scope column flux — the onset threshold tracks it.
-    spec_flux_avg: f32,
-    /// Decaying onset impulse for the scope (per scope column).
-    spec_onset: f32,
+    /// Running average of the scope column flux per band [Low, Mid, High] — each
+    /// band's onset threshold tracks its own average.
+    spec_flux_avg: [f32; 3],
+    /// Decaying onset impulse per band [Low, Mid, High] for the scope.
+    spec_onset: [f32; 3],
     /// Built lazily on the first active tap (kernel construction is one FFT per
     /// bin — paid once, only if the spectrogram is ever opened).
     cqt: Option<CqtTransform>,
@@ -516,8 +525,8 @@ impl WorkerLoop {
             scalar_producer,
             prev_spec_col: vec![0.0; spec_num_bins.max(1)],
             spec_has_prev: false,
-            spec_flux_avg: 0.0,
-            spec_onset: 0.0,
+            spec_flux_avg: [0.0; 3],
+            spec_onset: [0.0; 3],
             cqt: None,
             spec_window: Vec::new(),
             spec_since_hop: 0,
@@ -597,8 +606,8 @@ impl WorkerLoop {
             // Reset the scope's per-column onset state so a new source doesn't
             // inherit the old one's flux baseline / impulse.
             self.spec_has_prev = false;
-            self.spec_flux_avg = 0.0;
-            self.spec_onset = 0.0;
+            self.spec_flux_avg = [0.0; 3];
+            self.spec_onset = [0.0; 3];
         }
 
         for frame in work[..usable].chunks_exact(ch) {
@@ -706,34 +715,61 @@ impl WorkerLoop {
         let owed = self.spec_since_hop / hop;
         let avail = 1 + (self.spec_window.len() - n_fft) / hop;
         let emit = owed.min(avail);
+
+        // CQT bin boundaries for the Low/Mid/High split, from the live crossovers
+        // (the same edges the FFT analysis uses). VQT bins are geometric:
+        // bin(f) = bpo·log2(f / fmin). A band's onset is its own slice of flux.
+        let nb = self.spec_num_bins;
+        let fmin = self.spec_config.fmin.max(1.0);
+        let bpo = self.spec_config.bpo as f32;
+        let bin_of = |hz: f32| {
+            ((bpo * (hz / fmin).max(1e-6).log2()).round() as i64).clamp(1, nb as i64 - 1) as usize
+        };
+        let low_bin = bin_of(self.last_crossovers.0);
+        let mid_bin = bin_of(self.last_crossovers.1).max(low_bin + 1).min(nb.saturating_sub(1));
+
         for j in (0..emit).rev() {
             let end = self.spec_window.len() - j * hop;
             cqt.process_magnitudes(&self.spec_window[end - n_fft..end], &mut self.spec_col);
 
             // Per-column overlay scalars. Centroid = the magnitude-weighted mean
             // bin, as height-from-bottom (0..1) — VQT bins are geometric, so this
-            // is already the log-frequency centre the shader draws. Onset = a
-            // flux impulse vs the previous column, thresholded on a running
-            // average. Both advance every column (continuity) even if the ring is
-            // full and the push below is skipped.
-            let (mut num, mut den, mut flux) = (0.0f32, 0.0f32, 0.0f32);
+            // is already the log-frequency centre the shader draws. Per-band onset
+            // = a flux impulse vs the previous column, thresholded on that band's
+            // running average. All advance every column (continuity) even if the
+            // ring is full and the push below is skipped.
+            let (mut num, mut den) = (0.0f32, 0.0f32);
+            let mut flux = [0.0f32; 3];
             for (i, &m) in self.spec_col.iter().enumerate() {
                 num += i as f32 * m;
                 den += m;
                 if self.spec_has_prev {
-                    flux += (m - self.prev_spec_col[i]).max(0.0);
+                    let d = (m - self.prev_spec_col[i]).max(0.0);
+                    let band = if i < low_bin {
+                        0
+                    } else if i < mid_bin {
+                        1
+                    } else {
+                        2
+                    };
+                    flux[band] += d;
                 }
             }
-            let centroid_yfb = if den > 1e-9 && self.spec_num_bins > 1 {
-                (num / den / (self.spec_num_bins - 1) as f32).clamp(0.0, 1.0)
+            let centroid_yfb = if den > 1e-9 && nb > 1 {
+                (num / den / (nb - 1) as f32).clamp(0.0, 1.0)
             } else {
                 -1.0
             };
             if self.spec_has_prev {
-                let triggered =
-                    flux > self.spec_flux_avg * ONSET_RATIO && flux > ONSET_FLOOR;
-                self.spec_onset = if triggered { 1.0 } else { self.spec_onset * ONSET_DECAY };
-                self.spec_flux_avg += (flux - self.spec_flux_avg) * FLUX_AVG_COEFF;
+                for ((&f, avg), onset) in flux
+                    .iter()
+                    .zip(self.spec_flux_avg.iter_mut())
+                    .zip(self.spec_onset.iter_mut())
+                {
+                    let triggered = f > *avg * ONSET_RATIO && f > ONSET_FLOOR;
+                    *onset = if triggered { 1.0 } else { *onset * ONSET_DECAY };
+                    *avg += (f - *avg) * FLUX_AVG_COEFF;
+                }
             }
             self.prev_spec_col.copy_from_slice(&self.spec_col);
             self.spec_has_prev = true;
@@ -742,10 +778,15 @@ impl WorkerLoop {
             // ring can't fit, drop both (the scope skips a frame) rather than
             // desync the streams.
             if self.column_producer.vacant_len() >= self.spec_num_bins
-                && self.scalar_producer.vacant_len() >= 2
+                && self.scalar_producer.vacant_len() >= SCOPE_SCALAR_STRIDE
             {
                 self.column_producer.push_slice(&self.spec_col);
-                self.scalar_producer.push_slice(&[centroid_yfb, self.spec_onset]);
+                self.scalar_producer.push_slice(&[
+                    centroid_yfb,
+                    self.spec_onset[0],
+                    self.spec_onset[1],
+                    self.spec_onset[2],
+                ]);
             }
         }
         // Consume the whole backlog (including the collapsed remainder) so it

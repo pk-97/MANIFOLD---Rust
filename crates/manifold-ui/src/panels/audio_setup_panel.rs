@@ -69,11 +69,24 @@ const SCOPE_H_MIN: f32 = 200.0;
 /// Left margin inside the scope for the frequency-axis labels.
 const SCOPE_AXIS_W: f32 = 34.0;
 /// Right margin inside the scope for the per-band (Low/Mid/High) level meters.
-const SCOPE_METER_W: f32 = 30.0;
+const SCOPE_METER_W: f32 = 44.0;
 /// Gap between the waterfall and the band-meter column.
 const SCOPE_METER_GAP: f32 = 4.0;
+/// Width of the L/M/H letter label left of each meter bar.
+const BAND_METER_LABEL_W: f32 = 11.0;
 /// Half-height of a band meter bar (px).
 const BAND_METER_HALF_H: f32 = 5.0;
+/// Per-band meter/tick colours — Low = red, Mid = green, High = blue. Shared
+/// language with the spectrogram's colour-coded transient ticks.
+fn band_color(band: usize) -> Color32 {
+    match band {
+        0 => Color32::new(255, 95, 80, 255),   // Low — red
+        1 => Color32::new(90, 230, 120, 255),  // Mid — green
+        _ => Color32::new(105, 160, 255, 255), // High — blue
+    }
+}
+/// L/M/H labels in band order.
+const BAND_METER_LABELS: [&str; 3] = ["L", "M", "H"];
 
 /// Per-send interactive node ids.
 #[derive(Default, Clone)]
@@ -144,11 +157,11 @@ pub struct AudioSetupPanel {
     scope_fmax: f32,
     /// Which divider line is currently being dragged, if any.
     dragging_band: Option<BandDivider>,
-    /// Per-band (Low/Mid/High) level-meter nodes `(track, fill)` in the scope's
-    /// right margin. Created by `build`, repositioned + resized every frame by
-    /// [`AudioSetupPanel::update_band_meters`] so they track the moving
+    /// Per-band (Low/Mid/High) level-meter nodes `(track, fill, label)` in the
+    /// scope's right margin. Created by `build`, repositioned + resized every
+    /// frame by [`AudioSetupPanel::update_band_meters`] so they track the moving
     /// crossovers. `-1` when not built.
-    band_meter_ids: [(i32, i32); 3],
+    band_meter_ids: [(i32, i32, i32); 3],
 }
 
 impl AudioSetupPanel {
@@ -510,7 +523,7 @@ impl AudioSetupPanel {
         // ── Spectrogram scope (selected send) ──
         self.scope_rect = None;
         self.scope_readout_label = -1;
-        self.band_meter_ids = [(-1, -1); 3];
+        self.band_meter_ids = [(-1, -1, -1); 3];
         if !self.sends.is_empty() {
             cy += ROW_GAP;
             let sel_label = self
@@ -614,11 +627,27 @@ impl AudioSetupPanel {
                 self.scope_h,
             ));
 
-            // Per-band level meters (Low/Mid/High): a track + fill pair each, in
-            // the reserved right margin. Created here at zero size; positioned and
-            // filled every frame by `update_band_meters` so they follow the
-            // crossovers and the live levels.
-            for slot in self.band_meter_ids.iter_mut() {
+            // Per-band level meters (Low/Mid/High): a track + fill + letter label
+            // each, in the reserved right margin. Created here at zero size;
+            // positioned and filled every frame by `update_band_meters` so they
+            // follow the crossovers and the live levels. Fill + label share the
+            // band colour (red/green/blue), so the colours double as the legend
+            // across the meters and the spectrogram's transient ticks.
+            for (band, slot) in self.band_meter_ids.iter_mut().enumerate() {
+                let label = tree.add_label(
+                    self.bg_id,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    BAND_METER_LABELS[band],
+                    UIStyle {
+                        text_color: band_color(band),
+                        font_size: color::FONT_LABEL,
+                        text_align: TextAlign::Center,
+                        ..UIStyle::default()
+                    },
+                ) as i32;
                 let track = tree.add_panel(
                     self.bg_id,
                     0.0,
@@ -639,14 +668,9 @@ impl AudioSetupPanel {
                     0.0,
                     0.0,
                     0.0,
-                    UIStyle {
-                        // Warm amber pops against the blue spectrogram field.
-                        bg_color: Color32::new(245, 205, 90, 255),
-                        corner_radius: 1.0,
-                        ..UIStyle::default()
-                    },
+                    UIStyle { bg_color: band_color(band), corner_radius: 1.0, ..UIStyle::default() },
                 );
-                *slot = (track as i32, fill as i32);
+                *slot = (track as i32, fill as i32, label);
             }
         }
     }
@@ -779,16 +803,19 @@ impl AudioSetupPanel {
     /// `None`, or a dark scope, hides the bars.
     pub fn update_band_meters(&self, tree: &mut UITree, amps: Option<[f32; 3]>) {
         let Some(rect) = self.scope_rect() else { return };
-        let meter_x = rect.x + rect.width + SCOPE_METER_GAP;
-        let meter_w = (SCOPE_METER_W - SCOPE_METER_GAP).max(1.0);
+        // Letter label on the left of the margin, bar filling the rest.
+        let label_x = rect.x + rect.width + SCOPE_METER_GAP;
+        let bar_x = label_x + BAND_METER_LABEL_W;
+        let bar_w = (SCOPE_METER_W - SCOPE_METER_GAP - BAND_METER_LABEL_W).max(1.0);
+        let label_h = 12.0;
         // Band slab frequency edges, in [low, mid, high] order.
         let edges = [
             (self.scope_fmin, self.scope_low_hz),
             (self.scope_low_hz, self.scope_mid_hz),
             (self.scope_mid_hz, self.scope_fmax),
         ];
-        for (i, &(track, fill)) in self.band_meter_ids.iter().enumerate() {
-            if track < 0 || fill < 0 {
+        for (i, &(track, fill, label)) in self.band_meter_ids.iter().enumerate() {
+            if track < 0 || fill < 0 || label < 0 {
                 continue;
             }
             let (lo, hi) = edges[i];
@@ -800,14 +827,20 @@ impl AudioSetupPanel {
                     let amp = a[i].clamp(0.0, 1.0);
                     let top = y - BAND_METER_HALF_H;
                     let h = BAND_METER_HALF_H * 2.0;
-                    tree.set_bounds(track as u32, Rect::new(meter_x, top, meter_w, h));
-                    tree.set_bounds(fill as u32, Rect::new(meter_x, top, meter_w * amp, h));
+                    tree.set_bounds(track as u32, Rect::new(bar_x, top, bar_w, h));
+                    tree.set_bounds(fill as u32, Rect::new(bar_x, top, bar_w * amp, h));
+                    tree.set_bounds(
+                        label as u32,
+                        Rect::new(label_x, y - label_h * 0.5, BAND_METER_LABEL_W, label_h),
+                    );
                     tree.set_visible(track as u32, true);
                     tree.set_visible(fill as u32, true);
+                    tree.set_visible(label as u32, true);
                 }
                 _ => {
                     tree.set_visible(track as u32, false);
                     tree.set_visible(fill as u32, false);
+                    tree.set_visible(label as u32, false);
                 }
             }
         }

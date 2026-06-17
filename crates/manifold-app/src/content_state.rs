@@ -90,9 +90,10 @@ pub struct ContentState {
     /// (`k * spectrogram_num_bins` magnitudes, oldest → newest). Empty unless the
     /// Audio Setup scope is open on a send.
     pub spectrogram_columns: Vec<f32>,
-    /// Per-column overlay scalars in lockstep with `spectrogram_columns`: 2 per
-    /// column, `[centroid_yfb, onset]` (the scrolling centroid trace + transient
-    /// ticks). Length is `2 * (columns / spectrogram_num_bins)`.
+    /// Per-column overlay scalars in lockstep with `spectrogram_columns`: 4 per
+    /// column, `[centroid_yfb, onset_low, onset_mid, onset_high]` (the scrolling
+    /// centroid trace + per-band transient ticks). Length is
+    /// `4 * (columns / spectrogram_num_bins)`.
     pub spectrogram_col_scalars: Vec<f32>,
     /// Bins per spectrogram column (column length). 0 = no scope.
     pub spectrogram_num_bins: usize,
