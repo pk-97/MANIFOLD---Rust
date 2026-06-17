@@ -755,7 +755,16 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
 /// rate; the decay and averaging coefficients are per-hop (hop ≈ 5.3 ms at the
 /// 256-sample VQT hop), tuned for a ~100 ms settle and ~150 ms averaging window.
 const ONSET_RATIO: f32 = 1.8;
-const ONSET_FLOOR: f32 = 1e-3;
+/// A transient must be a real fraction of the band's energy, not a slow swell.
+/// Scale-invariant (flux ÷ energy), so it works across bands the pink tilt
+/// scales differently and rejects the heavily-overlapped low band's per-hop
+/// trickle. The main fix for sustained/faint low content firing onsets.
+const ONSET_REL_FLOOR: f32 = 0.12;
+/// A transient only fires on a band loud enough to matter — `amplitude` is the
+/// band's level on the colourmap's 0..1 dB scale (≈ −53 dBFS here). Screens
+/// noise-floor-faint content that the relative-flux test alone would still pass
+/// when a tiny energy doubles.
+const ONSET_AMP_GATE: f32 = 0.12;
 const ONSET_DECAY: f32 = 0.85; // per-hop; ~100 ms settle at hop ≈ 5.3 ms
 /// Smoothing of the running flux average the onset threshold tracks (per hop).
 const FLUX_AVG_COEFF: f32 = 0.03; // per-hop; ~150 ms averaging at hop ≈ 5.3 ms
@@ -954,13 +963,26 @@ fn reduce_send(
         bf.noisiness = if present { r.noisiness } else { 0.0 };
 
         if have_prev {
-            // Transients: positive flux above the band's running average, gated on
-            // presence and a refractory window so one hit is one decaying spike.
+            // Liveliness (relative flux) self-scales with density — it's also the
+            // transient's "sharpness" discriminator below.
+            let rel = relative_flux(r.flux, r.energy);
+            bf.liveliness = if present { rel } else { 0.0 };
+
+            // A transient is a sharp RISE, not just any wobble. Three scale-
+            // invariant conditions, all required (and a refractory window so one
+            // hit is one decaying spike):
+            //   • self-ratio — flux jumps above the band's own running average;
+            //   • relative flux — the jump is a real fraction of the band's
+            //     energy, which rejects the slow swell of sustained or heavily-
+            //     overlapped low content (the VQT's long bass kernels trickle a
+            //     little positive flux every hop, and an absolute floor can't
+            //     screen that the way it could on the old fixed-scale FFT);
+            //   • loudness — the band is actually present, not noise-floor faint.
             let refractory = &mut send.transient_refractory[bi];
-            let triggered = present
+            let triggered = bf.amplitude > ONSET_AMP_GATE
                 && *refractory == 0
                 && r.flux > send.flux_avg[bi] * ONSET_RATIO
-                && r.flux > ONSET_FLOOR;
+                && rel > ONSET_REL_FLOOR;
             if triggered {
                 bf.transients = 1.0;
                 *refractory = ONSET_REFRACTORY_HOPS;
@@ -973,8 +995,6 @@ fn reduce_send(
             if present {
                 send.flux_avg[bi] += (r.flux - send.flux_avg[bi]) * FLUX_AVG_COEFF;
             }
-            // Liveliness (relative flux) self-scales with density.
-            bf.liveliness = if present { relative_flux(r.flux, r.energy) } else { 0.0 };
         }
     }
 }
@@ -1188,6 +1208,57 @@ mod tests {
         let r2 = band_reduce(&col, &col, 0, nb, c.db_min, c.db_max);
         let steady = relative_flux(r2.flux, r2.energy);
         assert!(steady < 0.1, "steady tone → low relative flux: {steady}");
+    }
+
+    #[test]
+    fn transient_fires_on_onset_not_sustain() {
+        // The reported bug: a present-but-sustained band kept firing onsets. A
+        // steady tone (flux ≈ 0 relative to its energy) must NOT fire even though
+        // the band is loud and present; a real onset (energy appearing) must.
+        let c = cfg();
+        let nb = nbins();
+        let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
+        let presence_lin = 10.0f32.powf(c.db_min / 20.0);
+        let mid = bands().2;
+        let tone = vqt_col(&sine(1000.0, nfft()));
+        let silence = vec![0.0f32; nb];
+
+        let mut s = SendState {
+            channels: vec![0],
+            gain: 1.0,
+            window: Vec::new(),
+            since_hop: 0,
+            col: tone.clone(),
+            prev_col: tone.clone(),
+            flux_avg: [0.0; 4],
+            transient_refractory: [0; 4],
+            has_prev: true,
+            features: SendFeatures::default(),
+        };
+
+        // Hold the same loud tone for many hops — a sustain, not a transient.
+        let mut steady_fires = 0;
+        for _ in 0..40 {
+            s.col.copy_from_slice(&tone);
+            reduce_send(&mut s, nb, low_bin, mid_bin, presence_lin, c.db_min, c.db_max);
+            if s.features.bands[mid].transients > 0.99 {
+                steady_fires += 1;
+            }
+            s.prev_col.copy_from_slice(&s.col);
+        }
+        assert_eq!(steady_fires, 0, "a sustained tone must not fire transients");
+
+        // Now a real onset: silence, then the tone appears.
+        s.col.copy_from_slice(&silence);
+        reduce_send(&mut s, nb, low_bin, mid_bin, presence_lin, c.db_min, c.db_max);
+        s.prev_col.copy_from_slice(&s.col);
+        s.col.copy_from_slice(&tone);
+        reduce_send(&mut s, nb, low_bin, mid_bin, presence_lin, c.db_min, c.db_max);
+        assert!(
+            s.features.bands[mid].transients > 0.99,
+            "energy appearing must fire a transient: {}",
+            s.features.bands[mid].transients
+        );
     }
 
     #[test]
