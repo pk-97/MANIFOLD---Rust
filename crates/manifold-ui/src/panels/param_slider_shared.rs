@@ -159,6 +159,9 @@ pub struct ParamModState {
     /// Per-param: audio-mod invert (`AudioModShape::invert`) — drives the "Inv"
     /// toggle in the drawer (loud → low).
     pub audio_invert: Vec<bool>,
+    /// Per-param: audio-mod rate-of-change (`AudioModShape::rate_of_change`) —
+    /// drives the "d/dt" toggle.
+    pub audio_rate: Vec<bool>,
     /// Card-level: available send labels (same for every row on the card).
     pub audio_send_labels: Vec<String>,
     /// Card-level: send ids parallel to `audio_send_labels` — turns a selected
@@ -208,6 +211,8 @@ pub struct AudioCardState {
     pub range_max: Vec<f32>,
     /// Per-param: the mod's invert flag (`AudioModShape::invert`).
     pub invert: Vec<bool>,
+    /// Per-param: the mod's rate-of-change flag (`AudioModShape::rate_of_change`).
+    pub rate: Vec<bool>,
     /// Card-level: available send labels.
     pub send_labels: Vec<String>,
     /// Card-level: send ids parallel to `send_labels` — what the click handler
@@ -235,6 +240,7 @@ impl ParamModState {
             audio_range_min: vec![0.0; param_count],
             audio_range_max: vec![1.0; param_count],
             audio_invert: vec![false; param_count],
+            audio_rate: vec![false; param_count],
             audio_send_labels: Vec::new(),
             audio_send_ids: Vec::new(),
         }
@@ -248,6 +254,7 @@ impl ParamModState {
             self.audio_range_min[i] = audio.range_min.get(i).copied().unwrap_or(0.0);
             self.audio_range_max[i] = audio.range_max.get(i).copied().unwrap_or(1.0);
             self.audio_invert[i] = audio.invert.get(i).copied().unwrap_or(false);
+            self.audio_rate[i] = audio.rate.get(i).copied().unwrap_or(false);
             self.audio_send_idx[i] = audio
                 .send_id
                 .get(i)
@@ -1214,18 +1221,26 @@ pub(crate) fn build_param_row(
             .collect();
         let feat_sel = mod_state.audio_feature_idx.get(i).copied().unwrap_or(0);
         let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
-        let mut feat_buttons: Vec<DrawerButton> = AUDIO_FEATURE_LABELS
+        let rate_on = mod_state.audio_rate.get(i).copied().unwrap_or(false);
+        let feat_buttons: Vec<DrawerButton> = AUDIO_FEATURE_LABELS
             .iter()
             .enumerate()
             .map(|(k, l)| DrawerButton::new(*l, k as i32 == feat_sel))
             .collect();
-        // Trailing invert toggle (loud → low). Its flat index sits one past the
-        // features, so the click handler reads it as feature == LABELS.len().
-        feat_buttons.push(DrawerButton::new("Inv", invert_on));
+        // Modifier toggles on their own row, so the feature row isn't crowded:
+        // "Inv" (loud → low) then "d/dt" (drive on motion). Their flat indices
+        // sit one and two past the features (drawer button indices are flat
+        // across rows in creation order), so the click handler reads them as
+        // feature == LABELS.len() and LABELS.len() + 1.
+        let toggle_buttons = vec![
+            DrawerButton::new("Inv", invert_on),
+            DrawerButton::new("d/dt", rate_on),
+        ];
         let spec = DrawerSpec {
             rows: vec![
                 DrawerRow::Buttons { buttons: send_buttons, width: ButtonWidth::Proportional },
                 DrawerRow::Buttons { buttons: feat_buttons, width: ButtonWidth::Proportional },
+                DrawerRow::Buttons { buttons: toggle_buttons, width: ButtonWidth::Proportional },
             ],
             btn_font_size: config_font,
             slider_font_size: FONT_SIZE,
@@ -1262,6 +1277,8 @@ pub(crate) enum RowClick {
     AudioSelectFeature(usize, usize),
     /// The "Inv" invert toggle in the audio drawer (param index).
     AudioToggleInvert(usize),
+    /// The "d/dt" rate-of-change toggle in the audio drawer (param index).
+    AudioToggleRate(usize),
     /// The slider's param label, when it carries an OSC address to copy
     /// (param index). The caller performs the copied-flash side effect and
     /// reads `osc_addresses[pi]`.
@@ -1357,6 +1374,8 @@ pub(crate) fn match_param_row_click(
                 let feat = flat - send_count;
                 if feat == AUDIO_FEATURE_LABELS.len() {
                     RowClick::AudioToggleInvert(pi)
+                } else if feat == AUDIO_FEATURE_LABELS.len() + 1 {
+                    RowClick::AudioToggleRate(pi)
                 } else {
                     RowClick::AudioSelectFeature(pi, feat)
                 }

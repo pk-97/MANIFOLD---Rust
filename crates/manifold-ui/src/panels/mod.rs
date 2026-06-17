@@ -268,6 +268,10 @@ pub enum PanelAction {
     /// Toggle an audio modulation's invert flag (`AudioModShape::invert`) — the
     /// drawer's "Inv" button (loud → low).
     AudioModSetInvert(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Toggle an audio modulation's rate-of-change flag
+    /// (`AudioModShape::rate_of_change`) — the drawer's "d/dt" button; the
+    /// feature drives on its motion rather than its level.
+    AudioModSetRateOfChange(GraphParamTarget, manifold_core::effects::ParamId),
 
     // ── Audio Setup panel (project-level send routing) ──
     /// Open the input-device dropdown (anchored to the clicked trigger).

@@ -443,8 +443,9 @@ fn evaluate_instance_audio_mods(
     for (mi, idx, min, max, raw) in work {
         let out_norm = {
             let mods = fx.audio_mods.as_mut().unwrap();
-            let shape = mods[mi].shape;
-            shape.apply(raw, dt_s, &mut mods[mi].smoothed)
+            let m = &mut mods[mi];
+            let shape = m.shape;
+            shape.apply(raw, dt_s, &mut m.smoothed, &mut m.prev_raw)
         };
         fx.param_values[idx].value = min + (max - min) * out_norm;
     }

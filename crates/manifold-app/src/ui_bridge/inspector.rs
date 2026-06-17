@@ -1219,6 +1219,38 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
+        PanelAction::AudioModSetRateOfChange(gpt, param_id) => {
+            // Flip the mod's rate-of-change flag in one undo step — same shape
+            // path as invert: read the current shape, flip `rate_of_change`,
+            // commit old→new via the shape command.
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let old_shape = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.audio_mods
+                            .as_ref()
+                            .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
+                            .map(|m| m.shape)
+                    })
+                    .flatten();
+                if let Some(old_shape) = old_shape {
+                    let mut new_shape = old_shape;
+                    new_shape.rate_of_change = !old_shape.rate_of_change;
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(SetAudioModShapeCommand::new(
+                            DriverTarget::from(&target),
+                            param_id.clone(),
+                            old_shape,
+                            new_shape,
+                        ));
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
+            DispatchResult::handled()
+        }
+
         // ── Audio Setup (project-level send routing) ──────────────
         PanelAction::AudioSetDevice(device) => {
             let old = project.audio_setup.device.clone();

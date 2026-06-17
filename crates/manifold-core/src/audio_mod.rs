@@ -124,6 +124,12 @@ pub struct AudioModShape {
     /// Invert the signal (loud → low) before the range map.
     #[serde(default)]
     pub invert: bool,
+    /// Drive on the feature's **rate of change** (per second) instead of its
+    /// level, centered so "no change" sits mid-range and rising/falling push
+    /// above/below. Turns any feature into a motion signal — the literal "glue"
+    /// control: the visual breathes with the sound instead of leveling with it.
+    #[serde(default)]
+    pub rate_of_change: bool,
 }
 
 impl Default for AudioModShape {
@@ -136,17 +142,30 @@ impl Default for AudioModShape {
             range_max: 1.0,
             curve: default_curve(),
             invert: false,
+            rate_of_change: false,
         }
     }
 }
 
 impl AudioModShape {
     /// Smooth and map `raw` to a normalized 0..1 output within the target
-    /// param's range. Advances `smoothed` (the envelope-follower state) in
-    /// place. `dt_seconds` is real wall time, so attack/release are frame-rate
-    /// independent — a 120 ms release feels the same at 60 or 144 fps.
-    pub fn apply(&self, raw: f32, dt_seconds: f32, smoothed: &mut f32) -> f32 {
-        let target = (raw * self.sensitivity).clamp(0.0, 1.0);
+    /// param's range. Advances `smoothed` (the envelope-follower state) and
+    /// `prev_raw` (the rate-of-change differentiator's last sample) in place.
+    /// `dt_seconds` is real wall time, so both attack/release and the rate are
+    /// frame-rate independent — a 120 ms release feels the same at 60 or 144 fps.
+    pub fn apply(&self, raw: f32, dt_seconds: f32, smoothed: &mut f32, prev_raw: &mut f32) -> f32 {
+        // Rate-of-change differentiates the feature over real time (per second),
+        // scaled by sensitivity and centered at 0.5 so a steady signal reads as
+        // mid-range while motion pushes it up (rising) or down (falling). The
+        // level path is the plain sensitivity-scaled value. `prev_raw` always
+        // tracks the last raw, so toggling the mode mid-stream stays clean.
+        let target = if self.rate_of_change {
+            let rate = (raw - *prev_raw) / dt_seconds.max(1e-4);
+            (0.5 + rate * self.sensitivity).clamp(0.0, 1.0)
+        } else {
+            (raw * self.sensitivity).clamp(0.0, 1.0)
+        };
+        *prev_raw = raw;
 
         // One-pole follower: separate attack/release time constants. A
         // non-positive tau snaps instantly (no smoothing).
@@ -183,6 +202,10 @@ pub struct ParameterAudioMod {
     /// Envelope-follower accumulator. Runtime state, not serialized.
     #[serde(skip)]
     pub smoothed: f32,
+    /// Previous raw feature value — the rate-of-change differentiator's state.
+    /// Runtime state, not serialized.
+    #[serde(skip)]
+    pub prev_raw: f32,
 }
 
 fn default_true() -> bool {
@@ -198,6 +221,7 @@ impl ParameterAudioMod {
             source: AudioModSource { send_id, feature },
             shape: AudioModShape::default(),
             smoothed: 0.0,
+            prev_raw: 0.0,
         }
     }
 }
@@ -243,14 +267,15 @@ mod tests {
             ..Default::default()
         };
         let mut s = 0.0;
+        let mut p = 0.0;
         // One 16 ms step toward 1.0 should move partway, not all the way.
-        let out = shape.apply(1.0, 0.016, &mut s);
+        let out = shape.apply(1.0, 0.016, &mut s, &mut p);
         assert!(s > 0.0 && s < 1.0, "partial rise, got {s}");
         assert!((out - s).abs() < 1e-6, "linear curve, full range → out == smoothed");
 
         // Many steps converge to ~1.0.
         for _ in 0..100 {
-            shape.apply(1.0, 0.016, &mut s);
+            shape.apply(1.0, 0.016, &mut s, &mut p);
         }
         assert!(s > 0.99, "converges to target, got {s}");
     }
@@ -266,9 +291,31 @@ mod tests {
             ..Default::default()
         };
         let mut s = 0.0;
+        let mut p = 0.0;
         // raw 1.0 → smoothed 1.0 → invert → 0.0 → range map → 0.2.
-        let out = shape.apply(1.0, 0.016, &mut s);
+        let out = shape.apply(1.0, 0.016, &mut s, &mut p);
         assert!((out - 0.2).abs() < 1e-6, "inverted full signal maps to range floor, got {out}");
+    }
+
+    #[test]
+    fn rate_of_change_drives_on_motion_not_level() {
+        let shape = AudioModShape {
+            attack_ms: 0.0,
+            release_ms: 0.0, // snap, so output == target
+            rate_of_change: true,
+            ..Default::default()
+        };
+        let mut s = 0.0;
+        let mut prev = 0.0;
+        // Steady level (same raw twice) → no change → centered at 0.5.
+        shape.apply(0.7, 0.016, &mut s, &mut prev);
+        let steady = shape.apply(0.7, 0.016, &mut s, &mut prev);
+        assert!((steady - 0.5).abs() < 1e-6, "no change reads mid-range, got {steady}");
+        // A rise pushes above 0.5; a fall pushes below.
+        let rising = shape.apply(0.9, 0.016, &mut s, &mut prev);
+        assert!(rising > 0.5, "rising feature pushes above center, got {rising}");
+        let falling = shape.apply(0.5, 0.016, &mut s, &mut prev);
+        assert!(falling < 0.5, "falling feature pushes below center, got {falling}");
     }
 
     #[test]
