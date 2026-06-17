@@ -3916,22 +3916,20 @@ impl Application {
                 let lo_yfb = y_of(self.content_state.spectrogram_low_hz);
                 let hi_yfb = y_of(self.content_state.spectrogram_mid_hz);
                 // Which divider the cursor is over, for the grip-handle hover
-                // affordance: compare the cursor's uv.y (top-down) to each line's
-                // (the shader's `band_*_y` are from the bottom, so flip).
-                let hovered_divider = if scope_cursor_y < 0.0 {
-                    -1.0
+                // glow. Use the panel's OWN hit-test (same px tolerance the grab
+                // uses) so the glow and the grab zone match exactly — converting
+                // the cursor's uv.y back to a screen y. Off-scope cursor (< 0)
+                // maps far away → no hover.
+                let cursor_screen_y = if scope_cursor_y < 0.0 {
+                    -1.0e9
                 } else {
-                    let d_lo = (scope_cursor_y - (1.0 - lo_yfb)).abs();
-                    let d_hi = (scope_cursor_y - (1.0 - hi_yfb)).abs();
-                    const HOVER_UV: f32 = 0.02;
-                    if d_lo < HOVER_UV && d_lo <= d_hi {
-                        0.0
-                    } else if d_hi < HOVER_UV {
-                        1.0
-                    } else {
-                        -1.0
-                    }
+                    rect.y + scope_cursor_y * rect.height
                 };
+                let hovered_divider = self
+                    .ws
+                    .ui_root
+                    .audio_setup_panel
+                    .divider_hover_index(cursor_screen_y);
                 spectrogram.render(
                     &mut encoder,
                     &target,

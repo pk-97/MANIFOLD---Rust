@@ -733,27 +733,50 @@ impl AudioSetupPanel {
         })
     }
 
-    /// Which divider line (if any) is within grab distance of a screen point,
-    /// preferring the nearer when both are close. Requires the point to be within
-    /// the waterfall's horizontal span.
-    fn divider_at(&self, pos: Vec2) -> Option<BandDivider> {
-        let rect = self.scope_rect?;
-        if pos.x < rect.x || pos.x > rect.x + rect.width {
-            return None;
-        }
-        const GRAB_PX: f32 = 7.0;
+    /// Vertical grab tolerance for a divider line (logical px). Generous so the
+    /// thin line is easy to land on; the hover glow uses the SAME test (see
+    /// [`Self::divider_hover_index`]) so what lights up is exactly what grabs.
+    const DIVIDER_GRAB_PX: f32 = 12.0;
+
+    /// Which divider line (if any) is within grab distance of a screen `y`,
+    /// preferring the nearer when both are close. Pure y-distance — shared by the
+    /// pointer hit-test and the hover affordance.
+    fn nearest_divider_y(&self, screen_y: f32) -> Option<BandDivider> {
         let mut best: Option<(BandDivider, f32)> = None;
         for (band, hz) in
             [(BandDivider::Low, self.scope_low_hz), (BandDivider::Mid, self.scope_mid_hz)]
         {
             if let Some(ly) = self.scope_line_y(hz) {
-                let d = (pos.y - ly).abs();
-                if d <= GRAB_PX && best.is_none_or(|(_, bd)| d < bd) {
+                let d = (screen_y - ly).abs();
+                if d <= Self::DIVIDER_GRAB_PX && best.is_none_or(|(_, bd)| d < bd) {
                     best = Some((band, d));
                 }
             }
         }
         best.map(|(b, _)| b)
+    }
+
+    /// Which divider line (if any) is within grab distance of a screen point,
+    /// preferring the nearer when both are close. Requires the point to be within
+    /// the waterfall's horizontal span (plus a small slop so the left-edge grip
+    /// is easy to grab).
+    fn divider_at(&self, pos: Vec2) -> Option<BandDivider> {
+        let rect = self.scope_rect?;
+        if pos.x < rect.x - 4.0 || pos.x > rect.x + rect.width + 4.0 {
+            return None;
+        }
+        self.nearest_divider_y(pos.y)
+    }
+
+    /// Divider index for the shader's hover affordance: `0` = low/mid over the
+    /// cursor, `1` = mid/high, `< 0` = none. Uses the same test as the grab, so
+    /// the glow and the grab zone are identical.
+    pub fn divider_hover_index(&self, screen_y: f32) -> f32 {
+        match self.nearest_divider_y(screen_y) {
+            Some(BandDivider::Low) => 0.0,
+            Some(BandDivider::Mid) => 1.0,
+            None => -1.0,
+        }
     }
 
     /// Whether `id` is any node this panel owns (background or an interactive
