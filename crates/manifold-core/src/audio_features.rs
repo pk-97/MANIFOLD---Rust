@@ -24,8 +24,9 @@ pub struct SendFeatures {
     /// −1..1, so their RMS is in range by construction). This is the `Amplitude`
     /// feature — a true level the shaper maps straight onto a slider's range.
     pub amplitude: f32,
-    /// Relative energy in [low, mid, high] perceptual bands. An unnormalized FFT
-    /// magnitude (not 0..1) — the shaper's sensitivity scales it.
+    /// Energy in [low, mid, high] perceptual bands, dB-normalized to **0..1**
+    /// against a fixed reference (≈ −60 dBFS floor); the per-send input gain is
+    /// the calibration knob.
     pub band_energy: [f32; 3],
     /// Spectral centroid — "brightness" — normalized **0..1** on a log-frequency
     /// curve (~50 Hz..8 kHz), so 0 = dark, 1 = bright regardless of sample rate.
@@ -35,8 +36,8 @@ pub struct SendFeatures {
     /// Lets a send tell "the synth is sounding" from "that's the noise riser."
     pub flatness: f32,
     /// Spectral flux — rate of spectral change, the sum of positive bin-to-bin
-    /// magnitude increases. Unnormalized like `band_energy`; the shaper's
-    /// sensitivity scales it. Onset is derived from this.
+    /// magnitude increases, dB-normalized to **0..1** like `band_energy`. Onset
+    /// is derived from the raw (pre-normalization) flux.
     pub flux: f32,
     /// Transient trigger, 0..1 impulse that decays. Derived from an adaptive
     /// threshold on `flux`.

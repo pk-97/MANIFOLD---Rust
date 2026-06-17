@@ -493,7 +493,9 @@ impl WorkerLoop {
 
                     let flux = spectral_flux(&self.analyzer.mags, &send.prev_mags);
                     send.prev_mags.copy_from_slice(&self.analyzer.mags);
-                    send.features.flux = flux;
+                    // Stored feature is dB-normalized 0..1; onset detection below
+                    // works on the raw flux so its adaptive threshold is unaffected.
+                    send.features.flux = db_normalize(flux, FLUX_REF);
 
                     // Onset: a flux spike above the running average fires a unit
                     // impulse; otherwise the previous impulse decays.
@@ -607,6 +609,22 @@ const ONSET_DECAY: f32 = 0.6;
 /// Smoothing of the running flux average the onset threshold tracks.
 const FLUX_AVG_COEFF: f32 = 0.1;
 
+/// dB floor for the energy-feature normalization: this many dB below the
+/// reference maps to 0.0, the reference itself to 1.0. The bands and flux are
+/// raw amplitude-like magnitudes with no natural ceiling, so they're dB-mapped
+/// into 0..1 (like the already-bounded amplitude/centroid/flatness) — that way
+/// the shaper's Amount = 1 is a sane default across every feature instead of the
+/// energy ones pinning. The per-send input gain is the real calibration knob;
+/// these references are starting points to tune by feel.
+const FEATURE_FLOOR_DB: f32 = -60.0;
+/// Raw band-energy value treated as 0 dBFS. A full-scale tone concentrated in
+/// one band reads ~sqrt(FFT_SIZE)/4 = 8; real broadband material sits below, so
+/// this is a generous ceiling with headroom.
+const BAND_REF: f32 = 8.0;
+/// Raw spectral-flux value treated as 0 dBFS. Flux is a sum of per-bin increases
+/// with no natural ceiling; this is a starting guess to tune by feel.
+const FLUX_REF: f32 = 32.0;
+
 /// One window's stateless spectral reductions, all from the single FFT the
 /// analyzer runs. Flux/onset need the previous spectrum and are computed
 /// per-send by the caller from [`SpectralAnalyzer::mags`].
@@ -700,7 +718,7 @@ impl SpectralAnalyzer {
             for bin in lo..=hi {
                 sum += self.mags[bin] * self.mags[bin];
             }
-            band_energy[band] = (sum / FFT_SIZE as f32).sqrt();
+            band_energy[band] = db_normalize((sum / FFT_SIZE as f32).sqrt(), BAND_REF);
         }
 
         // Centroid (magnitude-weighted mean frequency) and flatness (geometric /
@@ -741,6 +759,18 @@ impl SpectralAnalyzer {
 /// the rectified spectrum — which correctly reads as the initial onset.
 fn spectral_flux(cur: &[f32], prev: &[f32]) -> f32 {
     cur.iter().zip(prev).map(|(&c, &p)| (c - p).max(0.0)).sum()
+}
+
+/// Map a raw, unbounded amplitude-like feature to 0..1 on a dB scale: `reference`
+/// is treated as 0 dBFS (→ 1.0) and [`FEATURE_FLOOR_DB`] below it as 0.0. Used to
+/// bring the band energies and flux into the same 0..1 range as the bounded
+/// features.
+fn db_normalize(raw: f32, reference: f32) -> f32 {
+    if raw <= 1e-9 {
+        return 0.0;
+    }
+    let db = 20.0 * (raw / reference).log10();
+    ((db - FEATURE_FLOOR_DB) / -FEATURE_FLOOR_DB).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -888,7 +918,8 @@ mod tests {
             s.band_energy,
         );
         // Overall amplitude is the normalized RMS — a full-scale tone reads
-        // ≈0.707, always inside 0..1 (unlike the unnormalized band energy).
+        // ≈0.707, always inside 0..1 (the band energies are dB-normalized to
+        // 0..1 too; this just checks a different code path).
         assert!(
             s.amplitude > 0.5 && s.amplitude <= 1.0,
             "full-scale tone RMS in 0..1: {}",
