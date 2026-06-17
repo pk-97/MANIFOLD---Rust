@@ -2001,6 +2001,25 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::AudioSendLabelClicked(send_id) => {
+                    if let Some(send) = self.local_project.audio_setup.find_send(send_id)
+                        && let Some(r) = self
+                            .ws
+                            .ui_root
+                            .audio_setup_panel
+                            .send_label_rect(&self.ws.ui_root.tree, send_id)
+                    {
+                        let label = send.label.clone();
+                        self.text_input.audio_send_id = Some(send_id.clone());
+                        self.text_input.begin(
+                            crate::text_input::TextInputField::AudioSendLabel,
+                            &label,
+                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                            11.0,
+                        );
+                    }
+                    continue;
+                }
                 PanelAction::MacroLabelRename(idx) => {
                     if let Some(slot) = self.local_project.settings.macro_bank.slots.get(*idx)
                         && let Some(r) = self

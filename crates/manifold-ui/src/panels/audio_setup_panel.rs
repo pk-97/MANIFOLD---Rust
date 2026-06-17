@@ -47,6 +47,7 @@ pub struct AudioSendRow {
 /// Per-send interactive node ids.
 #[derive(Default, Clone)]
 struct SendRowIds {
+    label: i32,
     ch_dropdown: i32,
     delete: i32,
 }
@@ -220,17 +221,44 @@ impl AudioSetupPanel {
             cy += ROW_H + ROW_GAP;
         }
 
-        // Send rows: label | [ channel name ▼ ] | ×
+        // Send rows: [swatch] label | [ channel name ▼ ] | ×
+        const SWATCH_W: f32 = 8.0;
+        const LABEL_W: f32 = 70.0;
         self.send_ids = vec![SendRowIds::default(); rows];
         for (i, send) in self.sends.iter().enumerate() {
-            tree.add_label(self.bg_id, inner_x, cy, 70.0, ROW_H, &send.label, label_style());
+            // Identity color swatch.
+            tree.add_panel(
+                self.bg_id,
+                inner_x,
+                cy + (ROW_H - 12.0) * 0.5,
+                SWATCH_W,
+                12.0,
+                UIStyle {
+                    bg_color: super::audio_send_color(&send.id),
+                    corner_radius: 2.0,
+                    ..UIStyle::default()
+                },
+            );
+
+            // Label is a button — clicking it opens the inline rename editor.
+            let label_x = inner_x + SWATCH_W + 6.0;
+            self.send_ids[i].label = tree.add_button(
+                self.bg_id,
+                label_x,
+                cy,
+                LABEL_W,
+                ROW_H,
+                label_button_style(),
+                &send.label,
+            ) as i32;
 
             // Channel dropdown shows the resolved channel name (or "Not routed").
+            let ch_x = label_x + LABEL_W + 4.0;
             self.send_ids[i].ch_dropdown = tree.add_button(
                 self.bg_id,
-                inner_x + 74.0,
+                ch_x,
                 cy,
-                inner_w - 74.0 - STEP_W - 4.0,
+                inner_x + inner_w - STEP_W - 4.0 - ch_x,
                 ROW_H,
                 dropdown_trigger_style(),
                 &format!("{}   \u{25BC}", send.channel_label),
@@ -274,7 +302,15 @@ impl AudioSetupPanel {
         }
         self.send_ids
             .iter()
-            .any(|r| id == r.ch_dropdown || id == r.delete)
+            .any(|r| id == r.label || id == r.ch_dropdown || id == r.delete)
+    }
+
+    /// Screen rect of a send's label button (the inline-rename anchor), or
+    /// `None` if the send isn't currently built.
+    pub fn send_label_rect(&self, tree: &UITree, id: &AudioSendId) -> Option<Rect> {
+        let i = self.sends.iter().position(|s| &s.id == id)?;
+        let node = self.send_ids.get(i)?;
+        (node.label >= 0).then(|| tree.get_bounds(node.label as u32))
     }
 
     /// Resolve a clicked node id to a [`PanelAction`], or `None` if it hit
@@ -298,6 +334,10 @@ impl AudioSetupPanel {
         }
         for (i, ids) in self.send_ids.iter().enumerate() {
             let send = &self.sends[i];
+            if id == ids.label {
+                // App opens the inline rename editor anchored to this label.
+                return Some(PanelAction::AudioSendLabelClicked(send.id.clone()));
+            }
             if id == ids.delete {
                 return Some(PanelAction::AudioRemoveSend(send.id.clone()));
             }
@@ -383,6 +423,20 @@ fn label_style() -> UIStyle {
         text_color: Color32::new(150, 150, 160, 255),
         font_size: color::FONT_LABEL,
         text_align: TextAlign::Left,
+        ..UIStyle::default()
+    }
+}
+
+/// The send-name button — looks like a label, hovers like an editable field.
+fn label_button_style() -> UIStyle {
+    UIStyle {
+        bg_color: Color32::new(0, 0, 0, 0),
+        hover_bg_color: Color32::new(44, 44, 50, 255),
+        pressed_bg_color: Color32::new(30, 30, 34, 255),
+        text_color: Color32::new(214, 214, 220, 255),
+        font_size: color::FONT_LABEL,
+        text_align: TextAlign::Left,
+        corner_radius: 2.0,
         ..UIStyle::default()
     }
 }

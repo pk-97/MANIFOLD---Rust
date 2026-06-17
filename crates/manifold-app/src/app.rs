@@ -1218,6 +1218,28 @@ impl Application {
                 }
                 self.needs_rebuild = true;
             }
+            TextInputField::AudioSendLabel => {
+                if let Some(send_id) = self.text_input.audio_send_id.take() {
+                    let new_label = text.trim().to_string();
+                    let old_label = self
+                        .local_project
+                        .audio_setup
+                        .find_send(&send_id)
+                        .map(|s| s.label.clone())
+                        .unwrap_or_default();
+                    if !new_label.is_empty() && old_label != new_label {
+                        let cmd =
+                            manifold_editing::commands::audio_setup::RenameAudioSendCommand::new(
+                                send_id, old_label, new_label,
+                            );
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                            Box::new(cmd);
+                        boxed.execute(&mut self.local_project);
+                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                    }
+                }
+                self.needs_rebuild = true;
+            }
             // ── Graph-editor fields ──────────────────────────────────────
             // The graph canvas renders from `content_state.active_graph_snapshot`
             // (the content thread owns the authoritative graph), so these

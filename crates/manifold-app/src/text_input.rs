@@ -40,6 +40,9 @@ pub enum TextInputField {
     SearchFilter,
     /// Timeline marker rename. MarkerId stored in TextInputState::marker_id.
     MarkerName,
+    /// Audio send rename. AudioSendId stored in TextInputState::audio_send_id
+    /// (Arc<str>, not Copy, so kept off this Copy enum).
+    AudioSendLabel,
     /// Graph-editor group rename. Carries the group's runtime node id; the scope
     /// is read from the canvas at commit time. Routes to `RenameGroupCommand`.
     GraphGroupRename(u32),
@@ -133,6 +136,8 @@ pub struct TextInputState {
     pub multiline: bool,
     /// MarkerId for MarkerName field (String not Copy, so stored separately).
     pub marker_id: Option<manifold_core::MarkerId>,
+    /// AudioSendId for the AudioSendLabel field (Arc<str> not Copy).
+    pub audio_send_id: Option<manifold_core::AudioSendId>,
     /// Param name for `GraphStringParam` (String not `Copy`, so stored here).
     pub graph_param_name: Option<String>,
     /// Cell context for `GraphTableCell` (carries the full table, so stored
@@ -152,6 +157,7 @@ impl TextInputState {
             select_all: false,
             multiline: false,
             marker_id: None,
+            audio_send_id: None,
             graph_param_name: None,
             graph_table_edit: None,
         }

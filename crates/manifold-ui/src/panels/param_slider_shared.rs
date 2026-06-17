@@ -1195,7 +1195,15 @@ pub(crate) fn build_param_row(
             .audio_send_labels
             .iter()
             .enumerate()
-            .map(|(k, label)| DrawerButton::new(label.clone(), k as i32 == send_sel))
+            .map(|(k, label)| {
+                let btn = DrawerButton::new(label.clone(), k as i32 == send_sel);
+                // Tint with the send's identity color so a driven slider reads
+                // the same color as its source in the Audio Setup panel.
+                match mod_state.audio_send_ids.get(k) {
+                    Some(id) => btn.with_accent(crate::panels::audio_send_color(id)),
+                    None => btn,
+                }
+            })
             .collect();
         send_buttons.push(DrawerButton::new("\u{002B}", false)); // + new send
         let feat_sel = mod_state.audio_feature_idx.get(i).copied().unwrap_or(0);

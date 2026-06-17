@@ -25,9 +25,36 @@ pub mod waveform_lane;
 
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
+use crate::node::Color32;
 use crate::tree::UITree;
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{AudioSendId, ClipId, LayerId};
 pub use viewport::HitRegion;
+
+/// A stable, distinct identity color for an audio send, derived from its id so
+/// it survives reorders without any stored field. Used by the Audio Setup row
+/// swatch and the per-slider audio drawer, so a slider driven by "Kick" reads
+/// the same color in both places.
+pub fn audio_send_color(id: &AudioSendId) -> Color32 {
+    // Bright, well-separated hues — the same palette feel as track colors.
+    const PALETTE: [(u8, u8, u8); 8] = [
+        (236, 110, 110), // red
+        (236, 168, 92),  // amber
+        (224, 214, 96),  // yellow
+        (130, 214, 124), // green
+        (104, 206, 206), // teal
+        (120, 168, 240), // blue
+        (176, 142, 234), // violet
+        (234, 134, 198), // pink
+    ];
+    // FNV-1a over the id bytes → stable index.
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in id.as_str().bytes() {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let (r, g, b) = PALETTE[(hash as usize) % PALETTE.len()];
+    Color32::new(r, g, b, 255)
+}
 
 /// Actions for driver configuration sub-panels.
 #[derive(Debug, Clone)]
@@ -256,8 +283,10 @@ pub enum PanelAction {
     AudioAddSend,
     /// Remove a send by id.
     AudioRemoveSend(manifold_core::AudioSendId),
-    /// Rename a send.
+    /// Rename a send (commit with the new label).
     AudioRenameSend(manifold_core::AudioSendId, String),
+    /// Begin inline editing of a send's label (clicked its name).
+    AudioSendLabelClicked(manifold_core::AudioSendId),
     /// Set a send's input channels (downmixed to mono for analysis).
     AudioSetSendChannels(manifold_core::AudioSendId, Vec<u16>),
     /// A modulator output sub-range handle moved during a drag. `TrimKind`

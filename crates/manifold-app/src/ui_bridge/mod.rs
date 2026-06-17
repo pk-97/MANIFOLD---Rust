@@ -384,6 +384,8 @@ pub fn dispatch(
         | PanelAction::EffectMappingAffineCommit { .. }
         | PanelAction::EffectMappingGotoNode { .. }
         | PanelAction::OpenAudioSetup
+        // Consumed in app_render (opens the inline rename editor); no-op here.
+        | PanelAction::AudioSendLabelClicked(_)
         | PanelAction::RevertEffectGraph => DispatchResult::handled(),
     }
 }
