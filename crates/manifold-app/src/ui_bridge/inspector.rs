@@ -1294,6 +1294,23 @@ pub(super) fn dispatch_inspector(
                 Box::new(SetAudioSendChannelsCommand::new(id.clone(), old, ch.clone())),
             )
         }
+        PanelAction::AudioSendStereoToggle(id) => {
+            // Mono ↔ stereo: stereo routes the primary channel and its pair
+            // partner; mono keeps just the primary. Out-of-range channels are
+            // ignored by the analysis downmix, so no device-bound clamp here.
+            let old = project
+                .audio_setup
+                .find_send(id)
+                .map(|s| s.channels.clone())
+                .unwrap_or_default();
+            let first = old.first().copied().unwrap_or(0);
+            let new = if old.len() >= 2 { vec![first] } else { vec![first, first + 1] };
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioSendChannelsCommand::new(id.clone(), old, new)),
+            )
+        }
         PanelAction::EnvelopeToggle(gpt, param_id) => {
             // Envelope-home unification: the envelope rides on the resolved
             // instance (keyed by param_id) for effects and generators alike.

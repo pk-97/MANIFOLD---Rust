@@ -49,6 +49,7 @@ pub struct AudioSendRow {
 struct SendRowIds {
     label: i32,
     ch_dropdown: i32,
+    stereo: i32,
     delete: i32,
 }
 
@@ -252,19 +253,7 @@ impl AudioSetupPanel {
                 &send.label,
             ) as i32;
 
-            // Channel dropdown shows the resolved channel name (or "Not routed").
-            let ch_x = label_x + LABEL_W + 4.0;
-            self.send_ids[i].ch_dropdown = tree.add_button(
-                self.bg_id,
-                ch_x,
-                cy,
-                inner_x + inner_w - STEP_W - 4.0 - ch_x,
-                ROW_H,
-                dropdown_trigger_style(),
-                &format!("{}   \u{25BC}", send.channel_label),
-            ) as i32;
-
-            // Delete (right-aligned).
+            // Delete (right-aligned), then mono/stereo toggle to its left.
             self.send_ids[i].delete = tree.add_button(
                 self.bg_id,
                 inner_x + inner_w - STEP_W,
@@ -273,6 +262,31 @@ impl AudioSetupPanel {
                 ROW_H,
                 btn_style(false),
                 "\u{00D7}",
+            ) as i32;
+
+            let stereo_on = send.channels.len() >= 2;
+            const STEREO_W: f32 = 30.0;
+            let stereo_x = inner_x + inner_w - STEP_W - 4.0 - STEREO_W;
+            self.send_ids[i].stereo = tree.add_button(
+                self.bg_id,
+                stereo_x,
+                cy,
+                STEREO_W,
+                ROW_H,
+                btn_style(stereo_on),
+                if stereo_on { "St" } else { "Mo" },
+            ) as i32;
+
+            // Channel dropdown fills the gap, showing the resolved name(s).
+            let ch_x = label_x + LABEL_W + 4.0;
+            self.send_ids[i].ch_dropdown = tree.add_button(
+                self.bg_id,
+                ch_x,
+                cy,
+                (stereo_x - 4.0 - ch_x).max(40.0),
+                ROW_H,
+                dropdown_trigger_style(),
+                &format!("{}   \u{25BC}", send.channel_label),
             ) as i32;
             cy += ROW_H + ROW_GAP;
         }
@@ -302,7 +316,15 @@ impl AudioSetupPanel {
         }
         self.send_ids
             .iter()
-            .any(|r| id == r.label || id == r.ch_dropdown || id == r.delete)
+            .any(|r| id == r.label || id == r.ch_dropdown || id == r.stereo || id == r.delete)
+    }
+
+    /// Whether a send is currently routed as a stereo pair (≥2 channels).
+    pub fn is_send_stereo(&self, id: &AudioSendId) -> bool {
+        self.sends
+            .iter()
+            .find(|s| &s.id == id)
+            .is_some_and(|s| s.channels.len() >= 2)
     }
 
     /// Screen rect of a send's label button (the inline-rename anchor), or
@@ -344,6 +366,9 @@ impl AudioSetupPanel {
             if id == ids.ch_dropdown {
                 // App opens the channel dropdown anchored to this trigger.
                 return Some(PanelAction::AudioSendChannelClicked(send.id.clone()));
+            }
+            if id == ids.stereo {
+                return Some(PanelAction::AudioSendStereoToggle(send.id.clone()));
             }
         }
         None

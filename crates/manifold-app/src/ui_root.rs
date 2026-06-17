@@ -1642,11 +1642,17 @@ impl UIRoot {
             DropdownContext::AudioSendChannel(send_id) => {
                 // The channel list is grouped (subdevice headers are non-
                 // selectable), so map the item index back to a channel index.
+                // Preserve the send's mono/stereo state: a stereo send picks the
+                // chosen channel plus its pair partner.
+                let stereo = self.audio_setup_panel.is_send_stereo(&send_id);
                 self.audio_channel_item_map
                     .get(index)
                     .copied()
                     .flatten()
-                    .map(|ch| PanelAction::AudioSetSendChannels(send_id, vec![ch]))
+                    .map(|ch| {
+                        let channels = if stereo { vec![ch, ch + 1] } else { vec![ch] };
+                        PanelAction::AudioSetSendChannels(send_id, channels)
+                    })
             }
             DropdownContext::CardContext(gpt) => {
                 // Label-matched: Copy/Paste are generator-only + conditional, so

@@ -289,6 +289,8 @@ pub enum PanelAction {
     AudioSendLabelClicked(manifold_core::AudioSendId),
     /// Set a send's input channels (downmixed to mono for analysis).
     AudioSetSendChannels(manifold_core::AudioSendId, Vec<u16>),
+    /// Toggle a send between mono (one channel) and stereo (a channel pair).
+    AudioSendStereoToggle(manifold_core::AudioSendId),
     /// A modulator output sub-range handle moved during a drag. `TrimKind`
     /// selects which modulator (driver / Ableton / audio) — the three formerly
     /// parallel `*TrimChanged` variants are one path now.

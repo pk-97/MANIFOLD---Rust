@@ -190,6 +190,7 @@ pub fn dispatch(
         | PanelAction::AudioRemoveSend(..)
         | PanelAction::AudioRenameSend(..)
         | PanelAction::AudioSetSendChannels(..)
+        | PanelAction::AudioSendStereoToggle(..)
         | PanelAction::AudioSetupDeviceClicked
         | PanelAction::AudioSendChannelClicked(..)
         | PanelAction::TrimChanged(..)
