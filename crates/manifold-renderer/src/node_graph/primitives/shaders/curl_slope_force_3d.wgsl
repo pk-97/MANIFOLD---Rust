@@ -1,16 +1,21 @@
 // node.curl_slope_force_3d — combine a vec3 gradient Texture3D into a
-// force field: cross the gradient with a (unit) reference axis for curl
-// (tangential orbit around density peaks) and add the gradient scaled by
-// slope (radial push/pull). Writes a vec3 force Texture3D.
+// force field: cross the gradient with a curl-noise reference axis for
+// swirl (tangential orbit around density peaks) and add the gradient
+// scaled by slope (radial push/pull). Writes a vec3 force Texture3D.
 //
-//   curl_force = cross(gradient, ref_axis)
+//   axis       = normalize(ref_axis + smooth_spatial_wobble(uv))
+//   curl_force = cross(gradient, axis)
 //   force      = curl_force * curl_strength + gradient * slope_strength
 //
-// Bit-exact with the curl + slope half of the legacy fused
-// fluid_gradient_curl_3d pass (the gradient half is the separate
+// Parity oracle for the generated standalone kernel (the body lives in
+// curl_slope_force_3d_body.wgsl; the gradient half is the separate
 // node.gradient_central_diff_3d atom upstream). `ref_axis` is normalized
-// CPU-side before reaching the shader so curl magnitude tracks
-// curl_strength exactly.
+// CPU-side and supplies the base orientation; the per-voxel wobble tilts
+// it smoothly across space so the swirl has no single global dead
+// direction. This DIVERGES from the legacy fused fluid_gradient_curl_3d
+// pass, which used one fixed axis and so pooled curl energy in one octant
+// (the swirl magnitude vanished where gradient ∥ ref_axis); see the body
+// for the full rationale.
 
 struct U {
     vol_res:        u32,
@@ -44,8 +49,24 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let ref_axis = vec3<f32>(params.ref_axis_x, params.ref_axis_y, params.ref_axis_z);
 
-    // Curl: cross(gradient, ref_axis) — tangential flow around density peaks.
-    let curl_force = cross(gradient, ref_axis);
+    // Curl-noise axis: tilt ref_axis by a smooth low-frequency spatial wobble so
+    // the swirl has no single global dead direction (cross magnitude is
+    // |gradient|·sin(angle to axis), which would otherwise carve a quiet pole +
+    // hot belt). `uv` is the normalized voxel centre — matches the generated
+    // kernel's (vec3<f32>(id) + 0.5) / vec3<f32>(textureDimensions(dst)).
+    let uv = (vec3<f32>(id) + vec3<f32>(0.5)) / vec3<f32>(f32(vr), f32(vr), f32(depth));
+    let tau = 6.2831853;
+    let wob = vec3<f32>(
+        sin(uv.y * tau * 2.0) + cos(uv.z * tau),
+        sin(uv.z * tau * 2.0) + cos(uv.x * tau),
+        sin(uv.x * tau * 2.0) + cos(uv.y * tau),
+    );
+    let axis_raw = ref_axis + wob * 0.9;
+    let axis_len = length(axis_raw);
+    let axis = select(ref_axis, axis_raw / axis_len, axis_len > 1e-4);
+
+    // Curl: cross(gradient, axis) — tangential flow around density peaks.
+    let curl_force = cross(gradient, axis);
 
     // Combined force: curl (tangential orbit) + slope (radial push/pull).
     let force = curl_force * params.curl_strength + gradient * params.slope_strength;

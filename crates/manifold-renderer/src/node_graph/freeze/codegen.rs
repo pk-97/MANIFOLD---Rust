@@ -4669,8 +4669,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
 
     /// 3D CoincidentTexel parity (dual-packed): node.curl_slope_force_3d reads its
     /// gradient volume at the OWN voxel (integer textureLoad, no sampler) and
-    /// combines curl + slope. ref_axis is CPU-normalized in run(), so the body
-    /// uses it directly (no GPU rsqrt — bit-exact). The hand uniform pads
+    /// combines curl + slope. ref_axis is CPU-normalized in run() and the body
+    /// tilts it per-voxel by a smooth spatial wobble (curl-noise) derived from the
+    /// normalized voxel centre `uv` — the oracle reconstructs the identical `uv`
+    /// from vol_res/vol_depth, so the two stay bit-for-bit. The hand uniform pads
     /// vol_res/vol_depth to 16 (48 bytes); the generated Params are contiguous (32
     /// bytes) — pack each from the same logical values.
     #[test]
