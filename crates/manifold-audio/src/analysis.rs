@@ -956,17 +956,29 @@ fn reduce_send(
     let have_prev = send.has_prev;
     for (bi, &(lo, hi)) in bands.iter().enumerate() {
         let r = band_reduce(&send.col, &send.prev_col, lo, hi, db_min, db_max);
+        // Two thresholds, deliberately different: `present` (loudest bin clears
+        // the display floor) means "drawn on the scope at all" and only governs
+        // the running-average bookkeeping; `loud` (band level above a musical
+        // floor) means "worth characterising." Every feature that DESCRIBES the
+        // band — brightness, noisiness, liveliness, transients — gates on `loud`,
+        // so none of them reports a value on faint, near-noise-floor content (a
+        // noise floor reads as maximally flat/noisy, a tiny energy wobble reads
+        // as high liveliness, etc.). Amplitude is the honest level and is always
+        // reported.
         let present = r.peak > presence_lin;
+        let loud = r.amplitude > ONSET_AMP_GATE;
         let bf = &mut send.features.bands[bi];
         bf.amplitude = r.amplitude;
-        bf.brightness = if present { r.brightness } else { 0.0 };
-        bf.noisiness = if present { r.noisiness } else { 0.0 };
+        bf.brightness = if loud { r.brightness } else { 0.0 };
+        bf.noisiness = if loud { r.noisiness } else { 0.0 };
 
         if have_prev {
             // Liveliness (relative flux) self-scales with density — it's also the
-            // transient's "sharpness" discriminator below.
+            // transient's "sharpness" discriminator below. Gated on `loud` for the
+            // same reason transients are: on a faint band a tiny energy doubling
+            // gives a high relative flux that isn't musically meaningful.
             let rel = relative_flux(r.flux, r.energy);
-            bf.liveliness = if present { rel } else { 0.0 };
+            bf.liveliness = if loud { rel } else { 0.0 };
 
             // A transient is a sharp RISE, not just any wobble. Three scale-
             // invariant conditions, all required (and a refractory window so one
@@ -979,7 +991,7 @@ fn reduce_send(
             //     screen that the way it could on the old fixed-scale FFT);
             //   • loudness — the band is actually present, not noise-floor faint.
             let refractory = &mut send.transient_refractory[bi];
-            let triggered = bf.amplitude > ONSET_AMP_GATE
+            let triggered = loud
                 && *refractory == 0
                 && r.flux > send.flux_avg[bi] * ONSET_RATIO
                 && rel > ONSET_REL_FLOOR;
