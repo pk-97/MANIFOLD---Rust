@@ -72,6 +72,13 @@ const SCOPE_AXIS_W: f32 = 34.0;
 const SCOPE_METER_W: f32 = 44.0;
 /// Gap between the waterfall and the band-meter column.
 const SCOPE_METER_GAP: f32 = 4.0;
+/// Vertical inset of the waterfall inside the backing panel. The blit is a hard
+/// rectangle (a generic viewport quad — no rounded corners), so without this its
+/// square top/bottom corners sit flush on the panel's rounded, bordered edge and
+/// read as a boxy clash. Insetting floats the waterfall as a clean rectangle
+/// inside the rounded frame. The frequency axis + dividers derive from the same
+/// inset rect (`scope_rect`), so the inset keeps them aligned.
+const SCOPE_PAD_Y: f32 = 3.0;
 /// Width of the L/M/H letter label left of each meter bar.
 const BAND_METER_LABEL_W: f32 = 11.0;
 /// Half-height of a band meter bar (px).
@@ -286,6 +293,15 @@ impl AudioSetupPanel {
                 ..UIStyle::default()
             },
         ) as i32;
+        // The modal background must be hit-testable so a press anywhere on it
+        // emits a PointerDown — `hit_test` only returns INTERACTIVE nodes, and
+        // `process_pointer` only fires PointerDown when something is hit. Without
+        // this, pressing on the spectrogram (a non-interactive backing panel)
+        // only arms the band-divider drag when an interactive node from the UI
+        // behind the modal happens to sit under the cursor — the source of the
+        // "sometimes draggable" band lines. `bg_id` is already in `owns_node`,
+        // so this also makes the modal reliably swallow stray clicks.
+        tree.set_flag(self.bg_id as u32, UIFlags::INTERACTIVE);
 
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
@@ -581,10 +597,16 @@ impl AudioSetupPanel {
                 },
             );
 
+            // Waterfall vertical span — inset inside the backing panel so the
+            // hard-cornered blit floats within the rounded, bordered frame.
+            let wf_y = cy + SCOPE_PAD_Y;
+            let wf_h = (self.scope_h - SCOPE_PAD_Y * 2.0).max(1.0);
+
             // Frequency-axis tick labels in the left margin (log scale: the
             // present pass draws the waterfall to the right of this margin).
             // Range must track `manifold_spectral::SpectrogramConfig` defaults
-            // (10 Hz–22 kHz); ticks match the Analyzer VST's axis.
+            // (10 Hz–22 kHz); ticks match the Analyzer VST's axis. Mapped over the
+            // waterfall's inset span so the ticks line up with the blit.
             let (fmin, fmax) = (10.0_f32, 22_000.0_f32);
             for &(hz, txt) in &[
                 (20.0, "20"),
@@ -599,7 +621,7 @@ impl AudioSetupPanel {
                 (20_000.0, "20k"),
             ] {
                 let yn = (hz / fmin).log2() / (fmax / fmin).log2();
-                let ly = cy + self.scope_h * (1.0 - yn) - 6.0;
+                let ly = wf_y + wf_h * (1.0 - yn) - 6.0;
                 tree.add_label(
                     self.bg_id,
                     inner_x + 2.0,
@@ -622,9 +644,9 @@ impl AudioSetupPanel {
             // nodes, since the blit would otherwise cover them).
             self.scope_rect = Some(Rect::new(
                 inner_x + SCOPE_AXIS_W,
-                cy,
+                wf_y,
                 inner_w - SCOPE_AXIS_W - SCOPE_METER_W,
-                self.scope_h,
+                wf_h,
             ));
 
             // Per-band level meters (Low/Mid/High): a track + fill + letter label
