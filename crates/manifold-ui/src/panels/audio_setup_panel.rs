@@ -42,6 +42,9 @@ pub struct AudioSendRow {
     /// BH_IN_R", or "Not routed". Resolved against the device directory by the
     /// data layer so the panel stays free of platform queries.
     pub channel_label: String,
+    /// Number of parameters this send currently drives. Surfaced on the row and
+    /// gates a confirm-before-delete so a bound send isn't silently severed.
+    pub driven_count: usize,
 }
 
 /// Per-send interactive node ids.
@@ -63,6 +66,10 @@ pub struct AudioSetupPanel {
     /// A reliability warning to surface below the device row (device offline,
     /// mic permission blocked), or `None` when all is well.
     status_warning: Option<String>,
+    /// Send whose delete button is armed for confirmation (it drives params, so
+    /// the first click arms and the second confirms). Cleared on any other click
+    /// or on close.
+    delete_armed: Option<AudioSendId>,
     // Node ids (set by `build`).
     bg_id: i32,
     close_id: i32,
@@ -86,6 +93,7 @@ impl AudioSetupPanel {
 
     pub fn close(&mut self) {
         self.open = false;
+        self.delete_armed = None;
     }
 
     /// The currently selected input device (`None` = system default). The app
@@ -117,10 +125,27 @@ impl AudioSetupPanel {
             .unwrap_or_else(|| "System Default".to_string())
     }
 
+    /// The single notice line shown below the device row: a delete-confirm
+    /// prompt (takes priority while a delete is armed), else a reliability
+    /// warning (device offline / mic blocked), else nothing.
+    fn active_notice(&self) -> Option<String> {
+        if let Some(id) = &self.delete_armed
+            && let Some(send) = self.sends.iter().find(|s| &s.id == id)
+        {
+            return Some(format!(
+                "\u{26A0} Delete \"{}\"? It drives {} param{} — click \u{00D7} again",
+                send.label,
+                send.driven_count,
+                if send.driven_count == 1 { "" } else { "s" },
+            ));
+        }
+        self.status_warning.clone()
+    }
+
     /// Total body height for the configured send count.
     fn body_height(&self) -> f32 {
         let rows = self.sends.len();
-        let warning = if self.status_warning.is_some() { ROW_H + ROW_GAP } else { 0.0 };
+        let warning = if self.active_notice().is_some() { ROW_H + ROW_GAP } else { 0.0 };
         TITLE_H
             + ROW_H // device row
             + ROW_GAP
@@ -203,8 +228,8 @@ impl AudioSetupPanel {
         ) as i32;
         cy += ROW_H + ROW_GAP;
 
-        // Reliability warning (device offline / mic blocked), if any.
-        if let Some(warning) = &self.status_warning {
+        // Notice line: delete-confirm prompt or reliability warning, if any.
+        if let Some(warning) = &self.active_notice() {
             tree.add_label(
                 self.bg_id,
                 inner_x,
@@ -253,15 +278,24 @@ impl AudioSetupPanel {
                 &send.label,
             ) as i32;
 
-            // Delete (right-aligned), then mono/stereo toggle to its left.
+            // Delete (right-aligned). Armed (awaiting confirm) shows a warning
+            // glyph; an in-use send tints amber as a "this drives params" cue.
+            let armed = self.delete_armed.as_ref() == Some(&send.id);
+            let delete_label = if armed { "!" } else { "\u{00D7}" };
+            let mut del_style = btn_style(false);
+            if armed {
+                del_style.text_color = Color32::new(236, 110, 110, 255); // red
+            } else if send.driven_count > 0 {
+                del_style.text_color = Color32::new(232, 168, 92, 255); // amber
+            }
             self.send_ids[i].delete = tree.add_button(
                 self.bg_id,
                 inner_x + inner_w - STEP_W,
                 cy,
                 STEP_W,
                 ROW_H,
-                btn_style(false),
-                "\u{00D7}",
+                del_style,
+                delete_label,
             ) as i32;
 
             let stereo_on = send.channels.len() >= 2;
@@ -346,33 +380,70 @@ impl AudioSetupPanel {
         self.handle_click_inner(id)
     }
 
-    fn handle_click_inner(&self, id: i32) -> Option<PanelAction> {
+    fn handle_click_inner(&mut self, id: i32) -> Option<PanelAction> {
         if id == self.device_dropdown_id {
+            self.delete_armed = None;
             // App opens the device dropdown anchored to this trigger.
             return Some(PanelAction::AudioSetupDeviceClicked);
         }
         if id == self.add_send_id {
+            self.delete_armed = None;
             return Some(PanelAction::AudioAddSend);
         }
-        for (i, ids) in self.send_ids.iter().enumerate() {
-            let send = &self.sends[i];
+        // Find which send row + control was hit (clone out so we don't hold a
+        // borrow across the delete-arm mutation).
+        let hit = self.send_ids.iter().enumerate().find_map(|(i, ids)| {
             if id == ids.label {
-                // App opens the inline rename editor anchored to this label.
-                return Some(PanelAction::AudioSendLabelClicked(send.id.clone()));
+                Some((i, RowControl::Label))
+            } else if id == ids.ch_dropdown {
+                Some((i, RowControl::Channel))
+            } else if id == ids.stereo {
+                Some((i, RowControl::Stereo))
+            } else if id == ids.delete {
+                Some((i, RowControl::Delete))
+            } else {
+                None
             }
-            if id == ids.delete {
-                return Some(PanelAction::AudioRemoveSend(send.id.clone()));
+        });
+        let (i, control) = hit?;
+        let send_id = self.sends[i].id.clone();
+        match control {
+            RowControl::Label => {
+                self.delete_armed = None;
+                Some(PanelAction::AudioSendLabelClicked(send_id))
             }
-            if id == ids.ch_dropdown {
-                // App opens the channel dropdown anchored to this trigger.
-                return Some(PanelAction::AudioSendChannelClicked(send.id.clone()));
+            RowControl::Channel => {
+                self.delete_armed = None;
+                Some(PanelAction::AudioSendChannelClicked(send_id))
             }
-            if id == ids.stereo {
-                return Some(PanelAction::AudioSendStereoToggle(send.id.clone()));
+            RowControl::Stereo => {
+                self.delete_armed = None;
+                Some(PanelAction::AudioSendStereoToggle(send_id))
+            }
+            RowControl::Delete => {
+                // Confirm before deleting a send that still drives params: the
+                // first click arms (re-render shows the prompt), the second
+                // confirms. A send driving nothing deletes immediately.
+                if self.sends[i].driven_count == 0
+                    || self.delete_armed.as_ref() == Some(&send_id)
+                {
+                    self.delete_armed = None;
+                    Some(PanelAction::AudioRemoveSend(send_id))
+                } else {
+                    self.delete_armed = Some(send_id);
+                    None
+                }
             }
         }
-        None
     }
+}
+
+/// Which interactive control of a send row was clicked.
+enum RowControl {
+    Label,
+    Channel,
+    Stereo,
+    Delete,
 }
 
 impl Overlay for AudioSetupPanel {
@@ -498,12 +569,14 @@ mod tests {
                     label: "Audio 1".into(),
                     channels: vec![0],
                     channel_label: "Channel 1".into(),
+                    driven_count: 0,
                 },
                 AudioSendRow {
                     id: AudioSendId::new("s2"),
                     label: "Audio 2".into(),
                     channels: vec![2],
                     channel_label: "MacBook Mic".into(),
+                    driven_count: 0,
                 },
             ],
             None,
@@ -540,6 +613,39 @@ mod tests {
         // Close button toggles closed and yields no action.
         assert!(p.handle_click(p.close_id).is_none());
         assert!(!p.is_open());
+    }
+
+    #[test]
+    fn in_use_send_delete_requires_confirm() {
+        let mut p = panel_with_two_sends();
+        // Mark send 1 as driving two params.
+        p.sends[0].driven_count = 2;
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+
+        let del = p.send_ids[0].delete;
+        // First click arms — no action, and the confirm notice appears.
+        assert!(p.handle_click(del).is_none());
+        assert!(p.active_notice().is_some_and(|n| n.contains("drives 2 params")));
+        // Second click confirms the delete.
+        assert!(matches!(p.handle_click(del), Some(PanelAction::AudioRemoveSend(_))));
+        assert!(p.active_notice().is_none(), "arm cleared after confirm");
+    }
+
+    #[test]
+    fn clicking_elsewhere_clears_delete_arm() {
+        let mut p = panel_with_two_sends();
+        p.sends[0].driven_count = 1;
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+
+        assert!(p.handle_click(p.send_ids[0].delete).is_none()); // arm
+        // Clicking the stereo toggle clears the arm instead of deleting.
+        assert!(matches!(
+            p.handle_click(p.send_ids[0].stereo),
+            Some(PanelAction::AudioSendStereoToggle(_))
+        ));
+        assert!(p.active_notice().is_none());
     }
 
     #[test]

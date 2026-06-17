@@ -1091,6 +1091,7 @@ pub fn sync_inspector_data(
                 label: s.label.clone(),
                 channel_label: channel_label(device.as_ref(), &s.channels),
                 channels: s.channels.clone(),
+                driven_count: project.audio_send_usage_count(&s.id),
             })
             .collect();
 

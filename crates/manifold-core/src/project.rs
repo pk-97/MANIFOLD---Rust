@@ -970,6 +970,33 @@ impl Project {
         false
     }
 
+    /// Number of parameters whose modulation references `send_id` (enabled or
+    /// not), across master effects, layer effects, and generator params. Used to
+    /// warn before deleting a send that sliders still depend on.
+    pub fn audio_send_usage_count(&self, send_id: &crate::id::AudioSendId) -> usize {
+        fn inst_count(fx: &crate::effects::PresetInstance, send_id: &crate::id::AudioSendId) -> usize {
+            fx.audio_mods
+                .as_ref()
+                .map(|v| v.iter().filter(|a| &a.source.send_id == send_id).count())
+                .unwrap_or(0)
+        }
+        let mut count = self
+            .settings
+            .master_effects
+            .iter()
+            .map(|fx| inst_count(fx, send_id))
+            .sum::<usize>();
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref() {
+                count += effects.iter().map(|fx| inst_count(fx, send_id)).sum::<usize>();
+            }
+            if let Some(gp) = layer.gen_params() {
+                count += inst_count(gp, send_id);
+            }
+        }
+        count
+    }
+
     /// Run `f` against the [`crate::effects::PresetInstance`] that a
     /// [`crate::graph_target::GraphTarget`] resolves to, returning its
     /// result (`None` if the target doesn't resolve). The one entry point
