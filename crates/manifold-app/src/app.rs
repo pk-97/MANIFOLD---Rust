@@ -237,6 +237,11 @@ pub struct Application {
     #[cfg(target_os = "macos")]
     pub(crate) spectrogram_pane: Option<crate::texture_pane::TexturePane>,
     pub(crate) spectrogram_num_bins: usize,
+    /// Physical-pixel size of the scope render target, tracked so it is rebuilt
+    /// when the (resizable) Audio Setup modal changes the on-screen scope size —
+    /// keeps the waterfall crisp instead of upscaling a fixed small texture.
+    #[cfg(target_os = "macos")]
+    pub(crate) spectrogram_tex_dims: (u32, u32),
     /// Last spectrogram-send selection pushed to the content thread, so the
     /// `SetSpectrogramSend` command only fires on change.
     pub(crate) spectrogram_send_sent: Option<manifold_core::AudioSendId>,
@@ -503,6 +508,8 @@ impl Application {
             #[cfg(target_os = "macos")]
             spectrogram_pane: None,
             spectrogram_num_bins: 0,
+            #[cfg(target_os = "macos")]
+            spectrogram_tex_dims: (0, 0),
             spectrogram_send_sent: None,
             atlas_pipeline: None,
             atlas_sampler: None,

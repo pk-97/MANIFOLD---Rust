@@ -23,7 +23,13 @@ use super::PanelAction;
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 
 // ── Layout ──
-const PANEL_W: f32 = 460.0;
+/// Minimum panel width (small screens / compact fallback). The modal targets a
+/// fraction of the viewport (see [`AudioSetupPanel::resize_to_viewport`]) but
+/// never shrinks below this.
+const PANEL_W_MIN: f32 = 460.0;
+/// Fraction of the viewport the enlarged modal fills, width and height.
+const PANEL_W_FRAC: f32 = 0.8;
+const PANEL_H_FRAC: f32 = 0.8;
 const TITLE_H: f32 = 26.0;
 const ROW_H: f32 = 24.0;
 const ROW_GAP: f32 = 4.0;
@@ -55,7 +61,9 @@ pub struct AudioSendRow {
 
 /// Height of the spectrogram scope section (title + waterfall).
 const SCOPE_TITLE_H: f32 = 18.0;
-const SCOPE_H: f32 = 200.0;
+/// Minimum waterfall height. When the modal is enlarged to the viewport
+/// fraction, the scope absorbs all the extra vertical space above this floor.
+const SCOPE_H_MIN: f32 = 200.0;
 /// Left margin inside the scope for the frequency-axis labels.
 const SCOPE_AXIS_W: f32 = 34.0;
 
@@ -100,6 +108,12 @@ pub struct AudioSetupPanel {
     /// Screen-space rect of the waterfall image (logical units), set by `build`.
     /// The present pass blits the spectrogram texture here. `None` when closed.
     scope_rect: Option<Rect>,
+    /// Resolved panel width and waterfall height for the current viewport, set by
+    /// [`AudioSetupPanel::resize_to_viewport`]. The modal targets
+    /// [`PANEL_W_FRAC`]×[`PANEL_H_FRAC`] of the screen; the control rows are
+    /// fixed-height, so the scope absorbs the extra vertical space.
+    panel_w: f32,
+    scope_h: f32,
     // Node ids (set by `build`).
     bg_id: i32,
     close_id: i32,
@@ -110,7 +124,11 @@ pub struct AudioSetupPanel {
 
 impl AudioSetupPanel {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            panel_w: PANEL_W_MIN,
+            scope_h: SCOPE_H_MIN,
+            ..Self::default()
+        }
     }
 
     pub fn is_open(&self) -> bool {
@@ -172,23 +190,36 @@ impl AudioSetupPanel {
         self.status_warning.clone()
     }
 
-    /// Total body height for the configured send count.
-    fn body_height(&self) -> f32 {
+    /// Body height of everything except the waterfall image: title, device row,
+    /// notice, send rows, add-send button, scope title, and padding. The scope's
+    /// waterfall (`self.scope_h`) is added on top by [`body_height`].
+    fn chrome_height(&self) -> f32 {
         let rows = self.sends.len();
         let warning = if self.active_notice().is_some() { ROW_H + ROW_GAP } else { 0.0 };
-        let scope = if self.sends.is_empty() {
-            0.0
-        } else {
-            ROW_GAP + SCOPE_TITLE_H + SCOPE_H
-        };
+        let scope_chrome = if self.sends.is_empty() { 0.0 } else { ROW_GAP + SCOPE_TITLE_H };
         TITLE_H
             + ROW_H // device row
             + ROW_GAP
             + warning
             + (ROW_H + ROW_GAP) * rows as f32
             + ROW_H // add-send button
-            + scope
+            + scope_chrome
             + PAD * 2.0
+    }
+
+    /// Total body height for the configured send count.
+    fn body_height(&self) -> f32 {
+        let scope = if self.sends.is_empty() { 0.0 } else { self.scope_h };
+        self.chrome_height() + scope
+    }
+
+    /// Resolve [`panel_w`](Self::panel_w)/[`scope_h`](Self::scope_h) to the
+    /// target viewport fraction, never below the compact minimums. The control
+    /// rows are fixed-height, so all the extra height goes to the waterfall.
+    fn resize_to_viewport(&mut self, viewport_w: f32, viewport_h: f32) {
+        self.panel_w = (viewport_w * PANEL_W_FRAC).max(PANEL_W_MIN);
+        let target_h = viewport_h * PANEL_H_FRAC;
+        self.scope_h = (target_h - self.chrome_height()).max(SCOPE_H_MIN);
     }
 
     /// Build the modal's nodes, centered in a `(width, height)` viewport.
@@ -196,8 +227,9 @@ impl AudioSetupPanel {
         if !self.open {
             return;
         }
+        self.resize_to_viewport(viewport_w, viewport_h);
         let body_h = self.body_height();
-        let x = ((viewport_w - PANEL_W) * 0.5).max(0.0);
+        let x = ((viewport_w - self.panel_w) * 0.5).max(0.0);
         let y = ((viewport_h - body_h) * 0.5).max(0.0);
         self.build_nodes(tree, x, y);
     }
@@ -210,7 +242,7 @@ impl AudioSetupPanel {
             -1,
             x,
             y,
-            PANEL_W,
+            self.panel_w,
             body_h,
             UIStyle {
                 bg_color: Color32::new(19, 19, 22, 250),
@@ -222,7 +254,7 @@ impl AudioSetupPanel {
         ) as i32;
 
         let inner_x = x + PAD;
-        let inner_w = PANEL_W - PAD * 2.0;
+        let inner_w = self.panel_w - PAD * 2.0;
         let mut cy = y + PAD;
 
         // Title + close.
@@ -486,7 +518,7 @@ impl AudioSetupPanel {
                 inner_x,
                 cy,
                 inner_w,
-                SCOPE_H,
+                self.scope_h,
                 UIStyle {
                     bg_color: Color32::new(10, 10, 12, 255),
                     border_color: Color32::new(48, 48, 52, 255),
@@ -498,10 +530,23 @@ impl AudioSetupPanel {
 
             // Frequency-axis tick labels in the left margin (log scale: the
             // present pass draws the waterfall to the right of this margin).
-            let (fmin, fmax) = (30.0_f32, 16_000.0_f32);
-            for &(hz, txt) in &[(100.0, "100"), (1000.0, "1k"), (10_000.0, "10k")] {
+            // Range must track `manifold_spectral::SpectrogramConfig` defaults
+            // (10 Hz–22 kHz); ticks match the Analyzer VST's axis.
+            let (fmin, fmax) = (10.0_f32, 22_000.0_f32);
+            for &(hz, txt) in &[
+                (20.0, "20"),
+                (50.0, "50"),
+                (100.0, "100"),
+                (200.0, "200"),
+                (500.0, "500"),
+                (1000.0, "1k"),
+                (2000.0, "2k"),
+                (5000.0, "5k"),
+                (10_000.0, "10k"),
+                (20_000.0, "20k"),
+            ] {
                 let yn = (hz / fmin).log2() / (fmax / fmin).log2();
-                let ly = cy + SCOPE_H * (1.0 - yn) - 6.0;
+                let ly = cy + self.scope_h * (1.0 - yn) - 6.0;
                 tree.add_label(
                     self.bg_id,
                     inner_x + 2.0,
@@ -524,7 +569,7 @@ impl AudioSetupPanel {
                 inner_x + SCOPE_AXIS_W,
                 cy,
                 inner_w - SCOPE_AXIS_W,
-                SCOPE_H,
+                self.scope_h,
             ));
         }
     }
@@ -721,14 +766,22 @@ impl Overlay for AudioSetupPanel {
     }
 
     fn desired_size(&self) -> Vec2 {
-        Vec2::new(PANEL_W, self.body_height())
+        Vec2::new(self.panel_w, self.body_height())
     }
 
     fn build_at(&mut self, tree: &mut UITree, placement: OverlayPlacement) {
         if !self.open {
             return;
         }
-        self.build_nodes(tree, placement.rect.x, placement.rect.y);
+        // Size to the viewport and self-center. The modal targets a screen
+        // fraction larger than the driver's content-based placement rect, so we
+        // recompute the centered origin from the full screen size here rather
+        // than using `placement.rect` (which was laid out for `desired_size`).
+        self.resize_to_viewport(placement.screen.x, placement.screen.y);
+        let body_h = self.body_height();
+        let x = ((placement.screen.x - self.panel_w) * 0.5).max(0.0);
+        let y = ((placement.screen.y - body_h) * 0.5).max(0.0);
+        self.build_nodes(tree, x, y);
     }
 
     fn on_event(&mut self, event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {

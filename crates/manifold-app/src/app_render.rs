@@ -3739,7 +3739,13 @@ impl Application {
             let num_bins = self.content_state.spectrogram_num_bins;
             let cfg = SpectrogramConfig::default();
 
-            // (Re)create the renderer + target pane if the layout changed.
+            // Render the waterfall at the scope's physical-pixel size so it stays
+            // crisp at any (resizable) modal size — the shader supersamples the
+            // column ring directly to display resolution. Clamped to bound VRAM.
+            let tex_w = ((rect.width * sf).round() as u32).clamp(256, 4096);
+            let tex_h = ((rect.height * sf).round() as u32).clamp(128, 4096);
+
+            // (Re)create the renderer if the column layout changed.
             if self.spectrogram.is_none() || self.spectrogram_num_bins != num_bins {
                 self.spectrogram = Some(Spectrogram::new(
                     &gpu.device,
@@ -3749,9 +3755,14 @@ impl Application {
                     cfg.db_min,
                     cfg.db_max,
                 ));
+                self.spectrogram_num_bins = num_bins;
+            }
+            // (Re)create the target pane when the scope's pixel size changes
+            // (modal resize) or it doesn't exist yet.
+            if self.spectrogram_pane.is_none() || self.spectrogram_tex_dims != (tex_w, tex_h) {
                 let tex = gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
-                    width: 512,
-                    height: 256,
+                    width: tex_w,
+                    height: tex_h,
                     depth: 1,
                     format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
                     dimension: manifold_gpu::GpuTextureDimension::D2,
@@ -3760,7 +3771,7 @@ impl Application {
                     mip_levels: 1,
                 });
                 self.spectrogram_pane = Some(crate::texture_pane::TexturePane::local(tex));
-                self.spectrogram_num_bins = num_bins;
+                self.spectrogram_tex_dims = (tex_w, tex_h);
             }
 
             if let (Some(spectrogram), Some(pane)) =
