@@ -549,16 +549,32 @@ impl WorkerLoop {
             self.spec_window.drain(0..excess);
         }
 
-        while self.spec_since_hop >= hop && self.spec_window.len() >= n_fft {
-            let start = self.spec_window.len() - n_fft;
-            cqt.process_magnitudes(&self.spec_window[start..], &mut self.spec_col);
+        if self.spec_window.len() < n_fft {
+            return;
+        }
+
+        // Columns owed since the last emit. Each is a window ending `hop` samples
+        // later than the previous, so the oldest one we can form must still have
+        // a full `n_fft` behind it — the retained buffer (capped at `n_fft + hop`)
+        // bounds how many DISTINCT columns exist. A startup/stall backlog that
+        // exceeds that is collapsed: emitting it would re-analyse the same static
+        // window and paint a run of identical columns (the left-edge smear), so we
+        // drop the columns we have no distinct data for instead of duplicating.
+        let owed = self.spec_since_hop / hop;
+        let avail = 1 + (self.spec_window.len() - n_fft) / hop;
+        let emit = owed.min(avail);
+        for j in (0..emit).rev() {
+            let end = self.spec_window.len() - j * hop;
+            cqt.process_magnitudes(&self.spec_window[end - n_fft..end], &mut self.spec_col);
             // Whole-column push only — if the ring can't fit a full column, drop
             // it (the scope skips a frame) rather than desync the stream.
             if self.column_producer.vacant_len() >= self.spec_num_bins {
                 self.column_producer.push_slice(&self.spec_col);
             }
-            self.spec_since_hop -= hop;
         }
+        // Consume the whole backlog (including the collapsed remainder) so it
+        // doesn't carry forward and re-smear on the next drain.
+        self.spec_since_hop -= owed * hop;
     }
 
     fn emit_frame(&mut self) {
