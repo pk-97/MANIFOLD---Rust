@@ -1,0 +1,18 @@
+[package]
+name = "manifold-spectral"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Shared spectral DSP + spectrogram rendering. The constant-Q transform (CQT/VQT)
+# is ported from the Manifold Analyzer VST; the GPU waterfall renderer is a clean
+# Manifold-native consumer of it (no egui/GL coupling). Used by the audio worker
+# (CPU CQT → magnitude columns) and the Audio Setup panel (columns → texture).
+
+[dependencies]
+manifold-gpu = { path = "../manifold-gpu" }
+log = { workspace = true }
+rustfft = "6"
+
+[lints]
+workspace = true

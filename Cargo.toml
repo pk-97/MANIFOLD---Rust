@@ -13,6 +13,7 @@ members = [
     "crates/manifold-led",
     "crates/manifold-gpu",
     "crates/manifold-audio",
+    "crates/manifold-spectral",
     "crates/manifold-recording",
     "crates/manifold-app",
 ]
