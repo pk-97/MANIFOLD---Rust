@@ -26,6 +26,8 @@ mod perform_mode;
 mod project_io;
 #[cfg(target_os = "macos")]
 mod shared_texture;
+#[cfg(target_os = "macos")]
+mod texture_pane;
 mod text_input;
 mod ui_bridge;
 mod ui_root;
