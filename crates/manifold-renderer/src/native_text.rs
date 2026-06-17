@@ -34,7 +34,7 @@ use manifold_ui::{
 };
 use std::sync::Arc;
 
-use crate::ui_renderer::Layer;
+use crate::ui_renderer::Depth;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -566,7 +566,7 @@ struct TextCommand {
     color: [u8; 4],
     font_weight: FontWeight,
     clip_bounds: Option<[f32; 4]>,
-    layer: Layer,
+    depth: Depth,
 }
 
 /// Command to draw an icon from the atlas.
@@ -578,7 +578,7 @@ struct IconCommand {
     icon_id: u8,
     color: [u8; 4],
     clip_bounds: Option<[f32; 4]>,
-    layer: Layer,
+    depth: Depth,
 }
 
 // ─── TextVertex ──────────────────────────────────────────────────────────────
@@ -651,12 +651,16 @@ pub struct NativeTextRenderer {
     vertices: Vec<TextVertex>,
     indices: Vec<u32>,
 
-    /// Per-layer (first_index, index_count) ranges into the prepared index
-    /// buffer, for text quads and icon quads respectively. Commands are
-    /// stable-sorted by layer during prepare so each layer's quads are
-    /// contiguous; `render_layer_in_pass` draws just one layer's ranges.
-    text_layer_ranges: [(u32, u32); 3],
-    icon_layer_ranges: [(u32, u32); 3],
+    /// Per-depth (depth, first_index, index_count) ranges into the prepared
+    /// index buffer, for text quads and icon quads respectively, ascending by
+    /// depth. Commands are stable-sorted by depth during prepare so each
+    /// depth's quads are contiguous; `render_depth_in_pass` draws just one
+    /// depth's ranges.
+    text_depth_ranges: Vec<(Depth, u32, u32)>,
+    icon_depth_ranges: Vec<(Depth, u32, u32)>,
+    /// Distinct depths that have text or icons this frame, ascending. The
+    /// owning `UIRenderer` merges this into its render walk.
+    depths: Vec<Depth>,
 
     /// Measurement cache: u64 hash of (text, font_size, weight) → Vec2.
     /// Uses hash keys to avoid String allocations on cache hits.
@@ -727,8 +731,9 @@ impl NativeTextRenderer {
             prepared_globals: [0.0; 4],
             vertices: Vec::new(),
             indices: Vec::new(),
-            text_layer_ranges: [(0, 0); 3],
-            icon_layer_ranges: [(0, 0); 3],
+            text_depth_ranges: Vec::with_capacity(8),
+            icon_depth_ranges: Vec::with_capacity(8),
+            depths: Vec::with_capacity(8),
             measure_cache: AHashMap::new(),
             frame_generation: 0,
         }
@@ -745,7 +750,7 @@ impl NativeTextRenderer {
         color: [u8; 4],
         font_weight: FontWeight,
         clip_bounds: Option<[f32; 4]>,
-        layer: Layer,
+        depth: Depth,
     ) {
         if text.is_empty() {
             return;
@@ -762,7 +767,7 @@ impl NativeTextRenderer {
             color,
             font_weight,
             clip_bounds,
-            layer,
+            depth,
         });
     }
 
@@ -816,7 +821,7 @@ impl NativeTextRenderer {
         h: f32,
         color: [u8; 4],
         clip_bounds: Option<[f32; 4]>,
-        layer: Layer,
+        depth: Depth,
     ) {
         if (icon_id as usize) < ICON_COUNT && self.icon_infos[icon_id as usize].is_some() {
             self.icon_commands.push(IconCommand {
@@ -827,7 +832,7 @@ impl NativeTextRenderer {
                 icon_id,
                 color,
                 clip_bounds,
-                layer,
+                depth,
             });
         }
     }
@@ -853,8 +858,9 @@ impl NativeTextRenderer {
         self.vertices.clear();
         self.indices.clear();
         self.prepared_index_count = 0;
-        self.text_layer_ranges = [(0, 0); 3];
-        self.icon_layer_ranges = [(0, 0); 3];
+        self.text_depth_ranges.clear();
+        self.icon_depth_ranges.clear();
+        self.depths.clear();
 
         if self.commands.is_empty() && self.icon_commands.is_empty() {
             return false;
@@ -865,10 +871,10 @@ impl NativeTextRenderer {
 
         let mut commands: Vec<TextCommand> = std::mem::take(&mut self.commands);
         let arena = std::mem::take(&mut self.text_arena);
-        // Stable sort: within a layer, insertion order is preserved, so a
-        // single-layer frame builds the identical buffer to the pre-layer
+        // Stable sort: within a depth, insertion order is preserved, so a
+        // single-depth frame builds the identical buffer to the pre-depth
         // renderer.
-        commands.sort_by_key(|c| c.layer);
+        commands.sort_by_key(|c| c.depth);
 
         for cmd in &commands {
             let range_start = self.indices.len() as u32;
@@ -987,13 +993,17 @@ impl NativeTextRenderer {
                 ]);
             }
 
-            // Extend this layer's text range (commands are layer-sorted, so
-            // the range stays contiguous).
-            let range = &mut self.text_layer_ranges[cmd.layer.index()];
-            if range.1 == 0 {
-                range.0 = range_start;
+            // Extend this depth's text range (commands are depth-sorted, so the
+            // range stays contiguous). Skip if this command emitted no glyphs.
+            let added = self.indices.len() as u32 - range_start;
+            if added > 0 {
+                match self.text_depth_ranges.last_mut() {
+                    Some((d, _, count)) if *d == cmd.depth => *count += added,
+                    _ => self
+                        .text_depth_ranges
+                        .push((cmd.depth, range_start, added)),
+                }
             }
-            range.1 = self.indices.len() as u32 - range.0;
         }
 
         // Restore arena capacity for next frame (contents will be cleared in clear_commands).
@@ -1009,9 +1019,9 @@ impl NativeTextRenderer {
             self.atlas.was_cleared = false;
         }
 
-        // Emit quads for icon commands (layer-sorted, like text above).
+        // Emit quads for icon commands (depth-sorted, like text above).
         let mut icon_cmds: Vec<IconCommand> = std::mem::take(&mut self.icon_commands);
-        icon_cmds.sort_by_key(|c| c.layer);
+        icon_cmds.sort_by_key(|c| c.depth);
         for cmd in &icon_cmds {
             let range_start = self.indices.len() as u32;
             let Some(info) = self.icon_infos[cmd.icon_id as usize] else {
@@ -1077,12 +1087,23 @@ impl NativeTextRenderer {
             self.indices
                 .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 
-            let range = &mut self.icon_layer_ranges[cmd.layer.index()];
-            if range.1 == 0 {
-                range.0 = range_start;
+            let added = self.indices.len() as u32 - range_start;
+            if added > 0 {
+                match self.icon_depth_ranges.last_mut() {
+                    Some((d, _, count)) if *d == cmd.depth => *count += added,
+                    _ => self
+                        .icon_depth_ranges
+                        .push((cmd.depth, range_start, added)),
+                }
             }
-            range.1 = self.indices.len() as u32 - range.0;
         }
+
+        // Union of text and icon depths, ascending — handed to the UIRenderer
+        // so it visits every depth that carries glyphs.
+        self.depths.extend(self.text_depth_ranges.iter().map(|r| r.0));
+        self.depths.extend(self.icon_depth_ranges.iter().map(|r| r.0));
+        self.depths.sort_unstable();
+        self.depths.dedup();
 
         if self.vertices.is_empty() {
             return false;
@@ -1163,16 +1184,31 @@ impl NativeTextRenderer {
         );
     }
 
-    /// Draw one layer's text + icon quads into an already-active render pass.
-    pub fn render_layer_in_pass(&self, encoder: &mut GpuEncoder, layer: Layer) {
+    /// Distinct depths carrying text or icons this frame, ascending. The
+    /// owning `UIRenderer` merges this into its depth walk so a text-only
+    /// depth is still visited.
+    pub fn depths(&self) -> &[Depth] {
+        &self.depths
+    }
+
+    /// Draw one depth's text + icon quads into an already-active render pass.
+    /// A no-op for a depth with no glyphs.
+    pub fn render_depth_in_pass(&self, encoder: &mut GpuEncoder, depth: Depth) {
         if self.prepared_index_count == 0 {
             return;
         }
         let Some(ref atlas_texture) = self.atlas.texture else {
             return;
         };
-        let text_range = self.text_layer_ranges[layer.index()];
-        let icon_range = self.icon_layer_ranges[layer.index()];
+        let range_for = |ranges: &[(Depth, u32, u32)]| {
+            ranges
+                .iter()
+                .find(|(d, _, _)| *d == depth)
+                .map(|&(_, first, count)| (first, count))
+                .unwrap_or((0, 0))
+        };
+        let text_range = range_for(&self.text_depth_ranges);
+        let icon_range = range_for(&self.icon_depth_ranges);
         if text_range.1 == 0 && icon_range.1 == 0 {
             return;
         }

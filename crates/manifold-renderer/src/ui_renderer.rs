@@ -100,23 +100,42 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// Z-order layer for draw commands. Within a frame, all Base geometry
-/// renders first (rects, lines, then text), then Overlay, then Tooltip.
-/// Within a layer, insertion order is preserved — so a frame that only
-/// touches Base renders identically to the pre-layer renderer.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
-pub enum Layer {
-    #[default]
-    Base,
-    Overlay,
-    Tooltip,
-}
+/// Z-depth for a draw command. Lower values paint first (further back).
+///
+/// The renderer paints in ascending depth, and **within a single depth it
+/// draws rects+lines first, then text+icons**. So a surface's own background
+/// never occludes its own text, but a *higher* depth occludes everything below
+/// it — text included. Two surfaces that stack (a dropdown over a panel, the
+/// graph mapping popover over nodes) must therefore sit at *distinct* depths,
+/// or the lower one's text bleeds through the higher one's fill.
+///
+/// Named tiers below are spaced by 100 so new surfaces slot between them
+/// without renumbering — adding a floating surface is "pick a depth," never a
+/// renderer edit. A frame that only touches one depth issues the identical
+/// draw sequence to the pre-depth renderer.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct Depth(pub i32);
 
-impl Layer {
-    pub const ALL: [Layer; 3] = [Layer::Base, Layer::Overlay, Layer::Tooltip];
+impl Depth {
+    /// Main UI: panels, timeline, graph wires.
+    pub const BASE: Depth = Depth(0);
+    /// Graph nodes — above the wires on `BASE`.
+    pub const CONTENT: Depth = Depth(100);
+    /// Floating top-level surfaces: panels, modals, perf HUD. The overlay
+    /// driver offsets each open overlay upward from here by its stack index
+    /// (`OVERLAY.above(i)`), so a later-opened overlay always paints over an
+    /// earlier one — text included.
+    pub const OVERLAY: Depth = Depth(200);
+    /// Surfaces that open *on top of* an overlay or node: dropdown menus, the
+    /// graph mapping popover.
+    pub const POPOVER: Depth = Depth(300);
+    /// Topmost transient surfaces: hover tooltips, drag ghosts, debug HUD.
+    pub const TOOLTIP: Depth = Depth(400);
 
-    pub const fn index(self) -> usize {
-        self as usize
+    /// This depth shifted up by `n` (e.g. `Depth::OVERLAY.above(i)` for the
+    /// i-th stacked overlay).
+    pub const fn above(self, n: i32) -> Depth {
+        Depth(self.0 + n)
     }
 }
 
@@ -143,7 +162,7 @@ struct LineCommand {
     y1: f32,
     thickness: f32,
     color: [f32; 4],
-    layer: Layer,
+    depth: Depth,
     /// Immediate clip captured at draw time (lines are only ever emitted via
     /// the immediate API; trees draw rects and text only).
     clip: Option<Rect>,
@@ -158,8 +177,8 @@ struct ScissorBatch {
     rect_start: usize,
     /// Number of rects in this batch.
     rect_count: usize,
-    /// Z-order layer the batch draws on.
-    layer: Layer,
+    /// Z-depth the batch draws on.
+    depth: Depth,
 }
 
 /// GPU-ready batch with physical pixel scissor coordinates.
@@ -170,8 +189,8 @@ struct PreparedBatch {
     index_offset: u64,
     /// Number of indices to draw.
     index_count: u32,
-    /// Z-order layer the batch draws on.
-    layer: Layer,
+    /// Z-depth the batch draws on.
+    depth: Depth,
 }
 
 /// Initial vertex/index buffer capacities (vertices / indices).
@@ -224,19 +243,23 @@ pub struct UIRenderer {
     // Stack backing the immediate clip — entries are pre-intersected with
     // their enclosing clip, so the top IS the effective clip.
     immediate_clip_stack: Vec<Rect>,
-    // Layer stack for z-ordered drawing. Empty = Base. Pushing/popping
+    // Depth stack for z-ordered drawing. Empty = Depth::BASE. Pushing/popping
     // flushes the pending immediate-mode run so commands on either side
-    // land in batches tagged with the correct layer.
-    layer_stack: Vec<Layer>,
+    // land in batches tagged with the correct depth.
+    depth_stack: Vec<Depth>,
     // Scissor batches accumulated during tree traversal.
     scissor_batches: Vec<ScissorBatch>,
     // Index into rect_commands where the current batch started.
     current_batch_start: usize,
     // GPU-ready batches produced by prepare().
     prepared_batches: Vec<PreparedBatch>,
+    // Distinct depths present this frame, ascending — the union of rect/line
+    // batch depths and the text renderer's text/icon depths. `render_in_pass`
+    // walks this so it never assumes a fixed set of layers.
+    prepared_depths: Vec<Depth>,
     // Scratch for grouping line quads into batches during prepare():
-    // (layer, clip at draw time, index buffer byte offset, index count).
-    line_batch_scratch: Vec<(Layer, Option<Rect>, u64, u32)>,
+    // (depth, clip at draw time, index buffer byte offset, index count).
+    line_batch_scratch: Vec<(Depth, Option<Rect>, u64, u32)>,
     // Physical dimensions of the render target (for full-viewport scissor reset).
     prepared_physical_w: u32,
     prepared_physical_h: u32,
@@ -315,10 +338,11 @@ impl UIRenderer {
             clip_stack: Vec::with_capacity(8),
             immediate_clip: None,
             immediate_clip_stack: Vec::with_capacity(4),
-            layer_stack: Vec::with_capacity(4),
+            depth_stack: Vec::with_capacity(4),
             scissor_batches: Vec::with_capacity(8),
             current_batch_start: 0,
             prepared_batches: Vec::with_capacity(8),
+            prepared_depths: Vec::with_capacity(8),
             line_batch_scratch: Vec::with_capacity(8),
             prepared_physical_w: 0,
             prepared_physical_h: 0,
@@ -354,26 +378,26 @@ impl UIRenderer {
         self.immediate_clip = self.immediate_clip_stack.last().copied();
     }
 
-    // ── Layers ──────────────────────────────────────────────────────
+    // ── Depth ───────────────────────────────────────────────────────
 
-    /// The layer subsequent draw commands land on.
-    pub fn current_layer(&self) -> Layer {
-        self.layer_stack.last().copied().unwrap_or(Layer::Base)
+    /// The depth subsequent draw commands land on.
+    pub fn current_depth(&self) -> Depth {
+        self.depth_stack.last().copied().unwrap_or(Depth::BASE)
     }
 
-    /// Draw subsequent commands on `layer` until the matching [`Self::pop_layer`].
+    /// Draw subsequent commands at `depth` until the matching [`Self::pop_depth`].
     /// Must be balanced before `prepare` runs; an unbalanced push would
     /// silently float everything after it.
-    pub fn push_layer(&mut self, layer: Layer) {
+    pub fn push_depth(&mut self, depth: Depth) {
         self.flush_immediate_run();
-        self.layer_stack.push(layer);
+        self.depth_stack.push(depth);
     }
 
-    /// Return to the layer that was active before the matching push.
-    pub fn pop_layer(&mut self) {
-        debug_assert!(!self.layer_stack.is_empty(), "pop_layer without push");
+    /// Return to the depth that was active before the matching push.
+    pub fn pop_depth(&mut self) {
+        debug_assert!(!self.depth_stack.is_empty(), "pop_depth without push");
         self.flush_immediate_run();
-        self.layer_stack.pop();
+        self.depth_stack.pop();
     }
 
     /// Queue a filled rectangle.
@@ -456,7 +480,7 @@ impl UIRenderer {
             y1,
             thickness,
             color: color.into().0,
-            layer: self.current_layer(),
+            depth: self.current_depth(),
             clip: self.immediate_clip,
         });
     }
@@ -478,9 +502,9 @@ impl UIRenderer {
             let clip = self
                 .immediate_clip
                 .map(|r| [r.x, r.y, r.x + r.width, r.y + r.height]);
-            let layer = self.current_layer();
+            let depth = self.current_depth();
             self.text_renderer
-                .draw_text(x, y, text, font_size, color, FontWeight::Medium, clip, layer);
+                .draw_text(x, y, text, font_size, color, FontWeight::Medium, clip, depth);
         }
     }
 
@@ -506,7 +530,7 @@ impl UIRenderer {
                 scissor: self.immediate_clip,
                 rect_start: self.current_batch_start,
                 rect_count: count,
-                layer: self.current_layer(),
+                depth: self.current_depth(),
             });
         }
         self.current_batch_start = self.rect_commands.len();
@@ -528,7 +552,7 @@ impl UIRenderer {
                 scissor: self.clip_stack.last().copied(),
                 rect_start: self.current_batch_start,
                 rect_count: count,
-                layer: self.current_layer(),
+                depth: self.current_depth(),
             });
         }
         self.current_batch_start = self.rect_commands.len();
@@ -723,7 +747,7 @@ impl UIRenderer {
                 ]
             };
 
-            let layer = self.current_layer();
+            let depth = self.current_depth();
             let first_char = text.chars().next().unwrap();
             if ('\u{E000}'..='\u{E004}').contains(&first_char) {
                 // Icon: square aspect ratio, centered in bounds
@@ -742,7 +766,7 @@ impl UIRenderer {
                     icon_h,
                     text_color,
                     clip_bounds,
-                    layer,
+                    depth,
                 );
             } else {
                 let text_size = self.text_renderer.measure_text_cached(
@@ -766,7 +790,7 @@ impl UIRenderer {
                     text_color,
                     style.font_weight,
                     clip_bounds,
-                    layer,
+                    depth,
                 );
             }
         }
@@ -785,9 +809,9 @@ impl UIRenderer {
         color: impl Into<TextColor>,
         clip_bounds: Option<[f32; 4]>,
     ) {
-        let layer = self.current_layer();
+        let depth = self.current_depth();
         self.text_renderer
-            .draw_icon(icon_id, x, y, w, h, color.into().0, clip_bounds, layer);
+            .draw_icon(icon_id, x, y, w, h, color.into().0, clip_bounds, depth);
     }
 
     /// Text measurement using NativeTextRenderer's cached measurement.
@@ -816,7 +840,7 @@ impl UIRenderer {
         // canvas) re-arms its lane clip after this, before queuing draws.
         self.immediate_clip = None;
         self.immediate_clip_stack.clear();
-        self.layer_stack.clear();
+        self.depth_stack.clear();
         #[cfg(target_os = "macos")]
         self.text_renderer.begin_frame();
     }
@@ -848,8 +872,8 @@ impl UIRenderer {
         scale_factor: f64,
     ) -> bool {
         debug_assert!(
-            self.layer_stack.is_empty(),
-            "unbalanced push_layer at prepare — everything after the push floats"
+            self.depth_stack.is_empty(),
+            "unbalanced push_depth at prepare — everything after the push floats"
         );
         debug_assert!(
             self.immediate_clip_stack.is_empty(),
@@ -907,16 +931,30 @@ impl UIRenderer {
                 .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
 
-        // Emit lines after rects, grouped by layer so each layer's lines form
+        // Distinct depths present across rect batches and lines, ascending.
+        // The render loop walks this union (plus any text-only depths) instead
+        // of a fixed layer set, so a new floating surface only has to pick a
+        // depth. A single-depth frame yields a one-element list and the
+        // identical draw sequence to the pre-depth renderer.
+        let mut depths: Vec<Depth> = self
+            .scissor_batches
+            .iter()
+            .map(|b| b.depth)
+            .chain(self.line_commands.iter().map(|c| c.depth))
+            .collect();
+        depths.sort_unstable();
+        depths.dedup();
+
+        // Emit lines after rects, grouped by depth so each depth's lines form
         // a contiguous index range. Each line is an oriented quad — four
         // corners offset by ±(perpendicular * half_thickness). The fragment
         // shader's fast path (rect_params zeroed) returns a flat fill, so we
-        // don't need a separate pipeline. Within a layer, runs of lines
+        // don't need a separate pipeline. Within a depth, runs of lines
         // sharing a clip become one batch (clip is captured at draw time).
         let mut line_batches = std::mem::take(&mut self.line_batch_scratch);
         line_batches.clear();
-        for layer in Layer::ALL {
-            for cmd in self.line_commands.iter().filter(|c| c.layer == layer) {
+        for &depth in &depths {
+            for cmd in self.line_commands.iter().filter(|c| c.depth == depth) {
                 let dx = cmd.x1 - cmd.x0;
                 let dy = cmd.y1 - cmd.y0;
                 let len_sq = dx * dx + dy * dy;
@@ -963,18 +1001,18 @@ impl UIRenderer {
                     .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 
                 match line_batches.last_mut() {
-                    Some((l, clip, _, count)) if *l == layer && *clip == cmd.clip => {
+                    Some((d, clip, _, count)) if *d == depth && *clip == cmd.clip => {
                         *count += 6;
                     }
-                    _ => line_batches.push((layer, cmd.clip, idx_offset, 6)),
+                    _ => line_batches.push((depth, cmd.clip, idx_offset, 6)),
                 }
             }
         }
 
-        // Build prepared batches: for each layer, that layer's rect batches
-        // (insertion order) then its line batches — so within a layer, lines
+        // Build prepared batches: for each depth, that depth's rect batches
+        // (insertion order) then its line batches — so within a depth, lines
         // draw over rects exactly as they always have globally, and a
-        // Base-only frame issues the identical sequence to the pre-layer
+        // single-depth frame issues the identical sequence to the pre-depth
         // renderer.
         let pw = self.prepared_physical_w;
         let ph = self.prepared_physical_h;
@@ -991,8 +1029,8 @@ impl UIRenderer {
             ]
         };
         self.prepared_batches.clear();
-        for layer in Layer::ALL {
-            for batch in self.scissor_batches.iter().filter(|b| b.layer == layer) {
+        for &depth in &depths {
+            for batch in self.scissor_batches.iter().filter(|b| b.depth == depth) {
                 if batch.rect_count == 0 {
                     continue;
                 }
@@ -1000,18 +1038,18 @@ impl UIRenderer {
                     scissor: batch.scissor.map(to_physical),
                     index_offset: (batch.rect_start * 6 * std::mem::size_of::<u32>()) as u64,
                     index_count: (batch.rect_count * 6) as u32,
-                    layer,
+                    depth,
                 });
             }
-            for &(l, clip, index_offset, index_count) in &line_batches {
-                if l != layer {
+            for &(d, clip, index_offset, index_count) in &line_batches {
+                if d != depth {
                     continue;
                 }
                 self.prepared_batches.push(PreparedBatch {
                     scissor: clip.map(to_physical),
                     index_offset,
                     index_count,
-                    layer,
+                    depth,
                 });
             }
         }
@@ -1063,6 +1101,19 @@ impl UIRenderer {
         #[cfg(not(target_os = "macos"))]
         let has_text = false;
 
+        // The render loop must visit every depth that has rects, lines, OR
+        // text — a depth with text but no rect (e.g. an unfilled label) would
+        // otherwise be skipped. Merge the text renderer's depths into the
+        // rect/line set.
+        #[cfg(target_os = "macos")]
+        {
+            depths.extend_from_slice(self.text_renderer.depths());
+            depths.sort_unstable();
+            depths.dedup();
+        }
+        self.prepared_depths.clear();
+        self.prepared_depths.extend_from_slice(&depths);
+
         self.rect_commands.clear();
         self.line_commands.clear();
         self.scissor_batches.clear();
@@ -1094,9 +1145,9 @@ impl UIRenderer {
     /// Used when the caller manages the render pass lifetime (e.g. batching
     /// UI draws with layer bitmap draws into a single pass).
     pub fn render_in_pass(&self, encoder: &mut GpuEncoder) {
-        // Issue draws layer by layer: a layer's rects + lines, then its text,
-        // so geometry on a higher layer covers text on a lower one.
-        for layer in Layer::ALL {
+        // Issue draws depth by depth: a depth's rects + lines, then its text,
+        // so geometry at a higher depth covers text at a lower one.
+        for &depth in &self.prepared_depths {
             if self.prepared_index_count > 0 {
                 let vbuf = self.vbuf_ring[self.prepared_slot].as_ref().unwrap();
                 let ibuf = self.ibuf_ring[self.prepared_slot].as_ref().unwrap();
@@ -1107,7 +1158,7 @@ impl UIRenderer {
                 let pw = self.prepared_physical_w;
                 let ph = self.prepared_physical_h;
                 let mut drew = false;
-                for batch in self.prepared_batches.iter().filter(|b| b.layer == layer) {
+                for batch in self.prepared_batches.iter().filter(|b| b.depth == depth) {
                     if let Some([x, y, w, h]) = batch.scissor {
                         encoder.set_scissor_rect(x, y, w, h);
                     } else {
@@ -1133,7 +1184,7 @@ impl UIRenderer {
             }
 
             #[cfg(target_os = "macos")]
-            self.text_renderer.render_layer_in_pass(encoder, layer);
+            self.text_renderer.render_depth_in_pass(encoder, depth);
         }
     }
 }

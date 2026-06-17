@@ -20,7 +20,7 @@
 use manifold_renderer::node_graph::{
     GraphSnapshot, GroupSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
 };
-use manifold_renderer::ui_renderer::{Layer, UIRenderer};
+use manifold_renderer::ui_renderer::{Depth, UIRenderer};
 use manifold_ui::PanelAction;
 
 use manifold_core::effect_graph_def::{GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID};
@@ -2790,15 +2790,15 @@ impl GraphCanvas {
             self.draw_ghost_wire(ui, viewport, *from_node, from_port);
         }
 
-        // Nodes draw on the Overlay layer so they sit *above* the wires
-        // (Base). The renderer batches all of a layer's rects before its
-        // lines, so node bodies (rects) and wires (lines) on the same layer
-        // would force every wire to paint over every body — the over-draw
-        // that made connections cross the face of a node and its preview.
-        // Splitting them across layers makes wires route behind nodes, the
-        // standard node-editor read. The node-output thumbnail blit (a later
-        // present pass) is already topmost, so it stays correctly over wires.
-        ui.push_layer(Layer::Overlay);
+        // Nodes draw at CONTENT depth so they sit *above* the wires (BASE).
+        // The renderer batches all of a depth's rects before its lines, so
+        // node bodies (rects) and wires (lines) at the same depth would force
+        // every wire to paint over every body — the over-draw that made
+        // connections cross the face of a node and its preview. Splitting them
+        // across depths makes wires route behind nodes, the standard
+        // node-editor read. The node-output thumbnail blit (a later present
+        // pass) is already topmost, so it stays correctly over wires.
+        ui.push_depth(Depth::CONTENT);
 
         // Nodes: everything else first, then the hovered node, then the
         // selected nodes last, so the node(s) you're working on are never
@@ -2831,33 +2831,34 @@ impl GraphCanvas {
             ui.draw_bordered_rect(x, y, w, h, MARQUEE_FILL, 0.0, 1.0, MARQUEE_BORDER);
         }
 
-        ui.pop_layer();
+        ui.pop_depth();
 
         // Hover tooltip: the node's friendly summary, or — when the cursor is
-        // over a param row — that param's help line. Drawn above the nodes but
-        // below the popover, and only when the canvas is idle (a tooltip
-        // chasing the cursor mid-drag would be noise).
+        // over a param row — that param's help line. Drawn above the nodes, and
+        // only when the canvas is idle (a tooltip chasing the cursor mid-drag
+        // would be noise) and no popover is open.
         if matches!(self.drag_mode, DragMode::None) && !self.mapping_popover.is_open() {
-            ui.push_layer(Layer::Tooltip);
+            ui.push_depth(Depth::TOOLTIP);
             self.draw_hover_tooltip(ui, viewport, canvas);
-            ui.pop_layer();
+            ui.pop_depth();
         }
 
-        // Mapping popover floats above everything else so its handles and
-        // buttons are never buried under a node it overlaps. It draws
-        // unclipped (it may extend past the canvas lane) on the Overlay
-        // layer; the lane clip is re-armed afterwards.
+        // Mapping popover floats above the nodes so its handles and buttons are
+        // never buried under a node it overlaps — and above the CONTENT-depth
+        // node text, so that text can't bleed through its face. It draws
+        // unclipped (it may extend past the canvas lane) at POPOVER depth; the
+        // lane clip is re-armed afterwards.
         ui.pop_immediate_clip();
-        ui.push_layer(Layer::Overlay);
+        ui.push_depth(Depth::POPOVER);
         self.mapping_popover.render(ui);
-        ui.pop_layer();
+        ui.pop_depth();
         ui.push_immediate_clip(viewport.x, viewport.y, viewport.w, viewport.h);
 
         // Debug overlay last, on top of everything — it's a diagnostic HUD.
         if self.debug_overlay {
-            ui.push_layer(Layer::Tooltip);
+            ui.push_depth(Depth::TOOLTIP);
             self.draw_debug_overlay(ui, canvas);
-            ui.pop_layer();
+            ui.pop_depth();
         }
 
         ui.pop_immediate_clip();

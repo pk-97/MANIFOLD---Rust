@@ -276,9 +276,9 @@ pub struct UIRoot {
     pub ableton_rediscovery_needed: bool,
 
     /// Node ranges `[start, end)` of each open overlay, in z-order, recorded by
-    /// `build_overlays`. The draw pass renders these on `Layer::Overlay` — so
-    /// build and draw share one source and cannot drift (the bug class this
-    /// system eliminates).
+    /// `build_overlays`. The draw pass renders these at `Depth::OVERLAY` offset
+    /// by stack index — so build and draw share one source and cannot drift
+    /// (the bug class this system eliminates).
     pub overlay_draw: Vec<(usize, usize)>,
     /// Tree index where the overlay region begins (after all scroll panels).
     /// The waveform/stem-lane overlay render uses this as its upper bound.

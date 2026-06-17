@@ -4,7 +4,7 @@
 //! overlay rendering helper. All methods are `impl Application` blocks that
 //! operate on the struct defined in app.rs.
 
-use manifold_renderer::ui_renderer::{Layer, UIRenderer};
+use manifold_renderer::ui_renderer::{Depth, UIRenderer};
 
 use manifold_ui::node::FontWeight;
 use manifold_ui::panels::PanelAction;
@@ -3138,19 +3138,20 @@ impl Application {
             // draws (the flush protocol covers them with their own batches).
             ui.render_tree_range(&ws.ui_root.tree, 0, usize::MAX);
             // The mapping drawer floats over the composited canvas + sidebar:
-            // it draws inline on the Overlay layer, unclipped.
+            // it draws inline at POPOVER depth (above the CONTENT-depth nodes),
+            // unclipped.
             if self.editor_mapping_popover.is_open() {
-                ui.push_layer(Layer::Overlay);
+                ui.push_depth(Depth::POPOVER);
                 self.editor_mapping_popover.set_live_value(popover_live_value);
                 self.editor_mapping_popover.render(ui);
-                ui.pop_layer();
+                ui.pop_depth();
             }
             // Graph text-input overlay (group rename / String param / wgsl /
-            // node search) — tops everything on the Overlay layer.
+            // node search) — tops everything at TOOLTIP depth.
             if self.text_input.active && self.text_input.field.is_graph_field() {
-                ui.push_layer(Layer::Overlay);
+                ui.push_depth(Depth::TOOLTIP);
                 render_text_input_overlay(&self.text_input, &self.frame_timer, ui);
-                ui.pop_layer();
+                ui.pop_depth();
             }
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
                 ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
@@ -3642,26 +3643,30 @@ impl Application {
             }
 
             // Top-level overlays (perf HUD, dropdown, modals) — built by the
-            // overlay driver at the tail of the tree, drawn here in z-order on
-            // the Overlay layer. One source (overlay_draw, recorded at build)
-            // for build and draw, so they cannot drift. Each range in its own
-            // push/pop for scissor isolation.
-            for &(start, end) in &self.ws.ui_root.overlay_draw {
-                ui.push_layer(Layer::Overlay);
+            // overlay driver at the tail of the tree, drawn here in z-order.
+            // One source (overlay_draw, recorded at build) for build and draw,
+            // so they cannot drift. overlay_draw is in Z_ORDER (bottom→top), so
+            // each overlay's depth is OVERLAY + its stack index: a later-opened
+            // overlay (e.g. a dropdown over the Audio Setup modal) paints over
+            // an earlier one, text included. Each range gets its own push/pop
+            // for scissor isolation.
+            for (i, &(start, end)) in self.ws.ui_root.overlay_draw.iter().enumerate() {
+                ui.push_depth(Depth::OVERLAY.above(i as i32));
                 ui.render_tree_range(&self.ws.ui_root.tree, start, end);
-                ui.pop_layer();
+                ui.pop_depth();
             }
 
-            // Effect card drag ghost + text input — top of the Overlay layer.
-            ui.push_layer(Layer::Overlay);
+            // Effect card drag ghost + text input — TOOLTIP depth, above every
+            // overlay.
+            ui.push_depth(Depth::TOOLTIP);
             if let Some(start) = self.ws.ui_root.inspector.card_drag_first_node() {
                 ui.render_tree_range(&self.ws.ui_root.tree, start, usize::MAX);
             }
-            // Text input overlay — last on Overlay, so it tops everything.
+            // Text input overlay — last, so it tops everything.
             if self.text_input.active {
                 render_text_input_overlay(&self.text_input, &self.frame_timer, ui);
             }
-            ui.pop_layer();
+            ui.pop_depth();
 
             // Flush all overlay commands
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
