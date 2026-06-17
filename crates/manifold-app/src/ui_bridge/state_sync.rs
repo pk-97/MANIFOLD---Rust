@@ -1076,10 +1076,16 @@ pub fn sync_inspector_data(
     // the modal is up) gives each send row its real channel name, grouped or
     // not, instead of a bare index.
     if ui.audio_setup_panel.is_open() {
+        use manifold_core::AudioSourceKind;
         use manifold_ui::panels::audio_setup_panel::AudioSendRow;
         let dir = manifold_audio::directory::system_directory();
+        // Tap sources (system / app output) don't live in the input-device list,
+        // so resolving them there would always read "missing". Only resolve a
+        // hardware device; a tap's liveness is checked separately below.
+        let is_tap = project.audio_setup.device.as_ref().is_some_and(|d| d.is_tap());
         let device = match &project.audio_setup.device {
-            Some(d) => dir.resolve(d.uid_opt(), Some(&d.name)),
+            Some(d) if !d.is_tap() => dir.resolve(d.uid_opt(), Some(&d.name)),
+            Some(_) => None, // a tap — no DeviceInfo
             None => dir.list_input_devices().into_iter().find(|d| d.is_default),
         };
         let sends = project
@@ -1089,25 +1095,33 @@ pub fn sync_inspector_data(
             .map(|s| AudioSendRow {
                 id: s.id.clone(),
                 label: s.label.clone(),
-                channel_label: channel_label(device.as_ref(), &s.channels),
+                channel_label: channel_label(device.as_ref(), is_tap, &s.channels),
                 channels: s.channels.clone(),
                 gain_db: s.gain_db,
                 driven_count: project.audio_send_usage_count(&s.id),
             })
             .collect();
 
-        // Surface a reliability warning: an explicitly-chosen device that won't
-        // resolve or reads offline, else a blocked mic permission.
-        let status_warning = if let Some(d) = &project.audio_setup.device {
-            match &device {
-                None => Some(format!("\u{26A0} \"{}\" is offline or unplugged", d.name)),
-                Some(info) if !info.is_alive => {
-                    Some(format!("\u{26A0} \"{}\" is offline", info.name))
-                }
-                _ => None,
-            }
-        } else {
-            None
+        // Surface a reliability warning: a chosen source that can't capture right
+        // now — a device that won't resolve / reads offline, a tap on an OS that
+        // can't tap, an app that isn't running — else a blocked mic permission.
+        let status_warning = match &project.audio_setup.device {
+            Some(d) => match d.kind {
+                AudioSourceKind::InputDevice => match &device {
+                    None => Some(format!("\u{26A0} \"{}\" is offline or unplugged", d.name)),
+                    Some(info) if !info.is_alive => {
+                        Some(format!("\u{26A0} \"{}\" is offline", info.name))
+                    }
+                    _ => None,
+                },
+                AudioSourceKind::SystemAudio => (!dir.tap_capabilities().system_audio)
+                    .then(|| "\u{26A0} System audio capture needs macOS 14.4+".to_string()),
+                AudioSourceKind::App => dir
+                    .resolve_app(d.uid_opt().unwrap_or(""))
+                    .is_none()
+                    .then(|| format!("\u{26A0} \"{}\" isn't running", d.name)),
+            },
+            None => None,
         }
         .or_else(|| {
             (!manifold_audio::permission::status().is_usable())
@@ -1462,12 +1476,22 @@ fn build_audio_card_state(
 /// back to a 1-based index when no device metadata is available.
 fn channel_label(
     device: Option<&manifold_audio::directory::DeviceInfo>,
+    is_tap: bool,
     channels: &[u16],
 ) -> String {
     if channels.is_empty() {
         return "Not routed".to_string();
     }
     let name_of = |ch: u16| -> String {
+        // A tap is a fixed stereo mixdown — channel 0/1 are Left/Right, matching
+        // the tap channel picker. A hardware device uses its platform names.
+        if is_tap {
+            return match ch {
+                0 => "Left".to_string(),
+                1 => "Right".to_string(),
+                n => format!("Channel {}", n + 1),
+            };
+        }
         device
             .and_then(|d| d.channels.get(ch as usize))
             .map(|c| c.display_name())
