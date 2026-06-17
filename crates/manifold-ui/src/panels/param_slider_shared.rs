@@ -206,9 +206,10 @@ pub(crate) fn audio_feature_from_index(idx: usize) -> manifold_core::AudioFeatur
 /// Index maps to an `AudioFeature` in the card's click handler. Split for display
 /// into a **Level** group (indices 0..4: Amp = overall level, then the Low/Mid/
 /// High energy bands) and a **Tone** group (indices 4..8: Bright = spectral
-/// centroid, Noise = flatness tonal→noisy, Flux = spectral change, Hit = onset).
+/// centroid, Noisy = flatness tonal→noisy, Flux = spectral change, Transients =
+/// onset).
 pub(crate) const AUDIO_FEATURE_LABELS: [&str; 8] =
-    ["Amp", "Low", "Mid", "High", "Bright", "Noise", "Flux", "Hit"];
+    ["Amp", "Low", "Mid", "High", "Bright", "Noisy", "Flux", "Transients"];
 /// How many of [`AUDIO_FEATURE_LABELS`] belong to the leading "Level" row; the
 /// rest form the "Tone" row.
 pub(crate) const AUDIO_LEVEL_FEATURE_COUNT: usize = 4;
