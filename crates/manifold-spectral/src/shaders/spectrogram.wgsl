@@ -6,7 +6,8 @@
 // where the NEXT column will be written, so the newest column is
 // `write_index-1`. x maps to time (right = now), y to log-frequency (VQT bins
 // are geometrically spaced, so bin index is linear in y). Magnitudes are
-// `|VQT|` (unit sine ≈ 1.0); we map dB → a magma-style colour ramp.
+// `|VQT|` (unit sine ≈ 1.0); we map dB → a jet colour ramp (matched to the
+// Analyzer VST).
 
 struct Params {
     num_bins: u32,
@@ -42,18 +43,28 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
     return out;
 }
 
-// Magma-ish ramp: black → purple → magenta → orange → pale yellow.
-fn colormap(t: f32) -> vec3<f32> {
-    let c0 = vec3<f32>(0.001, 0.000, 0.014);
-    let c1 = vec3<f32>(0.28, 0.09, 0.42);
-    let c2 = vec3<f32>(0.63, 0.19, 0.39);
-    let c3 = vec3<f32>(0.96, 0.49, 0.27);
-    let c4 = vec3<f32>(0.99, 0.96, 0.78);
-    let x = clamp(t, 0.0, 1.0) * 4.0;
-    if (x < 1.0) { return mix(c0, c1, x); }
-    if (x < 2.0) { return mix(c1, c2, x - 1.0); }
-    if (x < 3.0) { return mix(c2, c3, x - 2.0); }
-    return mix(c3, c4, x - 3.0);
+// Heatmap-style jet ramp, matched to the Analyzer VST: black → navy → blue →
+// cyan → green → yellow → red → white. The top 10% goes red→white so the
+// loudest peaks separate clearly from merely-loud content (solves jet's
+// classic red-vs-darker-red crush at the top end). Stops are non-uniform —
+// kept verbatim from the VST's `spectrum_line.wgsl` so the two read identical.
+fn colormap(t_in: f32) -> vec3<f32> {
+    let t = clamp(t_in, 0.0, 1.0);
+    let c0 = vec3<f32>(0.00, 0.00, 0.00); // black
+    let c1 = vec3<f32>(0.00, 0.00, 0.45); // deep navy
+    let c2 = vec3<f32>(0.00, 0.10, 0.95); // blue
+    let c3 = vec3<f32>(0.00, 0.80, 0.95); // cyan
+    let c4 = vec3<f32>(0.20, 0.95, 0.20); // green
+    let c5 = vec3<f32>(0.95, 0.95, 0.00); // yellow
+    let c6 = vec3<f32>(0.95, 0.00, 0.00); // red
+    let c7 = vec3<f32>(1.00, 1.00, 1.00); // white — peaks
+    if (t < 0.15) { return mix(c0, c1, t / 0.15); }
+    if (t < 0.35) { return mix(c1, c2, (t - 0.15) / 0.20); }
+    if (t < 0.55) { return mix(c2, c3, (t - 0.35) / 0.20); }
+    if (t < 0.70) { return mix(c3, c4, (t - 0.55) / 0.15); }
+    if (t < 0.80) { return mix(c4, c5, (t - 0.70) / 0.10); }
+    if (t < 0.90) { return mix(c5, c6, (t - 0.80) / 0.10); }
+    return mix(c6, c7, (t - 0.90) / 0.10);
 }
 
 @fragment
