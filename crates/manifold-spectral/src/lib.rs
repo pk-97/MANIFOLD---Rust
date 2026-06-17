@@ -23,9 +23,12 @@ pub use cqt::{CqtTransform, num_bins};
 #[cfg(feature = "gpu")]
 pub use spectrogram::Spectrogram;
 
-/// Parameters for a calibration spectrogram. Defaults target a single send at
-/// 48 kHz: an 8192-pt FFT (~170 ms), 30 Hz–16 kHz over 24 bins/octave (~217
-/// bins), a 1024-sample hop (~47 columns/s), and ~11 s of scroll-back.
+/// Parameters for a calibration spectrogram. Defaults mirror the Analyzer
+/// VST's *look* — 10 Hz–22 kHz over 24 bins/octave (~266 bins), a −59…0 dB
+/// colour range — on a deliberately lighter single-send CPU transform: a
+/// 16384-pt FFT (~341 ms) with a 1024-sample hop (~47 columns/s) and ~11 s of
+/// scroll-back. The VST's heavier 65536-pt FFT at a 256-sample hop (~188
+/// cols/s) is for a full-mix GPU pipeline we don't need here (see `cqt.rs`).
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrogramConfig {
     /// FFT size (power of two). Must exceed the longest VQT kernel.
@@ -55,16 +58,16 @@ pub struct SpectrogramConfig {
 impl Default for SpectrogramConfig {
     fn default() -> Self {
         Self {
-            n_fft: 8192,
-            fmin: 30.0,
-            fmax: 16_000.0,
+            n_fft: 16_384,
+            fmin: 10.0,
+            fmax: 22_000.0,
             bpo: 24,
             gamma_hz: 20.0,
             min_kernel_len: 256,
-            threshold_rel: 0.005,
+            threshold_rel: 1e-4,
             hop: 1024,
             history_len: 512,
-            db_min: -72.0,
+            db_min: -59.0,
             db_max: 0.0,
         }
     }
