@@ -55,6 +55,12 @@ pub struct AudioSend {
     /// means the send produces silence until the user routes it.
     #[serde(default)]
     pub channels: Vec<u16>,
+    /// Input gain trim in **decibels**, applied to the downmixed signal before
+    /// analysis. Defaults to **0 dB (unity)** — the user is expected to route
+    /// audio in at a sensible level, so gain is opt-in calibration, not a
+    /// required step. Applied live by the worker (no capture restart on change).
+    #[serde(default)]
+    pub gain_db: f32,
     /// Which extractors run for this send.
     #[serde(default)]
     pub analysis: SendAnalysisConfig,
@@ -67,8 +73,14 @@ impl AudioSend {
             id: AudioSendId::new(short_id()),
             label: label.into(),
             channels: Vec::new(),
+            gain_db: 0.0,
             analysis: SendAnalysisConfig::default(),
         }
+    }
+
+    /// Linear gain multiplier from the stored dB trim. 0 dB → 1.0 (unity).
+    pub fn gain_linear(&self) -> f32 {
+        10f32.powf(self.gain_db / 20.0)
     }
 }
 

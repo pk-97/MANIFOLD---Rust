@@ -187,6 +187,7 @@ pub fn dispatch(
         | PanelAction::AudioSetDevice(..)
         | PanelAction::AudioAddSend
         | PanelAction::AudioRemoveSend(..)
+        | PanelAction::AudioSendGainStep(..)
         | PanelAction::AudioRenameSend(..)
         | PanelAction::AudioSetSendChannels(..)
         | PanelAction::AudioSendStereoToggle(..)

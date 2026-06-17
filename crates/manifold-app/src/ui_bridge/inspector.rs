@@ -17,7 +17,7 @@ use manifold_editing::commands::audio_mod::{
 };
 use manifold_editing::commands::audio_setup::{
     AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand,
-    SetAudioInputDeviceCommand, SetAudioSendChannelsCommand,
+    SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendGainCommand,
 };
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
@@ -1279,6 +1279,27 @@ pub(super) fn dispatch_inspector(
                 project,
                 content_tx,
                 Box::new(SetAudioSendChannelsCommand::new(id.clone(), old, new)),
+            )
+        }
+        PanelAction::AudioSendGainStep(id, delta_db) => {
+            // The project is the source of truth: read current gain, apply the
+            // delta, clamp to a sensible trim range, commit old→new. Capture
+            // restart is avoided — the worker reads gain live (AudioModRuntime).
+            const GAIN_MIN_DB: f32 = -24.0;
+            const GAIN_MAX_DB: f32 = 24.0;
+            let old = project
+                .audio_setup
+                .find_send(id)
+                .map(|s| s.gain_db)
+                .unwrap_or(0.0);
+            let new = (old + delta_db).clamp(GAIN_MIN_DB, GAIN_MAX_DB);
+            if (new - old).abs() < f32::EPSILON {
+                return DispatchResult::structural();
+            }
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
             )
         }
         PanelAction::EnvelopeToggle(gpt, param_id) => {

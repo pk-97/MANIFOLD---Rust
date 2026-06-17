@@ -36,7 +36,7 @@
 //! it here.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -74,6 +74,52 @@ pub struct SendSpec {
     /// Device input channels to downmix to mono for this send. Out-of-range
     /// channels (≥ device channel count) are ignored at runtime.
     pub channels: Vec<u16>,
+}
+
+/// Live per-send input gain (linear multiplier), shared content thread → worker.
+///
+/// Lock-free: the content thread writes a slot on a gain edit, the worker reads
+/// it each drain. Sized to the send count at capture (re)build, so a *gain-only*
+/// edit updates it in place with **no capture restart** — gain is a calibration
+/// knob the performer rides while watching the meter, so it must not glitch the
+/// stream. Structural changes (channels / device) rebuild capture and mint a
+/// fresh bank (see the wiring layer's `CaptureSignature`).
+pub struct GainBank {
+    /// One linear gain per send, stored as `f32` bits in an atomic.
+    linear: Vec<AtomicU32>,
+}
+
+impl GainBank {
+    /// Build a bank from initial linear gains (one per send, in send order).
+    pub fn new(linear_gains: &[f32]) -> Self {
+        Self {
+            linear: linear_gains.iter().map(|g| AtomicU32::new(g.to_bits())).collect(),
+        }
+    }
+
+    /// Set send `index`'s linear gain. Out-of-range index is ignored.
+    pub fn set_linear(&self, index: usize, gain: f32) {
+        if let Some(slot) = self.linear.get(index) {
+            slot.store(gain.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    /// Send `index`'s current linear gain, or unity (1.0) if out of range.
+    pub fn get_linear(&self, index: usize) -> f32 {
+        self.linear
+            .get(index)
+            .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)))
+            .unwrap_or(1.0)
+    }
+
+    /// Number of send slots.
+    pub fn len(&self) -> usize {
+        self.linear.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.linear.is_empty()
+    }
 }
 
 /// A snapshot of every send's features at one analysis instant. `Copy` and
@@ -136,6 +182,7 @@ impl AudioFeatureWorker {
         sample_rate: u32,
         device_channels: u16,
         mut sends: Vec<SendSpec>,
+        gains: Arc<GainBank>,
     ) -> (Self, FeatureReader) {
         if sends.len() > MAX_SENDS {
             log::warn!(
@@ -160,6 +207,7 @@ impl AudioFeatureWorker {
                     sample_rate,
                     device_channels as usize,
                     sends,
+                    gains,
                 );
                 worker.run(&running_thread);
             })
@@ -188,6 +236,8 @@ impl Drop for AudioFeatureWorker {
 /// Per-send running state on the worker thread.
 struct SendState {
     channels: Vec<u16>,
+    /// Linear input gain, refreshed from the [`GainBank`] once per drain.
+    gain: f32,
     /// Samples accumulating toward the next FFT window.
     accum: Vec<f32>,
     features: SendFeatures,
@@ -198,6 +248,8 @@ struct WorkerLoop {
     producer: ringbuf::HeapProd<FeatureFrame>,
     device_channels: usize,
     sends: Vec<SendState>,
+    /// Live per-send gain, written by the content thread, read here each drain.
+    gains: Arc<GainBank>,
     analyzer: BandEnergyAnalyzer,
     /// Leftover interleaved samples that didn't complete a frame last drain.
     /// Retains its allocation across drains (never moved out), so stashing the
@@ -218,11 +270,13 @@ impl WorkerLoop {
         sample_rate: u32,
         device_channels: usize,
         specs: Vec<SendSpec>,
+        gains: Arc<GainBank>,
     ) -> Self {
         let sends = specs
             .into_iter()
             .map(|s| SendState {
                 channels: s.channels,
+                gain: 1.0,
                 accum: Vec::with_capacity(FFT_SIZE),
                 features: SendFeatures::default(),
             })
@@ -233,6 +287,7 @@ impl WorkerLoop {
             producer,
             device_channels: device_channels.max(1),
             sends,
+            gains,
             analyzer: BandEnergyAnalyzer::new(sample_rate),
             carry: Vec::with_capacity(FFT_SIZE),
             work: Vec::with_capacity(4096 + FFT_SIZE),
@@ -282,9 +337,16 @@ impl WorkerLoop {
         let usable = (work.len() / ch) * ch;
         let mut updated = false;
 
+        // Refresh each send's live gain once per drain (the bank is lock-free;
+        // a gain edit lands here without a capture restart). Disjoint fields, so
+        // the mutable `sends` borrow and the `gains` read don't conflict.
+        for (i, send) in self.sends.iter_mut().enumerate() {
+            send.gain = self.gains.get_linear(i);
+        }
+
         for frame in work[..usable].chunks_exact(ch) {
             for send in &mut self.sends {
-                let mono = downmix(frame, &send.channels);
+                let mono = downmix(frame, &send.channels) * send.gain;
                 send.accum.push(mono);
                 if send.accum.len() >= FFT_SIZE {
                     // Overall level: RMS of the raw (unwindowed) block, 0..1.
@@ -438,6 +500,20 @@ mod tests {
     }
 
     #[test]
+    fn gain_bank_set_get_and_out_of_range() {
+        let bank = GainBank::new(&[1.0, 2.0]);
+        assert_eq!(bank.len(), 2);
+        assert_eq!(bank.get_linear(0), 1.0);
+        assert_eq!(bank.get_linear(1), 2.0);
+        bank.set_linear(0, 0.5);
+        assert_eq!(bank.get_linear(0), 0.5);
+        // Out-of-range read is unity; out-of-range write is ignored.
+        assert_eq!(bank.get_linear(9), 1.0);
+        bank.set_linear(9, 4.0);
+        assert_eq!(bank.get_linear(9), 1.0);
+    }
+
+    #[test]
     fn downmix_averages_selected_channels() {
         // 2ch interleaved frame: ch0 = 1.0, ch1 = 0.0.
         let frame = [1.0, 0.0];
@@ -482,8 +558,9 @@ mod tests {
         assert_eq!(pushed, tone.len());
 
         let sends = vec![SendSpec { channels: vec![0] }];
+        let gains = Arc::new(GainBank::new(&[1.0]));
         let (mut worker, mut reader) =
-            AudioFeatureWorker::spawn(cons, SR, /* device_channels */ 1, sends);
+            AudioFeatureWorker::spawn(cons, SR, /* device_channels */ 1, sends, gains);
 
         // Poll up to ~500 ms for the first frame.
         let mut frame = None;

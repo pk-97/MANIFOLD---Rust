@@ -170,6 +170,39 @@ impl Command for SetAudioSendChannelsCommand {
     }
 }
 
+/// Set a send's input gain trim (decibels). Applied live by the analysis
+/// worker without restarting capture — a calibration knob, not structural.
+#[derive(Debug)]
+pub struct SetAudioSendGainCommand {
+    id: AudioSendId,
+    old_db: f32,
+    new_db: f32,
+}
+
+impl SetAudioSendGainCommand {
+    pub fn new(id: AudioSendId, old_db: f32, new_db: f32) -> Self {
+        Self { id, old_db, new_db }
+    }
+}
+
+impl Command for SetAudioSendGainCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
+            s.gain_db = self.new_db;
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
+            s.gain_db = self.old_db;
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Set Audio Send Gain"
+    }
+}
+
 /// Set a send's analysis config (which extractors run for it).
 #[derive(Debug)]
 pub struct SetAudioSendAnalysisCommand {
@@ -235,6 +268,20 @@ mod tests {
 
         cmd.undo(&mut project);
         assert_eq!(project.audio_setup.send_index(&b_id), Some(1));
+    }
+
+    #[test]
+    fn gain_round_trips() {
+        let mut project = Project::default();
+        let send = AudioSend::new("Bass");
+        let id = send.id.clone();
+        project.audio_setup.sends.push(send);
+
+        let mut cmd = SetAudioSendGainCommand::new(id.clone(), 0.0, 6.0);
+        cmd.execute(&mut project);
+        assert_eq!(project.audio_setup.find_send(&id).unwrap().gain_db, 6.0);
+        cmd.undo(&mut project);
+        assert_eq!(project.audio_setup.find_send(&id).unwrap().gain_db, 0.0);
     }
 
     #[test]

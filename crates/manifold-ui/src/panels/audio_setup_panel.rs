@@ -23,13 +23,17 @@ use super::PanelAction;
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 
 // ── Layout ──
-const PANEL_W: f32 = 360.0;
+const PANEL_W: f32 = 460.0;
 const TITLE_H: f32 = 26.0;
 const ROW_H: f32 = 24.0;
 const ROW_GAP: f32 = 4.0;
 const PAD: f32 = 10.0;
 const STEP_W: f32 = 22.0;
 const BTN_FONT: u16 = color::FONT_LABEL;
+/// Gain stepper geometry: [−] value [＋].
+const GAIN_BTN_W: f32 = 16.0;
+const GAIN_VAL_W: f32 = 50.0;
+const GAIN_W: f32 = GAIN_BTN_W * 2.0 + GAIN_VAL_W;
 
 /// One send's display data, supplied by `configure`.
 #[derive(Clone, Debug)]
@@ -42,6 +46,8 @@ pub struct AudioSendRow {
     /// BH_IN_R", or "Not routed". Resolved against the device directory by the
     /// data layer so the panel stays free of platform queries.
     pub channel_label: String,
+    /// Input gain trim in decibels (0 = unity). Shown on the row's −/＋ stepper.
+    pub gain_db: f32,
     /// Number of parameters this send currently drives. Surfaced on the row and
     /// gates a confirm-before-delete so a bound send isn't silently severed.
     pub driven_count: usize,
@@ -52,6 +58,8 @@ pub struct AudioSendRow {
 struct SendRowIds {
     label: i32,
     ch_dropdown: i32,
+    gain_minus: i32,
+    gain_plus: i32,
     stereo: i32,
     delete: i32,
     /// Level-meter fill node + its full-scale geometry, resized in place each
@@ -318,9 +326,45 @@ impl AudioSetupPanel {
                 if stereo_on { "St" } else { "Mo" },
             ) as i32;
 
+            // Gain stepper [−] value [＋], left of the stereo toggle. Discrete
+            // 1 dB steps; the value is read-only display (0 dB = unity).
+            let gain_x = stereo_x - 4.0 - GAIN_W;
+            self.send_ids[i].gain_minus = tree.add_button(
+                self.bg_id,
+                gain_x,
+                cy,
+                GAIN_BTN_W,
+                ROW_H,
+                btn_style(false),
+                "\u{2212}", // −
+            ) as i32;
+            tree.add_label(
+                self.bg_id,
+                gain_x + GAIN_BTN_W,
+                cy,
+                GAIN_VAL_W,
+                ROW_H,
+                &format_gain_db(send.gain_db),
+                UIStyle {
+                    text_color: Color32::new(190, 190, 198, 255),
+                    font_size: color::FONT_LABEL,
+                    text_align: TextAlign::Center,
+                    ..UIStyle::default()
+                },
+            );
+            self.send_ids[i].gain_plus = tree.add_button(
+                self.bg_id,
+                gain_x + GAIN_BTN_W + GAIN_VAL_W,
+                cy,
+                GAIN_BTN_W,
+                ROW_H,
+                btn_style(false),
+                "\u{002B}", // +
+            ) as i32;
+
             // Channel dropdown fills the gap, showing the resolved name(s).
             let ch_x = label_x + LABEL_W + 4.0;
-            let ch_w = (stereo_x - 4.0 - ch_x).max(40.0);
+            let ch_w = (gain_x - 4.0 - ch_x).max(40.0);
             self.send_ids[i].ch_dropdown = tree.add_button(
                 self.bg_id,
                 ch_x,
@@ -385,9 +429,14 @@ impl AudioSetupPanel {
         {
             return true;
         }
-        self.send_ids
-            .iter()
-            .any(|r| id == r.label || id == r.ch_dropdown || id == r.stereo || id == r.delete)
+        self.send_ids.iter().any(|r| {
+            id == r.label
+                || id == r.ch_dropdown
+                || id == r.gain_minus
+                || id == r.gain_plus
+                || id == r.stereo
+                || id == r.delete
+        })
     }
 
     /// Resize each send's meter fill from live levels (RMS 0..1). Called every
@@ -452,6 +501,10 @@ impl AudioSetupPanel {
                 Some((i, RowControl::Label))
             } else if id == ids.ch_dropdown {
                 Some((i, RowControl::Channel))
+            } else if id == ids.gain_minus {
+                Some((i, RowControl::GainDown))
+            } else if id == ids.gain_plus {
+                Some((i, RowControl::GainUp))
             } else if id == ids.stereo {
                 Some((i, RowControl::Stereo))
             } else if id == ids.delete {
@@ -470,6 +523,14 @@ impl AudioSetupPanel {
             RowControl::Channel => {
                 self.delete_armed = None;
                 Some(PanelAction::AudioSendChannelClicked(send_id))
+            }
+            RowControl::GainDown => {
+                self.delete_armed = None;
+                Some(PanelAction::AudioSendGainStep(send_id, -1.0))
+            }
+            RowControl::GainUp => {
+                self.delete_armed = None;
+                Some(PanelAction::AudioSendGainStep(send_id, 1.0))
             }
             RowControl::Stereo => {
                 self.delete_armed = None;
@@ -497,8 +558,20 @@ impl AudioSetupPanel {
 enum RowControl {
     Label,
     Channel,
+    GainDown,
+    GainUp,
     Stereo,
     Delete,
+}
+
+/// Format a send's gain trim for the row stepper. Unity reads "0 dB"; non-zero
+/// shows a signed integer dB (steps are 1 dB).
+fn format_gain_db(db: f32) -> String {
+    if db.abs() < 0.05 {
+        "0 dB".to_string()
+    } else {
+        format!("{db:+.0} dB")
+    }
 }
 
 impl Overlay for AudioSetupPanel {
@@ -624,6 +697,7 @@ mod tests {
                     label: "Audio 1".into(),
                     channels: vec![0],
                     channel_label: "Channel 1".into(),
+                    gain_db: 0.0,
                     driven_count: 0,
                 },
                 AudioSendRow {
@@ -631,6 +705,7 @@ mod tests {
                     label: "Audio 2".into(),
                     channels: vec![2],
                     channel_label: "MacBook Mic".into(),
+                    gain_db: 0.0,
                     driven_count: 0,
                 },
             ],
@@ -668,6 +743,35 @@ mod tests {
         // Close button toggles closed and yields no action.
         assert!(p.handle_click(p.close_id).is_none());
         assert!(!p.is_open());
+    }
+
+    #[test]
+    fn gain_buttons_emit_signed_steps() {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+
+        match p.handle_click(p.send_ids[0].gain_plus) {
+            Some(PanelAction::AudioSendGainStep(id, d)) => {
+                assert_eq!(id.as_str(), "s1");
+                assert_eq!(d, 1.0);
+            }
+            other => panic!("expected gain step +1, got {other:?}"),
+        }
+        match p.handle_click(p.send_ids[1].gain_minus) {
+            Some(PanelAction::AudioSendGainStep(id, d)) => {
+                assert_eq!(id.as_str(), "s2");
+                assert_eq!(d, -1.0);
+            }
+            other => panic!("expected gain step -1, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn format_gain_db_unity_and_signed() {
+        assert_eq!(format_gain_db(0.0), "0 dB");
+        assert_eq!(format_gain_db(6.0), "+6 dB");
+        assert_eq!(format_gain_db(-3.0), "-3 dB");
     }
 
     #[test]

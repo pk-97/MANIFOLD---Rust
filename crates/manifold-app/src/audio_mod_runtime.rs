@@ -12,7 +12,9 @@
 //! device leaves capture dark until the user re-points it (the remappable
 //! device policy), rather than failing the tick.
 
-use manifold_audio::analysis::{AudioFeatureWorker, FeatureReader, SendSpec};
+use std::sync::Arc;
+
+use manifold_audio::analysis::{AudioFeatureWorker, FeatureReader, GainBank, SendSpec};
 use manifold_audio::capture::{AudioCaptureConfig, AudioCaptureDevice};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSetup};
 use manifold_core::project::Project;
@@ -47,6 +49,9 @@ struct AudioModCapture {
     _worker: AudioFeatureWorker,
     reader: FeatureReader,
     signature: CaptureSignature,
+    /// Live per-send gain shared with the worker. A gain-only edit writes here
+    /// in place — no capture restart (gain isn't in [`CaptureSignature`]).
+    gains: Arc<GainBank>,
 }
 
 /// Content-thread-owned runtime that reconciles capture against the project and
@@ -139,8 +144,13 @@ impl AudioModRuntime {
         }
 
         let desired = CaptureSignature::from_setup(&project.audio_setup);
-        if self.capture.as_ref().is_some_and(|c| c.signature == desired) {
-            return; // already capturing with this exact config
+        if let Some(cap) = self.capture.as_ref()
+            && cap.signature == desired
+        {
+            // No structural change. Gain isn't in the signature, so sync it live
+            // here — a gain edit lands without restarting the capture stream.
+            sync_gains(&cap.gains, &project.audio_setup);
+            return;
         }
 
         // (Re)build. Drop any existing capture first so we don't hold two
@@ -193,6 +203,15 @@ impl AudioModRuntime {
             })
             .collect();
         let send_count = specs.len();
+        // Initial per-send linear gains, in send order — the worker reads these
+        // live through the shared bank.
+        let initial_gains: Vec<f32> = project
+            .audio_setup
+            .sends
+            .iter()
+            .map(|s| s.gain_linear())
+            .collect();
+        let gains = Arc::new(GainBank::new(&initial_gains));
 
         let mut device = match AudioCaptureDevice::new(AudioCaptureConfig {
             device_name: device_name.clone(),
@@ -218,7 +237,7 @@ impl AudioModRuntime {
         }
 
         let (worker, reader) =
-            AudioFeatureWorker::spawn(consumer, sample_rate, channels, specs);
+            AudioFeatureWorker::spawn(consumer, sample_rate, channels, specs, gains.clone());
         log::info!(
             "[AudioMod] Capture started: device={device_name:?}, {send_count} sends, \
              {sample_rate}Hz {channels}ch"
@@ -228,6 +247,18 @@ impl AudioModRuntime {
             _worker: worker,
             reader,
             signature: desired,
+            gains,
         });
+    }
+}
+
+/// Write each send's current linear gain into the shared [`GainBank`], in send
+/// order (the worker's send index). Cheap, lock-free; called every reconcile
+/// that finds no structural change, so a gain edit takes effect without a
+/// capture restart. A send count mismatch can't happen here — a send add/remove
+/// changes [`CaptureSignature`] and forces a rebuild before this runs.
+fn sync_gains(gains: &GainBank, setup: &AudioSetup) {
+    for (i, send) in setup.sends.iter().enumerate() {
+        gains.set_linear(i, send.gain_linear());
     }
 }

@@ -288,6 +288,10 @@ pub enum PanelAction {
     AudioSetSendChannels(manifold_core::AudioSendId, Vec<u16>),
     /// Toggle a send between mono (one channel) and stereo (a channel pair).
     AudioSendStereoToggle(manifold_core::AudioSendId),
+    /// Step a send's input gain trim by a dB delta (the panel's −/＋ buttons).
+    /// The host reads the send's current gain, applies the delta, clamps, and
+    /// commits — so the project stays the single source of truth.
+    AudioSendGainStep(manifold_core::AudioSendId, f32),
     /// A modulator output sub-range handle moved during a drag. `TrimKind`
     /// selects which modulator (driver / Ableton / audio) — the three formerly
     /// parallel `*TrimChanged` variants are one path now.
