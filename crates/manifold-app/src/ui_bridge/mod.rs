@@ -183,7 +183,6 @@ pub fn dispatch(
         | PanelAction::AudioModToggle(..)
         | PanelAction::AudioModSetSource(..)
         | PanelAction::AudioModRemove(..)
-        | PanelAction::AudioModNewSend(..)
         | PanelAction::AudioModSetInvert(..)
         | PanelAction::AudioSetDevice(..)
         | PanelAction::AudioAddSend

@@ -1962,8 +1962,9 @@ impl ParamCardPanel {
             // Already armed → disarm (closes the drawer), regardless of sends.
             vec![PanelAction::AudioModToggle(target, self.pid_at(pi))]
         } else if ms.audio_send_ids.is_empty() {
-            // Not armed, no send to point at → create the first send + arm.
-            vec![PanelAction::AudioModNewSend(target, self.pid_at(pi))]
+            // Not armed, no send to point at → open Audio Setup so the user can
+            // create one. Sends are defined there, never from the drawer.
+            vec![PanelAction::OpenAudioSetup]
         } else {
             // Not armed, sends exist → arm at the project's first send.
             vec![PanelAction::AudioModToggle(target, self.pid_at(pi))]
@@ -2057,9 +2058,6 @@ impl ParamCardPanel {
                 }
                 RowClick::AudioToggle(pi) => {
                     self.audio_toggle_action(GraphParamTarget::Effect(ei), pi)
-                }
-                RowClick::AudioNewSend(pi) => {
-                    vec![PanelAction::AudioModNewSend(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::AudioSelectSend(pi, k) => {
                     self.audio_set_source_action(GraphParamTarget::Effect(ei), pi, Some(k), None)
@@ -2177,9 +2175,6 @@ impl ParamCardPanel {
                 }
                 RowClick::AudioToggle(pi) => {
                     self.audio_toggle_action(GraphParamTarget::Generator, pi)
-                }
-                RowClick::AudioNewSend(pi) => {
-                    vec![PanelAction::AudioModNewSend(GraphParamTarget::Generator, self.pid_at(pi))]
                 }
                 RowClick::AudioSelectSend(pi, k) => {
                     self.audio_set_source_action(GraphParamTarget::Generator, pi, Some(k), None)

@@ -1185,13 +1185,14 @@ pub(crate) fn build_param_row(
     }
 
     // Audio-modulation drawer — auto-shows while a mod is active (mirrors the
-    // driver). Two rows: send selector (existing sends + a "＋" to create one)
-    // and feature selector. Built on the shared drawer API.
+    // driver). Two rows: send selector (the project's sends — new sends are
+    // created in the Audio Setup panel, not here) and feature selector. Built
+    // on the shared drawer API.
     if audio_active {
         use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
         let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
         let send_count = mod_state.audio_send_labels.len();
-        let mut send_buttons: Vec<DrawerButton> = mod_state
+        let send_buttons: Vec<DrawerButton> = mod_state
             .audio_send_labels
             .iter()
             .enumerate()
@@ -1205,7 +1206,6 @@ pub(crate) fn build_param_row(
                 }
             })
             .collect();
-        send_buttons.push(DrawerButton::new("\u{002B}", false)); // + new send
         let feat_sel = mod_state.audio_feature_idx.get(i).copied().unwrap_or(0);
         let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
         let mut feat_buttons: Vec<DrawerButton> = AUDIO_FEATURE_LABELS
@@ -1252,8 +1252,6 @@ pub(crate) enum RowClick {
     AudioToggle(usize),
     /// A send button in the audio drawer (param index, send index).
     AudioSelectSend(usize, usize),
-    /// The "＋" new-send button in the audio drawer (param index).
-    AudioNewSend(usize),
     /// A feature button in the audio drawer (param index, feature index).
     AudioSelectFeature(usize, usize),
     /// The "Inv" invert toggle in the audio drawer (param index).
@@ -1341,18 +1339,16 @@ pub(crate) fn match_param_row_click(
         }
     }
 
-    // Audio drawer buttons: flat index splits into send / new-send / feature.
+    // Audio drawer buttons: flat index splits into send / feature. Sends come
+    // first; the feature row (features + a trailing "Inv" toggle) follows.
     for (pi, cfg) in audio_configs.iter().enumerate() {
         if let Some((dids, send_count)) = cfg
             && let Some(flat) = dids.resolve_button(id)
         {
             return Some(if flat < *send_count {
                 RowClick::AudioSelectSend(pi, flat)
-            } else if flat == *send_count {
-                RowClick::AudioNewSend(pi)
             } else {
-                // Feature buttons, then a trailing "Inv" toggle one past them.
-                let feat = flat - send_count - 1;
+                let feat = flat - send_count;
                 if feat == AUDIO_FEATURE_LABELS.len() {
                     RowClick::AudioToggleInvert(pi)
                 } else {

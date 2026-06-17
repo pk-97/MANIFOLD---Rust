@@ -265,9 +265,6 @@ pub enum PanelAction {
     ),
     /// Remove the audio modulation from a param.
     AudioModRemove(GraphParamTarget, manifold_core::effects::ParamId),
-    /// Create a new audio send (default routing) and point this param's audio
-    /// modulation at it — the "＋" in the drawer's send selector.
-    AudioModNewSend(GraphParamTarget, manifold_core::effects::ParamId),
     /// Toggle an audio modulation's invert flag (`AudioModShape::invert`) — the
     /// drawer's "Inv" button (loud → low).
     AudioModSetInvert(GraphParamTarget, manifold_core::effects::ParamId),
