@@ -29,6 +29,14 @@ impl Application {
         self.local_project.settings.viewport_pixels_per_beat =
             self.ws.ui_root.viewport.pixels_per_beat();
 
+        // Persist panel sizing. These read from the live UI layout (which is
+        // never clobbered by content-thread snapshots) rather than relying on a
+        // drag-end write into local_project.settings — that write gets wiped by
+        // the next snapshot clone before save can capture it.
+        self.local_project.settings.inspector_width = self.ws.ui_root.layout.inspector_width;
+        self.local_project.settings.timeline_height_percent =
+            self.ws.ui_root.layout.timeline_split_ratio;
+
         // Persist inspector collapse states
         self.local_project.settings.macros_collapsed =
             self.ws.ui_root.inspector.macros_panel().is_collapsed();

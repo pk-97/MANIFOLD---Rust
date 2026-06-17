@@ -88,7 +88,8 @@ impl MacrosPanel {
             ableton_ranges: [None; MACRO_COUNT],
             dragging_ableton_trim: -1,
             dragging_ableton_trim_is_min: false,
-            is_collapsed: false,
+            // Default closed; project load overrides via set_collapsed().
+            is_collapsed: true,
             header_label_id: -1,
             chevron_btn_id: -1,
         }

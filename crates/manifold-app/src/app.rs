@@ -2602,17 +2602,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                         self.split_dragging = false;
                                         self.cursor_manager.set_default();
                                         self.ws.ui_root.set_split_handle_idle();
-                                        // Persist to ProjectSettings (Unity WorkspaceController line 591)
-                                        if let Some(project) = Some(&mut self.local_project) {
-                                            project.settings.timeline_height_percent =
-                                                self.ws.ui_root.layout.timeline_split_ratio;
-                                        }
+                                        // Width/ratio are captured at save time from
+                                        // the live UI layout (save_viewport_state) —
+                                        // a write here would be clobbered by the next
+                                        // content snapshot clone of local_project.
                                     } else if self.ws.ui_root.inspector_resize_dragging {
-                                        // Persist to ProjectSettings (Unity WorkspaceController line 528)
-                                        if let Some(project) = Some(&mut self.local_project) {
-                                            project.settings.inspector_width =
-                                                self.ws.ui_root.layout.inspector_width;
-                                        }
                                         self.ws.ui_root.end_inspector_resize();
                                     } else {
                                         self.ws.ui_root.pointer_event(

@@ -110,7 +110,9 @@ pub struct ProjectSettings {
     pub viewport_pixels_per_beat: f32,
 
     // ── Inspector collapse states (saved/restored on project load) ──
-    #[serde(default)]
+    // Macros default collapsed: new projects and projects predating this field
+    // open with the panel closed.
+    #[serde(default = "default_true")]
     pub macros_collapsed: bool,
     #[serde(default)]
     pub master_chrome_collapsed: bool,
@@ -269,7 +271,7 @@ impl Default for ProjectSettings {
             viewport_scroll_x_beats: 0.0,
             viewport_scroll_y_px: 0.0,
             viewport_pixels_per_beat: 120.0,
-            macros_collapsed: false,
+            macros_collapsed: true,
             master_chrome_collapsed: false,
             layer_chrome_collapsed: false,
             clip_chrome_collapsed: false,
