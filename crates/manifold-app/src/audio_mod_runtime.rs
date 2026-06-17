@@ -150,17 +150,26 @@ impl AudioModRuntime {
         let processes_changed = self
             .processes_dirty
             .swap(false, std::sync::atomic::Ordering::Relaxed);
+        // The current source's kind decides which hot-plug signals are relevant.
+        // `None` (system default input) counts as a hardware-device source.
+        let source_kind = engine
+            .project()
+            .and_then(|p| p.audio_setup.device.as_ref().map(|d| d.kind));
+
+        // A device hot-plug matters only to a hardware-device source. A tap
+        // doesn't resolve against the device list — and critically, creating our
+        // own private aggregate device fires this very notification, so acting on
+        // it for a tap would tear the tap down and rebuild it every tick in a
+        // feedback loop. Ignore device churn while a tap is the source.
+        let device_rebuild =
+            hotplugged && matches!(source_kind, None | Some(AudioSourceKind::InputDevice));
         // A process-list change matters only to an app tap (re-resolve its live
-        // process handle). Device / system-audio / default sources are unaffected,
-        // so we don't rebuild them when some unrelated app starts or stops audio.
-        let app_rebuild = processes_changed
-            && engine
-                .project()
-                .and_then(|p| p.audio_setup.device.as_ref())
-                .is_some_and(|d| d.kind == AudioSourceKind::App);
-        if data_version != self.last_version || hotplugged || app_rebuild || self.spec_dirty {
-            if hotplugged || app_rebuild {
-                // A device or the tapped app appeared/vanished/changed — drop
+        // process handle), so an unrelated app starting/stopping audio — or our
+        // aggregate churn — never rebuilds a device or system-audio capture.
+        let app_rebuild = processes_changed && matches!(source_kind, Some(AudioSourceKind::App));
+        if data_version != self.last_version || device_rebuild || app_rebuild || self.spec_dirty {
+            if device_rebuild || app_rebuild {
+                // The device or the tapped app appeared/vanished/changed — drop
                 // capture so reconcile rebuilds against the current state (the
                 // stored ref is unchanged, so the signature alone wouldn't fire).
                 self.capture = None;
