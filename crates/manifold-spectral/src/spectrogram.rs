@@ -145,6 +145,20 @@ impl Spectrogram {
         10.0 * (power + 1e-18).log10()
     }
 
+    /// Pink-weighted dB at the cursor: [`sample_db`](Self::sample_db) plus the
+    /// exact tilt the shader applies to the colour, so the hover readout matches
+    /// what's drawn under the cursor. `freq_log_ratio` is `log2(fmax/fmin)` of
+    /// the displayed range (0 → no tilt, raw level). Mirrors the shader's
+    /// `tilt = slope · freq_log_ratio · (0.5 − uv.y)`.
+    pub fn sample_db_weighted(&self, ux: f32, uy: f32, freq_log_ratio: f32) -> f32 {
+        let raw = self.sample_db(ux, uy);
+        if freq_log_ratio > 0.0 {
+            raw + PINK_SLOPE_DB_PER_OCT * freq_log_ratio * (0.5 - uy.clamp(0.0, 1.0))
+        } else {
+            raw
+        }
+    }
+
     /// Append one magnitude column at the sweep head (advancing it). Extra
     /// values past `num_bins` are ignored; a short column zero-pads the
     /// remainder. The head wraps at the right edge back to the left.

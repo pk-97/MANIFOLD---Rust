@@ -2380,10 +2380,17 @@ impl Application {
             let levels = self.content_state.audio_send_levels;
             self.ws.ui_root.update_audio_meters(&levels[..count]);
 
-            // Scope hover readout: freq + dB under the cursor. dB is sampled from
-            // last frame's ring (1-frame stale is imperceptible); freq is geometric.
+            // Scope hover readout: freq + pink-weighted dB under the cursor, so
+            // the number matches the colour. dB is sampled from last frame's ring
+            // (1-frame stale is imperceptible); freq is geometric.
+            let fmin = self.content_state.spectrogram_fmin;
+            let fmax = self.content_state.spectrogram_fmax;
+            let freq_log_ratio = if fmin > 0.0 && fmax > fmin { (fmax / fmin).log2() } else { 0.0 };
             let readout = self.scope_hover_uv().map(|(ux, uy, freq)| {
-                let db = self.spectrogram.as_ref().map_or(-120.0, |s| s.sample_db(ux, uy));
+                let db = self
+                    .spectrogram
+                    .as_ref()
+                    .map_or(-120.0, |s| s.sample_db_weighted(ux, uy, freq_log_ratio));
                 format_scope_readout(freq, db)
             });
             self.ws.ui_root.update_audio_scope_readout(readout.as_deref());
