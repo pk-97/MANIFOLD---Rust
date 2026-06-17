@@ -547,9 +547,29 @@ impl Application {
                         drag.apply(&mut self.local_project);
                     }
                 }
+                // Accumulate VQT columns from EVERY drained snapshot — the
+                // assignment below keeps only the latest, so reading columns off
+                // `content_state` would drop those from earlier snapshots when
+                // several arrive in one UI frame, and re-push them on frames that
+                // drain none. The render path consumes (clears) this buffer.
+                self.pending_spectrogram_columns
+                    .extend_from_slice(&state.spectrogram_columns);
+                // Bound it: never keep more than the waterfall's scroll-back depth
+                // (older columns scroll off anyway). Caps memory when the scope is
+                // closed but an audio mod keeps capture — and column production —
+                // running, since only the render path drains this buffer.
+                let nb = state.spectrogram_num_bins;
+                if nb > 0 {
+                    let max_cols = manifold_spectral::SpectrogramConfig::default().history_len;
+                    let excess = self.pending_spectrogram_columns.len().saturating_sub(max_cols * nb);
+                    if excess > 0 {
+                        self.pending_spectrogram_columns.drain(0..excess);
+                    }
+                }
                 self.content_state = ContentState {
-                    project_snapshot: None,    // consumed above
-                    modulation_snapshot: None, // consumed above
+                    project_snapshot: None,      // consumed above
+                    modulation_snapshot: None,   // consumed above
+                    spectrogram_columns: Vec::new(), // accumulated above
                     ..state
                 };
             }
@@ -3748,6 +3768,9 @@ impl Application {
 
             // (Re)create the renderer if the column layout changed.
             if self.spectrogram.is_none() || self.spectrogram_num_bins != num_bins {
+                // Drop columns captured under the old bin count — chunking them at
+                // the new `num_bins` would misalign the freshly built ring.
+                self.pending_spectrogram_columns.clear();
                 self.spectrogram = Some(Spectrogram::new(
                     &gpu.device,
                     num_bins,
@@ -3779,10 +3802,12 @@ impl Application {
                 (self.spectrogram.as_mut(), self.spectrogram_pane.as_mut())
                 && let Some(target) = pane.local_target().cloned()
             {
-                // Feed new columns (post-gain magnitudes from the worker).
-                for col in self.content_state.spectrogram_columns.chunks_exact(num_bins) {
+                // Feed new columns (post-gain magnitudes from the worker), each
+                // exactly once, then clear — see `pending_spectrogram_columns`.
+                for col in self.pending_spectrogram_columns.chunks_exact(num_bins) {
                     spectrogram.push_column(col);
                 }
+                self.pending_spectrogram_columns.clear();
                 // Band dividers at 250 Hz / 2 kHz (the modulation's low/mid/high
                 // splits), as normalised y on the log axis.
                 let (fmin, fmax) =

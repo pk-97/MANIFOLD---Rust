@@ -239,6 +239,16 @@ pub struct Application {
     #[cfg(target_os = "macos")]
     pub(crate) spectrogram_pane: Option<crate::texture_pane::TexturePane>,
     pub(crate) spectrogram_num_bins: usize,
+    /// VQT columns drained from content snapshots but not yet fed to the
+    /// waterfall. Snapshots carry the columns produced since the last snapshot;
+    /// accumulating here (rather than reading `content_state.spectrogram_columns`
+    /// directly) makes the feed consume-once: columns from every drained snapshot
+    /// are kept (the drain loop discards all but the latest snapshot), and the
+    /// render path clears this after pushing so no column is ever pushed twice.
+    /// Without it the waterfall double-pushes on UI frames with no new snapshot
+    /// and drops columns on frames that drain several — visible as juddery,
+    /// "jelly" scrolling and smeared startup columns.
+    pub(crate) pending_spectrogram_columns: Vec<f32>,
     /// Physical-pixel size of the scope render target, tracked so it is rebuilt
     /// when the (resizable) Audio Setup modal changes the on-screen scope size —
     /// keeps the waterfall crisp instead of upscaling a fixed small texture.
@@ -511,6 +521,7 @@ impl Application {
             #[cfg(target_os = "macos")]
             spectrogram_pane: None,
             spectrogram_num_bins: 0,
+            pending_spectrogram_columns: Vec::new(),
             #[cfg(target_os = "macos")]
             spectrogram_tex_dims: (0, 0),
             spectrogram_send_sent: None,
