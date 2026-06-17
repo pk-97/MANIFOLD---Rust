@@ -396,16 +396,8 @@ struct SendState {
     col: Vec<f32>,
     /// Previous column (one hop back) — the transient/liveliness flux baseline.
     prev_col: Vec<f32>,
-    /// Per-band fast amplitude follower (~10 ms) — chases the attack closely.
-    /// Order [Full, Low, Mid, High].
-    amp_fast: [f32; 4],
-    /// Per-band slow amplitude follower (~40 ms) — the local baseline. An onset is
-    /// `amp_fast − amp_slow` rising past a threshold: a sharp attack pulls fast
-    /// ahead of slow; sustained content keeps them together. On a fire the slow
-    /// follower is snapped to the current level so a HELD note can't re-fire.
-    amp_slow: [f32; 4],
-    /// Hops remaining in each band's onset refractory window — a short debounce so
-    /// the multi-hop attack itself reads as one spike.
+    /// Hops remaining in each band's onset refractory window — after a transient
+    /// fires, suppress re-fire until this elapses. Order [Full, Low, Mid, High].
     transient_refractory: [u8; 4],
     /// Whether `prev_col` holds a real column yet (skips the startup flux spike).
     has_prev: bool,
@@ -505,8 +497,6 @@ impl WorkerLoop {
                 since_hop: 0,
                 col: vec![0.0; nb],
                 prev_col: vec![0.0; nb],
-                amp_fast: [0.0; 4],
-                amp_slow: [0.0; 4],
                 transient_refractory: [0; 4],
                 has_prev: false,
                 centroid_yfb: [-1.0; 4],
@@ -762,41 +752,31 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
 
 // ── Onset (transient) detection ──────────────────────────────────────────
 //
-// A transient is a sharp ATTACK — what tells a kick on top of sustained bass
-// apart from a held drone is the *rate* of the rise, not the level or whether it
-// dips. So the detector is a percussive onset: two amplitude followers per band,
-// a fast one (~10 ms) that chases the attack and a slow one (~40 ms) that holds
-// the local baseline. The onset signal is their difference `fast − slow` — a
-// sharp attack pulls fast ahead of slow, sustained content keeps them together.
-// It fires when that difference clears `ONSET_RISE` (and the band is loud, and a
-// refractory has elapsed). A held note can't re-fire because the fast−slow gap
-// decays monotonically to zero once the level steadies, and the refractory is
-// sized to outlast that decay (~slow-follower settle) — so there's exactly one
-// onset per attack. A kick pattern dips between hits, so fast pulls ahead again
-// each time. Crucially the baseline is NOT snapped on fire: snapping pinned the
-// slow follower high on busy material, so kick after kick fell short of the
-// inflated baseline and was missed. Per-hop flux on a 94%-overlapped VQT was too
-// twitchy for this; the followers average that noise out.
+// Dead simple and deterministic: a transient is a burst of NEW energy in the
+// band. The detection function is relative spectral flux — `positive_flux ÷
+// energy`, the fraction of the band's energy that just appeared (0..1, so it's
+// level-independent and needs no per-band scaling or adaptive baseline). A kick
+// is a big chunk of new low-end energy → high relative flux; steady content
+// (held note, sustained bass) barely changes → ~0. Fire when it clears
+// `ONSET_THRESH` on a loud band, then a refractory blocks the multi-hop attack
+// from re-firing. That's the whole detector — no followers, no envelope, no
+// baseline state. Flux is the right signal because it tracks the kick's new
+// energy directly, where band-RMS amplitude diluted it across ~100 bins.
 
-/// Per-hop smoothing of the fast follower (~10 ms at hop ≈ 5.3 ms).
-const ONSET_FAST_COEFF: f32 = 0.5;
-/// Per-hop smoothing of the slow follower / baseline (~40 ms at hop ≈ 5.3 ms).
-const ONSET_SLOW_COEFF: f32 = 0.15;
-/// How far the fast follower must lead the slow one (on the 0..1 amplitude scale)
-/// to count as an attack. Lower = more sensitive. The main kick-sensitivity knob.
-const ONSET_RISE: f32 = 0.05;
+/// Relative flux (new energy ÷ band energy) that counts as an onset. The single
+/// sensitivity knob — lower catches softer transients, higher is stricter.
+const ONSET_THRESH: f32 = 0.15;
 /// A transient only fires on a band loud enough to matter — `amplitude` is the
 /// band's level on the colourmap's 0..1 dB scale (≈ −53 dBFS here).
 const ONSET_AMP_GATE: f32 = 0.12;
 /// Per-hop decay of the transient impulse (~100 ms settle at hop ≈ 5.3 ms).
 const ONSET_DECAY: f32 = 0.85;
-/// Below this band energy, relative flux (liveliness) reads 0 — avoids the
-/// flux ÷ energy ratio blowing up on near-silence.
+/// Below this band energy, relative flux reads 0 — avoids the flux ÷ energy ratio
+/// blowing up on near-silence.
 const FLUX_ENERGY_GATE: f32 = 1e-4;
-/// Refractory after an onset (~106 ms at hop ≈ 5.3 ms). Sized to outlast the
-/// fast−slow gap's decay even on a full-scale held note (so it fires once), which
-/// caps the kick rate at ~9/s — ample for any musical kick pattern.
-const ONSET_REFRACTORY_HOPS: u8 = 20;
+/// Refractory after an onset (~42 ms at hop ≈ 5.3 ms) so one attack reads as one
+/// spike; caps the rate at ~24/s, ample for any kick pattern.
+const ONSET_REFRACTORY_HOPS: u8 = 8;
 /// Pink-tilt slope the scope colourmap applies (dB/oct). Must stay equal to
 /// `manifold_spectral`'s `PINK_SLOPE_DB_PER_OCT` so the worker's reductions and
 /// presence gate evaluate the exact tilted dB the user sees painted.
@@ -973,25 +953,18 @@ fn reduce_send(
             -1.0
         };
 
-        // Onset followers track every hop — including warm-up — so they're already
-        // settled when firing arms ([`have_prev`]); a step from zero followers
-        // would otherwise read as a spurious onset the moment analysis starts.
-        let amp = r.amplitude;
-        send.amp_fast[bi] += (amp - send.amp_fast[bi]) * ONSET_FAST_COEFF;
-        send.amp_slow[bi] += (amp - send.amp_slow[bi]) * ONSET_SLOW_COEFF;
-
         if have_prev {
-            // Liveliness (relative flux) self-scales with density.
-            bf.liveliness = if loud { relative_flux(r.flux, r.energy) } else { 0.0 };
+            // Relative flux = the fraction of the band's energy that just appeared.
+            // It's the onset signal AND the liveliness reading.
+            let rel = relative_flux(r.flux, r.energy);
+            bf.liveliness = if loud { rel } else { 0.0 };
 
-            // Transient = a sharp attack: the fast follower leading the slow
-            // baseline by more than ONSET_RISE. The refractory (sized to outlast
-            // the gap's decay) gives one onset per held note; the baseline is left
-            // to track the real level so busy material doesn't pin it high and
-            // swallow later kicks.
-            let rise = send.amp_fast[bi] - send.amp_slow[bi];
+            // Transient: a burst of new energy past ONSET_THRESH on a loud band,
+            // then a refractory so one attack reads as one decaying spike. Steady
+            // content (held note, sustained bass) has ~0 flux → never fires; a
+            // kick is a big chunk of new energy → fires every hit.
             let refractory = &mut send.transient_refractory[bi];
-            let triggered = loud && *refractory == 0 && rise > ONSET_RISE;
+            let triggered = loud && *refractory == 0 && rel > ONSET_THRESH;
             if triggered {
                 bf.transients = 1.0;
                 *refractory = ONSET_REFRACTORY_HOPS;
@@ -1122,8 +1095,6 @@ mod tests {
             since_hop: 0,
             col,
             prev_col: vec![0.0f32; nb],
-            amp_fast: [0.0; 4],
-            amp_slow: [0.0; 4],
             transient_refractory: [0; 4],
             has_prev: false,
             centroid_yfb: [-1.0; 4],
@@ -1234,8 +1205,6 @@ mod tests {
             since_hop: 0,
             col: tone.clone(),
             prev_col: vec![0.0f32; nb],
-            amp_fast: [0.0; 4], // followers start at silence → the tone is an onset
-            amp_slow: [0.0; 4],
             transient_refractory: [0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
@@ -1292,8 +1261,6 @@ mod tests {
             since_hop: 0,
             col: bass.clone(),
             prev_col: bass.clone(),
-            amp_fast: [0.0; 4],
-            amp_slow: [0.0; 4],
             transient_refractory: [0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
@@ -1345,8 +1312,6 @@ mod tests {
             since_hop: 0,
             col: bass.clone(),
             prev_col: bass.clone(),
-            amp_fast: [0.0; 4],
-            amp_slow: [0.0; 4],
             transient_refractory: [0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
