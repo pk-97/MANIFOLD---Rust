@@ -40,10 +40,12 @@ struct Params {
 
 @group(0) @binding(0) var<storage, read> history: array<f32>;
 @group(0) @binding(1) var<uniform> p: Params;
-// Per-column overlay scalars, 4 per column: [centroid_yfb, onset_low, onset_mid,
-// onset_high]. Same column layout as `history`. `centroid_yfb` is the spectral
-// centroid as height-from-bottom (0..1); < 0 hides it. The three onsets are
-// 0..1 per-band transient impulses, drawn as colour-coded ticks.
+// Per-column overlay scalars, 7 per column: four per-band centroid heights
+// [centroid_full, centroid_low, centroid_mid, centroid_high] then three onsets
+// [onset_low, onset_mid, onset_high]. Same column layout as `history`. Each
+// centroid is that band's spectral centroid as height-from-bottom (0..1); < 0
+// hides that band's trace. The three onsets are 0..1 per-band transient impulses,
+// drawn as colour-coded ticks.
 @group(0) @binding(2) var<storage, read> col_scalars: array<f32>;
 
 struct VertexOutput {
@@ -114,6 +116,17 @@ fn divider(rgb: vec3<f32>, yfb: f32, ux: f32, band_y: f32, hovered: bool, ncols:
     return out;
 }
 
+// Draw one band's centroid trace: a soft-edged horizontal line at height `cen`
+// (from-bottom, 0..1). `cen < 0` hides it. `color` distinguishes the band.
+fn centroid_line(rgb: vec3<f32>, yfb: f32, cen: f32, color: vec3<f32>) -> vec3<f32> {
+    if (cen < 0.0) {
+        return rgb;
+    }
+    let cd = abs(yfb - cen);
+    let w = clamp(1.0 - cd / 0.006, 0.0, 1.0);
+    return mix(rgb, color, w * 0.9);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let n_bins = p.num_bins;
@@ -159,20 +172,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     rgb = divider(rgb, y_from_bottom, in.uv.x, p.band_lo_y, p.hovered_divider == 0.0, ncols);
     rgb = divider(rgb, y_from_bottom, in.uv.x, p.band_hi_y, p.hovered_divider == 1.0, ncols);
 
-    // Per-column overlays: the spectral-centroid trace and per-band transient
-    // ticks. Both scroll with the waterfall because they're keyed by `col`, the
-    // same 1:1 column slot the magnitudes use.
-    let centroid_yfb = col_scalars[col * 4u];
-    let on_low = col_scalars[col * 4u + 1u];
-    let on_mid = col_scalars[col * 4u + 2u];
-    let on_high = col_scalars[col * 4u + 3u];
-    // Centroid trace: a magenta line tracking the column's centre of spectral
-    // mass — "where the energy sits" over time. Soft-edged so it reads smooth.
-    if (centroid_yfb >= 0.0) {
-        let cd = abs(y_from_bottom - centroid_yfb);
-        let w = clamp(1.0 - cd / 0.008, 0.0, 1.0);
-        rgb = mix(rgb, vec3<f32>(1.0, 0.25, 0.85), w * 0.85);
-    }
+    // Per-column overlays: the per-band spectral-centroid traces and per-band
+    // transient ticks. Both scroll with the waterfall because they're keyed by
+    // `col`, the same 1:1 column slot the magnitudes use.
+    let cen_full = col_scalars[col * 7u];
+    let cen_low = col_scalars[col * 7u + 1u];
+    let cen_mid = col_scalars[col * 7u + 2u];
+    let cen_high = col_scalars[col * 7u + 3u];
+    let on_low = col_scalars[col * 7u + 4u];
+    let on_mid = col_scalars[col * 7u + 5u];
+    let on_high = col_scalars[col * 7u + 6u];
+    // Centroid traces: one line per band tracking "where the energy sits" within
+    // that band over time. Full = magenta (whole spectrum); per-band lines are
+    // colour-matched to the transient ticks below — Low = red, Mid = green, High
+    // = blue — and each stays inside its own region, so you can watch what the
+    // brightness feature reads for whichever band a slider is driven from. Drawn
+    // band-on-top-of-full so the band line wins where they cross.
+    rgb = centroid_line(rgb, y_from_bottom, cen_full, vec3<f32>(1.0, 0.25, 0.85));
+    rgb = centroid_line(rgb, y_from_bottom, cen_low, vec3<f32>(1.0, 0.45, 0.30));
+    rgb = centroid_line(rgb, y_from_bottom, cen_mid, vec3<f32>(0.40, 1.0, 0.50));
+    rgb = centroid_line(rgb, y_from_bottom, cen_high, vec3<f32>(0.45, 0.72, 1.0));
     // Transient ticks: three stacked lanes at the bottom edge, one colour per
     // band — Low = red (lowest lane), Mid = green, High = blue — so each band's
     // onset rhythm reads separately. Gated near the impulse peak so hits stay

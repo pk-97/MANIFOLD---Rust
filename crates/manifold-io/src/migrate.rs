@@ -60,7 +60,46 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.8.0".to_string());
     }
 
+    if is_version_less_than(&version, "1.9.0") {
+        migrate_v180_to_v190(&mut root);
+        root["projectVersion"] = Value::String("1.9.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
+}
+
+/// v1.8.0 → v1.9.0: the audio-modulation feature kinds `Brightness` and
+/// `Liveliness` were renamed to `Centroid` and `Flux` so the variant identifier
+/// matches its user-facing label and the canonical spectral term. The kind is
+/// serialized camelCase, so the on-disk string moved `"brightness"` → `"centroid"`
+/// and `"liveliness"` → `"flux"`. (The pre-matrix *flat* feature enum already
+/// spelled these `"centroid"`/`"flux"`; only the newer `{ kind, band }` matrix
+/// shape carried the renamed strings.)
+///
+/// Rewrites `audioMods[].source.feature.kind` on every preset instance (master /
+/// layer / clip effects + generator `genParams`). Idempotent: the new strings
+/// don't match the old ones, so a re-run is a no-op.
+fn migrate_v180_to_v190(root: &mut Value) {
+    for_each_preset_instance(root, |fx| {
+        let Some(mods) = fx.get_mut("audioMods").and_then(|m| m.as_array_mut()) else {
+            return;
+        };
+        for m in mods.iter_mut() {
+            let Some(kind) = m
+                .get_mut("source")
+                .and_then(|s| s.get_mut("feature"))
+                .and_then(|f| f.get_mut("kind"))
+            else {
+                continue;
+            };
+            let renamed = match kind.as_str() {
+                Some("brightness") => "centroid",
+                Some("liveliness") => "flux",
+                _ => continue,
+            };
+            *kind = Value::String(renamed.to_string());
+        }
+    });
 }
 
 /// v1.7.0 → v1.8.0: repair generator layers whose `genParams` was serialized
@@ -655,7 +694,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.8.0")
+            Some("1.9.0")
         );
     }
 
@@ -671,7 +710,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.8.0")
+            Some("1.9.0")
         );
     }
 
@@ -685,7 +724,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.8.0")
+            Some("1.9.0")
         );
     }
 
@@ -700,7 +739,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.8.0")
+            Some("1.9.0")
         );
     }
 
@@ -744,7 +783,7 @@ mod tests {
         // The "Ghost" envelope had no matching effect → dropped.
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.8.0")
+            Some("1.9.0")
         );
     }
 
@@ -992,7 +1031,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.8.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.9.0"));
         assert_eq!(
             v["settings"]["masterEffects"][0]["effectType"].as_str(),
             Some("WireframeDepth")
@@ -1042,7 +1081,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.8.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.9.0"));
 
         // Corrupted generator: effectType → generatorType, effectType removed.
         let gp0 = &v["timeline"]["layers"][0]["genParams"];
@@ -1083,6 +1122,68 @@ mod tests {
         assert_eq!(
             v["timeline"]["layers"][0]["genParams"]["generatorType"].as_str(),
             Some("Plasma")
+        );
+    }
+
+    /// v1.9.0: audio-mod feature kinds `brightness`/`liveliness` rewrite to
+    /// `centroid`/`flux` on every preset instance carrying `audioMods`; the
+    /// band and every other kind ride along untouched.
+    #[test]
+    fn test_v190_renames_audio_mod_feature_kinds() {
+        let json = r#"{
+            "projectVersion": "1.8.0",
+            "settings": {
+                "masterEffects": [
+                    { "effectType": "Bloom", "audioMods": [
+                        { "paramId": "amount",
+                          "source": { "sendId": "s1", "feature": { "kind": "brightness", "band": "high" } } },
+                        { "paramId": "radius",
+                          "source": { "sendId": "s1", "feature": { "kind": "amplitude", "band": "full" } } }
+                    ] }
+                ]
+            },
+            "timeline": { "layers": [ {
+                "effects": [ { "effectType": "Mirror", "audioMods": [
+                    { "paramId": "x",
+                      "source": { "sendId": "s2", "feature": { "kind": "liveliness", "band": "mid" } } }
+                ] } ],
+                "genParams": { "generatorType": "Plasma", "audioMods": [
+                    { "paramId": "speed",
+                      "source": { "sendId": "s3", "feature": { "kind": "brightness", "band": "low" } } }
+                ] }
+            } ] }
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(v["projectVersion"].as_str(), Some("1.9.0"));
+
+        let master = &v["settings"]["masterEffects"][0]["audioMods"];
+        assert_eq!(master[0]["source"]["feature"]["kind"].as_str(), Some("centroid"));
+        assert_eq!(
+            master[0]["source"]["feature"]["band"].as_str(),
+            Some("high"),
+            "band rides along untouched"
+        );
+        // A non-renamed kind is left exactly as-is.
+        assert_eq!(master[1]["source"]["feature"]["kind"].as_str(), Some("amplitude"));
+
+        // Layer effect + generator genParams are both walked.
+        let layer = &v["timeline"]["layers"][0];
+        assert_eq!(
+            layer["effects"][0]["audioMods"][0]["source"]["feature"]["kind"].as_str(),
+            Some("flux")
+        );
+        assert_eq!(
+            layer["genParams"]["audioMods"][0]["source"]["feature"]["kind"].as_str(),
+            Some("centroid")
+        );
+
+        // Idempotent: a second pass on the migrated doc changes nothing.
+        let again = migrate_if_needed(&migrated).unwrap();
+        let v2: Value = serde_json::from_str(&again).unwrap();
+        assert_eq!(
+            v2["settings"]["masterEffects"][0]["audioMods"][0]["source"]["feature"]["kind"].as_str(),
+            Some("centroid")
         );
     }
 }

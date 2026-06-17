@@ -207,9 +207,9 @@ pub(crate) fn audio_band_from_index(idx: usize) -> manifold_core::AudioBand {
 pub(crate) fn audio_kind_labels() -> [&'static str; 5] {
     [
         manifold_core::AudioFeatureKind::Amplitude.label(),
-        manifold_core::AudioFeatureKind::Brightness.label(),
+        manifold_core::AudioFeatureKind::Centroid.label(),
         manifold_core::AudioFeatureKind::Noisiness.label(),
-        manifold_core::AudioFeatureKind::Liveliness.label(),
+        manifold_core::AudioFeatureKind::Flux.label(),
         manifold_core::AudioFeatureKind::Transients.label(),
     ]
 }

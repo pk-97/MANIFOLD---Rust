@@ -3890,16 +3890,16 @@ impl Application {
             {
                 // Feed new columns (post-gain magnitudes from the worker), each
                 // exactly once, then clear — see `pending_spectrogram_columns`.
-                // The overlay scalars ride in lockstep (4 per column); a column
-                // with no matching record (shouldn't happen) gets the hide
-                // sentinel.
-                let mut scalars = self.pending_spectrogram_scalars.chunks_exact(4);
+                // The overlay scalars ride in lockstep (7 per column: four per-band
+                // centroids + three onsets); a column with no matching record
+                // (shouldn't happen) gets the hide sentinel.
+                let mut scalars = self.pending_spectrogram_scalars.chunks_exact(7);
                 for col in self.pending_spectrogram_columns.chunks_exact(num_bins) {
-                    let (centroid, onsets) = match scalars.next() {
-                        Some(s) => (s[0], [s[1], s[2], s[3]]),
-                        None => (-1.0, [0.0; 3]),
+                    let (centroids, onsets) = match scalars.next() {
+                        Some(s) => ([s[0], s[1], s[2], s[3]], [s[4], s[5], s[6]]),
+                        None => ([-1.0; 4], [0.0; 3]),
                     };
-                    spectrogram.push_column(col, centroid, onsets);
+                    spectrogram.push_column(col, centroids, onsets);
                 }
                 self.pending_spectrogram_columns.clear();
                 self.pending_spectrogram_scalars.clear();

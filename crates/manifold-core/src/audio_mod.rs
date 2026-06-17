@@ -65,11 +65,11 @@ pub enum AudioFeatureKind {
     #[default]
     Amplitude,
     /// Spectral centroid — brightness.
-    Brightness,
+    Centroid,
     /// Spectral flatness — tonal (0) vs noisy (1).
     Noisiness,
     /// Relative spectral flux — how much the band is changing.
-    Liveliness,
+    Flux,
     /// Onset trigger — transient hits in the band.
     Transients,
 }
@@ -78,9 +78,9 @@ impl AudioFeatureKind {
     /// All kinds in drawer-button order.
     pub const ALL: [AudioFeatureKind; 5] = [
         AudioFeatureKind::Amplitude,
-        AudioFeatureKind::Brightness,
+        AudioFeatureKind::Centroid,
         AudioFeatureKind::Noisiness,
-        AudioFeatureKind::Liveliness,
+        AudioFeatureKind::Flux,
         AudioFeatureKind::Transients,
     ];
 
@@ -93,9 +93,9 @@ impl AudioFeatureKind {
     pub fn label(self) -> &'static str {
         match self {
             AudioFeatureKind::Amplitude => "Amplitude",
-            AudioFeatureKind::Brightness => "Brightness",
+            AudioFeatureKind::Centroid => "Centroid",
             AudioFeatureKind::Noisiness => "Noisiness",
-            AudioFeatureKind::Liveliness => "Liveliness",
+            AudioFeatureKind::Flux => "Flux",
             AudioFeatureKind::Transients => "Transients",
         }
     }
@@ -103,7 +103,7 @@ impl AudioFeatureKind {
 
 /// What a modulation reads: a detector (`kind`) run over a frequency band
 /// (`band`). The cross-product is the feature matrix exposed in the drawer —
-/// e.g. `{ Transients, Low }` is a kick detector, `{ Brightness, Full }` is
+/// e.g. `{ Transients, Low }` is a kick detector, `{ Centroid, Full }` is
 /// overall brightness. Deserialization migrates the pre-matrix flat enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -122,9 +122,9 @@ impl AudioFeature {
         let b = &f.bands[self.band.index()];
         match self.kind {
             AudioFeatureKind::Amplitude => b.amplitude,
-            AudioFeatureKind::Brightness => b.brightness,
+            AudioFeatureKind::Centroid => b.brightness,
             AudioFeatureKind::Noisiness => b.noisiness,
-            AudioFeatureKind::Liveliness => b.liveliness,
+            AudioFeatureKind::Flux => b.liveliness,
             AudioFeatureKind::Transients => b.transients,
         }
     }
@@ -177,9 +177,9 @@ impl From<AudioFeatureRepr> for AudioFeature {
             AudioFeatureRepr::Legacy(l) => match l {
                 LegacyAudioFeature::Amplitude => (Amplitude, Full),
                 LegacyAudioFeature::BandEnergy(b) => (Amplitude, b),
-                LegacyAudioFeature::Centroid => (Brightness, Full),
+                LegacyAudioFeature::Centroid => (Centroid, Full),
                 LegacyAudioFeature::Flatness => (Noisiness, Full),
-                LegacyAudioFeature::Flux => (Liveliness, Full),
+                LegacyAudioFeature::Flux => (Flux, Full),
                 LegacyAudioFeature::Onset => (Transients, Full),
                 LegacyAudioFeature::Pitch | LegacyAudioFeature::PitchDelta => (Amplitude, Full),
             },
@@ -366,8 +366,8 @@ mod tests {
         };
         assert_eq!(AudioFeature::new(Amplitude, Full).extract(&f), 0.42);
         assert_eq!(AudioFeature::new(Amplitude, Low).extract(&f), 0.1);
-        assert_eq!(AudioFeature::new(Brightness, Mid).extract(&f), 0.55);
-        assert_eq!(AudioFeature::new(Liveliness, High).extract(&f), 1.7);
+        assert_eq!(AudioFeature::new(Centroid, Mid).extract(&f), 0.55);
+        assert_eq!(AudioFeature::new(Flux, High).extract(&f), 1.7);
         assert_eq!(AudioFeature::new(Transients, High).extract(&f), 0.9);
     }
 
@@ -385,9 +385,9 @@ mod tests {
         let cases = [
             ("\"amplitude\"", AudioFeatureKind::Amplitude, AudioBand::Full),
             ("{\"bandEnergy\":\"low\"}", AudioFeatureKind::Amplitude, AudioBand::Low),
-            ("\"centroid\"", AudioFeatureKind::Brightness, AudioBand::Full),
+            ("\"centroid\"", AudioFeatureKind::Centroid, AudioBand::Full),
             ("\"flatness\"", AudioFeatureKind::Noisiness, AudioBand::Full),
-            ("\"flux\"", AudioFeatureKind::Liveliness, AudioBand::Full),
+            ("\"flux\"", AudioFeatureKind::Flux, AudioBand::Full),
             ("\"onset\"", AudioFeatureKind::Transients, AudioBand::Full),
         ];
         for (json, kind, band) in cases {
@@ -395,7 +395,7 @@ mod tests {
             assert_eq!(f, AudioFeature::new(kind, band), "migrating {json}");
         }
         // Current shape round-trips.
-        let cur = AudioFeature::new(AudioFeatureKind::Brightness, AudioBand::High);
+        let cur = AudioFeature::new(AudioFeatureKind::Centroid, AudioBand::High);
         let json = serde_json::to_string(&cur).unwrap();
         assert_eq!(serde_json::from_str::<AudioFeature>(&json).unwrap(), cur);
     }
@@ -464,7 +464,7 @@ mod tests {
         let m = ParameterAudioMod::new(
             "amount".into(),
             AudioSendId::new("send-1"),
-            AudioFeature::new(AudioFeatureKind::Liveliness, AudioBand::Mid),
+            AudioFeature::new(AudioFeatureKind::Flux, AudioBand::Mid),
         );
         let json = serde_json::to_string(&m).unwrap();
         let back: ParameterAudioMod = serde_json::from_str(&json).unwrap();

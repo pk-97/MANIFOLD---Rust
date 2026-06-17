@@ -24,9 +24,10 @@ const SHADER: &str = include_str!("shaders/spectrogram.wgsl");
 /// is never written while a prior frame's GPU read is outstanding.
 const BUFFER_ROTATION: usize = 3;
 
-/// Overlay scalars stored per spectrogram column: `[centroid_yfb, onset_low,
-/// onset_mid, onset_high]`. The shader reads the same stride.
-const SCALAR_STRIDE: usize = 4;
+/// Overlay scalars stored per spectrogram column: four per-band centroid heights
+/// `[centroid_full, centroid_low, centroid_mid, centroid_high]` then three onsets
+/// `[onset_low, onset_mid, onset_high]`. The shader reads the same stride.
+const SCALAR_STRIDE: usize = 7;
 
 /// Pink-noise spectral tilt (dB/octave) applied to the colourmap, matching the
 /// Analyzer VST's default weighting: pink noise reads as a flat field, so a
@@ -71,11 +72,12 @@ pub struct Spectrogram {
     /// column to overwrite (also the shader's `write_index` — the sweep line).
     ring: Vec<f32>,
     /// Parallel per-column overlay scalars, [`SCALAR_STRIDE`] per column:
-    /// `[centroid_yfb, onset_low, onset_mid, onset_high]`. `centroid_yfb` is the
-    /// spectral centroid as normalised height-from-bottom (0..1, matching the bin
-    /// axis); `< 0` hides the trace for that column. The three onsets are 0..1
-    /// transient impulses per band, drawn as colour-coded ticks on the time axis.
-    /// Same ring layout as `ring`, written at `head`.
+    /// `[centroid_full, centroid_low, centroid_mid, centroid_high, onset_low,
+    /// onset_mid, onset_high]`. Each centroid is that band's spectral centroid as
+    /// normalised height-from-bottom (0..1, matching the bin axis); `< 0` hides
+    /// that band's trace for that column. The three onsets are 0..1 transient
+    /// impulses per band, drawn as colour-coded ticks on the time axis. Same ring
+    /// layout as `ring`, written at `head`.
     col_scalars: Vec<f32>,
     head: usize,
     bufs: Vec<GpuBuffer>,
@@ -190,12 +192,12 @@ impl Spectrogram {
     /// values past `num_bins` are ignored; a short column zero-pads the
     /// remainder. The head wraps at the right edge back to the left.
     ///
-    /// `centroid_yfb` is the column's spectral centroid as normalised
-    /// height-from-bottom (0..1); pass `< 0` to hide the trace for this column.
-    /// `onsets` is the per-band `[low, mid, high]` transient impulses (0..1),
-    /// drawn as colour-coded ticks on the time axis. Stored in the parallel
-    /// scalar ring at the same slot, so they scroll with the waterfall.
-    pub fn push_column(&mut self, magnitudes: &[f32], centroid_yfb: f32, onsets: [f32; 3]) {
+    /// `centroids` is the per-band `[full, low, mid, high]` spectral centroids as
+    /// normalised height-from-bottom (0..1); pass `< 0` for a band to hide its
+    /// trace for this column. `onsets` is the per-band `[low, mid, high]` transient
+    /// impulses (0..1), drawn as colour-coded ticks on the time axis. Stored in
+    /// the parallel scalar ring at the same slot, so they scroll with the waterfall.
+    pub fn push_column(&mut self, magnitudes: &[f32], centroids: [f32; 4], onsets: [f32; 3]) {
         let base = self.head * self.num_bins;
         let dst = &mut self.ring[base..base + self.num_bins];
         let n = magnitudes.len().min(self.num_bins);
@@ -204,10 +206,13 @@ impl Spectrogram {
             *v = 0.0;
         }
         let sbase = self.head * SCALAR_STRIDE;
-        self.col_scalars[sbase] = centroid_yfb;
-        self.col_scalars[sbase + 1] = onsets[0];
-        self.col_scalars[sbase + 2] = onsets[1];
-        self.col_scalars[sbase + 3] = onsets[2];
+        self.col_scalars[sbase] = centroids[0];
+        self.col_scalars[sbase + 1] = centroids[1];
+        self.col_scalars[sbase + 2] = centroids[2];
+        self.col_scalars[sbase + 3] = centroids[3];
+        self.col_scalars[sbase + 4] = onsets[0];
+        self.col_scalars[sbase + 5] = onsets[1];
+        self.col_scalars[sbase + 6] = onsets[2];
         self.head = (self.head + 1) % self.num_cols;
     }
 

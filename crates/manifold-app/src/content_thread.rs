@@ -1074,11 +1074,12 @@ impl ContentThread {
         self.audio_mod_runtime
             .drain_spectrogram_columns(|col| spectrogram_columns.extend_from_slice(col));
         // Per-column overlay scalars, drained in lockstep with the columns above.
-        // 4 per column: centroid + per-band onsets [low, mid, high].
+        // 7 per column: four per-band centroids [full, low, mid, high] + per-band
+        // onsets [low, mid, high].
         let mut spectrogram_col_scalars = Vec::new();
         self.audio_mod_runtime
-            .drain_spectrogram_scalars(|centroid: f32, onsets: [f32; 3]| {
-                spectrogram_col_scalars.push(centroid);
+            .drain_spectrogram_scalars(|centroids: [f32; 4], onsets: [f32; 3]| {
+                spectrogram_col_scalars.extend_from_slice(&centroids);
                 spectrogram_col_scalars.extend_from_slice(&onsets);
             });
         let spectrogram_num_bins = self.audio_mod_runtime.spectrogram_num_bins();
