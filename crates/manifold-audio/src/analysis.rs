@@ -399,6 +399,9 @@ struct SendState {
     /// Hops remaining in each band's onset refractory window — after a transient
     /// fires, suppress re-fire until this elapses. Order [Full, Low, Mid, High].
     transient_refractory: [u8; 4],
+    /// Previous hop's relative flux per band — for rising-edge onset detection
+    /// (fire only when flux crosses UP through the threshold, not while above it).
+    onset_prev_rel: [f32; 4],
     /// Whether `prev_col` holds a real column yet (skips the startup flux spike).
     has_prev: bool,
     /// Per-band spectral-centroid height-from-bottom (0..1) for the scope overlay,
@@ -498,6 +501,7 @@ impl WorkerLoop {
                 col: vec![0.0; nb],
                 prev_col: vec![0.0; nb],
                 transient_refractory: [0; 4],
+                onset_prev_rel: [0.0; 4],
                 has_prev: false,
                 centroid_yfb: [-1.0; 4],
                 features: SendFeatures::default(),
@@ -757,15 +761,17 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
 // energy`, the fraction of the band's energy that just appeared (0..1, so it's
 // level-independent and needs no per-band scaling or adaptive baseline). A kick
 // is a big chunk of new low-end energy → high relative flux; steady content
-// (held note, sustained bass) barely changes → ~0. Fire when it clears
-// `ONSET_THRESH` on a loud band, then a refractory blocks the multi-hop attack
-// from re-firing. That's the whole detector — no followers, no envelope, no
-// baseline state. Flux is the right signal because it tracks the kick's new
-// energy directly, where band-RMS amplitude diluted it across ~100 bins.
+// (held note, sustained bass) barely changes → low. Fire on the RISING EDGE
+// through `ONSET_THRESH` (crossing up, not every hop above it) on a loud band,
+// then a refractory debounces the multi-hop attack. That's the whole detector —
+// no followers, no envelope, no adaptive baseline. Flux is the right signal
+// because it tracks the kick's new energy directly, where band-RMS amplitude
+// diluted it across ~100 bins.
 
-/// Relative flux (new energy ÷ band energy) that counts as an onset. The single
-/// sensitivity knob — lower catches softer transients, higher is stricter.
-const ONSET_THRESH: f32 = 0.15;
+/// Relative flux (new energy ÷ band energy) a rising edge must cross to count as
+/// an onset. THE single sensitivity knob — lower catches softer transients but
+/// risks busy/textured material crossing it; higher is stricter.
+const ONSET_THRESH: f32 = 0.35;
 /// A transient only fires on a band loud enough to matter — `amplitude` is the
 /// band's level on the colourmap's 0..1 dB scale (≈ −53 dBFS here).
 const ONSET_AMP_GATE: f32 = 0.12;
@@ -959,12 +965,13 @@ fn reduce_send(
             let rel = relative_flux(r.flux, r.energy);
             bf.liveliness = if loud { rel } else { 0.0 };
 
-            // Transient: a burst of new energy past ONSET_THRESH on a loud band,
-            // then a refractory so one attack reads as one decaying spike. Steady
-            // content (held note, sustained bass) has ~0 flux → never fires; a
-            // kick is a big chunk of new energy → fires every hit.
+            // Transient: relative flux crossing UP through ONSET_THRESH on a loud
+            // band — the rising edge, not every hop it stays above, so busy
+            // content that sits above the threshold fires once, not continuously.
+            // A refractory then debounces the multi-hop attack.
+            let crossed = rel > ONSET_THRESH && send.onset_prev_rel[bi] <= ONSET_THRESH;
             let refractory = &mut send.transient_refractory[bi];
-            let triggered = loud && *refractory == 0 && rel > ONSET_THRESH;
+            let triggered = loud && *refractory == 0 && crossed;
             if triggered {
                 bf.transients = 1.0;
                 *refractory = ONSET_REFRACTORY_HOPS;
@@ -972,6 +979,7 @@ fn reduce_send(
                 bf.transients *= ONSET_DECAY;
                 *refractory = refractory.saturating_sub(1);
             }
+            send.onset_prev_rel[bi] = rel;
         }
     }
 }
@@ -1096,6 +1104,7 @@ mod tests {
             col,
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
+            onset_prev_rel: [0.0; 4],
             has_prev: false,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1206,6 +1215,7 @@ mod tests {
             col: tone.clone(),
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
+            onset_prev_rel: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1262,6 +1272,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
+            onset_prev_rel: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1313,6 +1324,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
+            onset_prev_rel: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
