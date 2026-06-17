@@ -73,7 +73,7 @@ const SCOPE_METER_W: f32 = 30.0;
 /// Gap between the waterfall and the band-meter column.
 const SCOPE_METER_GAP: f32 = 4.0;
 /// Half-height of a band meter bar (px).
-const BAND_METER_HALF_H: f32 = 3.0;
+const BAND_METER_HALF_H: f32 = 5.0;
 
 /// Per-send interactive node ids.
 #[derive(Default, Clone)]
@@ -626,7 +626,9 @@ impl AudioSetupPanel {
                     0.0,
                     0.0,
                     UIStyle {
-                        bg_color: Color32::new(28, 28, 32, 255),
+                        // Visibly lighter than the black scope so the empty part
+                        // of the bar reads as a scale, not just background.
+                        bg_color: Color32::new(54, 54, 62, 255),
                         corner_radius: 1.0,
                         ..UIStyle::default()
                     },
@@ -638,7 +640,8 @@ impl AudioSetupPanel {
                     0.0,
                     0.0,
                     UIStyle {
-                        bg_color: Color32::new(150, 200, 230, 255),
+                        // Warm amber pops against the blue spectrogram field.
+                        bg_color: Color32::new(245, 205, 90, 255),
                         corner_radius: 1.0,
                         ..UIStyle::default()
                     },

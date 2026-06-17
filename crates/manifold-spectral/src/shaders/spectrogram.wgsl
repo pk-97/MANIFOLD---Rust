@@ -145,10 +145,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let w = clamp(1.0 - cd / 0.008, 0.0, 1.0);
         rgb = mix(rgb, vec3<f32>(1.0, 0.25, 0.85), w * 0.85);
     }
-    // Transient ticks: a warm bar rising from the bottom edge on a column where
-    // an onset fired, its height proportional to the impulse strength.
-    if (onset > 0.04 && in.uv.y > 1.0 - onset * 0.14) {
-        rgb = mix(rgb, vec3<f32>(1.0, 0.85, 0.4), clamp(onset, 0.0, 1.0));
+    // Transient ticks: a short warm mark at the bottom edge on the columns where
+    // an onset actually fired. Gated near the impulse peak (the decay tail is
+    // hidden) so hits read as DISCRETE ticks, not a smeared ribbon, and kept low
+    // so they don't bury the sub-bass.
+    if (onset > 0.5 && in.uv.y > 0.955) {
+        rgb = mix(rgb, vec3<f32>(1.0, 0.85, 0.4), 0.8);
     }
 
     // Cursor frequency locator: a faint horizontal line at the hovered freq,
