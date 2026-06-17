@@ -35,6 +35,36 @@ fn default_true() -> bool {
     true
 }
 
+/// Default low/mid crossover (Hz). Matches the historical worker `LOW_HZ` const,
+/// so projects saved before crossovers were editable analyse identically.
+pub const DEFAULT_LOW_HZ: f32 = 250.0;
+/// Default mid/high crossover (Hz). Matches the historical worker `MID_HZ`.
+pub const DEFAULT_MID_HZ: f32 = 2000.0;
+/// Smallest spacing between crossovers and the band edges, as a frequency ratio.
+/// Keeps Low/Mid/High each at least this wide so a band never collapses to zero.
+const CROSSOVER_MIN_RATIO: f32 = 1.1;
+/// Absolute floor/ceiling for a crossover (Hz). The ceiling is conservative —
+/// the analysed range tops out near Nyquist, but a sane upper bound avoids a
+/// degenerate High band.
+const CROSSOVER_MIN_HZ: f32 = 20.0;
+const CROSSOVER_MAX_HZ: f32 = 18_000.0;
+
+fn default_low_hz() -> f32 {
+    DEFAULT_LOW_HZ
+}
+
+fn default_mid_hz() -> f32 {
+    DEFAULT_MID_HZ
+}
+
+fn is_default_low_hz(v: &f32) -> bool {
+    *v == DEFAULT_LOW_HZ
+}
+
+fn is_default_mid_hz(v: &f32) -> bool {
+    *v == DEFAULT_MID_HZ
+}
+
 impl Default for SendAnalysisConfig {
     fn default() -> Self {
         Self { onset: true, pitch: false }
@@ -114,7 +144,7 @@ impl AudioDeviceRef {
 }
 
 /// Project-level audio input configuration. See module docs.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioSetup {
     /// Chosen input device. `None` = system default input. Remappable on load:
@@ -128,6 +158,16 @@ pub struct AudioSetup {
     /// [`Self::send_index`]).
     #[serde(default)]
     pub sends: Vec<AudioSend>,
+    /// Low/mid crossover frequency (Hz): the split between the Low and Mid
+    /// analysis bands, and the lower divider line on the spectrogram. Global to
+    /// all sends — Low/Mid/High mean one consistent thing everywhere. Applied
+    /// live by the worker (no capture restart), like [`AudioSend::gain_db`].
+    #[serde(default = "default_low_hz", skip_serializing_if = "is_default_low_hz")]
+    pub low_hz: f32,
+    /// Mid/high crossover frequency (Hz): the split between the Mid and High
+    /// bands, and the upper divider line. See [`Self::low_hz`].
+    #[serde(default = "default_mid_hz", skip_serializing_if = "is_default_mid_hz")]
+    pub mid_hz: f32,
     /// Legacy pre-UID field: projects saved before UID identity stored only a
     /// device name under `deviceName`. Read on load and folded into [`device`]
     /// by [`Self::migrate_legacy_device`]; never serialized back.
@@ -135,11 +175,47 @@ pub struct AudioSetup {
     legacy_device_name: Option<String>,
 }
 
+impl Default for AudioSetup {
+    fn default() -> Self {
+        Self {
+            device: None,
+            sends: Vec::new(),
+            low_hz: DEFAULT_LOW_HZ,
+            mid_hz: DEFAULT_MID_HZ,
+            legacy_device_name: None,
+        }
+    }
+}
+
 impl AudioSetup {
     /// True when nothing is configured — lets the project skip serializing the
-    /// field so existing fixtures round-trip byte-identically.
+    /// field so existing fixtures round-trip byte-identically. Default
+    /// crossovers count as "nothing configured" (they serialize to nothing).
     pub fn is_empty(&self) -> bool {
-        self.device.is_none() && self.legacy_device_name.is_none() && self.sends.is_empty()
+        self.device.is_none()
+            && self.legacy_device_name.is_none()
+            && self.sends.is_empty()
+            && is_default_low_hz(&self.low_hz)
+            && is_default_mid_hz(&self.mid_hz)
+    }
+
+    /// Clamp a proposed `(low, mid)` crossover pair into the valid range:
+    /// each within [`CROSSOVER_MIN_HZ`]..[`CROSSOVER_MAX_HZ`] and separated
+    /// (from each other and the band edges) by at least [`CROSSOVER_MIN_RATIO`].
+    /// Returns the sanitised pair; the dragged value is honoured first and the
+    /// other is pushed only as far as needed to keep the spacing.
+    pub fn clamp_crossovers(low: f32, mid: f32, dragging_low: bool) -> (f32, f32) {
+        let lo_floor = CROSSOVER_MIN_HZ;
+        let hi_ceil = CROSSOVER_MAX_HZ;
+        if dragging_low {
+            let low = low.clamp(lo_floor, hi_ceil / (CROSSOVER_MIN_RATIO * CROSSOVER_MIN_RATIO));
+            let mid = mid.max(low * CROSSOVER_MIN_RATIO).min(hi_ceil);
+            (low, mid)
+        } else {
+            let mid = mid.clamp(lo_floor * (CROSSOVER_MIN_RATIO * CROSSOVER_MIN_RATIO), hi_ceil);
+            let low = low.min(mid / CROSSOVER_MIN_RATIO).max(lo_floor);
+            (low, mid)
+        }
     }
 
     /// Fold a legacy `deviceName` into a UID-less [`AudioDeviceRef`]. Idempotent;
@@ -226,7 +302,7 @@ mod tests {
         let mut setup = AudioSetup {
             device: Some(AudioDeviceRef::new("BlackHole16ch_UID", "BlackHole 16ch")),
             sends: vec![AudioSend::new("Bass")],
-            legacy_device_name: None,
+            ..Default::default()
         };
         setup.sends[0].channels = vec![2];
         setup.sends[0].analysis.pitch = true;
@@ -256,11 +332,61 @@ mod tests {
     }
 
     #[test]
+    fn default_crossovers_match_historical_consts() {
+        let setup = AudioSetup::default();
+        assert_eq!(setup.low_hz, 250.0);
+        assert_eq!(setup.mid_hz, 2000.0);
+        // Default crossovers must not break the empty round-trip.
+        assert!(setup.is_empty());
+        assert_eq!(serde_json::to_string(&setup).unwrap(), r#"{"sends":[]}"#);
+    }
+
+    #[test]
+    fn old_project_without_crossovers_loads_defaults() {
+        let json = r#"{"sends":[]}"#;
+        let setup: AudioSetup = serde_json::from_str(json).unwrap();
+        assert_eq!(setup.low_hz, 250.0);
+        assert_eq!(setup.mid_hz, 2000.0);
+    }
+
+    #[test]
+    fn non_default_crossovers_round_trip_and_are_not_empty() {
+        let mut setup = AudioSetup::default();
+        setup.low_hz = 180.0;
+        setup.mid_hz = 3000.0;
+        assert!(!setup.is_empty(), "edited crossovers must serialize");
+        let json = serde_json::to_string(&setup).unwrap();
+        assert!(json.contains("lowHz"));
+        let back: AudioSetup = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.low_hz, 180.0);
+        assert_eq!(back.mid_hz, 3000.0);
+    }
+
+    #[test]
+    fn clamp_crossovers_keeps_low_below_mid() {
+        // Dragging low up past mid pushes mid up to preserve spacing.
+        let (low, mid) = AudioSetup::clamp_crossovers(5000.0, 2000.0, true);
+        assert!(low < mid, "low {low} must stay below mid {mid}");
+        assert!(mid >= low * 1.1);
+
+        // Dragging mid down past low pushes low down.
+        let (low, mid) = AudioSetup::clamp_crossovers(250.0, 100.0, false);
+        assert!(low < mid, "low {low} must stay below mid {mid}");
+
+        // Out-of-range values are floored/ceiled.
+        let (low, _mid) = AudioSetup::clamp_crossovers(1.0, 2000.0, true);
+        assert!(low >= 20.0);
+        let (_low, mid) = AudioSetup::clamp_crossovers(250.0, 50_000.0, false);
+        assert!(mid <= 18_000.0);
+    }
+
+    #[test]
     fn new_uid_ref_takes_precedence_over_legacy() {
         let mut setup = AudioSetup {
             device: Some(AudioDeviceRef::new("uid-1", "Modern")),
             sends: vec![],
             legacy_device_name: Some("Legacy".into()),
+            ..Default::default()
         };
         setup.migrate_legacy_device();
         assert_eq!(setup.device.as_ref().unwrap().name, "Modern");

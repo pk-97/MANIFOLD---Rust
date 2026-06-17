@@ -92,6 +92,18 @@ pub enum AudioShapeParam {
     Release,
 }
 
+/// Which band-divider line on the Audio Setup spectrogram a drag is moving. The
+/// two crossovers share one drag path, snapshot slot, and commit command (the
+/// global [`SetAudioCrossoversCommand`]); this records which frequency the live
+/// edit writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BandDivider {
+    /// The low/mid crossover (`AudioSetup::low_hz`).
+    Low,
+    /// The mid/high crossover (`AudioSetup::mid_hz`).
+    Mid,
+}
+
 /// Which modulator's output sub-range a trim-handle drag is editing. The three
 /// kinds share one drag path, one set of `Trim*` actions, and one
 /// [`reposition_trim_bars`](param_slider_shared::reposition_trim_bars) layout
@@ -320,6 +332,15 @@ pub enum PanelAction {
     /// The host reads the send's current gain, applies the delta, clamps, and
     /// commits — so the project stays the single source of truth.
     AudioSendGainStep(manifold_core::AudioSendId, f32),
+    /// Begin dragging a band-divider line on the spectrogram — snapshot the
+    /// current crossovers so the commit records one undo step.
+    AudioCrossoverDragBegin,
+    /// Live crossover change while dragging a divider: which line + its new Hz.
+    /// Applied immediately (no per-frame undo) so the line tracks the cursor and
+    /// the analysis bands retune live.
+    AudioCrossoverChanged(BandDivider, f32),
+    /// Commit the band-divider drag as one undo step.
+    AudioCrossoverCommit,
     /// A modulator output sub-range handle moved during a drag. `TrimKind`
     /// selects which modulator (driver / Ableton / audio) — the three formerly
     /// parallel `*TrimChanged` variants are one path now.

@@ -95,6 +95,11 @@ pub struct ContentState {
     /// Analysed frequency range of the scope (Hz), for axis + band overlays.
     pub spectrogram_fmin: f32,
     pub spectrogram_fmax: f32,
+    /// Low/mid and mid/high crossover frequencies (Hz) — the editable band
+    /// dividers drawn on the spectrogram and used to position the per-band
+    /// meters. Mirror `project.audio_setup.{low_hz,mid_hz}`.
+    pub spectrogram_low_hz: f32,
+    pub spectrogram_mid_hz: f32,
     pub osc_sender_enabled: bool,
     pub osc_receiving_timecode: bool,
     pub osc_timecode_display: Arc<str>,
@@ -393,6 +398,8 @@ impl Default for ContentState {
             spectrogram_num_bins: 0,
             spectrogram_fmin: 0.0,
             spectrogram_fmax: 0.0,
+            spectrogram_low_hz: manifold_core::audio_setup::DEFAULT_LOW_HZ,
+            spectrogram_mid_hz: manifold_core::audio_setup::DEFAULT_MID_HZ,
             osc_sender_enabled: false,
             osc_receiving_timecode: false,
             osc_timecode_display: Arc::from(""),

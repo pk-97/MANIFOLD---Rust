@@ -168,6 +168,10 @@ pub struct Application {
     pub(crate) decay_snapshot: Option<f32>,
     /// Audio-mod shaping-slider drag snapshot (whole shape) for undo.
     pub(crate) audio_shape_snapshot: Option<manifold_core::audio_mod::AudioModShape>,
+    /// Band-divider drag snapshot `(low_hz, mid_hz)` for undo. Captured on
+    /// `AudioCrossoverDragBegin`, committed as one `SetAudioCrossoversCommand`
+    /// on `AudioCrossoverCommit`.
+    pub(crate) audio_crossover_snapshot: Option<(f32, f32)>,
     /// User param-binding mapping range drag snapshot `(min, max)` for
     /// undo. Captured on `EffectMappingRangeSnapshot`, committed as one
     /// `EditUserParamBindingCommand` on `EffectMappingRangeCommit`.
@@ -487,6 +491,7 @@ impl Application {
             target_snapshot: None,
             decay_snapshot: None,
             audio_shape_snapshot: None,
+            audio_crossover_snapshot: None,
             mapping_range_snapshot: None,
             mapping_affine_snapshot: None,
             active_inspector_drag: None,

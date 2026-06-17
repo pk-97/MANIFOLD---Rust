@@ -123,6 +123,40 @@ impl GainBank {
     }
 }
 
+/// Live Low/Mid/High crossover frequencies, shared content thread → worker.
+/// Like [`GainBank`], these are a calibration the performer can ride while
+/// watching the spectrogram, so they must apply without glitching the stream:
+/// the worker re-splits its analysis bands in place, no capture restart. Global
+/// to all sends — Low/Mid/High mean one consistent split everywhere.
+pub struct CrossoverBank {
+    low_hz: AtomicU32,
+    mid_hz: AtomicU32,
+}
+
+impl CrossoverBank {
+    /// Build from initial crossover frequencies (Hz).
+    pub fn new(low_hz: f32, mid_hz: f32) -> Self {
+        Self {
+            low_hz: AtomicU32::new(low_hz.to_bits()),
+            mid_hz: AtomicU32::new(mid_hz.to_bits()),
+        }
+    }
+
+    /// Set both crossover frequencies (Hz).
+    pub fn set(&self, low_hz: f32, mid_hz: f32) {
+        self.low_hz.store(low_hz.to_bits(), Ordering::Relaxed);
+        self.mid_hz.store(mid_hz.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Current `(low_hz, mid_hz)`.
+    pub fn get(&self) -> (f32, f32) {
+        (
+            f32::from_bits(self.low_hz.load(Ordering::Relaxed)),
+            f32::from_bits(self.mid_hz.load(Ordering::Relaxed)),
+        )
+    }
+}
+
 /// A snapshot of every send's features at one analysis instant. `Copy` and
 /// fixed-size so it rides the SPSC ring with no allocation.
 #[derive(Clone, Copy, Debug)]
@@ -245,6 +279,7 @@ impl AudioFeatureWorker {
         device_channels: u16,
         mut sends: Vec<SendSpec>,
         gains: Arc<GainBank>,
+        crossovers: Arc<CrossoverBank>,
         tap: Arc<SpectrogramTap>,
     ) -> (Self, FeatureReader, ColumnReader) {
         if sends.len() > MAX_SENDS {
@@ -283,6 +318,7 @@ impl AudioFeatureWorker {
                     device_channels as usize,
                     sends,
                     gains,
+                    crossovers,
                     tap,
                     col_prod,
                     spec_config,
@@ -334,6 +370,12 @@ struct WorkerLoop {
     sends: Vec<SendState>,
     /// Live per-send gain, written by the content thread, read here each drain.
     gains: Arc<GainBank>,
+    /// Live Low/Mid/High crossovers, read each drain; a change re-splits the
+    /// analyzer's bands (no capture restart).
+    crossovers: Arc<CrossoverBank>,
+    /// Last crossovers applied to the analyzer, to skip the recompute when
+    /// unchanged.
+    last_crossovers: (f32, f32),
     analyzer: SpectralAnalyzer,
     // ── Spectrogram column producer (one tapped send) ──
     sample_rate: f32,
@@ -374,6 +416,7 @@ impl WorkerLoop {
         device_channels: usize,
         specs: Vec<SendSpec>,
         gains: Arc<GainBank>,
+        crossovers: Arc<CrossoverBank>,
         tap: Arc<SpectrogramTap>,
         column_producer: ringbuf::HeapProd<f32>,
         spec_config: SpectrogramConfig,
@@ -391,13 +434,21 @@ impl WorkerLoop {
             })
             .collect();
 
+        // Start the analyzer at the bank's crossovers so the first window is
+        // already split correctly (rather than at the defaults for one drain).
+        let (init_low, init_mid) = crossovers.get();
+        let mut analyzer = SpectralAnalyzer::new(sample_rate);
+        analyzer.set_crossovers(init_low, init_mid);
+
         Self {
             consumer,
             producer,
             device_channels: device_channels.max(1),
             sends,
             gains,
-            analyzer: SpectralAnalyzer::new(sample_rate),
+            crossovers,
+            last_crossovers: (init_low, init_mid),
+            analyzer,
             sample_rate: sample_rate as f32,
             spec_config,
             spec_num_bins,
@@ -461,6 +512,15 @@ impl WorkerLoop {
         // the mutable `sends` borrow and the `gains` read don't conflict.
         for (i, send) in self.sends.iter_mut().enumerate() {
             send.gain = self.gains.get_linear(i);
+        }
+
+        // Re-split the analysis bands if the crossovers moved (a drag in the
+        // Audio Setup scope). Cheap compare-and-skip — the recompute is a few
+        // bin lookups, paid only on an actual change.
+        let xover = self.crossovers.get();
+        if xover != self.last_crossovers {
+            self.analyzer.set_crossovers(xover.0, xover.1);
+            self.last_crossovers = xover;
         }
 
         // Which send (if any) feeds the spectrogram this drain. A change resets
@@ -667,6 +727,28 @@ struct SpectralAnalyzer {
     /// Perceptual tilt weight per bin (applied to `mags`).
     tilt: Vec<f32>,
     nyquist_bin: usize,
+    /// Device sample rate (Hz) — needed to remap crossover frequencies to bins
+    /// when [`Self::set_crossovers`] is called live.
+    sample_rate: f32,
+}
+
+/// Inclusive bin ranges in `AudioBand` order [Full, Low, Mid, High] for the
+/// given crossover frequencies. Full spans `1..=nyquist` (DC skipped); Low/Mid/
+/// High are contiguous sub-ranges split at `low_hz` and `mid_hz`. Shared by
+/// construction and live [`SpectralAnalyzer::set_crossovers`] so the two can't
+/// drift.
+fn band_bins_for(sample_rate: f32, low_hz: f32, mid_hz: f32) -> [(usize, usize); 4] {
+    let nyquist_bin = FFT_SIZE / 2;
+    let bin_of =
+        |hz: f32| ((hz * FFT_SIZE as f32 / sample_rate).round() as usize).clamp(1, nyquist_bin);
+    let low_bin = bin_of(low_hz);
+    let mid_bin = bin_of(mid_hz).max(low_bin + 1).min(nyquist_bin);
+    [
+        (1, nyquist_bin),
+        (1, low_bin.saturating_sub(1).max(1)),
+        (low_bin, mid_bin.saturating_sub(1).max(low_bin)),
+        (mid_bin, nyquist_bin),
+    ]
 }
 
 impl SpectralAnalyzer {
@@ -683,19 +765,7 @@ impl SpectralAnalyzer {
             .collect();
 
         let nyquist_bin = FFT_SIZE / 2;
-        let bin_of = |hz: f32| {
-            ((hz * FFT_SIZE as f32 / sample_rate as f32).round() as usize).clamp(1, nyquist_bin)
-        };
-        let low_bin = bin_of(LOW_HZ);
-        let mid_bin = bin_of(MID_HZ);
-        // Skip the DC bin (0). Bands are inclusive ranges in AudioBand order:
-        // Full spans everything; Low/Mid/High are contiguous sub-ranges.
-        let band_bins = [
-            (1, nyquist_bin),
-            (1, low_bin.saturating_sub(1).max(1)),
-            (low_bin, mid_bin.saturating_sub(1).max(low_bin)),
-            (mid_bin, nyquist_bin),
-        ];
+        let band_bins = band_bins_for(sample_rate as f32, LOW_HZ, MID_HZ);
 
         let bin_hz: Vec<f32> = (0..=nyquist_bin)
             .map(|b| b as f32 * sample_rate as f32 / FFT_SIZE as f32)
@@ -719,7 +789,16 @@ impl SpectralAnalyzer {
             bin_hz,
             tilt,
             nyquist_bin,
+            sample_rate: sample_rate as f32,
         }
+    }
+
+    /// Re-split the Low/Mid/High bands at new crossover frequencies. Cheap (a
+    /// few bin lookups); the worker calls it only when the project's crossovers
+    /// change, so analysis retunes live with no capture restart. Full band is
+    /// unaffected.
+    fn set_crossovers(&mut self, low_hz: f32, mid_hz: f32) {
+        self.band_bins = band_bins_for(self.sample_rate, low_hz, mid_hz);
     }
 
     /// Analyze one full window of `FFT_SIZE` mono samples. Fills `self.mags` with
@@ -950,6 +1029,34 @@ mod tests {
     }
 
     #[test]
+    fn set_crossovers_moves_band_edges() {
+        let mut a = SpectralAnalyzer::new(SR);
+        let (_f, _lo, _mid, high_default) = (
+            a.band_bins[0],
+            a.band_bins[1],
+            a.band_bins[2],
+            a.band_bins[3],
+        );
+        // Raise the mid/high split: the High band must start at a higher bin.
+        a.set_crossovers(250.0, 6000.0);
+        let high_raised = a.band_bins[3];
+        assert!(
+            high_raised.0 > high_default.0,
+            "raising mid_hz should push the High band start up: {} -> {}",
+            high_default.0,
+            high_raised.0
+        );
+        // Full band is never touched by crossovers.
+        assert_eq!(a.band_bins[0], (1, FFT_SIZE / 2));
+        // Degenerate input (low ≥ mid) still yields ordered, non-empty bands.
+        a.set_crossovers(5000.0, 1000.0);
+        let (lo_a, lo_b) = a.band_bins[1];
+        let (mi_a, mi_b) = a.band_bins[2];
+        let (hi_a, hi_b) = a.band_bins[3];
+        assert!(lo_a <= lo_b && mi_a <= mi_b && hi_a <= hi_b, "bands stay ordered");
+    }
+
+    #[test]
     fn transients_localize_to_their_band() {
         // The kick-detector premise: a low thump appearing produces far more flux
         // in the low band than the high band, so Transients@Low fires on it while
@@ -981,9 +1088,17 @@ mod tests {
 
         let sends = vec![SendSpec { channels: vec![0] }];
         let gains = Arc::new(GainBank::new(&[1.0]));
+        let crossovers = Arc::new(CrossoverBank::new(250.0, 2000.0));
         let tap = Arc::new(SpectrogramTap::default());
-        let (mut worker, mut reader, _columns) =
-            AudioFeatureWorker::spawn(cons, SR, /* device_channels */ 1, sends, gains, tap);
+        let (mut worker, mut reader, _columns) = AudioFeatureWorker::spawn(
+            cons,
+            SR,
+            /* device_channels */ 1,
+            sends,
+            gains,
+            crossovers,
+            tap,
+        );
 
         // Poll up to ~500 ms for the first frame.
         let mut frame = None;

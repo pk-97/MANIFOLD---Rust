@@ -1078,6 +1078,15 @@ impl ContentThread {
             .audio_mod_runtime
             .spectrogram_freq_range()
             .unwrap_or((0.0, 0.0));
+        // The editable Low/Mid/High crossovers, for the band-divider lines + the
+        // per-band meters. Fall back to the historical defaults pre-project.
+        let (spectrogram_low_hz, spectrogram_mid_hz) = self.engine.project().map_or(
+            (
+                manifold_core::audio_setup::DEFAULT_LOW_HZ,
+                manifold_core::audio_setup::DEFAULT_MID_HZ,
+            ),
+            |p| (p.audio_setup.low_hz, p.audio_setup.mid_hz),
+        );
 
         let state = ContentState {
             current_beat: self.engine.current_beat(),
@@ -1152,6 +1161,8 @@ impl ContentThread {
             spectrogram_num_bins,
             spectrogram_fmin,
             spectrogram_fmax,
+            spectrogram_low_hz,
+            spectrogram_mid_hz,
             osc_sender_enabled: self.transport_controller.osc_sender_enabled,
             osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
             osc_timecode_display: self.cached_osc_timecode.clone(),

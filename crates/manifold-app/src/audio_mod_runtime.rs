@@ -15,7 +15,8 @@
 use std::sync::Arc;
 
 use manifold_audio::analysis::{
-    AudioFeatureWorker, ColumnReader, FeatureReader, GainBank, SendSpec, SpectrogramTap,
+    AudioFeatureWorker, ColumnReader, CrossoverBank, FeatureReader, GainBank, SendSpec,
+    SpectrogramTap,
 };
 use manifold_audio::capture::{AudioCaptureConfig, AudioCaptureDevice};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSetup};
@@ -88,6 +89,11 @@ pub struct AudioModRuntime {
     /// send opens the scope, which can start capture even with no audio mods yet
     /// (calibration precedes assignment).
     spec_dirty: bool,
+    /// Live Low/Mid/High crossovers shared with the worker. Global to all sends
+    /// and persistent across capture rebuilds (like the tap), synced from the
+    /// project each tick so a band-divider drag retunes analysis without a
+    /// capture restart.
+    crossovers: Arc<CrossoverBank>,
 }
 
 impl Default for AudioModRuntime {
@@ -107,6 +113,10 @@ impl Default for AudioModRuntime {
             mic_access_requested: false,
             spec_send: None,
             spec_dirty: false,
+            crossovers: Arc::new(CrossoverBank::new(
+                manifold_core::audio_setup::DEFAULT_LOW_HZ,
+                manifold_core::audio_setup::DEFAULT_MID_HZ,
+            )),
         }
     }
 }
@@ -139,6 +149,14 @@ impl AudioModRuntime {
             .and_then(|id| engine.project().and_then(|p| p.audio_setup.send_index(id)));
         if let Some(cap) = &self.capture {
             cap.tap.set_selected(tap_index);
+        }
+
+        // Sync the Low/Mid/High crossovers from the project every tick (cheap
+        // atomic stores). The worker reads this bank live, so a band-divider drag
+        // retunes the analysis bands with no capture restart — same model as gain.
+        if let Some(p) = engine.project() {
+            self.crossovers
+                .set(p.audio_setup.low_hz, p.audio_setup.mid_hz);
         }
 
         // Feed the engine. Reuse the snapshot's Vec capacity → no per-frame
@@ -307,6 +325,7 @@ impl AudioModRuntime {
             channels,
             specs,
             gains.clone(),
+            self.crossovers.clone(),
             tap.clone(),
         );
         log::info!(

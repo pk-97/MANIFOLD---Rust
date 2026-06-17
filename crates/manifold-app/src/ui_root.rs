@@ -1926,6 +1926,23 @@ impl UIRoot {
         self.audio_setup_panel.update_scope_readout(&mut self.tree, text);
     }
 
+    /// Push the current crossovers (Hz) + the scope's analysed frequency range to
+    /// the Audio Setup panel each frame, so it can hit-test the band-divider
+    /// lines for dragging. See `AudioSetupPanel::set_scope_bands`.
+    pub fn update_audio_scope_bands(&mut self, low_hz: f32, mid_hz: f32, fmin: f32, fmax: f32) {
+        if !self.audio_setup_panel.is_open() {
+            return;
+        }
+        self.audio_setup_panel
+            .set_scope_bands(low_hz, mid_hz, fmin, fmax);
+    }
+
+    /// Whether a band divider is currently being dragged in the Audio Setup
+    /// scope — the app suppresses the hover readout during the drag.
+    pub fn audio_band_dragging(&self) -> bool {
+        self.audio_setup_panel.is_dragging_band()
+    }
+
     /// Push waveform/stem lane node visibility and style to UITree.
     /// Called from app_render after syncing mute/solo/stems_available state.
     /// Separate from update() because app_render must sync state first.

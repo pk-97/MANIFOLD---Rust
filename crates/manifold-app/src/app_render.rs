@@ -2133,6 +2133,7 @@ impl Application {
                 &mut self.target_snapshot,
                 &mut self.decay_snapshot,
                 &mut self.audio_shape_snapshot,
+                &mut self.audio_crossover_snapshot,
                 &mut self.user_prefs,
                 &mut self.active_inspector_drag,
                 editor_target,
@@ -2386,13 +2387,28 @@ impl Application {
             let fmin = self.content_state.spectrogram_fmin;
             let fmax = self.content_state.spectrogram_fmax;
             let freq_log_ratio = if fmin > 0.0 && fmax > fmin { (fmax / fmin).log2() } else { 0.0 };
-            let readout = self.scope_hover_uv().map(|(ux, uy, freq)| {
-                let db = self
-                    .spectrogram
-                    .as_ref()
-                    .map_or(-120.0, |s| s.sample_db_weighted(ux, uy, freq_log_ratio));
-                format_scope_readout(freq, db)
-            });
+
+            // Feed the panel the current crossovers + range so it can hit-test the
+            // band-divider lines for dragging.
+            self.ws.ui_root.update_audio_scope_bands(
+                self.content_state.spectrogram_low_hz,
+                self.content_state.spectrogram_mid_hz,
+                fmin,
+                fmax,
+            );
+
+            // Hover readout, suppressed while a divider drag owns the gesture.
+            let readout = if self.ws.ui_root.audio_band_dragging() {
+                None
+            } else {
+                self.scope_hover_uv().map(|(ux, uy, freq)| {
+                    let db = self
+                        .spectrogram
+                        .as_ref()
+                        .map_or(-120.0, |s| s.sample_db_weighted(ux, uy, freq_log_ratio));
+                    format_scope_readout(freq, db)
+                })
+            };
             self.ws.ui_root.update_audio_scope_readout(readout.as_deref());
         }
 
@@ -3853,8 +3869,9 @@ impl Application {
                     spectrogram.push_column(col);
                 }
                 self.pending_spectrogram_columns.clear();
-                // Band dividers at 250 Hz / 2 kHz (the modulation's low/mid/high
-                // splits), as normalised y on the log axis.
+                // Band dividers at the editable low/mid + mid/high crossovers (the
+                // modulation's Low/Mid/High splits), as normalised y on the log
+                // axis. Drag-retuned live via the Audio Setup scope.
                 let (fmin, fmax) =
                     (self.content_state.spectrogram_fmin, self.content_state.spectrogram_fmax);
                 let y_of = |f: f32| {
@@ -3871,7 +3888,10 @@ impl Application {
                 spectrogram.render(
                     &mut encoder,
                     &target,
-                    [y_of(250.0), y_of(2000.0)],
+                    [
+                        y_of(self.content_state.spectrogram_low_hz),
+                        y_of(self.content_state.spectrogram_mid_hz),
+                    ],
                     freq_log_ratio,
                     scope_cursor_y,
                 );

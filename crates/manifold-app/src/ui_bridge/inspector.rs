@@ -16,7 +16,7 @@ use manifold_editing::commands::audio_mod::{
     ToggleAudioModEnabledCommand,
 };
 use manifold_editing::commands::audio_setup::{
-    AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand,
+    AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand, SetAudioCrossoversCommand,
     SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendGainCommand,
 };
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
@@ -348,6 +348,7 @@ pub(super) fn dispatch_inspector(
     target_snapshot: &mut Option<f32>,
     decay_snapshot: &mut Option<f32>,
     audio_shape_snapshot: &mut Option<manifold_core::audio_mod::AudioModShape>,
+    audio_crossover_snapshot: &mut Option<(f32, f32)>,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
     editor_target: Option<&manifold_core::GraphTarget>,
 ) -> DispatchResult {
@@ -1400,6 +1401,48 @@ pub(super) fn dispatch_inspector(
                 content_tx,
                 Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
             )
+        }
+        PanelAction::AudioCrossoverDragBegin => {
+            // Snapshot the pre-drag crossovers so the commit records one undo step.
+            *audio_crossover_snapshot =
+                Some((project.audio_setup.low_hz, project.audio_setup.mid_hz));
+            DispatchResult::handled()
+        }
+        PanelAction::AudioCrossoverChanged(band, hz) => {
+            // Live edit (no per-frame undo): clamp the dragged line against the
+            // other and the band edges, then apply to the local project and the
+            // content thread so the divider + analysis bands track the cursor.
+            let dragging_low = matches!(band, manifold_ui::BandDivider::Low);
+            let (cur_low, cur_mid) = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
+            let (low, mid) = if dragging_low {
+                manifold_core::audio_setup::AudioSetup::clamp_crossovers(*hz, cur_mid, true)
+            } else {
+                manifold_core::audio_setup::AudioSetup::clamp_crossovers(cur_low, *hz, false)
+            };
+            project.audio_setup.low_hz = low;
+            project.audio_setup.mid_hz = mid;
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProjectLive(Box::new(move |p| {
+                    p.audio_setup.low_hz = low;
+                    p.audio_setup.mid_hz = mid;
+                })),
+            );
+            DispatchResult::handled()
+        }
+        PanelAction::AudioCrossoverCommit => {
+            // One undo step: snapshot (old) → current crossovers (new).
+            if let Some(old) = audio_crossover_snapshot.take() {
+                let new = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
+                if new != old {
+                    return audio_setup_command(
+                        project,
+                        content_tx,
+                        Box::new(SetAudioCrossoversCommand::new(old, new)),
+                    );
+                }
+            }
+            DispatchResult::handled()
         }
         PanelAction::EnvelopeToggle(gpt, param_id) => {
             // Envelope-home unification: the envelope rides on the resolved

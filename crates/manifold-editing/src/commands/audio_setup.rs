@@ -203,6 +203,39 @@ impl Command for SetAudioSendGainCommand {
     }
 }
 
+/// Set the global Low/Mid/High crossover frequencies (Hz) — the band splits the
+/// analysis worker reads and the spectrogram draws as divider lines. One command
+/// captures both so a drag on either line is a single undo step. Applied live by
+/// the worker without restarting capture, like [`SetAudioSendGainCommand`].
+#[derive(Debug)]
+pub struct SetAudioCrossoversCommand {
+    old: (f32, f32),
+    new: (f32, f32),
+}
+
+impl SetAudioCrossoversCommand {
+    /// `old`/`new` are `(low_hz, mid_hz)` pairs.
+    pub fn new(old: (f32, f32), new: (f32, f32)) -> Self {
+        Self { old, new }
+    }
+}
+
+impl Command for SetAudioCrossoversCommand {
+    fn execute(&mut self, project: &mut Project) {
+        project.audio_setup.low_hz = self.new.0;
+        project.audio_setup.mid_hz = self.new.1;
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        project.audio_setup.low_hz = self.old.0;
+        project.audio_setup.mid_hz = self.old.1;
+    }
+
+    fn description(&self) -> &str {
+        "Set Audio Crossovers"
+    }
+}
+
 /// Set a send's analysis config (which extractors run for it).
 #[derive(Debug)]
 pub struct SetAudioSendAnalysisCommand {
@@ -282,6 +315,22 @@ mod tests {
         assert_eq!(project.audio_setup.find_send(&id).unwrap().gain_db, 6.0);
         cmd.undo(&mut project);
         assert_eq!(project.audio_setup.find_send(&id).unwrap().gain_db, 0.0);
+    }
+
+    #[test]
+    fn crossovers_round_trip() {
+        let mut project = Project::default();
+        // Defaults.
+        assert_eq!(project.audio_setup.low_hz, 250.0);
+        assert_eq!(project.audio_setup.mid_hz, 2000.0);
+
+        let mut cmd = SetAudioCrossoversCommand::new((250.0, 2000.0), (180.0, 3500.0));
+        cmd.execute(&mut project);
+        assert_eq!(project.audio_setup.low_hz, 180.0);
+        assert_eq!(project.audio_setup.mid_hz, 3500.0);
+        cmd.undo(&mut project);
+        assert_eq!(project.audio_setup.low_hz, 250.0);
+        assert_eq!(project.audio_setup.mid_hz, 2000.0);
     }
 
     #[test]

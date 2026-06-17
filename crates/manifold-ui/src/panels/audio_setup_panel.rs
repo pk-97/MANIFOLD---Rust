@@ -19,7 +19,7 @@ use crate::input::{Key, UIEvent};
 use crate::node::*;
 use crate::tree::UITree;
 
-use super::PanelAction;
+use super::{BandDivider, PanelAction};
 use super::overlay::{
     Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy, compute_overlay_rect,
 };
@@ -127,6 +127,17 @@ pub struct AudioSetupPanel {
     /// present pass blits on top), updated in place each frame by
     /// [`AudioSetupPanel::update_scope_readout`]. `-1` when not built.
     scope_readout_label: i32,
+    /// Current Low/Mid/High crossovers (Hz) and the scope's analysed frequency
+    /// range, pushed every frame by [`AudioSetupPanel::set_scope_bands`]. The
+    /// divider lines are drawn shader-side; the panel keeps these only to
+    /// hit-test a press against a line for dragging. `scope_fmin <= 0` means the
+    /// scope is dark (no capture) — dividers aren't draggable then.
+    scope_low_hz: f32,
+    scope_mid_hz: f32,
+    scope_fmin: f32,
+    scope_fmax: f32,
+    /// Which divider line is currently being dragged, if any.
+    dragging_band: Option<BandDivider>,
 }
 
 impl AudioSetupPanel {
@@ -602,6 +613,76 @@ impl AudioSetupPanel {
         self.open.then_some(self.scope_rect).flatten()
     }
 
+    /// Push the current crossovers (Hz) and the scope's analysed frequency range,
+    /// every frame while open. The panel hit-tests the band-divider lines against
+    /// these for dragging; the lines themselves are drawn shader-side from the
+    /// same values, so the grab target matches what's on screen.
+    pub fn set_scope_bands(&mut self, low_hz: f32, mid_hz: f32, fmin: f32, fmax: f32) {
+        self.scope_low_hz = low_hz;
+        self.scope_mid_hz = mid_hz;
+        self.scope_fmin = fmin;
+        self.scope_fmax = fmax;
+    }
+
+    /// True while a band divider is being dragged — the app suppresses the hover
+    /// readout then so the two don't fight over the same gesture.
+    pub fn is_dragging_band(&self) -> bool {
+        self.dragging_band.is_some()
+    }
+
+    /// Screen y (logical) of a frequency on the scope's log axis, or `None` if
+    /// the range is invalid (scope dark) or the scope isn't laid out.
+    fn scope_line_y(&self, hz: f32) -> Option<f32> {
+        let rect = self.scope_rect?;
+        if self.scope_fmin <= 0.0 || self.scope_fmax <= self.scope_fmin {
+            return None;
+        }
+        let yn = (hz / self.scope_fmin).log2() / (self.scope_fmax / self.scope_fmin).log2();
+        // yn: 0 at fmin (bottom), 1 at fmax (top). Screen y grows downward.
+        Some(rect.y + rect.height * (1.0 - yn))
+    }
+
+    /// Frequency (Hz) for a screen y on the scope, clamped into the displayed
+    /// range — the inverse of [`Self::scope_line_y`].
+    fn scope_y_to_hz(&self, y: f32) -> Option<f32> {
+        let rect = self.scope_rect?;
+        if self.scope_fmin <= 0.0 || self.scope_fmax <= self.scope_fmin || rect.height <= 0.0 {
+            return None;
+        }
+        let yn = (1.0 - (y - rect.y) / rect.height).clamp(0.0, 1.0);
+        Some(self.scope_fmin * (self.scope_fmax / self.scope_fmin).powf(yn))
+    }
+
+    /// Whether a screen point lies within the waterfall rect.
+    fn point_in_scope(&self, pos: Vec2) -> bool {
+        self.scope_rect().is_some_and(|r| {
+            pos.x >= r.x && pos.x <= r.x + r.width && pos.y >= r.y && pos.y <= r.y + r.height
+        })
+    }
+
+    /// Which divider line (if any) is within grab distance of a screen point,
+    /// preferring the nearer when both are close. Requires the point to be within
+    /// the waterfall's horizontal span.
+    fn divider_at(&self, pos: Vec2) -> Option<BandDivider> {
+        let rect = self.scope_rect?;
+        if pos.x < rect.x || pos.x > rect.x + rect.width {
+            return None;
+        }
+        const GRAB_PX: f32 = 7.0;
+        let mut best: Option<(BandDivider, f32)> = None;
+        for (band, hz) in
+            [(BandDivider::Low, self.scope_low_hz), (BandDivider::Mid, self.scope_mid_hz)]
+        {
+            if let Some(ly) = self.scope_line_y(hz) {
+                let d = (pos.y - ly).abs();
+                if d <= GRAB_PX && best.is_none_or(|(_, bd)| d < bd) {
+                    best = Some((band, d));
+                }
+            }
+        }
+        best.map(|(b, _)| b)
+    }
+
     /// Whether `id` is any node this panel owns (background or an interactive
     /// control) — the caller swallows such clicks so they don't fall through to
     /// the canvas behind the modal.
@@ -830,20 +911,52 @@ impl Overlay for AudioSetupPanel {
                 self.open = false;
                 OverlayResponse::Consumed(Vec::new())
             }
-            UIEvent::Click { node_id, .. } => {
+            UIEvent::Click { node_id, pos, .. } => {
                 let id = *node_id as i32;
                 if id == self.close_id {
                     self.open = false;
                     OverlayResponse::Consumed(Vec::new())
                 } else if let Some(action) = self.handle_click_inner(id) {
                     OverlayResponse::Consumed(vec![action])
-                } else if self.owns_node(id) {
-                    // Panel background or a non-action control — swallow, stay open.
+                } else if self.owns_node(id) || self.point_in_scope(*pos) {
+                    // Panel background, a non-action control, or the waterfall
+                    // (a tap on the scope must not close the modal) — swallow.
                     OverlayResponse::Consumed(Vec::new())
                 } else {
                     // Click landed on the dim backdrop / outside the panel — close.
                     self.open = false;
                     OverlayResponse::Consumed(Vec::new())
+                }
+            }
+            // ── Band-divider drag (Low/Mid/High crossovers) ──────────
+            // Arm on press if it lands on a divider line; thereafter the drag
+            // owns the gesture until release. The lines are drawn shader-side,
+            // so this only hit-tests their positions (see `set_scope_bands`).
+            UIEvent::PointerDown { pos, .. } => {
+                if let Some(band) = self.divider_at(*pos) {
+                    self.dragging_band = Some(band);
+                    OverlayResponse::Consumed(vec![PanelAction::AudioCrossoverDragBegin])
+                } else {
+                    OverlayResponse::Ignored
+                }
+            }
+            UIEvent::Drag { pos, .. } => {
+                if let Some(band) = self.dragging_band {
+                    match self.scope_y_to_hz(pos.y) {
+                        Some(hz) => OverlayResponse::Consumed(vec![
+                            PanelAction::AudioCrossoverChanged(band, hz),
+                        ]),
+                        None => OverlayResponse::Consumed(Vec::new()),
+                    }
+                } else {
+                    OverlayResponse::Ignored
+                }
+            }
+            UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
+                if self.dragging_band.take().is_some() {
+                    OverlayResponse::Consumed(vec![PanelAction::AudioCrossoverCommit])
+                } else {
+                    OverlayResponse::Ignored
                 }
             }
             _ => OverlayResponse::Ignored,

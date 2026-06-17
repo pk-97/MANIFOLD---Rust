@@ -220,7 +220,7 @@ impl Command for SetAudioModShapeCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::audio_mod::{AudioBand, AudioFeature};
+    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioFeatureKind};
     use manifold_core::id::{AudioSendId, EffectId};
 
     fn effect_target() -> DriverTarget {
@@ -231,7 +231,7 @@ mod tests {
         ParameterAudioMod::new(
             param.to_string().into(),
             AudioSendId::new("send-1"),
-            AudioFeature::BandEnergy(AudioBand::Low),
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low),
         )
     }
 

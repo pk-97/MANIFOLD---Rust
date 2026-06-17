@@ -72,6 +72,7 @@ pub fn dispatch(
     target_snapshot: &mut Option<f32>,
     decay_snapshot: &mut Option<f32>,
     audio_shape_snapshot: &mut Option<manifold_core::audio_mod::AudioModShape>,
+    audio_crossover_snapshot: &mut Option<(f32, f32)>,
     user_prefs: &mut UserPrefs,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
     // `Some(GraphTarget)` when the graph editor dispatches one of its left-lane
@@ -193,6 +194,9 @@ pub fn dispatch(
         | PanelAction::AudioAddSend
         | PanelAction::AudioRemoveSend(..)
         | PanelAction::AudioSendGainStep(..)
+        | PanelAction::AudioCrossoverDragBegin
+        | PanelAction::AudioCrossoverChanged(..)
+        | PanelAction::AudioCrossoverCommit
         | PanelAction::AudioRenameSend(..)
         | PanelAction::AudioSetSendChannels(..)
         | PanelAction::AudioSendStereoToggle(..)
@@ -264,6 +268,7 @@ pub fn dispatch(
             target_snapshot,
             decay_snapshot,
             audio_shape_snapshot,
+            audio_crossover_snapshot,
             active_inspector_drag,
             editor_target,
         ),
