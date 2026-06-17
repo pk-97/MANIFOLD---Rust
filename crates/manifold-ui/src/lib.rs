@@ -50,8 +50,8 @@ pub use panels::viewport::{
 };
 pub use panels::waveform_lane::WaveformLanePanel;
 pub use panels::{
-    DriverConfigAction, GraphParamTarget, HitRegion, InspectorTab, Panel, PanelAction, SyncSource,
-    TrimKind,
+    AudioShapeParam, DriverConfigAction, GraphParamTarget, HitRegion, InspectorTab, Panel,
+    PanelAction, SyncSource, TrimKind,
 };
 pub use slider::{BitmapSlider, SliderColors, SliderNodeIds};
 pub use tree::UITree;

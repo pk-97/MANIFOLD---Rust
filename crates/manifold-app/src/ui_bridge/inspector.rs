@@ -31,7 +31,9 @@ use manifold_editing::commands::settings::{
     ChangeLayerOpacityCommand, ChangeLedBrightnessCommand, ChangeMacroCommand,
     ChangeMasterOpacityCommand, PasteGeneratorCommand,
 };
-use manifold_ui::{DriverConfigAction, GraphParamTarget, InspectorTab, PanelAction, TrimKind};
+use manifold_ui::{
+    AudioShapeParam, DriverConfigAction, GraphParamTarget, InspectorTab, PanelAction, TrimKind,
+};
 
 use super::DispatchResult;
 use super::{resolve_effects_mut, resolve_effects_read};
@@ -345,6 +347,7 @@ pub(super) fn dispatch_inspector(
     trim_snapshot: &mut Option<(f32, f32)>,
     target_snapshot: &mut Option<f32>,
     decay_snapshot: &mut Option<f32>,
+    audio_shape_snapshot: &mut Option<manifold_core::audio_mod::AudioModShape>,
     active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
     editor_target: Option<&manifold_core::GraphTarget>,
 ) -> DispatchResult {
@@ -1237,6 +1240,70 @@ pub(super) fn dispatch_inspector(
                 if let Some(old_shape) = old_shape {
                     let mut new_shape = old_shape;
                     new_shape.rate_of_change = !old_shape.rate_of_change;
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(SetAudioModShapeCommand::new(
+                            DriverTarget::from(&target),
+                            param_id.clone(),
+                            old_shape,
+                            new_shape,
+                        ));
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
+            DispatchResult::handled()
+        }
+
+        PanelAction::AudioModShapeSnapshot(gpt, param_id) => {
+            // Capture the pre-drag shape so the commit can record one undo step.
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                *audio_shape_snapshot = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.audio_mods
+                            .as_ref()
+                            .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
+                            .map(|m| m.shape)
+                    })
+                    .flatten();
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioModShapeParamChanged(gpt, param_id, which, value) => {
+            // Live edit (no undo entry per frame) — the handle tracks the cursor.
+            if let Some(target) =
+                resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let which = *which;
+                let v = *value;
+                graph_audio_mod_dual_edit(project, content_tx, &target, param_id.clone(), move |m| {
+                    match which {
+                        AudioShapeParam::Sensitivity => m.shape.sensitivity = v,
+                        AudioShapeParam::Attack => m.shape.attack_ms = v,
+                        AudioShapeParam::Release => m.shape.release_ms = v,
+                    }
+                });
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioModShapeCommit(gpt, param_id) => {
+            // One undo step: snapshot (old) → current shape (new) via the shape command.
+            if let Some(old_shape) = audio_shape_snapshot.take()
+                && let Some(target) =
+                    resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
+            {
+                let new_shape = project
+                    .with_preset_graph_mut(&target, |inst| {
+                        inst.audio_mods
+                            .as_ref()
+                            .and_then(|ms| ms.iter().find(|a| a.param_id == *param_id))
+                            .map(|m| m.shape)
+                    })
+                    .flatten();
+                if let Some(new_shape) = new_shape
+                    && new_shape != old_shape
+                {
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(SetAudioModShapeCommand::new(
                             DriverTarget::from(&target),

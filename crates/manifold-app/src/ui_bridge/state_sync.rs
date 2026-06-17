@@ -1429,6 +1429,9 @@ fn build_audio_card_state(
         range_max: vec![1.0; n],
         invert: vec![false; n],
         rate: vec![false; n],
+        sensitivity: vec![1.0; n],
+        attack_ms: vec![5.0; n],
+        release_ms: vec![120.0; n],
         send_labels: Vec::new(),
         send_ids: Vec::new(),
     };
@@ -1445,6 +1448,9 @@ fn build_audio_card_state(
         a.range_max[pi] = am.shape.range_max;
         a.invert[pi] = am.shape.invert;
         a.rate[pi] = am.shape.rate_of_change;
+        a.sensitivity[pi] = am.shape.sensitivity;
+        a.attack_ms[pi] = am.shape.attack_ms;
+        a.release_ms[pi] = am.shape.release_ms;
         a.feature_idx[pi] = match am.source.feature {
             AudioFeature::Amplitude => 0,
             AudioFeature::BandEnergy(AudioBand::Low) => 1,

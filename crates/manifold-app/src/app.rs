@@ -166,6 +166,8 @@ pub struct Application {
     pub(crate) target_snapshot: Option<f32>,
     /// Envelope decay-slider drag snapshot for undo.
     pub(crate) decay_snapshot: Option<f32>,
+    /// Audio-mod shaping-slider drag snapshot (whole shape) for undo.
+    pub(crate) audio_shape_snapshot: Option<manifold_core::audio_mod::AudioModShape>,
     /// User param-binding mapping range drag snapshot `(min, max)` for
     /// undo. Captured on `EffectMappingRangeSnapshot`, committed as one
     /// `EditUserParamBindingCommand` on `EffectMappingRangeCommit`.
@@ -474,6 +476,7 @@ impl Application {
             trim_snapshot: None,
             target_snapshot: None,
             decay_snapshot: None,
+            audio_shape_snapshot: None,
             mapping_range_snapshot: None,
             mapping_affine_snapshot: None,
             active_inspector_drag: None,

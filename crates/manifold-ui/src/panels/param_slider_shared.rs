@@ -40,12 +40,22 @@ pub(crate) const WAVEFORM_COUNT: usize = 5;
 pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 
 /// Height of the per-param audio-modulation drawer. Rows: send selector, the
-/// Level feature row, the Tone feature row, and the modifier toggles (Inv/d-dt).
-/// Derived from the shared drawer metrics so the card's reserved height can't
-/// drift from what's actually drawn.
+/// Level feature row, the Tone feature row, the three shaping sliders
+/// (Amount/Attack/Release), and the modifier toggles (Inv/d-dt). Derived from
+/// the shared drawer metrics so the card's reserved height can't drift from
+/// what's actually drawn.
 pub(crate) fn audio_config_height() -> f32 {
-    crate::panels::drawer::uniform_rows_height(4)
+    crate::panels::drawer::uniform_rows_height(7)
 }
+
+/// Full-scale for the audio "Amount" (sensitivity) slider: 0..this.
+pub(crate) const AUDIO_SENS_MAX: f32 = 4.0;
+/// Full-scale for the audio "Attack" slider, in ms: 0..this.
+pub(crate) const AUDIO_ATTACK_MAX_MS: f32 = 500.0;
+/// Full-scale for the audio "Release" slider, in ms: 0..this.
+pub(crate) const AUDIO_RELEASE_MAX_MS: f32 = 2000.0;
+/// Leading-label width for the audio shaping sliders.
+pub(crate) const AUDIO_SHAPE_LABEL_W: f32 = 52.0;
 
 // Arming the envelope shows two controls: the orange target handle on the
 // parameter's own track (the value it's pulled toward) and a single "Decay"
@@ -163,6 +173,11 @@ pub struct ParamModState {
     /// Per-param: audio-mod rate-of-change (`AudioModShape::rate_of_change`) —
     /// drives the "d/dt" toggle.
     pub audio_rate: Vec<bool>,
+    /// Per-param: audio-mod shaping values, shown on the drawer sliders.
+    /// Sensitivity (Amount), and attack/release in ms.
+    pub audio_sensitivity: Vec<f32>,
+    pub audio_attack_ms: Vec<f32>,
+    pub audio_release_ms: Vec<f32>,
     /// Card-level: available send labels (same for every row on the card).
     pub audio_send_labels: Vec<String>,
     /// Card-level: send ids parallel to `audio_send_labels` — turns a selected
@@ -217,6 +232,10 @@ pub struct AudioCardState {
     pub invert: Vec<bool>,
     /// Per-param: the mod's rate-of-change flag (`AudioModShape::rate_of_change`).
     pub rate: Vec<bool>,
+    /// Per-param: the mod's shaping values (sensitivity, attack ms, release ms).
+    pub sensitivity: Vec<f32>,
+    pub attack_ms: Vec<f32>,
+    pub release_ms: Vec<f32>,
     /// Card-level: available send labels.
     pub send_labels: Vec<String>,
     /// Card-level: send ids parallel to `send_labels` — what the click handler
@@ -245,6 +264,9 @@ impl ParamModState {
             audio_range_max: vec![1.0; param_count],
             audio_invert: vec![false; param_count],
             audio_rate: vec![false; param_count],
+            audio_sensitivity: vec![1.0; param_count],
+            audio_attack_ms: vec![5.0; param_count],
+            audio_release_ms: vec![120.0; param_count],
             audio_send_labels: Vec::new(),
             audio_send_ids: Vec::new(),
         }
@@ -259,6 +281,9 @@ impl ParamModState {
             self.audio_range_max[i] = audio.range_max.get(i).copied().unwrap_or(1.0);
             self.audio_invert[i] = audio.invert.get(i).copied().unwrap_or(false);
             self.audio_rate[i] = audio.rate.get(i).copied().unwrap_or(false);
+            self.audio_sensitivity[i] = audio.sensitivity.get(i).copied().unwrap_or(1.0);
+            self.audio_attack_ms[i] = audio.attack_ms.get(i).copied().unwrap_or(5.0);
+            self.audio_release_ms[i] = audio.release_ms.get(i).copied().unwrap_or(120.0);
             self.audio_send_idx[i] = audio
                 .send_id
                 .get(i)
@@ -319,6 +344,8 @@ pub(crate) struct ParamDragState {
     pub(crate) dragging_target_param: i32,
     /// The envelope decay slider (`decay_beats`) in the drawer.
     pub(crate) dragging_decay_param: i32,
+    /// An audio shaping slider drag in the drawer: `(param_index, which scalar)`.
+    pub(crate) dragging_audio_shape: Option<(usize, crate::panels::AudioShapeParam)>,
 }
 
 impl ParamDragState {
@@ -328,6 +355,7 @@ impl ParamDragState {
             dragging_trim: None,
             dragging_target_param: -1,
             dragging_decay_param: -1,
+            dragging_audio_shape: None,
         }
     }
 
@@ -336,6 +364,7 @@ impl ParamDragState {
             || self.dragging_trim.is_some()
             || self.dragging_target_param >= 0
             || self.dragging_decay_param >= 0
+            || self.dragging_audio_shape.is_some()
     }
 }
 
@@ -1207,6 +1236,7 @@ pub(crate) fn build_param_row(
     // on the shared drawer API.
     if audio_active {
         use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
+        use crate::slider::SliderColors;
         let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
         let send_count = mod_state.audio_send_labels.len();
         let send_buttons: Vec<DrawerButton> = mod_state
@@ -1238,6 +1268,18 @@ pub(crate) fn build_param_row(
         };
         let level_buttons = make_feat(0..AUDIO_LEVEL_FEATURE_COUNT);
         let tone_buttons = make_feat(AUDIO_LEVEL_FEATURE_COUNT..AUDIO_FEATURE_LABELS.len());
+        // Shaping sliders: Amount (sensitivity), Attack, Release. These become
+        // `DrawerIds.sliders[0..3]` in row order — what the drag path hit-tests.
+        let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(1.0);
+        let attack = mod_state.audio_attack_ms.get(i).copied().unwrap_or(5.0);
+        let release = mod_state.audio_release_ms.get(i).copied().unwrap_or(120.0);
+        let shape_slider = |label: &str, norm: f32, value_text: String| DrawerRow::Slider {
+            label: label.to_string(),
+            norm: norm.clamp(0.0, 1.0),
+            value_text,
+            colors: SliderColors::default_slider(),
+            label_w: AUDIO_SHAPE_LABEL_W,
+        };
         // Modifier toggles on their own row, so the feature row isn't crowded:
         // "Inv" (loud → low) then "d/dt" (drive on motion). Their flat indices
         // sit one and two past the features (drawer button indices are flat
@@ -1252,6 +1294,9 @@ pub(crate) fn build_param_row(
                 DrawerRow::Buttons { buttons: send_buttons, width: ButtonWidth::Proportional },
                 DrawerRow::Buttons { buttons: level_buttons, width: ButtonWidth::Uniform },
                 DrawerRow::Buttons { buttons: tone_buttons, width: ButtonWidth::Uniform },
+                shape_slider("Amount", sens / AUDIO_SENS_MAX, format!("{sens:.2}")),
+                shape_slider("Attack", attack / AUDIO_ATTACK_MAX_MS, format!("{attack:.0} ms")),
+                shape_slider("Release", release / AUDIO_RELEASE_MAX_MS, format!("{release:.0} ms")),
                 DrawerRow::Buttons { buttons: toggle_buttons, width: ButtonWidth::Proportional },
             ],
             btn_font_size: config_font,

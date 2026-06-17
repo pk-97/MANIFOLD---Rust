@@ -2088,6 +2088,7 @@ impl Application {
                 &mut self.trim_snapshot,
                 &mut self.target_snapshot,
                 &mut self.decay_snapshot,
+                &mut self.audio_shape_snapshot,
                 &mut self.user_prefs,
                 &mut self.active_inspector_drag,
                 editor_target,

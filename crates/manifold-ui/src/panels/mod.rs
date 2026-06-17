@@ -79,6 +79,19 @@ pub enum GraphParamTarget {
     Generator,
 }
 
+/// Which scalar of an audio modulation's [`AudioModShape`] a drawer slider drag
+/// is editing. The three share one drag path, snapshot slot, and commit command;
+/// this records which field the live edit and the commit write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioShapeParam {
+    /// `sensitivity` — how hard the feature drives ("Amount").
+    Sensitivity,
+    /// `attack_ms` — rise smoothing.
+    Attack,
+    /// `release_ms` — fall smoothing.
+    Release,
+}
+
 /// Which modulator's output sub-range a trim-handle drag is editing. The three
 /// kinds share one drag path, one set of `Trim*` actions, and one
 /// [`reposition_trim_bars`](param_slider_shared::reposition_trim_bars) layout
@@ -272,6 +285,17 @@ pub enum PanelAction {
     /// (`AudioModShape::rate_of_change`) — the drawer's "d/dt" button; the
     /// feature drives on its motion rather than its level.
     AudioModSetRateOfChange(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Snapshot an audio mod's shape before a drawer-slider drag (undo start).
+    AudioModShapeSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    /// Live-edit one shape scalar during a drawer-slider drag (no undo entry).
+    AudioModShapeParamChanged(
+        GraphParamTarget,
+        manifold_core::effects::ParamId,
+        AudioShapeParam,
+        f32,
+    ),
+    /// Commit a shape-slider drag as one undo step (drag end).
+    AudioModShapeCommit(GraphParamTarget, manifold_core::effects::ParamId),
 
     // ── Audio Setup panel (project-level send routing) ──
     /// Open the input-device dropdown (anchored to the clicked trigger).

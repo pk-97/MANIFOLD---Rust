@@ -17,12 +17,32 @@
 
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
-use super::{GraphParamTarget, PanelAction, TrimKind};
+use super::{AudioShapeParam, GraphParamTarget, PanelAction, TrimKind};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
 use manifold_core::{EffectId, LayerId};
+
+/// Map a 0..1 slider position to an [`AudioModShape`] scalar's value, using the
+/// per-control full-scale constants. The single conversion shared by the audio
+/// shaping sliders' mouse-down and drag paths.
+fn audio_shape_value_from_norm(which: AudioShapeParam, norm: f32) -> f32 {
+    let n = norm.clamp(0.0, 1.0);
+    match which {
+        AudioShapeParam::Sensitivity => n * AUDIO_SENS_MAX,
+        AudioShapeParam::Attack => n * AUDIO_ATTACK_MAX_MS,
+        AudioShapeParam::Release => n * AUDIO_RELEASE_MAX_MS,
+    }
+}
+
+/// Display text for an audio shaping slider's value field.
+fn audio_shape_value_text(which: AudioShapeParam, value: f32) -> String {
+    match which {
+        AudioShapeParam::Sensitivity => format!("{value:.2}"),
+        AudioShapeParam::Attack | AudioShapeParam::Release => format!("{value:.0} ms"),
+    }
+}
 
 /// Which kind of preset a card is displaying. Carries the small set of real
 /// behavioral differences between the effect and generator inspector cards.
@@ -2339,6 +2359,31 @@ impl ParamCardPanel {
             }
         }
 
+        // 2b. Audio shaping sliders (Amount/Attack/Release) in the drawer share
+        // one drag path; the slider index picks which AudioModShape scalar it
+        // edits. Snapshot for undo, then dispatch the first live value.
+        for (pi, audio_cfg) in self.audio_configs.iter().enumerate() {
+            let Some((dids, _)) = audio_cfg else { continue };
+            for (si, which) in [
+                (0usize, AudioShapeParam::Sensitivity),
+                (1, AudioShapeParam::Attack),
+                (2, AudioShapeParam::Release),
+            ] {
+                if let Some(sl) = dids.sliders.get(si)
+                    && node_id == sl.track
+                {
+                    let norm = BitmapSlider::x_to_normalized(sl.track_rect, pos.x).clamp(0.0, 1.0);
+                    let value = audio_shape_value_from_norm(which, norm);
+                    self.drag.dragging_audio_shape = Some((pi, which));
+                    let pid = self.pid_at(pi);
+                    return vec![
+                        PanelAction::AudioModShapeSnapshot(target, pid.clone()),
+                        PanelAction::AudioModShapeParamChanged(target, pid, which, value),
+                    ];
+                }
+            }
+        }
+
         // 3. Trim bars — driver, Ableton, and audio share one hit-test;
         // `TrimKind` records which modulator's range was grabbed. The probe
         // order (driver → Ableton → audio) matches the old three-loop order.
@@ -2534,6 +2579,63 @@ impl ParamCardPanel {
             }
         }
 
+        // Audio shaping slider drag — update fill + value, dispatch live edit.
+        if let Some((pi, which)) = self.drag.dragging_audio_shape {
+            let si = match which {
+                AudioShapeParam::Sensitivity => 0,
+                AudioShapeParam::Attack => 1,
+                AudioShapeParam::Release => 2,
+            };
+            let rect = self
+                .audio_configs
+                .get(pi)
+                .and_then(|c| c.as_ref())
+                .and_then(|(d, _)| d.sliders.get(si))
+                .map(|sl| sl.track_rect);
+            if let Some(rect) = rect {
+                let norm = BitmapSlider::x_to_normalized(rect, pos.x).clamp(0.0, 1.0);
+                let value = audio_shape_value_from_norm(which, norm);
+                match which {
+                    AudioShapeParam::Sensitivity => {
+                        if let Some(v) = self.state.mod_state.audio_sensitivity.get_mut(pi) {
+                            *v = value;
+                        }
+                    }
+                    AudioShapeParam::Attack => {
+                        if let Some(v) = self.state.mod_state.audio_attack_ms.get_mut(pi) {
+                            *v = value;
+                        }
+                    }
+                    AudioShapeParam::Release => {
+                        if let Some(v) = self.state.mod_state.audio_release_ms.get_mut(pi) {
+                            *v = value;
+                        }
+                    }
+                }
+                let text = audio_shape_value_text(which, value);
+                if let Some((d, _)) = self.audio_configs.get(pi).and_then(|c| c.as_ref())
+                    && let Some(sl) = d.sliders.get(si)
+                {
+                    BitmapSlider::update_value(tree, sl, norm, &text);
+                }
+                let pid = self.pid_at(pi);
+                return match self.kind {
+                    ParamCardKind::Effect => vec![PanelAction::AudioModShapeParamChanged(
+                        GraphParamTarget::Effect(ei),
+                        pid,
+                        which,
+                        value,
+                    )],
+                    ParamCardKind::Generator => vec![PanelAction::AudioModShapeParamChanged(
+                        GraphParamTarget::Generator,
+                        pid,
+                        which,
+                        value,
+                    )],
+                };
+            }
+        }
+
         // Trim bar drag (driver / Ableton / audio) — one path. Read the kind's
         // current range, clamp the dragged edge, write it back, reposition the
         // bars, emit the change. The clamp and `reposition_trim_bars` are
@@ -2624,6 +2726,13 @@ impl ParamCardPanel {
             return match self.kind {
                 ParamCardKind::Effect => vec![PanelAction::EnvDecayCommit(GraphParamTarget::Effect(ei), pid)],
                 ParamCardKind::Generator => vec![PanelAction::EnvDecayCommit(GraphParamTarget::Generator, pid)],
+            };
+        }
+        if let Some((pi, _)) = self.drag.dragging_audio_shape.take() {
+            let pid = self.pid_at(pi);
+            return match self.kind {
+                ParamCardKind::Effect => vec![PanelAction::AudioModShapeCommit(GraphParamTarget::Effect(ei), pid)],
+                ParamCardKind::Generator => vec![PanelAction::AudioModShapeCommit(GraphParamTarget::Generator, pid)],
             };
         }
         if let Some((kind, pi, _)) = self.drag.dragging_trim.take() {
