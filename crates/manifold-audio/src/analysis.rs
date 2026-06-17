@@ -191,9 +191,11 @@ impl FeatureReader {
 /// every frame; this only matters if the UI stalls (then oldest columns drop).
 const COLUMN_RING_COLS: usize = 128;
 
-/// Overlay scalars per spectrogram column: `[centroid_yfb, onset_low,
-/// onset_mid, onset_high]`. The shader reads the same stride.
-const SCOPE_SCALAR_STRIDE: usize = 4;
+/// Overlay scalars per spectrogram column: four per-band centroid heights
+/// `[centroid_full, centroid_low, centroid_mid, centroid_high]` followed by the
+/// three per-band onset impulses `[onset_low, onset_mid, onset_high]`. The shader
+/// reads the same stride.
+const SCOPE_SCALAR_STRIDE: usize = 7;
 
 /// Live control for the spectrogram tap, shared content thread → worker. The
 /// content thread sets which send (by index) the worker should produce VQT
@@ -253,9 +255,9 @@ impl ColumnReader {
 }
 
 /// Read end of the worker's per-column overlay-scalar stream:
-/// [`SCOPE_SCALAR_STRIDE`] floats per column, `[centroid_yfb, onset_low,
-/// onset_mid, onset_high]`, produced in lockstep with [`ColumnReader`] (same
-/// column count, same order).
+/// [`SCOPE_SCALAR_STRIDE`] floats per column, `[centroid_full, centroid_low,
+/// centroid_mid, centroid_high, onset_low, onset_mid, onset_high]`, produced in
+/// lockstep with [`ColumnReader`] (same column count, same order).
 pub struct ScalarReader {
     cons: ringbuf::HeapCons<f32>,
     scratch: [f32; SCOPE_SCALAR_STRIDE],
@@ -263,15 +265,18 @@ pub struct ScalarReader {
 
 impl ScalarReader {
     /// Pop every complete scalar record available, calling
-    /// `f(centroid_yfb, [onset_low, onset_mid, onset_high])` in arrival order
-    /// (oldest → newest).
-    pub fn drain(&mut self, mut f: impl FnMut(f32, [f32; 3])) {
+    /// `f([centroid_full, centroid_low, centroid_mid, centroid_high],
+    /// [onset_low, onset_mid, onset_high])` in arrival order (oldest → newest).
+    pub fn drain(&mut self, mut f: impl FnMut([f32; 4], [f32; 3])) {
         while self.cons.occupied_len() >= SCOPE_SCALAR_STRIDE {
             let got = self.cons.pop_slice(&mut self.scratch);
             if got < SCOPE_SCALAR_STRIDE {
                 break;
             }
-            f(self.scratch[0], [self.scratch[1], self.scratch[2], self.scratch[3]]);
+            f(
+                [self.scratch[0], self.scratch[1], self.scratch[2], self.scratch[3]],
+                [self.scratch[4], self.scratch[5], self.scratch[6]],
+            );
         }
     }
 }
@@ -391,14 +396,25 @@ struct SendState {
     col: Vec<f32>,
     /// Previous column (one hop back) — the transient/liveliness flux baseline.
     prev_col: Vec<f32>,
-    /// Per-band running average of flux — the adaptive onset threshold tracks it.
-    /// Indexed in `AudioBand` order [Full, Low, Mid, High].
-    flux_avg: [f32; 4],
-    /// Hops remaining in each band's onset refractory window. Non-zero suppresses
-    /// re-firing so one hit reads as a single decaying spike, not a burst.
+    /// Per-band slow amplitude envelope — the onset detector's baseline. An onset
+    /// is the level rising sharply above this; it tracks the band's recent level
+    /// so the detector adapts to loud and quiet passages alike. Order [Full, Low,
+    /// Mid, High].
+    onset_env: [f32; 4],
+    /// Per-band onset arming. Set false the instant a transient fires and not set
+    /// true again until the level falls back toward the envelope (the note ends
+    /// or dips) — so a HELD note fires one onset, not a burst every refractory.
+    onset_armed: [bool; 4],
+    /// Hops remaining in each band's onset refractory window — a short debounce so
+    /// the multi-hop attack itself reads as one spike.
     transient_refractory: [u8; 4],
     /// Whether `prev_col` holds a real column yet (skips the startup flux spike).
     has_prev: bool,
+    /// Per-band spectral-centroid height-from-bottom (0..1) for the scope overlay,
+    /// indexed [Full, Low, Mid, High]; `-1` when the band isn't loud enough to
+    /// characterise. Mirrors the `brightness` feature's gating, but mapped to the
+    /// global display y so each band's centroid draws within its own region.
+    centroid_yfb: [f32; 4],
     features: SendFeatures,
 }
 
@@ -428,9 +444,6 @@ struct WorkerLoop {
     /// colourmap. Applied to the raw VQT magnitudes so every reduction — and the
     /// presence gate — reads the exact tilted dB the user sees. `num_bins` long.
     tilt_w: Vec<f32>,
-    /// Band-presence floor as a linear tilted-magnitude threshold: a bin clears it
-    /// iff it would be drawn non-black (display dB > `db_min`). From `db_min`.
-    presence_lin: f32,
     /// Cached band edges (VQT bin indices) for the current crossovers: Low =
     /// `0..low_bin`, Mid = `low_bin..mid_bin`, High = `mid_bin..num_bins`.
     low_bin: usize,
@@ -439,10 +452,11 @@ struct WorkerLoop {
     /// Which send to produce columns for, `-1` = none. Read from `tap` each drain.
     tap: Arc<SpectrogramTap>,
     column_producer: ringbuf::HeapProd<f32>,
-    /// Per-column overlay scalars ([`SCOPE_SCALAR_STRIDE`] per column: centroid-
-    /// height + a per-band onset for Low/Mid/High), in lockstep with
-    /// `column_producer`. The onsets ARE the tapped send's Low/Mid/High
-    /// transients, so the red ticks and the modulation source are identical.
+    /// Per-column overlay scalars ([`SCOPE_SCALAR_STRIDE`] per column: a centroid
+    /// height per band [Full/Low/Mid/High] + a per-band onset for Low/Mid/High),
+    /// in lockstep with `column_producer`. The onsets ARE the tapped send's
+    /// Low/Mid/High transients, so the ticks and the modulation source are
+    /// identical.
     scalar_producer: ringbuf::HeapProd<f32>,
     /// Last-seen tap, to detect a selection change (resets the tapped send).
     spec_tapped: i32,
@@ -492,9 +506,11 @@ impl WorkerLoop {
                 since_hop: 0,
                 col: vec![0.0; nb],
                 prev_col: vec![0.0; nb],
-                flux_avg: [0.0; 4],
+                onset_env: [0.0; 4],
+                onset_armed: [true; 4],
                 transient_refractory: [0; 4],
                 has_prev: false,
+                centroid_yfb: [-1.0; 4],
                 features: SendFeatures::default(),
             })
             .collect();
@@ -502,10 +518,6 @@ impl WorkerLoop {
         let sr = sample_rate as f32;
         let cqt = spec_config.build_transform(sr);
         let tilt_w = tilt_weights(&spec_config, sr, nb);
-        // A bin is "present" iff its tilted display level clears db_min — i.e.
-        // is drawn non-black. db = 20·log10(tilted_mag), so the linear threshold
-        // is 10^(db_min/20).
-        let presence_lin = 10.0f32.powf(spec_config.db_min / 20.0);
         let (init_low, init_mid) = crossovers.get();
         let (low_bin, mid_bin) = band_edges(&spec_config, sr, nb, init_low, init_mid);
 
@@ -524,7 +536,6 @@ impl WorkerLoop {
             n_fft,
             hop,
             tilt_w,
-            presence_lin,
             low_bin,
             mid_bin,
             tap,
@@ -690,7 +701,7 @@ impl WorkerLoop {
             for (c, (&raw, &w)) in send.col.iter_mut().zip(self.vqt_raw.iter().zip(self.tilt_w.iter())) {
                 *c = raw * w;
             }
-            reduce_send(send, nb, self.low_bin, self.mid_bin, self.presence_lin, db_min, db_max);
+            reduce_send(send, nb, self.low_bin, self.mid_bin, db_min, db_max);
             send.prev_col.copy_from_slice(&send.col);
             // Flux features only arm once the window has actually filled — a
             // zero-padded warm-up column differs from the next as content fills
@@ -698,16 +709,19 @@ impl WorkerLoop {
             send.has_prev = send.window.len() >= n_fft;
 
             // The tapped send drives the scope: push the raw column (the shader
-            // applies its own display tilt) and the overlay scalars — centroid
-            // plus this send's Low/Mid/High transients as the onset ticks.
+            // applies its own display tilt) and the overlay scalars — the four
+            // per-band centroid traces (Full/Low/Mid/High, each drawn within its
+            // own region) plus this send's Low/Mid/High transients as the ticks.
             if tapped
                 && self.column_producer.vacant_len() >= self.spec_num_bins
                 && self.scalar_producer.vacant_len() >= SCOPE_SCALAR_STRIDE
             {
-                let centroid_yfb = centroid_height(&self.vqt_raw, nb);
                 self.column_producer.push_slice(&self.vqt_raw);
                 self.scalar_producer.push_slice(&[
-                    centroid_yfb,
+                    send.centroid_yfb[0],
+                    send.centroid_yfb[1],
+                    send.centroid_yfb[2],
+                    send.centroid_yfb[3],
                     send.features.bands[1].transients,
                     send.features.bands[2].transients,
                     send.features.bands[3].transients,
@@ -747,33 +761,41 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
     if n == 0 { 0.0 } else { acc / n as f32 }
 }
 
-/// Onset detection (derived from per-band flux). A column whose flux exceeds the
-/// band's running average by `ONSET_RATIO` (and clears `ONSET_FLOOR`) fires a
-/// unit impulse; between hits the impulse decays by `ONSET_DECAY` per hop, so a
-/// transient reads as a snappy spike that settles in ~100 ms. `ONSET_RATIO` is a
-/// self-ratio (flux vs its own running average), so it's invariant to the hop
-/// rate; the decay and averaging coefficients are per-hop (hop ≈ 5.3 ms at the
-/// 256-sample VQT hop), tuned for a ~100 ms settle and ~150 ms averaging window.
-const ONSET_RATIO: f32 = 1.8;
-/// A transient must be a real fraction of the band's energy, not a slow swell.
-/// Scale-invariant (flux ÷ energy), so it works across bands the pink tilt
-/// scales differently and rejects the heavily-overlapped low band's per-hop
-/// trickle. The main fix for sustained/faint low content firing onsets.
-const ONSET_REL_FLOOR: f32 = 0.12;
+// ── Onset (transient) detection ──────────────────────────────────────────
+//
+// A transient is a NOTE ONSET: the band's level rising sharply above its recent
+// baseline. Per-hop spectral flux on a 94%-overlapped VQT is far too twitchy to
+// tell "new note" from "still ringing" — a held note trickles flux every hop and
+// a time-based refractory just re-fires once it expires. So the detector is an
+// envelope-follower Schmitt trigger on the band amplitude instead:
+//   • `onset_env` slowly tracks the band level (the baseline);
+//   • an onset fires when amplitude exceeds `env · ONSET_RISE_RATIO` while armed
+//     and loud;
+//   • firing DISARMS, and the band re-arms only once amplitude falls back below
+//     `env · ONSET_REARM_RATIO` (or goes silent) — so a sustained note fires once
+//     and can't re-fire until it actually dips or stops.
+// The decaying-impulse output and short refractory debounce are unchanged.
+
+/// Rise factor above the slow envelope that counts as an onset. On `amplitude`,
+/// which is dB-mapped 0..1, so this is a modest ratio.
+const ONSET_RISE_RATIO: f32 = 1.3;
+/// Re-arm once amplitude falls to this fraction of the envelope — i.e. the note
+/// dipped or ended. A sustain never dips this far, so it stays disarmed.
+const ONSET_REARM_RATIO: f32 = 0.7;
+/// Per-hop smoothing of the onset envelope (≈ 250 ms at hop ≈ 5.3 ms): slow
+/// enough that a sharp attack overshoots it, fast enough to follow a new section.
+const ONSET_ENV_COEFF: f32 = 0.02;
 /// A transient only fires on a band loud enough to matter — `amplitude` is the
-/// band's level on the colourmap's 0..1 dB scale (≈ −53 dBFS here). Screens
-/// noise-floor-faint content that the relative-flux test alone would still pass
-/// when a tiny energy doubles.
+/// band's level on the colourmap's 0..1 dB scale (≈ −53 dBFS here). Below it the
+/// band is treated as silent (and re-armed).
 const ONSET_AMP_GATE: f32 = 0.12;
-const ONSET_DECAY: f32 = 0.85; // per-hop; ~100 ms settle at hop ≈ 5.3 ms
-/// Smoothing of the running flux average the onset threshold tracks (per hop).
-const FLUX_AVG_COEFF: f32 = 0.03; // per-hop; ~150 ms averaging at hop ≈ 5.3 ms
+/// Per-hop decay of the transient impulse (~100 ms settle at hop ≈ 5.3 ms).
+const ONSET_DECAY: f32 = 0.85;
 /// Below this band energy, relative flux (liveliness) reads 0 — avoids the
 /// flux ÷ energy ratio blowing up on near-silence.
 const FLUX_ENERGY_GATE: f32 = 1e-4;
-/// Hops a band's onset is suppressed after firing (~53 ms at hop ≈ 5.3 ms). A
-/// kick can't physically retrigger every column; this kills the machine-gun
-/// re-fire that pins `transients` near 1 even on a single real hit.
+/// Short debounce after an onset (~53 ms at hop ≈ 5.3 ms) so the multi-hop attack
+/// reads as one spike. The arm/re-arm logic above prevents sustained re-fire.
 const ONSET_REFRACTORY_HOPS: u8 = 10;
 /// Pink-tilt slope the scope colourmap applies (dB/oct). Must stay equal to
 /// `manifold_spectral`'s `PINK_SLOPE_DB_PER_OCT` so the worker's reductions and
@@ -826,32 +848,12 @@ fn tilt_weights(cfg: &SpectrogramConfig, sample_rate: f32, num_bins: usize) -> V
         .collect()
 }
 
-/// Magnitude-weighted centroid as normalised height-from-bottom (0..1) over a
-/// column. VQT bins are geometric, so the bin-index mean is already the
-/// log-frequency centre the shader draws. `-1` when the column is silent.
-fn centroid_height(col: &[f32], num_bins: usize) -> f32 {
-    let nb = num_bins.max(1);
-    let (mut num, mut den) = (0.0f32, 0.0f32);
-    for (i, &m) in col.iter().enumerate() {
-        num += i as f32 * m;
-        den += m;
-    }
-    if den > 1e-9 && nb > 1 {
-        (num / den / (nb - 1) as f32).clamp(0.0, 1.0)
-    } else {
-        -1.0
-    }
-}
-
 /// One band's reductions from a tilted VQT column plus the previous column.
 struct BandReduce {
     amplitude: f32,
     brightness: f32,
     noisiness: f32,
-    /// Loudest bin (tilted magnitude) — the presence test compares it to the
-    /// display floor: present ⇔ at least one bin is drawn non-black.
-    peak: f32,
-    /// Positive spectral flux vs the previous column (onset / liveliness input).
+    /// Positive spectral flux vs the previous column (liveliness input).
     flux: f32,
     /// Sum of current magnitudes (liveliness denominator).
     energy: f32,
@@ -869,7 +871,6 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
             amplitude: 0.0,
             brightness: 0.0,
             noisiness: 0.0,
-            peak: 0.0,
             flux: 0.0,
             energy: 0.0,
         };
@@ -879,7 +880,6 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
     let mut den = 0.0f32;
     let mut log_sum = 0.0f32;
     let mut lin_sum = 0.0f32;
-    let mut peak = 0.0f32;
     let mut flux = 0.0f32;
     let mut energy = 0.0f32;
     for k in lo..hi {
@@ -889,9 +889,6 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
         den += m;
         log_sum += m.max(1e-9).ln();
         lin_sum += m;
-        if m > peak {
-            peak = m;
-        }
         let d = m - prev[k];
         if d > 0.0 {
             flux += d;
@@ -926,24 +923,23 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
         0.0
     };
 
-    BandReduce { amplitude, brightness, noisiness, peak, flux, energy }
+    BandReduce { amplitude, brightness, noisiness, flux, energy }
 }
 
 /// Reduce one send's current tilted column into its five per-band features, using
 /// the previous column for the flux-based ones. Band order is [Full, Low, Mid,
-/// High]. A band is "present" iff its loudest bin clears `presence_lin` — i.e. is
-/// drawn non-black on the scope. Brightness / noisiness / transients / liveliness
-/// read 0 on an absent band (a modulator mapped there stays quiet on material
-/// that isn't present); amplitude is the honest level and is always reported.
-/// Flux features only run once a real predecessor exists ([`SendState::has_prev`],
-/// set only after the window has filled), so neither arming nor warm-up fires a
+/// High]. Every feature that DESCRIBES the band — brightness / noisiness /
+/// liveliness / transients — reads 0 unless the band is `loud` (level above
+/// `ONSET_AMP_GATE`), so none of them characterises faint, near-noise-floor
+/// content; amplitude is the honest level and is always reported. Flux/onset
+/// features only run once a real predecessor exists ([`SendState::has_prev`], set
+/// only after the window has filled), so neither arming nor warm-up fires a
 /// spurious onset.
 fn reduce_send(
     send: &mut SendState,
     num_bins: usize,
     low_bin: usize,
     mid_bin: usize,
-    presence_lin: f32,
     db_min: f32,
     db_max: f32,
 ) {
@@ -956,57 +952,58 @@ fn reduce_send(
     let have_prev = send.has_prev;
     for (bi, &(lo, hi)) in bands.iter().enumerate() {
         let r = band_reduce(&send.col, &send.prev_col, lo, hi, db_min, db_max);
-        // Two thresholds, deliberately different: `present` (loudest bin clears
-        // the display floor) means "drawn on the scope at all" and only governs
-        // the running-average bookkeeping; `loud` (band level above a musical
-        // floor) means "worth characterising." Every feature that DESCRIBES the
-        // band — brightness, noisiness, liveliness, transients — gates on `loud`,
-        // so none of them reports a value on faint, near-noise-floor content (a
-        // noise floor reads as maximally flat/noisy, a tiny energy wobble reads
-        // as high liveliness, etc.). Amplitude is the honest level and is always
-        // reported.
-        let present = r.peak > presence_lin;
+        // `loud` (band level above a musical floor) means "worth characterising."
+        // Every feature that DESCRIBES the band gates on it, so none reports on
+        // faint, near-noise-floor content (a noise floor reads as maximally
+        // flat/noisy, a tiny energy wobble reads as high liveliness, etc.).
         let loud = r.amplitude > ONSET_AMP_GATE;
         let bf = &mut send.features.bands[bi];
         bf.amplitude = r.amplitude;
         bf.brightness = if loud { r.brightness } else { 0.0 };
         bf.noisiness = if loud { r.noisiness } else { 0.0 };
 
-        if have_prev {
-            // Liveliness (relative flux) self-scales with density — it's also the
-            // transient's "sharpness" discriminator below. Gated on `loud` for the
-            // same reason transients are: on a faint band a tiny energy doubling
-            // gives a high relative flux that isn't musically meaningful.
-            let rel = relative_flux(r.flux, r.energy);
-            bf.liveliness = if loud { rel } else { 0.0 };
+        // Scope overlay: the same centroid the `brightness` feature reads, but
+        // mapped from band-local 0..1 onto the global display y so each band's
+        // trace draws within its own region. Hidden (`-1`) on a non-loud band,
+        // matching the feature reading 0 there.
+        send.centroid_yfb[bi] = if loud && hi > lo + 1 {
+            let c = lo as f32 + r.brightness * (hi - 1 - lo) as f32;
+            (c / (num_bins.max(1) - 1) as f32).clamp(0.0, 1.0)
+        } else {
+            -1.0
+        };
 
-            // A transient is a sharp RISE, not just any wobble. Three scale-
-            // invariant conditions, all required (and a refractory window so one
-            // hit is one decaying spike):
-            //   • self-ratio — flux jumps above the band's own running average;
-            //   • relative flux — the jump is a real fraction of the band's
-            //     energy, which rejects the slow swell of sustained or heavily-
-            //     overlapped low content (the VQT's long bass kernels trickle a
-            //     little positive flux every hop, and an absolute floor can't
-            //     screen that the way it could on the old fixed-scale FFT);
-            //   • loudness — the band is actually present, not noise-floor faint.
+        if have_prev {
+            // Liveliness (relative flux) self-scales with density.
+            bf.liveliness = if loud { relative_flux(r.flux, r.energy) } else { 0.0 };
+
+            // Transient = a NOTE ONSET: amplitude rising sharply above its slow
+            // envelope while armed. Firing disarms; the band re-arms only once the
+            // level falls back toward the envelope (a dip or gap), so a HELD note
+            // fires exactly once instead of machine-gunning every refractory. A
+            // short refractory debounces the multi-hop attack itself.
+            let amp = bf.amplitude;
+            let env = send.onset_env[bi];
             let refractory = &mut send.transient_refractory[bi];
-            let triggered = loud
-                && *refractory == 0
-                && r.flux > send.flux_avg[bi] * ONSET_RATIO
-                && rel > ONSET_REL_FLOOR;
+            let rising = amp > env * ONSET_RISE_RATIO;
+            let triggered = loud && send.onset_armed[bi] && *refractory == 0 && rising;
             if triggered {
                 bf.transients = 1.0;
+                send.onset_armed[bi] = false;
                 *refractory = ONSET_REFRACTORY_HOPS;
             } else {
                 bf.transients *= ONSET_DECAY;
                 *refractory = refractory.saturating_sub(1);
             }
-            // Track the average only while present, so a silent stretch doesn't
-            // drag the baseline down and make the next real hit hyper-sensitive.
-            if present {
-                send.flux_avg[bi] += (r.flux - send.flux_avg[bi]) * FLUX_AVG_COEFF;
+            // Re-arm once the band dips back toward (or below) its baseline, or
+            // goes silent — a sustained note never dips this far, so it stays
+            // disarmed for its whole duration.
+            if !loud || amp < env * ONSET_REARM_RATIO {
+                send.onset_armed[bi] = true;
             }
+            // Slow baseline, updated AFTER the rise test so an onset is measured
+            // against the pre-onset level.
+            send.onset_env[bi] += (amp - send.onset_env[bi]) * ONSET_ENV_COEFF;
         }
     }
 }
@@ -1123,7 +1120,6 @@ mod tests {
         let c = cfg();
         let nb = c.num_bins(SR as f32);
         let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
-        let presence_lin = 10.0f32.powf(c.db_min / 20.0);
         let mut s = SendState {
             channels: vec![0],
             gain: 1.0,
@@ -1131,12 +1127,14 @@ mod tests {
             since_hop: 0,
             col,
             prev_col: vec![0.0f32; nb],
-            flux_avg: [0.0; 4],
+            onset_env: [0.0; 4],
+            onset_armed: [true; 4],
             transient_refractory: [0; 4],
             has_prev: false,
+            centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
         };
-        reduce_send(&mut s, nb, low_bin, mid_bin, presence_lin, c.db_min, c.db_max);
+        reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
         s.features
     }
 
@@ -1223,14 +1221,13 @@ mod tests {
     }
 
     #[test]
-    fn transient_fires_on_onset_not_sustain() {
-        // The reported bug: a present-but-sustained band kept firing onsets. A
-        // steady tone (flux ≈ 0 relative to its energy) must NOT fire even though
-        // the band is loud and present; a real onset (energy appearing) must.
+    fn transient_fires_once_per_note_not_per_hop() {
+        // The reported bug: a HELD note machine-gunned onsets every refractory.
+        // With the envelope + re-arm detector a held note must fire exactly once;
+        // it can only fire again after the level dips/stops and the note restarts.
         let c = cfg();
         let nb = nbins();
         let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
-        let presence_lin = 10.0f32.powf(c.db_min / 20.0);
         let mid = bands().2;
         let tone = vqt_col(&sine(1000.0, nfft()));
         let silence = vec![0.0f32; nb];
@@ -1241,36 +1238,44 @@ mod tests {
             window: Vec::new(),
             since_hop: 0,
             col: tone.clone(),
-            prev_col: tone.clone(),
-            flux_avg: [0.0; 4],
+            prev_col: vec![0.0f32; nb],
+            onset_env: [0.0; 4], // baseline starts at silence → the tone is an onset
+            onset_armed: [true; 4],
             transient_refractory: [0; 4],
             has_prev: true,
+            centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
         };
 
-        // Hold the same loud tone for many hops — a sustain, not a transient.
-        let mut steady_fires = 0;
-        for _ in 0..40 {
+        // Hold the tone for many hops: exactly one onset at the start, then the
+        // sustain must stay silent (no re-fire).
+        let mut hold_fires = 0;
+        for _ in 0..80 {
             s.col.copy_from_slice(&tone);
-            reduce_send(&mut s, nb, low_bin, mid_bin, presence_lin, c.db_min, c.db_max);
+            reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
             if s.features.bands[mid].transients > 0.99 {
-                steady_fires += 1;
+                hold_fires += 1;
             }
             s.prev_col.copy_from_slice(&s.col);
         }
-        assert_eq!(steady_fires, 0, "a sustained tone must not fire transients");
+        assert_eq!(hold_fires, 1, "a held note fires one onset, not a burst");
 
-        // Now a real onset: silence, then the tone appears.
-        s.col.copy_from_slice(&silence);
-        reduce_send(&mut s, nb, low_bin, mid_bin, presence_lin, c.db_min, c.db_max);
-        s.prev_col.copy_from_slice(&s.col);
-        s.col.copy_from_slice(&tone);
-        reduce_send(&mut s, nb, low_bin, mid_bin, presence_lin, c.db_min, c.db_max);
-        assert!(
-            s.features.bands[mid].transients > 0.99,
-            "energy appearing must fire a transient: {}",
-            s.features.bands[mid].transients
-        );
+        // A gap (re-arms the band), then the note again → a second onset.
+        for _ in 0..40 {
+            s.col.copy_from_slice(&silence);
+            reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
+            s.prev_col.copy_from_slice(&s.col);
+        }
+        let mut reonset = false;
+        for _ in 0..10 {
+            s.col.copy_from_slice(&tone);
+            reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
+            if s.features.bands[mid].transients > 0.99 {
+                reonset = true;
+            }
+            s.prev_col.copy_from_slice(&s.col);
+        }
+        assert!(reonset, "the note returning after a gap must fire a fresh onset");
     }
 
     #[test]
