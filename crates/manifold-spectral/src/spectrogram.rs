@@ -24,6 +24,13 @@ const SHADER: &str = include_str!("shaders/spectrogram.wgsl");
 /// is never written while a prior frame's GPU read is outstanding.
 const BUFFER_ROTATION: usize = 3;
 
+/// Pink-noise spectral tilt (dB/octave) applied to the colourmap, matching the
+/// Analyzer VST's default weighting: pink noise reads as a flat field, so a
+/// real-world mix isn't dominated by its bass energy. Auto-centred over the
+/// displayed range (mean 0) so overall brightness is preserved — see the
+/// shader. `0.0` would be the raw "Flat" look (bass blows out to white).
+const PINK_SLOPE_DB_PER_OCT: f32 = 3.0;
+
 /// Uniform params for the shader. `#[repr(C)]`, 16-byte aligned (two `vec4`-
 /// sized rows) per the GPU uniform-alignment convention.
 #[repr(C)]
@@ -37,6 +44,13 @@ struct Params {
     db_max: f32,
     band_lo_y: f32,
     band_hi_y: f32,
+    /// Pink tilt slope (dB/octave) and the displayed range's octave span
+    /// `log2(fmax/fmin)`; together they give the per-bin weighting in the
+    /// shader. Slope 0 disables the tilt.
+    tilt_slope: f32,
+    freq_log_ratio: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 /// Sweep-fill spectrogram renderer. One per visible scope; sized to the scope's
@@ -125,8 +139,16 @@ impl Spectrogram {
     /// Render the current history into `target` (cleared first). One fullscreen
     /// pass sampling the rotating buffer this frame writes. `band_ys` are two
     /// band-divider positions, normalised 0..1 from the bottom (low freq);
-    /// negative disables a line.
-    pub fn render(&mut self, encoder: &mut GpuEncoder, target: &GpuTexture, band_ys: [f32; 2]) {
+    /// negative disables a line. `freq_log_ratio` is `log2(fmax/fmin)` of the
+    /// displayed range — the octave span the pink tilt is centred and scaled
+    /// over; pass `0.0` to disable the tilt (Flat look).
+    pub fn render(
+        &mut self,
+        encoder: &mut GpuEncoder,
+        target: &GpuTexture,
+        band_ys: [f32; 2],
+        freq_log_ratio: f32,
+    ) {
         let buf = &self.bufs[self.buf_frame % BUFFER_ROTATION];
         self.buf_frame += 1;
 
@@ -149,6 +171,10 @@ impl Spectrogram {
             db_max: self.db_max,
             band_lo_y: band_ys[0],
             band_hi_y: band_ys[1],
+            tilt_slope: if freq_log_ratio > 0.0 { PINK_SLOPE_DB_PER_OCT } else { 0.0 },
+            freq_log_ratio,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         // SAFETY: `Params` is `#[repr(C)]` plain-old-data.
         let param_bytes = unsafe {

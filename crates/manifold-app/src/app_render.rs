@@ -3825,7 +3825,16 @@ impl Application {
                         -1.0
                     }
                 };
-                spectrogram.render(&mut encoder, &target, [y_of(250.0), y_of(2000.0)]);
+                // Octave span of the displayed range — drives the pink tilt
+                // (centred on the geometric-mean freq). 0 disables it.
+                let freq_log_ratio =
+                    if fmin > 0.0 && fmax > fmin { (fmax / fmin).log2() } else { 0.0 };
+                spectrogram.render(
+                    &mut encoder,
+                    &target,
+                    [y_of(250.0), y_of(2000.0)],
+                    freq_log_ratio,
+                );
 
                 // Blit through the unified TexturePane path (logical rect + scale).
                 crate::texture_pane::blit_texture_pane(

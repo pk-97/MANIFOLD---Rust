@@ -24,6 +24,15 @@ struct Params {
     // lands relative to the band a slider is driven from.
     band_lo_y: f32,
     band_hi_y: f32,
+    // Pink-tilt slope (dB/octave) and the displayed range's octave span
+    // `log2(fmax/fmin)`. The colourmap input is tilted by
+    // `slope * log2(f / geomean)` so pink noise reads flat; centred on the
+    // geometric-mean frequency keeps average brightness constant. Slope 0
+    // disables the tilt (Flat).
+    tilt_slope: f32,
+    freq_log_ratio: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 
 @group(0) @binding(0) var<storage, read> history: array<f32>;
@@ -77,17 +86,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(0.04, 0.04, 0.05, 1.0);
     }
 
-    // y: bottom (uv.y=1) → bin 0 (low freq); top (uv.y=0) → highest bin.
-    let bin_f = (1.0 - in.uv.y) * f32(n_bins);
-    let bin = min(u32(bin_f), n_bins - 1u);
-
     // x: direct 1:1 map to a column slot (no scrolling). Each pixel column owns
     // one ring column; the sweep head overwrites them in place.
     let col = min(u32(in.uv.x * f32(n_cols)), n_cols - 1u);
 
-    let mag = history[col * n_bins + bin];
-    let db = 20.0 * log2(mag + 1e-9) * 0.30103; // log10 = log2 * 0.30103
-    let norm = clamp((db - p.db_min) / (p.db_max - p.db_min), 0.0, 1.0);
+    // y: bottom (uv.y=1) → bin 0 (low freq); top (uv.y=0) → highest bin. Sample
+    // with a 2-tap blend between adjacent log bins, interpolated in the POWER
+    // domain (magnitudes are |VQT|, power = mag²) so the gradient is smooth
+    // instead of blocky — matches the VST's `sample_history_db`.
+    let log_bin_f = clamp((1.0 - in.uv.y) * f32(n_bins - 1u), 0.0, f32(n_bins - 1u));
+    let lo = u32(floor(log_bin_f));
+    let hi = min(lo + 1u, n_bins - 1u);
+    let frac = log_bin_f - floor(log_bin_f);
+    let mag_lo = history[col * n_bins + lo];
+    let mag_hi = history[col * n_bins + hi];
+    let power = mix(mag_lo * mag_lo, mag_hi * mag_hi, frac);
+    let db = 10.0 * log2(power + 1e-18) * 0.30103; // 10·log10(power) = 20·log10(mag)
+
+    // Pink tilt: boost highs / cut lows by `slope · log2(f/geomean)`. With the
+    // bin axis linear in log-freq, log2(f/geomean) = freq_log_ratio·(0.5 - uv.y).
+    let tilt = p.tilt_slope * p.freq_log_ratio * (0.5 - in.uv.y);
+    let norm = clamp((db + tilt - p.db_min) / (p.db_max - p.db_min), 0.0, 1.0);
     var rgb = colormap(norm);
 
     // Sweep head: a thin bright vertical line at the next write slot, marking
