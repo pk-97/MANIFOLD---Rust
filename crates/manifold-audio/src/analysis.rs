@@ -769,11 +769,14 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
 // the local baseline. The onset signal is their difference `fast − slow` — a
 // sharp attack pulls fast ahead of slow, sustained content keeps them together.
 // It fires when that difference clears `ONSET_RISE` (and the band is loud, and a
-// short refractory has elapsed); on a fire the slow follower is SNAPPED to the
-// current level so the gap collapses and a held note can't re-fire — yet a kick
-// pattern, whose level drops between hits, pulls fast ahead again on each hit.
-// Per-hop flux on a 94%-overlapped VQT was too twitchy for this; the followers
-// average that noise out.
+// refractory has elapsed). A held note can't re-fire because the fast−slow gap
+// decays monotonically to zero once the level steadies, and the refractory is
+// sized to outlast that decay (~slow-follower settle) — so there's exactly one
+// onset per attack. A kick pattern dips between hits, so fast pulls ahead again
+// each time. Crucially the baseline is NOT snapped on fire: snapping pinned the
+// slow follower high on busy material, so kick after kick fell short of the
+// inflated baseline and was missed. Per-hop flux on a 94%-overlapped VQT was too
+// twitchy for this; the followers average that noise out.
 
 /// Per-hop smoothing of the fast follower (~10 ms at hop ≈ 5.3 ms).
 const ONSET_FAST_COEFF: f32 = 0.5;
@@ -781,7 +784,7 @@ const ONSET_FAST_COEFF: f32 = 0.5;
 const ONSET_SLOW_COEFF: f32 = 0.15;
 /// How far the fast follower must lead the slow one (on the 0..1 amplitude scale)
 /// to count as an attack. Lower = more sensitive. The main kick-sensitivity knob.
-const ONSET_RISE: f32 = 0.06;
+const ONSET_RISE: f32 = 0.05;
 /// A transient only fires on a band loud enough to matter — `amplitude` is the
 /// band's level on the colourmap's 0..1 dB scale (≈ −53 dBFS here).
 const ONSET_AMP_GATE: f32 = 0.12;
@@ -790,9 +793,10 @@ const ONSET_DECAY: f32 = 0.85;
 /// Below this band energy, relative flux (liveliness) reads 0 — avoids the
 /// flux ÷ energy ratio blowing up on near-silence.
 const FLUX_ENERGY_GATE: f32 = 1e-4;
-/// Short debounce after an onset (~27 ms at hop ≈ 5.3 ms) so the multi-hop attack
-/// reads as one spike. The slow-follower snap prevents sustained re-fire.
-const ONSET_REFRACTORY_HOPS: u8 = 5;
+/// Refractory after an onset (~106 ms at hop ≈ 5.3 ms). Sized to outlast the
+/// fast−slow gap's decay even on a full-scale held note (so it fires once), which
+/// caps the kick rate at ~9/s — ample for any musical kick pattern.
+const ONSET_REFRACTORY_HOPS: u8 = 20;
 /// Pink-tilt slope the scope colourmap applies (dB/oct). Must stay equal to
 /// `manifold_spectral`'s `PINK_SLOPE_DB_PER_OCT` so the worker's reductions and
 /// presence gate evaluate the exact tilted dB the user sees painted.
@@ -980,18 +984,17 @@ fn reduce_send(
             // Liveliness (relative flux) self-scales with density.
             bf.liveliness = if loud { relative_flux(r.flux, r.energy) } else { 0.0 };
 
-            // Transient = a sharp attack: the fast follower pulling ahead of the
-            // slow baseline by more than ONSET_RISE. On a fire, snap the slow
-            // follower up to the current level so the gap closes and a held note
-            // can't re-fire — a kick pattern still dips between hits and reopens
-            // the gap. A short refractory debounces the multi-hop attack.
+            // Transient = a sharp attack: the fast follower leading the slow
+            // baseline by more than ONSET_RISE. The refractory (sized to outlast
+            // the gap's decay) gives one onset per held note; the baseline is left
+            // to track the real level so busy material doesn't pin it high and
+            // swallow later kicks.
             let rise = send.amp_fast[bi] - send.amp_slow[bi];
             let refractory = &mut send.transient_refractory[bi];
             let triggered = loud && *refractory == 0 && rise > ONSET_RISE;
             if triggered {
                 bf.transients = 1.0;
                 *refractory = ONSET_REFRACTORY_HOPS;
-                send.amp_slow[bi] = amp;
             } else {
                 bf.transients *= ONSET_DECAY;
                 *refractory = refractory.saturating_sub(1);
@@ -1321,6 +1324,59 @@ mod tests {
             }
         }
         assert_eq!(hits, 4, "every kick over sustained bass should fire an onset");
+    }
+
+    #[test]
+    fn rapid_kicks_over_continuous_bass_dont_pin_out() {
+        // Regression for the baseline-pinning miss: closely-spaced kicks over a
+        // continuous loud bass (short gaps) must keep firing. If the baseline gets
+        // ratcheted up by each hit, later kicks fall short and are missed.
+        let c = cfg();
+        let nb = nbins();
+        let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
+        let low = bands().1;
+        let kick = vqt_col(&sine(50.0, nfft()));
+        let bass: Vec<f32> = kick.iter().map(|m| m * 0.3).collect();
+
+        let mut s = SendState {
+            channels: vec![0],
+            gain: 1.0,
+            window: Vec::new(),
+            since_hop: 0,
+            col: bass.clone(),
+            prev_col: bass.clone(),
+            amp_fast: [0.0; 4],
+            amp_slow: [0.0; 4],
+            transient_refractory: [0; 4],
+            has_prev: true,
+            centroid_yfb: [-1.0; 4],
+            features: SendFeatures::default(),
+        };
+        for _ in 0..40 {
+            s.col.copy_from_slice(&bass);
+            reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
+            s.prev_col.copy_from_slice(&s.col);
+        }
+
+        // Kicks every 24 hops (~127 ms, ~8/s) over unbroken bass — short gaps.
+        let cycles = 8;
+        let mut fires = 0;
+        for _ in 0..cycles {
+            let mut fired = false;
+            for h in 0..24 {
+                let src = if h < 6 { &kick } else { &bass };
+                s.col.copy_from_slice(src);
+                reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
+                if s.features.bands[low].transients > 0.99 {
+                    fired = true;
+                }
+                s.prev_col.copy_from_slice(&s.col);
+            }
+            if fired {
+                fires += 1;
+            }
+        }
+        assert!(fires >= cycles - 1, "rapid kicks must keep firing, not pin out: {fires}/{cycles}");
     }
 
     #[test]
