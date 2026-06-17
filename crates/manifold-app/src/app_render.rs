@@ -3823,8 +3823,14 @@ impl Application {
         // overlay, drawn into `offscreen` just above). Render the live VQT
         // columns into a UI-device texture, then blit it into the panel's
         // reserved scope rect via the unified TexturePane path.
+        //
+        // Suppressed while a dropdown is open: dropdowns (device / channel) are
+        // overlays that expand down over the scope, and this blit lands on top of
+        // them — so painting the waterfall would hide the open list. The scope
+        // briefly shows its dark background instead, and returns when it closes.
         #[cfg(target_os = "macos")]
         if self.ws.ui_root.audio_setup_panel.is_open()
+            && !self.ws.ui_root.dropdown.is_open()
             && self.content_state.spectrogram_num_bins > 0
             && let Some(rect) = self.ws.ui_root.audio_setup_panel.scope_rect()
             && let (Some(blit_pipeline), Some(blit_sampler)) =
