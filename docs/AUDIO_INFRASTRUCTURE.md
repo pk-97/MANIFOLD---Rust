@@ -4,7 +4,7 @@
 
 The end-to-end real-time audio stack that feeds the instrument: how samples get in, how they become control signals, and how the device/channel metadata around them is surfaced and kept honest. This is the *infrastructure* layer. The feature that consumes it — driving effect sliders from audio — lives in [Audio Modulation — Design Doc](AUDIO_MODULATION_DESIGN.md); read that for the modulation source, the per-slider drawer, and the v2 pitch-tracking intelligence. This doc owns capture, analysis, the device directory, threading, and performance.
 
-Status: **partial — design + build plan.** Capture and the analysis worker exist and ship. The native CoreAudio device directory (channel names, stable UIDs, hot-plug), the persistence change, and most of the audio-settings UX are designed here and not yet built. Phases below mark what is built vs planned.
+Status: **implemented (2026-06-17).** Phases 1–6 and the Phase 7 cross-platform fallback have all shipped on `audio-modulation`: the native CoreAudio device directory (channel names, UIDs, liveness, subdevice grouping, hot-plug), UID-based identity + legacy migration, names/grouping in the UI, stage reliability (hot-plug rebuild, mic TCC, offline indicators), perf hygiene, and the full audio-settings UX (rename, identity color, mono/stereo, per-send meter, delete-in-use confirm). Still future by design: native Linux/Windows directory backends (7.1/7.2) and the output-channel/subdevice tree view (7.3). The §9 plan below records what was built; "planned" wording in earlier sections is historical design context.
 
 ---
 
@@ -158,6 +158,8 @@ Discipline to keep it there:
 - v2 onset/pitch extracts from the existing FFT buffer — no second transform.
 
 ## 9. Build plan — phases, steps, tasks
+
+**Status: Phases 1–6 ✓ and Phase 7's fallback ✓ shipped 2026-06-17. Remaining: 7.1 / 7.2 / 7.3 (future, by design).**
 
 Sequenced by dependency. **Critical path: 1 → 2 → (3 ∥ 4).** Phase 3's save-format decision must land before shows are saved with the new routing. Phase 5 items are independent once Phase 2 lands; Phase 6 can go anytime.
 
