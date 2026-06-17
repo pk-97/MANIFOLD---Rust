@@ -14,5 +14,7 @@
     <string>APPL</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>MANIFOLD captures audio input to drive visual parameters from live audio (audio modulation) and to record performances.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>MANIFOLD can listen to system audio or another app's audio output to drive visual parameters from whatever is playing.</string>
 </dict>
 </plist>

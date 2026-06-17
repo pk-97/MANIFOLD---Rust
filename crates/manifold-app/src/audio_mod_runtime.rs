@@ -18,8 +18,8 @@ use manifold_audio::analysis::{
     AudioFeatureWorker, ColumnReader, CrossoverBank, FeatureReader, GainBank, ScalarReader,
     SendSpec, SpectrogramTap,
 };
-use manifold_audio::capture::{AudioCaptureConfig, AudioCaptureDevice};
-use manifold_core::audio_setup::{AudioDeviceRef, AudioSetup};
+use manifold_audio::capture::{self, CaptureBackend, CaptureSource};
+use manifold_core::audio_setup::{AudioDeviceRef, AudioSetup, AudioSourceKind};
 use manifold_core::id::AudioSendId;
 use manifold_core::project::Project;
 use manifold_playback::engine::PlaybackEngine;
@@ -49,7 +49,7 @@ impl CaptureSignature {
 /// are kept alive by ownership here; dropping the struct stops capture and
 /// joins the worker.
 struct AudioModCapture {
-    _device: AudioCaptureDevice,
+    _backend: Box<dyn CaptureBackend>,
     _worker: AudioFeatureWorker,
     reader: FeatureReader,
     signature: CaptureSignature,
@@ -79,8 +79,14 @@ pub struct AudioModRuntime {
     /// Set by the hot-plug listener (on a HAL thread) when the device set or
     /// default device changes; drained each tick to force a re-resolve.
     devices_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Hot-plug subscription guard — unregisters the listener on drop.
+    /// Set by the process-list listener when an audio-producing app launches or
+    /// quits; drained each tick. Acted on **only** when the current source is an
+    /// app tap, so device / system-audio captures don't churn on unrelated apps.
+    processes_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Hot-plug subscription guard — unregisters the device listener on drop.
     _hotplug_sub: manifold_audio::directory::Subscription,
+    /// Process-list subscription guard — unregisters the listener on drop.
+    _process_sub: manifold_audio::directory::Subscription,
     /// Whether we've already triggered the one-time mic permission prompt.
     mic_access_requested: bool,
     /// Send the Audio Setup scope is showing, if open. Resolved to a worker
@@ -107,14 +113,20 @@ impl Default for AudioModRuntime {
         let directory = manifold_audio::directory::system_directory();
         let devices_dirty = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = devices_dirty.clone();
-        // The callback fires on an arbitrary HAL thread — only flip an atomic.
+        // The callbacks fire on arbitrary HAL threads — only flip an atomic.
         let sub = directory.subscribe(Box::new(move || flag.store(true, Ordering::Relaxed)));
+        let processes_dirty = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let pflag = processes_dirty.clone();
+        let process_sub =
+            directory.subscribe_processes(Box::new(move || pflag.store(true, Ordering::Relaxed)));
         Self {
             capture: None,
             last_version: 0,
             directory,
             devices_dirty,
+            processes_dirty,
             _hotplug_sub: sub,
+            _process_sub: process_sub,
             mic_access_requested: false,
             spec_send: None,
             spec_dirty: false,
@@ -135,11 +147,22 @@ impl AudioModRuntime {
         let hotplugged = self
             .devices_dirty
             .swap(false, std::sync::atomic::Ordering::Relaxed);
-        if data_version != self.last_version || hotplugged || self.spec_dirty {
-            if hotplugged {
-                // A device appeared/vanished/changed — drop capture so reconcile
-                // rebuilds against the current hardware (the stored ref is
-                // unchanged, so signature alone wouldn't trigger a rebuild).
+        let processes_changed = self
+            .processes_dirty
+            .swap(false, std::sync::atomic::Ordering::Relaxed);
+        // A process-list change matters only to an app tap (re-resolve its live
+        // process handle). Device / system-audio / default sources are unaffected,
+        // so we don't rebuild them when some unrelated app starts or stops audio.
+        let app_rebuild = processes_changed
+            && engine
+                .project()
+                .and_then(|p| p.audio_setup.device.as_ref())
+                .is_some_and(|d| d.kind == AudioSourceKind::App);
+        if data_version != self.last_version || hotplugged || app_rebuild || self.spec_dirty {
+            if hotplugged || app_rebuild {
+                // A device or the tapped app appeared/vanished/changed — drop
+                // capture so reconcile rebuilds against the current state (the
+                // stored ref is unchanged, so the signature alone wouldn't fire).
                 self.capture = None;
             }
             self.reconcile(engine.project());
@@ -229,6 +252,63 @@ impl AudioModRuntime {
         Some((cfg.fmin, cfg.effective_fmax(cap.sample_rate)))
     }
 
+    /// Resolve the project's chosen input to a ready-to-open [`CaptureSource`]
+    /// plus a human label for logging. `None` means the configured source is
+    /// currently unavailable (device absent, app not running, tap unsupported) —
+    /// capture should stay dark, the remappable policy. A `None` device ref maps
+    /// to the system default input.
+    fn resolve_source(&self, setup: &AudioSetup) -> Option<(CaptureSource, String)> {
+        let Some(dev_ref) = &setup.device else {
+            return Some((CaptureSource::DefaultInput, "System Default".to_string()));
+        };
+        match dev_ref.kind {
+            AudioSourceKind::InputDevice => {
+                match self.directory.resolve(dev_ref.uid_opt(), Some(&dev_ref.name)) {
+                    Some(info) => {
+                        let label = info.name.clone();
+                        Some((CaptureSource::Device { name: info.name }, label))
+                    }
+                    None => {
+                        log::warn!(
+                            "[AudioMod] Saved audio device '{}' not present; audio \
+                             modulation idle until it returns or is re-pointed",
+                            dev_ref.name
+                        );
+                        None
+                    }
+                }
+            }
+            AudioSourceKind::SystemAudio => {
+                if self.directory.tap_capabilities().system_audio {
+                    Some((CaptureSource::SystemAudio, "System Audio".to_string()))
+                } else {
+                    log::warn!(
+                        "[AudioMod] System-audio tap not supported on this OS (needs \
+                         macOS 14.4+); audio modulation idle"
+                    );
+                    None
+                }
+            }
+            AudioSourceKind::App => {
+                let bundle_id = dev_ref.uid_opt().unwrap_or("");
+                match self.directory.resolve_app(bundle_id) {
+                    Some(app) => {
+                        let label = format!("app:{}", app.name);
+                        Some((CaptureSource::Apps { handles: vec![app.handle] }, label))
+                    }
+                    None => {
+                        log::warn!(
+                            "[AudioMod] App '{}' not running (or output tap unsupported); \
+                             audio modulation idle until it returns",
+                            dev_ref.name
+                        );
+                        None
+                    }
+                }
+            }
+        }
+    }
+
     /// Start, stop, or rebuild capture to match the project's audio setup.
     fn reconcile(&mut self, project: Option<&Project>) {
         let Some(project) = project else {
@@ -283,22 +363,12 @@ impl AudioModRuntime {
             _ => {}
         }
 
-        // Resolve the stored device reference (UID, name fallback) to the
-        // current openable device name. A configured-but-absent device leaves
-        // capture dark (remappable policy); `None` = system default input.
-        let device_name: Option<String> = match &project.audio_setup.device {
-            Some(dev_ref) => match self.directory.resolve(dev_ref.uid_opt(), Some(&dev_ref.name)) {
-                Some(info) => Some(info.name),
-                None => {
-                    log::warn!(
-                        "[AudioMod] Saved audio device '{}' not present; audio \
-                         modulation idle until it returns or is re-pointed",
-                        dev_ref.name
-                    );
-                    return;
-                }
-            },
-            None => None,
+        // Resolve the stored source reference to a ready-to-open `CaptureSource`.
+        // A configured-but-absent source (device unplugged, app not running, tap
+        // unsupported) leaves capture dark — the remappable policy — rather than
+        // failing the tick. `None` = system default input.
+        let Some((source, source_label)) = self.resolve_source(&project.audio_setup) else {
+            return;
         };
         let specs: Vec<SendSpec> = project
             .audio_setup
@@ -319,25 +389,23 @@ impl AudioModRuntime {
             .collect();
         let gains = Arc::new(GainBank::new(&initial_gains));
 
-        let mut device = match AudioCaptureDevice::new(AudioCaptureConfig {
-            device_name: device_name.clone(),
-        }) {
-            Ok(d) => d,
+        let mut backend = match capture::open(source) {
+            Ok(b) => b,
             Err(e) => {
                 log::warn!(
-                    "[AudioMod] Capture device unavailable ({e}); audio modulation idle \
+                    "[AudioMod] Capture source unavailable ({e}); audio modulation idle \
                      until the input is re-pointed"
                 );
                 return;
             }
         };
-        let sample_rate = device.sample_rate();
-        let channels = device.channels();
-        let Some(consumer) = device.take_consumer() else {
-            log::error!("[AudioMod] Capture device returned no consumer");
+        let sample_rate = backend.sample_rate();
+        let channels = backend.channels();
+        let Some(consumer) = backend.take_consumer() else {
+            log::error!("[AudioMod] Capture backend returned no consumer");
             return;
         };
-        if let Err(e) = device.start() {
+        if let Err(e) = backend.start() {
             log::warn!("[AudioMod] Failed to start capture: {e}");
             return;
         }
@@ -353,11 +421,11 @@ impl AudioModRuntime {
             tap.clone(),
         );
         log::info!(
-            "[AudioMod] Capture started: device={device_name:?}, {send_count} sends, \
+            "[AudioMod] Capture started: source={source_label}, {send_count} sends, \
              {sample_rate}Hz {channels}ch"
         );
         self.capture = Some(AudioModCapture {
-            _device: device,
+            _backend: backend,
             _worker: worker,
             reader,
             signature: desired,

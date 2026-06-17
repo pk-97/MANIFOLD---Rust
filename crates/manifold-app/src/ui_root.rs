@@ -110,8 +110,23 @@ pub enum DropdownContext {
     MacroSlotContext(usize),  // macro_index (right-click on macro slider)
     GenStringParamDropdown(usize), // string_param_index (dropdown selector)
     AudioInputDevice,         // audio input device selection for live recording
-    AudioSetupDevice,         // Audio Setup modal: capture input device
+    AudioSetupDevice,         // Audio Setup modal: capture input source
     AudioSendChannel(manifold_core::AudioSendId), // Audio Setup: a send's input channel
+}
+
+/// A selectable entry in the Audio Setup source dropdown. The dropdown mixes the
+/// system default, hardware/virtual devices, and output-tap sources (system +
+/// per-app), so each item carries which it is rather than relying on position.
+#[derive(Clone, Copy)]
+enum AudioSourceChoice {
+    /// "System Default" — clears the explicit source.
+    SystemDefault,
+    /// A hardware/virtual input device, by index into `audio_setup_devices`.
+    Device(usize),
+    /// The whole-system output tap.
+    SystemAudio,
+    /// An application output tap, by index into `audio_setup_apps`.
+    App(usize),
 }
 
 /// Fine-grained tracking of what scroll-related state changed.
@@ -222,6 +237,15 @@ pub struct UIRoot {
     /// liveness, subdevice grouping). Refreshed from the device directory when
     /// the device dropdown opens, and read when a device or channel is chosen.
     audio_setup_devices: Vec<manifold_audio::directory::DeviceInfo>,
+    /// Cached tappable-application metadata for the Audio Setup source dropdown,
+    /// refreshed alongside `audio_setup_devices`. Empty on OSes without app-audio
+    /// tapping.
+    audio_setup_apps: Vec<manifold_audio::directory::AppAudioSource>,
+    /// Item-index → source-choice map for the currently-open Audio Setup source
+    /// dropdown. `None` entries are non-selectable section headers; the dropdown
+    /// mixes the default, hardware devices, and tap sources, so item index alone
+    /// can't be mapped back to a choice.
+    audio_setup_source_map: Vec<Option<AudioSourceChoice>>,
     /// Item-index → channel-index map for the currently-open send-channel
     /// dropdown. `None` entries are non-selectable subdevice headers; the
     /// channel dropdown is built grouped, so item index ≠ channel index.
@@ -327,6 +351,8 @@ impl UIRoot {
             audio_input_device_names: Vec::new(),
             selected_audio_input_device: None,
             audio_setup_devices: Vec::new(),
+            audio_setup_apps: Vec::new(),
+            audio_setup_source_map: Vec::new(),
             audio_channel_item_map: Vec::new(),
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
@@ -1247,35 +1273,82 @@ impl UIRoot {
                 true
             }
             PanelAction::AudioSetupDeviceClicked => {
-                // Enumerate input devices with full metadata (names, UID,
-                // liveness) on demand for the Audio Setup modal.
+                // Enumerate input devices + tappable sources on demand for the
+                // Audio Setup modal. The list is three sections: the default, the
+                // hardware/virtual input devices, and the output taps (system +
+                // running apps). A parallel choice map records what each row is so
+                // selection doesn't depend on position.
                 let dir = manifold_audio::directory::system_directory();
                 self.audio_setup_devices = dir.list_input_devices();
-                let mut items: Vec<DropdownItem> = vec![DropdownItem::new("System Default")];
-                items.extend(self.audio_setup_devices.iter().map(|d| {
-                    // Mark an offline device so a stale routing reads clearly.
-                    let label = if d.is_alive {
-                        d.name.clone()
-                    } else {
-                        format!("{} (offline)", d.name)
-                    };
-                    DropdownItem::new(&label)
-                }));
+                let caps = dir.tap_capabilities();
+                self.audio_setup_apps =
+                    if caps.app_audio { dir.list_audio_apps() } else { Vec::new() };
+
+                let mut items: Vec<DropdownItem> = Vec::new();
+                let mut map: Vec<Option<AudioSourceChoice>> = Vec::new();
+
+                items.push(DropdownItem::new("System Default"));
+                map.push(Some(AudioSourceChoice::SystemDefault));
+
+                if !self.audio_setup_devices.is_empty() {
+                    items.push(DropdownItem::disabled("Input Devices"));
+                    map.push(None);
+                    for (i, d) in self.audio_setup_devices.iter().enumerate() {
+                        // Mark an offline device so a stale routing reads clearly.
+                        let label = if d.is_alive {
+                            d.name.clone()
+                        } else {
+                            format!("{} (offline)", d.name)
+                        };
+                        items.push(DropdownItem::new(&label));
+                        map.push(Some(AudioSourceChoice::Device(i)));
+                    }
+                }
+
+                if caps.system_audio || caps.app_audio {
+                    items.push(DropdownItem::disabled("Capture Output"));
+                    map.push(None);
+                    if caps.system_audio {
+                        items.push(DropdownItem::new("System Audio"));
+                        map.push(Some(AudioSourceChoice::SystemAudio));
+                    }
+                    for (i, app) in self.audio_setup_apps.iter().enumerate() {
+                        // A backgrounded/idle app is still selectable; it just
+                        // produces silence until it plays.
+                        let label = if app.is_alive {
+                            app.name.clone()
+                        } else {
+                            format!("{} (idle)", app.name)
+                        };
+                        items.push(DropdownItem::new(&label));
+                        map.push(Some(AudioSourceChoice::App(i)));
+                    }
+                }
+
+                self.audio_setup_source_map = map;
                 self.open_dropdown_at(DropdownContext::AudioSetupDevice, items, trigger);
                 true
             }
             PanelAction::AudioSendChannelClicked(send_id) => {
-                // Build the channel list from the selected device's true layout,
-                // grouped by subdevice, with platform channel names. Falls back
-                // to a bare mono entry if the device can't be resolved.
-                let dir = manifold_audio::directory::system_directory();
-                let device = match self.audio_setup_panel.current_device() {
-                    Some(dev_ref) => dir.resolve(dev_ref.uid_opt(), Some(&dev_ref.name)),
-                    // No explicit device → the system default input.
-                    None => dir.list_input_devices().into_iter().find(|d| d.is_default),
+                // A tap source (system / app output) is a fixed stereo mixdown, so
+                // it has no hardware channel layout — present Left/Right. A device
+                // source builds its true layout, grouped by subdevice, with
+                // platform channel names.
+                let (items, map) = if self
+                    .audio_setup_panel
+                    .current_device()
+                    .is_some_and(|d| d.is_tap())
+                {
+                    build_tap_channel_dropdown()
+                } else {
+                    let dir = manifold_audio::directory::system_directory();
+                    let device = match self.audio_setup_panel.current_device() {
+                        Some(dev_ref) => dir.resolve(dev_ref.uid_opt(), Some(&dev_ref.name)),
+                        // No explicit device → the system default input.
+                        None => dir.list_input_devices().into_iter().find(|d| d.is_default),
+                    };
+                    build_channel_dropdown(device.as_ref())
                 };
-
-                let (items, map) = build_channel_dropdown(device.as_ref());
                 self.audio_channel_item_map = map;
                 self.open_dropdown_at(
                     DropdownContext::AudioSendChannel(send_id.clone()),
@@ -1628,17 +1701,35 @@ impl UIRoot {
                 }
             }
             DropdownContext::AudioSetupDevice => {
-                if index == 0 {
-                    // "System Default" → clear the explicit device.
-                    Some(PanelAction::AudioSetDevice(None))
-                } else {
-                    // Store stable UID + display name from the cached metadata.
-                    self.audio_setup_devices.get(index - 1).map(|d| {
-                        PanelAction::AudioSetDevice(Some(manifold_core::AudioDeviceRef::new(
-                            d.uid.clone(),
-                            d.name.clone(),
-                        )))
-                    })
+                // Map the chosen row back to a source via the parallel choice map
+                // (headers are non-selectable `None` entries and never fire here).
+                match self.audio_setup_source_map.get(index).copied().flatten() {
+                    Some(AudioSourceChoice::SystemDefault) => {
+                        Some(PanelAction::AudioSetDevice(None))
+                    }
+                    Some(AudioSourceChoice::Device(i)) => {
+                        // Store stable UID + display name from the cached metadata.
+                        self.audio_setup_devices.get(i).map(|d| {
+                            PanelAction::AudioSetDevice(Some(manifold_core::AudioDeviceRef::new(
+                                d.uid.clone(),
+                                d.name.clone(),
+                            )))
+                        })
+                    }
+                    Some(AudioSourceChoice::SystemAudio) => Some(PanelAction::AudioSetDevice(
+                        Some(manifold_core::AudioDeviceRef::system_audio()),
+                    )),
+                    Some(AudioSourceChoice::App(i)) => {
+                        // Persist the stable bundle id + display name; the runtime
+                        // re-resolves to a live process at capture time.
+                        self.audio_setup_apps.get(i).map(|app| {
+                            PanelAction::AudioSetDevice(Some(manifold_core::AudioDeviceRef::app(
+                                app.bundle_id.clone(),
+                                app.name.clone(),
+                            )))
+                        })
+                    }
+                    None => None,
                 }
             }
             DropdownContext::AudioSendChannel(send_id) => {
@@ -1966,6 +2057,16 @@ impl UIRoot {
 /// platform channel names. Returns the items and a parallel item-index →
 /// channel-index map (`None` for non-selectable subdevice headers). Falls back
 /// to a single mono entry when no device metadata is available.
+/// Channel dropdown for a tap source. Output taps are a fixed stereo mixdown, so
+/// the choices are simply Left (0) and Right (1) — the same item-index → channel
+/// map shape as [`build_channel_dropdown`], so the selection handler is shared.
+fn build_tap_channel_dropdown() -> (Vec<DropdownItem>, Vec<Option<u16>>) {
+    (
+        vec![DropdownItem::new("Left"), DropdownItem::new("Right")],
+        vec![Some(0), Some(1)],
+    )
+}
+
 fn build_channel_dropdown(
     device: Option<&manifold_audio::directory::DeviceInfo>,
 ) -> (Vec<DropdownItem>, Vec<Option<u16>>) {

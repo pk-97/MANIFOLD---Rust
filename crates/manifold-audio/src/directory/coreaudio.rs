@@ -15,7 +15,10 @@ use std::ffi::c_void;
 use core_foundation::base::TCFType;
 use core_foundation::string::{CFString, CFStringRef};
 
-use super::{AudioDeviceDirectory, ChannelInfo, DeviceInfo, SubdeviceGroup, Subscription};
+use super::{
+    AppAudioSource, AudioDeviceDirectory, ChannelInfo, DeviceInfo, SubdeviceGroup, Subscription,
+    TapCapabilities, TapHandle,
+};
 
 // ── CoreAudio FFI types ──────────────────────────────────────────────────
 
@@ -103,12 +106,19 @@ const PROP_IS_ALIVE: u32 = fourcc(b"livn");
 const PROP_STREAM_CONFIG: u32 = fourcc(b"slay");
 const PROP_SUBDEVICE_LIST: u32 = fourcc(b"grup");
 
+// Process objects — for per-application audio tapping (macOS 14.4+).
+const PROP_PROCESS_LIST: u32 = fourcc(b"prs#"); // kAudioHardwarePropertyProcessObjectList
+const PROP_PROCESS_PID: u32 = fourcc(b"ppid"); // kAudioProcessPropertyPID
+const PROP_PROCESS_BUNDLE_ID: u32 = fourcc(b"pbid"); // kAudioProcessPropertyBundleID
+const PROP_PROCESS_RUNNING_OUTPUT: u32 = fourcc(b"piro"); // kAudioProcessPropertyIsRunningOutput
+
 const fn addr(selector: u32, scope: u32) -> AudioObjectPropertyAddress {
     AudioObjectPropertyAddress { selector, scope, element: ELEMENT_MAIN }
 }
 
 const DEVICES_ADDR: AudioObjectPropertyAddress = addr(PROP_DEVICES, SCOPE_GLOBAL);
 const DEFAULT_INPUT_ADDR: AudioObjectPropertyAddress = addr(PROP_DEFAULT_INPUT, SCOPE_GLOBAL);
+const PROCESS_LIST_ADDR: AudioObjectPropertyAddress = addr(PROP_PROCESS_LIST, SCOPE_GLOBAL);
 
 // ── Low-level property helpers ───────────────────────────────────────────
 
@@ -330,6 +340,84 @@ fn device_info(obj: AudioObjectID, default_input: AudioObjectID) -> Option<Devic
     })
 }
 
+// ── Process objects (per-app audio tapping) ──────────────────────────────
+
+/// All CoreAudio process objects (one per process that has touched audio).
+/// Empty on macOS < 14.4 (the property doesn't exist) or if the read fails.
+fn all_process_ids() -> Vec<AudioObjectID> {
+    let Some(size) = property_size(SYSTEM_OBJECT, &PROCESS_LIST_ADDR) else {
+        return Vec::new();
+    };
+    let count = size / std::mem::size_of::<AudioObjectID>();
+    if count == 0 {
+        return Vec::new();
+    }
+    let mut ids = vec![0u32; count];
+    let mut io = size as u32;
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            SYSTEM_OBJECT,
+            &PROCESS_LIST_ADDR,
+            0,
+            std::ptr::null(),
+            &mut io,
+            ids.as_mut_ptr() as *mut c_void,
+        )
+    };
+    if status != 0 {
+        return Vec::new();
+    }
+    ids
+}
+
+/// Build the tappable-app record for one process object, or `None` if it has no
+/// bundle id (background audio daemons, the system process, etc.).
+fn app_source(process_obj: AudioObjectID) -> Option<AppAudioSource> {
+    let bundle_id = property_cfstring(process_obj, &addr(PROP_PROCESS_BUNDLE_ID, SCOPE_GLOBAL))?;
+    let pid = property_pod::<i32>(process_obj, &addr(PROP_PROCESS_PID, SCOPE_GLOBAL)).unwrap_or(-1);
+    let is_alive = property_pod::<u32>(process_obj, &addr(PROP_PROCESS_RUNNING_OUTPUT, SCOPE_GLOBAL))
+        .map(|v| v != 0)
+        .unwrap_or(false);
+    let name = app_display_name(pid).unwrap_or_else(|| bundle_id.clone());
+    Some(AppAudioSource {
+        bundle_id,
+        name,
+        pid,
+        handle: process_obj as TapHandle,
+        is_alive,
+    })
+}
+
+/// A friendly app name from `NSRunningApplication.localizedName`, looked up by
+/// pid. `None` when AppKit isn't loaded (headless / tests) or the pid is gone —
+/// callers fall back to the bundle id. Resolved dynamically so this crate never
+/// links AppKit; the class is present whenever the GUI app is running.
+fn app_display_name(pid: i32) -> Option<String> {
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::NSString;
+
+    if pid < 0 {
+        return None;
+    }
+    let cls = AnyClass::get(c"NSRunningApplication")?;
+    // + (instancetype)runningApplicationWithProcessIdentifier:(pid_t)pid
+    let app: *mut AnyObject =
+        unsafe { msg_send![cls, runningApplicationWithProcessIdentifier: pid] };
+    if app.is_null() {
+        return None;
+    }
+    let name: *mut NSString = unsafe { msg_send![app, localizedName] };
+    if name.is_null() {
+        return None;
+    }
+    // localizedName is autoreleased; retain into a Retained for a safe read.
+    let name: Retained<NSString> = unsafe { Retained::retain(name)? };
+    let s = name.to_string();
+    (!s.is_empty()).then_some(s)
+}
+
 // ── Hot-plug listener plumbing ───────────────────────────────────────────
 
 struct ListenerContext {
@@ -397,6 +485,31 @@ impl AudioDeviceDirectory for CoreAudioDirectory {
             .collect()
     }
 
+    fn tap_capabilities(&self) -> TapCapabilities {
+        // Both modes ride the same process-tap API; if it's present, both work.
+        let supported = crate::capture::tap_supported();
+        TapCapabilities { system_audio: supported, app_audio: supported }
+    }
+
+    fn list_audio_apps(&self) -> Vec<AppAudioSource> {
+        let mut apps: Vec<AppAudioSource> =
+            all_process_ids().into_iter().filter_map(app_source).collect();
+        // Stable, friendly order: live (currently producing) first, then by name.
+        apps.sort_by(|a, b| {
+            b.is_alive
+                .cmp(&a.is_alive)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        apps
+    }
+
+    fn resolve_app(&self, bundle_id: &str) -> Option<AppAudioSource> {
+        all_process_ids()
+            .into_iter()
+            .filter_map(app_source)
+            .find(|a| a.bundle_id == bundle_id)
+    }
+
     fn subscribe(&self, on_change: Box<dyn Fn() + Send + Sync>) -> Subscription {
         let ctx = Box::into_raw(Box::new(ListenerContext { on_change }));
         let ctx_addr = ctx as usize;
@@ -425,6 +538,31 @@ impl AudioDeviceDirectory for CoreAudioDirectory {
             }
             // No listener references the context now — reclaim and drop it.
             unsafe { drop(Box::from_raw(ctx)) };
+        })
+    }
+
+    fn subscribe_processes(&self, on_change: Box<dyn Fn() + Send + Sync>) -> Subscription {
+        let ctx = Box::into_raw(Box::new(ListenerContext { on_change }));
+        let ctx_addr = ctx as usize;
+        unsafe {
+            AudioObjectAddPropertyListener(
+                SYSTEM_OBJECT,
+                &PROCESS_LIST_ADDR,
+                listener_proc,
+                ctx as *mut c_void,
+            );
+        }
+        Subscription::new(move || {
+            let ctx = ctx_addr as *mut ListenerContext;
+            unsafe {
+                AudioObjectRemovePropertyListener(
+                    SYSTEM_OBJECT,
+                    &PROCESS_LIST_ADDR,
+                    listener_proc,
+                    ctx as *mut c_void,
+                );
+                drop(Box::from_raw(ctx));
+            }
         })
     }
 }
@@ -463,6 +601,26 @@ mod tests {
         let dir = CoreAudioDirectory::new();
         let sub = dir.subscribe(Box::new(|| {}));
         drop(sub); // unregisters + frees context without panic/leak
+    }
+
+    #[test]
+    fn tap_queries_are_well_formed() {
+        let dir = CoreAudioDirectory::new();
+        // Capabilities follow the capture backend's symbol availability.
+        let caps = dir.tap_capabilities();
+        assert_eq!(caps.system_audio, crate::capture::tap_supported());
+        assert_eq!(caps.app_audio, crate::capture::tap_supported());
+
+        // Every listed app must carry a stable bundle id and a non-empty name.
+        for app in dir.list_audio_apps() {
+            assert!(!app.bundle_id.is_empty(), "app source needs a bundle id");
+            assert!(!app.name.is_empty(), "app source needs a display name");
+        }
+
+        // A bogus bundle id never resolves; the listener round-trips cleanly.
+        assert!(dir.resolve_app("definitely.not.a.real.bundle.id").is_none());
+        let sub = dir.subscribe_processes(Box::new(|| {}));
+        drop(sub);
     }
 
     #[test]

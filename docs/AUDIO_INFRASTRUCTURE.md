@@ -1,10 +1,12 @@
 # Real-Time Audio Infrastructure — Design Doc
 
-<!-- index: The real-time audio stack: capture (cpal), the off-RT analysis worker, the planned native CoreAudio device directory (channel names, stable UIDs, hot-plug), and the audio-settings UX. Threading, data flow, perf budget, and the phased build plan. -->
+<!-- index: The real-time audio stack: capture (cpal input devices + CoreAudio output taps for system/per-app audio), the off-RT analysis worker, the native CoreAudio device directory (channel names, stable UIDs, hot-plug), and the audio-settings UX. Threading, data flow, perf budget, the phased build plan, and the backend-neutral CaptureBackend seam (§11). -->
 
 The end-to-end real-time audio stack that feeds the instrument: how samples get in, how they become control signals, and how the device/channel metadata around them is surfaced and kept honest. This is the *infrastructure* layer. The feature that consumes it — driving effect sliders from audio — lives in [Audio Modulation — Design Doc](AUDIO_MODULATION_DESIGN.md); read that for the modulation source, the per-slider drawer, and the v2 pitch-tracking intelligence. This doc owns capture, analysis, the device directory, threading, and performance.
 
-Status: **implemented (2026-06-17).** Phases 1–6 and the Phase 7 cross-platform fallback have all shipped on `audio-modulation`: the native CoreAudio device directory (channel names, UIDs, liveness, subdevice grouping, hot-plug), UID-based identity + legacy migration, names/grouping in the UI, stage reliability (hot-plug rebuild, mic TCC, offline indicators), perf hygiene, and the full audio-settings UX (rename, identity color, mono/stereo, per-send meter, delete-in-use confirm). Still future by design: native Linux/Windows directory backends (7.1/7.2) and the output-channel/subdevice tree view (7.3). The §9 plan below records what was built; "planned" wording in earlier sections is historical design context.
+Status: **implemented (2026-06-17).** Phases 1–6 and the Phase 7 cross-platform fallback have all shipped on `audio-modulation`: the native CoreAudio device directory (channel names, UIDs, liveness, subdevice grouping, hot-plug), UID-based identity + legacy migration, names/grouping in the UI, stage reliability (hot-plug rebuild, mic TCC, offline indicators), perf hygiene, and the full audio-settings UX (rename, identity color, mono/stereo, per-send meter, delete-in-use confirm). **Output taps** — capturing system audio or a single app's output (no loopback driver) — shipped on `audio-app-tap` behind the backend-neutral [`CaptureBackend`] seam; see **§11**. Still future by design: native Linux/Windows directory *and* tap backends (the seam is stubbed and ready), and the output-channel/subdevice tree view (7.3). The §9 plan below records what was built; "planned" wording in earlier sections is historical design context.
+
+[`CaptureBackend`]: ../crates/manifold-audio/src/capture/mod.rs
 
 ---
 
@@ -39,11 +41,14 @@ The split matters: the sample path stays on cpal (portable, proven). Only the me
 
 ### 3.1 Capture — `manifold-audio::capture`
 
-[crates/manifold-audio/src/capture.rs](../crates/manifold-audio/src/capture.rs). Opens a system input device via cpal at its **native sample rate and channel count** (no format conversion), and streams Float32 interleaved samples into a lock-free SPSC ring (`ringbuf`, 2 seconds deep).
+[crates/manifold-audio/src/capture/](../crates/manifold-audio/src/capture/mod.rs). All capture is behind one trait — [`CaptureBackend`](../crates/manifold-audio/src/capture/mod.rs): it streams Float32 interleaved samples into a lock-free SPSC ring (`ringbuf`, ~2 seconds deep) and reports `sample_rate()` + `channels()`. Downstream code (analysis worker, recording) consumes only the ring consumer and those two numbers — never a platform type — so the same path runs whatever the source is. Two backend families implement it:
 
-The cpal callback runs on a real-time OS thread and obeys the RT contract: **no alloc, no lock, no log, no panic** — only a `push_slice` into the ring, with an atomic overflow counter on the rare full ring. This is correct and should not be touched.
+- **Input devices** — [`cpal_input`](../crates/manifold-audio/src/capture/cpal_input.rs): a cpal stream on a hardware / aggregate / virtual input, at its **native sample rate and channel count** (no format conversion). This is the original path and should not be touched.
+- **Output taps** — [`process_tap`](../crates/manifold-audio/src/capture/process_tap.rs) (macOS): CoreAudio process taps for system or per-app output. See **§11**.
 
-What capture exposes today: `list_devices()` (name + default flag), `device_channels()` (a bare count), `sample_rate()`, `channels()`. The limitation that drives Phase 1: **cpal's device model is counts and formats only — it has no concept of a channel name or a stable device identity.**
+The realtime callback (cpal's, or the tap's IO proc) obeys the RT contract: **no alloc, no lock, no log, no panic** — only a `push_slice` into the ring, with an atomic overflow counter on the rare full ring.
+
+What the cpal backend exposes for the device picker: `list_devices()` (name + default flag), `sample_rate()`, `channels()`. The limitation that drives Phase 1: **cpal's device model is counts and formats only — it has no concept of a channel name or a stable device identity.**
 
 ### 3.2 Analysis worker — `manifold-audio::analysis`
 
@@ -204,3 +209,52 @@ Sequenced by dependency. **Critical path: 1 → 2 → (3 ∥ 4).** Phase 3's sav
 - [Audio Modulation — Design Doc](AUDIO_MODULATION_DESIGN.md) — the feature this infrastructure feeds: modulation source, per-slider drawer, v2 pitch tracking.
 - [Overlay System Design](OVERLAY_SYSTEM_DESIGN.md) — the overlay stack the Audio Setup modal lives in.
 - [Content Thread](../CLAUDE.md) / two-thread model — where `FeatureReader` is read and `ContentState` snapshots ship to the UI.
+
+## 11. Output taps — system & per-app capture
+
+Capturing *rendered output* — the whole system mix, or one application's audio — without a loopback driver (BlackHole/Loopback) or any cable. On stage this means visuals can follow whatever is playing out (a DJ rig, a backing track, another performer's feed) or follow exactly one app (Ableton's master) while ignoring system beeps and notification dings. Selected from the same Audio Setup source dropdown as input devices.
+
+### 11.1 The seam — one trait, three source families
+
+The runtime resolves the persisted source ref to a [`CaptureSource`](../crates/manifold-audio/src/capture/mod.rs) and calls `capture::open`, which returns a `Box<dyn CaptureBackend>`. Nothing above the `capture` module knows which backend it got — the analysis worker, recording, the scope, and the UI are all source-agnostic.
+
+```text
+CaptureSource::DefaultInput            → cpal default input
+CaptureSource::Device { name }         → cpal named input
+CaptureSource::SystemAudio             → process tap, global (whole mix)
+CaptureSource::Apps { handles }        → process tap, mixdown of those processes
+```
+
+`CaptureSource` is the *resolved, ready-to-open* form — recomputed every time capture (re)builds, never persisted. The persisted form is `AudioDeviceRef { uid, name, kind }` (see §5); the runtime's `resolve_source` maps `kind` → `CaptureSource`: a device UID becomes an openable name, an app **bundle id** becomes live process [`TapHandle`]s. A configured-but-absent source (device unplugged, app not running, tap unsupported) leaves capture dark — the remappable policy — rather than failing the tick.
+
+[`TapHandle`]: ../crates/manifold-audio/src/directory.rs
+
+### 11.2 macOS implementation — `process_tap`
+
+CoreAudio process taps (macOS **14.4+**). Three OS objects wired together, all owned by one `ProcessTapCapture` that tears them down in order on drop:
+
+1. **Tap** — `AudioHardwareCreateProcessTap` from a `CATapDescription` (built via objc2): `initStereoGlobalTapButExcludeProcesses:[]` for system audio, `initStereoMixdownOfProcesses:` for apps. Defines *what* to capture.
+2. **Private aggregate device** — built from a CF dictionary listing the tap (`taps` key → sub-tap with the tap's UUID). This is what exposes the tapped audio as a readable input stream.
+3. **IO proc** — `AudioDeviceCreateIOProcID` on the aggregate; its realtime callback interleaves the tapped buffers into the same ring every other backend feeds. Planar input is interleaved through a pre-sized scratch buffer (no alloc in the callback).
+
+**Version safety via `dlsym`.** Only `AudioHardwareCreate/DestroyProcessTap` and `CATapDescription` are new in 14.4; the aggregate-device + IO-proc APIs are decades old (hard-linked). The two new C symbols are resolved with `dlsym` and the class is looked up by name, so the binary **loads and runs on older macOS** — `tap_supported()` simply returns `false`, the directory reports no tap capabilities, and the menu sections never appear. No hard link against a symbol the OS might not have.
+
+**Permission.** Taps use the same microphone-TCC gate the built-in mic does (`NSMicrophoneUsageDescription`), plus `NSAudioCaptureUsageDescription` in the bundle Info.plist; the existing reconcile prompt covers it. (Reminder: a worktree build is a new binary path → fresh TCC grant — see the worktree note in the build docs.)
+
+### 11.3 Per-app enumeration & self-healing
+
+The directory ([`CoreAudioDirectory`](../crates/manifold-audio/src/directory/coreaudio.rs)) enumerates `kAudioHardwarePropertyProcessObjectList`, reads each process's bundle id / pid / output-activity, and resolves a friendly name from `NSRunningApplication` (dynamically, so the crate never links AppKit). `AppAudioSource.bundle_id` is the stable persisted identity; `handle` is the live, non-persisted process object id.
+
+App taps are **self-healing**: a dedicated `subscribe_processes` listener (kept separate from device hot-plug, so a system-audio or device capture never churns when an unrelated app starts or stops audio) flips a `processes_dirty` flag. The runtime acts on it **only** when the current source is an app tap — re-resolving the bundle id and rebuilding with the fresh handle. App quits → resolve fails → capture goes dark; app relaunches → rebuild. Tap channels are a fixed stereo mixdown, so the channel picker offers Left/Right.
+
+### 11.4 Cross-platform mapping (the seam is stubbed, ready)
+
+[`unsupported_tap`](../crates/manifold-audio/src/capture/unsupported_tap.rs) satisfies the same three entry points (`is_supported`, `open_system_audio`, `open_apps`) on non-macOS targets — reporting "unsupported" — so `capture::open`, the directory capabilities, the runtime resolution, the UI gating, and persistence all compile and behave identically everywhere. Filling in a real backend is purely local to its platform module:
+
+| Platform | System audio | Per-app audio | Process identity (`TapHandle`) |
+|---|---|---|---|
+| **macOS** (done) | `CATapDescription` global tap | `initStereoMixdownOfProcesses:` | CoreAudio process `AudioObjectID` |
+| **Windows** | WASAPI loopback (`AUDCLNT_STREAMFLAGS_LOOPBACK`) | `ActivateAudioInterfaceAsync` + `AUDIOCLIENT_ACTIVATION_PARAMS` process-loopback (Win 10 2004+) | PID |
+| **Linux** | PipeWire monitor source of the default sink | per-node capture of an app's stream | PipeWire node id |
+
+A new backend gives those three entry points and a directory implementing `tap_capabilities` / `list_audio_apps` / `resolve_app` / `subscribe_processes`; everything above the `capture` and `directory` traits is untouched.

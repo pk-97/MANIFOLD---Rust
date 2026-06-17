@@ -1,8 +1,11 @@
-//! Audio input capture via `cpal`.
+//! Audio **input-device** capture via `cpal` — the `CaptureBackend`
+//! implementation for hardware, aggregate, and virtual input devices.
 //!
 //! Opens a system audio input device (e.g. BlackHole) and streams Float32
 //! interleaved samples into a lock-free SPSC ring buffer. The ring buffer
-//! consumer is handed to the recording thread for muxing into the MP4.
+//! consumer is handed downstream (the analysis worker, or the recording thread).
+//! Tap-based capture (system / per-app output) lives in a sibling module behind
+//! the same [`CaptureBackend`](super::CaptureBackend) trait — see [`super`].
 //!
 //! The `cpal` audio callback runs on a real-time OS thread — it must never
 //! allocate, lock, or log. Only lock-free ring buffer writes.
@@ -14,6 +17,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
 use ringbuf::HeapRb;
 use ringbuf::traits::{Producer as ProducerTrait, Split};
+
+use super::{AudioConsumer, CaptureBackend};
 
 /// Information about an available audio input device.
 #[derive(Clone, Debug)]
@@ -28,9 +33,6 @@ pub struct AudioCaptureConfig {
     /// Device name to open. `None` = system default input.
     pub device_name: Option<String>,
 }
-
-/// Ring buffer consumer type for reading captured audio samples.
-pub type AudioConsumer = ringbuf::HeapCons<f32>;
 
 /// Captures audio from a system input device into a lock-free ring buffer.
 pub struct AudioCaptureDevice {
@@ -205,5 +207,26 @@ impl AudioCaptureDevice {
 impl Drop for AudioCaptureDevice {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+impl CaptureBackend for AudioCaptureDevice {
+    fn sample_rate(&self) -> u32 {
+        AudioCaptureDevice::sample_rate(self)
+    }
+    fn channels(&self) -> u16 {
+        AudioCaptureDevice::channels(self)
+    }
+    fn take_consumer(&mut self) -> Option<AudioConsumer> {
+        AudioCaptureDevice::take_consumer(self)
+    }
+    fn start(&self) -> Result<(), String> {
+        AudioCaptureDevice::start(self)
+    }
+    fn stop(&self) {
+        AudioCaptureDevice::stop(self)
+    }
+    fn overflow_count(&self) -> u64 {
+        AudioCaptureDevice::overflow_count(self)
     }
 }

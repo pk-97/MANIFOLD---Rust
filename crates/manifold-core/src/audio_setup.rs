@@ -114,32 +114,92 @@ impl AudioSend {
     }
 }
 
-/// A reference to a chosen input device that survives reconnection and rename.
+/// What an [`AudioDeviceRef`] points at — the kind of capture source.
 ///
-/// Identity is the platform **UID** (CoreAudio's stable device id); `name` is
-/// for display and as a fallback match when the UID can't be resolved — a
-/// project saved before UID identity, or a device whose UID changed. The app
-/// resolves this to a live device through `manifold_audio::directory` at capture
-/// time, so a renamed-but-same device still opens and a same-name-different
-/// device is not silently bound. See `docs/AUDIO_INFRASTRUCTURE.md` §5.
+/// The default, [`InputDevice`](Self::InputDevice), is the historical meaning: a
+/// hardware, aggregate, or virtual **input** device addressed by its CoreAudio
+/// UID. The tap kinds capture *rendered output* instead of a hardware input:
+/// [`SystemAudio`](Self::SystemAudio) taps the whole system mix;
+/// [`App`](Self::App) taps a single application's audio. The variant decides how
+/// the runtime resolves the ref to a live capture backend, so it is the
+/// authority — not the `uid`/`name` strings, which mean different things per
+/// kind (see [`AudioDeviceRef`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioSourceKind {
+    /// A hardware / aggregate / virtual input device, keyed by `uid`.
+    #[default]
+    InputDevice,
+    /// The system-wide audio output mix, tapped (no per-process filter).
+    SystemAudio,
+    /// One application's audio output, tapped. `uid` holds the app's stable
+    /// bundle id; `name` is the app's display name.
+    App,
+}
+
+fn is_input_device_kind(k: &AudioSourceKind) -> bool {
+    matches!(k, AudioSourceKind::InputDevice)
+}
+
+/// A reference to a chosen capture source that survives reconnection and rename.
+///
+/// For an [`InputDevice`](AudioSourceKind::InputDevice) (the default), identity
+/// is the platform **UID** (CoreAudio's stable device id); `name` is for display
+/// and as a fallback match when the UID can't be resolved — a project saved
+/// before UID identity, or a device whose UID changed. For a tap source, `kind`
+/// selects the capture path and the strings adapt: [`SystemAudio`] needs neither
+/// (`name` is just the display label "System Audio"); [`App`] stores the app's
+/// stable **bundle id** in `uid` and its display name in `name`, re-resolved to
+/// a live process at capture time so an app that quits and relaunches re-binds.
+///
+/// The app resolves this through `manifold_audio::directory` at capture time, so
+/// a renamed-but-same device still opens and a same-name-different device is not
+/// silently bound. See `docs/AUDIO_INFRASTRUCTURE.md` §5.
+///
+/// [`SystemAudio`]: AudioSourceKind::SystemAudio
+/// [`App`]: AudioSourceKind::App
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioDeviceRef {
-    /// Stable platform UID. Empty only for a legacy name-only reference.
+    /// Stable identity: a device UID (`InputDevice`) or an app bundle id (`App`).
+    /// Empty for `SystemAudio` and for a legacy name-only device reference.
     #[serde(default)]
     pub uid: String,
     /// Display name + fallback match key.
     pub name: String,
+    /// Which kind of source this ref points at. Defaults to `InputDevice` and is
+    /// skipped on serialize when so, keeping pre-tap project fixtures byte-identical.
+    #[serde(default, skip_serializing_if = "is_input_device_kind")]
+    pub kind: AudioSourceKind,
 }
 
 impl AudioDeviceRef {
+    /// An input-device reference by UID + display name.
     pub fn new(uid: impl Into<String>, name: impl Into<String>) -> Self {
-        Self { uid: uid.into(), name: name.into() }
+        Self { uid: uid.into(), name: name.into(), kind: AudioSourceKind::InputDevice }
     }
 
-    /// The UID for resolution, or `None` if this is a legacy name-only ref.
+    /// The system-audio tap source (whole-system output mix).
+    pub fn system_audio() -> Self {
+        Self { uid: String::new(), name: "System Audio".to_string(), kind: AudioSourceKind::SystemAudio }
+    }
+
+    /// An application-audio tap source, keyed by stable bundle id + display name.
+    pub fn app(bundle_id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self { uid: bundle_id.into(), name: name.into(), kind: AudioSourceKind::App }
+    }
+
+    /// The UID for resolution, or `None` if this is a legacy name-only ref or a
+    /// kind that carries no UID ([`SystemAudio`](AudioSourceKind::SystemAudio)).
     pub fn uid_opt(&self) -> Option<&str> {
         (!self.uid.is_empty()).then_some(self.uid.as_str())
+    }
+
+    /// Whether this ref points at a tap source (system or app) rather than a
+    /// hardware input device. Tap sources expose a synthetic stereo channel
+    /// layout instead of a hardware device's channels.
+    pub fn is_tap(&self) -> bool {
+        !matches!(self.kind, AudioSourceKind::InputDevice)
     }
 }
 
@@ -226,7 +286,11 @@ impl AudioSetup {
         if self.device.is_none()
             && let Some(name) = self.legacy_device_name.take()
         {
-            self.device = Some(AudioDeviceRef { uid: String::new(), name });
+            self.device = Some(AudioDeviceRef {
+                uid: String::new(),
+                name,
+                kind: AudioSourceKind::InputDevice,
+            });
         }
         self.legacy_device_name = None;
     }
@@ -378,6 +442,45 @@ mod tests {
         assert!(low >= 20.0);
         let (_low, mid) = AudioSetup::clamp_crossovers(250.0, 50_000.0, false);
         assert!(mid <= 18_000.0);
+    }
+
+    #[test]
+    fn input_device_ref_round_trips_without_kind_key() {
+        // A plain input-device ref must serialize byte-identically to the
+        // pre-tap format — no `kind` key — so old fixtures round-trip.
+        let dev = AudioDeviceRef::new("uid-1", "BlackHole 16ch");
+        assert_eq!(dev.kind, AudioSourceKind::InputDevice);
+        let json = serde_json::to_string(&dev).unwrap();
+        assert!(!json.contains("kind"), "InputDevice kind must be skipped: {json}");
+        let back: AudioDeviceRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(dev, back);
+    }
+
+    #[test]
+    fn legacy_device_ref_without_kind_loads_as_input_device() {
+        let json = r#"{"uid":"uid-1","name":"BlackHole 16ch"}"#;
+        let dev: AudioDeviceRef = serde_json::from_str(json).unwrap();
+        assert_eq!(dev.kind, AudioSourceKind::InputDevice);
+        assert!(!dev.is_tap());
+    }
+
+    #[test]
+    fn tap_sources_round_trip_with_kind() {
+        let sys = AudioDeviceRef::system_audio();
+        assert_eq!(sys.kind, AudioSourceKind::SystemAudio);
+        assert!(sys.is_tap());
+        assert_eq!(sys.uid_opt(), None, "system audio carries no uid");
+        let back: AudioDeviceRef = serde_json::from_str(&serde_json::to_string(&sys).unwrap()).unwrap();
+        assert_eq!(sys, back);
+
+        let app = AudioDeviceRef::app("com.ableton.live", "Ableton Live");
+        assert_eq!(app.kind, AudioSourceKind::App);
+        assert!(app.is_tap());
+        assert_eq!(app.uid_opt(), Some("com.ableton.live"));
+        let json = serde_json::to_string(&app).unwrap();
+        assert!(json.contains("\"kind\":\"app\""), "kind serializes camelCase: {json}");
+        let back: AudioDeviceRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(app, back);
     }
 
     #[test]
