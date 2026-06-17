@@ -2397,6 +2397,17 @@ impl Application {
                 fmax,
             );
 
+            // Per-band level meters: the tapped send's Low/Mid/High amplitudes.
+            let band_amps = self.content_state.spectrogram_features.map(|f| {
+                use manifold_core::AudioBand;
+                [
+                    f.bands[AudioBand::Low.index()].amplitude,
+                    f.bands[AudioBand::Mid.index()].amplitude,
+                    f.bands[AudioBand::High.index()].amplitude,
+                ]
+            });
+            self.ws.ui_root.update_audio_band_meters(band_amps);
+
             // Hover readout, suppressed while a divider drag owns the gesture.
             let readout = if self.ws.ui_root.audio_band_dragging() {
                 None

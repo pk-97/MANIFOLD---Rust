@@ -94,6 +94,9 @@ pub struct AudioModRuntime {
     /// project each tick so a band-divider drag retunes analysis without a
     /// capture restart.
     crossovers: Arc<CrossoverBank>,
+    /// Worker index of the scope-tapped send, resolved each tick. Lets the
+    /// content thread pull that send's features for the scope's per-band meters.
+    tapped_index: Option<usize>,
 }
 
 impl Default for AudioModRuntime {
@@ -117,6 +120,7 @@ impl Default for AudioModRuntime {
                 manifold_core::audio_setup::DEFAULT_LOW_HZ,
                 manifold_core::audio_setup::DEFAULT_MID_HZ,
             )),
+            tapped_index: None,
         }
     }
 }
@@ -150,6 +154,7 @@ impl AudioModRuntime {
         if let Some(cap) = &self.capture {
             cap.tap.set_selected(tap_index);
         }
+        self.tapped_index = tap_index;
 
         // Sync the Low/Mid/High crossovers from the project every tick (cheap
         // atomic stores). The worker reads this bank live, so a band-divider drag
@@ -187,6 +192,13 @@ impl AudioModRuntime {
     /// Bin count of the current column stream, or 0 if capture is inactive.
     pub fn spectrogram_num_bins(&self) -> usize {
         self.capture.as_ref().map_or(0, |c| c.columns.num_bins())
+    }
+
+    /// Worker index of the scope-tapped send, or `None` when nothing is tapped.
+    /// The content thread uses this to pull the tapped send's features for the
+    /// scope's per-band meters.
+    pub fn tapped_send_index(&self) -> Option<usize> {
+        self.tapped_index
     }
 
     /// Drain all complete VQT columns produced since the last call, oldest →

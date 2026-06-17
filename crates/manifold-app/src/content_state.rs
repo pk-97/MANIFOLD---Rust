@@ -100,6 +100,9 @@ pub struct ContentState {
     /// meters. Mirror `project.audio_setup.{low_hz,mid_hz}`.
     pub spectrogram_low_hz: f32,
     pub spectrogram_mid_hz: f32,
+    /// The tapped (scope-selected) send's latest features, for the spectrogram's
+    /// per-band level meters. `None` when no send feeds the scope.
+    pub spectrogram_features: Option<manifold_core::SendFeatures>,
     pub osc_sender_enabled: bool,
     pub osc_receiving_timecode: bool,
     pub osc_timecode_display: Arc<str>,
@@ -400,6 +403,7 @@ impl Default for ContentState {
             spectrogram_fmax: 0.0,
             spectrogram_low_hz: manifold_core::audio_setup::DEFAULT_LOW_HZ,
             spectrogram_mid_hz: manifold_core::audio_setup::DEFAULT_MID_HZ,
+            spectrogram_features: None,
             osc_sender_enabled: false,
             osc_receiving_timecode: false,
             osc_timecode_display: Arc::from(""),

@@ -68,6 +68,12 @@ const SCOPE_TITLE_H: f32 = 18.0;
 const SCOPE_H_MIN: f32 = 200.0;
 /// Left margin inside the scope for the frequency-axis labels.
 const SCOPE_AXIS_W: f32 = 34.0;
+/// Right margin inside the scope for the per-band (Low/Mid/High) level meters.
+const SCOPE_METER_W: f32 = 30.0;
+/// Gap between the waterfall and the band-meter column.
+const SCOPE_METER_GAP: f32 = 4.0;
+/// Half-height of a band meter bar (px).
+const BAND_METER_HALF_H: f32 = 3.0;
 
 /// Per-send interactive node ids.
 #[derive(Default, Clone)]
@@ -138,6 +144,11 @@ pub struct AudioSetupPanel {
     scope_fmax: f32,
     /// Which divider line is currently being dragged, if any.
     dragging_band: Option<BandDivider>,
+    /// Per-band (Low/Mid/High) level-meter nodes `(track, fill)` in the scope's
+    /// right margin. Created by `build`, repositioned + resized every frame by
+    /// [`AudioSetupPanel::update_band_meters`] so they track the moving
+    /// crossovers. `-1` when not built.
+    band_meter_ids: [(i32, i32); 3],
 }
 
 impl AudioSetupPanel {
@@ -499,6 +510,7 @@ impl AudioSetupPanel {
         // ── Spectrogram scope (selected send) ──
         self.scope_rect = None;
         self.scope_readout_label = -1;
+        self.band_meter_ids = [(-1, -1); 3];
         if !self.sends.is_empty() {
             cy += ROW_GAP;
             let sel_label = self
@@ -592,13 +604,47 @@ impl AudioSetupPanel {
             }
 
             // The waterfall image rect (logical) — the present pass blits the
-            // spectrogram texture here, on top of the backing panel.
+            // spectrogram texture here, on top of the backing panel. A right
+            // margin is reserved for the per-band level meters (drawn as UI
+            // nodes, since the blit would otherwise cover them).
             self.scope_rect = Some(Rect::new(
                 inner_x + SCOPE_AXIS_W,
                 cy,
-                inner_w - SCOPE_AXIS_W,
+                inner_w - SCOPE_AXIS_W - SCOPE_METER_W,
                 self.scope_h,
             ));
+
+            // Per-band level meters (Low/Mid/High): a track + fill pair each, in
+            // the reserved right margin. Created here at zero size; positioned and
+            // filled every frame by `update_band_meters` so they follow the
+            // crossovers and the live levels.
+            for slot in self.band_meter_ids.iter_mut() {
+                let track = tree.add_panel(
+                    self.bg_id,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    UIStyle {
+                        bg_color: Color32::new(28, 28, 32, 255),
+                        corner_radius: 1.0,
+                        ..UIStyle::default()
+                    },
+                );
+                let fill = tree.add_panel(
+                    self.bg_id,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    UIStyle {
+                        bg_color: Color32::new(150, 200, 230, 255),
+                        corner_radius: 1.0,
+                        ..UIStyle::default()
+                    },
+                );
+                *slot = (track as i32, fill as i32);
+            }
         }
     }
 
@@ -720,6 +766,47 @@ impl AudioSetupPanel {
                 ids.meter_fill as u32,
                 Rect::new(ids.meter_x, ids.meter_y, w, ids.meter_h),
             );
+        }
+    }
+
+    /// Position + fill the per-band level meters from the tapped send's per-band
+    /// amplitudes `[low, mid, high]` (each 0..1), every frame while open. Each
+    /// bar sits at the geometric centre of its band slab — so it lines up with
+    /// the frequency axis — and follows the crossovers as they're dragged.
+    /// `None`, or a dark scope, hides the bars.
+    pub fn update_band_meters(&self, tree: &mut UITree, amps: Option<[f32; 3]>) {
+        let Some(rect) = self.scope_rect() else { return };
+        let meter_x = rect.x + rect.width + SCOPE_METER_GAP;
+        let meter_w = (SCOPE_METER_W - SCOPE_METER_GAP).max(1.0);
+        // Band slab frequency edges, in [low, mid, high] order.
+        let edges = [
+            (self.scope_fmin, self.scope_low_hz),
+            (self.scope_low_hz, self.scope_mid_hz),
+            (self.scope_mid_hz, self.scope_fmax),
+        ];
+        for (i, &(track, fill)) in self.band_meter_ids.iter().enumerate() {
+            if track < 0 || fill < 0 {
+                continue;
+            }
+            let (lo, hi) = edges[i];
+            let center_y = amps
+                .filter(|_| lo > 0.0 && hi > lo)
+                .and_then(|_| self.scope_line_y((lo * hi).sqrt()));
+            match (amps, center_y) {
+                (Some(a), Some(y)) => {
+                    let amp = a[i].clamp(0.0, 1.0);
+                    let top = y - BAND_METER_HALF_H;
+                    let h = BAND_METER_HALF_H * 2.0;
+                    tree.set_bounds(track as u32, Rect::new(meter_x, top, meter_w, h));
+                    tree.set_bounds(fill as u32, Rect::new(meter_x, top, meter_w * amp, h));
+                    tree.set_visible(track as u32, true);
+                    tree.set_visible(fill as u32, true);
+                }
+                _ => {
+                    tree.set_visible(track as u32, false);
+                    tree.set_visible(fill as u32, false);
+                }
+            }
         }
     }
 

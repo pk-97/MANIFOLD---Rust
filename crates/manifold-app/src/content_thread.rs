@@ -1087,6 +1087,11 @@ impl ContentThread {
             ),
             |p| (p.audio_setup.low_hz, p.audio_setup.mid_hz),
         );
+        // The tapped send's features, for the scope's per-band level meters.
+        let spectrogram_features = self
+            .audio_mod_runtime
+            .tapped_send_index()
+            .and_then(|i| audio_snapshot.sends.get(i).copied());
 
         let state = ContentState {
             current_beat: self.engine.current_beat(),
@@ -1163,6 +1168,7 @@ impl ContentThread {
             spectrogram_fmax,
             spectrogram_low_hz,
             spectrogram_mid_hz,
+            spectrogram_features,
             osc_sender_enabled: self.transport_controller.osc_sender_enabled,
             osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
             osc_timecode_display: self.cached_osc_timecode.clone(),

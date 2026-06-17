@@ -1943,6 +1943,16 @@ impl UIRoot {
         self.audio_setup_panel.is_dragging_band()
     }
 
+    /// Position + fill the scope's per-band level meters from the tapped send's
+    /// `[low, mid, high]` amplitudes (0..1), or hide them when `None`. In place,
+    /// every frame — see `update_audio_meters`.
+    pub fn update_audio_band_meters(&mut self, amps: Option<[f32; 3]>) {
+        if !self.audio_setup_panel.is_open() {
+            return;
+        }
+        self.audio_setup_panel.update_band_meters(&mut self.tree, amps);
+    }
+
     /// Push waveform/stem lane node visibility and style to UITree.
     /// Called from app_render after syncing mute/solo/stems_available state.
     /// Separate from update() because app_render must sync state first.
