@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Tesseract",
-  "description": "Tesseract — 4D hypercube wireframe rotating continuously through the XY, ZW, and XW planes. Decomposed from the legacy `TesseractGenerator` Rust struct into the curated primitive library.\n\n`node.generate_tesseract_vertices` produces the 16 corners (pre-scaled to magnitude 0.25 to match `PROJ_SCALE`) plus the 32-edge bit-flip topology; three `node.math` nodes turn `time × rate` into per-plane angles fed into `node.rotate_4d`; `node.project_4d` performs the two-stage 4D→3D→2D perspective collapse; `node.render_lines` (with its `edges` input wired) renders the wireframe with the legacy line + dot semantics.\n\nLegacy outer-card param names (`xy` / `zw` / `xw` / `verts` / `v_size` / `anim`) are aliased to the new general-user names for save-file backward compatibility.",
+  "description": "Tesseract — 4D hypercube wireframe rotating continuously through the XY, ZW, and XW planes. Decomposed from the legacy `TesseractGenerator` Rust struct into the curated primitive library.\n\n`node.hypercube_vertices` produces the 16 corners (pre-scaled to magnitude 0.25 to match `PROJ_SCALE`) and `node.edges_from_hypercube` the 32-edge bit-flip topology — the 4D counterparts of `node.polytope_vertices` / `node.polytope_edges`. Three `node.math` nodes turn `time × rate` into per-plane angles fed into `node.rotate_4d`; `node.project_4d` performs the two-stage 4D→3D→2D perspective collapse; `node.render_lines` (with its `edges` input wired) renders the wireframe with line + dot semantics.\n\nThe `Dimension` control on `hypercube_vertices` collapses the higher axes toward zero, morphing the shape point → line → square → cube → tesseract as it ramps 1 → 4. At 4.0 (the default) it is the full tesseract, matching the legacy generator's look. Wire `Dimension` to an LFO / macro for a live dimension-morph reveal.\n\nLegacy outer-card param names (`xy` / `zw` / `xw` / `verts` / `v_size` / `anim`) are aliased to the new general-user names for save-file backward compatibility.",
   "presetMetadata": {
     "id": "Tesseract",
     "displayName": "Tesseract",
@@ -131,6 +131,17 @@
         "isToggle": false,
         "formatString": "F2",
         "oscSuffix": "scale"
+      },
+      {
+        "id": "dimension",
+        "name": "Dimension",
+        "min": 1.0,
+        "max": 4.0,
+        "defaultValue": 4.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "dim"
       }
     ],
     "paramAliases": [
@@ -174,6 +185,9 @@
         "convert": { "type": "Float" } },
       { "id": "scale", "label": "Scale", "defaultValue": 1.0,
         "target": { "kind": "node", "nodeId": "project", "param": "proj_scale" },
+        "convert": { "type": "Float" } },
+      { "id": "dimension", "label": "Dimension", "defaultValue": 4.0,
+        "target": { "kind": "node", "nodeId": "shape", "param": "dimension" },
         "convert": { "type": "Float" } }
     ],
     "skipMode": { "kind": "never" }
@@ -204,7 +218,13 @@
         "op": { "type": "Enum",  "value": 2 }
       }
     },
-    { "id": 4, "typeId": "node.generate_tesseract_vertices", "handle": "shape", "nodeId": "shape" },
+    {
+      "id": 4, "typeId": "node.hypercube_vertices", "handle": "shape", "nodeId": "shape",
+      "params": {
+        "dimension": { "type": "Float", "value": 4.0 }
+      }
+    },
+    { "id": 9, "typeId": "node.edges_from_hypercube", "handle": "edges", "nodeId": "edges" },
     {
       "id": 5, "typeId": "node.rotate_4d", "handle": "rotate", "nodeId": "rotate",
       "params": {
@@ -253,7 +273,7 @@
     { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "in" },
 
     { "fromNode": 6, "fromPort": "out",   "toNode": 7, "toPort": "points" },
-    { "fromNode": 4, "fromPort": "edges", "toNode": 7, "toPort": "edges"  },
+    { "fromNode": 9, "fromPort": "edges", "toNode": 7, "toPort": "edges"  },
 
     { "fromNode": 7, "fromPort": "color", "toNode": 8, "toPort": "in" }
   ]

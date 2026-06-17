@@ -85,13 +85,13 @@ mod scatter_particles_camera;
 mod gain;
 mod gaussian_blur_variable_width;
 mod edges_from_grid_uv;
+mod edges_from_hypercube;
 mod ellipse_mask;
 mod generate_cube_mesh;
 mod generate_grid_mesh;
 mod generate_grid_uv;
 mod generate_instance_transforms;
 mod generate_range;
-mod generate_tesseract_vertices;
 mod pack_vec4;
 mod gradient_central_diff;
 mod gradient_ramp;
@@ -100,6 +100,7 @@ mod hash_field_by_seed;
 mod hdr_retention_mix;
 mod heightmap_to_normal;
 mod hue_saturation;
+mod hypercube_vertices;
 mod image_folder;
 mod instance_position_jitter;
 mod instance_rotation_jitter;
@@ -289,6 +290,7 @@ pub use scatter_particles_camera::{SCATTER_CAMERA_MODES, ScatterParticlesCamera}
 pub use gain::Gain;
 pub use gaussian_blur_variable_width::{BLUR_VARIABLE_AXES, GaussianBlurVariableWidth};
 pub use edges_from_grid_uv::EdgesFromGridUv;
+pub use edges_from_hypercube::EdgesFromHypercube;
 pub use ellipse_mask::EllipseMask;
 pub use generate_cube_mesh::{CUBE_VERTEX_COUNT, GenerateCubeMesh};
 pub use generate_grid_mesh::GenerateGridMesh;
@@ -299,9 +301,6 @@ pub use generate_instance_transforms::{
     GenerateInstanceTransforms, INSTANCE_LAYOUTS,
 };
 pub use generate_range::GenerateRange;
-pub use generate_tesseract_vertices::{
-    GenerateTesseractVertices, TESSERACT_VERTEX_COUNT,
-};
 pub use pack_vec4::PackVec4;
 pub use gradient_central_diff::{GRADIENT_CHANNELS, GradientCentralDiff};
 pub use gradient_ramp::GradientRamp;
@@ -316,6 +315,7 @@ pub use euler_step_particles::EulerStepParticles;
 pub use sample_texture_at_particles::SampleTextureAtParticles;
 pub use wrap_particles_torus::WrapParticlesTorus;
 pub use hue_saturation::HueSaturation;
+pub use hypercube_vertices::HypercubeVertices;
 pub use invert::Invert;
 pub use lambert_directional::LambertDirectional;
 pub use length_vec2::LengthVec2;
