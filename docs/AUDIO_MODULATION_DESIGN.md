@@ -215,6 +215,16 @@ The drawer parallels the existing envelope/driver drawers built on `param_slider
 
 The drawer is authoring UI. It does not need to be perform-time minimal; it needs to be clear.
 
+### 10.0 Next: spectrogram feature overlays + draggable bands (planned 2026-06-17)
+
+The matrix (§5) ships, but the analysis is still assigned blind. Two pieces make it legible, both on the **Audio Setup spectrogram** (per tapped send):
+
+1. **Feature overlays.** Positioned overlays drawn in the plot — a **centroid line** riding the brightness, **per-band level meters** docked to the right edge (each aligned to its frequency slab), and **transient ticks** on the time axis — plus a margin meter strip so the scalar features (Amplitude/Liveliness/Noisiness) show their live 0..1 too. The data is already computed in the worker; the work is plumbing the per-send feature scalars to the UI thread (the spectrogram *columns* already make that worker→UI trip — extend that stream, or add the scalars to `ContentState`). Drawing is cheap.
+
+2. **Draggable band boundaries.** The Low/Mid/High crossovers are currently `LOW_HZ`/`MID_HZ` **consts** in `manifold-audio` (`analysis.rs`). To drag the spectrogram's two horizontal boundary lines, those edges must become **editable values stored on the project** (in `AudioSetup`, global to all sends — bands are a shared concept), threaded to the worker's `SpectralAnalyzer` which recomputes `band_bins` on change (live, like per-send gain — no capture restart). The spectrogram draws the two lines with drag handles; a drag edits the crossovers via `EditingService`. This makes the bands fit the material instead of fixed 250 Hz / 2 kHz.
+
+Both are decoupled from the modulation hot path. Overlays first (biggest "oh, *that's* what it tracks" payoff, and they double as the tilt/reference calibration tool); draggable bands second.
+
 ### 10.1 The Audio Setup panel
 
 Separate from the per-slider drawer, a central **Audio Setup** panel edits the `AudioSetup` (§3.2): pick the input device, see its channels, create/label/delete sends, assign each send's channel(s) and gain, and toggle per-send analysis (e.g. "enable pitch tracking"). This is the one place audio enters Manifold; the slider drawers only consume the sends it defines. Edits route through `EditingService` like any other project mutation. A live per-send meter here helps the user confirm signal is arriving before they assign anything.
