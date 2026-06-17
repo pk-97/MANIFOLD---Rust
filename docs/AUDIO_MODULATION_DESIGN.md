@@ -215,15 +215,17 @@ The drawer parallels the existing envelope/driver drawers built on `param_slider
 
 The drawer is authoring UI. It does not need to be perform-time minimal; it needs to be clear.
 
-### 10.0 Next: spectrogram feature overlays + draggable bands (planned 2026-06-17)
+### 10.0 Spectrogram feature overlays + draggable bands (shipped 2026-06-17)
 
-The matrix (§5) ships, but the analysis is still assigned blind. Two pieces make it legible, both on the **Audio Setup spectrogram** (per tapped send):
+The matrix (§5) shipped, but the analysis was assigned blind. Three pieces made it legible, all on the **Audio Setup spectrogram** (per tapped send). All decoupled from the modulation hot path. Built draggable-bands first (it also positions the per-band meters), then meters, then the scrolling traces.
 
-1. **Feature overlays.** Positioned overlays drawn in the plot — a **centroid line** riding the brightness, **per-band level meters** docked to the right edge (each aligned to its frequency slab), and **transient ticks** on the time axis — plus a margin meter strip so the scalar features (Amplitude/Liveliness/Noisiness) show their live 0..1 too. The data is already computed in the worker; the work is plumbing the per-send feature scalars to the UI thread (the spectrogram *columns* already make that worker→UI trip — extend that stream, or add the scalars to `ContentState`). Drawing is cheap.
+1. **Draggable band boundaries.** The Low/Mid/High crossovers were `LOW_HZ`/`MID_HZ` **consts** in `analysis.rs`; they're now `low_hz`/`mid_hz` on `AudioSetup` (serde-default 250/2000, global to all sends), threaded to the worker via a lock-free `CrossoverBank` (mirrors `GainBank`) that re-splits `band_bins` live each drain — no capture restart. The shader draws the two lines from the editable values; a press near a line in the scope arms a drag (`AudioSetupPanel::on_event`), live-edits via `MutateProjectLive`, and commits one `SetAudioCrossoversCommand`. `AudioSetup::clamp_crossovers` keeps low<mid in 20..18k.
 
-2. **Draggable band boundaries.** The Low/Mid/High crossovers are currently `LOW_HZ`/`MID_HZ` **consts** in `manifold-audio` (`analysis.rs`). To drag the spectrogram's two horizontal boundary lines, those edges must become **editable values stored on the project** (in `AudioSetup`, global to all sends — bands are a shared concept), threaded to the worker's `SpectralAnalyzer` which recomputes `band_bins` on change (live, like per-send gain — no capture restart). The spectrogram draws the two lines with drag handles; a drag edits the crossovers via `EditingService`. This makes the bands fit the material instead of fixed 250 Hz / 2 kHz.
+2. **Per-band level meters.** Low/Mid/High amplitude bars in a reserved right margin, each at the geometric centre of its band slab so it lines up with the frequency axis and follows the crossovers as they drag. The tapped send's `SendFeatures` ride `ContentState` (the runtime exposes the resolved tapped-send index); the panel repositions + fills the bars in place each frame.
 
-Both are decoupled from the modulation hot path. Overlays first (biggest "oh, *that's* what it tracks" payoff, and they double as the tilt/reference calibration tool); draggable bands second.
+3. **Scrolling centroid trace + transient ticks.** Per-column overlays computed in the worker from the CQT column (centroid as height-from-bottom — VQT bins are geometric, so it's already the log-freq centre; onset from column-to-column flux), streamed on a lock-step scalar ring (2 floats/column) alongside the magnitude columns, carried in `ContentState`, and drawn in the spectrogram shader from a third storage buffer keyed by the same 1:1 column slot — so they scroll locked to the waterfall with no scroll math. A `-1` centroid sentinel hides the trace on empty columns; the WGSL is guarded by a naga parse/validate unit test.
+
+The hover readout (freq + pink-weighted dB at the cursor) is a separate, parallel addition (see commits `ce932caa`/`627b4438`).
 
 ### 10.1 The Audio Setup panel
 
