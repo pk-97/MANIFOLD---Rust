@@ -761,7 +761,9 @@ mod tests {
     // ── audio modulation ─────────────────────────────────────────────────
 
     use manifold_core::audio_features::{AudioFeatureSnapshot, SendFeatures};
-    use manifold_core::audio_mod::{AudioBand, AudioFeature, AudioModShape, ParameterAudioMod};
+    use manifold_core::audio_mod::{
+        AudioBand, AudioFeature, AudioFeatureKind, AudioModShape, ParameterAudioMod,
+    };
     use manifold_core::audio_setup::AudioSend;
     use manifold_core::id::AudioSendId;
     use manifold_core::Seconds;
@@ -776,23 +778,22 @@ mod tests {
         (project, send_id)
     }
 
-    /// A snapshot with one send whose low band reads `low`.
+    /// A snapshot with one send whose low-band amplitude reads `low`.
     fn snapshot_low(low: f32) -> AudioFeatureSnapshot {
+        let mut bands = [manifold_core::BandFeatures::default(); 4];
+        bands[manifold_core::AudioBand::Low.index()].amplitude = low;
         AudioFeatureSnapshot {
-            sends: vec![SendFeatures {
-                band_energy: [low, 0.0, 0.0],
-                ..Default::default()
-            }],
+            sends: vec![SendFeatures { bands, ..Default::default() }],
         }
     }
 
-    /// Attach an audio mod on `amount` reading the send's low band, snapping
-    /// instantly (no smoothing) over the full range.
+    /// Attach an audio mod on `amount` reading the send's low-band amplitude,
+    /// snapping instantly (no smoothing) over the full range.
     fn attach_full_range_low_mod(project: &mut Project, send_id: &AudioSendId) {
         let mut m = ParameterAudioMod::new(
             "amount".into(),
             send_id.clone(),
-            AudioFeature::BandEnergy(AudioBand::Low),
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low),
         );
         m.shape = AudioModShape {
             attack_ms: 0.0,

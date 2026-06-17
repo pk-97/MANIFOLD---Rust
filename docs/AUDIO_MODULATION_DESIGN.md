@@ -110,15 +110,23 @@ This worker is the home of the **feature seam** — the single most important ar
 
 > The worker produces feature frames; the drawer picks among features. A feature is an output of a pluggable extractor, **not** a hardcoded scalar. v1 plumbing must not assume "the feature is band energy."
 
-Feature frames are keyed by **send** (`AudioSendId`), not raw channel — the worker downmixes each send's channels to mono, then runs only that send's configured extractors. A frame is a small, fixed-shape struct per send — cheap to publish. Per send, v1 carries at least:
+Feature frames are keyed by **send** (`AudioSendId`), not raw channel — the worker downmixes each send's channels to mono, runs one FFT, and reduces it. A frame is a small, fixed-shape struct per send — cheap to publish.
 
-| Feature | v1? | Meaning |
-|---|---|---|
-| `band_energy[lo/mid/hi]` | yes | perceptual (log-spaced, loudness-weighted) band energy |
-| `onset` | yes | transient trigger (impulse, decays) |
-| `pitch_hz` | v2 | tracked fundamental (instantaneous frequency of the dominant ridge) |
-| `pitch_delta_st` | v2 | df/dt in **semitones per second** — the headline "motion" feature |
-| `pitch_confidence` | v2 | 0–1 trust signal from ridge magnitude / energy |
+**The feature × band matrix (shipped 2026-06-17).** Rather than a flat feature list, the worker runs the *same five detectors over four frequency bands*. The drawer picks one cell of the matrix — a detector (`kind`) × a band — so e.g. `Transients × Low` is a kick detector, `Brightness × High` is the brightness of just the top end. Every cell is normalized **0..1**.
+
+| Detector (`kind`) | Meaning | Full | Low | Mid | High |
+|---|---|:-:|:-:|:-:|:-:|
+| `Amplitude` | band loudness (per-bin RMS, dB-normalized) | ✓ | ✓ | ✓ | ✓ |
+| `Brightness` | spectral centroid, log-mapped across the band's edges | ✓ | ✓ | ✓ | ✓ |
+| `Noisiness` | spectral flatness (tonal→noisy) | ✓ | ✓ | ✓ | ✓ |
+| `Liveliness` | **relative** spectral flux (change ÷ band energy) — self-scales, doesn't pin | ✓ | ✓ | ✓ | ✓ |
+| `Transients` | onset trigger (impulse, decays) from the band's flux | ✓ | ✓ | ✓ | ✓ |
+
+`SendFeatures` is `[BandFeatures; 4]` (Full/Low/Mid/High) — 20 cheap scalars per send. `pitch_hz` / `pitch_delta_st` / `pitch_confidence` remain per-send v2 fields (the ridge tracker), not part of the matrix.
+
+**One perceptual tilt, applied once.** Before *any* reduction the magnitude spectrum is multiplied by a fixed pink (+3 dB/oct amplitude) tilt — the analysis counterpart of the spectrogram's pink-noise tilt — so highs aren't buried by the natural 1/f slope. Every detector then sees identical data: amplitude/brightness track perceived balance, and noisiness measures flatness relative to *pink* (the right reference for music) rather than white. The tilt is an analysis-side fixed curve, deliberately **not** wired to the display's tilt knob — a cosmetic control must never move the modulation.
+
+**Normalization.** `Amplitude` is dB-mapped (−60 dB floor) against a fixed reference; the per-send input gain is the calibration knob (no auto-range, so the same kick reads the same every night). `Liveliness` is relative flux (flux ÷ energy), naturally 0..1, so it self-scales with density instead of pinning on dense material. `Brightness`/`Noisiness` are intrinsically bounded.
 
 Extractors are independent and composable. Band energy and onset are simple DSP. The pitch features all come from one ridge tracker (§6) added later as a single drop-in extractor.
 
@@ -164,7 +172,7 @@ pub struct ParameterAudioMod {
 }
 ```
 
-`AudioModSource` is `{ send_id: AudioSendId, feature: AudioFeature }` — it references a **named send** in the project's `AudioSetup` (§3.2), never a raw channel. `AudioFeature` is the enum that grows with §5's table — v1 ships `BandEnergy(Band)` and `Onset`; `PitchDelta`/`Pitch` land with v2 without touching this struct.
+`AudioModSource` is `{ send_id: AudioSendId, feature: AudioFeature }` — it references a **named send** in the project's `AudioSetup` (§3.2), never a raw channel. `AudioFeature` is `{ kind: AudioFeatureKind, band: AudioBand }` — one cell of the §5 matrix. Deserialization migrates the pre-matrix flat enum (`Amplitude`/`BandEnergy(b)`/`Centroid`/…) onto the new shape, so saved projects keep working.
 
 **Evaluation.** Like drivers and envelopes, `audio_mods` is evaluated each content-thread tick: read the latest feature frame for the source's `send_id`, run it through the shaper, write the parameter's effective value on top of its `base` (`ParamSlot.base`). It participates in the same per-tick parameter evaluation and composition order as the existing sources — audio modulation is not special-cased in the render path. (Composition order with drivers/envelopes/Ableton on the same param follows the existing modulation-stacking convention; spell it out when implementing.)
 
@@ -196,9 +204,13 @@ cpal RT thread ─push→ analysis ring ─drain→ audio worker ─frames→ pl
 The drawer parallels the existing envelope/driver drawers built on `param_slider_shared` ([crates/manifold-ui/src/panels/param_slider_shared.rs](../crates/manifold-ui/src/panels/param_slider_shared.rs)):
 
 - A third modulation button on the slider opens the Audio drawer downward.
-- **Source row:** send picker (the named sends from the project's `AudioSetup` — "Kick / Bass / Vocals") + feature picker (`BandEnergy`, `Onset` in v1; `Pitch`, `PitchDelta` appear when v2 lands and only for sends that enabled pitch tracking).
-- **Shape rows:** attack, release, range (min/max), curve.
-- A small live meter of the post-shape value so the performer sees it move while assigning.
+- Rows (top to bottom), each with a leading label that lines up with the sliders:
+  - **Source** — send picker (the named sends, tinted with each send's identity color).
+  - **Feature** — the detector: Amplitude / Brightness / Noisiness / Liveliness / Transients.
+  - **Band** — Full / Low / Mid / High. Feature × Band = the cell that drives the slider.
+  - **Invert / Delta** toggles (loud→low; drive on rate-of-change).
+  - **Amount / Attack / Release** shaping sliders (sensitivity + envelope-follower smoothing). Range is the green trim handles on the slider itself.
+- The main slider moves as the mod drives it, doubling as the live meter; a dedicated post-shape meter and the spectrogram feature-overlays are the next step.
 - Mutations route through `EditingService` like every other param change — a command that edits `audio_mods` on the target `PresetInstance`. No direct model writes from the UI.
 
 The drawer is authoring UI. It does not need to be perform-time minimal; it needs to be clear.

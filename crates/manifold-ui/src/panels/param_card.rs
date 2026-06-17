@@ -1994,13 +1994,17 @@ impl ParamCardPanel {
     /// Build an `AudioModSetSource` action for a param, combining the current
     /// send + feature selection (from `mod_state`) with the one dimension the
     /// click changed. Empty when no send resolves (nothing to point at).
+    /// Build an `AudioModSetSource` from the param's current selections, with one
+    /// axis optionally overridden (the clicked send / feature-kind / band).
     fn audio_set_source_action(
         &self,
         target: GraphParamTarget,
         pi: usize,
         send_override: Option<usize>,
-        feature_override: Option<usize>,
+        kind_override: Option<usize>,
+        band_override: Option<usize>,
     ) -> Vec<PanelAction> {
+        use super::param_slider_shared::{audio_band_from_index, audio_kind_from_index};
         let ms = &self.state.mod_state;
         let send_k = send_override
             .map(|k| k as i32)
@@ -2011,9 +2015,14 @@ impl ParamCardPanel {
         else {
             return vec![];
         };
-        let feat_idx = feature_override
-            .unwrap_or_else(|| ms.audio_feature_idx.get(pi).copied().unwrap_or(0) as usize);
-        let feature = super::param_slider_shared::audio_feature_from_index(feat_idx);
+        let kind_idx =
+            kind_override.unwrap_or_else(|| ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize);
+        let band_idx =
+            band_override.unwrap_or_else(|| ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize);
+        let feature = manifold_core::AudioFeature::new(
+            audio_kind_from_index(kind_idx),
+            audio_band_from_index(band_idx),
+        );
         vec![PanelAction::AudioModSetSource(target, self.pid_at(pi), send_id, feature)]
     }
 
@@ -2080,10 +2089,13 @@ impl ParamCardPanel {
                     self.audio_toggle_action(GraphParamTarget::Effect(ei), pi)
                 }
                 RowClick::AudioSelectSend(pi, k) => {
-                    self.audio_set_source_action(GraphParamTarget::Effect(ei), pi, Some(k), None)
+                    self.audio_set_source_action(GraphParamTarget::Effect(ei), pi, Some(k), None, None)
                 }
-                RowClick::AudioSelectFeature(pi, f) => {
-                    self.audio_set_source_action(GraphParamTarget::Effect(ei), pi, None, Some(f))
+                RowClick::AudioSelectKind(pi, k) => {
+                    self.audio_set_source_action(GraphParamTarget::Effect(ei), pi, None, Some(k), None)
+                }
+                RowClick::AudioSelectBand(pi, b) => {
+                    self.audio_set_source_action(GraphParamTarget::Effect(ei), pi, None, None, Some(b))
                 }
                 RowClick::AudioToggleInvert(pi) => {
                     vec![PanelAction::AudioModSetInvert(GraphParamTarget::Effect(ei), self.pid_at(pi))]
@@ -2203,10 +2215,13 @@ impl ParamCardPanel {
                     self.audio_toggle_action(GraphParamTarget::Generator, pi)
                 }
                 RowClick::AudioSelectSend(pi, k) => {
-                    self.audio_set_source_action(GraphParamTarget::Generator, pi, Some(k), None)
+                    self.audio_set_source_action(GraphParamTarget::Generator, pi, Some(k), None, None)
                 }
-                RowClick::AudioSelectFeature(pi, f) => {
-                    self.audio_set_source_action(GraphParamTarget::Generator, pi, None, Some(f))
+                RowClick::AudioSelectKind(pi, k) => {
+                    self.audio_set_source_action(GraphParamTarget::Generator, pi, None, Some(k), None)
+                }
+                RowClick::AudioSelectBand(pi, b) => {
+                    self.audio_set_source_action(GraphParamTarget::Generator, pi, None, None, Some(b))
                 }
                 RowClick::AudioToggleInvert(pi) => {
                     vec![PanelAction::AudioModSetInvert(GraphParamTarget::Generator, self.pid_at(pi))]

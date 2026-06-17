@@ -160,8 +160,10 @@ pub struct ParamModState {
     /// Per-param: index of the selected send in [`Self::audio_send_labels`], or
     /// -1 if the mod's send no longer resolves.
     pub audio_send_idx: Vec<i32>,
-    /// Per-param: selected feature index (see [`AUDIO_FEATURE_LABELS`]).
-    pub audio_feature_idx: Vec<i32>,
+    /// Per-param: selected feature `kind` index (into `AudioFeatureKind::ALL`)
+    /// and `band` index (into `AudioBand::ALL`) — the two-axis feature matrix.
+    pub audio_kind_idx: Vec<i32>,
+    pub audio_band_idx: Vec<i32>,
     /// Per-param: audio-mod output sub-range (the green trim handles), 0..1 of the
     /// slider's travel. Mirrors `trim_min`/`trim_max` for drivers — the audio
     /// drives only this slice of the param's range.
@@ -185,34 +187,46 @@ pub struct ParamModState {
     pub audio_send_ids: Vec<manifold_core::AudioSendId>,
 }
 
-/// Map a feature button index (see [`AUDIO_FEATURE_LABELS`]) to its
-/// `AudioFeature`. Out-of-range falls back to low-band energy.
-pub(crate) fn audio_feature_from_index(idx: usize) -> manifold_core::AudioFeature {
-    use manifold_core::audio_mod::{AudioBand, AudioFeature};
-    match idx {
-        0 => AudioFeature::Amplitude,
-        1 => AudioFeature::BandEnergy(AudioBand::Low),
-        2 => AudioFeature::BandEnergy(AudioBand::Mid),
-        3 => AudioFeature::BandEnergy(AudioBand::High),
-        4 => AudioFeature::Centroid,
-        5 => AudioFeature::Flatness,
-        6 => AudioFeature::Flux,
-        7 => AudioFeature::Onset,
-        _ => AudioFeature::Amplitude,
-    }
+/// Map a feature-row button index to its `AudioFeatureKind` (clamped).
+pub(crate) fn audio_kind_from_index(idx: usize) -> manifold_core::AudioFeatureKind {
+    manifold_core::AudioFeatureKind::ALL
+        .get(idx)
+        .copied()
+        .unwrap_or(manifold_core::AudioFeatureKind::Amplitude)
 }
 
-/// The feature options exposed in the per-slider audio drawer, in button order.
-/// Index maps to an `AudioFeature` in the card's click handler. Split for display
-/// into a **Level** group (indices 0..4: Amp = overall level, then the Low/Mid/
-/// High energy bands) and a **Tone** group (indices 4..8: Bright = spectral
-/// centroid, Noisy = flatness tonal→noisy, Flux = spectral change, Transients =
-/// onset).
-pub(crate) const AUDIO_FEATURE_LABELS: [&str; 8] =
-    ["Amp", "Low", "Mid", "High", "Bright", "Noisy", "Flux", "Transients"];
-/// How many of [`AUDIO_FEATURE_LABELS`] belong to the leading "Level" row; the
-/// rest form the "Tone" row.
-pub(crate) const AUDIO_LEVEL_FEATURE_COUNT: usize = 4;
+/// Map a band-row button index to its `AudioBand` (clamped).
+pub(crate) fn audio_band_from_index(idx: usize) -> manifold_core::AudioBand {
+    manifold_core::AudioBand::ALL
+        .get(idx)
+        .copied()
+        .unwrap_or(manifold_core::AudioBand::Full)
+}
+
+/// Feature-row button labels, in `AudioFeatureKind::ALL` order.
+pub(crate) fn audio_kind_labels() -> [&'static str; 5] {
+    [
+        manifold_core::AudioFeatureKind::Amplitude.label(),
+        manifold_core::AudioFeatureKind::Brightness.label(),
+        manifold_core::AudioFeatureKind::Noisiness.label(),
+        manifold_core::AudioFeatureKind::Liveliness.label(),
+        manifold_core::AudioFeatureKind::Transients.label(),
+    ]
+}
+
+/// Band-row button labels, in `AudioBand::ALL` order.
+pub(crate) fn audio_band_labels() -> [&'static str; 4] {
+    [
+        manifold_core::AudioBand::Full.label(),
+        manifold_core::AudioBand::Low.label(),
+        manifold_core::AudioBand::Mid.label(),
+        manifold_core::AudioBand::High.label(),
+    ]
+}
+
+/// Number of feature kinds / bands exposed in the drawer.
+pub(crate) const AUDIO_KIND_COUNT: usize = 5;
+pub(crate) const AUDIO_BAND_COUNT: usize = 4;
 
 /// Audio-modulation display state for one card, assembled in `state_sync` and
 /// applied to [`ParamModState`] via [`ParamModState::sync_audio`]. Bundled so
@@ -224,8 +238,9 @@ pub struct AudioCardState {
     /// Per-param: the mod's send id, if any. Resolved to an index into
     /// `send_ids` by [`ParamModState::sync_audio`].
     pub send_id: Vec<Option<manifold_core::AudioSendId>>,
-    /// Per-param: selected feature index (0..3).
-    pub feature_idx: Vec<i32>,
+    /// Per-param: selected feature `kind` and `band` indices (the matrix axes).
+    pub kind_idx: Vec<i32>,
+    pub band_idx: Vec<i32>,
     /// Per-param: the mod's output sub-range (`AudioModShape::range_min/max`).
     pub range_min: Vec<f32>,
     pub range_max: Vec<f32>,
@@ -260,7 +275,8 @@ impl ParamModState {
             driver_triplet: vec![false; param_count],
             audio_active: vec![false; param_count],
             audio_send_idx: vec![-1; param_count],
-            audio_feature_idx: vec![0; param_count],
+            audio_kind_idx: vec![0; param_count],
+            audio_band_idx: vec![0; param_count],
             audio_range_min: vec![0.0; param_count],
             audio_range_max: vec![1.0; param_count],
             audio_invert: vec![false; param_count],
@@ -277,7 +293,8 @@ impl ParamModState {
     pub fn sync_audio(&mut self, n: usize, audio: &AudioCardState) {
         for i in 0..n {
             self.audio_active[i] = audio.active.get(i).copied().unwrap_or(false);
-            self.audio_feature_idx[i] = audio.feature_idx.get(i).copied().unwrap_or(0);
+            self.audio_kind_idx[i] = audio.kind_idx.get(i).copied().unwrap_or(0);
+            self.audio_band_idx[i] = audio.band_idx.get(i).copied().unwrap_or(0);
             self.audio_range_min[i] = audio.range_min.get(i).copied().unwrap_or(0.0);
             self.audio_range_max[i] = audio.range_max.get(i).copied().unwrap_or(1.0);
             self.audio_invert[i] = audio.invert.get(i).copied().unwrap_or(false);
@@ -625,8 +642,12 @@ pub(crate) fn build_driver_config(
 
     let spec = DrawerSpec {
         rows: vec![
-            DrawerRow::Buttons { buttons: beat_div_buttons, width: ButtonWidth::Proportional },
-            DrawerRow::Buttons { buttons: row2_buttons, width: ButtonWidth::Uniform },
+            DrawerRow::Buttons {
+                buttons: beat_div_buttons,
+                width: ButtonWidth::Proportional,
+                label: None,
+            },
+            DrawerRow::Buttons { buttons: row2_buttons, width: ButtonWidth::Uniform, label: None },
         ],
         btn_font_size,
         slider_font_size: FONT_SIZE,
@@ -1256,19 +1277,23 @@ pub(crate) fn build_param_row(
                 }
             })
             .collect();
-        let feat_sel = mod_state.audio_feature_idx.get(i).copied().unwrap_or(0);
+        let kind_sel = mod_state.audio_kind_idx.get(i).copied().unwrap_or(0);
+        let band_sel = mod_state.audio_band_idx.get(i).copied().unwrap_or(0);
         let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
         let rate_on = mod_state.audio_rate.get(i).copied().unwrap_or(false);
-        // Features split into two legible rows: Level (Amp/Low/Mid/High) and
-        // Tone (Bright/Noise/Flux/Hit). Their flat button indices stay 0..8
-        // across the two rows, so the click handler is unchanged.
-        let make_feat = |range: std::ops::Range<usize>| -> Vec<DrawerButton> {
-            range
-                .map(|k| DrawerButton::new(AUDIO_FEATURE_LABELS[k], k as i32 == feat_sel))
-                .collect()
-        };
-        let level_buttons = make_feat(0..AUDIO_LEVEL_FEATURE_COUNT);
-        let tone_buttons = make_feat(AUDIO_LEVEL_FEATURE_COUNT..AUDIO_FEATURE_LABELS.len());
+        // The feature matrix: a Feature row (kind) and a Band row, each a single
+        // selection. Flat button indices run sends, then kinds (0..5), then bands
+        // (5..9), then the two modifier toggles (9, 10) — see match_param_row_click.
+        let kind_buttons: Vec<DrawerButton> = audio_kind_labels()
+            .iter()
+            .enumerate()
+            .map(|(k, l)| DrawerButton::new(*l, k as i32 == kind_sel))
+            .collect();
+        let band_buttons: Vec<DrawerButton> = audio_band_labels()
+            .iter()
+            .enumerate()
+            .map(|(b, l)| DrawerButton::new(*l, b as i32 == band_sel))
+            .collect();
         // Shaping sliders: Amount (sensitivity), Attack, Release. These become
         // `DrawerIds.sliders[0..3]` in row order — what the drag path hit-tests.
         let sens = mod_state.audio_sensitivity.get(i).copied().unwrap_or(1.0);
@@ -1281,24 +1306,35 @@ pub(crate) fn build_param_row(
             colors: SliderColors::default_slider(),
             label_w: AUDIO_SHAPE_LABEL_W,
         };
-        // Modifier toggles on their own row, so the feature row isn't crowded:
-        // "Inv" (loud → low) then "d/dt" (drive on motion). Their flat indices
-        // sit one and two past the features (drawer button indices are flat
-        // across rows in creation order), so the click handler reads them as
-        // feature == LABELS.len() and LABELS.len() + 1.
-        let toggle_buttons = vec![
-            DrawerButton::new("Inv", invert_on),
-            DrawerButton::new("d/dt", rate_on),
-        ];
+        // Modifier toggles below the band row: "Inv" (loud → low) then "Delta"
+        // (drive on motion). Flat indices sit one and two past the bands.
+        let toggle_buttons =
+            vec![DrawerButton::new("Inv", invert_on), DrawerButton::new("Delta", rate_on)];
         let spec = DrawerSpec {
             rows: vec![
-                DrawerRow::Buttons { buttons: send_buttons, width: ButtonWidth::Proportional },
-                DrawerRow::Buttons { buttons: level_buttons, width: ButtonWidth::Uniform },
-                DrawerRow::Buttons { buttons: tone_buttons, width: ButtonWidth::Uniform },
+                DrawerRow::Buttons {
+                    buttons: send_buttons,
+                    width: ButtonWidth::Proportional,
+                    label: Some("Source".into()),
+                },
+                DrawerRow::Buttons {
+                    buttons: kind_buttons,
+                    width: ButtonWidth::Uniform,
+                    label: Some("Feature".into()),
+                },
+                DrawerRow::Buttons {
+                    buttons: band_buttons,
+                    width: ButtonWidth::Uniform,
+                    label: Some("Band".into()),
+                },
+                DrawerRow::Buttons {
+                    buttons: toggle_buttons,
+                    width: ButtonWidth::Proportional,
+                    label: None,
+                },
                 shape_slider("Amount", sens / AUDIO_SENS_MAX, format!("{sens:.2}")),
                 shape_slider("Attack", attack / AUDIO_ATTACK_MAX_MS, format!("{attack:.0} ms")),
                 shape_slider("Release", release / AUDIO_RELEASE_MAX_MS, format!("{release:.0} ms")),
-                DrawerRow::Buttons { buttons: toggle_buttons, width: ButtonWidth::Proportional },
             ],
             btn_font_size: config_font,
             slider_font_size: FONT_SIZE,
@@ -1331,8 +1367,10 @@ pub(crate) enum RowClick {
     AudioToggle(usize),
     /// A send button in the audio drawer (param index, send index).
     AudioSelectSend(usize, usize),
-    /// A feature button in the audio drawer (param index, feature index).
-    AudioSelectFeature(usize, usize),
+    /// A feature-kind button in the audio drawer (param index, kind index).
+    AudioSelectKind(usize, usize),
+    /// A band button in the audio drawer (param index, band index).
+    AudioSelectBand(usize, usize),
     /// The "Inv" invert toggle in the audio drawer (param index).
     AudioToggleInvert(usize),
     /// The "d/dt" rate-of-change toggle in the audio drawer (param index).
@@ -1420,23 +1458,24 @@ pub(crate) fn match_param_row_click(
         }
     }
 
-    // Audio drawer buttons: flat index splits into send / feature. Sends come
-    // first; the feature row (features + a trailing "Inv" toggle) follows.
+    // Audio drawer buttons: one flat index across rows in build order — sends,
+    // then the Feature (kind) row, the Band row, then the two modifier toggles.
     for (pi, cfg) in audio_configs.iter().enumerate() {
         if let Some((dids, send_count)) = cfg
             && let Some(flat) = dids.resolve_button(id)
         {
-            return Some(if flat < *send_count {
-                RowClick::AudioSelectSend(pi, flat)
+            if flat < *send_count {
+                return Some(RowClick::AudioSelectSend(pi, flat));
+            }
+            let f = flat - send_count;
+            return Some(if f < AUDIO_KIND_COUNT {
+                RowClick::AudioSelectKind(pi, f)
+            } else if f < AUDIO_KIND_COUNT + AUDIO_BAND_COUNT {
+                RowClick::AudioSelectBand(pi, f - AUDIO_KIND_COUNT)
+            } else if f == AUDIO_KIND_COUNT + AUDIO_BAND_COUNT {
+                RowClick::AudioToggleInvert(pi)
             } else {
-                let feat = flat - send_count;
-                if feat == AUDIO_FEATURE_LABELS.len() {
-                    RowClick::AudioToggleInvert(pi)
-                } else if feat == AUDIO_FEATURE_LABELS.len() + 1 {
-                    RowClick::AudioToggleRate(pi)
-                } else {
-                    RowClick::AudioSelectFeature(pi, feat)
-                }
+                RowClick::AudioToggleRate(pi)
             });
         }
     }

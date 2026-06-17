@@ -32,6 +32,11 @@ const ROW_GAP: f32 = 4.0;
 /// container height to get the row height.
 pub(crate) const TOP_PAD: f32 = 4.0;
 const BTN_GAP: f32 = 1.0;
+/// Width reserved for a [`DrawerRow::Buttons`] leading label. Matches the audio
+/// shaping sliders' label width so feature/band rows line up with them.
+const ROW_LABEL_W: f32 = 52.0;
+/// Height of a row label's text box.
+const ROW_LABEL_H: f32 = 14.0;
 /// Horizontal inset for the leading/trailing elements of a [`DrawerRow::Status`]
 /// strip — matches the Ableton drawer's original `pad`.
 const STATUS_PAD: f32 = 6.0;
@@ -114,10 +119,13 @@ pub struct StatusStrip {
 /// One row of a drawer.
 pub enum DrawerRow {
     /// A horizontal group of buttons. Each button is one addressable control;
-    /// `width` selects proportional or uniform distribution.
+    /// `width` selects proportional or uniform distribution. `label`, when set,
+    /// reserves a leading label column (e.g. "Feature") that lines up with the
+    /// slider rows' labels.
     Buttons {
         buttons: Vec<DrawerButton>,
         width: ButtonWidth,
+        label: Option<String>,
     },
     /// A full-width value slider. Not click-addressed (the panel's existing
     /// slider-drag path handles it via the returned [`SliderNodeIds`]).
@@ -259,14 +267,33 @@ pub fn build(
 
     for row in &spec.rows {
         match row {
-            DrawerRow::Buttons { buttons, width } => {
+            DrawerRow::Buttons { buttons, width, label } => {
+                // Optional leading label column, aligned with the slider labels.
+                let label_w = if label.is_some() { ROW_LABEL_W } else { 0.0 };
+                if let Some(text) = label {
+                    tree.add_label(
+                        container,
+                        x + PAD_H,
+                        row_y + (ROW_H - ROW_LABEL_H) * 0.5,
+                        label_w,
+                        ROW_LABEL_H,
+                        text,
+                        UIStyle {
+                            text_color: Color32::new(150, 150, 160, 255),
+                            font_size: spec.slider_font_size,
+                            text_align: TextAlign::Left,
+                            ..UIStyle::default()
+                        },
+                    );
+                }
                 let labels: Vec<&str> = buttons.iter().map(|b| b.label.as_str()).collect();
-                let content_w = avail_w - BTN_GAP * (buttons.len().max(1) as f32 - 1.0);
+                let content_w =
+                    avail_w - label_w - BTN_GAP * (buttons.len().max(1) as f32 - 1.0);
                 let widths = match width {
                     ButtonWidth::Proportional => proportional_widths(&labels, content_w),
                     ButtonWidth::Uniform => uniform_widths(buttons.len(), content_w),
                 };
-                let mut cx = x + PAD_H;
+                let mut cx = x + PAD_H + label_w;
                 for (b, bw) in buttons.iter().zip(widths.iter()) {
                     let mut style = config_btn_style(b.active, spec.btn_font_size);
                     if let Some(accent) = b.accent {
@@ -388,6 +415,7 @@ mod tests {
         DrawerRow::Buttons {
             buttons: labels.iter().map(|(l, a)| DrawerButton::new(*l, *a)).collect(),
             width: ButtonWidth::Proportional,
+            label: None,
         }
     }
 
@@ -395,6 +423,7 @@ mod tests {
         DrawerRow::Buttons {
             buttons: labels.iter().map(|(l, a)| DrawerButton::new(*l, *a)).collect(),
             width: ButtonWidth::Uniform,
+            label: None,
         }
     }
 

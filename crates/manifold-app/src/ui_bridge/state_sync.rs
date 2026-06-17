@@ -1420,11 +1420,11 @@ fn build_audio_card_state(
     n: usize,
     resolve: impl Fn(&str) -> Option<usize>,
 ) -> AudioCardState {
-    use manifold_core::audio_mod::{AudioBand, AudioFeature};
     let mut a = AudioCardState {
         active: vec![false; n],
         send_id: vec![None; n],
-        feature_idx: vec![0; n],
+        kind_idx: vec![0; n],
+        band_idx: vec![0; n],
         range_min: vec![0.0; n],
         range_max: vec![1.0; n],
         invert: vec![false; n],
@@ -1451,18 +1451,8 @@ fn build_audio_card_state(
         a.sensitivity[pi] = am.shape.sensitivity;
         a.attack_ms[pi] = am.shape.attack_ms;
         a.release_ms[pi] = am.shape.release_ms;
-        a.feature_idx[pi] = match am.source.feature {
-            AudioFeature::Amplitude => 0,
-            AudioFeature::BandEnergy(AudioBand::Low) => 1,
-            AudioFeature::BandEnergy(AudioBand::Mid) => 2,
-            AudioFeature::BandEnergy(AudioBand::High) => 3,
-            AudioFeature::Centroid => 4,
-            AudioFeature::Flatness => 5,
-            AudioFeature::Flux => 6,
-            AudioFeature::Onset => 7,
-            // v2 features have no card option yet; show the default ("Amp").
-            AudioFeature::Pitch | AudioFeature::PitchDelta => 0,
-        };
+        a.kind_idx[pi] = am.source.feature.kind.index() as i32;
+        a.band_idx[pi] = am.source.feature.band.index() as i32;
     }
     a
 }

@@ -1055,7 +1055,9 @@ impl ContentThread {
             .clone()
             .and_then(|t| self.graph_snapshot(&t));
 
-        // Per-send audio levels for the Audio Setup meters (RMS amplitude 0..1).
+        // Per-send audio levels for the Audio Setup meters — the full-band
+        // amplitude (overall loudness, 0..1).
+        let full = manifold_core::AudioBand::Full.index();
         let mut audio_send_levels = [0.0f32; manifold_audio::analysis::MAX_SENDS];
         let audio_snapshot = self.engine.audio_snapshot();
         let audio_send_count = audio_snapshot.sends.len().min(audio_send_levels.len());
@@ -1063,7 +1065,7 @@ impl ContentThread {
             .iter_mut()
             .zip(audio_snapshot.sends.iter().take(audio_send_count))
         {
-            *dst = f.amplitude;
+            *dst = f.bands[full].amplitude;
         }
 
         // Drain any new VQT spectrogram columns for the Audio Setup scope. Empty

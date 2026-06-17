@@ -42,8 +42,10 @@ pub use color::Color;
 pub use effects::{EffectContainer, ParamSource};
 pub use graph_target::GraphTarget;
 pub use preset_type_id::PresetTypeId;
-pub use audio_features::{AudioFeatureSnapshot, SendFeatures};
-pub use audio_mod::{AudioBand, AudioFeature, AudioModShape, AudioModSource, ParameterAudioMod};
+pub use audio_features::{AudioFeatureSnapshot, BandFeatures, SendFeatures};
+pub use audio_mod::{
+    AudioBand, AudioFeature, AudioFeatureKind, AudioModShape, AudioModSource, ParameterAudioMod,
+};
 pub use audio_setup::{AudioDeviceRef, AudioSend, AudioSetup, SendAnalysisConfig};
 pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
 pub use layer::OverlapAction;

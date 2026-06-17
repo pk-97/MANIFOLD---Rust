@@ -10,46 +10,42 @@
 //! These are **runtime** values: never serialized, recomputed every analysis
 //! block. See `docs/AUDIO_MODULATION_DESIGN.md` §5.
 
+/// The detector outputs for one frequency band, all normalized **0..1**. The
+/// same five detectors run on every band (`Full`/`Low`/`Mid`/`High`), so any
+/// feature can be measured over any band — the cross-product the drawer exposes.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BandFeatures {
+    /// Loudness of the band — dB-normalized energy (RMS of the band magnitude).
+    pub amplitude: f32,
+    /// Spectral centroid within the band — brightness (log-mapped 0..1).
+    pub brightness: f32,
+    /// Spectral flatness within the band — tonal (0) vs noisy (1).
+    pub noisiness: f32,
+    /// Relative spectral flux within the band — change ÷ band energy, so it
+    /// self-scales with density instead of pinning on loud/busy material.
+    pub liveliness: f32,
+    /// Transient trigger — a 0..1 impulse that decays, from an adaptive
+    /// threshold on the band's flux. `Transients` on `Low` is a kick detector.
+    pub transients: f32,
+}
+
 /// Extracted features for one send at one analysis instant.
 ///
-/// v1 fills `amplitude`, `band_energy`, `centroid`, `flatness`, `flux`, and
-/// `onset` (all cheap reductions over the one FFT the worker runs); the pitch
-/// fields are v2 (the ridge tracker) and default to zero until that extractor
-/// produces them. New features become new fields here — the
-/// modulation model's [`crate::audio_mod::AudioFeature`] enum selects among
-/// them, so adding one does not disturb the plumbing.
+/// Per-band detector outputs (`bands`, indexed by [`crate::audio_mod::AudioBand`])
+/// plus the per-send pitch fields. All cheap reductions over the one FFT the
+/// worker runs; the pitch fields are v2 (the ridge tracker) and default to zero
+/// until that extractor produces them. [`crate::audio_mod::AudioFeature`] selects
+/// a `(kind, band)` cell, so adding a band or kind doesn't disturb the plumbing.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SendFeatures {
-    /// Overall RMS level of the analysis block, normalized **0..1** (samples are
-    /// −1..1, so their RMS is in range by construction). This is the `Amplitude`
-    /// feature — a true level the shaper maps straight onto a slider's range.
-    pub amplitude: f32,
-    /// Energy in [low, mid, high] perceptual bands, dB-normalized to **0..1**
-    /// against a fixed reference (≈ −60 dBFS floor); the per-send input gain is
-    /// the calibration knob.
-    pub band_energy: [f32; 3],
-    /// Spectral centroid — "brightness" — normalized **0..1** on a log-frequency
-    /// curve (~50 Hz..8 kHz), so 0 = dark, 1 = bright regardless of sample rate.
-    /// The feature that most directly carries emergent filter/FM motion.
-    pub centroid: f32,
-    /// Spectral flatness — tonal vs noisy — **0..1** (0 = pure tone, 1 = noise).
-    /// Lets a send tell "the synth is sounding" from "that's the noise riser."
-    pub flatness: f32,
-    /// Spectral flux — rate of spectral change, the sum of positive bin-to-bin
-    /// magnitude increases, dB-normalized to **0..1** like `band_energy`. Onset
-    /// is derived from the raw (pre-normalization) flux.
-    pub flux: f32,
-    /// Transient trigger, 0..1 impulse that decays. Derived from an adaptive
-    /// threshold on `flux`.
-    pub onset: f32,
-    /// Tracked fundamental in Hz (v2).
+    /// Per-band detector outputs, indexed by `AudioBand::index()` —
+    /// `[Full, Low, Mid, High]`.
+    pub bands: [BandFeatures; 4],
+    /// Tracked fundamental in Hz (v2) — per-send, not per-band.
     pub pitch_hz: f32,
-    /// Pitch rate-of-change in semitones/sec (v2) — the headline "motion"
-    /// feature. Signed.
+    /// Pitch rate-of-change in semitones/sec (v2). Signed.
     pub pitch_delta_st: f32,
-    /// Confidence the pitch reading is real, 0..1, from ridge magnitude /
-    /// energy (v2). Gates the pitch features so they go still on non-tonal
-    /// input.
+    /// Confidence the pitch reading is real, 0..1 (v2).
     pub pitch_confidence: f32,
 }
 

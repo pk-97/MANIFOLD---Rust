@@ -17,54 +17,174 @@ use crate::effects::ParamId;
 use crate::id::AudioSendId;
 use crate::macro_bank::MacroCurve;
 
-/// Which perceptual band of a send's energy a feature reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// A frequency band a feature is measured over. `Full` is the whole spectrum;
+/// `Low`/`Mid`/`High` restrict the reduction to a sub-range, so any feature can
+/// run on any band (e.g. `Transients` on `Low` is a kick detector).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioBand {
+    #[default]
+    Full,
     Low,
     Mid,
     High,
 }
 
-/// Which extracted feature of a send drives the modulation. `Amplitude` (the
-/// default) is the simple overall level; `BandEnergy`, `Centroid`, `Flatness`,
-/// `Flux` and `Onset` are the v1 spectral features; `Pitch`/`PitchDelta` arrive
-/// with the v2 ridge tracker and slot in here without touching the plumbing.
+impl AudioBand {
+    /// All bands in [`crate::audio_features::SendFeatures::bands`] order.
+    pub const ALL: [AudioBand; 4] =
+        [AudioBand::Full, AudioBand::Low, AudioBand::Mid, AudioBand::High];
+
+    /// Index into [`crate::audio_features::SendFeatures::bands`].
+    pub fn index(self) -> usize {
+        match self {
+            AudioBand::Full => 0,
+            AudioBand::Low => 1,
+            AudioBand::Mid => 2,
+            AudioBand::High => 3,
+        }
+    }
+
+    /// Short user-facing label.
+    pub fn label(self) -> &'static str {
+        match self {
+            AudioBand::Full => "Full",
+            AudioBand::Low => "Low",
+            AudioBand::Mid => "Mid",
+            AudioBand::High => "High",
+        }
+    }
+}
+
+/// Which detector runs over the chosen band. Each name describes the rough
+/// character of the sound it responds to. All are normalized 0..1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub enum AudioFeature {
-    /// Overall input level — the RMS of the analysis block, normalized 0..1
-    /// (the worker computes it from the raw samples). The shaper maps this
-    /// straight onto the target slider's range. The default feature.
+pub enum AudioFeatureKind {
+    /// Loudness of the band (RMS-like energy, dB-normalized).
     #[default]
     Amplitude,
-    BandEnergy(AudioBand),
-    /// Spectral centroid — "brightness", normalized 0..1.
-    Centroid,
+    /// Spectral centroid — brightness.
+    Brightness,
     /// Spectral flatness — tonal (0) vs noisy (1).
+    Noisiness,
+    /// Relative spectral flux — how much the band is changing.
+    Liveliness,
+    /// Onset trigger — transient hits in the band.
+    Transients,
+}
+
+impl AudioFeatureKind {
+    /// All kinds in drawer-button order.
+    pub const ALL: [AudioFeatureKind; 5] = [
+        AudioFeatureKind::Amplitude,
+        AudioFeatureKind::Brightness,
+        AudioFeatureKind::Noisiness,
+        AudioFeatureKind::Liveliness,
+        AudioFeatureKind::Transients,
+    ];
+
+    /// Index in [`Self::ALL`] order.
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|&k| k == self).unwrap_or(0)
+    }
+
+    /// User-facing label.
+    pub fn label(self) -> &'static str {
+        match self {
+            AudioFeatureKind::Amplitude => "Amplitude",
+            AudioFeatureKind::Brightness => "Brightness",
+            AudioFeatureKind::Noisiness => "Noisiness",
+            AudioFeatureKind::Liveliness => "Liveliness",
+            AudioFeatureKind::Transients => "Transients",
+        }
+    }
+}
+
+/// What a modulation reads: a detector (`kind`) run over a frequency band
+/// (`band`). The cross-product is the feature matrix exposed in the drawer —
+/// e.g. `{ Transients, Low }` is a kick detector, `{ Brightness, Full }` is
+/// overall brightness. Deserialization migrates the pre-matrix flat enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioFeature {
+    pub kind: AudioFeatureKind,
+    pub band: AudioBand,
+}
+
+impl AudioFeature {
+    pub fn new(kind: AudioFeatureKind, band: AudioBand) -> Self {
+        Self { kind, band }
+    }
+
+    /// Pull this feature's scalar out of a send's per-band features.
+    pub fn extract(self, f: &SendFeatures) -> f32 {
+        let b = &f.bands[self.band.index()];
+        match self.kind {
+            AudioFeatureKind::Amplitude => b.amplitude,
+            AudioFeatureKind::Brightness => b.brightness,
+            AudioFeatureKind::Noisiness => b.noisiness,
+            AudioFeatureKind::Liveliness => b.liveliness,
+            AudioFeatureKind::Transients => b.transients,
+        }
+    }
+}
+
+// ── Load migration: pre-matrix flat feature enum → { kind, band } ──
+//
+// `AudioFeature` used to be a flat enum (Amplitude / BandEnergy(band) / Centroid
+// / …). Saved projects carry that shape, so deserialization accepts both: the
+// current `{ kind, band }` object, or the legacy enum, mapped onto the matrix.
+
+impl<'de> Deserialize<'de> for AudioFeature {
+    fn deserialize<D>(d: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(AudioFeatureRepr::deserialize(d)?.into())
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AudioFeatureRepr {
+    /// Current shape — both keys required (no defaults), so the legacy object
+    /// form (`{ "bandEnergy": … }`) can't accidentally match here.
+    Matrix { kind: AudioFeatureKind, band: AudioBand },
+    /// Legacy flat enum.
+    Legacy(LegacyAudioFeature),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum LegacyAudioFeature {
+    Amplitude,
+    BandEnergy(AudioBand),
+    Centroid,
     Flatness,
-    /// Spectral flux — continuous "how much is changing."
     Flux,
     Onset,
     Pitch,
     PitchDelta,
 }
 
-impl AudioFeature {
-    /// Pull this feature's scalar out of a send's features.
-    pub fn extract(self, f: &SendFeatures) -> f32 {
-        match self {
-            AudioFeature::Amplitude => f.amplitude,
-            AudioFeature::BandEnergy(AudioBand::Low) => f.band_energy[0],
-            AudioFeature::BandEnergy(AudioBand::Mid) => f.band_energy[1],
-            AudioFeature::BandEnergy(AudioBand::High) => f.band_energy[2],
-            AudioFeature::Centroid => f.centroid,
-            AudioFeature::Flatness => f.flatness,
-            AudioFeature::Flux => f.flux,
-            AudioFeature::Onset => f.onset,
-            AudioFeature::Pitch => f.pitch_hz,
-            AudioFeature::PitchDelta => f.pitch_delta_st,
-        }
+impl From<AudioFeatureRepr> for AudioFeature {
+    fn from(r: AudioFeatureRepr) -> Self {
+        use AudioBand::Full;
+        use AudioFeatureKind::*;
+        let (kind, band) = match r {
+            AudioFeatureRepr::Matrix { kind, band } => (kind, band),
+            AudioFeatureRepr::Legacy(l) => match l {
+                LegacyAudioFeature::Amplitude => (Amplitude, Full),
+                LegacyAudioFeature::BandEnergy(b) => (Amplitude, b),
+                LegacyAudioFeature::Centroid => (Brightness, Full),
+                LegacyAudioFeature::Flatness => (Noisiness, Full),
+                LegacyAudioFeature::Flux => (Liveliness, Full),
+                LegacyAudioFeature::Onset => (Transients, Full),
+                LegacyAudioFeature::Pitch | LegacyAudioFeature::PitchDelta => (Amplitude, Full),
+            },
+        };
+        AudioFeature { kind, band }
     }
 }
 
@@ -232,31 +352,52 @@ mod tests {
 
     #[test]
     fn extract_selects_the_right_scalar() {
+        use crate::audio_features::BandFeatures;
+        use AudioBand::*;
+        use AudioFeatureKind::*;
         let f = SendFeatures {
-            amplitude: 0.42,
-            band_energy: [0.1, 0.2, 0.3],
-            centroid: 0.55,
-            flatness: 0.15,
-            flux: 1.7,
-            onset: 0.9,
-            pitch_hz: 110.0,
-            pitch_delta_st: -2.5,
-            pitch_confidence: 0.8,
+            bands: [
+                BandFeatures { amplitude: 0.42, ..Default::default() }, // Full
+                BandFeatures { amplitude: 0.1, ..Default::default() },  // Low
+                BandFeatures { brightness: 0.55, ..Default::default() }, // Mid
+                BandFeatures { liveliness: 1.7, transients: 0.9, ..Default::default() }, // High
+            ],
+            ..Default::default()
         };
-        assert_eq!(AudioFeature::BandEnergy(AudioBand::Low).extract(&f), 0.1);
-        assert_eq!(AudioFeature::BandEnergy(AudioBand::High).extract(&f), 0.3);
-        assert_eq!(AudioFeature::Centroid.extract(&f), 0.55);
-        assert_eq!(AudioFeature::Flatness.extract(&f), 0.15);
-        assert_eq!(AudioFeature::Flux.extract(&f), 1.7);
-        assert_eq!(AudioFeature::Onset.extract(&f), 0.9);
-        assert_eq!(AudioFeature::PitchDelta.extract(&f), -2.5);
-        // Amplitude reads the worker's normalized 0..1 RMS level directly.
-        assert_eq!(AudioFeature::Amplitude.extract(&f), 0.42);
+        assert_eq!(AudioFeature::new(Amplitude, Full).extract(&f), 0.42);
+        assert_eq!(AudioFeature::new(Amplitude, Low).extract(&f), 0.1);
+        assert_eq!(AudioFeature::new(Brightness, Mid).extract(&f), 0.55);
+        assert_eq!(AudioFeature::new(Liveliness, High).extract(&f), 1.7);
+        assert_eq!(AudioFeature::new(Transients, High).extract(&f), 0.9);
     }
 
     #[test]
-    fn amplitude_is_the_default_feature() {
-        assert_eq!(AudioFeature::default(), AudioFeature::Amplitude);
+    fn amplitude_full_is_the_default_feature() {
+        assert_eq!(
+            AudioFeature::default(),
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full)
+        );
+    }
+
+    #[test]
+    fn legacy_flat_feature_migrates_to_matrix() {
+        // Old flat-enum JSON forms must load onto the { kind, band } matrix.
+        let cases = [
+            ("\"amplitude\"", AudioFeatureKind::Amplitude, AudioBand::Full),
+            ("{\"bandEnergy\":\"low\"}", AudioFeatureKind::Amplitude, AudioBand::Low),
+            ("\"centroid\"", AudioFeatureKind::Brightness, AudioBand::Full),
+            ("\"flatness\"", AudioFeatureKind::Noisiness, AudioBand::Full),
+            ("\"flux\"", AudioFeatureKind::Liveliness, AudioBand::Full),
+            ("\"onset\"", AudioFeatureKind::Transients, AudioBand::Full),
+        ];
+        for (json, kind, band) in cases {
+            let f: AudioFeature = serde_json::from_str(json).unwrap();
+            assert_eq!(f, AudioFeature::new(kind, band), "migrating {json}");
+        }
+        // Current shape round-trips.
+        let cur = AudioFeature::new(AudioFeatureKind::Brightness, AudioBand::High);
+        let json = serde_json::to_string(&cur).unwrap();
+        assert_eq!(serde_json::from_str::<AudioFeature>(&json).unwrap(), cur);
     }
 
     #[test]
@@ -323,7 +464,7 @@ mod tests {
         let m = ParameterAudioMod::new(
             "amount".into(),
             AudioSendId::new("send-1"),
-            AudioFeature::BandEnergy(AudioBand::Mid),
+            AudioFeature::new(AudioFeatureKind::Liveliness, AudioBand::Mid),
         );
         let json = serde_json::to_string(&m).unwrap();
         let back: ParameterAudioMod = serde_json::from_str(&json).unwrap();
