@@ -396,15 +396,14 @@ struct SendState {
     col: Vec<f32>,
     /// Previous column (one hop back) — the transient/liveliness flux baseline.
     prev_col: Vec<f32>,
-    /// Per-band slow amplitude envelope — the onset detector's baseline. An onset
-    /// is the level rising sharply above this; it tracks the band's recent level
-    /// so the detector adapts to loud and quiet passages alike. Order [Full, Low,
-    /// Mid, High].
-    onset_env: [f32; 4],
-    /// Per-band onset arming. Set false the instant a transient fires and not set
-    /// true again until the level falls back toward the envelope (the note ends
-    /// or dips) — so a HELD note fires one onset, not a burst every refractory.
-    onset_armed: [bool; 4],
+    /// Per-band fast amplitude follower (~10 ms) — chases the attack closely.
+    /// Order [Full, Low, Mid, High].
+    amp_fast: [f32; 4],
+    /// Per-band slow amplitude follower (~40 ms) — the local baseline. An onset is
+    /// `amp_fast − amp_slow` rising past a threshold: a sharp attack pulls fast
+    /// ahead of slow; sustained content keeps them together. On a fire the slow
+    /// follower is snapped to the current level so a HELD note can't re-fire.
+    amp_slow: [f32; 4],
     /// Hops remaining in each band's onset refractory window — a short debounce so
     /// the multi-hop attack itself reads as one spike.
     transient_refractory: [u8; 4],
@@ -506,8 +505,8 @@ impl WorkerLoop {
                 since_hop: 0,
                 col: vec![0.0; nb],
                 prev_col: vec![0.0; nb],
-                onset_env: [0.0; 4],
-                onset_armed: [true; 4],
+                amp_fast: [0.0; 4],
+                amp_slow: [0.0; 4],
                 transient_refractory: [0; 4],
                 has_prev: false,
                 centroid_yfb: [-1.0; 4],
@@ -763,40 +762,37 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
 
 // ── Onset (transient) detection ──────────────────────────────────────────
 //
-// A transient is a NOTE ONSET: the band's level rising sharply above its recent
-// baseline. Per-hop spectral flux on a 94%-overlapped VQT is far too twitchy to
-// tell "new note" from "still ringing" — a held note trickles flux every hop and
-// a time-based refractory just re-fires once it expires. So the detector is an
-// envelope-follower Schmitt trigger on the band amplitude instead:
-//   • `onset_env` slowly tracks the band level (the baseline);
-//   • an onset fires when amplitude exceeds `env · ONSET_RISE_RATIO` while armed
-//     and loud;
-//   • firing DISARMS, and the band re-arms only once amplitude falls back below
-//     `env · ONSET_REARM_RATIO` (or goes silent) — so a sustained note fires once
-//     and can't re-fire until it actually dips or stops.
-// The decaying-impulse output and short refractory debounce are unchanged.
+// A transient is a sharp ATTACK — what tells a kick on top of sustained bass
+// apart from a held drone is the *rate* of the rise, not the level or whether it
+// dips. So the detector is a percussive onset: two amplitude followers per band,
+// a fast one (~10 ms) that chases the attack and a slow one (~40 ms) that holds
+// the local baseline. The onset signal is their difference `fast − slow` — a
+// sharp attack pulls fast ahead of slow, sustained content keeps them together.
+// It fires when that difference clears `ONSET_RISE` (and the band is loud, and a
+// short refractory has elapsed); on a fire the slow follower is SNAPPED to the
+// current level so the gap collapses and a held note can't re-fire — yet a kick
+// pattern, whose level drops between hits, pulls fast ahead again on each hit.
+// Per-hop flux on a 94%-overlapped VQT was too twitchy for this; the followers
+// average that noise out.
 
-/// Rise factor above the slow envelope that counts as an onset. On `amplitude`,
-/// which is dB-mapped 0..1, so this is a modest ratio.
-const ONSET_RISE_RATIO: f32 = 1.3;
-/// Re-arm once amplitude falls to this fraction of the envelope — i.e. the note
-/// dipped or ended. A sustain never dips this far, so it stays disarmed.
-const ONSET_REARM_RATIO: f32 = 0.7;
-/// Per-hop smoothing of the onset envelope (≈ 250 ms at hop ≈ 5.3 ms): slow
-/// enough that a sharp attack overshoots it, fast enough to follow a new section.
-const ONSET_ENV_COEFF: f32 = 0.02;
+/// Per-hop smoothing of the fast follower (~10 ms at hop ≈ 5.3 ms).
+const ONSET_FAST_COEFF: f32 = 0.5;
+/// Per-hop smoothing of the slow follower / baseline (~40 ms at hop ≈ 5.3 ms).
+const ONSET_SLOW_COEFF: f32 = 0.15;
+/// How far the fast follower must lead the slow one (on the 0..1 amplitude scale)
+/// to count as an attack. Lower = more sensitive. The main kick-sensitivity knob.
+const ONSET_RISE: f32 = 0.06;
 /// A transient only fires on a band loud enough to matter — `amplitude` is the
-/// band's level on the colourmap's 0..1 dB scale (≈ −53 dBFS here). Below it the
-/// band is treated as silent (and re-armed).
+/// band's level on the colourmap's 0..1 dB scale (≈ −53 dBFS here).
 const ONSET_AMP_GATE: f32 = 0.12;
 /// Per-hop decay of the transient impulse (~100 ms settle at hop ≈ 5.3 ms).
 const ONSET_DECAY: f32 = 0.85;
 /// Below this band energy, relative flux (liveliness) reads 0 — avoids the
 /// flux ÷ energy ratio blowing up on near-silence.
 const FLUX_ENERGY_GATE: f32 = 1e-4;
-/// Short debounce after an onset (~53 ms at hop ≈ 5.3 ms) so the multi-hop attack
-/// reads as one spike. The arm/re-arm logic above prevents sustained re-fire.
-const ONSET_REFRACTORY_HOPS: u8 = 10;
+/// Short debounce after an onset (~27 ms at hop ≈ 5.3 ms) so the multi-hop attack
+/// reads as one spike. The slow-follower snap prevents sustained re-fire.
+const ONSET_REFRACTORY_HOPS: u8 = 5;
 /// Pink-tilt slope the scope colourmap applies (dB/oct). Must stay equal to
 /// `manifold_spectral`'s `PINK_SLOPE_DB_PER_OCT` so the worker's reductions and
 /// presence gate evaluate the exact tilted dB the user sees painted.
@@ -973,37 +969,33 @@ fn reduce_send(
             -1.0
         };
 
+        // Onset followers track every hop — including warm-up — so they're already
+        // settled when firing arms ([`have_prev`]); a step from zero followers
+        // would otherwise read as a spurious onset the moment analysis starts.
+        let amp = r.amplitude;
+        send.amp_fast[bi] += (amp - send.amp_fast[bi]) * ONSET_FAST_COEFF;
+        send.amp_slow[bi] += (amp - send.amp_slow[bi]) * ONSET_SLOW_COEFF;
+
         if have_prev {
             // Liveliness (relative flux) self-scales with density.
             bf.liveliness = if loud { relative_flux(r.flux, r.energy) } else { 0.0 };
 
-            // Transient = a NOTE ONSET: amplitude rising sharply above its slow
-            // envelope while armed. Firing disarms; the band re-arms only once the
-            // level falls back toward the envelope (a dip or gap), so a HELD note
-            // fires exactly once instead of machine-gunning every refractory. A
-            // short refractory debounces the multi-hop attack itself.
-            let amp = bf.amplitude;
-            let env = send.onset_env[bi];
+            // Transient = a sharp attack: the fast follower pulling ahead of the
+            // slow baseline by more than ONSET_RISE. On a fire, snap the slow
+            // follower up to the current level so the gap closes and a held note
+            // can't re-fire — a kick pattern still dips between hits and reopens
+            // the gap. A short refractory debounces the multi-hop attack.
+            let rise = send.amp_fast[bi] - send.amp_slow[bi];
             let refractory = &mut send.transient_refractory[bi];
-            let rising = amp > env * ONSET_RISE_RATIO;
-            let triggered = loud && send.onset_armed[bi] && *refractory == 0 && rising;
+            let triggered = loud && *refractory == 0 && rise > ONSET_RISE;
             if triggered {
                 bf.transients = 1.0;
-                send.onset_armed[bi] = false;
                 *refractory = ONSET_REFRACTORY_HOPS;
+                send.amp_slow[bi] = amp;
             } else {
                 bf.transients *= ONSET_DECAY;
                 *refractory = refractory.saturating_sub(1);
             }
-            // Re-arm once the band dips back toward (or below) its baseline, or
-            // goes silent — a sustained note never dips this far, so it stays
-            // disarmed for its whole duration.
-            if !loud || amp < env * ONSET_REARM_RATIO {
-                send.onset_armed[bi] = true;
-            }
-            // Slow baseline, updated AFTER the rise test so an onset is measured
-            // against the pre-onset level.
-            send.onset_env[bi] += (amp - send.onset_env[bi]) * ONSET_ENV_COEFF;
         }
     }
 }
@@ -1127,8 +1119,8 @@ mod tests {
             since_hop: 0,
             col,
             prev_col: vec![0.0f32; nb],
-            onset_env: [0.0; 4],
-            onset_armed: [true; 4],
+            amp_fast: [0.0; 4],
+            amp_slow: [0.0; 4],
             transient_refractory: [0; 4],
             has_prev: false,
             centroid_yfb: [-1.0; 4],
@@ -1239,8 +1231,8 @@ mod tests {
             since_hop: 0,
             col: tone.clone(),
             prev_col: vec![0.0f32; nb],
-            onset_env: [0.0; 4], // baseline starts at silence → the tone is an onset
-            onset_armed: [true; 4],
+            amp_fast: [0.0; 4], // followers start at silence → the tone is an onset
+            amp_slow: [0.0; 4],
             transient_refractory: [0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
@@ -1276,6 +1268,59 @@ mod tests {
             s.prev_col.copy_from_slice(&s.col);
         }
         assert!(reonset, "the note returning after a gap must fire a fresh onset");
+    }
+
+    #[test]
+    fn kick_on_sustained_bass_fires_each_hit() {
+        // The other failure mode: kicks riding on a sustained bass floor (the low
+        // band never goes quiet). Each kick's sharp attack must still fire even
+        // though the band level never dips to silence between hits.
+        let c = cfg();
+        let nb = nbins();
+        let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
+        let low = bands().1;
+        let kick = vqt_col(&sine(50.0, nfft())); // full-level low content
+        let bass: Vec<f32> = kick.iter().map(|m| m * 0.3).collect(); // quieter sustain
+
+        let mut s = SendState {
+            channels: vec![0],
+            gain: 1.0,
+            window: Vec::new(),
+            since_hop: 0,
+            col: bass.clone(),
+            prev_col: bass.clone(),
+            amp_fast: [0.0; 4],
+            amp_slow: [0.0; 4],
+            transient_refractory: [0; 4],
+            has_prev: true,
+            centroid_yfb: [-1.0; 4],
+            features: SendFeatures::default(),
+        };
+        // Settle the followers on the sustained bass floor.
+        for _ in 0..40 {
+            s.col.copy_from_slice(&bass);
+            reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
+            s.prev_col.copy_from_slice(&s.col);
+        }
+
+        // Four kicks, each a short burst over the bass, with bass between them.
+        let mut hits = 0;
+        for _ in 0..4 {
+            let mut fired = false;
+            for h in 0..46 {
+                let src = if h < 6 { &kick } else { &bass };
+                s.col.copy_from_slice(src);
+                reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
+                if s.features.bands[low].transients > 0.99 {
+                    fired = true;
+                }
+                s.prev_col.copy_from_slice(&s.col);
+            }
+            if fired {
+                hits += 1;
+            }
+        }
+        assert_eq!(hits, 4, "every kick over sustained bass should fire an onset");
     }
 
     #[test]
