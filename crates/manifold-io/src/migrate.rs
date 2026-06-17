@@ -55,7 +55,52 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.7.0".to_string());
     }
 
+    if is_version_less_than(&version, "1.8.0") {
+        migrate_v170_to_v180(&mut root);
+        root["projectVersion"] = Value::String("1.8.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
+}
+
+/// v1.7.0 → v1.8.0: repair generator layers whose `genParams` was serialized
+/// through the *effect* path. `Layer::new_generator` used to build its
+/// `gen_params` with `PresetInstance::new` (which stamps `kind: Effect`)
+/// instead of `PresetInstance::new_generator` (`kind: Generator`). The wrong
+/// kind is invisible at runtime — `generator_type()` just reads the
+/// `effect_type` field — but it routes serialization through the effect
+/// branch, so the saved `genParams` carries an `effectType` field where the
+/// generator decoder expects `generatorType`. On reload the decoder finds no
+/// `generatorType`, defaults the type to `NONE`, and the layer renders black
+/// (the "cleared generator" bug); only layers that also carried a per-instance
+/// graph override survived, rescued on load by `reconcile_generator_identity`
+/// reading the graph's `presetMetadata.id`.
+///
+/// Rename `effectType` → `generatorType` inside every layer `genParams` that
+/// lacks `generatorType`. Generators saved by fixed code already have
+/// `generatorType` (and no `effectType` in `genParams`), so they are skipped —
+/// the pass is idempotent and only ever touches the corrupted shape. Layer /
+/// master / clip *effects* legitimately use `effectType` and are never visited
+/// (this walks `genParams` only).
+fn migrate_v170_to_v180(root: &mut Value) {
+    let Some(layers) = root
+        .get_mut("timeline")
+        .and_then(|t| t.get_mut("layers"))
+        .and_then(|l| l.as_array_mut())
+    else {
+        return;
+    };
+    for layer in layers.iter_mut() {
+        let Some(gp) = layer.get_mut("genParams").and_then(|g| g.as_object_mut()) else {
+            continue;
+        };
+        if gp.contains_key("generatorType") {
+            continue;
+        }
+        if let Some(ty) = gp.remove("effectType") {
+            gp.insert("generatorType".to_string(), ty);
+        }
+    }
 }
 
 /// v1.6.0 → v1.7.0: the WireframeDepth graph decomposition replaced the legacy
@@ -610,7 +655,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.7.0")
+            Some("1.8.0")
         );
     }
 
@@ -626,7 +671,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.7.0")
+            Some("1.8.0")
         );
     }
 
@@ -640,7 +685,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.7.0")
+            Some("1.8.0")
         );
     }
 
@@ -655,7 +700,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.7.0")
+            Some("1.8.0")
         );
     }
 
@@ -699,7 +744,7 @@ mod tests {
         // The "Ghost" envelope had no matching effect → dropped.
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.7.0")
+            Some("1.8.0")
         );
     }
 
@@ -947,7 +992,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.7.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.8.0"));
         assert_eq!(
             v["settings"]["masterEffects"][0]["effectType"].as_str(),
             Some("WireframeDepth")
@@ -969,6 +1014,75 @@ mod tests {
         assert_eq!(
             v["timeline"]["layers"][0]["clips"][0]["effects"][0]["effectType"].as_str(),
             Some("WireframeDepth")
+        );
+    }
+
+    #[test]
+    fn test_v180_repairs_effect_kind_gen_params() {
+        // A generator layer whose `genParams` was saved through the effect
+        // path (carries `effectType`, no `generatorType`) is repaired; a
+        // correctly-saved generator (`generatorType`) is left alone; layer
+        // and master *effects* keep their `effectType`.
+        let json = r#"{
+            "projectVersion": "1.7.0",
+            "settings": {
+                "masterEffects": [ { "effectType": "ColorGrade", "enabled": true } ]
+            },
+            "timeline": { "layers": [
+                {
+                    "layerType": 1,
+                    "genParams": { "effectType": "FluidSimulation", "paramValues": {} },
+                    "effects": [ { "effectType": "Bloom" } ]
+                },
+                {
+                    "layerType": 1,
+                    "genParams": { "generatorType": "Plasma", "paramValues": {} }
+                }
+            ] }
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(v["projectVersion"].as_str(), Some("1.8.0"));
+
+        // Corrupted generator: effectType → generatorType, effectType removed.
+        let gp0 = &v["timeline"]["layers"][0]["genParams"];
+        assert_eq!(gp0["generatorType"].as_str(), Some("FluidSimulation"));
+        assert!(
+            gp0.get("effectType").is_none(),
+            "effectType must be removed from genParams"
+        );
+
+        // Healthy generator: untouched.
+        assert_eq!(
+            v["timeline"]["layers"][1]["genParams"]["generatorType"].as_str(),
+            Some("Plasma")
+        );
+
+        // Real effects keep effectType — the pass only walks genParams.
+        assert_eq!(
+            v["settings"]["masterEffects"][0]["effectType"].as_str(),
+            Some("ColorGrade")
+        );
+        assert_eq!(
+            v["timeline"]["layers"][0]["effects"][0]["effectType"].as_str(),
+            Some("Bloom")
+        );
+    }
+
+    #[test]
+    fn test_v180_gen_params_repair_is_idempotent() {
+        // Re-running the repair on already-fixed genParams is a no-op.
+        let json = r#"{
+            "projectVersion": "1.8.0",
+            "timeline": { "layers": [
+                { "layerType": 1, "genParams": { "generatorType": "Plasma" } }
+            ] }
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(
+            v["timeline"]["layers"][0]["genParams"]["generatorType"].as_str(),
+            Some("Plasma")
         );
     }
 }

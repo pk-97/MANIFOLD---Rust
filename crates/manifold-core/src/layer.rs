@@ -229,7 +229,15 @@ impl Layer {
     /// Create a new generator layer with fully initialized params.
     pub fn new_generator(name: String, gen_type: PresetTypeId, index: i32) -> Self {
         let mut layer = Self::new(name, LayerType::Generator, index);
-        layer.gen_params = Some(PresetInstance::new(gen_type));
+        // MUST be `new_generator`, not `new`: the latter stamps
+        // `kind: Effect`, which is invisible in memory (`generator_type()`
+        // just reads `effect_type`) but routes serialization through the
+        // effect path — the saved `genParams` then carries `effectType`
+        // instead of `generatorType`. On reload the generator decoder only
+        // reads `generatorType`, so the type drops to `NONE` and the layer
+        // renders black ("cleared generator"). `new_generator` also seeds
+        // default param values via `init_defaults()`.
+        layer.gen_params = Some(PresetInstance::new_generator(gen_type));
         layer
     }
 
