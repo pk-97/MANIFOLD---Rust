@@ -123,6 +123,27 @@ impl Application {
         self.watched_graph_target.clone()
     }
 
+    /// Cursor position over the audio scope's waterfall, if inside it:
+    /// `(uv_x, uv_y, freq_hz)` with uv in 0..1 (y top→bottom) and the frequency
+    /// at that height on the log axis. `None` when the cursor is elsewhere, the
+    /// scope is closed, or the analysed range is degenerate.
+    fn scope_hover_uv(&self) -> Option<(f32, f32, f32)> {
+        let rect = self.ws.ui_root.audio_setup_panel.scope_rect()?;
+        if !rect.contains(self.cursor_pos) || rect.width <= 0.0 || rect.height <= 0.0 {
+            return None;
+        }
+        let fmin = self.content_state.spectrogram_fmin;
+        let fmax = self.content_state.spectrogram_fmax;
+        if !(fmin > 0.0 && fmax > fmin) {
+            return None;
+        }
+        let ux = ((self.cursor_pos.x - rect.x) / rect.width).clamp(0.0, 1.0);
+        let uy = ((self.cursor_pos.y - rect.y) / rect.height).clamp(0.0, 1.0);
+        // uv.y=1 (bottom) → fmin, uv.y=0 (top) → fmax; freq is geometric in height.
+        let freq = fmin * (fmax / fmin).powf(1.0 - uy);
+        Some((ux, uy, freq))
+    }
+
     /// Read the watched param's CURRENT reshape `(min, max, scale, offset)`
     /// for the drawer seed + drag change-detection. Reads the preset's
     /// authoring surface (`ParamSpecDef` range + `BindingDef` scale/offset)
@@ -2358,6 +2379,14 @@ impl Application {
             let count = self.content_state.audio_send_count;
             let levels = self.content_state.audio_send_levels;
             self.ws.ui_root.update_audio_meters(&levels[..count]);
+
+            // Scope hover readout: freq + dB under the cursor. dB is sampled from
+            // last frame's ring (1-frame stale is imperceptible); freq is geometric.
+            let readout = self.scope_hover_uv().map(|(ux, uy, freq)| {
+                let db = self.spectrogram.as_ref().map_or(-120.0, |s| s.sample_db(ux, uy));
+                format_scope_readout(freq, db)
+            });
+            self.ws.ui_root.update_audio_scope_readout(readout.as_deref());
         }
 
         // 6·audio·scope. Push the scope's selected send to the content thread
@@ -3804,6 +3833,9 @@ impl Application {
                 self.spectrogram_tex_dims = (tex_w, tex_h);
             }
 
+            // Cursor frequency-line position (uv.y), computed before the mutable
+            // spectrogram borrow below. Negative = not hovering.
+            let scope_cursor_y = self.scope_hover_uv().map_or(-1.0, |(_, uy, _)| uy);
             if let (Some(spectrogram), Some(pane)) =
                 (self.spectrogram.as_mut(), self.spectrogram_pane.as_mut())
                 && let Some(target) = pane.local_target().cloned()
@@ -3834,6 +3866,7 @@ impl Application {
                     &target,
                     [y_of(250.0), y_of(2000.0)],
                     freq_log_ratio,
+                    scope_cursor_y,
                 );
 
                 // Blit through the unified TexturePane path (logical rect + scale).
@@ -3923,6 +3956,17 @@ impl Application {
         present_enc.present_drawable(&drawable);
         present_enc.commit();
     }
+}
+
+/// Format the audio scope's hover readout: frequency (kHz above 1 kHz, else Hz)
+/// and the raw level in dB, e.g. `4.17 kHz   -17.9 dB`.
+fn format_scope_readout(freq: f32, db: f32) -> String {
+    let f = if freq >= 1000.0 {
+        format!("{:.2} kHz", freq / 1000.0)
+    } else {
+        format!("{freq:.0} Hz")
+    };
+    format!("{f}   {db:.1} dB")
 }
 
 // ── Text input overlay rendering (free function to avoid borrow conflicts) ──

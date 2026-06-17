@@ -122,6 +122,11 @@ pub struct AudioSetupPanel {
     device_dropdown_id: i32,
     add_send_id: i32,
     send_ids: Vec<SendRowIds>,
+    /// Right-aligned label in the scope title row showing the freq + dB under
+    /// the cursor. Lives in the title strip (not over the waterfall, which the
+    /// present pass blits on top), updated in place each frame by
+    /// [`AudioSetupPanel::update_scope_readout`]. `-1` when not built.
+    scope_readout_label: i32,
 }
 
 impl AudioSetupPanel {
@@ -482,6 +487,7 @@ impl AudioSetupPanel {
 
         // ── Spectrogram scope (selected send) ──
         self.scope_rect = None;
+        self.scope_readout_label = -1;
         if !self.sends.is_empty() {
             cy += ROW_GAP;
             let sel_label = self
@@ -504,6 +510,23 @@ impl AudioSetupPanel {
                     ..UIStyle::default()
                 },
             );
+            // Hover readout (freq + dB at the cursor), right-aligned in the same
+            // title row — outside the waterfall rect, so the present pass's blit
+            // doesn't cover it. Empty until the app feeds a value on hover.
+            self.scope_readout_label = tree.add_label(
+                self.bg_id,
+                inner_x + inner_w * 0.35,
+                cy,
+                inner_w * 0.65,
+                SCOPE_TITLE_H,
+                "",
+                UIStyle {
+                    text_color: Color32::new(150, 200, 230, 255),
+                    font_size: color::FONT_LABEL,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                },
+            ) as i32;
             cy += SCOPE_TITLE_H;
 
             // Backing panel behind the whole scope (axis margin + waterfall).
@@ -616,6 +639,23 @@ impl AudioSetupPanel {
                 ids.meter_fill as u32,
                 Rect::new(ids.meter_x, ids.meter_y, w, ids.meter_h),
             );
+        }
+    }
+
+    /// Update the scope's hover readout text in place (no rebuild). `Some(text)`
+    /// shows it (freq + dB under the cursor); `None` hides it. Called every frame
+    /// while open, mirroring [`update_meters`](Self::update_meters).
+    pub fn update_scope_readout(&self, tree: &mut UITree, text: Option<&str>) {
+        if self.scope_readout_label < 0 {
+            return;
+        }
+        let id = self.scope_readout_label as u32;
+        match text {
+            Some(t) => {
+                tree.set_text(id, t);
+                tree.set_visible(id, true);
+            }
+            None => tree.set_visible(id, false),
         }
     }
 

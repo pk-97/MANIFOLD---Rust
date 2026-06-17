@@ -1917,6 +1917,15 @@ impl UIRoot {
         self.audio_setup_panel.update_meters(&mut self.tree, levels);
     }
 
+    /// Update the audio scope's hover readout (freq + dB under the cursor), or
+    /// hide it when not hovering. In place, every frame — see `update_meters`.
+    pub fn update_audio_scope_readout(&mut self, text: Option<&str>) {
+        if !self.audio_setup_panel.is_open() {
+            return;
+        }
+        self.audio_setup_panel.update_scope_readout(&mut self.tree, text);
+    }
+
     /// Push waveform/stem lane node visibility and style to UITree.
     /// Called from app_render after syncing mute/solo/stems_available state.
     /// Separate from update() because app_render must sync state first.

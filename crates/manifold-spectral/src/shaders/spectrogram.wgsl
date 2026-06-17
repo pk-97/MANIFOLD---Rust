@@ -31,8 +31,9 @@ struct Params {
     // disables the tilt (Flat).
     tilt_slope: f32,
     freq_log_ratio: f32,
+    // Cursor frequency line (uv.y, 0 top → 1 bottom); negative hides it.
+    cursor_y: f32,
     _pad1: f32,
-    _pad2: f32,
 };
 
 @group(0) @binding(0) var<storage, read> history: array<f32>;
@@ -126,6 +127,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if (p.band_hi_y >= 0.0 && abs(y_from_bottom - p.band_hi_y) < half_px) {
         rgb = mix(rgb, line, 0.7);
+    }
+
+    // Cursor frequency locator: a faint horizontal line at the hovered freq,
+    // paired with the title-row readout. `cursor_y` is in uv.y (0 top → 1 bottom).
+    if (p.cursor_y >= 0.0 && abs(in.uv.y - p.cursor_y) < 0.0018) {
+        rgb = mix(rgb, vec3<f32>(0.9, 0.95, 1.0), 0.45);
     }
     return vec4<f32>(rgb, 1.0);
 }

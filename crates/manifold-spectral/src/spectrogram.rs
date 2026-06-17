@@ -49,8 +49,10 @@ struct Params {
     /// shader. Slope 0 disables the tilt.
     tilt_slope: f32,
     freq_log_ratio: f32,
+    /// Cursor frequency line position (uv.y, 0 top → 1 bottom); negative hides
+    /// it. Drawn as a faint horizontal line so the hover readout has a locator.
+    cursor_y: f32,
     _pad1: f32,
-    _pad2: f32,
 }
 
 /// Sweep-fill spectrogram renderer. One per visible scope; sized to the scope's
@@ -122,6 +124,27 @@ impl Spectrogram {
         self.num_cols
     }
 
+    /// Raw dB at normalised scope position (`ux` 0→1 left→right, `uy` 0→1
+    /// top→bottom) — the same column/bin the shader paints, with the same
+    /// power-domain 2-tap bin interpolation but WITHOUT the pink tilt, so the
+    /// hover readout shows true level. Returns a deep floor for an empty cell.
+    pub fn sample_db(&self, ux: f32, uy: f32) -> f32 {
+        if self.num_bins == 0 || self.num_cols == 0 {
+            return self.db_min;
+        }
+        let col = ((ux.clamp(0.0, 1.0) * self.num_cols as f32) as usize).min(self.num_cols - 1);
+        let top = (self.num_bins - 1) as f32;
+        let log_bin_f = ((1.0 - uy).clamp(0.0, 1.0) * top).clamp(0.0, top);
+        let lo = log_bin_f.floor() as usize;
+        let hi = (lo + 1).min(self.num_bins - 1);
+        let frac = log_bin_f - lo as f32;
+        let base = col * self.num_bins;
+        let m_lo = self.ring[base + lo];
+        let m_hi = self.ring[base + hi];
+        let power = m_lo * m_lo * (1.0 - frac) + m_hi * m_hi * frac;
+        10.0 * (power + 1e-18).log10()
+    }
+
     /// Append one magnitude column at the sweep head (advancing it). Extra
     /// values past `num_bins` are ignored; a short column zero-pads the
     /// remainder. The head wraps at the right edge back to the left.
@@ -141,13 +164,15 @@ impl Spectrogram {
     /// band-divider positions, normalised 0..1 from the bottom (low freq);
     /// negative disables a line. `freq_log_ratio` is `log2(fmax/fmin)` of the
     /// displayed range — the octave span the pink tilt is centred and scaled
-    /// over; pass `0.0` to disable the tilt (Flat look).
+    /// over; pass `0.0` to disable the tilt (Flat look). `cursor_y` draws a
+    /// faint horizontal locator line (uv.y, 0 top → 1 bottom); negative hides it.
     pub fn render(
         &mut self,
         encoder: &mut GpuEncoder,
         target: &GpuTexture,
         band_ys: [f32; 2],
         freq_log_ratio: f32,
+        cursor_y: f32,
     ) {
         let buf = &self.bufs[self.buf_frame % BUFFER_ROTATION];
         self.buf_frame += 1;
@@ -173,8 +198,8 @@ impl Spectrogram {
             band_hi_y: band_ys[1],
             tilt_slope: if freq_log_ratio > 0.0 { PINK_SLOPE_DB_PER_OCT } else { 0.0 },
             freq_log_ratio,
+            cursor_y,
             _pad1: 0.0,
-            _pad2: 0.0,
         };
         // SAFETY: `Params` is `#[repr(C)]` plain-old-data.
         let param_bytes = unsafe {
