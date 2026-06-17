@@ -85,8 +85,21 @@ impl AudioCaptureDevice {
             buffer_size: cpal::BufferSize::Default,
         };
 
-        // Ring buffer: 2 seconds of audio.
-        let capacity = (sample_rate as usize) * (channels as usize) * 2;
+        // Ring buffer: ~2 seconds of audio, but bounded so an exotic
+        // high-channel aggregate (e.g. 64ch @ 96kHz ≈ 49MB) can't balloon the
+        // allocation. The cap trims ring *duration*, never channels — the worker
+        // drains every tick, so less headroom is harmless. Floored at ~0.25s.
+        const MAX_RING_SAMPLES: usize = 4 * 1024 * 1024; // 16 MiB of f32
+        let want = (sample_rate as usize) * (channels as usize) * 2;
+        let floor = ((sample_rate as usize) * (channels as usize)) / 4;
+        let capacity = want.min(MAX_RING_SAMPLES).max(floor).max(1);
+        if capacity < want {
+            log::warn!(
+                "[AudioCapture] {channels}ch @ {sample_rate}Hz: ring capped to \
+                 {capacity} samples (~{:.2}s) to bound memory",
+                capacity as f32 / (sample_rate as f32 * channels as f32).max(1.0),
+            );
+        }
         let ring = HeapRb::<f32>::new(capacity);
         let (mut producer, consumer) = ring.split();
 

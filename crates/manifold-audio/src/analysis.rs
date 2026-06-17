@@ -200,7 +200,12 @@ struct WorkerLoop {
     sends: Vec<SendState>,
     analyzer: BandEnergyAnalyzer,
     /// Leftover interleaved samples that didn't complete a frame last drain.
+    /// Retains its allocation across drains (never moved out), so stashing the
+    /// remainder each tick is realloc-free in steady state.
     carry: Vec<f32>,
+    /// Persistent per-drain work buffer (carry-over + freshly drained samples).
+    /// Swapped out and back so the analysis loop borrows a local, not `self`.
+    work: Vec<f32>,
     /// Reusable drain buffer.
     drain_buf: Vec<f32>,
     seq: u64,
@@ -230,6 +235,7 @@ impl WorkerLoop {
             sends,
             analyzer: BandEnergyAnalyzer::new(sample_rate),
             carry: Vec::with_capacity(FFT_SIZE),
+            work: Vec::with_capacity(4096 + FFT_SIZE),
             drain_buf: vec![0.0; 4096],
             seq: 0,
         }
@@ -253,8 +259,14 @@ impl WorkerLoop {
             return false;
         }
 
-        // Pull the carry forward, then drain the ring onto it.
-        let mut samples = std::mem::take(&mut self.carry);
+        // Move the carry-over into the persistent work buffer (`carry` keeps its
+        // allocation), then drain the ring onto it. `work` is taken out so the
+        // analysis loop below borrows a local, not `self`.
+        let mut work = std::mem::take(&mut self.work);
+        work.clear();
+        work.extend_from_slice(&self.carry);
+        self.carry.clear();
+
         let mut remaining = available;
         while remaining > 0 {
             let n = remaining.min(self.drain_buf.len());
@@ -262,15 +274,15 @@ impl WorkerLoop {
             if popped == 0 {
                 break;
             }
-            samples.extend_from_slice(&self.drain_buf[..popped]);
+            work.extend_from_slice(&self.drain_buf[..popped]);
             remaining -= popped;
         }
 
         let ch = self.device_channels;
-        let usable = (samples.len() / ch) * ch;
+        let usable = (work.len() / ch) * ch;
         let mut updated = false;
 
-        for frame in samples[..usable].chunks_exact(ch) {
+        for frame in work[..usable].chunks_exact(ch) {
             for send in &mut self.sends {
                 let mono = downmix(frame, &send.channels);
                 send.accum.push(mono);
@@ -278,15 +290,20 @@ impl WorkerLoop {
                     // Overall level: RMS of the raw (unwindowed) block, 0..1.
                     send.features.amplitude = block_rms(&send.accum[..FFT_SIZE]);
                     send.features.band_energy = self.analyzer.analyze(&send.accum[..FFT_SIZE]);
+                    // v2 seam: onset/pitch extractors must read the FFT spectrum
+                    // the analyzer already computed for this window, never run a
+                    // second transform. See docs/AUDIO_INFRASTRUCTURE.md §8.
                     send.accum.clear();
                     updated = true;
                 }
             }
         }
 
-        // Stash the partial frame remainder for next drain.
-        self.carry.clear();
-        self.carry.extend_from_slice(&samples[usable..]);
+        // Stash the partial frame remainder for next drain. `carry` kept its
+        // allocation, so this is realloc-free once warmed.
+        self.carry.extend_from_slice(&work[usable..]);
+        // Return the work buffer for reuse next drain.
+        self.work = work;
 
         if updated {
             self.emit_frame();
