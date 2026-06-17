@@ -43,8 +43,13 @@ pub struct SpectrogramConfig {
     pub fmax: f32,
     /// Bins per octave (frequency resolution).
     pub bpo: usize,
-    /// Variable-Q bandwidth floor (Hz); 0 = classical CQT.
-    pub gamma_hz: f32,
+    /// Variable-Q bandwidth floor (Hz), frequency-ramped as
+    /// `γ(f) = lo + (hi − lo)·min(1, f/transition)`. A smaller `lo` in deep bass
+    /// grows the kernel longer for finer low-end resolution; `hi` governs mids
+    /// and highs. `lo == hi` = constant γ; `0` = classical CQT.
+    pub gamma_lo_hz: f32,
+    pub gamma_hi_hz: f32,
+    pub gamma_transition_hz: f32,
     /// Per-bin kernel length floor (samples).
     pub min_kernel_len: usize,
     /// Sparse-kernel prune threshold (relative to each row's peak).
@@ -66,7 +71,12 @@ impl Default for SpectrogramConfig {
             fmin: 10.0,
             fmax: 22_000.0,
             bpo: 24,
-            gamma_hz: 20.0,
+            // Ramped γ (matches the Analyzer VST): 20 Hz above 200 Hz keeps mids
+            // and highs unchanged; 10 Hz in deep bass doubles the bass kernel
+            // length for finer low-end resolution — still well within n_fft.
+            gamma_lo_hz: 10.0,
+            gamma_hi_hz: 20.0,
+            gamma_transition_hz: 200.0,
             min_kernel_len: 256,
             threshold_rel: 1e-4,
             hop: 256,
@@ -97,7 +107,9 @@ impl SpectrogramConfig {
             self.fmin,
             self.effective_fmax(sample_rate),
             self.bpo,
-            self.gamma_hz,
+            self.gamma_lo_hz,
+            self.gamma_hi_hz,
+            self.gamma_transition_hz,
             self.min_kernel_len,
             self.threshold_rel,
         )

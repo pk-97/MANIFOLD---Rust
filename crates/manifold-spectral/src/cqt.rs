@@ -47,7 +47,11 @@ impl CqtTransform {
     /// is the expensive step — do it once at capture/sample-rate change.
     ///
     /// * `bpo` — bins per octave (24 = 2/semitone, good spectrogram density).
-    /// * `gamma_hz` — bandwidth floor γ; 0 reduces to classical CQT.
+    /// * `gamma_lo_hz` / `gamma_hi_hz` / `gamma_transition_hz` — frequency-ramped
+    ///   bandwidth floor: `γ(f) = lo + (hi − lo)·min(1, f/transition)`. A smaller
+    ///   γ in deep bass grows the kernel longer (finer bass resolution, kills the
+    ///   2f ripple on sub sines) while the larger γ above the knee keeps mids and
+    ///   highs as they were. `lo == hi` reduces to a constant γ; `0` → classical CQT.
     /// * `min_kernel_len` — per-bin kernel floor in samples; keeps HF bandwidth
     ///   narrow enough to resolve closely-spaced partials.
     /// * `threshold_rel` — prunes kernel entries below `threshold_rel·max_entry`
@@ -59,15 +63,24 @@ impl CqtTransform {
         fmin: f32,
         fmax: f32,
         bpo: usize,
-        gamma_hz: f32,
+        gamma_lo_hz: f32,
+        gamma_hi_hz: f32,
+        gamma_transition_hz: f32,
         min_kernel_len: usize,
         threshold_rel: f32,
     ) -> Self {
         assert!(n_fft.is_power_of_two(), "n_fft must be a power of two");
         assert!(fmax > fmin && fmin > 0.0, "need fmax > fmin > 0");
         assert!(bpo > 0);
-        assert!(gamma_hz >= 0.0);
+        assert!(gamma_lo_hz >= 0.0 && gamma_hi_hz >= 0.0);
+        assert!(gamma_transition_hz > 0.0);
         assert!((0.0..1.0).contains(&threshold_rel));
+
+        // γ(f) = lo + (hi − lo)·min(1, f/transition). Matches the Analyzer VST.
+        let gamma_at = |f: f32| -> f32 {
+            let t = (f / gamma_transition_hz).clamp(0.0, 1.0);
+            gamma_lo_hz + (gamma_hi_hz - gamma_lo_hz) * t
+        };
 
         let num_bins = num_bins(fmin, fmax, bpo);
         assert!(num_bins > 0);
@@ -98,8 +111,9 @@ impl CqtTransform {
 
         for &f_k in &center_freqs {
             // Variable-Q bandwidth: at high freq `α·f_k` dominates (constant Q);
-            // γ floors it so deep-bass windows fit several cycles.
-            let bandwidth = alpha * f_k + gamma_hz;
+            // below the transition γ ramps down so deep-bass windows grow long
+            // enough to fit several cycles.
+            let bandwidth = alpha * f_k + gamma_at(f_k);
             let n_k_ideal = (sample_rate / bandwidth).ceil() as usize;
             let n_k = n_k_ideal.min(n_fft).max(min_kernel_len).max(4);
 
@@ -215,7 +229,7 @@ mod tests {
     #[test]
     fn unit_sine_peaks_near_its_bin_at_unity() {
         let n_fft = 8192;
-        let mut cqt = CqtTransform::new(SR, n_fft, 50.0, 8000.0, 24, 20.0, 256, 0.005);
+        let mut cqt = CqtTransform::new(SR, n_fft, 50.0, 8000.0, 24, 10.0, 20.0, 200.0, 256, 0.005);
         let mut out = vec![0.0; cqt.num_bins()];
         cqt.process_magnitudes(&sine(1000.0, n_fft), &mut out);
 
@@ -236,7 +250,7 @@ mod tests {
     #[test]
     fn silence_reads_near_zero() {
         let n_fft = 8192;
-        let mut cqt = CqtTransform::new(SR, n_fft, 50.0, 8000.0, 12, 20.0, 256, 0.005);
+        let mut cqt = CqtTransform::new(SR, n_fft, 50.0, 8000.0, 12, 10.0, 20.0, 200.0, 256, 0.005);
         let mut out = vec![0.0; cqt.num_bins()];
         cqt.process_magnitudes(&vec![0.0; n_fft], &mut out);
         assert!(out.iter().all(|&v| v < 1e-5), "silence should be ~0");
