@@ -407,6 +407,9 @@ struct SendState {
     /// Per-band running average of flux — the adaptive onset threshold tracks it.
     /// Indexed in `AudioBand` order [Full, Low, Mid, High].
     flux_avg: [f32; 4],
+    /// Hops remaining in each band's onset refractory window. Non-zero suppresses
+    /// re-firing so one hit reads as a single decaying spike, not a burst.
+    transient_refractory: [u8; 4],
     /// Windows analyzed so far. Flux features are held at 0 until a valid
     /// predecessor exists (≥2 for transients, ≥3 for liveliness's 2-hop diff), so
     /// arming audio-mod doesn't fire a spurious onset off the zero-init spectrum.
@@ -447,6 +450,8 @@ struct WorkerLoop {
     /// Running average of the scope column flux per band [Low, Mid, High] — each
     /// band's onset threshold tracks its own average.
     spec_flux_avg: [f32; 3],
+    /// Hops remaining in each scope band's tick refractory [Low, Mid, High].
+    spec_refractory: [u8; 3],
     /// Decaying onset impulse per band [Low, Mid, High] for the scope.
     spec_onset: [f32; 3],
     /// Built lazily on the first active tap (kernel construction is one FFT per
@@ -497,6 +502,7 @@ impl WorkerLoop {
                 prev_mags: vec![0.0; FFT_SIZE / 2 + 1],
                 prev2_mags: vec![0.0; FFT_SIZE / 2 + 1],
                 flux_avg: [0.0; 4],
+                transient_refractory: [0; 4],
                 windows_done: 0,
                 features: SendFeatures::default(),
             })
@@ -526,6 +532,7 @@ impl WorkerLoop {
             prev_spec_col: vec![0.0; spec_num_bins.max(1)],
             spec_has_prev: false,
             spec_flux_avg: [0.0; 3],
+            spec_refractory: [0; 3],
             spec_onset: [0.0; 3],
             cqt: None,
             spec_window: Vec::new(),
@@ -607,6 +614,7 @@ impl WorkerLoop {
             // inherit the old one's flux baseline / impulse.
             self.spec_has_prev = false;
             self.spec_flux_avg = [0.0; 3];
+            self.spec_refractory = [0; 3];
             self.spec_onset = [0.0; 3];
         }
 
@@ -637,13 +645,29 @@ impl WorkerLoop {
                         // Transients: a flux spike (vs the previous, 50%-overlapping
                         // window) above the band's running average fires a unit
                         // impulse; otherwise it decays. Needs one valid predecessor.
+                        // Gated on band presence (so a silent band can't free-run on
+                        // noise) and a refractory window (so one hit is one spike).
                         if wd >= 2 {
                             let (flux, _) = band_flux_energy(mags, &send.prev_mags, lo, hi);
-                            let triggered =
-                                flux > send.flux_avg[bi] * ONSET_RATIO && flux > ONSET_FLOOR;
-                            bf.transients =
-                                if triggered { 1.0 } else { bf.transients * ONSET_DECAY };
-                            send.flux_avg[bi] += (flux - send.flux_avg[bi]) * FLUX_AVG_COEFF;
+                            let refractory = &mut send.transient_refractory[bi];
+                            let present = bf.amplitude >= BAND_PRESENCE_GATE;
+                            let triggered = present
+                                && *refractory == 0
+                                && flux > send.flux_avg[bi] * ONSET_RATIO
+                                && flux > ONSET_FLOOR;
+                            if triggered {
+                                bf.transients = 1.0;
+                                *refractory = ONSET_REFRACTORY_HOPS;
+                            } else {
+                                bf.transients *= ONSET_DECAY;
+                                *refractory = refractory.saturating_sub(1);
+                            }
+                            // Track the average only while the band is present, so a
+                            // silent stretch doesn't drag the baseline down to noise
+                            // and make the next real hit hyper-sensitive.
+                            if present {
+                                send.flux_avg[bi] += (flux - send.flux_avg[bi]) * FLUX_AVG_COEFF;
+                            }
                         }
 
                         // Liveliness (relative flux) self-scales with density. It
@@ -728,6 +752,19 @@ impl WorkerLoop {
         let low_bin = bin_of(self.last_crossovers.0);
         let mid_bin = bin_of(self.last_crossovers.1).max(low_bin + 1).min(nb.saturating_sub(1));
 
+        // Band-presence floor, in the exact tilted-dB domain the spectrogram
+        // shader paints. Per bin the shader draws `10·log10(mag) + tilt`, where
+        // `tilt = slope · log2(fmax/fmin) · (0.5 − uv.y)` and a bin is black at
+        // or below `db_min`. The worker holds the same static config, so it can
+        // reproduce that gate exactly: a band may tick only if at least one of
+        // its bins is drawn non-black. This replaces the old relative
+        // energy-share test, which fired on sub-floor (black) bass because it
+        // ignored both the absolute floor and the pink tilt that cuts the lows.
+        let db_min = self.spec_config.db_min;
+        let tilt_k = SCOPE_TILT_DB_PER_OCT
+            * (self.spec_config.effective_fmax(self.sample_rate) / fmin).log2();
+        let inv_nb = if nb > 1 { 1.0 / (nb - 1) as f32 } else { 0.0 };
+
         for j in (0..emit).rev() {
             let end = self.spec_window.len() - j * hop;
             cqt.process_magnitudes(&self.spec_window[end - n_fft..end], &mut self.spec_col);
@@ -740,18 +777,28 @@ impl WorkerLoop {
             // ring is full and the push below is skipped.
             let (mut num, mut den) = (0.0f32, 0.0f32);
             let mut flux = [0.0f32; 3];
+            // Peak displayed dB per band (tilted, matching the shader). A band is
+            // "present" iff its loudest bin clears `db_min` — i.e. is painted.
+            let mut peak_db = [f32::NEG_INFINITY; 3];
             for (i, &m) in self.spec_col.iter().enumerate() {
                 num += i as f32 * m;
                 den += m;
+                let band = if i < low_bin {
+                    0
+                } else if i < mid_bin {
+                    1
+                } else {
+                    2
+                };
+                // Match the shader exactly: power = mag², dB = 10·log10(power)
+                // = 20·log10(mag), then the pink tilt added on top.
+                let tilt = tilt_k * (i as f32 * inv_nb - 0.5);
+                let db = 10.0 * (m * m + 1e-18).log10() + tilt;
+                if db > peak_db[band] {
+                    peak_db[band] = db;
+                }
                 if self.spec_has_prev {
                     let d = (m - self.prev_spec_col[i]).max(0.0);
-                    let band = if i < low_bin {
-                        0
-                    } else if i < mid_bin {
-                        1
-                    } else {
-                        2
-                    };
                     flux[band] += d;
                 }
             }
@@ -761,14 +808,26 @@ impl WorkerLoop {
                 -1.0
             };
             if self.spec_has_prev {
-                for ((&f, avg), onset) in flux
-                    .iter()
-                    .zip(self.spec_flux_avg.iter_mut())
-                    .zip(self.spec_onset.iter_mut())
-                {
-                    let triggered = f > *avg * ONSET_RATIO && f > ONSET_FLOOR;
-                    *onset = if triggered { 1.0 } else { *onset * ONSET_DECAY };
-                    *avg += (f - *avg) * FLUX_AVG_COEFF;
+                // A band fires only if it's actually drawn on the scope — its
+                // loudest bin must clear the same `db_min` floor the colourmap
+                // uses. An all-black band (sub-floor bass) can't tick.
+                for b in 0..3 {
+                    let f = flux[b];
+                    let present = peak_db[b] > db_min;
+                    let triggered = present
+                        && self.spec_refractory[b] == 0
+                        && f > self.spec_flux_avg[b] * ONSET_RATIO
+                        && f > ONSET_FLOOR;
+                    if triggered {
+                        self.spec_onset[b] = 1.0;
+                        self.spec_refractory[b] = ONSET_REFRACTORY_HOPS;
+                    } else {
+                        self.spec_onset[b] *= ONSET_DECAY;
+                        self.spec_refractory[b] = self.spec_refractory[b].saturating_sub(1);
+                    }
+                    if present {
+                        self.spec_flux_avg[b] += (f - self.spec_flux_avg[b]) * FLUX_AVG_COEFF;
+                    }
                 }
             }
             self.prev_spec_col.copy_from_slice(&self.spec_col);
@@ -830,7 +889,7 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
 /// the decay and the averaging coefficient are per-hop, so each is the √ of its
 /// old per-window value — at 2× the window rate (one hop ≈ 10.7 ms) that
 /// preserves the old 0.6/window ~100 ms settle and 0.1/window ~210 ms averaging.
-const ONSET_RATIO: f32 = 1.6;
+const ONSET_RATIO: f32 = 1.8;
 const ONSET_FLOOR: f32 = 1e-3;
 const ONSET_DECAY: f32 = 0.775; // √0.6 — per-hop; matches the old 0.6/window settle
 /// Smoothing of the running flux average the onset threshold tracks (per hop).
@@ -838,6 +897,27 @@ const FLUX_AVG_COEFF: f32 = 0.05; // 1−√0.9 — per-hop; matches the old 0.1
 /// Below this band energy, relative flux (liveliness) reads 0 — avoids the
 /// flux ÷ energy ratio blowing up on near-silence.
 const FLUX_ENERGY_GATE: f32 = 1e-4;
+/// Presence floor for the band detectors. Brightness/noisiness/transients all
+/// *characterize* a band — on one with no real content they'd describe the noise
+/// floor and report a plausible-but-meaningless value (noisiness worst: a flat
+/// noise floor reads as maximally noisy). Below this dB-normalized amplitude
+/// (≈ −51 dBFS RMS) the band is treated as silent and those three read 0, so a
+/// modulator mapped to e.g. Transients/Low stays quiet on material with no low
+/// end instead of free-running on noise. Amplitude itself is ungated — it's the
+/// honest energy reading the others lean on. The self-ratio onset threshold is a
+/// divide-guard, not an energy gate, which is why it needs this.
+const BAND_PRESENCE_GATE: f32 = 0.15;
+/// Hops a band's onset is suppressed after firing (~53 ms at one hop ≈ 10.7 ms).
+/// A kick can't physically retrigger every window; this kills the machine-gun
+/// re-fire that pins `transients` near 1 even on a single real hit.
+const ONSET_REFRACTORY_HOPS: u8 = 5;
+/// Pink-tilt slope the scope colourmap applies (dB/oct). Must stay equal to
+/// `manifold_spectral`'s `PINK_SLOPE_DB_PER_OCT` so the worker's band-presence
+/// gate evaluates the exact tilted dB the user sees painted — a band ticks only
+/// if at least one of its bins clears `db_min` (is drawn non-black). Gating on
+/// the displayed dB rather than a relative energy share is what stops a black,
+/// sub-floor bass band from free-running the low onset.
+const SCOPE_TILT_DB_PER_OCT: f32 = 3.0;
 
 /// dB floor for band-amplitude normalization: this many dB below the reference
 /// maps to 0.0, the reference itself to 1.0. Band amplitude is a raw magnitude
@@ -1008,16 +1088,24 @@ impl SpectralAnalyzer {
 
         let amplitude = db_normalize((sum_sq / n).sqrt(), BAND_REF);
 
+        // Brightness and noisiness describe *what* a present band sounds like. On a
+        // band with no real content the `> 1e-9` divide-guards still pass (noise
+        // floor easily clears them), so they'd characterize the noise — noisiness
+        // worst of all, since a flat floor reads as maximally noisy. Gate both on
+        // the band's own energy: below the presence floor there is no timbre to
+        // report, so both read 0.
+        let present = amplitude >= BAND_PRESENCE_GATE;
+
         let lo_hz = self.bin_hz[lo].max(1.0);
         let hi_hz = self.bin_hz[hi].max(lo_hz * 1.0001);
-        let brightness = if den > 1e-9 {
+        let brightness = if present && den > 1e-9 {
             let c_hz = (num / den).clamp(lo_hz, hi_hz);
             ((c_hz.ln() - lo_hz.ln()) / (hi_hz.ln() - lo_hz.ln())).clamp(0.0, 1.0)
         } else {
             0.0
         };
 
-        let noisiness = if lin_sum > 1e-9 {
+        let noisiness = if present && lin_sum > 1e-9 {
             let geo = (log_sum / n).exp();
             let arith = lin_sum / n;
             (geo / arith).clamp(0.0, 1.0)
@@ -1168,6 +1256,24 @@ mod tests {
         let tone = a.analyze(&sine(1000.0, FFT_SIZE))[full].noisiness;
         let noisy = a.analyze(&noise(FFT_SIZE))[full].noisiness;
         assert!(noisy > tone, "noise flatter than a tone: {tone} vs {noisy}");
+    }
+
+    #[test]
+    fn empty_bands_report_no_timbre() {
+        // A pure 1 kHz tone fills the mid band; low and high hold only the FFT
+        // window's leakage — i.e. no real content. The presence gate must zero
+        // their brightness/noisiness so a modulator mapped there reads silent
+        // rather than describing the noise floor (regression: noisiness used to
+        // pin near 1 on an empty band, since a flat floor reads as max-flat).
+        let (_full, low, mid, high) = bands();
+        let mut a = SpectralAnalyzer::new(SR);
+        let r = a.analyze(&sine(1000.0, FFT_SIZE));
+        assert!(r[mid].amplitude >= BAND_PRESENCE_GATE, "mid band is present");
+        for &b in &[low, high] {
+            assert!(r[b].amplitude < BAND_PRESENCE_GATE, "empty band below gate");
+            assert_eq!(r[b].brightness, 0.0, "empty band brightness gated to 0");
+            assert_eq!(r[b].noisiness, 0.0, "empty band noisiness gated to 0");
+        }
     }
 
     #[test]
