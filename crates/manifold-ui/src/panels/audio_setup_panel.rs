@@ -20,7 +20,9 @@ use crate::node::*;
 use crate::tree::UITree;
 
 use super::PanelAction;
-use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
+use super::overlay::{
+    Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy, compute_overlay_rect,
+};
 
 // ── Layout ──
 /// Minimum panel width (small screens / compact fallback). The modal targets a
@@ -213,25 +215,17 @@ impl AudioSetupPanel {
         self.chrome_height() + scope
     }
 
-    /// Resolve [`panel_w`](Self::panel_w)/[`scope_h`](Self::scope_h) to the
-    /// target viewport fraction, never below the compact minimums. The control
-    /// rows are fixed-height, so all the extra height goes to the waterfall.
-    fn resize_to_viewport(&mut self, viewport_w: f32, viewport_h: f32) {
-        self.panel_w = (viewport_w * PANEL_W_FRAC).max(PANEL_W_MIN);
-        let target_h = viewport_h * PANEL_H_FRAC;
-        self.scope_h = (target_h - self.chrome_height()).max(SCOPE_H_MIN);
-    }
-
-    /// Build the modal's nodes, centered in a `(width, height)` viewport.
+    /// Build the modal's nodes, centered in a `(width, height)` viewport. Routes
+    /// through the same size-policy + centering path the overlay driver uses, so
+    /// the standalone path and the driven path lay out identically.
     pub fn build(&mut self, tree: &mut UITree, viewport_w: f32, viewport_h: f32) {
         if !self.open {
             return;
         }
-        self.resize_to_viewport(viewport_w, viewport_h);
-        let body_h = self.body_height();
-        let x = ((viewport_w - self.panel_w) * 0.5).max(0.0);
-        let y = ((viewport_h - body_h) * 0.5).max(0.0);
-        self.build_nodes(tree, x, y);
+        let screen = Vec2::new(viewport_w, viewport_h);
+        let size = self.size_policy().resolve(screen, self.desired_size());
+        let rect = compute_overlay_rect(&self.anchor(), size, screen, None);
+        self.build_at(tree, OverlayPlacement { rect, screen });
     }
 
     /// Build the modal's nodes with the panel's top-left at `(x, y)`.
@@ -765,6 +759,15 @@ impl Overlay for AudioSetupPanel {
         Anchor::Centered
     }
 
+    fn size_policy(&self) -> SizePolicy {
+        // 80% of the viewport, never below the compact minimums. The min height
+        // is the fixed control chrome plus the smallest useful waterfall.
+        SizePolicy::Fraction {
+            frac: Vec2::new(PANEL_W_FRAC, PANEL_H_FRAC),
+            min: Vec2::new(PANEL_W_MIN, self.chrome_height() + SCOPE_H_MIN),
+        }
+    }
+
     fn desired_size(&self) -> Vec2 {
         Vec2::new(self.panel_w, self.body_height())
     }
@@ -773,15 +776,12 @@ impl Overlay for AudioSetupPanel {
         if !self.open {
             return;
         }
-        // Size to the viewport and self-center. The modal targets a screen
-        // fraction larger than the driver's content-based placement rect, so we
-        // recompute the centered origin from the full screen size here rather
-        // than using `placement.rect` (which was laid out for `desired_size`).
-        self.resize_to_viewport(placement.screen.x, placement.screen.y);
-        let body_h = self.body_height();
-        let x = ((placement.screen.x - self.panel_w) * 0.5).max(0.0);
-        let y = ((placement.screen.y - body_h) * 0.5).max(0.0);
-        self.build_nodes(tree, x, y);
+        // The driver has already sized + centered the rect per `size_policy`.
+        // Fill it: the width is the panel, and the waterfall absorbs whatever
+        // height is left after the fixed-height control rows.
+        self.panel_w = placement.rect.width;
+        self.scope_h = (placement.rect.height - self.chrome_height()).max(SCOPE_H_MIN);
+        self.build_nodes(tree, placement.rect.x, placement.rect.y);
     }
 
     fn on_event(&mut self, event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {

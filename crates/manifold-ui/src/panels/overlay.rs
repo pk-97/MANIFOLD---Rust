@@ -62,6 +62,35 @@ pub enum Anchor {
     SelfManaged,
 }
 
+/// How an overlay's on-screen size is determined. Returned by
+/// [`Overlay::size_policy`] and resolved by the driver against the screen size
+/// *before* centering — so viewport-relative overlays (e.g. a settings modal
+/// that fills most of the screen) declare their size here instead of
+/// self-positioning inside `build_at`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SizePolicy {
+    /// Size from the overlay's intrinsic [`Overlay::desired_size`]
+    /// (content-sized popups: dropdown, browser, Ableton picker, perf HUD).
+    Content,
+    /// A fraction of the screen per axis, floored at `min` logical pixels. The
+    /// driver resolves it to `max(screen * frac, min)` componentwise.
+    Fraction { frac: Vec2, min: Vec2 },
+}
+
+impl SizePolicy {
+    /// Resolve to a concrete size. `content` is the overlay's `desired_size()`
+    /// (used only by [`SizePolicy::Content`]); `screen` is the full screen size.
+    pub fn resolve(&self, screen: Vec2, content: Vec2) -> Vec2 {
+        match *self {
+            SizePolicy::Content => content,
+            SizePolicy::Fraction { frac, min } => Vec2::new(
+                (screen.x * frac.x).max(min.x),
+                (screen.y * frac.y).max(min.y),
+            ),
+        }
+    }
+}
+
 /// What the driver hands an overlay's `build_at`: the resolved placement rect
 /// (for placed overlays — `Centered`/`Corner`/`At`/`ToNode`/`Fixed`) and the
 /// full screen size (for `SelfManaged` overlays that position themselves).
@@ -96,8 +125,15 @@ pub trait Overlay {
     /// Where the overlay wants to sit.
     fn anchor(&self) -> Anchor;
 
-    /// The overlay's size in logical pixels (may depend on content). Unused for
-    /// `SelfManaged` overlays.
+    /// How the overlay's size is determined. Defaults to [`SizePolicy::Content`]
+    /// (intrinsic [`desired_size`](Self::desired_size)); override to size
+    /// relative to the viewport.
+    fn size_policy(&self) -> SizePolicy {
+        SizePolicy::Content
+    }
+
+    /// The overlay's intrinsic size in logical pixels (may depend on content).
+    /// Used for [`SizePolicy::Content`]; unused for `SelfManaged` overlays.
     fn desired_size(&self) -> Vec2;
 
     /// Build the overlay's nodes into `tree`. Only called when `is_open()`.
@@ -234,6 +270,34 @@ mod tests {
         let r = compute_overlay_rect(&Anchor::SelfManaged, Vec2::new(10.0, 10.0), screen(), None);
         assert_eq!(r.x, 0.0);
         assert_eq!(r.y, 0.0);
+    }
+
+    #[test]
+    fn size_policy_content_passes_through_desired() {
+        let s = SizePolicy::Content.resolve(screen(), Vec2::new(300.0, 200.0));
+        assert_eq!(s, Vec2::new(300.0, 200.0));
+    }
+
+    #[test]
+    fn size_policy_fraction_scales_to_screen() {
+        // screen() is 1000×800 → 0.8 → 800×640, both above the mins.
+        let s = SizePolicy::Fraction {
+            frac: Vec2::new(0.8, 0.8),
+            min: Vec2::new(460.0, 240.0),
+        }
+        .resolve(screen(), Vec2::new(300.0, 200.0));
+        assert_eq!(s, Vec2::new(800.0, 640.0));
+    }
+
+    #[test]
+    fn size_policy_fraction_floors_at_min() {
+        // Tiny screen → fraction falls below the mins, which win.
+        let s = SizePolicy::Fraction {
+            frac: Vec2::new(0.8, 0.8),
+            min: Vec2::new(460.0, 240.0),
+        }
+        .resolve(Vec2::new(400.0, 200.0), Vec2::ZERO);
+        assert_eq!(s, Vec2::new(460.0, 240.0));
     }
 
     #[test]

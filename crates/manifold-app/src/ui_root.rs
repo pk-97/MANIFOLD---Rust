@@ -700,7 +700,9 @@ impl UIRoot {
                 );
             }
             let anchor = ov.anchor();
-            let size = ov.desired_size();
+            // Resolve the overlay's size policy against the screen (content-sized
+            // by default; viewport-relative overlays scale here) before centering.
+            let size = ov.size_policy().resolve(screen, ov.desired_size());
             let node_rect = if let Anchor::ToNode(nid) = anchor {
                 Some(tree.get_bounds(nid as u32))
             } else {
