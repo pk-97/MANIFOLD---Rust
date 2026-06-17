@@ -8,30 +8,30 @@
 //! (id minted at construction) so execute/undo are deterministic.
 
 use crate::command::Command;
-use manifold_core::audio_setup::{AudioSend, SendAnalysisConfig};
+use manifold_core::audio_setup::{AudioDeviceRef, AudioSend, SendAnalysisConfig};
 use manifold_core::id::AudioSendId;
 use manifold_core::project::Project;
 
-/// Set (or clear) the input device name.
+/// Set (or clear) the input device. `None` = system default input.
 #[derive(Debug)]
 pub struct SetAudioInputDeviceCommand {
-    old: Option<String>,
-    new: Option<String>,
+    old: Option<AudioDeviceRef>,
+    new: Option<AudioDeviceRef>,
 }
 
 impl SetAudioInputDeviceCommand {
-    pub fn new(old: Option<String>, new: Option<String>) -> Self {
+    pub fn new(old: Option<AudioDeviceRef>, new: Option<AudioDeviceRef>) -> Self {
         Self { old, new }
     }
 }
 
 impl Command for SetAudioInputDeviceCommand {
     fn execute(&mut self, project: &mut Project) {
-        project.audio_setup.device_name = self.new.clone();
+        project.audio_setup.device = self.new.clone();
     }
 
     fn undo(&mut self, project: &mut Project) {
-        project.audio_setup.device_name = self.old.clone();
+        project.audio_setup.device = self.old.clone();
     }
 
     fn description(&self) -> &str {

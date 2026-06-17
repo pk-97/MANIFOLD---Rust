@@ -171,21 +171,6 @@ impl AudioCaptureDevice {
         self.overflow_count.load(Ordering::Relaxed)
     }
 
-    /// Input channel count of a device by name (`None` = system default input),
-    /// read from its default input config without opening a stream. `None` if the
-    /// device is absent or its config can't be queried.
-    pub fn device_channels(name: Option<&str>) -> Option<u16> {
-        let host = cpal::default_host();
-        let device = match name {
-            Some(name) => host
-                .input_devices()
-                .ok()?
-                .find(|d| d.name().ok().as_deref() == Some(name))?,
-            None => host.default_input_device()?,
-        };
-        device.default_input_config().ok().map(|c| c.channels())
-    }
-
     /// Enumerate available audio input devices.
     pub fn list_devices() -> Vec<AudioDeviceInfo> {
         let host = cpal::default_host();

@@ -1250,12 +1250,12 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Audio Setup (project-level send routing) ──────────────
-        PanelAction::AudioSetDevice(name) => {
-            let old = project.audio_setup.device_name.clone();
+        PanelAction::AudioSetDevice(device) => {
+            let old = project.audio_setup.device.clone();
             audio_setup_command(
                 project,
                 content_tx,
-                Box::new(SetAudioInputDeviceCommand::new(old, name.clone())),
+                Box::new(SetAudioInputDeviceCommand::new(old, device.clone())),
             )
         }
         PanelAction::AudioAddSend => {

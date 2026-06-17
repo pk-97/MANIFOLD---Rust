@@ -12,7 +12,7 @@
 //! gain trim. Per-send labels are auto-assigned ("Audio N") until a text-field
 //! rename lands; multi-channel downmix and the v2 analysis toggles are future.
 
-use manifold_core::AudioSendId;
+use manifold_core::{AudioDeviceRef, AudioSendId};
 
 use crate::color;
 use crate::input::{Key, UIEvent};
@@ -36,8 +36,12 @@ const BTN_FONT: u16 = color::FONT_LABEL;
 pub struct AudioSendRow {
     pub id: AudioSendId,
     pub label: String,
-    /// First routed channel (the panel edits a single channel per send in v1).
-    pub channel: u16,
+    /// Routed channels (0-based). One channel = mono; two = a stereo pair.
+    pub channels: Vec<u16>,
+    /// Pre-resolved channel label for the trigger, e.g. "BH_IN_L", "BH_IN_L +
+    /// BH_IN_R", or "Not routed". Resolved against the device directory by the
+    /// data layer so the panel stays free of platform queries.
+    pub channel_label: String,
 }
 
 /// Per-send interactive node ids.
@@ -52,7 +56,7 @@ struct SendRowIds {
 pub struct AudioSetupPanel {
     open: bool,
     // Configured data.
-    current_device: Option<String>,
+    current_device: Option<AudioDeviceRef>,
     sends: Vec<AudioSendRow>,
     // Node ids (set by `build`).
     bg_id: i32,
@@ -79,23 +83,27 @@ impl AudioSetupPanel {
         self.open = false;
     }
 
-    /// The currently selected input device name (`None` = system default). The
-    /// app reads this to scope the channel dropdown to the device's channels.
-    pub fn current_device(&self) -> Option<&str> {
-        self.current_device.as_deref()
+    /// The currently selected input device (`None` = system default). The app
+    /// reads this to scope the channel dropdown to the device's channels,
+    /// resolving by UID with a name fallback.
+    pub fn current_device(&self) -> Option<&AudioDeviceRef> {
+        self.current_device.as_ref()
     }
 
     /// Update the data the panel renders. Called from `state_sync` on a
     /// structural sync while the panel is open. The device list itself is
     /// enumerated lazily by the app when the device dropdown opens, so it isn't
     /// passed here.
-    pub fn configure(&mut self, current_device: Option<String>, sends: Vec<AudioSendRow>) {
+    pub fn configure(&mut self, current_device: Option<AudioDeviceRef>, sends: Vec<AudioSendRow>) {
         self.current_device = current_device;
         self.sends = sends;
     }
 
     fn device_label(&self) -> String {
-        self.current_device.clone().unwrap_or_else(|| "System Default".to_string())
+        self.current_device
+            .as_ref()
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| "System Default".to_string())
     }
 
     /// Total body height for the configured send count.
@@ -182,20 +190,20 @@ impl AudioSetupPanel {
         ) as i32;
         cy += ROW_H + ROW_GAP;
 
-        // Send rows: label | [ Ch N ▼ ] | − dB + | ×
+        // Send rows: label | [ channel name ▼ ] | ×
         self.send_ids = vec![SendRowIds::default(); rows];
         for (i, send) in self.sends.iter().enumerate() {
             tree.add_label(self.bg_id, inner_x, cy, 70.0, ROW_H, &send.label, label_style());
 
-            // Channel dropdown (1-based display; channel 0 shows as "Ch 1").
+            // Channel dropdown shows the resolved channel name (or "Not routed").
             self.send_ids[i].ch_dropdown = tree.add_button(
                 self.bg_id,
                 inner_x + 74.0,
                 cy,
-                78.0,
+                inner_w - 74.0 - STEP_W - 4.0,
                 ROW_H,
                 dropdown_trigger_style(),
-                &format!("Ch {}   \u{25BC}", send.channel + 1),
+                &format!("{}   \u{25BC}", send.channel_label),
             ) as i32;
 
             // Delete (right-aligned).
@@ -376,8 +384,18 @@ mod tests {
         p.configure(
             None,
             vec![
-                AudioSendRow { id: AudioSendId::new("s1"), label: "Audio 1".into(), channel: 0 },
-                AudioSendRow { id: AudioSendId::new("s2"), label: "Audio 2".into(), channel: 2 },
+                AudioSendRow {
+                    id: AudioSendId::new("s1"),
+                    label: "Audio 1".into(),
+                    channels: vec![0],
+                    channel_label: "Channel 1".into(),
+                },
+                AudioSendRow {
+                    id: AudioSendId::new("s2"),
+                    label: "Audio 2".into(),
+                    channels: vec![2],
+                    channel_label: "MacBook Mic".into(),
+                },
             ],
         );
         p

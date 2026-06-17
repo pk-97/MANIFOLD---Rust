@@ -250,8 +250,8 @@ pub enum PanelAction {
     AudioSetupDeviceClicked,
     /// Open a send's input-channel dropdown (anchored to the clicked trigger).
     AudioSendChannelClicked(manifold_core::AudioSendId),
-    /// Set (or clear) the capture input device.
-    AudioSetDevice(Option<String>),
+    /// Set (or clear) the capture input device. `None` = system default input.
+    AudioSetDevice(Option<manifold_core::AudioDeviceRef>),
     /// Add a new empty send.
     AudioAddSend,
     /// Remove a send by id.

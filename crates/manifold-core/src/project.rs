@@ -140,6 +140,11 @@ impl Project {
         self.midi_config.rebuild_dictionary();
         self.timeline.rebuild_clip_lookup();
 
+        // Fold a legacy pre-UID `deviceName` into a UID-less AudioDeviceRef so
+        // older saves resolve their audio input by name. See
+        // `docs/AUDIO_INFRASTRUCTURE.md` §5.
+        self.audio_setup.migrate_legacy_device();
+
         // Validate tempo map data
         self.tempo_map.ensure_valid();
         self.tempo_map

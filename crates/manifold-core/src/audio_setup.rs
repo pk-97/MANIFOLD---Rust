@@ -72,28 +72,80 @@ impl AudioSend {
     }
 }
 
+/// A reference to a chosen input device that survives reconnection and rename.
+///
+/// Identity is the platform **UID** (CoreAudio's stable device id); `name` is
+/// for display and as a fallback match when the UID can't be resolved — a
+/// project saved before UID identity, or a device whose UID changed. The app
+/// resolves this to a live device through `manifold_audio::directory` at capture
+/// time, so a renamed-but-same device still opens and a same-name-different
+/// device is not silently bound. See `docs/AUDIO_INFRASTRUCTURE.md` §5.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioDeviceRef {
+    /// Stable platform UID. Empty only for a legacy name-only reference.
+    #[serde(default)]
+    pub uid: String,
+    /// Display name + fallback match key.
+    pub name: String,
+}
+
+impl AudioDeviceRef {
+    pub fn new(uid: impl Into<String>, name: impl Into<String>) -> Self {
+        Self { uid: uid.into(), name: name.into() }
+    }
+
+    /// The UID for resolution, or `None` if this is a legacy name-only ref.
+    pub fn uid_opt(&self) -> Option<&str> {
+        (!self.uid.is_empty()).then_some(self.uid.as_str())
+    }
+}
+
 /// Project-level audio input configuration. See module docs.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioSetup {
-    /// Chosen input device name. `None` = system default input. Remappable on
-    /// load: if the saved device is absent at startup, the sends survive intact
-    /// and capture stays dark until the user re-points it (the MIDI-port
-    /// pattern), rather than silently binding to the wrong hardware.
+    /// Chosen input device. `None` = system default input. Remappable on load:
+    /// if the saved device is absent at startup, the sends survive intact and
+    /// capture stays dark until the user re-points it (the MIDI-port pattern),
+    /// rather than silently binding to the wrong hardware.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device_name: Option<String>,
+    pub device: Option<AudioDeviceRef>,
     /// The named sends, in declaration order. **Send order is significant**: it
     /// is the index the analysis worker keys feature frames by (see
     /// [`Self::send_index`]).
     #[serde(default)]
     pub sends: Vec<AudioSend>,
+    /// Legacy pre-UID field: projects saved before UID identity stored only a
+    /// device name under `deviceName`. Read on load and folded into [`device`]
+    /// by [`Self::migrate_legacy_device`]; never serialized back.
+    #[serde(default, rename = "deviceName", skip_serializing)]
+    legacy_device_name: Option<String>,
 }
 
 impl AudioSetup {
     /// True when nothing is configured — lets the project skip serializing the
     /// field so existing fixtures round-trip byte-identically.
     pub fn is_empty(&self) -> bool {
-        self.device_name.is_none() && self.sends.is_empty()
+        self.device.is_none() && self.legacy_device_name.is_none() && self.sends.is_empty()
+    }
+
+    /// Fold a legacy `deviceName` into a UID-less [`AudioDeviceRef`]. Idempotent;
+    /// called once from `Project::on_after_deserialize`. The UID stays empty so
+    /// resolution falls back to a name match until the user re-points the device
+    /// (which mints a real UID) or it resolves and is re-saved.
+    pub fn migrate_legacy_device(&mut self) {
+        if self.device.is_none()
+            && let Some(name) = self.legacy_device_name.take()
+        {
+            self.device = Some(AudioDeviceRef { uid: String::new(), name });
+        }
+        self.legacy_device_name = None;
+    }
+
+    /// Display name of the chosen device, if any.
+    pub fn device_display_name(&self) -> Option<&str> {
+        self.device.as_ref().map(|d| d.name.as_str())
     }
 
     /// Find a send by id.
@@ -153,15 +205,16 @@ mod tests {
         let setup = AudioSetup::default();
         assert!(setup.is_empty());
         let json = serde_json::to_string(&setup).unwrap();
-        // device_name skipped (None), sends present but empty.
+        // device skipped (None), legacy field never serialized, sends empty.
         assert_eq!(json, r#"{"sends":[]}"#);
     }
 
     #[test]
     fn round_trips_through_json() {
         let mut setup = AudioSetup {
-            device_name: Some("BlackHole 16ch".into()),
+            device: Some(AudioDeviceRef::new("BlackHole16ch_UID", "BlackHole 16ch")),
             sends: vec![AudioSend::new("Bass")],
+            legacy_device_name: None,
         };
         setup.sends[0].channels = vec![2];
         setup.sends[0].analysis.pitch = true;
@@ -169,5 +222,35 @@ mod tests {
         let json = serde_json::to_string(&setup).unwrap();
         let back: AudioSetup = serde_json::from_str(&json).unwrap();
         assert_eq!(setup, back);
+    }
+
+    #[test]
+    fn legacy_device_name_migrates_to_uidless_ref() {
+        // A project saved before UID identity carries only `deviceName`.
+        let json = r#"{"deviceName":"BlackHole 16ch","sends":[]}"#;
+        let mut setup: AudioSetup = serde_json::from_str(json).unwrap();
+        assert!(setup.device.is_none(), "not migrated until the hook runs");
+
+        setup.migrate_legacy_device();
+        let dev = setup.device.as_ref().expect("migrated device");
+        assert_eq!(dev.name, "BlackHole 16ch");
+        assert!(dev.uid.is_empty(), "legacy ref has no UID; resolves by name");
+        assert_eq!(dev.uid_opt(), None);
+
+        // Migration is idempotent and never re-serializes the legacy key.
+        setup.migrate_legacy_device();
+        let reser = serde_json::to_string(&setup).unwrap();
+        assert!(!reser.contains("deviceName"));
+    }
+
+    #[test]
+    fn new_uid_ref_takes_precedence_over_legacy() {
+        let mut setup = AudioSetup {
+            device: Some(AudioDeviceRef::new("uid-1", "Modern")),
+            sends: vec![],
+            legacy_device_name: Some("Legacy".into()),
+        };
+        setup.migrate_legacy_device();
+        assert_eq!(setup.device.as_ref().unwrap().name, "Modern");
     }
 }

@@ -14,15 +14,17 @@
 
 use manifold_audio::analysis::{AudioFeatureWorker, FeatureReader, SendSpec};
 use manifold_audio::capture::{AudioCaptureConfig, AudioCaptureDevice};
-use manifold_core::audio_setup::AudioSetup;
+use manifold_core::audio_setup::{AudioDeviceRef, AudioSetup};
 use manifold_core::project::Project;
 use manifold_playback::engine::PlaybackEngine;
 
 /// The capture-relevant fingerprint of an [`AudioSetup`]. Changes here force a
-/// device/worker rebuild; label-only edits compare equal and don't.
+/// device/worker rebuild; label-only edits compare equal and don't. The device
+/// is keyed by its stable [`AudioDeviceRef`] (UID), so renaming the OS device
+/// doesn't churn capture — it re-resolves to the same hardware.
 #[derive(Clone, PartialEq, Default)]
 struct CaptureSignature {
-    device_name: Option<String>,
+    device: Option<AudioDeviceRef>,
     /// Channels per send in send order — the order is significant because it is
     /// the worker's frame index.
     sends: Vec<Vec<u16>>,
@@ -31,7 +33,7 @@ struct CaptureSignature {
 impl CaptureSignature {
     fn from_setup(setup: &AudioSetup) -> Self {
         Self {
-            device_name: setup.device_name.clone(),
+            device: setup.device.clone(),
             sends: setup.sends.iter().map(|s| s.channels.clone()).collect(),
         }
     }
@@ -108,7 +110,26 @@ impl AudioModRuntime {
         // streams on one device during the swap.
         self.capture = None;
 
-        let device_name = project.audio_setup.device_name.clone();
+        // Resolve the stored device reference (UID, name fallback) to the
+        // current openable device name. A configured-but-absent device leaves
+        // capture dark (remappable policy); `None` = system default input.
+        let device_name: Option<String> = match &project.audio_setup.device {
+            Some(dev_ref) => {
+                let dir = manifold_audio::directory::system_directory();
+                match dir.resolve(dev_ref.uid_opt(), Some(&dev_ref.name)) {
+                    Some(info) => Some(info.name),
+                    None => {
+                        log::warn!(
+                            "[AudioMod] Saved audio device '{}' not present; audio \
+                             modulation idle until it returns or is re-pointed",
+                            dev_ref.name
+                        );
+                        return;
+                    }
+                }
+            }
+            None => None,
+        };
         let specs: Vec<SendSpec> = project
             .audio_setup
             .sends

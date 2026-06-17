@@ -1072,11 +1072,16 @@ pub fn sync_inspector_data(
     selection: &SelectionState,
 ) {
     // Audio Setup modal — refresh its current device + send list while it's
-    // open. The device *list* is enumerated lazily by the app when the device
-    // dropdown opens (a CoreAudio call), so this sync just mirrors the selected
-    // device name and the project's sends — no per-sync enumeration.
+    // open. Resolving the device through the directory once per sync (only while
+    // the modal is up) gives each send row its real channel name, grouped or
+    // not, instead of a bare index.
     if ui.audio_setup_panel.is_open() {
         use manifold_ui::panels::audio_setup_panel::AudioSendRow;
+        let dir = manifold_audio::directory::system_directory();
+        let device = match &project.audio_setup.device {
+            Some(d) => dir.resolve(d.uid_opt(), Some(&d.name)),
+            None => dir.list_input_devices().into_iter().find(|d| d.is_default),
+        };
         let sends = project
             .audio_setup
             .sends
@@ -1084,11 +1089,12 @@ pub fn sync_inspector_data(
             .map(|s| AudioSendRow {
                 id: s.id.clone(),
                 label: s.label.clone(),
-                channel: s.channels.first().copied().unwrap_or(0),
+                channel_label: channel_label(device.as_ref(), &s.channels),
+                channels: s.channels.clone(),
             })
             .collect();
         ui.audio_setup_panel
-            .configure(project.audio_setup.device_name.clone(), sends);
+            .configure(project.audio_setup.device.clone(), sends);
     }
 
     // Master effects → inspector (envelopes ride on each instance)
@@ -1427,6 +1433,25 @@ fn build_audio_card_state(
         };
     }
     a
+}
+
+/// Resolve a send's routed channels to a human label for the Audio Setup row:
+/// the channel name(s) joined with " + ", or "Not routed" when empty. Falls
+/// back to a 1-based index when no device metadata is available.
+fn channel_label(
+    device: Option<&manifold_audio::directory::DeviceInfo>,
+    channels: &[u16],
+) -> String {
+    if channels.is_empty() {
+        return "Not routed".to_string();
+    }
+    let name_of = |ch: u16| -> String {
+        device
+            .and_then(|d| d.channels.get(ch as usize))
+            .map(|c| c.display_name())
+            .unwrap_or_else(|| format!("Channel {}", ch + 1))
+    };
+    channels.iter().map(|&ch| name_of(ch)).collect::<Vec<_>>().join(" + ")
 }
 
 /// Stamp the card-level available-send list (labels + ids) onto every card

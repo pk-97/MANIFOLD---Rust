@@ -218,6 +218,15 @@ pub struct UIRoot {
     /// Currently selected audio input device name for live recording.
     pub selected_audio_input_device: Option<String>,
 
+    /// Cached device metadata for the Audio Setup modal (channel names, UID,
+    /// liveness, subdevice grouping). Refreshed from the device directory when
+    /// the device dropdown opens, and read when a device or channel is chosen.
+    audio_setup_devices: Vec<manifold_audio::directory::DeviceInfo>,
+    /// Item-index → channel-index map for the currently-open send-channel
+    /// dropdown. `None` entries are non-selectable subdevice headers; the
+    /// channel dropdown is built grouped, so item index ≠ channel index.
+    audio_channel_item_map: Vec<Option<u16>>,
+
     // Inspector resize state
     pub inspector_resize_dragging: bool,
     inspector_drag_start_x: f32,
@@ -317,6 +326,8 @@ impl UIRoot {
             midi_device_names: Vec::new(),
             audio_input_device_names: Vec::new(),
             selected_audio_input_device: None,
+            audio_setup_devices: Vec::new(),
+            audio_channel_item_map: Vec::new(),
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
@@ -1234,32 +1245,36 @@ impl UIRoot {
                 true
             }
             PanelAction::AudioSetupDeviceClicked => {
-                // Enumerate capture devices on demand for the Audio Setup modal.
-                self.audio_input_device_names =
-                    manifold_audio::capture::AudioCaptureDevice::list_devices()
-                        .into_iter()
-                        .map(|d| d.name)
-                        .collect();
+                // Enumerate input devices with full metadata (names, UID,
+                // liveness) on demand for the Audio Setup modal.
+                let dir = manifold_audio::directory::system_directory();
+                self.audio_setup_devices = dir.list_input_devices();
                 let mut items: Vec<DropdownItem> = vec![DropdownItem::new("System Default")];
-                items.extend(
-                    self.audio_input_device_names
-                        .iter()
-                        .map(|name| DropdownItem::new(name)),
-                );
+                items.extend(self.audio_setup_devices.iter().map(|d| {
+                    // Mark an offline device so a stale routing reads clearly.
+                    let label = if d.is_alive {
+                        d.name.clone()
+                    } else {
+                        format!("{} (offline)", d.name)
+                    };
+                    DropdownItem::new(&label)
+                }));
                 self.open_dropdown_at(DropdownContext::AudioSetupDevice, items, trigger);
                 true
             }
             PanelAction::AudioSendChannelClicked(send_id) => {
-                // List only the channels the selected device actually has. Fall
-                // back to mono if the device is absent / can't report its config.
-                let device = self.audio_setup_panel.current_device();
-                let count = manifold_audio::capture::AudioCaptureDevice::device_channels(device)
-                    .unwrap_or(1)
-                    .max(1);
-                // 1-based labels; index k → 0-based channel k.
-                let items: Vec<DropdownItem> = (0..count)
-                    .map(|ch| DropdownItem::new(&format!("Channel {}", ch + 1)))
-                    .collect();
+                // Build the channel list from the selected device's true layout,
+                // grouped by subdevice, with platform channel names. Falls back
+                // to a bare mono entry if the device can't be resolved.
+                let dir = manifold_audio::directory::system_directory();
+                let device = match self.audio_setup_panel.current_device() {
+                    Some(dev_ref) => dir.resolve(dev_ref.uid_opt(), Some(&dev_ref.name)),
+                    // No explicit device → the system default input.
+                    None => dir.list_input_devices().into_iter().find(|d| d.is_default),
+                };
+
+                let (items, map) = build_channel_dropdown(device.as_ref());
+                self.audio_channel_item_map = map;
                 self.open_dropdown_at(
                     DropdownContext::AudioSendChannel(send_id.clone()),
                     items,
@@ -1615,14 +1630,23 @@ impl UIRoot {
                     // "System Default" → clear the explicit device.
                     Some(PanelAction::AudioSetDevice(None))
                 } else {
-                    self.audio_input_device_names
-                        .get(index - 1)
-                        .map(|name| PanelAction::AudioSetDevice(Some(name.clone())))
+                    // Store stable UID + display name from the cached metadata.
+                    self.audio_setup_devices.get(index - 1).map(|d| {
+                        PanelAction::AudioSetDevice(Some(manifold_core::AudioDeviceRef::new(
+                            d.uid.clone(),
+                            d.name.clone(),
+                        )))
+                    })
                 }
             }
             DropdownContext::AudioSendChannel(send_id) => {
-                // index k → 0-based channel k (downmixed to mono for analysis).
-                Some(PanelAction::AudioSetSendChannels(send_id, vec![index as u16]))
+                // The channel list is grouped (subdevice headers are non-
+                // selectable), so map the item index back to a channel index.
+                self.audio_channel_item_map
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .map(|ch| PanelAction::AudioSetSendChannels(send_id, vec![ch]))
             }
             DropdownContext::CardContext(gpt) => {
                 // Label-matched: Copy/Paste are generator-only + conditional, so
@@ -1883,4 +1907,42 @@ impl UIRoot {
         self.waveform_lane.update_nodes(&mut self.tree);
         self.stem_lanes.update_nodes(&mut self.tree);
     }
+}
+
+/// Build the send-channel dropdown for `device`, grouped by subdevice with
+/// platform channel names. Returns the items and a parallel item-index →
+/// channel-index map (`None` for non-selectable subdevice headers). Falls back
+/// to a single mono entry when no device metadata is available.
+fn build_channel_dropdown(
+    device: Option<&manifold_audio::directory::DeviceInfo>,
+) -> (Vec<DropdownItem>, Vec<Option<u16>>) {
+    let Some(device) = device else {
+        return (vec![DropdownItem::new("Channel 1")], vec![Some(0)]);
+    };
+    if device.channels.is_empty() {
+        return (vec![DropdownItem::new("Channel 1")], vec![Some(0)]);
+    }
+
+    let mut items = Vec::new();
+    let mut map: Vec<Option<u16>> = Vec::new();
+
+    if device.subdevices.is_empty() {
+        for ch in &device.channels {
+            items.push(DropdownItem::new(&ch.display_name()));
+            map.push(Some(ch.index));
+        }
+    } else {
+        for group in &device.subdevices {
+            items.push(DropdownItem::disabled(&group.name));
+            map.push(None);
+            let end = group.channel_start.saturating_add(group.channel_count);
+            for idx in group.channel_start..end {
+                if let Some(ch) = device.channels.get(idx as usize) {
+                    items.push(DropdownItem::new(&ch.display_name()));
+                    map.push(Some(ch.index));
+                }
+            }
+        }
+    }
+    (items, map)
 }
