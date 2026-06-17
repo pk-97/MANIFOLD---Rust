@@ -1869,6 +1869,7 @@ name = "manifold-audio"
 version = "0.1.0"
 dependencies = [
  "block2 0.6.2",
+ "core-foundation 0.10.1",
  "cpal",
  "log",
  "manifold-core",

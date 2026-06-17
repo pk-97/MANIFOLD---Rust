@@ -11,11 +11,13 @@ cpal = "0.15"
 ringbuf = "0.4"
 rustfft = "6"
 
-# macOS ScreenCaptureKit FFI (per-app audio capture)
+# macOS ScreenCaptureKit FFI (per-app audio capture) + CoreAudio device directory
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSError", "NSString", "NSArray", "NSObjCRuntime"] }
 block2 = "0.6"
+# CFString/CFArray handling for the CoreAudio device directory (channel names, UIDs).
+core-foundation = "0.10"
 
 [lints]
 workspace = true
