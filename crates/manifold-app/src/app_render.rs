@@ -554,14 +554,17 @@ impl Application {
                 // drain none. The render path consumes (clears) this buffer.
                 self.pending_spectrogram_columns
                     .extend_from_slice(&state.spectrogram_columns);
-                // Bound it: never keep more than the waterfall's scroll-back depth
-                // (older columns scroll off anyway). Caps memory when the scope is
-                // closed but an audio mod keeps capture — and column production —
+                // Bound it: never keep more than one screen-width of columns (a
+                // full sweep overwrites the rest anyway). 4096 = the max texture
+                // width clamp below, so an open scope never drops a column it
+                // could display; this only caps memory when the scope is closed
+                // but an audio mod keeps capture — and column production —
                 // running, since only the render path drains this buffer.
                 let nb = state.spectrogram_num_bins;
                 if nb > 0 {
-                    let max_cols = manifold_spectral::SpectrogramConfig::default().history_len;
-                    let excess = self.pending_spectrogram_columns.len().saturating_sub(max_cols * nb);
+                    const MAX_PENDING_COLS: usize = 4096;
+                    let excess =
+                        self.pending_spectrogram_columns.len().saturating_sub(MAX_PENDING_COLS * nb);
                     if excess > 0 {
                         self.pending_spectrogram_columns.drain(0..excess);
                     }
@@ -3766,15 +3769,18 @@ impl Application {
             let tex_w = ((rect.width * sf).round() as u32).clamp(256, 4096);
             let tex_h = ((rect.height * sf).round() as u32).clamp(128, 4096);
 
-            // (Re)create the renderer if the column layout changed.
-            if self.spectrogram.is_none() || self.spectrogram_num_bins != num_bins {
-                // Drop columns captured under the old bin count — chunking them at
-                // the new `num_bins` would misalign the freshly built ring.
+            // (Re)create the renderer if the bin count or the on-screen width
+            // changed. The ring is sized to the texture's pixel width so each
+            // column owns one pixel (crisp 1:1 sweep, no resampling).
+            let cur_cols = self.spectrogram.as_ref().map(|s| s.num_cols());
+            if cur_cols != Some(tex_w as usize) || self.spectrogram_num_bins != num_bins {
+                // Drop buffered columns — chunking them at the new `num_bins`
+                // would misalign, and a width change resets the sweep anyway.
                 self.pending_spectrogram_columns.clear();
                 self.spectrogram = Some(Spectrogram::new(
                     &gpu.device,
                     num_bins,
-                    cfg.history_len,
+                    tex_w as usize,
                     manifold_gpu::GpuTextureFormat::Rgba8Unorm,
                     cfg.db_min,
                     cfg.db_max,

@@ -26,9 +26,13 @@ pub use spectrogram::Spectrogram;
 /// Parameters for a calibration spectrogram. Defaults mirror the Analyzer
 /// VST's *look* — 10 Hz–22 kHz over 24 bins/octave (~266 bins), a −59…0 dB
 /// colour range — on a deliberately lighter single-send CPU transform: a
-/// 16384-pt FFT (~341 ms) with a 1024-sample hop (~47 columns/s) and ~11 s of
-/// scroll-back. The VST's heavier 65536-pt FFT at a 256-sample hop (~188
-/// cols/s) is for a full-mix GPU pipeline we don't need here (see `cqt.rs`).
+/// 16384-pt FFT (~341 ms) with a 256-sample hop (~188 columns/s, matching the
+/// VST). The high column rate is what makes the sweep head advance smoothly
+/// (~3 px/frame at 60 Hz, 1 column = 1 pixel) instead of lurching. The FFT is
+/// still the light 16384-pt one — the VST's heavier 65536-pt FFT is for a
+/// full-mix GPU pipeline we don't need here (see `cqt.rs`). `history_len` no
+/// longer sizes the on-screen ring (the renderer sizes that to the scope's
+/// pixel width for a crisp 1:1 sweep); it is retained only as a buffering hint.
 #[derive(Clone, Copy, Debug)]
 pub struct SpectrogramConfig {
     /// FFT size (power of two). Must exceed the longest VQT kernel.
@@ -65,8 +69,8 @@ impl Default for SpectrogramConfig {
             gamma_hz: 20.0,
             min_kernel_len: 256,
             threshold_rel: 1e-4,
-            hop: 1024,
-            history_len: 512,
+            hop: 256,
+            history_len: 2048,
             db_min: -59.0,
             db_max: 0.0,
         }

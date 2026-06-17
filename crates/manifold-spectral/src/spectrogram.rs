@@ -1,10 +1,14 @@
-//! GPU waterfall renderer for VQT magnitude columns.
+//! GPU sweep-fill renderer for VQT magnitude columns.
 //!
 //! Consumes per-hop magnitude columns (from [`crate::cqt::CqtTransform`]) into a
-//! CPU ring, and renders a scrolling, colour-mapped spectrogram into a caller-
-//! owned [`GpuTexture`] with one fullscreen pass. Purpose-built for Manifold's
-//! Audio Setup scope — no egui/GL coupling. The dB conversion, colour ramp, and
-//! log-frequency mapping all live in `shaders/spectrogram.wgsl`.
+//! CPU ring whose width equals the on-screen pixel width, and paints them into a
+//! caller-owned [`GpuTexture`] with one fullscreen pass. Oscilloscope-style: the
+//! image is stationary and a write head sweeps left→right, overwriting the
+//! oldest column in place and wrapping at the right edge — so 1 column maps to
+//! exactly 1 pixel (no horizontal resampling, no scrolling judder). The dB
+//! conversion, colour ramp, and log-frequency mapping all live in
+//! `shaders/spectrogram.wgsl`. Purpose-built for Manifold's Audio Setup scope —
+//! no egui/GL coupling.
 //!
 //! Race-free without locks: the column history is uploaded into one of three
 //! rotating GPU buffers per render, so the CPU never writes a buffer the GPU is
@@ -26,7 +30,7 @@ const BUFFER_ROTATION: usize = 3;
 #[derive(Clone, Copy)]
 struct Params {
     num_bins: u32,
-    history_len: u32,
+    num_cols: u32,
     write_index: u32,
     _pad0: u32,
     db_min: f32,
@@ -35,12 +39,14 @@ struct Params {
     band_hi_y: f32,
 }
 
-/// Scrolling spectrogram renderer. One per visible scope.
+/// Sweep-fill spectrogram renderer. One per visible scope; sized to the scope's
+/// pixel width so each column owns one pixel column.
 pub struct Spectrogram {
     num_bins: usize,
-    history_len: usize,
-    /// `history_len * num_bins` magnitudes; a ring of columns. `head` is the
-    /// next column to overwrite (also the shader's `write_index`).
+    /// Column count = on-screen pixel width. One pixel column per ring column.
+    num_cols: usize,
+    /// `num_cols * num_bins` magnitudes; a ring of columns. `head` is the next
+    /// column to overwrite (also the shader's `write_index` — the sweep line).
     ring: Vec<f32>,
     head: usize,
     bufs: Vec<GpuBuffer>,
@@ -51,19 +57,19 @@ pub struct Spectrogram {
 }
 
 impl Spectrogram {
-    /// Create a renderer for `num_bins`-tall columns and `history_len` columns
-    /// of scroll-back. `color_format` must match the texture passed to
-    /// [`render`](Self::render). `db_min`/`db_max` set the magnitude→colour
-    /// dynamic range (e.g. −72 dB → 0 dB).
+    /// Create a renderer for `num_bins`-tall columns across `num_cols` pixel
+    /// columns (pass the scope's physical-pixel width). `color_format` must
+    /// match the texture passed to [`render`](Self::render). `db_min`/`db_max`
+    /// set the magnitude→colour dynamic range (e.g. −59 dB → 0 dB).
     pub fn new(
         device: &GpuDevice,
         num_bins: usize,
-        history_len: usize,
+        num_cols: usize,
         color_format: GpuTextureFormat,
         db_min: f32,
         db_max: f32,
     ) -> Self {
-        let elems = num_bins * history_len;
+        let elems = num_bins * num_cols;
         let bytes = (elems * std::mem::size_of::<f32>()) as u64;
         let bufs = (0..BUFFER_ROTATION)
             .map(|_| {
@@ -82,7 +88,7 @@ impl Spectrogram {
         );
         Self {
             num_bins,
-            history_len,
+            num_cols,
             ring: vec![0.0; elems],
             head: 0,
             bufs,
@@ -97,8 +103,14 @@ impl Spectrogram {
         self.num_bins
     }
 
-    /// Append one magnitude column (advancing the ring). Extra values past
-    /// `num_bins` are ignored; a short column zero-pads the remainder.
+    /// On-screen column count this renderer was built for (== pixel width).
+    pub fn num_cols(&self) -> usize {
+        self.num_cols
+    }
+
+    /// Append one magnitude column at the sweep head (advancing it). Extra
+    /// values past `num_bins` are ignored; a short column zero-pads the
+    /// remainder. The head wraps at the right edge back to the left.
     pub fn push_column(&mut self, magnitudes: &[f32]) {
         let base = self.head * self.num_bins;
         let dst = &mut self.ring[base..base + self.num_bins];
@@ -107,7 +119,7 @@ impl Spectrogram {
         for v in &mut dst[n..] {
             *v = 0.0;
         }
-        self.head = (self.head + 1) % self.history_len;
+        self.head = (self.head + 1) % self.num_cols;
     }
 
     /// Render the current history into `target` (cleared first). One fullscreen
@@ -130,7 +142,7 @@ impl Spectrogram {
 
         let params = Params {
             num_bins: self.num_bins as u32,
-            history_len: self.history_len as u32,
+            num_cols: self.num_cols as u32,
             write_index: self.head as u32,
             _pad0: 0,
             db_min: self.db_min,
