@@ -64,8 +64,16 @@ pub struct Spectrogram {
     /// `num_cols * num_bins` magnitudes; a ring of columns. `head` is the next
     /// column to overwrite (also the shader's `write_index` — the sweep line).
     ring: Vec<f32>,
+    /// Parallel per-column overlay scalars, 2 per column: `[centroid_yfb, onset]`.
+    /// `centroid_yfb` is the spectral centroid as normalised height-from-bottom
+    /// (0..1, matching the bin axis); `< 0` hides the trace for that column.
+    /// `onset` is a 0..1 transient impulse, drawn as a tick on the time axis.
+    /// Same ring layout as `ring`, written at `head`.
+    col_scalars: Vec<f32>,
     head: usize,
     bufs: Vec<GpuBuffer>,
+    /// Rotating GPU buffers for `col_scalars`, mirroring `bufs`.
+    scalar_bufs: Vec<GpuBuffer>,
     buf_frame: usize,
     pipeline: GpuRenderPipeline,
     db_min: f32,
@@ -94,6 +102,16 @@ impl Spectrogram {
                 b
             })
             .collect();
+        // Overlay scalar ring: 2 floats per column.
+        let scalar_elems = num_cols * 2;
+        let scalar_bytes = (scalar_elems * std::mem::size_of::<f32>()) as u64;
+        let scalar_bufs = (0..BUFFER_ROTATION)
+            .map(|_| {
+                let b = device.create_buffer_shared(scalar_bytes.max(4));
+                b.zero_fill();
+                b
+            })
+            .collect();
         let pipeline = device.create_render_pipeline(
             SHADER,
             "vs_main",
@@ -106,8 +124,10 @@ impl Spectrogram {
             num_bins,
             num_cols,
             ring: vec![0.0; elems],
+            col_scalars: vec![-1.0; scalar_elems],
             head: 0,
             bufs,
+            scalar_bufs,
             buf_frame: 0,
             pipeline,
             db_min,
@@ -162,7 +182,13 @@ impl Spectrogram {
     /// Append one magnitude column at the sweep head (advancing it). Extra
     /// values past `num_bins` are ignored; a short column zero-pads the
     /// remainder. The head wraps at the right edge back to the left.
-    pub fn push_column(&mut self, magnitudes: &[f32]) {
+    ///
+    /// `centroid_yfb` is the column's spectral centroid as normalised
+    /// height-from-bottom (0..1); pass `< 0` to hide the trace for this column.
+    /// `onset` is a 0..1 transient impulse drawn as a tick on the time axis.
+    /// Stored in the parallel scalar ring at the same slot, so they scroll with
+    /// the waterfall.
+    pub fn push_column(&mut self, magnitudes: &[f32], centroid_yfb: f32, onset: f32) {
         let base = self.head * self.num_bins;
         let dst = &mut self.ring[base..base + self.num_bins];
         let n = magnitudes.len().min(self.num_bins);
@@ -170,6 +196,8 @@ impl Spectrogram {
         for v in &mut dst[n..] {
             *v = 0.0;
         }
+        self.col_scalars[self.head * 2] = centroid_yfb;
+        self.col_scalars[self.head * 2 + 1] = onset;
         self.head = (self.head + 1) % self.num_cols;
     }
 
@@ -188,17 +216,24 @@ impl Spectrogram {
         freq_log_ratio: f32,
         cursor_y: f32,
     ) {
-        let buf = &self.bufs[self.buf_frame % BUFFER_ROTATION];
+        let slot = self.buf_frame % BUFFER_ROTATION;
+        let buf = &self.bufs[slot];
+        let scalar_buf = &self.scalar_bufs[slot];
         self.buf_frame += 1;
 
-        // SAFETY: shared buffer; `ring` is exactly the buffer's length and this
-        // buffer isn't read by an in-flight frame (rotation guarantees it).
+        // SAFETY: shared buffers; `ring`/`col_scalars` are exactly each buffer's
+        // length and aren't read by an in-flight frame (rotation guarantees it).
         unsafe {
             let bytes = std::slice::from_raw_parts(
                 self.ring.as_ptr() as *const u8,
                 std::mem::size_of_val(self.ring.as_slice()),
             );
             buf.write(0, bytes);
+            let scalar_bytes = std::slice::from_raw_parts(
+                self.col_scalars.as_ptr() as *const u8,
+                std::mem::size_of_val(self.col_scalars.as_slice()),
+            );
+            scalar_buf.write(0, scalar_bytes);
         }
 
         let params = Params {
@@ -229,10 +264,31 @@ impl Spectrogram {
             &[
                 GpuBinding::Buffer { binding: 0, buffer: buf, offset: 0 },
                 GpuBinding::Bytes { binding: 1, data: param_bytes },
+                GpuBinding::Buffer { binding: 2, buffer: scalar_buf, offset: 0 },
             ],
             true, // clear
             true, // store
             "Spectrogram",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SHADER;
+
+    /// The spectrogram WGSL must parse and pass naga's validator — catches a
+    /// malformed binding/index/type before it reaches the GPU at runtime (the
+    /// shader is otherwise only compiled when the Audio Setup scope opens).
+    #[test]
+    fn shader_parses_and_validates() {
+        let module =
+            naga::front::wgsl::parse_str(SHADER).expect("spectrogram WGSL should parse");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("spectrogram WGSL should validate");
     }
 }

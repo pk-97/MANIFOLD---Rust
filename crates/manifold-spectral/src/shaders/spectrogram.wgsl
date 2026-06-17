@@ -38,6 +38,10 @@ struct Params {
 
 @group(0) @binding(0) var<storage, read> history: array<f32>;
 @group(0) @binding(1) var<uniform> p: Params;
+// Per-column overlay scalars, 2 per column: [centroid_yfb, onset]. Same column
+// layout as `history`. `centroid_yfb` is the spectral centroid as height-from-
+// bottom (0..1); < 0 hides it. `onset` is a 0..1 transient impulse.
+@group(0) @binding(2) var<storage, read> col_scalars: array<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -127,6 +131,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if (p.band_hi_y >= 0.0 && abs(y_from_bottom - p.band_hi_y) < half_px) {
         rgb = mix(rgb, line, 0.7);
+    }
+
+    // Per-column overlays: the spectral-centroid trace and transient ticks.
+    // Both scroll with the waterfall because they're keyed by `col`, the same
+    // 1:1 column slot the magnitudes use.
+    let centroid_yfb = col_scalars[col * 2u];
+    let onset = col_scalars[col * 2u + 1u];
+    // Centroid trace: a magenta line tracking the column's centre of spectral
+    // mass — "where the energy sits" over time. Soft-edged so it reads smooth.
+    if (centroid_yfb >= 0.0) {
+        let cd = abs(y_from_bottom - centroid_yfb);
+        let w = clamp(1.0 - cd / 0.008, 0.0, 1.0);
+        rgb = mix(rgb, vec3<f32>(1.0, 0.25, 0.85), w * 0.85);
+    }
+    // Transient ticks: a warm bar rising from the bottom edge on a column where
+    // an onset fired, its height proportional to the impulse strength.
+    if (onset > 0.04 && in.uv.y > 1.0 - onset * 0.14) {
+        rgb = mix(rgb, vec3<f32>(1.0, 0.85, 0.4), clamp(onset, 0.0, 1.0));
     }
 
     // Cursor frequency locator: a faint horizontal line at the hovered freq,

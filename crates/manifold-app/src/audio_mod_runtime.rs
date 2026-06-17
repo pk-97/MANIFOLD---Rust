@@ -15,8 +15,8 @@
 use std::sync::Arc;
 
 use manifold_audio::analysis::{
-    AudioFeatureWorker, ColumnReader, CrossoverBank, FeatureReader, GainBank, SendSpec,
-    SpectrogramTap,
+    AudioFeatureWorker, ColumnReader, CrossoverBank, FeatureReader, GainBank, ScalarReader,
+    SendSpec, SpectrogramTap,
 };
 use manifold_audio::capture::{AudioCaptureConfig, AudioCaptureDevice};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSetup};
@@ -60,6 +60,8 @@ struct AudioModCapture {
     tap: Arc<SpectrogramTap>,
     /// Read end of the worker's VQT column stream.
     columns: ColumnReader,
+    /// Read end of the worker's per-column overlay scalars (centroid + onset).
+    scalars: ScalarReader,
     /// Capture sample rate, for the scope's frequency-axis range.
     sample_rate: f32,
 }
@@ -209,6 +211,15 @@ impl AudioModRuntime {
         }
     }
 
+    /// Drain the per-column overlay scalars `(centroid_yfb, onset)` produced
+    /// since the last call, oldest → newest and in lockstep with
+    /// [`Self::drain_spectrogram_columns`]. No-op when capture is inactive.
+    pub fn drain_spectrogram_scalars(&mut self, f: impl FnMut(f32, f32)) {
+        if let Some(cap) = &mut self.capture {
+            cap.scalars.drain(f);
+        }
+    }
+
     /// The scope's analysed frequency range `(fmin, fmax)` Hz — for the
     /// frequency axis and band-divider overlays. `None` when capture is inactive.
     pub fn spectrogram_freq_range(&self) -> Option<(f32, f32)> {
@@ -331,7 +342,7 @@ impl AudioModRuntime {
         }
 
         let tap = Arc::new(SpectrogramTap::default());
-        let (worker, reader, columns) = AudioFeatureWorker::spawn(
+        let (worker, reader, columns, scalars) = AudioFeatureWorker::spawn(
             consumer,
             sample_rate,
             channels,
@@ -352,6 +363,7 @@ impl AudioModRuntime {
             gains,
             tap,
             columns,
+            scalars,
             sample_rate: sample_rate as f32,
         });
     }

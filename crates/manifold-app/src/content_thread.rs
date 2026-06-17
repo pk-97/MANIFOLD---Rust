@@ -1073,6 +1073,12 @@ impl ContentThread {
         let mut spectrogram_columns = Vec::new();
         self.audio_mod_runtime
             .drain_spectrogram_columns(|col| spectrogram_columns.extend_from_slice(col));
+        // Per-column overlay scalars, drained in lockstep with the columns above.
+        let mut spectrogram_col_scalars = Vec::new();
+        self.audio_mod_runtime.drain_spectrogram_scalars(|centroid, onset| {
+            spectrogram_col_scalars.push(centroid);
+            spectrogram_col_scalars.push(onset);
+        });
         let spectrogram_num_bins = self.audio_mod_runtime.spectrogram_num_bins();
         let (spectrogram_fmin, spectrogram_fmax) = self
             .audio_mod_runtime
@@ -1163,6 +1169,7 @@ impl ContentThread {
             audio_send_levels,
             audio_send_count,
             spectrogram_columns,
+            spectrogram_col_scalars,
             spectrogram_num_bins,
             spectrogram_fmin,
             spectrogram_fmax,

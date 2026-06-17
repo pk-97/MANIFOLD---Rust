@@ -266,6 +266,28 @@ impl ColumnReader {
     }
 }
 
+/// Read end of the worker's per-column overlay-scalar stream: 2 floats per
+/// column, `[centroid_yfb, onset]`, produced in lockstep with [`ColumnReader`]
+/// (same column count, same order).
+pub struct ScalarReader {
+    cons: ringbuf::HeapCons<f32>,
+    scratch: [f32; 2],
+}
+
+impl ScalarReader {
+    /// Pop every complete scalar pair available, calling `f(centroid_yfb, onset)`
+    /// in arrival order (oldest → newest).
+    pub fn drain(&mut self, mut f: impl FnMut(f32, f32)) {
+        while self.cons.occupied_len() >= 2 {
+            let got = self.cons.pop_slice(&mut self.scratch);
+            if got < 2 {
+                break;
+            }
+            f(self.scratch[0], self.scratch[1]);
+        }
+    }
+}
+
 /// Spawns and owns the analysis worker thread. Stops the thread on `stop()` or
 /// drop.
 pub struct AudioFeatureWorker {
@@ -288,7 +310,7 @@ impl AudioFeatureWorker {
         gains: Arc<GainBank>,
         crossovers: Arc<CrossoverBank>,
         tap: Arc<SpectrogramTap>,
-    ) -> (Self, FeatureReader, ColumnReader) {
+    ) -> (Self, FeatureReader, ColumnReader, ScalarReader) {
         if sends.len() > MAX_SENDS {
             log::warn!(
                 "[AudioAnalysis] {} sends exceeds MAX_SENDS={MAX_SENDS}; extra dropped",
@@ -312,6 +334,11 @@ impl AudioFeatureWorker {
             scratch: vec![0.0; num_bins.max(1)],
         };
 
+        // Overlay-scalar ring: 2 floats per column, sized to match the column
+        // ring's column capacity so they never desync.
+        let (scalar_prod, scalar_cons) = HeapRb::<f32>::new((2 * COLUMN_RING_COLS).max(1)).split();
+        let scalar_reader = ScalarReader { cons: scalar_cons, scratch: [0.0; 2] };
+
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = running.clone();
 
@@ -328,6 +355,7 @@ impl AudioFeatureWorker {
                     crossovers,
                     tap,
                     col_prod,
+                    scalar_prod,
                     spec_config,
                     num_bins,
                 );
@@ -335,7 +363,7 @@ impl AudioFeatureWorker {
             })
             .expect("spawn audio analysis thread");
 
-        (Self { running, handle: Some(handle) }, reader, column_reader)
+        (Self { running, handle: Some(handle) }, reader, column_reader, scalar_reader)
     }
 
     /// Stop the worker thread and join it. Idempotent.
@@ -400,6 +428,18 @@ struct WorkerLoop {
     /// Which send to produce columns for, `-1` = none. Read from `tap` each drain.
     tap: Arc<SpectrogramTap>,
     column_producer: ringbuf::HeapProd<f32>,
+    /// Per-column overlay scalars (2 per column: centroid-height, onset),
+    /// produced in lockstep with `column_producer`. Drives the scope's scrolling
+    /// centroid trace + transient ticks.
+    scalar_producer: ringbuf::HeapProd<f32>,
+    /// Previous scope column's magnitudes, for the per-column onset (flux).
+    prev_spec_col: Vec<f32>,
+    /// Whether `prev_spec_col` holds a real column yet (skips the startup spike).
+    spec_has_prev: bool,
+    /// Running average of the scope column flux — the onset threshold tracks it.
+    spec_flux_avg: f32,
+    /// Decaying onset impulse for the scope (per scope column).
+    spec_onset: f32,
     /// Built lazily on the first active tap (kernel construction is one FFT per
     /// bin — paid once, only if the spectrogram is ever opened).
     cqt: Option<CqtTransform>,
@@ -435,6 +475,7 @@ impl WorkerLoop {
         crossovers: Arc<CrossoverBank>,
         tap: Arc<SpectrogramTap>,
         column_producer: ringbuf::HeapProd<f32>,
+        scalar_producer: ringbuf::HeapProd<f32>,
         spec_config: SpectrogramConfig,
         spec_num_bins: usize,
     ) -> Self {
@@ -472,6 +513,11 @@ impl WorkerLoop {
             spec_num_bins,
             tap,
             column_producer,
+            scalar_producer,
+            prev_spec_col: vec![0.0; spec_num_bins.max(1)],
+            spec_has_prev: false,
+            spec_flux_avg: 0.0,
+            spec_onset: 0.0,
             cqt: None,
             spec_window: Vec::new(),
             spec_since_hop: 0,
@@ -548,6 +594,11 @@ impl WorkerLoop {
             self.spec_window.clear();
             self.spec_since_hop = 0;
             self.spec_tapped = tapped;
+            // Reset the scope's per-column onset state so a new source doesn't
+            // inherit the old one's flux baseline / impulse.
+            self.spec_has_prev = false;
+            self.spec_flux_avg = 0.0;
+            self.spec_onset = 0.0;
         }
 
         for frame in work[..usable].chunks_exact(ch) {
@@ -658,10 +709,43 @@ impl WorkerLoop {
         for j in (0..emit).rev() {
             let end = self.spec_window.len() - j * hop;
             cqt.process_magnitudes(&self.spec_window[end - n_fft..end], &mut self.spec_col);
-            // Whole-column push only — if the ring can't fit a full column, drop
-            // it (the scope skips a frame) rather than desync the stream.
-            if self.column_producer.vacant_len() >= self.spec_num_bins {
+
+            // Per-column overlay scalars. Centroid = the magnitude-weighted mean
+            // bin, as height-from-bottom (0..1) — VQT bins are geometric, so this
+            // is already the log-frequency centre the shader draws. Onset = a
+            // flux impulse vs the previous column, thresholded on a running
+            // average. Both advance every column (continuity) even if the ring is
+            // full and the push below is skipped.
+            let (mut num, mut den, mut flux) = (0.0f32, 0.0f32, 0.0f32);
+            for (i, &m) in self.spec_col.iter().enumerate() {
+                num += i as f32 * m;
+                den += m;
+                if self.spec_has_prev {
+                    flux += (m - self.prev_spec_col[i]).max(0.0);
+                }
+            }
+            let centroid_yfb = if den > 1e-9 && self.spec_num_bins > 1 {
+                (num / den / (self.spec_num_bins - 1) as f32).clamp(0.0, 1.0)
+            } else {
+                -1.0
+            };
+            if self.spec_has_prev {
+                let triggered =
+                    flux > self.spec_flux_avg * ONSET_RATIO && flux > ONSET_FLOOR;
+                self.spec_onset = if triggered { 1.0 } else { self.spec_onset * ONSET_DECAY };
+                self.spec_flux_avg += (flux - self.spec_flux_avg) * FLUX_AVG_COEFF;
+            }
+            self.prev_spec_col.copy_from_slice(&self.spec_col);
+            self.spec_has_prev = true;
+
+            // Whole-column push only, in lockstep with its scalars — if either
+            // ring can't fit, drop both (the scope skips a frame) rather than
+            // desync the streams.
+            if self.column_producer.vacant_len() >= self.spec_num_bins
+                && self.scalar_producer.vacant_len() >= 2
+            {
                 self.column_producer.push_slice(&self.spec_col);
+                self.scalar_producer.push_slice(&[centroid_yfb, self.spec_onset]);
             }
         }
         // Consume the whole backlog (including the collapsed remainder) so it
@@ -1126,7 +1210,7 @@ mod tests {
         let gains = Arc::new(GainBank::new(&[1.0]));
         let crossovers = Arc::new(CrossoverBank::new(250.0, 2000.0));
         let tap = Arc::new(SpectrogramTap::default());
-        let (mut worker, mut reader, _columns) = AudioFeatureWorker::spawn(
+        let (mut worker, mut reader, _columns, _scalars) = AudioFeatureWorker::spawn(
             cons,
             SR,
             /* device_channels */ 1,

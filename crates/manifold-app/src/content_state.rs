@@ -90,6 +90,10 @@ pub struct ContentState {
     /// (`k * spectrogram_num_bins` magnitudes, oldest → newest). Empty unless the
     /// Audio Setup scope is open on a send.
     pub spectrogram_columns: Vec<f32>,
+    /// Per-column overlay scalars in lockstep with `spectrogram_columns`: 2 per
+    /// column, `[centroid_yfb, onset]` (the scrolling centroid trace + transient
+    /// ticks). Length is `2 * (columns / spectrogram_num_bins)`.
+    pub spectrogram_col_scalars: Vec<f32>,
     /// Bins per spectrogram column (column length). 0 = no scope.
     pub spectrogram_num_bins: usize,
     /// Analysed frequency range of the scope (Hz), for axis + band overlays.
@@ -398,6 +402,7 @@ impl Default for ContentState {
             audio_send_levels: [0.0; manifold_audio::analysis::MAX_SENDS],
             audio_send_count: 0,
             spectrogram_columns: Vec::new(),
+            spectrogram_col_scalars: Vec::new(),
             spectrogram_num_bins: 0,
             spectrogram_fmin: 0.0,
             spectrogram_fmax: 0.0,

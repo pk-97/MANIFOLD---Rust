@@ -575,6 +575,9 @@ impl Application {
                 // drain none. The render path consumes (clears) this buffer.
                 self.pending_spectrogram_columns
                     .extend_from_slice(&state.spectrogram_columns);
+                // Overlay scalars ride in lockstep (2 per column).
+                self.pending_spectrogram_scalars
+                    .extend_from_slice(&state.spectrogram_col_scalars);
                 // Bound it: never keep more than one screen-width of columns (a
                 // full sweep overwrites the rest anyway). 4096 = the max texture
                 // width clamp below, so an open scope never drops a column it
@@ -588,12 +591,17 @@ impl Application {
                         self.pending_spectrogram_columns.len().saturating_sub(MAX_PENDING_COLS * nb);
                     if excess > 0 {
                         self.pending_spectrogram_columns.drain(0..excess);
+                        // Drop the matching scalar pairs (2 per column).
+                        let cols = excess / nb;
+                        let scalar_excess = (cols * 2).min(self.pending_spectrogram_scalars.len());
+                        self.pending_spectrogram_scalars.drain(0..scalar_excess);
                     }
                 }
                 self.content_state = ContentState {
                     project_snapshot: None,      // consumed above
                     modulation_snapshot: None,   // consumed above
                     spectrogram_columns: Vec::new(), // accumulated above
+                    spectrogram_col_scalars: Vec::new(), // accumulated above
                     ..state
                 };
             }
@@ -3876,10 +3884,18 @@ impl Application {
             {
                 // Feed new columns (post-gain magnitudes from the worker), each
                 // exactly once, then clear — see `pending_spectrogram_columns`.
+                // The overlay scalars ride in lockstep (2 per column); a column
+                // with no matching pair (shouldn't happen) gets the hide sentinel.
+                let mut scalars = self.pending_spectrogram_scalars.chunks_exact(2);
                 for col in self.pending_spectrogram_columns.chunks_exact(num_bins) {
-                    spectrogram.push_column(col);
+                    let (centroid, onset) = match scalars.next() {
+                        Some(s) => (s[0], s[1]),
+                        None => (-1.0, 0.0),
+                    };
+                    spectrogram.push_column(col, centroid, onset);
                 }
                 self.pending_spectrogram_columns.clear();
+                self.pending_spectrogram_scalars.clear();
                 // Band dividers at the editable low/mid + mid/high crossovers (the
                 // modulation's Low/Mid/High splits), as normalised y on the log
                 // axis. Drag-retuned live via the Audio Setup scope.
