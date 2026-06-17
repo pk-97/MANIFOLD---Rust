@@ -175,15 +175,21 @@ pub(crate) fn audio_feature_from_index(idx: usize) -> manifold_core::AudioFeatur
         1 => AudioFeature::BandEnergy(AudioBand::Low),
         2 => AudioFeature::BandEnergy(AudioBand::Mid),
         3 => AudioFeature::BandEnergy(AudioBand::High),
-        4 => AudioFeature::Onset,
+        4 => AudioFeature::Centroid,
+        5 => AudioFeature::Flatness,
+        6 => AudioFeature::Flux,
+        7 => AudioFeature::Onset,
         _ => AudioFeature::Amplitude,
     }
 }
 
 /// The feature options exposed in the per-slider audio drawer, in button order.
 /// Index maps to an `AudioFeature` in the card's click handler. "Amp" is the
-/// overall level (the default); Lo/Mid/Hi are the energy bands; On is onset.
-pub(crate) const AUDIO_FEATURE_LABELS: [&str; 5] = ["Amp", "Lo", "Mid", "Hi", "On"];
+/// overall level (the default); Lo/Mid/Hi are the energy bands; Bri is spectral
+/// centroid (brightness); Nsy is flatness (tonal→noisy); Flx is spectral flux
+/// (continuous change); On is onset (the discrete hit).
+pub(crate) const AUDIO_FEATURE_LABELS: [&str; 8] =
+    ["Amp", "Lo", "Mid", "Hi", "Bri", "Nsy", "Flx", "On"];
 
 /// Audio-modulation display state for one card, assembled in `state_sync` and
 /// applied to [`ParamModState`] via [`ParamModState::sync_audio`]. Bundled so

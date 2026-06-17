@@ -27,9 +27,9 @@ pub enum AudioBand {
 }
 
 /// Which extracted feature of a send drives the modulation. `Amplitude` (the
-/// default) is the simple overall level; `BandEnergy` and `Onset` are the
-/// v1 band features; `Pitch`/`PitchDelta` arrive with the v2 ridge tracker and
-/// slot in here without touching the model or plumbing.
+/// default) is the simple overall level; `BandEnergy`, `Centroid`, `Flatness`,
+/// `Flux` and `Onset` are the v1 spectral features; `Pitch`/`PitchDelta` arrive
+/// with the v2 ridge tracker and slot in here without touching the plumbing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioFeature {
@@ -39,6 +39,12 @@ pub enum AudioFeature {
     #[default]
     Amplitude,
     BandEnergy(AudioBand),
+    /// Spectral centroid — "brightness", normalized 0..1.
+    Centroid,
+    /// Spectral flatness — tonal (0) vs noisy (1).
+    Flatness,
+    /// Spectral flux — continuous "how much is changing."
+    Flux,
     Onset,
     Pitch,
     PitchDelta,
@@ -52,6 +58,9 @@ impl AudioFeature {
             AudioFeature::BandEnergy(AudioBand::Low) => f.band_energy[0],
             AudioFeature::BandEnergy(AudioBand::Mid) => f.band_energy[1],
             AudioFeature::BandEnergy(AudioBand::High) => f.band_energy[2],
+            AudioFeature::Centroid => f.centroid,
+            AudioFeature::Flatness => f.flatness,
+            AudioFeature::Flux => f.flux,
             AudioFeature::Onset => f.onset,
             AudioFeature::Pitch => f.pitch_hz,
             AudioFeature::PitchDelta => f.pitch_delta_st,
@@ -202,6 +211,9 @@ mod tests {
         let f = SendFeatures {
             amplitude: 0.42,
             band_energy: [0.1, 0.2, 0.3],
+            centroid: 0.55,
+            flatness: 0.15,
+            flux: 1.7,
             onset: 0.9,
             pitch_hz: 110.0,
             pitch_delta_st: -2.5,
@@ -209,6 +221,9 @@ mod tests {
         };
         assert_eq!(AudioFeature::BandEnergy(AudioBand::Low).extract(&f), 0.1);
         assert_eq!(AudioFeature::BandEnergy(AudioBand::High).extract(&f), 0.3);
+        assert_eq!(AudioFeature::Centroid.extract(&f), 0.55);
+        assert_eq!(AudioFeature::Flatness.extract(&f), 0.15);
+        assert_eq!(AudioFeature::Flux.extract(&f), 1.7);
         assert_eq!(AudioFeature::Onset.extract(&f), 0.9);
         assert_eq!(AudioFeature::PitchDelta.extract(&f), -2.5);
         // Amplitude reads the worker's normalized 0..1 RMS level directly.

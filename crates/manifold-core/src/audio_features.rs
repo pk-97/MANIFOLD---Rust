@@ -12,9 +12,10 @@
 
 /// Extracted features for one send at one analysis instant.
 ///
-/// v1 fills `band_energy` (and, once the onset extractor lands, `onset`); the
-/// pitch fields are v2 (the synchro ridge tracker) and default to zero until
-/// that extractor produces them. New features become new fields here — the
+/// v1 fills `amplitude`, `band_energy`, `centroid`, `flatness`, `flux`, and
+/// `onset` (all cheap reductions over the one FFT the worker runs); the pitch
+/// fields are v2 (the ridge tracker) and default to zero until that extractor
+/// produces them. New features become new fields here — the
 /// modulation model's [`crate::audio_mod::AudioFeature`] enum selects among
 /// them, so adding one does not disturb the plumbing.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -26,7 +27,19 @@ pub struct SendFeatures {
     /// Relative energy in [low, mid, high] perceptual bands. An unnormalized FFT
     /// magnitude (not 0..1) — the shaper's sensitivity scales it.
     pub band_energy: [f32; 3],
-    /// Transient trigger, 0..1 impulse that decays (v1 extractor pending).
+    /// Spectral centroid — "brightness" — normalized **0..1** on a log-frequency
+    /// curve (~50 Hz..8 kHz), so 0 = dark, 1 = bright regardless of sample rate.
+    /// The feature that most directly carries emergent filter/FM motion.
+    pub centroid: f32,
+    /// Spectral flatness — tonal vs noisy — **0..1** (0 = pure tone, 1 = noise).
+    /// Lets a send tell "the synth is sounding" from "that's the noise riser."
+    pub flatness: f32,
+    /// Spectral flux — rate of spectral change, the sum of positive bin-to-bin
+    /// magnitude increases. Unnormalized like `band_energy`; the shaper's
+    /// sensitivity scales it. Onset is derived from this.
+    pub flux: f32,
+    /// Transient trigger, 0..1 impulse that decays. Derived from an adaptive
+    /// threshold on `flux`.
     pub onset: f32,
     /// Tracked fundamental in Hz (v2).
     pub pitch_hz: f32,

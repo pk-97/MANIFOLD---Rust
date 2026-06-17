@@ -1448,7 +1448,10 @@ fn build_audio_card_state(
             AudioFeature::BandEnergy(AudioBand::Low) => 1,
             AudioFeature::BandEnergy(AudioBand::Mid) => 2,
             AudioFeature::BandEnergy(AudioBand::High) => 3,
-            AudioFeature::Onset => 4,
+            AudioFeature::Centroid => 4,
+            AudioFeature::Flatness => 5,
+            AudioFeature::Flux => 6,
+            AudioFeature::Onset => 7,
             // v2 features have no card option yet; show the default ("Amp").
             AudioFeature::Pitch | AudioFeature::PitchDelta => 0,
         };

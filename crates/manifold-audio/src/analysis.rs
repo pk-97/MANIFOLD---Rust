@@ -319,6 +319,10 @@ struct SendState {
     gain: f32,
     /// Samples accumulating toward the next FFT window.
     accum: Vec<f32>,
+    /// Previous window's magnitude spectrum (`0..=nyquist`), for spectral flux.
+    prev_mags: Vec<f32>,
+    /// Running average of spectral flux — the adaptive onset threshold tracks it.
+    flux_avg: f32,
     features: SendFeatures,
 }
 
@@ -329,7 +333,7 @@ struct WorkerLoop {
     sends: Vec<SendState>,
     /// Live per-send gain, written by the content thread, read here each drain.
     gains: Arc<GainBank>,
-    analyzer: BandEnergyAnalyzer,
+    analyzer: SpectralAnalyzer,
     // ── Spectrogram column producer (one tapped send) ──
     sample_rate: f32,
     spec_config: SpectrogramConfig,
@@ -380,6 +384,8 @@ impl WorkerLoop {
                 channels: s.channels,
                 gain: 1.0,
                 accum: Vec::with_capacity(FFT_SIZE),
+                prev_mags: vec![0.0; FFT_SIZE / 2 + 1],
+                flux_avg: 0.0,
                 features: SendFeatures::default(),
             })
             .collect();
@@ -390,7 +396,7 @@ impl WorkerLoop {
             device_channels: device_channels.max(1),
             sends,
             gains,
-            analyzer: BandEnergyAnalyzer::new(sample_rate),
+            analyzer: SpectralAnalyzer::new(sample_rate),
             sample_rate: sample_rate as f32,
             spec_config,
             spec_num_bins,
@@ -476,10 +482,26 @@ impl WorkerLoop {
                 if send.accum.len() >= FFT_SIZE {
                     // Overall level: RMS of the raw (unwindowed) block, 0..1.
                     send.features.amplitude = block_rms(&send.accum[..FFT_SIZE]);
-                    send.features.band_energy = self.analyzer.analyze(&send.accum[..FFT_SIZE]);
-                    // v2 seam: onset/pitch extractors must read the FFT spectrum
-                    // the analyzer already computed for this window, never run a
-                    // second transform. See docs/AUDIO_INFRASTRUCTURE.md §8.
+                    // One FFT, many reductions: bands/centroid/flatness come back
+                    // directly; flux/onset are stateful and read the magnitude
+                    // spectrum the analyzer just left in `mags`, never a second
+                    // transform. See docs/AUDIO_INFRASTRUCTURE.md §8.
+                    let sf = self.analyzer.analyze(&send.accum[..FFT_SIZE]);
+                    send.features.band_energy = sf.band_energy;
+                    send.features.centroid = sf.centroid;
+                    send.features.flatness = sf.flatness;
+
+                    let flux = spectral_flux(&self.analyzer.mags, &send.prev_mags);
+                    send.prev_mags.copy_from_slice(&self.analyzer.mags);
+                    send.features.flux = flux;
+
+                    // Onset: a flux spike above the running average fires a unit
+                    // impulse; otherwise the previous impulse decays.
+                    let triggered = flux > send.flux_avg * ONSET_RATIO && flux > ONSET_FLOOR;
+                    send.features.onset =
+                        if triggered { 1.0 } else { send.features.onset * ONSET_DECAY };
+                    send.flux_avg += (flux - send.flux_avg) * FLUX_AVG_COEFF;
+
                     send.accum.clear();
                     updated = true;
                 }
@@ -570,18 +592,51 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
     if n == 0 { 0.0 } else { acc / n as f32 }
 }
 
-/// Windowed-FFT band energy: splits one FFT window into low/mid/high bands and
-/// returns an amplitude-like scalar per band.
-struct BandEnergyAnalyzer {
+/// Spectral centroid normalization range (Hz) — centroid is mapped log onto
+/// 0..1 across this span so "brightness" reads the same at any sample rate.
+const CENTROID_LO_HZ: f32 = 50.0;
+const CENTROID_HI_HZ: f32 = 8000.0;
+
+/// Onset detection (derived from spectral flux). A window whose flux exceeds the
+/// running average by `ONSET_RATIO` (and clears `ONSET_FLOOR`) fires a unit
+/// impulse; between hits the impulse decays by `ONSET_DECAY` per window
+/// (~21 ms), so a transient reads as a snappy spike that settles in ~100 ms.
+const ONSET_RATIO: f32 = 1.6;
+const ONSET_FLOOR: f32 = 1e-3;
+const ONSET_DECAY: f32 = 0.6;
+/// Smoothing of the running flux average the onset threshold tracks.
+const FLUX_AVG_COEFF: f32 = 0.1;
+
+/// One window's stateless spectral reductions, all from the single FFT the
+/// analyzer runs. Flux/onset need the previous spectrum and are computed
+/// per-send by the caller from [`SpectralAnalyzer::mags`].
+#[derive(Clone, Copy, Debug, Default)]
+struct SpectralFrame {
+    band_energy: [f32; 3],
+    centroid: f32,
+    flatness: f32,
+}
+
+/// Windowed-FFT spectral analyzer. Shared across sends (stateless per call): it
+/// computes the magnitude spectrum once and reduces it to band energy, centroid
+/// and flatness. The magnitude spectrum is left in `mags` so the caller can
+/// compute per-send spectral flux against that send's previous spectrum.
+struct SpectralAnalyzer {
     fft: Arc<dyn Fft<f32>>,
     window: Vec<f32>,
     buffer: Vec<Complex<f32>>,
     scratch: Vec<Complex<f32>>,
     /// Inclusive bin ranges for [low, mid, high].
     band_bins: [(usize, usize); 3],
+    /// Magnitude per bin, `0..=nyquist`. Rewritten every `analyze` call; read by
+    /// the caller for spectral flux.
+    mags: Vec<f32>,
+    /// Center frequency (Hz) per bin, precomputed for the centroid sum.
+    bin_hz: Vec<f32>,
+    nyquist_bin: usize,
 }
 
-impl BandEnergyAnalyzer {
+impl SpectralAnalyzer {
     fn new(sample_rate: u32) -> Self {
         let fft = FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE);
         let scratch_len = fft.get_inplace_scratch_len();
@@ -607,34 +662,85 @@ impl BandEnergyAnalyzer {
             (mid_bin, nyquist_bin),
         ];
 
+        let bin_hz = (0..=nyquist_bin)
+            .map(|b| b as f32 * sample_rate as f32 / FFT_SIZE as f32)
+            .collect();
+
         Self {
             fft,
             window,
             buffer: vec![Complex::new(0.0, 0.0); FFT_SIZE],
             scratch: vec![Complex::new(0.0, 0.0); scratch_len],
             band_bins,
+            mags: vec![0.0; nyquist_bin + 1],
+            bin_hz,
+            nyquist_bin,
         }
     }
 
-    /// Analyze one full window of `FFT_SIZE` mono samples.
-    fn analyze(&mut self, samples: &[f32]) -> [f32; 3] {
+    /// Analyze one full window of `FFT_SIZE` mono samples. Fills `self.mags` and
+    /// returns the stateless reductions; the caller derives flux/onset from
+    /// `self.mags`.
+    fn analyze(&mut self, samples: &[f32]) -> SpectralFrame {
         debug_assert_eq!(samples.len(), FFT_SIZE);
         for (i, b) in self.buffer.iter_mut().enumerate() {
             *b = Complex::new(samples[i] * self.window[i], 0.0);
         }
         self.fft.process_with_scratch(&mut self.buffer, &mut self.scratch);
 
-        let mut out = [0.0f32; 3];
+        // Magnitude spectrum, 0..=nyquist.
+        for bin in 0..=self.nyquist_bin {
+            self.mags[bin] = self.buffer[bin].norm();
+        }
+
+        // Band energy: RMS of the band magnitude over the window length.
+        let mut band_energy = [0.0f32; 3];
         for (band, &(lo, hi)) in self.band_bins.iter().enumerate() {
             let mut sum = 0.0;
             for bin in lo..=hi {
-                sum += self.buffer[bin].norm_sqr();
+                sum += self.mags[bin] * self.mags[bin];
             }
-            // Amplitude-like: RMS of the band magnitude over the window length.
-            out[band] = (sum / FFT_SIZE as f32).sqrt();
+            band_energy[band] = (sum / FFT_SIZE as f32).sqrt();
         }
-        out
+
+        // Centroid (magnitude-weighted mean frequency) and flatness (geometric /
+        // arithmetic mean), both over the non-DC bins from one pass.
+        let mut num = 0.0;
+        let mut den = 0.0;
+        let mut log_sum = 0.0;
+        let mut lin_sum = 0.0;
+        for bin in 1..=self.nyquist_bin {
+            let m = self.mags[bin];
+            num += self.bin_hz[bin] * m;
+            den += m;
+            log_sum += m.max(1e-9).ln();
+            lin_sum += m;
+        }
+        let n = self.nyquist_bin as f32; // bins 1..=nyquist
+        let centroid = if den > 1e-9 {
+            let c_hz = (num / den).clamp(CENTROID_LO_HZ, CENTROID_HI_HZ);
+            (c_hz.ln() - CENTROID_LO_HZ.ln()) / (CENTROID_HI_HZ.ln() - CENTROID_LO_HZ.ln())
+        } else {
+            0.0
+        };
+        let flatness = if lin_sum > 1e-9 {
+            let geo = (log_sum / n).exp();
+            let arith = lin_sum / n;
+            (geo / arith).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        SpectralFrame { band_energy, centroid, flatness }
     }
+}
+
+/// Spectral flux: the sum of positive bin-to-bin magnitude increases between the
+/// current and previous spectra. Unnormalized (like band energy); the shaper's
+/// sensitivity scales it. On the first window prev is all-zero, so this returns
+/// the rectified spectrum — which correctly reads as the initial onset.
+fn spectral_flux(cur: &[f32], prev: &[f32]) -> f32 {
+    cur.iter().zip(prev).map(|(&c, &p)| (c - p).max(0.0)).sum()
 }
 
 #[cfg(test)]
@@ -688,23 +794,63 @@ mod tests {
 
     #[test]
     fn band_energy_localizes_a_tone() {
-        let mut a = BandEnergyAnalyzer::new(SR);
+        let mut a = SpectralAnalyzer::new(SR);
 
-        let low = a.analyze(&sine(60.0, FFT_SIZE));
+        let low = a.analyze(&sine(60.0, FFT_SIZE)).band_energy;
         assert!(low[0] > low[1] && low[0] > low[2], "60 Hz should dominate low band: {low:?}");
 
-        let mid = a.analyze(&sine(1000.0, FFT_SIZE));
+        let mid = a.analyze(&sine(1000.0, FFT_SIZE)).band_energy;
         assert!(mid[1] > mid[0] && mid[1] > mid[2], "1 kHz should dominate mid band: {mid:?}");
 
-        let high = a.analyze(&sine(6000.0, FFT_SIZE));
+        let high = a.analyze(&sine(6000.0, FFT_SIZE)).band_energy;
         assert!(high[2] > high[0] && high[2] > high[1], "6 kHz should dominate high band: {high:?}");
     }
 
     #[test]
     fn silence_reads_near_zero() {
-        let mut a = BandEnergyAnalyzer::new(SR);
-        let e = a.analyze(&vec![0.0; FFT_SIZE]);
+        let mut a = SpectralAnalyzer::new(SR);
+        let e = a.analyze(&vec![0.0; FFT_SIZE]).band_energy;
         assert!(e.iter().all(|&v| v < 1e-6), "silence should be ~0: {e:?}");
+    }
+
+    #[test]
+    fn centroid_rises_with_brightness() {
+        let mut a = SpectralAnalyzer::new(SR);
+        let dark = a.analyze(&sine(100.0, FFT_SIZE)).centroid;
+        let bright = a.analyze(&sine(5000.0, FFT_SIZE)).centroid;
+        assert!(bright > dark, "5 kHz should read brighter than 100 Hz: {dark} vs {bright}");
+        assert!((0.0..=1.0).contains(&dark) && (0.0..=1.0).contains(&bright), "normalized 0..1");
+    }
+
+    #[test]
+    fn flatness_separates_tone_from_noise() {
+        let mut a = SpectralAnalyzer::new(SR);
+        let tone = a.analyze(&sine(1000.0, FFT_SIZE)).flatness;
+        // Deterministic pseudo-noise (no rng dep): an LCG mapped to -1..1.
+        let mut state = 0x2545_F491u32;
+        let noise: Vec<f32> = (0..FFT_SIZE)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0
+            })
+            .collect();
+        let noisy = a.analyze(&noise).flatness;
+        assert!(noisy > tone, "noise should be flatter than a tone: {tone} vs {noisy}");
+    }
+
+    #[test]
+    fn flux_fires_on_change_not_on_steady_state() {
+        let mut a = SpectralAnalyzer::new(SR);
+        let silence = vec![0.0; FFT_SIZE / 2 + 1];
+        // Energy appearing against silence produces flux.
+        let _ = a.analyze(&sine(1000.0, FFT_SIZE));
+        let onset_flux = spectral_flux(&a.mags, &silence);
+        assert!(onset_flux > 0.0, "energy appearing should produce flux: {onset_flux}");
+        // The same spectrum twice → little positive change.
+        let prev = a.mags.clone();
+        let _ = a.analyze(&sine(1000.0, FFT_SIZE));
+        let steady = spectral_flux(&a.mags, &prev);
+        assert!(steady < onset_flux * 0.1, "steady tone should have little flux: {steady} vs {onset_flux}");
     }
 
     #[test]
