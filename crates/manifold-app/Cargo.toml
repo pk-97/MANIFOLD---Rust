@@ -19,6 +19,9 @@ manifold-media = { path = "../manifold-media" }
 manifold-gpu = { path = "../manifold-gpu" }
 manifold-led = { path = "../manifold-led" }
 manifold-audio = { path = "../manifold-audio" }
+# `gpu` feature: the app renders the spectrogram waterfall, so it needs the GPU
+# renderer (the worker, via manifold-audio, uses the CPU CQT only).
+manifold-spectral = { path = "../manifold-spectral", features = ["gpu"] }
 manifold-recording = { path = "../manifold-recording" }
 winit = { workspace = true }
 log = { workspace = true }

@@ -31,8 +31,8 @@ struct Params {
     _pad0: u32,
     db_min: f32,
     db_max: f32,
-    _pad1: f32,
-    _pad2: f32,
+    band_lo_y: f32,
+    band_hi_y: f32,
 }
 
 /// Scrolling spectrogram renderer. One per visible scope.
@@ -111,8 +111,10 @@ impl Spectrogram {
     }
 
     /// Render the current history into `target` (cleared first). One fullscreen
-    /// pass sampling the rotating buffer this frame writes.
-    pub fn render(&mut self, encoder: &mut GpuEncoder, target: &GpuTexture) {
+    /// pass sampling the rotating buffer this frame writes. `band_ys` are two
+    /// band-divider positions, normalised 0..1 from the bottom (low freq);
+    /// negative disables a line.
+    pub fn render(&mut self, encoder: &mut GpuEncoder, target: &GpuTexture, band_ys: [f32; 2]) {
         let buf = &self.bufs[self.buf_frame % BUFFER_ROTATION];
         self.buf_frame += 1;
 
@@ -133,8 +135,8 @@ impl Spectrogram {
             _pad0: 0,
             db_min: self.db_min,
             db_max: self.db_max,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            band_lo_y: band_ys[0],
+            band_hi_y: band_ys[1],
         };
         // SAFETY: `Params` is `#[repr(C)]` plain-old-data.
         let param_bytes = unsafe {

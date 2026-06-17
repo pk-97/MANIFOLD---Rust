@@ -1852,6 +1852,7 @@ dependencies = [
  "manifold-profiler",
  "manifold-recording",
  "manifold-renderer",
+ "manifold-spectral",
  "manifold-ui",
  "mimalloc",
  "objc2 0.6.4",
@@ -1873,6 +1874,7 @@ dependencies = [
  "cpal",
  "log",
  "manifold-core",
+ "manifold-spectral",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
  "ringbuf 0.4.8",
@@ -2028,6 +2030,15 @@ dependencies = [
  "serde",
  "serde_json",
  "tiff 0.9.1",
+]
+
+[[package]]
+name = "manifold-spectral"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "manifold-gpu",
+ "rustfft",
 ]
 
 [[package]]

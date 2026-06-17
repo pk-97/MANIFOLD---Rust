@@ -228,6 +228,18 @@ pub struct Application {
     pub(crate) last_atlas_visible_sent: Vec<manifold_core::NodeId>,
     pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
+    /// Audio Setup spectrogram waterfall renderer + its target texture, created
+    /// lazily on the UI device when the scope opens and rebuilt if the column
+    /// bin count changes. `spectrogram_num_bins` tracks the built layout.
+    pub(crate) spectrogram: Option<manifold_spectral::Spectrogram>,
+    /// The scope's render target, wrapped as a `Local` TexturePane so the blit
+    /// goes through the unified texture-in-UI path.
+    #[cfg(target_os = "macos")]
+    pub(crate) spectrogram_pane: Option<crate::texture_pane::TexturePane>,
+    pub(crate) spectrogram_num_bins: usize,
+    /// Last spectrogram-send selection pushed to the content thread, so the
+    /// `SetSpectrogramSend` command only fires on change.
+    pub(crate) spectrogram_send_sent: Option<manifold_core::AudioSendId>,
     pub(crate) atlas_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) atlas_sampler: Option<manifold_gpu::GpuSampler>,
     /// Samples one atlas cell (UV sub-rect via inline `Bytes` uniform) onto a
@@ -487,6 +499,11 @@ impl Application {
             last_atlas_visible_sent: Vec::new(),
             blit_pipeline: None,
             blit_sampler: None,
+            spectrogram: None,
+            #[cfg(target_os = "macos")]
+            spectrogram_pane: None,
+            spectrogram_num_bins: 0,
+            spectrogram_send_sent: None,
             atlas_pipeline: None,
             atlas_sampler: None,
             node_thumb_pipeline: None,

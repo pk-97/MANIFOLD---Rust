@@ -14,9 +14,12 @@
 
 use std::sync::Arc;
 
-use manifold_audio::analysis::{AudioFeatureWorker, FeatureReader, GainBank, SendSpec};
+use manifold_audio::analysis::{
+    AudioFeatureWorker, ColumnReader, FeatureReader, GainBank, SendSpec, SpectrogramTap,
+};
 use manifold_audio::capture::{AudioCaptureConfig, AudioCaptureDevice};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSetup};
+use manifold_core::id::AudioSendId;
 use manifold_core::project::Project;
 use manifold_playback::engine::PlaybackEngine;
 
@@ -52,6 +55,12 @@ struct AudioModCapture {
     /// Live per-send gain shared with the worker. A gain-only edit writes here
     /// in place — no capture restart (gain isn't in [`CaptureSignature`]).
     gains: Arc<GainBank>,
+    /// Spectrogram tap control — which send the worker produces VQT columns for.
+    tap: Arc<SpectrogramTap>,
+    /// Read end of the worker's VQT column stream.
+    columns: ColumnReader,
+    /// Capture sample rate, for the scope's frequency-axis range.
+    sample_rate: f32,
 }
 
 /// Content-thread-owned runtime that reconciles capture against the project and
@@ -71,6 +80,14 @@ pub struct AudioModRuntime {
     _hotplug_sub: manifold_audio::directory::Subscription,
     /// Whether we've already triggered the one-time mic permission prompt.
     mic_access_requested: bool,
+    /// Send the Audio Setup scope is showing, if open. Resolved to a worker
+    /// index against the live project each tick and written to the tap, so it
+    /// survives capture rebuilds (which mint a fresh tap).
+    spec_send: Option<AudioSendId>,
+    /// Set when `spec_send` changes, forcing a reconcile next tick — selecting a
+    /// send opens the scope, which can start capture even with no audio mods yet
+    /// (calibration precedes assignment).
+    spec_dirty: bool,
 }
 
 impl Default for AudioModRuntime {
@@ -88,6 +105,8 @@ impl Default for AudioModRuntime {
             devices_dirty,
             _hotplug_sub: sub,
             mic_access_requested: false,
+            spec_send: None,
+            spec_dirty: false,
         }
     }
 }
@@ -100,7 +119,7 @@ impl AudioModRuntime {
         let hotplugged = self
             .devices_dirty
             .swap(false, std::sync::atomic::Ordering::Relaxed);
-        if data_version != self.last_version || hotplugged {
+        if data_version != self.last_version || hotplugged || self.spec_dirty {
             if hotplugged {
                 // A device appeared/vanished/changed — drop capture so reconcile
                 // rebuilds against the current hardware (the stored ref is
@@ -109,6 +128,17 @@ impl AudioModRuntime {
             }
             self.reconcile(engine.project());
             self.last_version = data_version;
+            self.spec_dirty = false;
+        }
+
+        // Resolve the scope's send id → worker index against the live project and
+        // write the tap (cheap, every tick — survives rebuilds).
+        let tap_index = self
+            .spec_send
+            .as_ref()
+            .and_then(|id| engine.project().and_then(|p| p.audio_setup.send_index(id)));
+        if let Some(cap) = &self.capture {
+            cap.tap.set_selected(tap_index);
         }
 
         // Feed the engine. Reuse the snapshot's Vec capacity → no per-frame
@@ -126,6 +156,37 @@ impl AudioModRuntime {
         }
     }
 
+    /// Set which send the Audio Setup scope is showing (`None` = panel closed /
+    /// nothing selected). Forces a reconcile so capture can start for
+    /// calibration even before any audio mod is assigned.
+    pub fn set_spectrogram_send(&mut self, send: Option<AudioSendId>) {
+        if self.spec_send != send {
+            self.spec_send = send;
+            self.spec_dirty = true;
+        }
+    }
+
+    /// Bin count of the current column stream, or 0 if capture is inactive.
+    pub fn spectrogram_num_bins(&self) -> usize {
+        self.capture.as_ref().map_or(0, |c| c.columns.num_bins())
+    }
+
+    /// Drain all complete VQT columns produced since the last call, oldest →
+    /// newest. No-op when capture is inactive.
+    pub fn drain_spectrogram_columns(&mut self, f: impl FnMut(&[f32])) {
+        if let Some(cap) = &mut self.capture {
+            cap.columns.drain_columns(f);
+        }
+    }
+
+    /// The scope's analysed frequency range `(fmin, fmax)` Hz — for the
+    /// frequency axis and band-divider overlays. `None` when capture is inactive.
+    pub fn spectrogram_freq_range(&self) -> Option<(f32, f32)> {
+        let cap = self.capture.as_ref()?;
+        let cfg = manifold_spectral::SpectrogramConfig::default();
+        Some((cfg.fmin, cfg.effective_fmax(cap.sample_rate)))
+    }
+
     /// Start, stop, or rebuild capture to match the project's audio setup.
     fn reconcile(&mut self, project: Option<&Project>) {
         let Some(project) = project else {
@@ -133,8 +194,11 @@ impl AudioModRuntime {
             return;
         };
 
-        let gate =
-            project.has_active_audio_mods() && !project.audio_setup.sends.is_empty();
+        // Capture runs when there's an active audio mod OR the Audio Setup scope
+        // is open on a send (calibration before assignment), and at least one
+        // send exists.
+        let gate = (project.has_active_audio_mods() || self.spec_send.is_some())
+            && !project.audio_setup.sends.is_empty();
         if !gate {
             if self.capture.is_some() {
                 log::info!("[AudioMod] Stopping capture — no active audio modulations");
@@ -236,8 +300,15 @@ impl AudioModRuntime {
             return;
         }
 
-        let (worker, reader) =
-            AudioFeatureWorker::spawn(consumer, sample_rate, channels, specs, gains.clone());
+        let tap = Arc::new(SpectrogramTap::default());
+        let (worker, reader, columns) = AudioFeatureWorker::spawn(
+            consumer,
+            sample_rate,
+            channels,
+            specs,
+            gains.clone(),
+            tap.clone(),
+        );
         log::info!(
             "[AudioMod] Capture started: device={device_name:?}, {send_count} sends, \
              {sample_rate}Hz {channels}ch"
@@ -248,6 +319,9 @@ impl AudioModRuntime {
             reader,
             signature: desired,
             gains,
+            tap,
+            columns,
+            sample_rate: sample_rate as f32,
         });
     }
 }

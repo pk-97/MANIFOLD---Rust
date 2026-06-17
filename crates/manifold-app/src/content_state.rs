@@ -86,6 +86,15 @@ pub struct ContentState {
     pub audio_send_levels: [f32; manifold_audio::analysis::MAX_SENDS],
     /// Number of valid entries in [`Self::audio_send_levels`].
     pub audio_send_count: usize,
+    /// New VQT spectrogram columns produced since the last snapshot, flattened
+    /// (`k * spectrogram_num_bins` magnitudes, oldest → newest). Empty unless the
+    /// Audio Setup scope is open on a send.
+    pub spectrogram_columns: Vec<f32>,
+    /// Bins per spectrogram column (column length). 0 = no scope.
+    pub spectrogram_num_bins: usize,
+    /// Analysed frequency range of the scope (Hz), for axis + band overlays.
+    pub spectrogram_fmin: f32,
+    pub spectrogram_fmax: f32,
     pub osc_sender_enabled: bool,
     pub osc_receiving_timecode: bool,
     pub osc_timecode_display: Arc<str>,
@@ -380,6 +389,10 @@ impl Default for ContentState {
             midi_device_names: Arc::from([]),
             audio_send_levels: [0.0; manifold_audio::analysis::MAX_SENDS],
             audio_send_count: 0,
+            spectrogram_columns: Vec::new(),
+            spectrogram_num_bins: 0,
+            spectrogram_fmin: 0.0,
+            spectrogram_fmax: 0.0,
             osc_sender_enabled: false,
             osc_receiving_timecode: false,
             osc_timecode_display: Arc::from(""),

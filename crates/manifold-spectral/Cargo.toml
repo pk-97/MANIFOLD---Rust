@@ -10,9 +10,16 @@ publish = false
 # (CPU CQT → magnitude columns) and the Audio Setup panel (columns → texture).
 
 [dependencies]
-manifold-gpu = { path = "../manifold-gpu" }
+# Optional: only the GPU waterfall renderer needs it. The CPU CQT (used by the
+# audio worker) compiles without it, so manifold-audio stays GPU-free when built
+# alone. Enabled by the `gpu` feature, which the app turns on.
+manifold-gpu = { path = "../manifold-gpu", optional = true }
 log = { workspace = true }
 rustfft = "6"
+
+[features]
+default = []
+gpu = ["dep:manifold-gpu"]
 
 [lints]
 workspace = true

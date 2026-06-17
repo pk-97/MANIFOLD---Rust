@@ -21,10 +21,6 @@
 //! hand-rolled blits are intentionally left as-is — `TexturePane` is the clean
 //! path forward, not a consolidation pass over old code.
 
-// Wired into the present pass by the spectrogram (Phase 5); until then the API
-// is dead. Remove this allow once the Audio Setup scope consumes it.
-#![allow(dead_code)]
-
 use std::sync::Arc;
 
 use manifold_gpu::{
@@ -42,6 +38,10 @@ pub enum PaneSource {
     /// A cross-device IOSurface bridge. Holds the per-surface imported textures
     /// plus the last-seen generation; [`TexturePane::current`] re-imports every
     /// surface on a generation change (resize) and returns the published front.
+    ///
+    /// Unused today — the spectrogram is `Local`. This is the ready path for a
+    /// future cross-device consumer (e.g. migrating node-preview / master-out).
+    #[allow(dead_code)]
     Bridged {
         bridge: Arc<SharedTextureBridge>,
         /// One imported texture per IOSurface (`len == SURFACE_COUNT`). `None`
@@ -64,7 +64,9 @@ impl TexturePane {
         Self { source: PaneSource::Local(texture) }
     }
 
-    /// A pane backed by a cross-device IOSurface bridge.
+    /// A pane backed by a cross-device IOSurface bridge. Ready for a future
+    /// cross-device consumer; the spectrogram uses [`Self::local`].
+    #[allow(dead_code)]
     pub fn bridged(bridge: Arc<SharedTextureBridge>) -> Self {
         Self {
             source: PaneSource::Bridged {
@@ -116,6 +118,7 @@ impl TexturePane {
 
     /// Replace a local pane's texture — e.g. when the scope is resized and its
     /// render target is reallocated. No-op for a bridged pane.
+    #[allow(dead_code)]
     pub fn set_local(&mut self, texture: GpuTexture) {
         if let PaneSource::Local(slot) = &mut self.source {
             *slot = texture;

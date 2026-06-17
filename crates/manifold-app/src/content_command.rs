@@ -53,6 +53,10 @@ pub enum ContentCommand {
         preloaded: Box<PreloadedAudioData>,
     },
     ResetAudio,
+    /// Set which send the Audio Setup spectrogram scope is showing (`None` =
+    /// panel closed / no selection). Drives the worker's VQT column producer.
+    /// Like `WatchEffectGraph`, this is UI state pushed to the content thread.
+    SetSpectrogramSend(Option<manifold_core::AudioSendId>),
 
     // ── Stem audio ──────────────────────────────────────────────────
     /// Toggle expand/collapse of stem playback.

@@ -36,7 +36,7 @@
 //! it here.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -46,6 +46,7 @@ use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
 pub use manifold_core::audio_features::SendFeatures;
+use manifold_spectral::{CqtTransform, SpectrogramConfig};
 
 use crate::capture::AudioConsumer;
 
@@ -163,6 +164,67 @@ impl FeatureReader {
     }
 }
 
+/// How many columns of headroom the worker→UI column ring holds. The UI drains
+/// every frame; this only matters if the UI stalls (then oldest columns drop).
+const COLUMN_RING_COLS: usize = 128;
+
+/// Live control for the spectrogram tap, shared content thread → worker. The
+/// content thread sets which send (by index) the worker should produce VQT
+/// columns for; `-1` = none (no spectrogram work). Lock-free, like [`GainBank`].
+pub struct SpectrogramTap {
+    selected: AtomicI32,
+}
+
+impl Default for SpectrogramTap {
+    fn default() -> Self {
+        Self { selected: AtomicI32::new(-1) }
+    }
+}
+
+impl SpectrogramTap {
+    /// Select the send (by worker index) to produce columns for, or `None` to
+    /// stop. The worker resets its rolling window when this changes.
+    pub fn set_selected(&self, send_index: Option<usize>) {
+        self.selected
+            .store(send_index.map(|i| i as i32).unwrap_or(-1), Ordering::Relaxed);
+    }
+
+    fn selected(&self) -> i32 {
+        self.selected.load(Ordering::Relaxed)
+    }
+}
+
+/// Read end of the worker's VQT column stream. Each column is `num_bins`
+/// magnitudes (geometrically-spaced bins). The producer pushes whole columns
+/// only, so the ring is always a whole number of columns.
+pub struct ColumnReader {
+    cons: ringbuf::HeapCons<f32>,
+    num_bins: usize,
+    scratch: Vec<f32>,
+}
+
+impl ColumnReader {
+    /// Bin count per column (the spectrogram renderer must match it).
+    pub fn num_bins(&self) -> usize {
+        self.num_bins
+    }
+
+    /// Pop every complete column available, calling `f` with each in arrival
+    /// order (oldest → newest). No-op if `num_bins == 0`.
+    pub fn drain_columns(&mut self, mut f: impl FnMut(&[f32])) {
+        if self.num_bins == 0 {
+            return;
+        }
+        while self.cons.occupied_len() >= self.num_bins {
+            let got = self.cons.pop_slice(&mut self.scratch);
+            if got < self.num_bins {
+                break; // shouldn't happen (whole-column pushes), but stay safe
+            }
+            f(&self.scratch[..self.num_bins]);
+        }
+    }
+}
+
 /// Spawns and owns the analysis worker thread. Stops the thread on `stop()` or
 /// drop.
 pub struct AudioFeatureWorker {
@@ -183,7 +245,8 @@ impl AudioFeatureWorker {
         device_channels: u16,
         mut sends: Vec<SendSpec>,
         gains: Arc<GainBank>,
-    ) -> (Self, FeatureReader) {
+        tap: Arc<SpectrogramTap>,
+    ) -> (Self, FeatureReader, ColumnReader) {
         if sends.len() > MAX_SENDS {
             log::warn!(
                 "[AudioAnalysis] {} sends exceeds MAX_SENDS={MAX_SENDS}; extra dropped",
@@ -194,6 +257,18 @@ impl AudioFeatureWorker {
 
         let (prod, cons) = HeapRb::<FeatureFrame>::new(OUTPUT_RING_CAPACITY).split();
         let reader = FeatureReader { cons, last: None };
+
+        // Spectrogram column ring. Bin count is fixed by config + sample rate,
+        // so the ring and reader agree without a built transform.
+        let spec_config = SpectrogramConfig::default();
+        let num_bins = spec_config.num_bins(sample_rate as f32);
+        let (col_prod, col_cons) =
+            HeapRb::<f32>::new((num_bins * COLUMN_RING_COLS).max(1)).split();
+        let column_reader = ColumnReader {
+            cons: col_cons,
+            num_bins,
+            scratch: vec![0.0; num_bins.max(1)],
+        };
 
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = running.clone();
@@ -208,12 +283,16 @@ impl AudioFeatureWorker {
                     device_channels as usize,
                     sends,
                     gains,
+                    tap,
+                    col_prod,
+                    spec_config,
+                    num_bins,
                 );
                 worker.run(&running_thread);
             })
             .expect("spawn audio analysis thread");
 
-        (Self { running, handle: Some(handle) }, reader)
+        (Self { running, handle: Some(handle) }, reader, column_reader)
     }
 
     /// Stop the worker thread and join it. Idempotent.
@@ -251,6 +330,24 @@ struct WorkerLoop {
     /// Live per-send gain, written by the content thread, read here each drain.
     gains: Arc<GainBank>,
     analyzer: BandEnergyAnalyzer,
+    // ── Spectrogram column producer (one tapped send) ──
+    sample_rate: f32,
+    spec_config: SpectrogramConfig,
+    spec_num_bins: usize,
+    /// Which send to produce columns for, `-1` = none. Read from `tap` each drain.
+    tap: Arc<SpectrogramTap>,
+    column_producer: ringbuf::HeapProd<f32>,
+    /// Built lazily on the first active tap (kernel construction is one FFT per
+    /// bin — paid once, only if the spectrogram is ever opened).
+    cqt: Option<CqtTransform>,
+    /// Rolling post-gain mono window of the tapped send (newest at the end).
+    spec_window: Vec<f32>,
+    /// Samples accumulated since the last column was emitted.
+    spec_since_hop: usize,
+    /// Last-seen tap, to detect a selection change (resets the window).
+    spec_tapped: i32,
+    /// Reusable per-column magnitude scratch (`spec_num_bins` long).
+    spec_col: Vec<f32>,
     /// Leftover interleaved samples that didn't complete a frame last drain.
     /// Retains its allocation across drains (never moved out), so stashing the
     /// remainder each tick is realloc-free in steady state.
@@ -264,6 +361,7 @@ struct WorkerLoop {
 }
 
 impl WorkerLoop {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         consumer: AudioConsumer,
         producer: ringbuf::HeapProd<FeatureFrame>,
@@ -271,6 +369,10 @@ impl WorkerLoop {
         device_channels: usize,
         specs: Vec<SendSpec>,
         gains: Arc<GainBank>,
+        tap: Arc<SpectrogramTap>,
+        column_producer: ringbuf::HeapProd<f32>,
+        spec_config: SpectrogramConfig,
+        spec_num_bins: usize,
     ) -> Self {
         let sends = specs
             .into_iter()
@@ -289,6 +391,16 @@ impl WorkerLoop {
             sends,
             gains,
             analyzer: BandEnergyAnalyzer::new(sample_rate),
+            sample_rate: sample_rate as f32,
+            spec_config,
+            spec_num_bins,
+            tap,
+            column_producer,
+            cqt: None,
+            spec_window: Vec::new(),
+            spec_since_hop: 0,
+            spec_tapped: -1,
+            spec_col: vec![0.0; spec_num_bins.max(1)],
             carry: Vec::with_capacity(FFT_SIZE),
             work: Vec::with_capacity(4096 + FFT_SIZE),
             drain_buf: vec![0.0; 4096],
@@ -344,9 +456,22 @@ impl WorkerLoop {
             send.gain = self.gains.get_linear(i);
         }
 
+        // Which send (if any) feeds the spectrogram this drain. A change resets
+        // the rolling window so the scope doesn't splice two sources.
+        let tapped = self.tap.selected();
+        if tapped != self.spec_tapped {
+            self.spec_window.clear();
+            self.spec_since_hop = 0;
+            self.spec_tapped = tapped;
+        }
+
         for frame in work[..usable].chunks_exact(ch) {
-            for send in &mut self.sends {
+            for (i, send) in self.sends.iter_mut().enumerate() {
                 let mono = downmix(frame, &send.channels) * send.gain;
+                if i as i32 == tapped {
+                    self.spec_window.push(mono);
+                    self.spec_since_hop += 1;
+                }
                 send.accum.push(mono);
                 if send.accum.len() >= FFT_SIZE {
                     // Overall level: RMS of the raw (unwindowed) block, 0..1.
@@ -361,6 +486,11 @@ impl WorkerLoop {
             }
         }
 
+        // Emit spectrogram columns for the tapped send (post-gain mono).
+        if tapped >= 0 {
+            self.produce_spectrogram_columns();
+        }
+
         // Stash the partial frame remainder for next drain. `carry` kept its
         // allocation, so this is realloc-free once warmed.
         self.carry.extend_from_slice(&work[usable..]);
@@ -371,6 +501,36 @@ impl WorkerLoop {
             self.emit_frame();
         }
         updated
+    }
+
+    /// Run the VQT over the rolling window every `hop` samples, pushing each
+    /// resulting magnitude column to the worker→UI ring. Builds the transform
+    /// lazily on first use (kernel construction is one FFT per bin).
+    fn produce_spectrogram_columns(&mut self) {
+        let cqt = self
+            .cqt
+            .get_or_insert_with(|| self.spec_config.build_transform(self.sample_rate));
+        let n_fft = cqt.n_fft();
+        let hop = self.spec_config.hop.max(1);
+
+        // Bound the rolling window: keep at most one full window plus one hop of
+        // lookahead, so `drain` is realloc-free in steady state.
+        let cap = n_fft + hop;
+        if self.spec_window.len() > cap {
+            let excess = self.spec_window.len() - cap;
+            self.spec_window.drain(0..excess);
+        }
+
+        while self.spec_since_hop >= hop && self.spec_window.len() >= n_fft {
+            let start = self.spec_window.len() - n_fft;
+            cqt.process_magnitudes(&self.spec_window[start..], &mut self.spec_col);
+            // Whole-column push only — if the ring can't fit a full column, drop
+            // it (the scope skips a frame) rather than desync the stream.
+            if self.column_producer.vacant_len() >= self.spec_num_bins {
+                self.column_producer.push_slice(&self.spec_col);
+            }
+            self.spec_since_hop -= hop;
+        }
     }
 
     fn emit_frame(&mut self) {
@@ -559,8 +719,9 @@ mod tests {
 
         let sends = vec![SendSpec { channels: vec![0] }];
         let gains = Arc::new(GainBank::new(&[1.0]));
-        let (mut worker, mut reader) =
-            AudioFeatureWorker::spawn(cons, SR, /* device_channels */ 1, sends, gains);
+        let tap = Arc::new(SpectrogramTap::default());
+        let (mut worker, mut reader, _columns) =
+            AudioFeatureWorker::spawn(cons, SR, /* device_channels */ 1, sends, gains, tap);
 
         // Poll up to ~500 ms for the first frame.
         let mut frame = None;

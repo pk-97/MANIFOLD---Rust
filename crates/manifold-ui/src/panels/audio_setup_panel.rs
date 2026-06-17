@@ -53,9 +53,17 @@ pub struct AudioSendRow {
     pub driven_count: usize,
 }
 
+/// Height of the spectrogram scope section (title + waterfall).
+const SCOPE_TITLE_H: f32 = 18.0;
+const SCOPE_H: f32 = 200.0;
+/// Left margin inside the scope for the frequency-axis labels.
+const SCOPE_AXIS_W: f32 = 34.0;
+
 /// Per-send interactive node ids.
 #[derive(Default, Clone)]
 struct SendRowIds {
+    /// Identity-colour swatch — clicking it selects the send for the scope.
+    swatch: i32,
     label: i32,
     ch_dropdown: i32,
     gain_minus: i32,
@@ -85,6 +93,13 @@ pub struct AudioSetupPanel {
     /// the first click arms and the second confirms). Cleared on any other click
     /// or on close.
     delete_armed: Option<AudioSendId>,
+    /// Send whose spectrogram the scope is showing. Defaults to the first send;
+    /// clicking a row's swatch reselects. Read by the app each frame to drive
+    /// the worker's column producer and the waterfall.
+    selected_send: Option<AudioSendId>,
+    /// Screen-space rect of the waterfall image (logical units), set by `build`.
+    /// The present pass blits the spectrogram texture here. `None` when closed.
+    scope_rect: Option<Rect>,
     // Node ids (set by `build`).
     bg_id: i32,
     close_id: i32,
@@ -161,12 +176,18 @@ impl AudioSetupPanel {
     fn body_height(&self) -> f32 {
         let rows = self.sends.len();
         let warning = if self.active_notice().is_some() { ROW_H + ROW_GAP } else { 0.0 };
+        let scope = if self.sends.is_empty() {
+            0.0
+        } else {
+            ROW_GAP + SCOPE_TITLE_H + SCOPE_H
+        };
         TITLE_H
             + ROW_H // device row
             + ROW_GAP
             + warning
             + (ROW_H + ROW_GAP) * rows as f32
             + ROW_H // add-send button
+            + scope
             + PAD * 2.0
     }
 
@@ -262,24 +283,39 @@ impl AudioSetupPanel {
             cy += ROW_H + ROW_GAP;
         }
 
+        // Default the scope selection to the first send; keep it if still valid.
+        if !self.sends.iter().any(|s| Some(&s.id) == self.selected_send.as_ref()) {
+            self.selected_send = self.sends.first().map(|s| s.id.clone());
+        }
+
         // Send rows: [swatch] label | [ channel name ▼ ] | ×
         const SWATCH_W: f32 = 8.0;
         const LABEL_W: f32 = 70.0;
         self.send_ids = vec![SendRowIds::default(); rows];
         for (i, send) in self.sends.iter().enumerate() {
-            // Identity color swatch.
-            tree.add_panel(
+            // Identity-colour swatch — a button that selects this send for the
+            // scope. The selected row's swatch fills the row height; others are a
+            // small dot.
+            let selected = Some(&send.id) == self.selected_send.as_ref();
+            let (swatch_h, swatch_y) = if selected {
+                (ROW_H, cy)
+            } else {
+                (12.0, cy + (ROW_H - 12.0) * 0.5)
+            };
+            self.send_ids[i].swatch = tree.add_button(
                 self.bg_id,
                 inner_x,
-                cy + (ROW_H - 12.0) * 0.5,
+                swatch_y,
                 SWATCH_W,
-                12.0,
+                swatch_h,
                 UIStyle {
                     bg_color: super::audio_send_color(&send.id),
+                    hover_bg_color: super::audio_send_color(&send.id),
                     corner_radius: 2.0,
                     ..UIStyle::default()
                 },
-            );
+                "",
+            ) as i32;
 
             // Label is a button — clicking it opens the inline rename editor.
             let label_x = inner_x + SWATCH_W + 6.0;
@@ -416,6 +452,92 @@ impl AudioSetupPanel {
             btn_style(false),
             "+ Add Send",
         ) as i32;
+        cy += ROW_H;
+
+        // ── Spectrogram scope (selected send) ──
+        self.scope_rect = None;
+        if !self.sends.is_empty() {
+            cy += ROW_GAP;
+            let sel_label = self
+                .selected_send
+                .as_ref()
+                .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+                .map(|s| s.label.as_str())
+                .unwrap_or("—");
+            tree.add_label(
+                self.bg_id,
+                inner_x,
+                cy,
+                inner_w,
+                SCOPE_TITLE_H,
+                &format!("Spectrogram — {sel_label}"),
+                UIStyle {
+                    text_color: Color32::new(170, 170, 180, 255),
+                    font_size: color::FONT_LABEL,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            cy += SCOPE_TITLE_H;
+
+            // Backing panel behind the whole scope (axis margin + waterfall).
+            tree.add_panel(
+                self.bg_id,
+                inner_x,
+                cy,
+                inner_w,
+                SCOPE_H,
+                UIStyle {
+                    bg_color: Color32::new(10, 10, 12, 255),
+                    border_color: Color32::new(48, 48, 52, 255),
+                    border_width: 1.0,
+                    corner_radius: 3.0,
+                    ..UIStyle::default()
+                },
+            );
+
+            // Frequency-axis tick labels in the left margin (log scale: the
+            // present pass draws the waterfall to the right of this margin).
+            let (fmin, fmax) = (30.0_f32, 16_000.0_f32);
+            for &(hz, txt) in &[(100.0, "100"), (1000.0, "1k"), (10_000.0, "10k")] {
+                let yn = (hz / fmin).log2() / (fmax / fmin).log2();
+                let ly = cy + SCOPE_H * (1.0 - yn) - 6.0;
+                tree.add_label(
+                    self.bg_id,
+                    inner_x + 2.0,
+                    ly,
+                    SCOPE_AXIS_W - 4.0,
+                    12.0,
+                    txt,
+                    UIStyle {
+                        text_color: Color32::new(120, 120, 130, 255),
+                        font_size: color::FONT_LABEL,
+                        text_align: TextAlign::Right,
+                        ..UIStyle::default()
+                    },
+                );
+            }
+
+            // The waterfall image rect (logical) — the present pass blits the
+            // spectrogram texture here, on top of the backing panel.
+            self.scope_rect = Some(Rect::new(
+                inner_x + SCOPE_AXIS_W,
+                cy,
+                inner_w - SCOPE_AXIS_W,
+                SCOPE_H,
+            ));
+        }
+    }
+
+    /// The send the scope is showing, if any.
+    pub fn selected_send(&self) -> Option<&AudioSendId> {
+        self.selected_send.as_ref()
+    }
+
+    /// Screen-space rect (logical units) the present pass blits the spectrogram
+    /// texture into, or `None` when the panel is closed / has no sends.
+    pub fn scope_rect(&self) -> Option<Rect> {
+        self.open.then_some(self.scope_rect).flatten()
     }
 
     /// Whether `id` is any node this panel owns (background or an interactive
@@ -430,7 +552,8 @@ impl AudioSetupPanel {
             return true;
         }
         self.send_ids.iter().any(|r| {
-            id == r.label
+            id == r.swatch
+                || id == r.label
                 || id == r.ch_dropdown
                 || id == r.gain_minus
                 || id == r.gain_plus
@@ -497,7 +620,9 @@ impl AudioSetupPanel {
         // Find which send row + control was hit (clone out so we don't hold a
         // borrow across the delete-arm mutation).
         let hit = self.send_ids.iter().enumerate().find_map(|(i, ids)| {
-            if id == ids.label {
+            if id == ids.swatch {
+                Some((i, RowControl::Select))
+            } else if id == ids.label {
                 Some((i, RowControl::Label))
             } else if id == ids.ch_dropdown {
                 Some((i, RowControl::Channel))
@@ -516,6 +641,13 @@ impl AudioSetupPanel {
         let (i, control) = hit?;
         let send_id = self.sends[i].id.clone();
         match control {
+            RowControl::Select => {
+                // Pure UI state — the app reads `selected_send()` each frame to
+                // drive the scope + worker. Swallow (no command).
+                self.delete_armed = None;
+                self.selected_send = Some(send_id);
+                None
+            }
             RowControl::Label => {
                 self.delete_armed = None;
                 Some(PanelAction::AudioSendLabelClicked(send_id))
@@ -556,6 +688,7 @@ impl AudioSetupPanel {
 
 /// Which interactive control of a send row was clicked.
 enum RowControl {
+    Select,
     Label,
     Channel,
     GainDown,
@@ -743,6 +876,25 @@ mod tests {
         // Close button toggles closed and yields no action.
         assert!(p.handle_click(p.close_id).is_none());
         assert!(!p.is_open());
+    }
+
+    #[test]
+    fn swatch_click_selects_send_and_scope_rect_present() {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+
+        // Defaults to the first send; the scope rect exists while open.
+        assert_eq!(p.selected_send().map(|s| s.as_str()), Some("s1"));
+        assert!(p.scope_rect().is_some());
+
+        // Clicking send 2's swatch selects it (no PanelAction — pure UI state).
+        assert!(p.handle_click(p.send_ids[1].swatch).is_none());
+        assert_eq!(p.selected_send().map(|s| s.as_str()), Some("s2"));
+
+        // Closed → no scope rect.
+        p.close();
+        assert!(p.scope_rect().is_none());
     }
 
     #[test]

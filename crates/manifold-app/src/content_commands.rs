@@ -458,6 +458,9 @@ impl ContentThread {
                     audio_sync.reset_audio();
                 }
             }
+            ContentCommand::SetSpectrogramSend(send) => {
+                self.audio_mod_runtime.set_spectrogram_send(send);
+            }
 
             // ── Stem audio ────────────────────────────────────────
             ContentCommand::StemSetExpanded(expand) => {

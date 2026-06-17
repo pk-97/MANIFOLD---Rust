@@ -2336,6 +2336,21 @@ impl Application {
             self.ws.ui_root.update_audio_meters(&levels[..count]);
         }
 
+        // 6·audio·scope. Push the scope's selected send to the content thread
+        // (drives the worker's VQT column producer). Only on change — closing the
+        // panel sends `None`, stopping column production.
+        {
+            let desired = if self.ws.ui_root.audio_setup_panel.is_open() {
+                self.ws.ui_root.audio_setup_panel.selected_send().cloned()
+            } else {
+                None
+            };
+            if desired != self.spectrogram_send_sent {
+                self.send_content_cmd(ContentCommand::SetSpectrogramSend(desired.clone()));
+                self.spectrogram_send_sent = desired;
+            }
+        }
+
         // 6a. Update waveform lane overlay (position for dirty-checking)
         {
             let scroll_x = self.ws.ui_root.viewport.scroll_x_beats().as_f32()
@@ -3547,6 +3562,81 @@ impl Application {
                 true,
                 "Atlas Blit",
             );
+        }
+
+        // Pass 2b: Audio Setup spectrogram waterfall. Render the VQT columns into
+        // a UI-device texture, then blit it into the panel's reserved scope rect
+        // (on top of the atlas, like the sidebar monitors). Gated on the modal
+        // being open with a live column stream.
+        #[cfg(target_os = "macos")]
+        if self.ws.ui_root.audio_setup_panel.is_open()
+            && self.content_state.spectrogram_num_bins > 0
+            && let Some(rect) = self.ws.ui_root.audio_setup_panel.scope_rect()
+            && let (Some(blit_pipeline), Some(blit_sampler)) =
+                (&self.blit_pipeline, &self.blit_sampler)
+        {
+            use manifold_spectral::{Spectrogram, SpectrogramConfig};
+            let num_bins = self.content_state.spectrogram_num_bins;
+            let cfg = SpectrogramConfig::default();
+
+            // (Re)create the renderer + target pane if the layout changed.
+            if self.spectrogram.is_none() || self.spectrogram_num_bins != num_bins {
+                self.spectrogram = Some(Spectrogram::new(
+                    &gpu.device,
+                    num_bins,
+                    cfg.history_len,
+                    manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+                    cfg.db_min,
+                    cfg.db_max,
+                ));
+                let tex = gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
+                    width: 512,
+                    height: 256,
+                    depth: 1,
+                    format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+                    dimension: manifold_gpu::GpuTextureDimension::D2,
+                    usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+                    label: "Audio Scope",
+                    mip_levels: 1,
+                });
+                self.spectrogram_pane = Some(crate::texture_pane::TexturePane::local(tex));
+                self.spectrogram_num_bins = num_bins;
+            }
+
+            if let (Some(spectrogram), Some(pane)) =
+                (self.spectrogram.as_mut(), self.spectrogram_pane.as_mut())
+                && let Some(target) = pane.local_target().cloned()
+            {
+                // Feed new columns (post-gain magnitudes from the worker).
+                for col in self.content_state.spectrogram_columns.chunks_exact(num_bins) {
+                    spectrogram.push_column(col);
+                }
+                // Band dividers at 250 Hz / 2 kHz (the modulation's low/mid/high
+                // splits), as normalised y on the log axis.
+                let (fmin, fmax) =
+                    (self.content_state.spectrogram_fmin, self.content_state.spectrogram_fmax);
+                let y_of = |f: f32| {
+                    if fmin > 0.0 && fmax > fmin {
+                        (f / fmin).log2() / (fmax / fmin).log2()
+                    } else {
+                        -1.0
+                    }
+                };
+                spectrogram.render(&mut encoder, &target, [y_of(250.0), y_of(2000.0)]);
+
+                // Blit through the unified TexturePane path (logical rect + scale).
+                crate::texture_pane::blit_texture_pane(
+                    pane,
+                    &gpu.device,
+                    &mut encoder,
+                    blit_pipeline,
+                    blit_sampler,
+                    offscreen,
+                    (rect.x, rect.y, rect.width, rect.height),
+                    sf,
+                    "Audio Scope Blit",
+                );
+            }
         }
 
         // Pass 3: Blit compositor output ON TOP of atlas in video area (aspect-fit)

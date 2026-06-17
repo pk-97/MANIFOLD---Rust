@@ -6,6 +6,9 @@ publish = false
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
+# CPU CQT for the spectrogram column producer. default-features=false keeps the
+# GPU renderer (and manifold-gpu) out of this crate's standalone build.
+manifold-spectral = { path = "../manifold-spectral", default-features = false }
 log = { workspace = true }
 cpal = "0.15"
 ringbuf = "0.4"

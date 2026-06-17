@@ -15,8 +15,12 @@ struct Params {
     _pad0: u32,
     db_min: f32,
     db_max: f32,
-    _pad1: f32,
-    _pad2: f32,
+    // Band-divider positions, normalised 0..1 from the bottom (low freq).
+    // Negative = disabled. These are the low/mid and mid/high splits the
+    // modulation reads, drawn as thin lines so the performer sees where energy
+    // lands relative to the band a slider is driven from.
+    band_lo_y: f32,
+    band_hi_y: f32,
 };
 
 @group(0) @binding(0) var<storage, read> history: array<f32>;
@@ -72,5 +76,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let mag = history[col * n_bins + bin];
     let db = 20.0 * log2(mag + 1e-9) * 0.30103; // log10 = log2 * 0.30103
     let norm = clamp((db - p.db_min) / (p.db_max - p.db_min), 0.0, 1.0);
-    return vec4<f32>(colormap(norm), 1.0);
+    var rgb = colormap(norm);
+
+    // Band dividers: a thin bright line at each split, blended over the image.
+    let y_from_bottom = 1.0 - in.uv.y;
+    let line = vec3<f32>(0.85, 0.85, 0.90);
+    let half_px = 0.0015;
+    if (p.band_lo_y >= 0.0 && abs(y_from_bottom - p.band_lo_y) < half_px) {
+        rgb = mix(rgb, line, 0.7);
+    }
+    if (p.band_hi_y >= 0.0 && abs(y_from_bottom - p.band_hi_y) < half_px) {
+        rgb = mix(rgb, line, 0.7);
+    }
+    return vec4<f32>(rgb, 1.0);
 }

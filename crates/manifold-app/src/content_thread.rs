@@ -1066,6 +1066,17 @@ impl ContentThread {
             *dst = f.amplitude;
         }
 
+        // Drain any new VQT spectrogram columns for the Audio Setup scope. Empty
+        // unless the scope is open on a send; the UI feeds them to the waterfall.
+        let mut spectrogram_columns = Vec::new();
+        self.audio_mod_runtime
+            .drain_spectrogram_columns(|col| spectrogram_columns.extend_from_slice(col));
+        let spectrogram_num_bins = self.audio_mod_runtime.spectrogram_num_bins();
+        let (spectrogram_fmin, spectrogram_fmax) = self
+            .audio_mod_runtime
+            .spectrogram_freq_range()
+            .unwrap_or((0.0, 0.0));
+
         let state = ContentState {
             current_beat: self.engine.current_beat(),
             current_time: self.engine.current_time(),
@@ -1135,6 +1146,10 @@ impl ContentThread {
             midi_device_names: self.last_sent_midi_device_names.clone(),
             audio_send_levels,
             audio_send_count,
+            spectrogram_columns,
+            spectrogram_num_bins,
+            spectrogram_fmin,
+            spectrogram_fmax,
             osc_sender_enabled: self.transport_controller.osc_sender_enabled,
             osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
             osc_timecode_display: self.cached_osc_timecode.clone(),

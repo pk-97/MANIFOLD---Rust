@@ -15,10 +15,12 @@
 //! they need.
 
 mod cqt;
-mod spectrogram;
 mod window;
+#[cfg(feature = "gpu")]
+mod spectrogram;
 
 pub use cqt::{CqtTransform, num_bins};
+#[cfg(feature = "gpu")]
 pub use spectrogram::Spectrogram;
 
 /// Parameters for a calibration spectrogram. Defaults target a single send at
