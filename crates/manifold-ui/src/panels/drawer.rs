@@ -56,16 +56,28 @@ pub struct DrawerButton {
     /// Optional identity tint (e.g. an audio send's color). When set, the active
     /// button fills with this color and an inactive one tints its text.
     pub accent: Option<Color32>,
+    /// When true the accent is used as text color only (never a full fill), and
+    /// the active state shows the normal selection highlight. Keeps an identity
+    /// tint legible without a button-sized block of saturated color.
+    pub accent_text_only: bool,
 }
 
 impl DrawerButton {
     pub fn new(label: impl Into<String>, active: bool) -> Self {
-        Self { label: label.into(), active, accent: None }
+        Self { label: label.into(), active, accent: None, accent_text_only: false }
     }
 
     /// Give the button an identity tint. See [`DrawerButton::accent`].
     pub fn with_accent(mut self, accent: Color32) -> Self {
         self.accent = Some(accent);
+        self
+    }
+
+    /// Tint only the text with the identity color; the active state uses the
+    /// standard selection highlight instead of a full accent fill.
+    pub fn with_accent_text_only(mut self, accent: Color32) -> Self {
+        self.accent = Some(accent);
+        self.accent_text_only = true;
         self
     }
 }
@@ -258,7 +270,11 @@ pub fn build(
                 for (b, bw) in buttons.iter().zip(widths.iter()) {
                     let mut style = config_btn_style(b.active, spec.btn_font_size);
                     if let Some(accent) = b.accent {
-                        if b.active {
+                        if b.accent_text_only {
+                            // Identity as text color only; active keeps the
+                            // standard selection highlight (no full fill).
+                            style.text_color = accent;
+                        } else if b.active {
                             style.bg_color = accent;
                             style.text_color = Color32::new(20, 20, 24, 255);
                         } else {

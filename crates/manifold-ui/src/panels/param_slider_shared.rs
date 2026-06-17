@@ -39,11 +39,12 @@ pub(crate) const WAVEFORM_COUNT: usize = 5;
 
 pub(crate) const ABL_CONFIG_HEIGHT: f32 = 24.0;
 
-/// Height of the per-param audio-modulation drawer — a send-selector row and a
-/// feature-selector row (see `build_param_row`). Derived from the shared drawer
-/// metrics so the card's reserved height can't drift from what's actually drawn.
+/// Height of the per-param audio-modulation drawer. Rows: send selector, the
+/// Level feature row, the Tone feature row, and the modifier toggles (Inv/d-dt).
+/// Derived from the shared drawer metrics so the card's reserved height can't
+/// drift from what's actually drawn.
 pub(crate) fn audio_config_height() -> f32 {
-    crate::panels::drawer::uniform_rows_height(2)
+    crate::panels::drawer::uniform_rows_height(4)
 }
 
 // Arming the envelope shows two controls: the orange target handle on the
@@ -187,12 +188,15 @@ pub(crate) fn audio_feature_from_index(idx: usize) -> manifold_core::AudioFeatur
 }
 
 /// The feature options exposed in the per-slider audio drawer, in button order.
-/// Index maps to an `AudioFeature` in the card's click handler. "Amp" is the
-/// overall level (the default); Lo/Mid/Hi are the energy bands; Bri is spectral
-/// centroid (brightness); Nsy is flatness (tonal→noisy); Flx is spectral flux
-/// (continuous change); On is onset (the discrete hit).
+/// Index maps to an `AudioFeature` in the card's click handler. Split for display
+/// into a **Level** group (indices 0..4: Amp = overall level, then the Low/Mid/
+/// High energy bands) and a **Tone** group (indices 4..8: Bright = spectral
+/// centroid, Noise = flatness tonal→noisy, Flux = spectral change, Hit = onset).
 pub(crate) const AUDIO_FEATURE_LABELS: [&str; 8] =
-    ["Amp", "Lo", "Mid", "Hi", "Bri", "Nsy", "Flx", "On"];
+    ["Amp", "Low", "Mid", "High", "Bright", "Noise", "Flux", "Hit"];
+/// How many of [`AUDIO_FEATURE_LABELS`] belong to the leading "Level" row; the
+/// rest form the "Tone" row.
+pub(crate) const AUDIO_LEVEL_FEATURE_COUNT: usize = 4;
 
 /// Audio-modulation display state for one card, assembled in `state_sync` and
 /// applied to [`ParamModState`] via [`ParamModState::sync_audio`]. Bundled so
@@ -1211,10 +1215,12 @@ pub(crate) fn build_param_row(
             .enumerate()
             .map(|(k, label)| {
                 let btn = DrawerButton::new(label.clone(), k as i32 == send_sel);
-                // Tint with the send's identity color so a driven slider reads
-                // the same color as its source in the Audio Setup panel.
+                // Tint the label with the send's identity color so a driven
+                // slider reads the same color as its source in the Audio Setup
+                // panel — text-only, so the selected send shows the standard
+                // highlight instead of a drawer-wide block of saturated color.
                 match mod_state.audio_send_ids.get(k) {
-                    Some(id) => btn.with_accent(crate::panels::audio_send_color(id)),
+                    Some(id) => btn.with_accent_text_only(crate::panels::audio_send_color(id)),
                     None => btn,
                 }
             })
@@ -1222,11 +1228,16 @@ pub(crate) fn build_param_row(
         let feat_sel = mod_state.audio_feature_idx.get(i).copied().unwrap_or(0);
         let invert_on = mod_state.audio_invert.get(i).copied().unwrap_or(false);
         let rate_on = mod_state.audio_rate.get(i).copied().unwrap_or(false);
-        let feat_buttons: Vec<DrawerButton> = AUDIO_FEATURE_LABELS
-            .iter()
-            .enumerate()
-            .map(|(k, l)| DrawerButton::new(*l, k as i32 == feat_sel))
-            .collect();
+        // Features split into two legible rows: Level (Amp/Low/Mid/High) and
+        // Tone (Bright/Noise/Flux/Hit). Their flat button indices stay 0..8
+        // across the two rows, so the click handler is unchanged.
+        let make_feat = |range: std::ops::Range<usize>| -> Vec<DrawerButton> {
+            range
+                .map(|k| DrawerButton::new(AUDIO_FEATURE_LABELS[k], k as i32 == feat_sel))
+                .collect()
+        };
+        let level_buttons = make_feat(0..AUDIO_LEVEL_FEATURE_COUNT);
+        let tone_buttons = make_feat(AUDIO_LEVEL_FEATURE_COUNT..AUDIO_FEATURE_LABELS.len());
         // Modifier toggles on their own row, so the feature row isn't crowded:
         // "Inv" (loud → low) then "d/dt" (drive on motion). Their flat indices
         // sit one and two past the features (drawer button indices are flat
@@ -1239,7 +1250,8 @@ pub(crate) fn build_param_row(
         let spec = DrawerSpec {
             rows: vec![
                 DrawerRow::Buttons { buttons: send_buttons, width: ButtonWidth::Proportional },
-                DrawerRow::Buttons { buttons: feat_buttons, width: ButtonWidth::Proportional },
+                DrawerRow::Buttons { buttons: level_buttons, width: ButtonWidth::Uniform },
+                DrawerRow::Buttons { buttons: tone_buttons, width: ButtonWidth::Uniform },
                 DrawerRow::Buttons { buttons: toggle_buttons, width: ButtonWidth::Proportional },
             ],
             btn_font_size: config_font,
