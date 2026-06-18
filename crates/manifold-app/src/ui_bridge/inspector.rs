@@ -721,6 +721,24 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
+        PanelAction::ClipDetectClicked => {
+            // Per-clip detection: analyze the selected audio clip's file and place
+            // its triggers. The orchestrator (content thread) does the work and the
+            // result syncs back; status shows via the global percussion status.
+            if let Some(clip_id) = &selection.primary_selected_clip_id {
+                ContentCommand::send(content_tx, ContentCommand::DetectClip(clip_id.clone()));
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::ClipClearTriggersClicked => {
+            if let Some(clip_id) = &selection.primary_selected_clip_id {
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::ClearClipTriggers(clip_id.clone()),
+                );
+            }
+            DispatchResult::handled()
+        }
         PanelAction::ClipLoopToggle => {
             if let Some(clip_id) = &selection.primary_selected_clip_id {
                 let clip_id = clip_id.clone();

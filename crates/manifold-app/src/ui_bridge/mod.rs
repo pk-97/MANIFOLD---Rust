@@ -167,6 +167,8 @@ pub fn dispatch(
         | PanelAction::ClipChromeCollapseToggle
         | PanelAction::ClipBpmClicked
         | PanelAction::ClipWarpToggled
+        | PanelAction::ClipDetectClicked
+        | PanelAction::ClipClearTriggersClicked
         | PanelAction::ClipLoopToggle
         | PanelAction::ClipSlipSnapshot
         | PanelAction::ClipSlipChanged(_)

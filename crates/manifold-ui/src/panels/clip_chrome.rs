@@ -38,6 +38,8 @@ pub struct ClipChromePanel {
     bpm_value_btn_id: i32,
     warp_toggle_btn_id: i32,
     loop_toggle_btn_id: i32,
+    detect_btn_id: i32,
+    clear_triggers_btn_id: i32,
     gen_type_label_id: i32,
     effects_label_id: i32,
     divider_ids: [i32; 3],
@@ -75,6 +77,8 @@ impl ClipChromePanel {
             bpm_value_btn_id: -1,
             warp_toggle_btn_id: -1,
             loop_toggle_btn_id: -1,
+            detect_btn_id: -1,
+            clear_triggers_btn_id: -1,
             gen_type_label_id: -1,
             effects_label_id: -1,
             divider_ids: [-1; 3],
@@ -102,8 +106,10 @@ impl ClipChromePanel {
             if self.mode_video {
                 h += SECTION_LABEL_H + SMALL_ROW_H + BPM_ROW_H + LOOP_BUTTON_H;
             } else if self.mode_audio {
-                // Source label + filename + warp toggle + clip-BPM row.
+                // Source label + filename + warp toggle + clip-BPM row, then the
+                // detection section (label + Detect + Clear buttons).
                 h += SECTION_LABEL_H + SMALL_ROW_H + LOOP_BUTTON_H + BPM_ROW_H;
+                h += SECTION_LABEL_H + LOOP_BUTTON_H * 2.0;
             } else if self.mode_generator {
                 h += SMALL_ROW_H;
             }
@@ -495,6 +501,66 @@ impl ClipChromePanel {
         ) as i32;
         cy += BPM_ROW_H;
 
+        // ── Detection section ──
+        // "Detection" section label
+        tree.add_label(
+            -1,
+            cx,
+            cy,
+            w,
+            SECTION_LABEL_H,
+            "Detection",
+            UIStyle {
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: SMALL_FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        cy += SECTION_LABEL_H;
+
+        // Detect button — runs analysis on the clip's file and places triggers.
+        self.detect_btn_id = tree.add_button(
+            -1,
+            cx,
+            cy,
+            w,
+            LOOP_BUTTON_H,
+            UIStyle {
+                bg_color: BPM_BTN_COLOR,
+                hover_bg_color: BPM_BTN_HOVER,
+                pressed_bg_color: darken(BPM_BTN_COLOR, 10),
+                text_color: color::TEXT_PRIMARY_C32,
+                font_size: SMALL_FONT_SIZE,
+                corner_radius: color::BUTTON_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+            "Detect",
+        ) as i32;
+        cy += LOOP_BUTTON_H;
+
+        // Clear button — removes only this clip's own triggers.
+        self.clear_triggers_btn_id = tree.add_button(
+            -1,
+            cx,
+            cy,
+            w,
+            LOOP_BUTTON_H,
+            UIStyle {
+                bg_color: LOOP_OFF_COLOR,
+                hover_bg_color: lighten(LOOP_OFF_COLOR, 10),
+                pressed_bg_color: darken(LOOP_OFF_COLOR, 10),
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: SMALL_FONT_SIZE,
+                corner_radius: color::BUTTON_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+            "Clear Triggers",
+        ) as i32;
+        cy += LOOP_BUTTON_H;
+
         cy
     }
 
@@ -634,6 +700,12 @@ impl ClipChromePanel {
         if id == self.warp_toggle_btn_id && self.mode_audio {
             return vec![PanelAction::ClipWarpToggled];
         }
+        if id == self.detect_btn_id && self.mode_audio {
+            return vec![PanelAction::ClipDetectClicked];
+        }
+        if id == self.clear_triggers_btn_id && self.mode_audio {
+            return vec![PanelAction::ClipClearTriggersClicked];
+        }
         if id == self.loop_toggle_btn_id && self.mode_video {
             return vec![PanelAction::ClipLoopToggle];
         }
@@ -736,6 +808,13 @@ mod tests {
         // Warp toggle click fires the warp action.
         let warp = panel.handle_click(panel.warp_toggle_btn_id as u32);
         assert!(matches!(warp.as_slice(), [PanelAction::ClipWarpToggled]));
+        // Detection buttons exist and fire their actions.
+        assert!(panel.detect_btn_id >= 0);
+        assert!(panel.clear_triggers_btn_id >= 0);
+        let detect = panel.handle_click(panel.detect_btn_id as u32);
+        assert!(matches!(detect.as_slice(), [PanelAction::ClipDetectClicked]));
+        let clear = panel.handle_click(panel.clear_triggers_btn_id as u32);
+        assert!(matches!(clear.as_slice(), [PanelAction::ClipClearTriggersClicked]));
     }
 
     #[test]

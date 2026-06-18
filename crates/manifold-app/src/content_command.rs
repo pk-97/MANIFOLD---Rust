@@ -111,16 +111,16 @@ pub enum ContentCommand {
     // ── Percussion ─────────────────────────────────────────────────
     /// Run per-clip detection on an existing audio clip (audio-clip-detection).
     /// Analyzes the clip's file and places its triggers, owned by the clip.
-    /// Producer is the audio-clip inspector's Detect button (P4); the content-side
-    /// handler is wired now so the orchestrator path is complete and testable.
-    #[allow(dead_code)]
+    /// Run per-clip detection on an audio clip. Produced by the inspector Detect
+    /// button (P4).
     DetectClip(ClipId),
     /// Re-place a clip's triggers from its cached analysis (no backend run).
-    /// Driven by the inspector's live knobs (P4). Instant.
+    /// Driven by the inspector's live config knobs (per-instrument UI is a P4
+    /// follow-up; the command + content path are in place).
     #[allow(dead_code)]
     ReplanClip(ClipId),
     /// Remove every trigger a given audio clip produced (one undoable step).
-    #[allow(dead_code)]
+    /// Produced by the inspector Clear button (P4).
     ClearClipTriggers(ClipId),
     /// Trigger percussion import pipeline with the selected audio/JSON file path.
     /// Port of Unity: percussionImportController.OnImportPercussionMap(path).

@@ -239,6 +239,10 @@ pub enum PanelAction {
     ClipBpmClicked,
     /// Audio clip: toggle warp on/off (sets recorded BPM to project tempo / 0).
     ClipWarpToggled,
+    /// Audio clip: run per-clip percussion detection on its file.
+    ClipDetectClicked,
+    /// Audio clip: remove the triggers this clip produced.
+    ClipClearTriggersClicked,
     ClipLoopToggle,
     ClipSlipSnapshot,
     ClipSlipChanged(f32),
