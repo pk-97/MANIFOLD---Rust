@@ -75,6 +75,7 @@ impl AudioWaveformCache {
     pub fn poll_and_request(&mut self, audio_clips: &[(ClipId, String)]) -> bool {
         let mut newly_ready = false;
         while let Ok((id, renderer)) = self.rx.try_recv() {
+            log::info!("[AudioWaveform] decode ready, cached for clip {id:?}");
             self.ready.insert(id, Arc::new(renderer));
             newly_ready = true;
         }
@@ -105,6 +106,12 @@ impl AudioWaveformCache {
             .map(|(id, _)| id.clone())
             .collect();
         if !evicted.is_empty() {
+            log::info!(
+                "[AudioWaveform] evicting {} clip(s) absent >{} polls: {:?}",
+                evicted.len(),
+                EVICT_GRACE_POLLS,
+                evicted
+            );
             self.ready.retain(|id, _| !evicted.contains(id));
             self.requested.retain(|id| !evicted.contains(id));
             self.absent_polls.retain(|id, _| !evicted.contains(id));
