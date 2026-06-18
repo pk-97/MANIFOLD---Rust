@@ -147,6 +147,9 @@ pub fn dispatch(
         PanelAction::MasterOpacitySnapshot
         | PanelAction::MasterOpacityChanged(_)
         | PanelAction::MasterOpacityCommit
+        | PanelAction::AudioGainSnapshot(_)
+        | PanelAction::AudioGainChanged(..)
+        | PanelAction::AudioGainCommit(_)
         | PanelAction::MasterCollapseToggle
         | PanelAction::MasterExitPathClicked
         | PanelAction::SetLedExitIndex(_)
@@ -295,7 +298,8 @@ pub fn dispatch(
         | PanelAction::LayerDragMoved(..)
         | PanelAction::LayerDragEnded(..)
         | PanelAction::AddLayerClicked
-        | PanelAction::DeleteLayerClicked(_) => layer::dispatch_layer(
+        | PanelAction::DeleteLayerClicked(_)
+        | PanelAction::SetLayerAudioSend(..) => layer::dispatch_layer(
             action,
             project,
             content_tx,
@@ -399,6 +403,8 @@ pub fn dispatch(
         | PanelAction::OpenAudioSetup
         // Consumed in app_render (opens the inline rename editor); no-op here.
         | PanelAction::AudioSendLabelClicked(_)
+        // Consumed in ui_root::try_open_dropdown (opens the send picker); no-op here.
+        | PanelAction::AudioSendClicked(_)
         | PanelAction::RevertEffectGraph => DispatchResult::handled(),
     }
 }

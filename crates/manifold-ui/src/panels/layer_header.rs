@@ -204,6 +204,9 @@ pub struct LayerInfo {
     pub is_collapsed: bool,
     pub is_group: bool,
     pub is_generator: bool,
+    /// True for `LayerType::Audio` — drives the audio control set
+    /// (Mute / Solo / Gain / Send) instead of video/generator controls.
+    pub is_audio: bool,
     pub is_muted: bool,
     pub is_solo: bool,
     pub is_led: bool,
@@ -219,6 +222,11 @@ pub struct LayerInfo {
     pub midi_device: Option<String>,
     /// True when layer is in "AllNotes" trigger mode (every NoteOn triggers).
     pub midi_all_notes: bool,
+    /// Audio layer gain in dB (audio layers only).
+    pub audio_gain_db: f32,
+    /// Name of the modulation send this audio layer feeds, if any. `None` shows
+    /// "No send".
+    pub audio_send_name: Option<String>,
     /// Y offset within the layer controls panel (panel-local).
     pub y_offset: f32,
     /// Height of this layer row.
@@ -228,46 +236,130 @@ pub struct LayerInfo {
     pub color: Color32,
 }
 
+// ── LayerControl ────────────────────────────────────────────────────
+
+/// One descriptor per addressable control the layer card can show. The card is
+/// laid out, built, and hit-tested by walking these descriptors, so the
+/// per-type difference lives in one place (the geometry branches in
+/// `compute_layer_row`) instead of being duplicated across layout / build /
+/// hit-test.
+///
+/// Declaration order is the build (z) order: `Background` first (drawn behind
+/// everything), then the structural visuals, then the flowing rows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(usize)]
+enum LayerControl {
+    Background = 0,
+    AccentBar,
+    Connector,
+    BottomBorder,
+    Chevron,
+    Name,
+    DragHandle,
+    GenType,
+    Mute,
+    Solo,
+    Led,
+    Blend,
+    Separator,
+    Info,
+    Folder,
+    PathLabel,
+    NewClip,
+    MidiLabel,
+    MidiInput,
+    MidiMode,
+    ChLabel,
+    ChDropdown,
+    DevLabel,
+    DevDropdown,
+    AddGenClip,
+    Gain,
+    Send,
+}
+
+const N_CONTROLS: usize = 27;
+
+impl LayerControl {
+    /// All controls in declaration (build / z) order.
+    const ALL: [LayerControl; N_CONTROLS] = [
+        LayerControl::Background,
+        LayerControl::AccentBar,
+        LayerControl::Connector,
+        LayerControl::BottomBorder,
+        LayerControl::Chevron,
+        LayerControl::Name,
+        LayerControl::DragHandle,
+        LayerControl::GenType,
+        LayerControl::Mute,
+        LayerControl::Solo,
+        LayerControl::Led,
+        LayerControl::Blend,
+        LayerControl::Separator,
+        LayerControl::Info,
+        LayerControl::Folder,
+        LayerControl::PathLabel,
+        LayerControl::NewClip,
+        LayerControl::MidiLabel,
+        LayerControl::MidiInput,
+        LayerControl::MidiMode,
+        LayerControl::ChLabel,
+        LayerControl::ChDropdown,
+        LayerControl::DevLabel,
+        LayerControl::DevDropdown,
+        LayerControl::AddGenClip,
+        LayerControl::Gain,
+        LayerControl::Send,
+    ];
+
+    #[inline]
+    fn idx(self) -> usize {
+        self as usize
+    }
+}
+
 // ── LayerRowData ────────────────────────────────────────────────────
 
-#[derive(Default)]
+/// Per-control rects for one layer row, keyed by `LayerControl`. A control is
+/// "present" once `set` records a rect for it; absent controls are skipped by
+/// build and hit-test.
+#[derive(Clone, Copy)]
 struct LayerRowData {
-    background: Rect,
-    chevron: Rect,
-    name: Rect,
-    drag_handle: Rect,
-    mute: Rect,
-    solo: Rect,
-    led: Rect,
-    blend_mode: Rect,
-    separator: Rect,
-    accent_bar: Rect,
-    connector: Rect,
-    bottom_border: Rect,
-    info: Rect,
-    folder: Rect,
-    path_label: Rect,
-    new_clip: Rect,
-    gen_type: Rect,
-    add_gen_clip: Rect,
-    midi_label: Rect,
-    midi_input: Rect,
-    midi_mode: Rect,
-    ch_label: Rect,
-    ch_dropdown: Rect,
-    dev_label: Rect,
-    dev_dropdown: Rect,
-    has_chevron: bool,
-    has_accent_bar: bool,
-    has_connector: bool,
-    has_bottom_border: bool,
-    has_expanded_controls: bool,
-    has_gen_type: bool,
-    has_video_controls: bool,
-    has_generator_controls: bool,
+    rects: [Rect; N_CONTROLS],
+    present: [bool; N_CONTROLS],
+}
+
+impl Default for LayerRowData {
+    fn default() -> Self {
+        Self {
+            rects: [Rect::ZERO; N_CONTROLS],
+            present: [false; N_CONTROLS],
+        }
+    }
+}
+
+impl LayerRowData {
+    #[inline]
+    fn set(&mut self, c: LayerControl, r: Rect) {
+        self.rects[c.idx()] = r;
+        self.present[c.idx()] = true;
+    }
+
+    #[inline]
+    fn rect(&self, c: LayerControl) -> Rect {
+        self.rects[c.idx()]
+    }
+
+    #[inline]
+    fn has(&self, c: LayerControl) -> bool {
+        self.present[c.idx()]
+    }
 }
 
 /// Compute element rects for one layer row in panel-local coordinates.
+///
+/// Geometry is the single source of truth for the card layout; build and
+/// hit-test consume the resulting descriptor list and never re-derive type.
 #[allow(clippy::too_many_arguments)]
 fn compute_layer_row(
     y_offset: f32,
@@ -276,10 +368,12 @@ fn compute_layer_row(
     is_collapsed: bool,
     is_group: bool,
     is_generator: bool,
+    is_audio: bool,
     is_child: bool,
     is_last_child: bool,
     is_group_expanded: bool,
 ) -> LayerRowData {
+    use LayerControl as C;
     let mut d = LayerRowData::default();
     let w = if panel_width > 0.0 {
         panel_width
@@ -287,62 +381,66 @@ fn compute_layer_row(
         color::LAYER_CONTROLS_WIDTH
     };
 
-    d.background = Rect::new(0.0, y_offset, w, height);
+    d.set(C::Background, Rect::new(0.0, y_offset, w, height));
 
     let left_indent = if is_child { CHILD_INDENT } else { 0.0 };
     let pad = PAD + left_indent;
     let mut y = y_offset + PAD;
 
     // ── Group visuals ──
-    d.has_accent_bar = is_child;
     if is_child {
-        d.accent_bar = Rect::new(0.0, y_offset, ACCENT_W, height);
+        d.set(C::AccentBar, Rect::new(0.0, y_offset, ACCENT_W, height));
     }
-
-    d.has_connector = is_group && is_group_expanded;
-    if d.has_connector {
-        d.connector = Rect::new(0.0, y_offset + height * 0.5, ACCENT_W, height * 0.5);
+    if is_group && is_group_expanded {
+        d.set(
+            C::Connector,
+            Rect::new(0.0, y_offset + height * 0.5, ACCENT_W, height * 0.5),
+        );
     }
-
-    d.has_bottom_border = is_child && is_last_child;
-    if d.has_bottom_border {
-        d.bottom_border = Rect::new(0.0, y_offset + height - BORDER_H, w, BORDER_H);
+    if is_child && is_last_child {
+        d.set(
+            C::BottomBorder,
+            Rect::new(0.0, y_offset + height - BORDER_H, w, BORDER_H),
+        );
     }
 
     // ── Top row: Chevron | Name | DragHandle ──
-    d.has_chevron = true;
-    let chevron_w = if d.has_chevron { CHEVRON_W } else { 0.0 };
-    if d.has_chevron {
-        d.chevron = Rect::new(pad, y, CHEVRON_W, BTN_H);
-    }
+    let chevron_w = CHEVRON_W;
+    d.set(C::Chevron, Rect::new(pad, y, CHEVRON_W, BTN_H));
 
     let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
     let handle_x = w - pad - HANDLE_W - 8.0;
     let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
-    d.name = Rect::new(name_left, y, name_w, NAME_H);
-    d.drag_handle = Rect::new(handle_x, y, HANDLE_W, BTN_H);
+    d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+    d.set(C::DragHandle, Rect::new(handle_x, y, HANDLE_W, BTN_H));
 
     y += ROW_STEP;
 
     // ── Generator type row ──
-    d.has_gen_type = is_generator;
     if is_generator {
         let gen_w = w - name_left - pad;
-        d.gen_type = Rect::new(name_left, y, gen_w, GEN_TYPE_H);
+        d.set(C::GenType, Rect::new(name_left, y, gen_w, GEN_TYPE_H));
         y += GEN_TYPE_H;
     }
 
-    // ── Button row: M | S | L | BlendMode ──
+    // ── Button row: M | S | [L | BlendMode] ──
+    // Audio layers carry only Mute / Solo here, then a Gain row and a Send row;
+    // they have no LED output, blend mode, folder, clip, or MIDI controls.
     let mut btn_x = pad;
-    d.mute = Rect::new(btn_x, y, MS_BTN_W, BTN_H);
+    d.set(C::Mute, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
     btn_x += MS_BTN_W + 2.0;
-    d.solo = Rect::new(btn_x, y, MS_BTN_W, BTN_H);
+    d.set(C::Solo, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
     btn_x += MS_BTN_W + 2.0;
-    d.led = Rect::new(btn_x, y, MS_BTN_W, BTN_H);
+
+    if is_audio {
+        return compute_audio_row(d, y_offset, height, w, pad, btn_x, y);
+    }
+
+    d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
     btn_x += MS_BTN_W + 4.0;
 
     let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
-    d.blend_mode = Rect::new(btn_x, y, dd_w, BTN_H);
+    d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
 
     y += BTN_H + 2.0;
 
@@ -352,174 +450,160 @@ fn compute_layer_row(
     } else {
         SEP_H
     };
-    d.has_expanded_controls = !is_collapsed || is_group;
-    if !d.has_expanded_controls {
-        d.separator = Rect::new(0.0, y_offset + height - sep_h, w, sep_h);
+    let has_expanded_controls = !is_collapsed || is_group;
+    if !has_expanded_controls {
+        d.set(
+            C::Separator,
+            Rect::new(0.0, y_offset + height - sep_h, w, sep_h),
+        );
         return d;
     }
 
     // ── Info label ──
-    d.info = Rect::new(pad, y, w - pad * 2.0, INFO_H);
+    d.set(C::Info, Rect::new(pad, y, w - pad * 2.0, INFO_H));
     y += 16.0;
 
     if is_group {
         y += 2.0;
     } else if is_generator {
-        d.has_generator_controls = true;
-        d.add_gen_clip = Rect::new(pad, y, ADD_GEN_W, BTN_H);
+        d.set(C::AddGenClip, Rect::new(pad, y, ADD_GEN_W, BTN_H));
         y += BTN_H + 2.0;
 
         // MIDI note + trigger-mode toggle (share one row)
-        d.midi_label = Rect::new(pad, y, MIDI_LBL_W, BTN_H);
+        d.set(C::MidiLabel, Rect::new(pad, y, MIDI_LBL_W, BTN_H));
         let gen_midi_x = pad + MIDI_LBL_W + 2.0;
         let right_edge = w - pad - RIGHT_GUTTER;
         let mode_x = right_edge - MODE_TOGGLE_W;
-        d.midi_input = Rect::new(gen_midi_x, y, (mode_x - 4.0 - gen_midi_x).max(10.0), BTN_H);
-        d.midi_mode = Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H);
+        d.set(
+            C::MidiInput,
+            Rect::new(gen_midi_x, y, (mode_x - 4.0 - gen_midi_x).max(10.0), BTN_H),
+        );
+        d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
         y += ROW_STEP;
 
         // MIDI channel + device dropdown (share one row)
-        d.ch_label = Rect::new(pad, y, CH_LBL_W, BTN_H);
+        d.set(C::ChLabel, Rect::new(pad, y, CH_LBL_W, BTN_H));
         let gen_ch_x = pad + CH_LBL_W + 2.0;
         let ch_w = 44.0;
-        d.ch_dropdown = Rect::new(gen_ch_x, y, ch_w, BTN_H);
+        d.set(C::ChDropdown, Rect::new(gen_ch_x, y, ch_w, BTN_H));
         let dev_lbl_x = gen_ch_x + ch_w + 6.0;
-        d.dev_label = Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H);
+        d.set(C::DevLabel, Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H));
         let dev_x = dev_lbl_x + DEV_LBL_W + 2.0;
-        d.dev_dropdown = Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H);
+        d.set(
+            C::DevDropdown,
+            Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H),
+        );
     } else {
-        d.has_video_controls = true;
-
         // Folder | PathLabel | +new clip
-        d.folder = Rect::new(pad, y, FOLDER_W, BTN_H);
+        d.set(C::Folder, Rect::new(pad, y, FOLDER_W, BTN_H));
         let path_left = pad + FOLDER_W + 4.0;
         let new_clip_x = w - pad - NEW_CLIP_W;
         let path_w = (new_clip_x - path_left - 4.0).max(10.0);
-        d.path_label = Rect::new(path_left, y, path_w, BTN_H);
-        d.new_clip = Rect::new(new_clip_x, y, NEW_CLIP_W, BTN_H);
+        d.set(C::PathLabel, Rect::new(path_left, y, path_w, BTN_H));
+        d.set(C::NewClip, Rect::new(new_clip_x, y, NEW_CLIP_W, BTN_H));
         y += ROW_STEP;
 
         // MIDI note + trigger-mode toggle (share one row)
-        d.midi_label = Rect::new(pad, y, MIDI_LBL_W, BTN_H);
+        d.set(C::MidiLabel, Rect::new(pad, y, MIDI_LBL_W, BTN_H));
         let midi_x = pad + MIDI_LBL_W + 2.0;
         let right_edge = w - pad - RIGHT_GUTTER;
         let mode_x = right_edge - MODE_TOGGLE_W;
-        d.midi_input = Rect::new(midi_x, y, (mode_x - 4.0 - midi_x).max(10.0), BTN_H);
-        d.midi_mode = Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H);
+        d.set(
+            C::MidiInput,
+            Rect::new(midi_x, y, (mode_x - 4.0 - midi_x).max(10.0), BTN_H),
+        );
+        d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
         y += ROW_STEP;
 
         // MIDI channel + device dropdown (share one row)
-        d.ch_label = Rect::new(pad, y, CH_LBL_W, BTN_H);
+        d.set(C::ChLabel, Rect::new(pad, y, CH_LBL_W, BTN_H));
         let ch_x = pad + CH_LBL_W + 2.0;
         let ch_w = 44.0;
-        d.ch_dropdown = Rect::new(ch_x, y, ch_w, BTN_H);
+        d.set(C::ChDropdown, Rect::new(ch_x, y, ch_w, BTN_H));
         let dev_lbl_x = ch_x + ch_w + 6.0;
-        d.dev_label = Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H);
+        d.set(C::DevLabel, Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H));
         let dev_x = dev_lbl_x + DEV_LBL_W + 2.0;
-        d.dev_dropdown = Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H);
+        d.set(
+            C::DevDropdown,
+            Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H),
+        );
     }
 
     let _ = y; // suppress unused
-    d.separator = Rect::new(0.0, y_offset + height - sep_h, w, sep_h);
+    d.set(
+        C::Separator,
+        Rect::new(0.0, y_offset + height - sep_h, w, sep_h),
+    );
+    d
+}
+
+/// Audio-layer controls: Mute / Solo are already placed by `compute_layer_row`;
+/// this lays out the Gain row and the Send row beneath them, then the
+/// separator. Audio cards never collapse their detail controls.
+fn compute_audio_row(
+    mut d: LayerRowData,
+    y_offset: f32,
+    height: f32,
+    w: f32,
+    pad: f32,
+    _btn_x: f32,
+    y_buttons: f32,
+) -> LayerRowData {
+    use LayerControl as C;
+    let mut y = y_buttons + BTN_H + 2.0;
+    let right_edge = w - pad - RIGHT_GUTTER;
+
+    // Gain: dB slider spanning the row (label is drawn inside the slider widget).
+    d.set(C::Gain, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
+    y += ROW_STEP;
+
+    // Send: modulation-send dropdown spanning the row.
+    d.set(C::Send, Rect::new(pad, y, (right_edge - pad).max(20.0), BTN_H));
+    y += BTN_H + 2.0;
+
+    let _ = y;
+    d.set(
+        C::Separator,
+        Rect::new(0.0, y_offset + height - SEP_H, w, SEP_H),
+    );
     d
 }
 
 // ── LayerRowIds ─────────────────────────────────────────────────────
 
-#[derive(Clone)]
+/// Node IDs for one layer row, keyed by `LayerControl`. Absent controls are
+/// `-1`. Replaces the old per-field struct so adding a control is one enum
+/// variant plus one build arm, not a parallel edit across four structures.
+#[derive(Clone, Copy)]
 struct LayerRowIds {
-    bg: i32,
-    chevron: i32,
-    name: i32,
-    drag_handle: i32,
-    mute: i32,
-    solo: i32,
-    led: i32,
-    blend_mode: i32,
-    separator: i32,
-    info: i32,
-    accent_bar: i32,
-    connector: i32,
-    bottom_border: i32,
-    folder: i32,
-    path_label: i32,
-    new_clip: i32,
-    gen_type: i32,
-    add_gen_clip: i32,
-    midi_label: i32,
-    midi_input: i32,
-    midi_mode: i32,
-    ch_label: i32,
-    ch_dropdown: i32,
-    dev_label: i32,
-    dev_dropdown: i32,
-}
-
-impl LayerRowIds {
-    /// Iterate all valid (>= 0) node IDs in this row.
-    fn for_each_id(&self, mut f: impl FnMut(i32)) {
-        for &id in &[
-            self.bg,
-            self.chevron,
-            self.name,
-            self.drag_handle,
-            self.mute,
-            self.solo,
-            self.led,
-            self.blend_mode,
-            self.separator,
-            self.info,
-            self.accent_bar,
-            self.connector,
-            self.bottom_border,
-            self.folder,
-            self.path_label,
-            self.new_clip,
-            self.gen_type,
-            self.add_gen_clip,
-            self.midi_label,
-            self.midi_input,
-            self.midi_mode,
-            self.ch_label,
-            self.ch_dropdown,
-            self.dev_label,
-            self.dev_dropdown,
-        ] {
-            if id >= 0 {
-                f(id);
-            }
-        }
-    }
+    id: [i32; N_CONTROLS],
 }
 
 impl Default for LayerRowIds {
     fn default() -> Self {
         Self {
-            bg: -1,
-            chevron: -1,
-            name: -1,
-            drag_handle: -1,
-            mute: -1,
-            solo: -1,
-            led: -1,
-            blend_mode: -1,
-            separator: -1,
-            info: -1,
-            accent_bar: -1,
-            connector: -1,
-            bottom_border: -1,
-            folder: -1,
-            path_label: -1,
-            new_clip: -1,
-            gen_type: -1,
-            add_gen_clip: -1,
-            midi_label: -1,
-            midi_input: -1,
-            midi_mode: -1,
-            ch_label: -1,
-            ch_dropdown: -1,
-            dev_label: -1,
-            dev_dropdown: -1,
+            id: [-1; N_CONTROLS],
+        }
+    }
+}
+
+impl LayerRowIds {
+    #[inline]
+    fn id(&self, c: LayerControl) -> i32 {
+        self.id[c.idx()]
+    }
+
+    #[inline]
+    fn set(&mut self, c: LayerControl, v: i32) {
+        self.id[c.idx()] = v;
+    }
+
+    /// Iterate all valid (>= 0) node IDs in this row.
+    fn for_each_id(&self, mut f: impl FnMut(i32)) {
+        for &id in &self.id {
+            if id >= 0 {
+                f(id);
+            }
         }
     }
 }
@@ -555,6 +639,30 @@ fn info_text(layer: &LayerInfo, all_layers: &[LayerInfo]) -> String {
 /// Offset a panel-local rect to screen space.
 fn screen(r: Rect, origin: Vec2) -> Rect {
     Rect::new(r.x + origin.x, r.y + origin.y, r.width, r.height)
+}
+
+// ── Gain (dB) mapping ───────────────────────────────────────────────
+// Shared by the audio-layer Gain slider; the same range will back master and
+// clip gain once those reuse the widget.
+
+const GAIN_DB_MIN: f32 = -60.0;
+const GAIN_DB_MAX: f32 = 12.0;
+
+/// Map a dB value to the slider's 0..1 normalized position. (The reverse,
+/// norm→dB, is handled inside `SliderDragState`, which is configured with the
+/// dB range directly.)
+fn gain_db_to_norm(db: f32) -> f32 {
+    ((db - GAIN_DB_MIN) / (GAIN_DB_MAX - GAIN_DB_MIN)).clamp(0.0, 1.0)
+}
+
+/// Human-readable value text for the gain slider (mixer style: signed dB, or
+/// "-inf" at the floor).
+fn gain_db_text(db: f32) -> String {
+    if db <= GAIN_DB_MIN {
+        "-inf".to_string()
+    } else {
+        format!("{:+.1} dB", db)
+    }
 }
 
 // ── LayerHeaderPanel ────────────────────────────────────────────────
@@ -599,6 +707,12 @@ pub struct LayerHeaderPanel {
     // Scroll offset is set externally via set_scroll_y() (synced with viewport).
     scroll: ScrollContainer,
 
+    // Per-row gain slider drag state (audio layers). Reuses the shared
+    // SliderDragState machine — same as the inspector/master sliders.
+    gain_sliders: Vec<crate::slider::SliderDragState>,
+    // Index of the layer whose gain slider is mid-drag, or -1.
+    active_gain_drag: i32,
+
     // Cache tracking
     cache_first_node: usize,
     cache_node_count: usize,
@@ -629,6 +743,8 @@ impl LayerHeaderPanel {
             panel_origin: Vec2::ZERO,
             panel_width: 0.0,
             scroll: ScrollContainer::new(),
+            gain_sliders: Vec::new(),
+            active_gain_drag: -1,
             cache_first_node: usize::MAX,
             cache_node_count: 0,
         }
@@ -726,27 +842,35 @@ impl LayerHeaderPanel {
     // ── Accessors ───────────────────────────────────────────────────
 
     pub fn blend_mode_node_id(&self, index: usize) -> i32 {
-        self.rows.get(index).map_or(-1, |r| r.blend_mode)
+        self.rows.get(index).map_or(-1, |r| r.id(LayerControl::Blend))
     }
 
     pub fn midi_channel_node_id(&self, index: usize) -> i32 {
-        self.rows.get(index).map_or(-1, |r| r.ch_dropdown)
+        self.rows
+            .get(index)
+            .map_or(-1, |r| r.id(LayerControl::ChDropdown))
     }
 
     pub fn midi_input_node_id(&self, index: usize) -> i32 {
-        self.rows.get(index).map_or(-1, |r| r.midi_input)
+        self.rows
+            .get(index)
+            .map_or(-1, |r| r.id(LayerControl::MidiInput))
     }
 
     pub fn midi_device_node_id(&self, index: usize) -> i32 {
-        self.rows.get(index).map_or(-1, |r| r.dev_dropdown)
+        self.rows
+            .get(index)
+            .map_or(-1, |r| r.id(LayerControl::DevDropdown))
     }
 
     pub fn midi_mode_node_id(&self, index: usize) -> i32 {
-        self.rows.get(index).map_or(-1, |r| r.midi_mode)
+        self.rows
+            .get(index)
+            .map_or(-1, |r| r.id(LayerControl::MidiMode))
     }
 
     pub fn name_node_id(&self, index: usize) -> i32 {
-        self.rows.get(index).map_or(-1, |r| r.name)
+        self.rows.get(index).map_or(-1, |r| r.id(LayerControl::Name))
     }
 
     pub fn get_node_bounds(&self, tree: &UITree, node_id: i32) -> Rect {
@@ -766,8 +890,9 @@ impl LayerHeaderPanel {
                 }
                 *cached = muted;
             }
-            if row.mute >= 0 {
-                tree.set_style(row.mute as u32, mute_style(muted));
+            let mute_id = row.id(LayerControl::Mute);
+            if mute_id >= 0 {
+                tree.set_style(mute_id as u32, mute_style(muted));
             }
         }
     }
@@ -780,8 +905,9 @@ impl LayerHeaderPanel {
                 }
                 *cached = solo;
             }
-            if row.solo >= 0 {
-                tree.set_style(row.solo as u32, solo_style(solo));
+            let solo_id = row.id(LayerControl::Solo);
+            if solo_id >= 0 {
+                tree.set_style(solo_id as u32, solo_style(solo));
             }
         }
     }
@@ -794,8 +920,9 @@ impl LayerHeaderPanel {
                 }
                 *cached = led;
             }
-            if row.led >= 0 {
-                tree.set_style(row.led as u32, led_style(led));
+            let led_id = row.id(LayerControl::Led);
+            if led_id >= 0 {
+                tree.set_style(led_id as u32, led_style(led));
             }
         }
     }
@@ -808,70 +935,78 @@ impl LayerHeaderPanel {
                 }
                 *cached = selected;
             }
-            if row.bg >= 0 {
+            let bg_id = row.id(LayerControl::Background);
+            if bg_id >= 0 {
                 let layer_color = self
                     .cached_colors
                     .get(index)
                     .copied()
                     .unwrap_or(Color32::TRANSPARENT);
-                tree.set_style(row.bg as u32, bg_style(selected, layer_color));
+                tree.set_style(bg_id as u32, bg_style(selected, layer_color));
             }
         }
     }
 
     pub fn set_layer_name(&mut self, tree: &mut UITree, index: usize, name: &str) {
-        if let Some(row) = self.rows.get(index)
-            && row.name >= 0
-        {
-            tree.set_text(row.name as u32, name);
+        if let Some(row) = self.rows.get(index) {
+            let id = row.id(LayerControl::Name);
+            if id >= 0 {
+                tree.set_text(id as u32, name);
+            }
         }
     }
 
     pub fn set_blend_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index)
-            && row.blend_mode >= 0
-        {
-            tree.set_text(row.blend_mode as u32, text);
+        if let Some(row) = self.rows.get(index) {
+            let id = row.id(LayerControl::Blend);
+            if id >= 0 {
+                tree.set_text(id as u32, text);
+            }
         }
     }
 
     pub fn set_midi_note_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index)
-            && row.midi_input >= 0
-        {
-            tree.set_text(row.midi_input as u32, text);
+        if let Some(row) = self.rows.get(index) {
+            let id = row.id(LayerControl::MidiInput);
+            if id >= 0 {
+                tree.set_text(id as u32, text);
+            }
         }
     }
 
     pub fn set_midi_channel_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index)
-            && row.ch_dropdown >= 0
-        {
-            tree.set_text(row.ch_dropdown as u32, text);
+        if let Some(row) = self.rows.get(index) {
+            let id = row.id(LayerControl::ChDropdown);
+            if id >= 0 {
+                tree.set_text(id as u32, text);
+            }
         }
     }
 
     pub fn set_midi_device_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index)
-            && row.dev_dropdown >= 0
-        {
-            tree.set_text(row.dev_dropdown as u32, text);
+        if let Some(row) = self.rows.get(index) {
+            let id = row.id(LayerControl::DevDropdown);
+            if id >= 0 {
+                tree.set_text(id as u32, text);
+            }
         }
     }
 
     pub fn set_midi_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index)
-            && row.midi_mode >= 0
-        {
-            tree.set_text(row.midi_mode as u32, text);
+        if let Some(row) = self.rows.get(index) {
+            let id = row.id(LayerControl::MidiMode);
+            if id >= 0 {
+                tree.set_text(id as u32, text);
+            }
         }
     }
 
     pub fn set_info_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index)
-            && row.info >= 0
-        {
-            tree.set_text(row.info as u32, text);
+        if let Some(row) = self.rows.get(index) {
+            let id = row.id(LayerControl::Info);
+            if id >= 0 {
+                tree.set_text(id as u32, text);
+            }
         }
     }
 
@@ -882,6 +1017,54 @@ impl LayerHeaderPanel {
         self.drag_source >= 0
     }
 
+    // ── Gain slider drag (audio layers) ───────────────────────────────
+
+    /// True while an audio-layer gain slider is mid-drag.
+    pub fn is_gain_dragging(&self) -> bool {
+        self.active_gain_drag >= 0
+    }
+
+    /// Try to begin a gain-slider drag on `node_id` at screen x `pos_x`.
+    /// Returns Snapshot + Changed actions if it hit an audio layer's gain track.
+    pub fn try_begin_gain_drag(&mut self, node_id: u32, pos_x: f32) -> Vec<PanelAction> {
+        for i in 0..self.gain_sliders.len() {
+            if let Some(val) = self.gain_sliders[i].try_start_drag(node_id, pos_x) {
+                self.active_gain_drag = i as i32;
+                return vec![
+                    PanelAction::AudioGainSnapshot(i),
+                    PanelAction::AudioGainChanged(i, val),
+                ];
+            }
+        }
+        Vec::new()
+    }
+
+    /// Continue the active gain drag; updates the slider visual and returns the
+    /// new dB value as a Changed action.
+    pub fn handle_gain_drag(&mut self, tree: &mut UITree, pos_x: f32) -> Vec<PanelAction> {
+        if self.active_gain_drag < 0 {
+            return Vec::new();
+        }
+        let i = self.active_gain_drag as usize;
+        if let Some(val) = self.gain_sliders[i].apply_drag(pos_x, tree, &gain_db_text) {
+            return vec![PanelAction::AudioGainChanged(i, val)];
+        }
+        Vec::new()
+    }
+
+    /// End the active gain drag; returns a Commit action for one undo step.
+    pub fn handle_gain_drag_end(&mut self) -> Vec<PanelAction> {
+        if self.active_gain_drag < 0 {
+            return Vec::new();
+        }
+        let i = self.active_gain_drag as usize;
+        self.active_gain_drag = -1;
+        if self.gain_sliders[i].end_drag() {
+            return vec![PanelAction::AudioGainCommit(i)];
+        }
+        Vec::new()
+    }
+
     /// Call when a drag begins on a layer header node.
     /// Returns PanelAction if the drag starts on a drag handle.
     pub fn handle_drag_begin(&mut self, tree: &mut UITree, node_id: u32) -> Vec<PanelAction> {
@@ -889,7 +1072,7 @@ impl LayerHeaderPanel {
         // Try exact node_id match first (works when no rebuild happened since PointerDown).
         let mut matched_index: Option<usize> = None;
         for (i, row) in self.rows.iter().enumerate() {
-            if id == row.drag_handle {
+            if id == row.id(LayerControl::DragHandle) {
                 matched_index = Some(i);
                 break;
             }
@@ -907,16 +1090,17 @@ impl LayerHeaderPanel {
         if let Some(i) = matched_index {
             self.drag_source = i as i32;
             self.drag_target = i as i32;
-            if let Some(row) = self.rows.get(i)
-                && row.bg >= 0
-            {
-                tree.set_style(
-                    row.bg as u32,
-                    UIStyle {
-                        bg_color: DRAG_SOURCE_DIM,
-                        ..UIStyle::default()
-                    },
-                );
+            if let Some(row) = self.rows.get(i) {
+                let bg_id = row.id(LayerControl::Background);
+                if bg_id >= 0 {
+                    tree.set_style(
+                        bg_id as u32,
+                        UIStyle {
+                            bg_color: DRAG_SOURCE_DIM,
+                            ..UIStyle::default()
+                        },
+                    );
+                }
             }
             return vec![PanelAction::LayerDragStarted(i)];
         }
@@ -978,16 +1162,17 @@ impl LayerHeaderPanel {
         self.hide_insert_indicator(tree);
 
         // Restore source layer appearance
-        if let Some(row) = self.rows.get(source)
-            && row.bg >= 0
-        {
-            let selected = self.cached_selected.get(source).copied().unwrap_or(false);
-            let layer_color = self
-                .cached_colors
-                .get(source)
-                .copied()
-                .unwrap_or(Color32::TRANSPARENT);
-            tree.set_style(row.bg as u32, bg_style(selected, layer_color));
+        if let Some(row) = self.rows.get(source) {
+            let bg_id = row.id(LayerControl::Background);
+            if bg_id >= 0 {
+                let selected = self.cached_selected.get(source).copied().unwrap_or(false);
+                let layer_color = self
+                    .cached_colors
+                    .get(source)
+                    .copied()
+                    .unwrap_or(Color32::TRANSPARENT);
+                tree.set_style(bg_id as u32, bg_style(selected, layer_color));
+            }
         }
 
         if source != target {
@@ -1061,431 +1246,401 @@ impl LayerHeaderPanel {
         origin: Vec2,
         clip_parent: i32,
     ) {
-        let ids = &mut self.rows[index];
+        use LayerControl as C;
         let s = |r: Rect| screen(r, origin);
-
-        // Background (full row interactive area, uses exact layer color)
-        let bg_r = s(row.background);
-        ids.bg = tree.add_button(
-            clip_parent,
-            bg_r.x,
-            bg_r.y,
-            bg_r.width,
-            bg_r.height,
-            bg_style(layer.is_selected, layer.color),
-            "",
-        ) as i32;
-
-        // Contrast text color for readability on the layer's background
+        // Contrast text color for readability on the layer's background.
         let text_clr = color::contrast_text_color(layer.color);
+        let mut ids = LayerRowIds::default();
 
-        // Group accent bar
-        if row.has_accent_bar {
-            let r = s(row.accent_bar);
-            ids.accent_bar = tree.add_panel(
-                clip_parent,
-                r.x,
-                r.y,
-                r.width,
-                r.height,
-                UIStyle {
-                    bg_color: ACCENT_COLOR,
-                    ..UIStyle::default()
-                },
-            ) as i32;
-        }
-
-        // Group connector
-        if row.has_connector {
-            let r = s(row.connector);
-            ids.connector = tree.add_panel(
-                clip_parent,
-                r.x,
-                r.y,
-                r.width,
-                r.height,
-                UIStyle {
-                    bg_color: ACCENT_COLOR,
-                    ..UIStyle::default()
-                },
-            ) as i32;
-        }
-
-        // Group bottom border
-        if row.has_bottom_border {
-            let r = s(row.bottom_border);
-            ids.bottom_border = tree.add_panel(
-                clip_parent,
-                r.x,
-                r.y,
-                r.width,
-                r.height,
-                UIStyle {
-                    bg_color: BORDER_CLR,
-                    ..UIStyle::default()
-                },
-            ) as i32;
-        }
-
-        // Chevron
-        if row.has_chevron {
-            let chev = if layer.is_collapsed {
-                "\u{25B6}"
-            } else {
-                "\u{25BC}"
+        // One build arm per control kind, shared by every layer type. Walk the
+        // descriptors in declaration (z) order; absent controls are skipped.
+        for &c in &C::ALL {
+            if !row.has(c) {
+                continue;
+            }
+            let r = s(row.rect(c));
+            let node: i32 = match c {
+                C::Background => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    bg_style(layer.is_selected, layer.color),
+                    "",
+                ) as i32,
+                C::AccentBar | C::Connector => tree.add_panel(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    UIStyle {
+                        bg_color: ACCENT_COLOR,
+                        ..UIStyle::default()
+                    },
+                ) as i32,
+                C::BottomBorder => tree.add_panel(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    UIStyle {
+                        bg_color: BORDER_CLR,
+                        ..UIStyle::default()
+                    },
+                ) as i32,
+                C::Chevron => {
+                    let chev = if layer.is_collapsed {
+                        "\u{25B6}"
+                    } else {
+                        "\u{25BC}"
+                    };
+                    tree.add_button(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        UIStyle {
+                            bg_color: Color32::TRANSPARENT,
+                            hover_bg_color: color::BUTTON_HIGHLIGHTED,
+                            pressed_bg_color: color::BUTTON_PRESSED,
+                            text_color: text_clr,
+                            font_size: SMALL_FONT,
+                            corner_radius: color::SMALL_RADIUS,
+                            text_align: TextAlign::Center,
+                            ..UIStyle::default()
+                        },
+                        chev,
+                    ) as i32
+                }
+                C::Name => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    UIStyle {
+                        bg_color: Color32::TRANSPARENT,
+                        hover_bg_color: color::LAYER_CHEVRON_HOVER,
+                        pressed_bg_color: color::LAYER_CHEVRON_PRESSED,
+                        text_color: text_clr,
+                        font_size: NAME_FONT,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                    &layer.name,
+                ) as i32,
+                C::DragHandle => {
+                    // Hamburger icon drawn as 3 horizontal bars.
+                    let handle = tree.add_button(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        UIStyle {
+                            bg_color: color::HANDLE_BG,
+                            hover_bg_color: color::BUTTON_HIGHLIGHTED,
+                            pressed_bg_color: color::BUTTON_PRESSED,
+                            corner_radius: LH_BTN_RADIUS,
+                            ..UIStyle::default()
+                        },
+                        "",
+                    ) as i32;
+                    let bar_w: f32 = 10.0;
+                    let bar_h: f32 = 1.5;
+                    let bar_x = r.x + (r.width - bar_w) * 0.5;
+                    let bar_style = UIStyle {
+                        bg_color: color::TEXT_ON_DARK,
+                        ..UIStyle::default()
+                    };
+                    for i in 0..3 {
+                        let bar_y = r.y + 4.5 + i as f32 * 4.0;
+                        tree.add_panel(handle, bar_x, bar_y, bar_w, bar_h, bar_style);
+                    }
+                    handle
+                }
+                C::GenType => {
+                    let gen_text = layer.generator_type.as_deref().unwrap_or("Unknown");
+                    tree.add_label(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        gen_text,
+                        UIStyle {
+                            text_color: text_clr,
+                            font_size: SMALL_FONT,
+                            text_align: TextAlign::Left,
+                            ..UIStyle::default()
+                        },
+                    ) as i32
+                }
+                C::Mute => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    mute_style(layer.is_muted),
+                    "M",
+                ) as i32,
+                C::Solo => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    solo_style(layer.is_solo),
+                    "S",
+                ) as i32,
+                C::Led => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    led_style(layer.is_led),
+                    "L",
+                ) as i32,
+                C::Blend => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    small_button_style(),
+                    &layer.blend_mode,
+                ) as i32,
+                C::Separator => {
+                    let sep_color = if layer.is_group {
+                        color::GROUP_SEPARATOR_COLOR
+                    } else {
+                        SEP_COLOR
+                    };
+                    tree.add_panel(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        UIStyle {
+                            bg_color: sep_color,
+                            ..UIStyle::default()
+                        },
+                    ) as i32
+                }
+                C::Info => {
+                    let info = info_text(layer, &self.layers);
+                    tree.add_label(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        &info,
+                        UIStyle {
+                            text_color: text_clr,
+                            font_size: SMALL_FONT,
+                            text_align: TextAlign::Left,
+                            ..UIStyle::default()
+                        },
+                    ) as i32
+                }
+                C::Folder => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    small_button_style(),
+                    "Folder",
+                ) as i32,
+                C::PathLabel => {
+                    let path_text =
+                        folder_path_text(&layer.video_folder_path, layer.source_clip_count);
+                    tree.add_label(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        &path_text,
+                        UIStyle {
+                            text_color: text_clr,
+                            font_size: SMALL_FONT,
+                            text_align: TextAlign::Left,
+                            ..UIStyle::default()
+                        },
+                    ) as i32
+                }
+                C::NewClip => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    small_button_style(),
+                    "+ new clip",
+                ) as i32,
+                C::MidiLabel => tree.add_label(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    "MIDI",
+                    UIStyle {
+                        text_color: text_clr,
+                        font_size: SMALL_FONT,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                ) as i32,
+                C::MidiInput => {
+                    let midi_text = if layer.midi_all_notes {
+                        "—".to_string()
+                    } else {
+                        note_number_to_name(layer.midi_note)
+                    };
+                    tree.add_button(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        field_style(),
+                        &midi_text,
+                    ) as i32
+                }
+                C::MidiMode => {
+                    let mode_text = if layer.midi_all_notes { "All" } else { "Note" };
+                    tree.add_button(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        small_button_style(),
+                        mode_text,
+                    ) as i32
+                }
+                C::ChLabel => tree.add_label(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    "CH",
+                    UIStyle {
+                        text_color: text_clr,
+                        font_size: SMALL_FONT,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                ) as i32,
+                C::ChDropdown => {
+                    let ch_text = if layer.midi_channel < 0 {
+                        "All".to_string()
+                    } else {
+                        format!("{}", layer.midi_channel + 1)
+                    };
+                    tree.add_button(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        small_button_style(),
+                        &ch_text,
+                    ) as i32
+                }
+                C::DevLabel => tree.add_label(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    "DEV",
+                    UIStyle {
+                        text_color: text_clr,
+                        font_size: SMALL_FONT,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                ) as i32,
+                C::DevDropdown => {
+                    let dev_text: &str = match layer.midi_device.as_deref() {
+                        None | Some("") => "All",
+                        Some(name) => name,
+                    };
+                    tree.add_button(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        small_button_style(),
+                        dev_text,
+                    ) as i32
+                }
+                C::AddGenClip => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    small_button_style(),
+                    "+ Clip",
+                ) as i32,
+                C::Gain => {
+                    // Reusable dB slider; its `track` node is the drag target we
+                    // address as the Gain control. The full node set is handed to
+                    // a SliderDragState so drag updates reuse the shared machine.
+                    let norm = gain_db_to_norm(layer.audio_gain_db);
+                    let value_text = gain_db_text(layer.audio_gain_db);
+                    let slider = crate::slider::BitmapSlider::build(
+                        tree,
+                        clip_parent,
+                        r,
+                        None,
+                        norm,
+                        &value_text,
+                        &crate::slider::SliderColors::default_slider(),
+                        SMALL_FONT,
+                        0.0,
+                    );
+                    let track = slider.track as i32;
+                    let mut gs = crate::slider::SliderDragState::with_range(
+                        GAIN_DB_MIN,
+                        GAIN_DB_MAX,
+                        false,
+                    );
+                    gs.set_ids(slider);
+                    self.gain_sliders[index] = gs;
+                    track
+                }
+                C::Send => {
+                    let send_text = layer.audio_send_name.as_deref().unwrap_or("No send");
+                    tree.add_button(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        small_button_style(),
+                        send_text,
+                    ) as i32
+                }
             };
-            let r = s(row.chevron);
-            ids.chevron = tree.add_button(
-                clip_parent,
-                r.x,
-                r.y,
-                r.width,
-                r.height,
-                UIStyle {
-                    bg_color: Color32::TRANSPARENT,
-                    hover_bg_color: color::BUTTON_HIGHLIGHTED,
-                    pressed_bg_color: color::BUTTON_PRESSED,
-                    text_color: text_clr,
-                    font_size: SMALL_FONT,
-                    corner_radius: color::SMALL_RADIUS,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
-                },
-                chev,
-            ) as i32;
+            ids.set(c, node);
         }
 
-        // Layer name
-        let nr = s(row.name);
-        ids.name = tree.add_button(
-            clip_parent,
-            nr.x,
-            nr.y,
-            nr.width,
-            nr.height,
-            UIStyle {
-                bg_color: Color32::TRANSPARENT,
-                hover_bg_color: color::LAYER_CHEVRON_HOVER,
-                pressed_bg_color: color::LAYER_CHEVRON_PRESSED,
-                text_color: text_clr,
-                font_size: NAME_FONT,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-            &layer.name,
-        ) as i32;
-
-        // Drag handle (hamburger icon drawn as 3 horizontal bars)
-        let dr = s(row.drag_handle);
-        ids.drag_handle = tree.add_button(
-            clip_parent,
-            dr.x,
-            dr.y,
-            dr.width,
-            dr.height,
-            UIStyle {
-                bg_color: color::HANDLE_BG,
-                hover_bg_color: color::BUTTON_HIGHLIGHTED,
-                pressed_bg_color: color::BUTTON_PRESSED,
-                corner_radius: LH_BTN_RADIUS,
-                ..UIStyle::default()
-            },
-            "",
-        ) as i32;
-        // Three horizontal bars: 10×1.5 each, centered in 18×18 button
-        let bar_w: f32 = 10.0;
-        let bar_h: f32 = 1.5;
-        let bar_x = dr.x + (dr.width - bar_w) * 0.5;
-        let bar_color = color::TEXT_ON_DARK;
-        let bar_style = UIStyle {
-            bg_color: bar_color,
-            ..UIStyle::default()
-        };
-        for i in 0..3 {
-            let bar_y = dr.y + 4.5 + i as f32 * 4.0;
-            tree.add_panel(ids.drag_handle, bar_x, bar_y, bar_w, bar_h, bar_style);
-        }
-
-        // Generator type label
-        if row.has_gen_type {
-            let gen_text = layer.generator_type.as_deref().unwrap_or("Unknown");
-            let r = s(row.gen_type);
-            ids.gen_type = tree.add_label(
-                clip_parent,
-                r.x,
-                r.y,
-                r.width,
-                r.height,
-                gen_text,
-                UIStyle {
-                    text_color: text_clr,
-                    font_size: SMALL_FONT,
-                    text_align: TextAlign::Left,
-                    ..UIStyle::default()
-                },
-            ) as i32;
-        }
-
-        // Mute button
-        let mr = s(row.mute);
-        ids.mute = tree.add_button(
-            clip_parent,
-            mr.x,
-            mr.y,
-            mr.width,
-            mr.height,
-            mute_style(layer.is_muted),
-            "M",
-        ) as i32;
-
-        // Solo button
-        let sr = s(row.solo);
-        ids.solo = tree.add_button(
-            clip_parent,
-            sr.x,
-            sr.y,
-            sr.width,
-            sr.height,
-            solo_style(layer.is_solo),
-            "S",
-        ) as i32;
-
-        // LED button — when enabled, this layer composites into the LED output
-        let lr = s(row.led);
-        ids.led = tree.add_button(
-            clip_parent,
-            lr.x,
-            lr.y,
-            lr.width,
-            lr.height,
-            led_style(layer.is_led),
-            "L",
-        ) as i32;
-
-        // Blend mode
-        let br = s(row.blend_mode);
-        ids.blend_mode = tree.add_button(
-            clip_parent,
-            br.x,
-            br.y,
-            br.width,
-            br.height,
-            small_button_style(),
-            &layer.blend_mode,
-        ) as i32;
-
-        // Separator — thicker for group layers
-        let sepr = s(row.separator);
-        let sep_color = if layer.is_group {
-            color::GROUP_SEPARATOR_COLOR
-        } else {
-            SEP_COLOR
-        };
-        ids.separator = tree.add_panel(
-            clip_parent,
-            sepr.x,
-            sepr.y,
-            sepr.width,
-            sepr.height,
-            UIStyle {
-                bg_color: sep_color,
-                ..UIStyle::default()
-            },
-        ) as i32;
-
-        // ── Expanded controls ──
-        if !row.has_expanded_controls {
-            return;
-        }
-
-        // Info label
-        let info = info_text(layer, &self.layers);
-        let ir = s(row.info);
-        ids.info = tree.add_label(
-            clip_parent,
-            ir.x,
-            ir.y,
-            ir.width,
-            ir.height,
-            &info,
-            UIStyle {
-                text_color: text_clr,
-                font_size: SMALL_FONT,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        ) as i32;
-
-        if row.has_video_controls {
-            // Folder button
-            let fr = s(row.folder);
-            ids.folder = tree.add_button(
-                clip_parent,
-                fr.x,
-                fr.y,
-                fr.width,
-                fr.height,
-                small_button_style(),
-                "Folder",
-            ) as i32;
-
-            // Path label
-            let path_text = folder_path_text(&layer.video_folder_path, layer.source_clip_count);
-            let pr = s(row.path_label);
-            ids.path_label = tree.add_label(
-                clip_parent,
-                pr.x,
-                pr.y,
-                pr.width,
-                pr.height,
-                &path_text,
-                UIStyle {
-                    text_color: text_clr,
-                    font_size: SMALL_FONT,
-                    text_align: TextAlign::Left,
-                    ..UIStyle::default()
-                },
-            ) as i32;
-
-            // +new clip button
-            let ncr = s(row.new_clip);
-            ids.new_clip = tree.add_button(
-                clip_parent,
-                ncr.x,
-                ncr.y,
-                ncr.width,
-                ncr.height,
-                small_button_style(),
-                "+ new clip",
-            ) as i32;
-        }
-
-        // MIDI controls — shared by video and generator
-        if row.has_video_controls || row.has_generator_controls {
-            // MIDI label + input
-            let mlr = s(row.midi_label);
-            ids.midi_label = tree.add_label(
-                clip_parent,
-                mlr.x,
-                mlr.y,
-                mlr.width,
-                mlr.height,
-                "MIDI",
-                UIStyle {
-                    text_color: text_clr,
-                    font_size: SMALL_FONT,
-                    text_align: TextAlign::Left,
-                    ..UIStyle::default()
-                },
-            ) as i32;
-
-            let midi_text = if layer.midi_all_notes {
-                "—".to_string()
-            } else {
-                note_number_to_name(layer.midi_note)
-            };
-            let mir = s(row.midi_input);
-            ids.midi_input = tree.add_button(
-                clip_parent,
-                mir.x,
-                mir.y,
-                mir.width,
-                mir.height,
-                field_style(),
-                &midi_text,
-            ) as i32;
-
-            // Trigger-mode toggle (Note ↔ All)
-            let mode_text = if layer.midi_all_notes { "All" } else { "Note" };
-            let mmr = s(row.midi_mode);
-            ids.midi_mode = tree.add_button(
-                clip_parent,
-                mmr.x,
-                mmr.y,
-                mmr.width,
-                mmr.height,
-                small_button_style(),
-                mode_text,
-            ) as i32;
-
-            // Channel label + dropdown
-            let clr = s(row.ch_label);
-            ids.ch_label = tree.add_label(
-                clip_parent,
-                clr.x,
-                clr.y,
-                clr.width,
-                clr.height,
-                "CH",
-                UIStyle {
-                    text_color: text_clr,
-                    font_size: SMALL_FONT,
-                    text_align: TextAlign::Left,
-                    ..UIStyle::default()
-                },
-            ) as i32;
-
-            let ch_text = if layer.midi_channel < 0 {
-                "All".to_string()
-            } else {
-                format!("{}", layer.midi_channel + 1)
-            };
-            let cdr = s(row.ch_dropdown);
-            ids.ch_dropdown = tree.add_button(
-                clip_parent,
-                cdr.x,
-                cdr.y,
-                cdr.width,
-                cdr.height,
-                small_button_style(),
-                &ch_text,
-            ) as i32;
-
-            // Per-layer device filter: label + dropdown
-            let dlr = s(row.dev_label);
-            ids.dev_label = tree.add_label(
-                clip_parent,
-                dlr.x,
-                dlr.y,
-                dlr.width,
-                dlr.height,
-                "DEV",
-                UIStyle {
-                    text_color: text_clr,
-                    font_size: SMALL_FONT,
-                    text_align: TextAlign::Left,
-                    ..UIStyle::default()
-                },
-            ) as i32;
-
-            let dev_text: &str = match layer.midi_device.as_deref() {
-                None | Some("") => "All",
-                Some(name) => name,
-            };
-            let ddr = s(row.dev_dropdown);
-            ids.dev_dropdown = tree.add_button(
-                clip_parent,
-                ddr.x,
-                ddr.y,
-                ddr.width,
-                ddr.height,
-                small_button_style(),
-                dev_text,
-            ) as i32;
-        }
-
-        if row.has_generator_controls {
-            let agr = s(row.add_gen_clip);
-            ids.add_gen_clip = tree.add_button(
-                clip_parent,
-                agr.x,
-                agr.y,
-                agr.width,
-                agr.height,
-                small_button_style(),
-                "+ Clip",
-            ) as i32;
-        }
+        self.rows[index] = ids;
     }
 
     fn handle_click(&self, node_id: u32, modifiers: crate::input::Modifiers) -> Vec<PanelAction> {
@@ -1502,45 +1657,33 @@ impl LayerHeaderPanel {
         if id == self.add_layer_btn && id >= 0 {
             return vec![PanelAction::AddLayerClicked];
         }
+        use LayerControl as C;
         for (i, row) in self.rows.iter().enumerate() {
-            if id == row.mute {
-                return vec![PanelAction::ToggleMute(i)];
-            }
-            if id == row.solo {
-                return vec![PanelAction::ToggleSolo(i)];
-            }
-            if id == row.led {
-                return vec![PanelAction::ToggleLed(i)];
-            }
-            if id == row.chevron {
-                return vec![PanelAction::ChevronClicked(i)];
-            }
-            if id == row.blend_mode {
-                return vec![PanelAction::BlendModeClicked(i)];
-            }
-            if id == row.folder {
-                return vec![PanelAction::FolderClicked(i)];
-            }
-            if id == row.new_clip {
-                return vec![PanelAction::NewClipClicked(i)];
-            }
-            if id == row.add_gen_clip {
-                return vec![PanelAction::AddGenClipClicked(i)];
-            }
-            if id == row.midi_input {
-                return vec![PanelAction::MidiInputClicked(i)];
-            }
-            if id == row.midi_mode {
-                return vec![PanelAction::MidiTriggerModeClicked(i)];
-            }
-            if id == row.ch_dropdown {
-                return vec![PanelAction::MidiChannelClicked(i)];
-            }
-            if id == row.dev_dropdown {
-                return vec![PanelAction::MidiDeviceClicked(i)];
-            }
-            if id == row.name || id == row.bg || id == row.drag_handle {
-                return vec![PanelAction::LayerClicked(i, modifiers)];
+            for &c in &C::ALL {
+                if row.id(c) != id {
+                    continue;
+                }
+                return match c {
+                    C::Mute => vec![PanelAction::ToggleMute(i)],
+                    C::Solo => vec![PanelAction::ToggleSolo(i)],
+                    C::Led => vec![PanelAction::ToggleLed(i)],
+                    C::Chevron => vec![PanelAction::ChevronClicked(i)],
+                    C::Blend => vec![PanelAction::BlendModeClicked(i)],
+                    C::Folder => vec![PanelAction::FolderClicked(i)],
+                    C::NewClip => vec![PanelAction::NewClipClicked(i)],
+                    C::AddGenClip => vec![PanelAction::AddGenClipClicked(i)],
+                    C::MidiInput => vec![PanelAction::MidiInputClicked(i)],
+                    C::MidiMode => vec![PanelAction::MidiTriggerModeClicked(i)],
+                    C::ChDropdown => vec![PanelAction::MidiChannelClicked(i)],
+                    C::DevDropdown => vec![PanelAction::MidiDeviceClicked(i)],
+                    C::Send => vec![PanelAction::AudioSendClicked(i)],
+                    C::Name | C::Background | C::DragHandle => {
+                        vec![PanelAction::LayerClicked(i, modifiers)]
+                    }
+                    // Labels, separators, accent visuals, and the gain track
+                    // (drag, not click) have no click action.
+                    _ => Vec::new(),
+                };
             }
         }
         Vec::new()
@@ -1549,7 +1692,7 @@ impl LayerHeaderPanel {
     fn handle_double_click(&self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
         for (i, row) in self.rows.iter().enumerate() {
-            if id == row.name {
+            if id == row.id(LayerControl::Name) {
                 return vec![PanelAction::LayerDoubleClicked(i)];
             }
         }
@@ -1690,6 +1833,12 @@ impl Panel for LayerHeaderPanel {
         let layer_count = self.layers.len();
         self.rows.clear();
         self.rows.resize(layer_count, LayerRowIds::default());
+        // Gain slider node IDs are invalidated by the rebuild; reset and
+        // re-populate per audio row in build_layer_row.
+        self.active_gain_drag = -1;
+        self.gain_sliders.clear();
+        self.gain_sliders
+            .resize_with(layer_count, crate::slider::SliderDragState::default);
         // Only resize cached state vectors if layer count changed —
         // preserve existing values to keep dirty-check logic correct.
         self.cached_mute.resize(layer_count, false);
@@ -1730,6 +1879,7 @@ impl Panel for LayerHeaderPanel {
                 layer.is_collapsed,
                 layer.is_group,
                 layer.is_generator,
+                layer.is_audio,
                 is_child,
                 is_last_child,
                 layer.is_group && !layer.is_collapsed,
@@ -1827,10 +1977,15 @@ impl Panel for LayerHeaderPanel {
             // Do NOT return LayerClicked here: that triggers a structural rebuild
             // which invalidates node IDs before DragBegin fires, breaking drag.
             // Selection happens on Click (release) instead — acceptable for drag handles.
-            UIEvent::PointerDown { node_id, .. } => {
+            UIEvent::PointerDown { node_id, pos, .. } => {
+                // Audio-layer gain slider: begin drag if the press hit its track.
+                let gain = self.try_begin_gain_drag(*node_id, pos.x);
+                if !gain.is_empty() {
+                    return gain;
+                }
                 let id = *node_id as i32;
                 for (i, row) in self.rows.iter().enumerate() {
-                    if id == row.drag_handle {
+                    if id == row.id(LayerControl::DragHandle) {
                         self.pending_drag_layer = i as i32;
                         return Vec::new();
                     }
@@ -1860,6 +2015,7 @@ mod tests {
             is_collapsed: false,
             is_group: false,
             is_generator: false,
+            is_audio: false,
             is_muted: false,
             is_solo: false,
             is_led: false,
@@ -1873,10 +2029,20 @@ mod tests {
             midi_channel: -1,
             midi_device: None,
             midi_all_notes: false,
+            audio_gain_db: 0.0,
+            audio_send_name: None,
             y_offset,
             height,
             is_selected: false,
             color: Color32::new(100, 148, 210, 220),
+        }
+    }
+
+    fn make_audio_layer(name: &str, y_offset: f32, height: f32) -> LayerInfo {
+        LayerInfo {
+            is_audio: true,
+            audio_send_name: Some("Drums".into()),
+            ..make_video_layer(name, y_offset, height)
         }
     }
 
@@ -1913,18 +2079,18 @@ mod tests {
         assert_eq!(panel.layer_count(), 3);
         // All layers should have bg, name, mute, solo, blend_mode
         for i in 0..3 {
-            assert!(panel.rows[i].bg >= 0, "layer {} bg", i);
-            assert!(panel.rows[i].name >= 0, "layer {} name", i);
-            assert!(panel.rows[i].mute >= 0, "layer {} mute", i);
-            assert!(panel.rows[i].solo >= 0, "layer {} solo", i);
-            assert!(panel.rows[i].blend_mode >= 0, "layer {} blend", i);
+            assert!(panel.rows[i].id(LayerControl::Background) >= 0, "layer {} bg", i);
+            assert!(panel.rows[i].id(LayerControl::Name) >= 0, "layer {} name", i);
+            assert!(panel.rows[i].id(LayerControl::Mute) >= 0, "layer {} mute", i);
+            assert!(panel.rows[i].id(LayerControl::Solo) >= 0, "layer {} solo", i);
+            assert!(panel.rows[i].id(LayerControl::Blend) >= 0, "layer {} blend", i);
         }
         // Generator layer should have gen_type and add_gen_clip
-        assert!(panel.rows[2].gen_type >= 0);
-        assert!(panel.rows[2].add_gen_clip >= 0);
+        assert!(panel.rows[2].id(LayerControl::GenType) >= 0);
+        assert!(panel.rows[2].id(LayerControl::AddGenClip) >= 0);
         // Video layers should have folder and new_clip
-        assert!(panel.rows[0].folder >= 0);
-        assert!(panel.rows[0].new_clip >= 0);
+        assert!(panel.rows[0].id(LayerControl::Folder) >= 0);
+        assert!(panel.rows[0].id(LayerControl::NewClip) >= 0);
         // Insert indicator
         assert!(panel.insert_indicator_id >= 0);
     }
@@ -1937,11 +2103,17 @@ mod tests {
         panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
         panel.build(&mut tree, &layout);
 
-        let a = panel.handle_click(panel.rows[0].mute as u32, crate::input::Modifiers::NONE);
+        let a = panel.handle_click(
+            panel.rows[0].id(LayerControl::Mute) as u32,
+            crate::input::Modifiers::NONE,
+        );
         assert_eq!(a.len(), 1);
         assert!(matches!(a[0], PanelAction::ToggleMute(0)));
 
-        let a = panel.handle_click(panel.rows[0].solo as u32, crate::input::Modifiers::NONE);
+        let a = panel.handle_click(
+            panel.rows[0].id(LayerControl::Solo) as u32,
+            crate::input::Modifiers::NONE,
+        );
         assert_eq!(a.len(), 1);
         assert!(matches!(a[0], PanelAction::ToggleSolo(0)));
     }
@@ -1954,7 +2126,10 @@ mod tests {
         panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
         panel.build(&mut tree, &layout);
 
-        let a = panel.handle_click(panel.rows[0].chevron as u32, crate::input::Modifiers::NONE);
+        let a = panel.handle_click(
+            panel.rows[0].id(LayerControl::Chevron) as u32,
+            crate::input::Modifiers::NONE,
+        );
         assert!(matches!(a[0], PanelAction::ChevronClicked(0)));
     }
 
@@ -1990,10 +2165,10 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         // Group has connector
-        assert!(panel.rows[0].connector >= 0);
+        assert!(panel.rows[0].id(LayerControl::Connector) >= 0);
         // Child has accent bar and bottom border (last child)
-        assert!(panel.rows[1].accent_bar >= 0);
-        assert!(panel.rows[1].bottom_border >= 0);
+        assert!(panel.rows[1].id(LayerControl::AccentBar) >= 0);
+        assert!(panel.rows[1].id(LayerControl::BottomBorder) >= 0);
     }
 
     #[test]
@@ -2023,14 +2198,14 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         // Collapsed layer should NOT have folder, new_clip, midi controls
-        assert_eq!(panel.rows[0].folder, -1);
-        assert_eq!(panel.rows[0].new_clip, -1);
-        assert_eq!(panel.rows[0].midi_input, -1);
-        assert_eq!(panel.rows[0].ch_dropdown, -1);
+        assert_eq!(panel.rows[0].id(LayerControl::Folder), -1);
+        assert_eq!(panel.rows[0].id(LayerControl::NewClip), -1);
+        assert_eq!(panel.rows[0].id(LayerControl::MidiInput), -1);
+        assert_eq!(panel.rows[0].id(LayerControl::ChDropdown), -1);
         // But should still have mute/solo/blend
-        assert!(panel.rows[0].mute >= 0);
-        assert!(panel.rows[0].solo >= 0);
-        assert!(panel.rows[0].blend_mode >= 0);
+        assert!(panel.rows[0].id(LayerControl::Mute) >= 0);
+        assert!(panel.rows[0].id(LayerControl::Solo) >= 0);
+        assert!(panel.rows[0].id(LayerControl::Blend) >= 0);
     }
 
     #[test]
@@ -2042,7 +2217,7 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         let event = UIEvent::DoubleClick {
-            node_id: panel.rows[0].name as u32,
+            node_id: panel.rows[0].id(LayerControl::Name) as u32,
             pos: Vec2::ZERO,
             modifiers: crate::input::Modifiers::default(),
         };
@@ -2057,5 +2232,234 @@ mod tests {
         assert_eq!(panel.blend_mode_node_id(0), -1);
         assert_eq!(panel.midi_channel_node_id(99), -1);
         assert_eq!(panel.name_node_id(0), -1);
+    }
+
+    // ── Layout equivalence gate ─────────────────────────────────────
+    //
+    // Frozen, independent copy of the card geometry captured at the
+    // descriptor refactor. The live `compute_layer_row` is asserted equal to
+    // this oracle rect-for-rect for every layer type. If a future edit drifts
+    // the live geometry, this frozen copy disagrees and the gate fails —
+    // exactly the "descriptor layout equals old compute_layer_row" guard the
+    // design calls for.
+    #[allow(clippy::too_many_arguments)]
+    fn oracle_row(
+        y_offset: f32,
+        height: f32,
+        panel_width: f32,
+        is_collapsed: bool,
+        is_group: bool,
+        is_generator: bool,
+        is_audio: bool,
+        is_child: bool,
+        is_last_child: bool,
+        is_group_expanded: bool,
+    ) -> LayerRowData {
+        use LayerControl as C;
+        let mut d = LayerRowData::default();
+        let w = if panel_width > 0.0 {
+            panel_width
+        } else {
+            color::LAYER_CONTROLS_WIDTH
+        };
+        d.set(C::Background, Rect::new(0.0, y_offset, w, height));
+        let left_indent = if is_child { CHILD_INDENT } else { 0.0 };
+        let pad = PAD + left_indent;
+        let mut y = y_offset + PAD;
+        if is_child {
+            d.set(C::AccentBar, Rect::new(0.0, y_offset, ACCENT_W, height));
+        }
+        if is_group && is_group_expanded {
+            d.set(
+                C::Connector,
+                Rect::new(0.0, y_offset + height * 0.5, ACCENT_W, height * 0.5),
+            );
+        }
+        if is_child && is_last_child {
+            d.set(
+                C::BottomBorder,
+                Rect::new(0.0, y_offset + height - BORDER_H, w, BORDER_H),
+            );
+        }
+        let chevron_w = CHEVRON_W;
+        d.set(C::Chevron, Rect::new(pad, y, CHEVRON_W, BTN_H));
+        let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
+        let handle_x = w - pad - HANDLE_W - 8.0;
+        let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
+        d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
+        d.set(C::DragHandle, Rect::new(handle_x, y, HANDLE_W, BTN_H));
+        y += ROW_STEP;
+        if is_generator {
+            let gen_w = w - name_left - pad;
+            d.set(C::GenType, Rect::new(name_left, y, gen_w, GEN_TYPE_H));
+            y += GEN_TYPE_H;
+        }
+        let mut btn_x = pad;
+        d.set(C::Mute, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
+        btn_x += MS_BTN_W + 2.0;
+        d.set(C::Solo, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
+        btn_x += MS_BTN_W + 2.0;
+        if is_audio {
+            let mut ay = y + BTN_H + 2.0;
+            let right_edge = w - pad - RIGHT_GUTTER;
+            d.set(C::Gain, Rect::new(pad, ay, (right_edge - pad).max(20.0), BTN_H));
+            ay += ROW_STEP;
+            d.set(C::Send, Rect::new(pad, ay, (right_edge - pad).max(20.0), BTN_H));
+            d.set(
+                C::Separator,
+                Rect::new(0.0, y_offset + height - SEP_H, w, SEP_H),
+            );
+            return d;
+        }
+        d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
+        btn_x += MS_BTN_W + 4.0;
+        let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
+        d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
+        y += BTN_H + 2.0;
+        let sep_h = if is_group {
+            color::GROUP_SEPARATOR_HEIGHT
+        } else {
+            SEP_H
+        };
+        if is_collapsed && !is_group {
+            d.set(
+                C::Separator,
+                Rect::new(0.0, y_offset + height - sep_h, w, sep_h),
+            );
+            return d;
+        }
+        d.set(C::Info, Rect::new(pad, y, w - pad * 2.0, INFO_H));
+        y += 16.0;
+        if is_group {
+            y += 2.0;
+        } else if is_generator {
+            d.set(C::AddGenClip, Rect::new(pad, y, ADD_GEN_W, BTN_H));
+            y += BTN_H + 2.0;
+            d.set(C::MidiLabel, Rect::new(pad, y, MIDI_LBL_W, BTN_H));
+            let gen_midi_x = pad + MIDI_LBL_W + 2.0;
+            let right_edge = w - pad - RIGHT_GUTTER;
+            let mode_x = right_edge - MODE_TOGGLE_W;
+            d.set(
+                C::MidiInput,
+                Rect::new(gen_midi_x, y, (mode_x - 4.0 - gen_midi_x).max(10.0), BTN_H),
+            );
+            d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
+            y += ROW_STEP;
+            d.set(C::ChLabel, Rect::new(pad, y, CH_LBL_W, BTN_H));
+            let gen_ch_x = pad + CH_LBL_W + 2.0;
+            let ch_w = 44.0;
+            d.set(C::ChDropdown, Rect::new(gen_ch_x, y, ch_w, BTN_H));
+            let dev_lbl_x = gen_ch_x + ch_w + 6.0;
+            d.set(C::DevLabel, Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H));
+            let dev_x = dev_lbl_x + DEV_LBL_W + 2.0;
+            d.set(
+                C::DevDropdown,
+                Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H),
+            );
+        } else {
+            d.set(C::Folder, Rect::new(pad, y, FOLDER_W, BTN_H));
+            let path_left = pad + FOLDER_W + 4.0;
+            let new_clip_x = w - pad - NEW_CLIP_W;
+            let path_w = (new_clip_x - path_left - 4.0).max(10.0);
+            d.set(C::PathLabel, Rect::new(path_left, y, path_w, BTN_H));
+            d.set(C::NewClip, Rect::new(new_clip_x, y, NEW_CLIP_W, BTN_H));
+            y += ROW_STEP;
+            d.set(C::MidiLabel, Rect::new(pad, y, MIDI_LBL_W, BTN_H));
+            let midi_x = pad + MIDI_LBL_W + 2.0;
+            let right_edge = w - pad - RIGHT_GUTTER;
+            let mode_x = right_edge - MODE_TOGGLE_W;
+            d.set(
+                C::MidiInput,
+                Rect::new(midi_x, y, (mode_x - 4.0 - midi_x).max(10.0), BTN_H),
+            );
+            d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
+            y += ROW_STEP;
+            d.set(C::ChLabel, Rect::new(pad, y, CH_LBL_W, BTN_H));
+            let ch_x = pad + CH_LBL_W + 2.0;
+            let ch_w = 44.0;
+            d.set(C::ChDropdown, Rect::new(ch_x, y, ch_w, BTN_H));
+            let dev_lbl_x = ch_x + ch_w + 6.0;
+            d.set(C::DevLabel, Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H));
+            let dev_x = dev_lbl_x + DEV_LBL_W + 2.0;
+            d.set(
+                C::DevDropdown,
+                Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H),
+            );
+        }
+        let _ = y;
+        d.set(
+            C::Separator,
+            Rect::new(0.0, y_offset + height - sep_h, w, sep_h),
+        );
+        d
+    }
+
+    fn assert_row_eq(a: &LayerRowData, b: &LayerRowData, case: &str) {
+        for &c in &LayerControl::ALL {
+            assert_eq!(a.has(c), b.has(c), "{case}: presence of {c:?}");
+            if a.has(c) {
+                assert_eq!(a.rect(c), b.rect(c), "{case}: rect of {c:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn layout_matches_frozen_oracle() {
+        // (is_collapsed, is_group, is_generator, is_audio, is_child, is_last, is_grp_exp, label)
+        let cases = [
+            (false, false, false, false, false, false, false, "video"),
+            (false, false, true, false, false, false, false, "generator"),
+            (false, true, false, false, false, false, true, "group"),
+            (true, false, false, false, false, false, false, "collapsed-video"),
+            (true, false, true, false, false, false, false, "collapsed-gen"),
+            (false, false, false, false, true, true, false, "child-last"),
+            (false, false, false, true, false, false, false, "audio"),
+        ];
+        for (coll, grp, genr, aud, child, last, gexp, label) in cases {
+            let live = compute_layer_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp);
+            let oracle = oracle_row(0.0, 140.0, 300.0, coll, grp, genr, aud, child, last, gexp);
+            assert_row_eq(&live, &oracle, label);
+        }
+    }
+
+    #[test]
+    fn audio_card_controls() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+        panel.set_layers(vec![make_audio_layer("Drums In", 0.0, 140.0)]);
+        panel.build(&mut tree, &layout);
+
+        // Audio layers expose Mute / Solo / Gain / Send …
+        assert!(panel.rows[0].id(LayerControl::Mute) >= 0);
+        assert!(panel.rows[0].id(LayerControl::Solo) >= 0);
+        assert!(panel.rows[0].id(LayerControl::Gain) >= 0);
+        assert!(panel.rows[0].id(LayerControl::Send) >= 0);
+        // … and none of the video/generator/LED/blend controls.
+        assert_eq!(panel.rows[0].id(LayerControl::Led), -1);
+        assert_eq!(panel.rows[0].id(LayerControl::Blend), -1);
+        assert_eq!(panel.rows[0].id(LayerControl::Folder), -1);
+        assert_eq!(panel.rows[0].id(LayerControl::MidiInput), -1);
+
+        // Send is click-routable to its picker.
+        let a = panel.handle_click(
+            panel.rows[0].id(LayerControl::Send) as u32,
+            crate::input::Modifiers::NONE,
+        );
+        assert!(matches!(a.as_slice(), [PanelAction::AudioSendClicked(0)]));
+    }
+
+    #[test]
+    fn gain_db_mapping() {
+        assert!((gain_db_to_norm(GAIN_DB_MIN) - 0.0).abs() < 1e-6);
+        assert!((gain_db_to_norm(GAIN_DB_MAX) - 1.0).abs() < 1e-6);
+        // 0 dB sits proportionally between the floor and ceiling.
+        let expected = (0.0 - GAIN_DB_MIN) / (GAIN_DB_MAX - GAIN_DB_MIN);
+        assert!((gain_db_to_norm(0.0) - expected).abs() < 1e-6);
+        // Out-of-range clamps.
+        assert_eq!(gain_db_to_norm(-200.0), 0.0);
+        assert_eq!(gain_db_to_norm(200.0), 1.0);
+        assert_eq!(gain_db_text(-60.0), "-inf");
+        assert_eq!(gain_db_text(0.0), "+0.0 dB");
     }
 }

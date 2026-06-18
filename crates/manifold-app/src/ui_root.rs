@@ -112,6 +112,7 @@ pub enum DropdownContext {
     AudioInputDevice,         // audio input device selection for live recording
     AudioSetupDevice,         // Audio Setup modal: capture input source
     AudioSendChannel(manifold_core::AudioSendId), // Audio Setup: a send's input channel
+    LayerAudioSend(usize),                        // audio layer header: pick which send it feeds
 }
 
 /// A selectable entry in the Audio Setup source dropdown. The dropdown mixes the
@@ -258,6 +259,9 @@ pub struct UIRoot {
     /// dropdown. `None` entries are non-selectable subdevice headers; the
     /// channel dropdown is built grouped, so item index ≠ channel index.
     audio_channel_item_map: Vec<Option<u16>>,
+    /// Item-index → send-id map for the currently-open layer Send dropdown.
+    /// Index 0 is "No send" (`None`); the rest map to a named send.
+    layer_send_map: Vec<Option<manifold_core::AudioSendId>>,
 
     // Inspector resize state
     pub inspector_resize_dragging: bool,
@@ -364,6 +368,7 @@ impl UIRoot {
             audio_setup_apps: Vec::new(),
             audio_setup_source_map: Vec::new(),
             audio_channel_item_map: Vec::new(),
+            layer_send_map: Vec::new(),
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
@@ -1162,6 +1167,11 @@ impl UIRoot {
                         let mut lh_actions = self.layer_headers.handle_drag(&mut self.tree, *pos);
                         actions.append(&mut lh_actions);
                     }
+                    if self.layer_headers.is_gain_dragging() {
+                        let mut g_actions =
+                            self.layer_headers.handle_gain_drag(&mut self.tree, pos.x);
+                        actions.append(&mut g_actions);
+                    }
                 }
                 UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                     if self.inspector.is_card_drag_active() {
@@ -1174,6 +1184,10 @@ impl UIRoot {
                     if self.layer_headers.is_dragging() {
                         let mut lh_actions = self.layer_headers.handle_drag_end(&mut self.tree);
                         actions.append(&mut lh_actions);
+                    }
+                    if self.layer_headers.is_gain_dragging() {
+                        let mut g_actions = self.layer_headers.handle_gain_drag_end();
+                        actions.append(&mut g_actions);
                     }
                 }
                 _ => {}
@@ -1218,6 +1232,22 @@ impl UIRoot {
                     .map(|m| DropdownItem::new(m.display_name()))
                     .collect();
                 self.open_dropdown_at(DropdownContext::BlendMode(*idx), items, trigger);
+                true
+            }
+            PanelAction::AudioSendClicked(idx) => {
+                // "No send" first, then every named send from Audio Setup so the
+                // layer dropdown and the setup panel can never disagree.
+                let sends = self.audio_setup_panel.send_options();
+                let mut items = Vec::with_capacity(sends.len() + 1);
+                let mut map: Vec<Option<manifold_core::AudioSendId>> = Vec::with_capacity(sends.len() + 1);
+                items.push(DropdownItem::new("No send"));
+                map.push(None);
+                for (id, label) in sends {
+                    items.push(DropdownItem::new(&label));
+                    map.push(Some(id));
+                }
+                self.layer_send_map = map;
+                self.open_dropdown_at(DropdownContext::LayerAudioSend(*idx), items, trigger);
                 true
             }
             PanelAction::AddEffectClicked(tab) => {
@@ -1803,6 +1833,11 @@ impl UIRoot {
                         PanelAction::AudioSetSendChannels(send_id, channels)
                     })
             }
+            DropdownContext::LayerAudioSend(layer_idx) => self
+                .layer_send_map
+                .get(index)
+                .cloned()
+                .map(|send_id| PanelAction::SetLayerAudioSend(layer_idx, send_id)),
             DropdownContext::CardContext(gpt) => {
                 // Label-matched: Copy/Paste are generator-only + conditional, so
                 // item indices shift — match the label, not a fixed position.

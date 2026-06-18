@@ -477,6 +477,47 @@ pub(super) fn dispatch_inspector(
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
+        // ── Audio-layer gain slider (layer header) ─────────────────
+        PanelAction::AudioGainSnapshot(idx) => {
+            *drag_snapshot = project
+                .timeline
+                .layers
+                .get(*idx)
+                .map(|l| l.audio_gain_db);
+            DispatchResult::handled()
+        }
+        PanelAction::AudioGainChanged(idx, db) => {
+            let db = *db;
+            if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+                layer.audio_gain_db = db;
+                let id = layer.layer_id.clone();
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::MutateProjectLive(Box::new(move |p| {
+                        if let Some((_, l)) = p.timeline.find_layer_by_id_mut(&id) {
+                            l.audio_gain_db = db;
+                        }
+                    })),
+                );
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AudioGainCommit(idx) => {
+            if let Some(old_db) = drag_snapshot.take()
+                && let Some(layer) = project.timeline.layers.get(*idx)
+            {
+                let new_db = layer.audio_gain_db;
+                if (old_db - new_db).abs() > f32::EPSILON {
+                    let cmd = manifold_editing::commands::layer::SetLayerAudioGainCommand::new(
+                        layer.layer_id.clone(),
+                        old_db,
+                        new_db,
+                    );
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            DispatchResult::handled()
+        }
         PanelAction::MasterCollapseToggle => {
             ui.inspector.master_chrome_mut().toggle_collapsed();
             DispatchResult::structural()
