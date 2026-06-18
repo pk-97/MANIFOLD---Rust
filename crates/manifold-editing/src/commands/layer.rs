@@ -411,3 +411,46 @@ impl Command for DuplicateLayersCommand {
         "Duplicate Layers"
     }
 }
+
+/// Set an audio layer's output gain (decibels). The track fader for an audio
+/// layer; applied to its kira playback handle. See `docs/AUDIO_LAYER_DESIGN.md`.
+#[derive(Debug)]
+pub struct SetLayerAudioGainCommand {
+    layer_id: LayerId,
+    old_db: f32,
+    new_db: f32,
+}
+
+impl SetLayerAudioGainCommand {
+    pub fn new(layer_id: LayerId, old_db: f32, new_db: f32) -> Self {
+        Self { layer_id, old_db, new_db }
+    }
+}
+
+impl Command for SetLayerAudioGainCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(layer) = project
+            .timeline
+            .layers
+            .iter_mut()
+            .find(|l| l.layer_id == self.layer_id)
+        {
+            layer.audio_gain_db = self.new_db;
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(layer) = project
+            .timeline
+            .layers
+            .iter_mut()
+            .find(|l| l.layer_id == self.layer_id)
+        {
+            layer.audio_gain_db = self.old_db;
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Set Audio Layer Gain"
+    }
+}

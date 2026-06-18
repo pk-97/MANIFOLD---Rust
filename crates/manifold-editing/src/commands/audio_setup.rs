@@ -8,8 +8,8 @@
 //! (id minted at construction) so execute/undo are deterministic.
 
 use crate::command::Command;
-use manifold_core::audio_setup::{AudioDeviceRef, AudioSend, SendAnalysisConfig};
-use manifold_core::id::AudioSendId;
+use manifold_core::audio_setup::{AudioDeviceRef, AudioSend, AudioSendSource, SendAnalysisConfig};
+use manifold_core::id::{AudioSendId, LayerId};
 use manifold_core::project::Project;
 
 /// Set (or clear) the input device. `None` = system default input.
@@ -268,6 +268,79 @@ impl Command for SetAudioSendAnalysisCommand {
     }
 }
 
+/// Route a send's signal source — capture downmix (the default) or a timeline
+/// audio layer. Binding to a layer clears any other send that was pointing at
+/// the same layer (one layer → one send); both the new binding and the cleared
+/// one(s) are captured so undo restores the exact prior routing. This is the
+/// single mutation path for the layer↔send binding the layer header edits.
+#[derive(Debug)]
+pub struct SetAudioSendSourceCommand {
+    id: AudioSendId,
+    new: AudioSendSource,
+    /// The target send's source before this command (captured on execute).
+    old_target: Option<AudioSendSource>,
+    /// Other sends whose layer binding was cleared, with their prior source.
+    cleared: Vec<(AudioSendId, AudioSendSource)>,
+}
+
+impl SetAudioSendSourceCommand {
+    pub fn new(id: AudioSendId, new: AudioSendSource) -> Self {
+        Self { id, new, old_target: None, cleared: Vec::new() }
+    }
+
+    /// Convenience: bind `send` to be fed by `layer`.
+    pub fn to_layer(send: AudioSendId, layer: LayerId) -> Self {
+        Self::new(send, AudioSendSource::Layer(layer))
+    }
+
+    /// Convenience: revert `send` to a capture source.
+    pub fn to_capture(send: AudioSendId) -> Self {
+        Self::new(send, AudioSendSource::Capture)
+    }
+}
+
+impl Command for SetAudioSendSourceCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let setup = &mut project.audio_setup;
+        self.old_target = setup.find_send(&self.id).map(|s| s.source.clone());
+        self.cleared.clear();
+        match &self.new {
+            AudioSendSource::Layer(layer) => {
+                // Capture the sends that bind_send_to_layer will clear, for undo.
+                for s in &setup.sends {
+                    if s.id != self.id && s.layer_source() == Some(layer) {
+                        self.cleared.push((s.id.clone(), s.source.clone()));
+                    }
+                }
+                setup.bind_send_to_layer(&self.id, layer.clone());
+            }
+            AudioSendSource::Capture => {
+                if let Some(s) = setup.find_send_mut(&self.id) {
+                    s.source = AudioSendSource::Capture;
+                }
+            }
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let setup = &mut project.audio_setup;
+        for (id, src) in self.cleared.drain(..) {
+            if let Some(s) = setup.find_send_mut(&id) {
+                s.source = src;
+            }
+        }
+        if let Some(old) = self.old_target.take()
+            && let Some(s) = setup.find_send_mut(&self.id)
+        {
+            s.source = old;
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Set Audio Send Source"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +404,34 @@ mod tests {
         cmd.undo(&mut project);
         assert_eq!(project.audio_setup.low_hz, 250.0);
         assert_eq!(project.audio_setup.mid_hz, 2000.0);
+    }
+
+    #[test]
+    fn send_source_binds_layer_and_clears_other_then_undoes() {
+        use manifold_core::id::LayerId;
+        let mut project = Project::default();
+        let a = AudioSend::new("A");
+        let b = AudioSend::new("B");
+        let a_id = a.id.clone();
+        let b_id = b.id.clone();
+        let layer = LayerId::new("L1");
+        project.audio_setup.sends = vec![a, b];
+
+        // Bind A to the layer.
+        let mut c1 = SetAudioSendSourceCommand::to_layer(a_id.clone(), layer.clone());
+        c1.execute(&mut project);
+        assert_eq!(project.audio_setup.find_send(&a_id).unwrap().layer_source(), Some(&layer));
+
+        // Bind B to the SAME layer — A must be cleared back to capture.
+        let mut c2 = SetAudioSendSourceCommand::to_layer(b_id.clone(), layer.clone());
+        c2.execute(&mut project);
+        assert_eq!(project.audio_setup.find_send(&b_id).unwrap().layer_source(), Some(&layer));
+        assert!(!project.audio_setup.find_send(&a_id).unwrap().is_layer_fed());
+
+        // Undo c2 restores A's binding and clears B.
+        c2.undo(&mut project);
+        assert_eq!(project.audio_setup.find_send(&a_id).unwrap().layer_source(), Some(&layer));
+        assert!(!project.audio_setup.find_send(&b_id).unwrap().is_layer_fed());
     }
 
     #[test]

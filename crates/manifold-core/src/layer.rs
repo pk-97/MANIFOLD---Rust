@@ -67,6 +67,13 @@ pub struct Layer {
     // ── Effects ──
     #[serde(default = "default_one")]
     pub opacity: f32,
+
+    // ── Audio layer (LayerType::Audio) ──
+    /// Per-layer audio output gain in **decibels** (0 dB = unity), applied to
+    /// this audio layer's playback. The track fader; meaningless on non-audio
+    /// layers. See `docs/AUDIO_LAYER_DESIGN.md`.
+    #[serde(default, skip_serializing_if = "is_zero_audio_gain")]
+    pub audio_gain_db: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effects: Option<Vec<PresetInstance>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -244,6 +251,23 @@ impl Layer {
     /// Create a new video layer.
     pub fn new_video(name: String, index: i32) -> Self {
         Self::new(name, LayerType::Video, index)
+    }
+
+    /// Create a new audio layer.
+    pub fn new_audio(name: String, index: i32) -> Self {
+        Self::new(name, LayerType::Audio, index)
+    }
+
+    /// Whether this is an audio layer.
+    #[inline]
+    pub fn is_audio(&self) -> bool {
+        self.layer_type == LayerType::Audio
+    }
+
+    /// Per-layer audio gain as a linear multiplier (0 dB → 1.0).
+    #[inline]
+    pub fn audio_gain_linear(&self) -> f32 {
+        10f32.powf(self.audio_gain_db / 20.0)
     }
 
     /// Read-only access to generator params.
@@ -905,6 +929,7 @@ impl Default for Layer {
             default_blend_mode: BlendMode::Normal,
             layer_color: Color::WHITE,
             opacity: 1.0,
+            audio_gain_db: 0.0,
             effects: None,
             effect_groups: None,
             gen_params: None,
@@ -945,6 +970,9 @@ fn default_neg_one() -> i32 {
 }
 fn is_default_trigger_mode(mode: &MidiTriggerMode) -> bool {
     *mode == MidiTriggerMode::SingleNote
+}
+fn is_zero_audio_gain(v: &f32) -> bool {
+    *v == 0.0
 }
 
 #[cfg(test)]

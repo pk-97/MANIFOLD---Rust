@@ -11,6 +11,13 @@ pub struct TimelineClip {
     pub id: ClipId,
     #[serde(default)]
     pub video_clip_id: String,
+    /// Audio file path for an audio-layer clip. Empty for video / generator
+    /// clips; non-empty marks this as an audio clip (discriminated the same way
+    /// `video_clip_id` marks a video clip). The owning layer is `LayerType::Audio`.
+    /// The derived per-send feature curve is runtime-only (cached by `ClipId`),
+    /// never serialized. See `docs/AUDIO_LAYER_DESIGN.md`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub audio_file_path: String,
 
     // ── Beat-primary timing (source of truth) ──
     #[serde(default)]
@@ -211,6 +218,29 @@ impl TimelineClip {
         }
     }
 
+    /// Create a new audio clip backed by a decoded file. `in_point` is the
+    /// offset into the source file (seconds, BPM-independent, like video).
+    /// `recorded_bpm` carries the clip's native tempo for warp (0 = no warp).
+    pub fn new_audio(
+        audio_file_path: String,
+        start_beat: Beats,
+        duration_beats: Beats,
+        in_point: Seconds,
+    ) -> Self {
+        Self {
+            audio_file_path,
+            start_beat,
+            duration_beats: duration_beats.max(Beats::ZERO),
+            in_point: in_point.max(Seconds::ZERO),
+            ..Default::default()
+        }
+    }
+
+    /// Whether this clip is an audio clip (has a backing audio file path).
+    pub fn is_audio(&self) -> bool {
+        !self.audio_file_path.is_empty()
+    }
+
     /// Set scale with clamp. Unity TimelineClip.cs line 179.
     pub fn set_scale(&mut self, v: f32) {
         self.scale = v.max(0.01);
@@ -227,6 +257,7 @@ impl Default for TimelineClip {
         Self {
             id: ClipId::new(crate::short_id()),
             video_clip_id: String::new(),
+            audio_file_path: String::new(),
             layer_id: crate::id::LayerId::default(),
             start_beat: Beats::ZERO,
             duration_beats: Beats::ONE,
@@ -376,5 +407,28 @@ mod tests {
     fn test_new_generator_clamps_duration() {
         let clip = TimelineClip::new_generator(Beats(0.0), Beats(-2.0));
         assert_eq!(clip.duration_beats, Beats(0.0));
+    }
+
+    #[test]
+    fn test_new_audio_clip_discriminates_and_round_trips() {
+        let clip = TimelineClip::new_audio(
+            "/tmp/kick.wav".into(),
+            Beats(4.0),
+            Beats(8.0),
+            Seconds(1.5),
+        );
+        assert!(clip.is_audio());
+        assert!(!TimelineClip::new_generator(Beats(0.0), Beats(1.0)).is_audio());
+        assert_eq!(clip.in_point, Seconds(1.5));
+
+        let json = serde_json::to_string(&clip).unwrap();
+        assert!(json.contains("audioFilePath"));
+        let back: TimelineClip = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.audio_file_path, "/tmp/kick.wav");
+        assert!(back.is_audio());
+
+        // A non-audio clip must not emit the key (byte-identical legacy fixtures).
+        let video = TimelineClip::new_video("v1".into(), Beats(0.0), Beats(1.0), Seconds(0.0));
+        assert!(!serde_json::to_string(&video).unwrap().contains("audioFilePath"));
     }
 }

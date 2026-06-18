@@ -46,7 +46,9 @@ pub use audio_features::{AudioFeatureSnapshot, BandFeatures, SendFeatures};
 pub use audio_mod::{
     AudioBand, AudioFeature, AudioFeatureKind, AudioModShape, AudioModSource, ParameterAudioMod,
 };
-pub use audio_setup::{AudioDeviceRef, AudioSend, AudioSetup, AudioSourceKind, SendAnalysisConfig};
+pub use audio_setup::{
+    AudioDeviceRef, AudioSend, AudioSendSource, AudioSetup, AudioSourceKind, SendAnalysisConfig,
+};
 pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
 pub use layer::OverlapAction;
 pub use macro_bank::{

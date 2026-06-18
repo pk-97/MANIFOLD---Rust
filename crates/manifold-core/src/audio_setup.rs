@@ -10,8 +10,31 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::AudioSendId;
+use crate::id::{AudioSendId, LayerId};
 use crate::math::short_id;
+
+/// Where a send's signal comes from.
+///
+/// The default, [`Capture`](Self::Capture), is the historical meaning: the send
+/// is a downmix of the chosen capture device's [`channels`](AudioSend::channels),
+/// analyzed live by the worker. [`Layer`](Self::Layer) feeds the send from a
+/// timeline audio layer instead — its features come from an offline curve sampled
+/// at the playhead, not the live ring (see `docs/AUDIO_LAYER_DESIGN.md` §3). This
+/// is the single source of truth for the layer↔send binding; the layer header's
+/// send dropdown edits it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioSendSource {
+    /// Downmix of the capture device's channels (the original live path).
+    #[default]
+    Capture,
+    /// Fed by a timeline audio layer, by its stable [`LayerId`].
+    Layer(LayerId),
+}
+
+fn is_capture_source(s: &AudioSendSource) -> bool {
+    matches!(s, AudioSendSource::Capture)
+}
 
 /// Per-send analysis configuration: which extractors run for this send.
 ///
@@ -94,6 +117,11 @@ pub struct AudioSend {
     /// Which extractors run for this send.
     #[serde(default)]
     pub analysis: SendAnalysisConfig,
+    /// Where the send's signal comes from — a capture downmix (default) or a
+    /// timeline audio layer. Skipped on serialize when `Capture`, so pre-audio-
+    /// layer project fixtures round-trip byte-identically.
+    #[serde(default, skip_serializing_if = "is_capture_source")]
+    pub source: AudioSendSource,
 }
 
 impl AudioSend {
@@ -105,7 +133,21 @@ impl AudioSend {
             channels: Vec::new(),
             gain_db: 0.0,
             analysis: SendAnalysisConfig::default(),
+            source: AudioSendSource::Capture,
         }
+    }
+
+    /// The layer feeding this send, if it is a layer source.
+    pub fn layer_source(&self) -> Option<&LayerId> {
+        match &self.source {
+            AudioSendSource::Layer(id) => Some(id),
+            AudioSendSource::Capture => None,
+        }
+    }
+
+    /// Whether this send is fed by a timeline audio layer (not capture).
+    pub fn is_layer_fed(&self) -> bool {
+        matches!(self.source, AudioSendSource::Layer(_))
     }
 
     /// Linear gain multiplier from the stored dB trim. 0 dB → 1.0 (unity).
@@ -305,6 +347,41 @@ impl AudioSetup {
         self.sends.iter().find(|s| &s.id == id)
     }
 
+    /// The send currently fed by `layer`, if any. One layer feeds at most one
+    /// send — the reverse of [`AudioSendSource::Layer`].
+    pub fn send_for_layer(&self, layer: &LayerId) -> Option<&AudioSend> {
+        self.sends
+            .iter()
+            .find(|s| s.layer_source() == Some(layer))
+    }
+
+    /// Route `send` to be fed by `layer`, clearing any other send that was
+    /// pointing at the same layer (one layer → one send). Returns `true` if a
+    /// matching send existed and was (re)routed.
+    pub fn bind_send_to_layer(&mut self, send: &AudioSendId, layer: LayerId) -> bool {
+        for s in &mut self.sends {
+            if s.layer_source() == Some(&layer) && &s.id != send {
+                s.source = AudioSendSource::Capture;
+            }
+        }
+        if let Some(s) = self.sends.iter_mut().find(|s| &s.id == send) {
+            s.source = AudioSendSource::Layer(layer);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Detach any layer→send binding for `layer` (e.g. when the layer is deleted),
+    /// reverting the affected send to a capture source.
+    pub fn unbind_layer(&mut self, layer: &LayerId) {
+        for s in &mut self.sends {
+            if s.layer_source() == Some(layer) {
+                s.source = AudioSendSource::Capture;
+            }
+        }
+    }
+
     /// Find a send by id (mutable).
     pub fn find_send_mut(&mut self, id: &AudioSendId) -> Option<&mut AudioSend> {
         self.sends.iter_mut().find(|s| &s.id == id)
@@ -481,6 +558,48 @@ mod tests {
         assert!(json.contains("\"kind\":\"app\""), "kind serializes camelCase: {json}");
         let back: AudioDeviceRef = serde_json::from_str(&json).unwrap();
         assert_eq!(app, back);
+    }
+
+    #[test]
+    fn capture_source_is_skipped_layer_source_round_trips() {
+        use crate::id::LayerId;
+        // A default (capture) send must serialize without a `source` key, so
+        // pre-audio-layer fixtures round-trip byte-identically.
+        let send = AudioSend::new("Kick");
+        assert_eq!(send.source, AudioSendSource::Capture);
+        let json = serde_json::to_string(&send).unwrap();
+        assert!(!json.contains("source"), "capture source must be skipped: {json}");
+
+        // A layer-fed send round-trips with its LayerId.
+        let mut layer_send = AudioSend::new("Bass");
+        layer_send.source = AudioSendSource::Layer(LayerId::new("L7"));
+        let json = serde_json::to_string(&layer_send).unwrap();
+        assert!(json.contains("source"));
+        let back: AudioSend = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.layer_source(), Some(&LayerId::new("L7")));
+        assert!(back.is_layer_fed());
+    }
+
+    #[test]
+    fn bind_send_to_layer_is_one_to_one() {
+        use crate::id::LayerId;
+        let mut setup = AudioSetup::default();
+        setup.sends = vec![AudioSend::new("A"), AudioSend::new("B")];
+        let a = setup.sends[0].id.clone();
+        let b = setup.sends[1].id.clone();
+        let layer = LayerId::new("L1");
+
+        setup.bind_send_to_layer(&a, layer.clone());
+        assert_eq!(setup.send_for_layer(&layer).map(|s| &s.id), Some(&a));
+
+        // Binding B to the same layer moves the binding (A reverts to capture).
+        setup.bind_send_to_layer(&b, layer.clone());
+        assert_eq!(setup.send_for_layer(&layer).map(|s| &s.id), Some(&b));
+        assert!(!setup.find_send(&a).unwrap().is_layer_fed());
+
+        // Unbinding the layer reverts B too.
+        setup.unbind_layer(&layer);
+        assert!(setup.send_for_layer(&layer).is_none());
     }
 
     #[test]

@@ -118,6 +118,10 @@ pub enum LayerType {
     Video = 0,
     Generator = 1,
     Group = 2,
+    /// An audio track: plays an imported audio file synced to the transport and
+    /// can drive audio modulation. No visual output (the compositor skips it).
+    /// See `docs/AUDIO_LAYER_DESIGN.md`.
+    Audio = 3,
 }
 
 impl Serialize for LayerType {
@@ -134,12 +138,14 @@ impl<'de> Deserialize<'de> for LayerType {
                 0 => LayerType::Video,
                 1 => LayerType::Generator,
                 2 => LayerType::Group,
+                3 => LayerType::Audio,
                 _ => LayerType::Video,
             },
             serde_json::Value::String(s) => match s.as_str() {
                 "Video" => LayerType::Video,
                 "Generator" => LayerType::Generator,
                 "Group" => LayerType::Group,
+                "Audio" => LayerType::Audio,
                 _ => LayerType::Video,
             },
             _ => LayerType::Video,
