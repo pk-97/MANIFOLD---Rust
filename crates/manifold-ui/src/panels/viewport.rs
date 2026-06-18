@@ -46,6 +46,13 @@ pub struct ViewportClip {
     /// in the background. Shared (`Arc`) so attaching it to a clip each sync is a
     /// cheap refcount bump, not a copy.
     pub waveform: Option<std::sync::Arc<crate::waveform_renderer::WaveformRenderer>>,
+    /// Audio only: offset into the source file where this clip starts playing
+    /// (seconds). The left edge of the waveform window. Ignored for non-audio.
+    pub in_point_seconds: f32,
+    /// Audio only: warped source-seconds per beat (`60 / clip_bpm` with warp on,
+    /// `60 / project_bpm` with warp off). Times `duration_beats` gives the source
+    /// window length, so the waveform scale is set by warp, not by trim.
+    pub warped_secs_per_beat: f32,
 }
 
 /// Which part of a clip was hit.
@@ -2689,6 +2696,8 @@ mod tests {
                 is_generator: false,
                 is_audio: false,
                 waveform: None,
+                in_point_seconds: 0.0,
+                warped_secs_per_beat: 0.0,
             },
             ViewportClip {
                 clip_id: "clip_002".into(),
@@ -2702,6 +2711,8 @@ mod tests {
                 is_generator: true,
                 is_audio: false,
                 waveform: None,
+                in_point_seconds: 0.0,
+                warped_secs_per_beat: 0.0,
             },
         ]
     }
@@ -2910,6 +2921,8 @@ mod tests {
             is_generator: false,
             is_audio: false,
             waveform: None,
+            in_point_seconds: 0.0,
+            warped_secs_per_beat: 0.0,
         }]);
         panel.build(&mut tree, &layout);
 

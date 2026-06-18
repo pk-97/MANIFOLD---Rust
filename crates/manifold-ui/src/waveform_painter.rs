@@ -30,7 +30,11 @@ use crate::waveform_renderer::WaveformLevel;
 /// - `lane_height`: height of the waveform lane in pixels
 /// - `waveform_x_px`: X pixel position of the waveform start in content space
 /// - `waveform_width_px`: total width of the waveform in pixels
-/// - `scroll_offset_x`: horizontal scroll offset in pixels
+/// - `src_start`, `src_end`: the source-file sub-window to show, as fractions of
+///   the file in `[0, 1]`. The clip is a *window* onto the file (Ableton model):
+///   `src_start..src_end` of the file's texels map across `waveform_width_px`, so
+///   trimming the clip reveals more/less of the file instead of rescaling it.
+///   Pass `(0.0, 1.0)` to show the whole file.
 pub fn draw_waveform(
     buffer: &mut [Color32],
     buf_w: usize,
@@ -42,12 +46,15 @@ pub fn draw_waveform(
     lane_height: i32,
     waveform_x_px: f32,
     waveform_width_px: f32,
+    src_start: f32,
+    src_end: f32,
 ) {
     if level.texel_count() == 0 || waveform_width_px <= 0.0 || lane_height <= 0 {
         return;
     }
 
     let texel_count = level.texel_count() as f32;
+    let src_span = (src_end - src_start).max(0.0);
     let height_padding = 10.0; // Unity: HeightPadding = 10f (line 34)
     let draw_height = (lane_height as f32 - height_padding).max(1.0);
     let mid = y_offset + lane_height / 2;
@@ -70,8 +77,10 @@ pub fn draw_waveform(
         }
         let norm = local_x / waveform_width_px;
 
-        // Map to texel index (Unity: GetOrBuildTileTexture lines 447-452)
-        let texel_index = (norm * texel_count) as usize;
+        // Map the pixel into the source sub-window, then to a texel. With the
+        // default (0,1) window this is the old whole-file mapping.
+        let file_norm = src_start + norm * src_span;
+        let texel_index = (file_norm * texel_count) as usize;
         if texel_index >= level.texel_count() {
             continue;
         }
@@ -203,6 +212,7 @@ mod tests {
             &mut buf, 320, 56, level, 0, 320, // x range
             0, 56, // y offset, lane height
             0.0, 320.0, // waveform position and width
+            0.0, 1.0, // whole-file window
         );
 
         // Some pixels should be non-transparent (waveform was drawn)

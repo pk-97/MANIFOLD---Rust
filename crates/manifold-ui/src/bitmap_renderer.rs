@@ -446,9 +446,26 @@ impl LayerBitmapRenderer {
             {
                 let full_x = (clip_start_f32 - viewport_min_beat) * scaled_ppb;
                 let full_w = clip.duration_beats.as_f32() * scaled_ppb;
-                // scaled_ppb already folds in render_scale, so pass 1.0 here to
-                // avoid double-scaling the level selection.
-                if let Some(level) = renderer.select_level_for_zoom(full_w, 1.0) {
+                // The clip is a window onto the file (Ableton model): show the
+                // source slice [in_point, in_point + win_secs] rather than the
+                // whole file squashed into the clip rect. Trim changes the window
+                // length; warp changes win_secs (the scale).
+                let file_secs = renderer.clip_duration_seconds();
+                let win_secs = clip.duration_beats.as_f32() * clip.warped_secs_per_beat;
+                let (src_start, src_end) = if file_secs > 0.0 {
+                    (
+                        (clip.in_point_seconds / file_secs).clamp(0.0, 1.0),
+                        ((clip.in_point_seconds + win_secs) / file_secs).clamp(0.0, 1.0),
+                    )
+                } else {
+                    (0.0, 1.0)
+                };
+                let frac = (src_end - src_start).max(1e-4);
+                // Pick the MIP at the resolution the *whole* file would occupy if
+                // the visible window were stretched to full_w, so a zoomed-in trim
+                // doesn't get a too-coarse level. scaled_ppb already folds in
+                // render_scale, so pass 1.0 to avoid double-scaling.
+                if let Some(level) = renderer.select_level_for_zoom(full_w / frac, 1.0) {
                     let x_start = x.max(paint_x0 as i32);
                     let x_end = (x + w).min(paint_x1 as i32);
                     crate::waveform_painter::draw_waveform(
@@ -462,6 +479,8 @@ impl LayerBitmapRenderer {
                         clip_h,
                         full_x,
                         full_w,
+                        src_start,
+                        src_end,
                     );
                 }
             }
@@ -747,6 +766,8 @@ mod tests {
             is_generator: false,
             is_audio: false,
             waveform: None,
+            in_point_seconds: 0.0,
+            warped_secs_per_beat: 0.0,
         }
     }
 

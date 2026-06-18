@@ -428,6 +428,8 @@ impl WaveformLanePanel {
                     buf_h as i32,
                     waveform_x - self.scroll_offset_x,
                     waveform_width,
+                    0.0,
+                    1.0,
                 );
             }
         }

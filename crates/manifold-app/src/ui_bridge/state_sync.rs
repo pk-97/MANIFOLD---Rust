@@ -1001,6 +1001,8 @@ pub fn sync_project_data(
                     } else {
                         None
                     },
+                    in_point_seconds: clip.in_point.0 as f32,
+                    warped_secs_per_beat: audio_warped_spb(clip, project),
                 });
             }
         }
@@ -1079,6 +1081,8 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
                 } else {
                     None
                 },
+                in_point_seconds: clip.in_point.0 as f32,
+                warped_secs_per_beat: audio_warped_spb(clip, project),
             });
         }
     }
@@ -1087,6 +1091,19 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
     if ui.viewport.markers_stale(&project.timeline.markers) {
         ui.viewport.set_markers(project.timeline.markers.clone());
     }
+}
+
+/// Warped source-seconds per beat for an audio clip's waveform window:
+/// `60 / clip_bpm` with warp on, `60 / project_bpm` with warp off. Multiplying by
+/// `duration_beats` gives the source window length, so the waveform's horizontal
+/// scale is set by warp, not by trim. Zero for non-audio clips (unused).
+fn audio_warped_spb(clip: &manifold_core::clip::TimelineClip, project: &Project) -> f32 {
+    if !clip.is_audio() {
+        return 0.0;
+    }
+    let project_bpm = project.settings.bpm.0;
+    let spb = 60.0 / project_bpm.max(1.0);
+    spb * clip.warp_ratio(project_bpm)
 }
 
 /// Sync inspector content for the active selection.
