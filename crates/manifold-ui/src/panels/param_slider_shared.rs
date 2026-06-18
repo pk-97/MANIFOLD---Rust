@@ -610,8 +610,9 @@ pub(crate) fn build_dropdown_trigger(
     font_size: u16,
 ) -> i32 {
     // Trailing chevron kept inside the same button so the whole cell is one
-    // hit target. A leading space pads the label off the left edge.
-    let text = format!(" {current}   \u{25BE}");
+    // hit target. A leading space pads the label off the left edge. U+25BC (▼)
+    // is in the atlas (the tree collapse chevron); U+25BE (▾) is not.
+    let text = format!(" {current}   \u{25BC}");
     tree.add_button(
         parent,
         rect.x,
