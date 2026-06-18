@@ -229,9 +229,9 @@ Phases ordered so each ships something usable. Anchors are real file:line from t
 - **P2 offline modulation** ✓ — `OfflineSendAnalyzer` + `FeatureCurve` (manifold-audio), sharing the live worker's `form_tilted_column`/`reduce_send` so the curve is bit-for-bit the live analysis. `AudioLayerCurves` cache (manifold-app) wired into the snapshot fill with worker-index alignment; layer-fed slots overwritten with the playhead curve sample. Look-ahead supported. Tests for tone localization, hop-rate parity, look-ahead, cache.
 - **P3 playback** ✓ — `AudioLayerPlayback` (manifold-playback): one kira voice per active audio clip, transport-following (seek-on-drift/replay-on-stop), mute/solo (audio bus)/gain via per-voice volume tween, 5 ms declick. Driven from the content tick; decode reuses `audio_sync::preload_audio`.
 
-**Remaining — UI affordances (need the app running to build safely; data + commands already in place behind them):**
-- **Send-source selector UI** — a control to invoke `SetAudioSendSourceCommand` (route a layer → a send). Natural home: a per-send source row in the Audio Setup panel (it already manages sends) or a dropdown on the audio layer header. The command, model, and modulation wiring are done; this is the missing way to *set* the binding from the UI.
-- **In-clip waveform painting** — audio clips currently render as plain clip blocks on their lane. Drawing the waveform inside needs per-clip decoded levels plumbed to the UI thread (background-decoded, like the percussion `waveform_lane`) and `WaveformRenderer`/`waveform_painter` wired into the timeline clip draw.
-- **Warp (P4), export (P5), hardening (P6)** — not started; `recorded_bpm` is already the clip-BPM field warp will use.
+**Landed — UI (P1/P2 complete):**
+- **Send-source selector UI** ✓ — a per-send source button in the Audio Setup panel cycles capture → each audio layer → capture, committing `SetAudioSendSourceCommand`. `state_sync` resolves the label/`layer_fed`; the inspector handler cycles and dispatches.
+- **In-clip waveform painting** ✓ — `AudioWaveformCache` background-decodes each audio clip into a normalized peak array (cached by `ClipId`, lazy, self-evicting), attached to `ViewportClip.waveform` each sync; `bitmap_painter::draw_clip_waveform` paints peak-mirrored bars in the clip rect through the bounds-clamped `fill_rect`. The clip fingerprint folds in waveform presence so the async decode triggers a repaint.
 
-Both remaining UI items were deferred deliberately rather than authored blind: they are sizable bitmap-UI features (layout + hit-testing + input) on the live-performance surface, where a layout/interaction regression is high-cost and can't be verified without running the app.
+**Remaining — later phases (not in P0–P3 scope):**
+- **Warp (P4), export (P5), hardening (P6)** — not started; `recorded_bpm` is already the clip-BPM field warp will use.
