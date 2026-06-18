@@ -20,12 +20,24 @@ use ahash::AHashMap;
 use manifold_core::id::ClipId;
 use manifold_ui::waveform_renderer::WaveformRenderer;
 
+/// Consecutive polls a clip must be absent before its renderer is evicted.
+/// The clip list is built from the UI-thread project copy while the clips that
+/// are *displayed* come from the content-thread snapshot; the two can disagree
+/// for a frame or two around edits. Evicting on the first miss made the
+/// attached renderer toggle `Some → None → Some`, which blanked and re-drew the
+/// waveform (the flicker). A short grace (~2 s at 60 fps) absorbs that churn
+/// while still bounding memory when a clip is genuinely gone.
+const EVICT_GRACE_POLLS: u32 = 120;
+
 /// Background-decoded per-clip waveform renderers, owned by `UIRoot`.
 pub struct AudioWaveformCache {
     ready: AHashMap<ClipId, Arc<WaveformRenderer>>,
     /// Clips whose decode has been requested (in flight or finished/failed), so
     /// we never spawn a second decode for the same clip.
     requested: HashSet<ClipId>,
+    /// Consecutive polls each tracked clip has been absent from the live list.
+    /// Reset to 0 whenever the clip reappears; eviction only at the grace limit.
+    absent_polls: AHashMap<ClipId, u32>,
     tx: Sender<(ClipId, WaveformRenderer)>,
     rx: Receiver<(ClipId, WaveformRenderer)>,
 }
@@ -33,7 +45,13 @@ pub struct AudioWaveformCache {
 impl Default for AudioWaveformCache {
     fn default() -> Self {
         let (tx, rx) = channel();
-        Self { ready: AHashMap::new(), requested: HashSet::new(), tx, rx }
+        Self {
+            ready: AHashMap::new(),
+            requested: HashSet::new(),
+            absent_polls: AHashMap::new(),
+            tx,
+            rx,
+        }
     }
 }
 
@@ -58,10 +76,30 @@ impl AudioWaveformCache {
             self.requested.insert(id.clone());
             self.spawn_decode(id.clone(), path.clone());
         }
-        // Evict clips that vanished from the project (keeps both maps bounded).
+        // Evict clips absent for the full grace window — not on the first miss,
+        // so a one-frame snapshot disagreement doesn't drop a live renderer and
+        // flicker the waveform. Present clips reset their absence counter.
         let live: HashSet<&ClipId> = audio_clips.iter().map(|(id, _)| id).collect();
-        self.ready.retain(|id, _| live.contains(id));
-        self.requested.retain(|id| live.contains(id));
+        let tracked: Vec<ClipId> =
+            self.ready.keys().chain(self.requested.iter()).cloned().collect();
+        for id in tracked {
+            if live.contains(&id) {
+                self.absent_polls.remove(&id);
+            } else {
+                *self.absent_polls.entry(id).or_insert(0) += 1;
+            }
+        }
+        let evicted: HashSet<ClipId> = self
+            .absent_polls
+            .iter()
+            .filter(|&(_, &n)| n >= EVICT_GRACE_POLLS)
+            .map(|(id, _)| id.clone())
+            .collect();
+        if !evicted.is_empty() {
+            self.ready.retain(|id, _| !evicted.contains(id));
+            self.requested.retain(|id| !evicted.contains(id));
+            self.absent_polls.retain(|id, _| !evicted.contains(id));
+        }
     }
 
     fn spawn_decode(&self, id: ClipId, path: String) {
@@ -100,9 +138,32 @@ mod tests {
         assert!(cache.requested.contains(&id));
         cache.poll_and_request(&[(id.clone(), "/no/such.wav".into())]);
         assert_eq!(cache.requested.len(), 1);
-        // Clip vanishes → evicted from the requested set.
+        // Clip vanishes for ONE poll → still tracked (grace window absorbs a
+        // transient snapshot disagreement; this is what kills the flicker).
         cache.poll_and_request(&[]);
+        assert_eq!(cache.requested.len(), 1, "one miss must not evict");
+        // Absent for the full grace window → finally evicted.
+        for _ in 0..EVICT_GRACE_POLLS {
+            cache.poll_and_request(&[]);
+        }
         assert!(cache.requested.is_empty());
         assert!(cache.renderer(&id).is_none());
+    }
+
+    #[test]
+    fn reappearing_clip_resets_grace() {
+        let mut cache = AudioWaveformCache::default();
+        let id = ClipId::new("c1");
+        cache.poll_and_request(&[(id.clone(), "/no/such.wav".into())]);
+        // Absent for almost the whole window, then it comes back…
+        for _ in 0..EVICT_GRACE_POLLS - 1 {
+            cache.poll_and_request(&[]);
+        }
+        cache.poll_and_request(&[(id.clone(), "/no/such.wav".into())]);
+        // …the counter reset, so another near-full window still doesn't evict.
+        for _ in 0..EVICT_GRACE_POLLS - 1 {
+            cache.poll_and_request(&[]);
+        }
+        assert!(cache.requested.contains(&id), "reappearance must reset grace");
     }
 }
