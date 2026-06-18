@@ -195,6 +195,17 @@ pub enum PanelAction {
     MidiChannelClicked(usize),
     MidiDeviceClicked(usize),
     MidiTriggerModeClicked(usize),
+    /// Audio-layer Send dropdown clicked (layer index) — opens the send picker.
+    AudioSendClicked(usize),
+    /// Route an audio layer to a send (layer index, send id). `None` clears the
+    /// layer's send routing (reverts the previously-fed send to a capture source).
+    SetLayerAudioSend(usize, Option<manifold_core::AudioSendId>),
+    /// Audio-layer Gain slider drag begins (layer index) — snapshot for undo.
+    AudioGainSnapshot(usize),
+    /// Audio-layer Gain slider dragged to a new dB value (layer index, dB).
+    AudioGainChanged(usize, f32),
+    /// Audio-layer Gain slider released (layer index) — commit one undo step.
+    AudioGainCommit(usize),
     LayerDragStarted(usize),
     LayerDragMoved(usize, usize),
     LayerDragEnded(usize, usize),

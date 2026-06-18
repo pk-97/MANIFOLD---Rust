@@ -209,6 +209,15 @@ impl AudioSetupPanel {
         self.current_device.as_ref()
     }
 
+    /// (id, label) for each named send, in declaration order. Used to populate
+    /// the layer-header Send dropdown so it stays in lockstep with Audio Setup.
+    pub fn send_options(&self) -> Vec<(AudioSendId, String)> {
+        self.sends
+            .iter()
+            .map(|s| (s.id.clone(), s.label.clone()))
+            .collect()
+    }
+
     /// Update the data the panel renders. Called from `state_sync` on a
     /// structural sync while the panel is open. The device list itself is
     /// enumerated lazily by the app when the device dropdown opens, so it isn't

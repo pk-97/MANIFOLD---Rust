@@ -825,6 +825,7 @@ pub fn sync_project_data(
                     is_collapsed: layer.is_collapsed,
                     is_group: layer.is_group(),
                     is_generator: layer.layer_type == LayerType::Generator,
+                    is_audio: layer.is_audio(),
                     is_muted: layer.is_muted
                         || layer.parent_layer_id.as_ref().is_some_and(|pid| {
                             project
@@ -858,6 +859,11 @@ pub fn sync_project_data(
                         layer.midi_trigger_mode,
                         manifold_core::types::MidiTriggerMode::AllNotes
                     ),
+                    audio_gain_db: layer.audio_gain_db,
+                    audio_send_name: project
+                        .audio_setup
+                        .send_for_layer(&layer.layer_id)
+                        .map(|s| s.label.clone()),
                     y_offset: y,
                     height: track_h,
                     is_selected: selection.is_layer_active(&layer.layer_id),
