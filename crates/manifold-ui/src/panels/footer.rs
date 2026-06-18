@@ -360,6 +360,27 @@ impl FooterPanel {
         }
         Vec::new()
     }
+
+    /// Node-intent dispatch for the footer buttons' clicks. Mirrors
+    /// `handle_click`. See `docs/NODE_INTENT_DISPATCH.md`.
+    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        use crate::intent::Gesture::Click;
+        let mut on = |id: i32, a: PanelAction| {
+            if id >= 0 {
+                intents.on(id as u32, Click, a);
+            }
+        };
+        on(self.quantize_button_id, PanelAction::CycleQuantize);
+        on(self.resolution_button_id, PanelAction::ResolutionClicked);
+        on(self.fps_field_id, PanelAction::FpsFieldClicked);
+        on(self.scale_100_id, PanelAction::SetRenderScale(1.0));
+        on(self.scale_75_id, PanelAction::SetRenderScale(0.75));
+        on(self.scale_50_id, PanelAction::SetRenderScale(0.5));
+        on(self.tonemap_aces_id, PanelAction::SetTonemapCurve(TonemapCurve::AcesNarkowicz));
+        on(self.tonemap_hill_id, PanelAction::SetTonemapCurve(TonemapCurve::AcesHill));
+        on(self.tonemap_agx_id, PanelAction::SetTonemapCurve(TonemapCurve::Agx));
+        on(self.tonemap_khr_id, PanelAction::SetTonemapCurve(TonemapCurve::KhronosPbrNeutral));
+    }
 }
 
 impl Default for FooterPanel {

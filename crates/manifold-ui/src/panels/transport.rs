@@ -1115,6 +1115,36 @@ impl TransportPanel {
         }
         Vec::new()
     }
+
+    /// Node-intent dispatch for the transport buttons' clicks. Mirrors
+    /// `handle_click` — each button id maps to its action. See
+    /// `docs/NODE_INTENT_DISPATCH.md`.
+    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        use crate::intent::Gesture::Click;
+        let mut on = |id: i32, a: PanelAction| {
+            if id >= 0 {
+                intents.on(id as u32, Click, a);
+            }
+        };
+        on(self.link_button_id, PanelAction::ToggleLink);
+        on(self.clk_button_id, PanelAction::ToggleMidiClock);
+        on(self.clk_device_id, PanelAction::SelectClkDevice);
+        on(self.sync_button_id, PanelAction::ToggleSyncOutput);
+        on(self.play_button_id, PanelAction::PlayPause);
+        on(self.stop_button_id, PanelAction::Stop);
+        on(self.rec_button_id, PanelAction::Record);
+        on(self.bpm_field_id, PanelAction::BpmFieldClicked);
+        on(self.bpm_reset_id, PanelAction::ResetBpm);
+        on(self.bpm_clear_id, PanelAction::ClearBpm);
+        on(self.new_button_id, PanelAction::NewProject);
+        on(self.open_button_id, PanelAction::OpenProject);
+        on(self.open_recent_id, PanelAction::OpenRecent);
+        on(self.save_button_id, PanelAction::SaveProject);
+        on(self.save_as_id, PanelAction::SaveProjectAs);
+        on(self.export_button_id, PanelAction::ExportVideo);
+        on(self.hdr_button_id, PanelAction::ToggleHdr);
+        on(self.perc_button_id, PanelAction::TogglePercussion);
+    }
 }
 
 impl Default for TransportPanel {
@@ -1208,6 +1238,24 @@ mod tests {
         let panel = TransportPanel::new();
         let actions = panel.handle_click(9999);
         assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn intent_resolves_play_button_click() {
+        use crate::intent::{Gesture, IntentRegistry};
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = TransportPanel::new();
+        panel.build(&mut tree, &layout);
+
+        let mut intents = IntentRegistry::new();
+        panel.register_intents(&mut intents);
+
+        // The live path resolves the play button's click through the registry.
+        let action = intents.resolve(&tree, panel.play_button_id, Gesture::Click);
+        assert!(matches!(action, Some(PanelAction::PlayPause)));
+        let stop = intents.resolve(&tree, panel.stop_button_id, Gesture::Click);
+        assert!(matches!(stop, Some(PanelAction::Stop)));
     }
 
     #[test]

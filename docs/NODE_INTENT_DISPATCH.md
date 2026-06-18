@@ -1,8 +1,47 @@
 # Node-Intent Dispatch — friendly, position-robust UI event API
 
-Status: **active build** (started 2026-06-18). Replaces the per-panel
-`event.node_id == self.some_id` matching pattern (142 sites across 16 panels)
-with a single declarative `intent` layer on the UI tree.
+Status: **right-click migration complete** (2026-06-18, branch `intent-dispatch`).
+Replaces the per-panel `event.node_id == self.some_id` matching pattern with a
+single declarative `intent` layer on the UI tree, for the right-click gesture
+across every surface that had one. Click migration is deliberately deferred (see
+§ Outcome).
+
+## Outcome (what shipped on this branch)
+
+**Done — gestures resolve through one path:**
+- Foundation: `intent.rs` (`IntentRegistry` + fold-up `resolve`), `UIRoot`
+  wiring, `process_right_click` emit-on-miss (cause #1).
+- Param cards (right-click): track = instant reset; the full-row catcher gives
+  label / value / gaps the param menu (no narrow-target lottery).
+- Inspector chrome (right-click): `master_chrome`, `layer_chrome`,
+  `macros_panel` register their track/label intents (clip_chrome has none).
+- Button grids (click): `transport`, `header`, `footer` register a Click intent
+  per button. These had no dead-zone bug (solid buttons), so this is the
+  consistency win — the live dispatch is now declarative. Verified by
+  registry-resolve tests; `handle_click` kept as the tested twin/fallback. The
+  `last_click_node` capture (for dropdown anchoring) happens before intent
+  consumes the event, so dropdown triggers still anchor correctly.
+- Perf: repopulation gated on `UITree::structure_version` — off the hot path.
+
+**Positional exceptions (intentionally NOT converted):** `layer_header` and
+`viewport` markers resolve right-click by *position over the whole row / flag*,
+not by narrow node id. That already gives the reliability the intent system
+exists to provide — there are no dead zones to fix — so converting them would be
+churn that risks a working interaction. They benefit from emit-on-miss for free.
+
+**Nothing to migrate:** `browser_popup`, `ableton_picker`, `audio_setup_panel`,
+`waveform_lane`, `stem_lane` have no right-click handlers (click/drag/scrub only).
+
+**Deferred (with reason), not abandoned:**
+- *Deleting the old `handle_right_click` / `handle_click` twins.* They're kept as
+  tested fallbacks for now. `param_card::handle_right_click` is still used by the
+  graph-editor card (`app_render`, its own `ui_root`, out of scope here), so it
+  can't be removed yet; the others are harmless. Full deletion is gated on
+  graph-editor migration + live verification that the intent path is correct on
+  every surface. Until then the live path is intent (it consumes the event); the
+  twin only runs if a node isn't registered.
+
+**Out of scope:** the graph editor canvas has its own `ui_root` and hit model.
 
 ## The problem this removes
 

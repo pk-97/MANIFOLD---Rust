@@ -292,6 +292,22 @@ impl HeaderPanel {
         }
         Vec::new()
     }
+
+    /// Node-intent dispatch for the header buttons' clicks. Mirrors
+    /// `handle_click`. See `docs/NODE_INTENT_DISPATCH.md`.
+    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        use crate::intent::Gesture::Click;
+        let mut on = |id: i32, a: PanelAction| {
+            if id >= 0 {
+                intents.on(id as u32, Click, a);
+            }
+        };
+        on(self.zoom_out_id, PanelAction::ZoomOut);
+        on(self.zoom_in_id, PanelAction::ZoomIn);
+        on(self.audio_btn_id, PanelAction::OpenAudioSetup);
+        on(self.monitor_btn_id, PanelAction::ToggleMonitor);
+        on(self.perform_btn_id, PanelAction::EnterPerformMode);
+    }
 }
 
 impl Default for HeaderPanel {
