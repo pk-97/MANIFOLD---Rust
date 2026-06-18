@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 211 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 212 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -140,7 +140,7 @@ _Generated from the node registry. Do not hand-edit. 211 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (24)
+### 3D Geometry (25)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -151,11 +151,12 @@ _Generated from the node registry. Do not hand-edit. 211 nodes registered, group
 | Digital Plants Render | `node.digital_plants_render` | Filter | Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed. |
 | Push Mesh | `node.displace_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
 | Grid Edges | `node.edges_from_grid_uv` | Source | Outputs the wireframe edges that connect a grid of points, so you can draw the grid as a mesh of lines. |
+| Hypercube Edges (4D) | `node.edges_from_hypercube` | Source | Builds the wireframe edges of a hypercube — which corners connect. Feed it with the matching hypercube points to draw the 4D cube. |
 | Cube Mesh | `node.generate_cube_mesh` | Source | Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry. |
 | Grid Mesh | `node.generate_grid_mesh` | Source | Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh. |
 | Grid Points (UV) | `node.generate_grid_uv` | Source | Outputs a grid of U and V values sampling a parametric surface, the input for building curved meshes and wireframes. |
 | Arrange Copies | `node.generate_instance_transforms` | Source | Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies. |
-| Tesseract Points (4D) | `node.generate_tesseract_vertices` | Source | Builds the points and edges of a tesseract, a 4D cube, ready to rotate in 4D and flatten down to something you can draw. |
+| Hypercube Points (4D) | `node.hypercube_vertices` | Source | Builds the corner points of a hypercube. The Dimension knob morphs it from a flat square up through a cube to a full 4D tesseract — wire it to an LFO to animat… |
 | Nested Cubes Geometry | `node.nested_cubes_geometry` | Source | Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms. |
 | Combine XY (curve) | `node.pack_curve_xy` | Filter | Zips two number lists, X and Y, into one list of points ready to draw as a line or curve. |
 | Platonic Solid Edges | `node.polytope_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
@@ -382,7 +383,7 @@ _Generated from the node registry. Do not hand-edit. 211 nodes registered, group
 | `StarField` | Star Field | generator | Procedural | 8 |
 | `Strobe` | Strobe | effect | Stylize | 3 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 3 |
-| `Tesseract` | Tesseract | generator | Procedural | 11 |
+| `Tesseract` | Tesseract | generator | Procedural | 12 |
 | `Text` | Text | generator | Source | 8 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Stylize | 3 |
