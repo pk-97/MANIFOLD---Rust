@@ -23,6 +23,13 @@ pub struct UITree {
     last_child: Vec<i32>,
     count: usize,
     has_dirty: bool,
+    /// Monotonic counter bumped on every *structural* change (add_node, clear,
+    /// truncate_from) — never on in-place set_* mutations. Consumers that cache
+    /// per-node-id data (e.g. the intent registry) repopulate only when this
+    /// changes, so they stay correct across partial rebuilds without paying a
+    /// per-frame cost. Cannot go stale: it lives at the mutation layer, so no
+    /// structural change can bypass it.
+    structure_version: u64,
 }
 
 const INITIAL_CAPACITY: usize = 512;
@@ -37,6 +44,7 @@ impl UITree {
             last_child: Vec::with_capacity(INITIAL_CAPACITY),
             count: 0,
             has_dirty: false,
+            structure_version: 0,
         }
     }
 
@@ -46,6 +54,11 @@ impl UITree {
 
     pub fn has_dirty(&self) -> bool {
         self.has_dirty
+    }
+
+    /// Current structural generation — see [`UITree::structure_version`].
+    pub fn structure_version(&self) -> u64 {
+        self.structure_version
     }
 
     // ── Node creation ───────────────────────────────────────────────
@@ -82,6 +95,7 @@ impl UITree {
         self.link_child(id as i32, parent_id);
         self.count += 1;
         self.has_dirty = true;
+        self.structure_version = self.structure_version.wrapping_add(1);
         id
     }
 
@@ -569,6 +583,7 @@ impl UITree {
         self.last_child.clear();
         self.count = 0;
         self.has_dirty = false;
+        self.structure_version = self.structure_version.wrapping_add(1);
     }
 
     /// Truncate the tree to `from_index` nodes, removing everything at and
@@ -590,6 +605,7 @@ impl UITree {
         self.last_child.truncate(from_index);
         self.count = from_index;
         self.has_dirty = true;
+        self.structure_version = self.structure_version.wrapping_add(1);
     }
 }
 
@@ -650,6 +666,31 @@ mod tests {
 
         let hit = tree.hit_test(Vec2::new(60.0, 60.0));
         assert_eq!(hit, btn2 as i32);
+    }
+
+    #[test]
+    fn structure_version_bumps_on_structural_ops_only() {
+        let mut tree = UITree::new();
+        let v0 = tree.structure_version();
+        let btn = tree.add_button(-1, 0.0, 0.0, 100.0, 30.0, default_style(), "A");
+        let v1 = tree.structure_version();
+        assert!(v1 > v0, "add_node must bump structure_version");
+
+        // In-place set_* mutations must NOT bump it (intent ids stay valid).
+        tree.set_flag(btn, UIFlags::PRESSED);
+        tree.set_text(btn, "B");
+        assert_eq!(
+            tree.structure_version(),
+            v1,
+            "set_* mutations must not bump structure_version"
+        );
+
+        // truncate + clear are structural.
+        tree.truncate_from(0);
+        let v2 = tree.structure_version();
+        assert!(v2 > v1, "truncate_from must bump structure_version");
+        tree.clear();
+        assert!(tree.structure_version() > v2, "clear must bump structure_version");
     }
 
     #[test]

@@ -1330,37 +1330,6 @@ impl InspectorCompositePanel {
         }
     }
 
-    fn route_right_click(&mut self, node_id: u32) -> Vec<PanelAction> {
-        if let Some(target) = self.find_target_for_node(node_id) {
-            // Right-click also targets a sub-panel — keep last_effect_tab in sync
-            // so dispatch routes UnmapParamAbleton etc. to the correct list.
-            self.update_last_effect_tab(&target);
-            match target {
-                PressedTarget::Macros => self.macros_panel.handle_right_click(node_id),
-                PressedTarget::MasterChrome => self.master_chrome.handle_right_click(node_id),
-                PressedTarget::LayerChrome => self.layer_chrome.handle_right_click(node_id),
-                PressedTarget::ClipChrome => self.clip_chrome.handle_right_click(node_id),
-                PressedTarget::MasterEffect(i) => self
-                    .master_effects
-                    .get(i)
-                    .map(|c| c.handle_right_click(node_id))
-                    .unwrap_or_default(),
-                PressedTarget::LayerEffect(i) => self
-                    .layer_effects
-                    .get(i)
-                    .map(|c| c.handle_right_click(node_id))
-                    .unwrap_or_default(),
-                PressedTarget::GenParam => self
-                    .gen_params
-                    .as_ref()
-                    .map(|gp| gp.handle_right_click(node_id))
-                    .unwrap_or_default(),
-                PressedTarget::Scrollbar => Vec::new(),
-            }
-        } else {
-            Vec::new()
-        }
-    }
 }
 
 impl Panel for InspectorCompositePanel {
@@ -1653,21 +1622,17 @@ impl Panel for InspectorCompositePanel {
                 }
                 Vec::new()
             }
-            UIEvent::RightClick { node_id, pos, .. } => {
-                if !self.viewport_rect.contains(*pos) {
-                    return Vec::new();
-                }
-                self.route_right_click(*node_id)
-            }
+            // Right-click is handled entirely by node-intent dispatch (see
+            // `register_intents` below); the inspector no longer routes it.
             _ => Vec::new(),
         }
     }
 
-    /// Forward node-intent registration to the param cards. Right-clicks on
-    /// effect/generator cards now resolve through intent dispatch (with fold-up
-    /// over dead zones) instead of `route_right_click`'s exact-id matching.
-    /// Chrome sub-panels (macros, master/layer/clip) are not yet migrated and
-    /// keep their `handle_event` path.
+    /// Forward node-intent registration to the param cards and chrome
+    /// sub-panels. Right-clicks now resolve through intent dispatch (with
+    /// fold-up over dead zones) instead of `route_right_click`'s exact-id
+    /// matching. (clip_chrome has no right-click affordance, so nothing to
+    /// register.) See `docs/NODE_INTENT_DISPATCH.md`.
     fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         for card in &self.master_effects {
             card.register_intents(intents);
@@ -1678,6 +1643,9 @@ impl Panel for InspectorCompositePanel {
         if let Some(gp) = self.gen_params.as_ref() {
             gp.register_intents(intents);
         }
+        self.macros_panel.register_intents(intents);
+        self.master_chrome.register_intents(intents);
+        self.layer_chrome.register_intents(intents);
     }
 
     fn first_node(&self) -> usize {

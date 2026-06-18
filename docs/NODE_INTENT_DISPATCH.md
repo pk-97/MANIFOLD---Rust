@@ -1,8 +1,48 @@
 # Node-Intent Dispatch — friendly, position-robust UI event API
 
-Status: **active build** (started 2026-06-18). Replaces the per-panel
-`event.node_id == self.some_id` matching pattern (142 sites across 16 panels)
-with a single declarative `intent` layer on the UI tree.
+Status: **right-click migration complete — single dispatch path, old handlers
+deleted** (2026-06-18, branch `intent-dispatch`). Every node-addressed
+right-click in the app resolves through one declarative `intent` layer; the
+per-panel `event.node_id == self.some_id` right-click handlers are gone. The
+button-grid clicks are migrated too; the rest of the click handlers remain (a
+later, optional consistency pass).
+
+## Outcome (what shipped on this branch)
+
+**Right-click — one path, everywhere, old handlers deleted:**
+- Foundation: `intent.rs` (`IntentRegistry` + fold-up `resolve`), `UIRoot`
+  wiring, `process_right_click` emit-on-miss (cause #1).
+- Param cards: track = instant reset; the full-row catcher gives label / value /
+  gaps the param menu (no narrow-target lottery).
+- Inspector chrome: `master_chrome` / `layer_chrome` / `macros_panel` register
+  track/label intents (clip_chrome has none).
+- Layer headers: every node of a row registers `LayerHeaderRightClicked(i)`, so
+  a right-click anywhere on the row opens that layer's menu — reproducing the old
+  whole-row positional behaviour through the registry, and dropping the manual
+  X-bounds guard (the hit test scopes it to the panel for free).
+- **Graph editor card:** the editor window's hand-rolled loop now resolves the
+  card's right-click through a dedicated `editor_card_intents` registry against
+  `ed.ui_root.tree` — the second `ui_root` is no longer a holdout.
+- **Deleted:** `param_card::handle_right_click[_effect/_generator]`, the four
+  chrome `handle_right_click`s, the inspector `route_right_click` + its
+  `RightClick` arm, and `layer_header::handle_right_click`. Intent is the *sole*
+  right-click path — no twins, so a registration gap surfaces immediately instead
+  of being masked by a fallback.
+- Perf: repopulation gated on `UITree::structure_version` — off the hot path.
+
+**The one positional exception (justified):** `viewport` timeline markers. They
+are *painted directly*, not `UITree` nodes, so there is nothing to attach an
+intent to; they resolve right-click by scanning marker-flag rects. This isn't the
+narrow-node anti-pattern (it's whole-flag positional), and it can't join the
+registry without first making markers tree nodes — a separate change.
+
+**No right-click to migrate:** `browser_popup`, `ableton_picker`,
+`audio_setup_panel`, `waveform_lane`, `stem_lane` (click/drag/scrub only).
+
+**Clicks:** `transport` / `header` / `footer` button grids register Click intents
+(verified by registry-resolve tests); their `handle_click` twins remain for now.
+Migrating the remaining panels' clicks is an optional later pass — clicks have no
+dead-zone bug, so it's consistency, not correctness.
 
 ## The problem this removes
 

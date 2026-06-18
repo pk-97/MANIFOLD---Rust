@@ -652,10 +652,6 @@ impl ClipChromePanel {
         Vec::new()
     }
 
-    pub fn handle_right_click(&self, _node_id: u32) -> Vec<PanelAction> {
-        Vec::new()
-    }
-
     pub fn bpm_button_rect(&self, tree: &UITree) -> Rect {
         if self.bpm_value_btn_id >= 0 {
             tree.get_bounds(self.bpm_value_btn_id as u32)

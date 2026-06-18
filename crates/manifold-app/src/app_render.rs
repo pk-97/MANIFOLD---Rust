@@ -839,13 +839,23 @@ impl Application {
                 }
             } else {
                 use manifold_ui::input::UIEvent;
+                // Right-click now resolves through the intent registry (fold-up
+                // catcher), matching the inspector. Refresh it from the card's
+                // current node ids once per frame that carries events; the card
+                // built into `ed.ui_root.tree` last present, so those ids match
+                // this frame's events.
+                if !events.is_empty() {
+                    self.editor_card_intents.clear();
+                    self.editor_card
+                        .register_intents(&mut self.editor_card_intents);
+                }
                 for event in &events {
                     // Left-lane card: map editor pointer events to the card's
                     // node-id methods, exactly as the inspector composite does
                     // (Click→handle_click, PointerDown→grab, Drag→scrub,
-                    // DragEnd→commit, RightClick→menu). The card ignores node_ids
-                    // that aren't its own, so forwarding every event is safe.
-                    // OpenGraphEditor (the card cog) is dropped here — you're
+                    // DragEnd→commit, RightClick→intent resolve). The card ignores
+                    // node_ids that aren't its own, so forwarding every event is
+                    // safe. OpenGraphEditor (the card cog) is dropped here — you're
                     // already in the editor; CardContext suppresses the button in
                     // a later pass.
                     let from_card = match event {
@@ -859,9 +869,15 @@ impl Application {
                         UIEvent::DragEnd { .. } => {
                             self.editor_card.handle_drag_end(&mut ed.ui_root.tree)
                         }
-                        UIEvent::RightClick { node_id, .. } => {
-                            self.editor_card.handle_right_click(*node_id)
-                        }
+                        UIEvent::RightClick { node_id, .. } => self
+                            .editor_card_intents
+                            .resolve(
+                                &ed.ui_root.tree,
+                                *node_id as i32,
+                                manifold_ui::intent::Gesture::RightClick,
+                            )
+                            .into_iter()
+                            .collect(),
                         _ => Vec::new(),
                     };
                     for a in from_card {
