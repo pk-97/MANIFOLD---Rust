@@ -637,7 +637,14 @@ impl Application {
                     .map(|c| (c.id.clone(), c.audio_file_path.clone()))
             })
             .collect();
-        self.ws.ui_root.audio_waveforms.poll_and_request(&audio_clips);
+        // A decode that lands this frame must be attached now: the viewport clip
+        // snapshot is only rebuilt on drag / structural change, so without this the
+        // waveform would stay blank (and look like it "cleared" while scrolling)
+        // until the next unrelated edit. Re-sync so the new renderer attaches; the
+        // per-layer fingerprint (waveform.is_some()) then repaints the lane once.
+        if self.ws.ui_root.audio_waveforms.poll_and_request(&audio_clips) {
+            crate::ui_bridge::sync_clip_positions(&mut self.ws.ui_root, &self.local_project);
+        }
 
         // 1c. Push the latest graph snapshot into the editor canvas
         // (read-only viewer of the running NodeGraphTestFX).

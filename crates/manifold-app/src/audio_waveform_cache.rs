@@ -65,9 +65,18 @@ impl AudioWaveformCache {
     /// Drive the cache: drain finished decodes, request decodes for any audio
     /// clip not yet requested, and evict clips no longer present. Call once per
     /// frame with `(clip_id, file_path)` for every audio clip in the project.
-    pub fn poll_and_request(&mut self, audio_clips: &[(ClipId, String)]) {
+    ///
+    /// Returns `true` when a decode finished on this call. The viewport's clip
+    /// snapshot is only rebuilt on drag / structural change, so a renderer that
+    /// lands between those would never get attached (the waveform would stay
+    /// blank until the next unrelated edit). The caller forces a clip re-sync on
+    /// `true` so the new renderer attaches the moment it's ready.
+    #[must_use]
+    pub fn poll_and_request(&mut self, audio_clips: &[(ClipId, String)]) -> bool {
+        let mut newly_ready = false;
         while let Ok((id, renderer)) = self.rx.try_recv() {
             self.ready.insert(id, Arc::new(renderer));
+            newly_ready = true;
         }
         for (id, path) in audio_clips {
             if path.is_empty() || self.requested.contains(id) {
@@ -100,6 +109,7 @@ impl AudioWaveformCache {
             self.requested.retain(|id| !evicted.contains(id));
             self.absent_polls.retain(|id, _| !evicted.contains(id));
         }
+        newly_ready
     }
 
     fn spawn_decode(&self, id: ClipId, path: String) {
@@ -134,17 +144,18 @@ mod tests {
         let id = ClipId::new("c1");
         // A bogus path is requested once (decode will fail in the background,
         // but the request is recorded so it is not re-spawned every frame).
-        cache.poll_and_request(&[(id.clone(), "/no/such.wav".into())]);
+        // Nothing decodes synchronously, so the first poll reports no new ready.
+        assert!(!cache.poll_and_request(&[(id.clone(), "/no/such.wav".into())]));
         assert!(cache.requested.contains(&id));
-        cache.poll_and_request(&[(id.clone(), "/no/such.wav".into())]);
+        let _ = cache.poll_and_request(&[(id.clone(), "/no/such.wav".into())]);
         assert_eq!(cache.requested.len(), 1);
         // Clip vanishes for ONE poll → still tracked (grace window absorbs a
         // transient snapshot disagreement; this is what kills the flicker).
-        cache.poll_and_request(&[]);
+        let _ = cache.poll_and_request(&[]);
         assert_eq!(cache.requested.len(), 1, "one miss must not evict");
         // Absent for the full grace window → finally evicted.
         for _ in 0..EVICT_GRACE_POLLS {
-            cache.poll_and_request(&[]);
+            let _ = cache.poll_and_request(&[]);
         }
         assert!(cache.requested.is_empty());
         assert!(cache.renderer(&id).is_none());
@@ -154,15 +165,15 @@ mod tests {
     fn reappearing_clip_resets_grace() {
         let mut cache = AudioWaveformCache::default();
         let id = ClipId::new("c1");
-        cache.poll_and_request(&[(id.clone(), "/no/such.wav".into())]);
+        let _ = cache.poll_and_request(&[(id.clone(), "/no/such.wav".into())]);
         // Absent for almost the whole window, then it comes back…
         for _ in 0..EVICT_GRACE_POLLS - 1 {
-            cache.poll_and_request(&[]);
+            let _ = cache.poll_and_request(&[]);
         }
-        cache.poll_and_request(&[(id.clone(), "/no/such.wav".into())]);
+        let _ = cache.poll_and_request(&[(id.clone(), "/no/such.wav".into())]);
         // …the counter reset, so another near-full window still doesn't evict.
         for _ in 0..EVICT_GRACE_POLLS - 1 {
-            cache.poll_and_request(&[]);
+            let _ = cache.poll_and_request(&[]);
         }
         assert!(cache.requested.contains(&id), "reappearance must reset grace");
     }
