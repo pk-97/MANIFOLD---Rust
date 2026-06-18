@@ -332,6 +332,12 @@ pub enum PanelAction {
     /// The host reads the send's current gain, applies the delta, clamps, and
     /// commits — so the project stays the single source of truth.
     AudioSendGainStep(manifold_core::AudioSendId, f32),
+    /// Cycle a send's signal source: capture channels → each audio layer →
+    /// back to capture. The host resolves the current source against the live
+    /// project's audio layers, picks the next, and commits a source change —
+    /// the way an audio layer gets routed to drive modulation
+    /// (`docs/AUDIO_LAYER_DESIGN.md`).
+    AudioSendSourceClicked(manifold_core::AudioSendId),
     /// Begin dragging a band-divider line on the spectrogram — snapshot the
     /// current crossovers so the commit records one undo step.
     AudioCrossoverDragBegin,

@@ -1076,7 +1076,7 @@ pub fn sync_inspector_data(
     // the modal is up) gives each send row its real channel name, grouped or
     // not, instead of a bare index.
     if ui.audio_setup_panel.is_open() {
-        use manifold_core::AudioSourceKind;
+        use manifold_core::{AudioSendSource, AudioSourceKind};
         use manifold_ui::panels::audio_setup_panel::AudioSendRow;
         let dir = manifold_audio::directory::system_directory();
         // Tap sources (system / app output) don't live in the input-device list,
@@ -1092,13 +1092,32 @@ pub fn sync_inspector_data(
             .audio_setup
             .sends
             .iter()
-            .map(|s| AudioSendRow {
-                id: s.id.clone(),
-                label: s.label.clone(),
-                channel_label: channel_label(device.as_ref(), is_tap, &s.channels),
-                channels: s.channels.clone(),
-                gain_db: s.gain_db,
-                driven_count: project.audio_send_usage_count(&s.id),
+            .map(|s| {
+                // Source indicator: "Cap" for a capture (channel) source, or the
+                // feeding audio layer's (truncated) name when layer-fed.
+                let (source_label, layer_fed) = match &s.source {
+                    AudioSendSource::Layer(lid) => {
+                        let name = project
+                            .timeline
+                            .layers
+                            .iter()
+                            .find(|l| &l.layer_id == lid)
+                            .map(|l| l.name.chars().take(6).collect::<String>())
+                            .unwrap_or_else(|| "\u{2014}".to_string()); // — (orphaned)
+                        (name, true)
+                    }
+                    AudioSendSource::Capture => ("Cap".to_string(), false),
+                };
+                AudioSendRow {
+                    id: s.id.clone(),
+                    label: s.label.clone(),
+                    channel_label: channel_label(device.as_ref(), is_tap, &s.channels),
+                    channels: s.channels.clone(),
+                    gain_db: s.gain_db,
+                    driven_count: project.audio_send_usage_count(&s.id),
+                    source_label,
+                    layer_fed,
+                }
             })
             .collect();
 

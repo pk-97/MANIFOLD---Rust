@@ -18,6 +18,7 @@ use manifold_editing::commands::audio_mod::{
 use manifold_editing::commands::audio_setup::{
     AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand, SetAudioCrossoversCommand,
     SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendGainCommand,
+    SetAudioSendSourceCommand,
 };
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
@@ -1400,6 +1401,42 @@ pub(super) fn dispatch_inspector(
                 project,
                 content_tx,
                 Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
+            )
+        }
+        PanelAction::AudioSendSourceClicked(id) => {
+            // Cycle the send's source: capture → each audio layer (timeline
+            // order) → back to capture. This is how an audio layer gets routed
+            // to drive modulation (docs/AUDIO_LAYER_DESIGN.md §3). The model is
+            // the single source of truth — read current, pick next, commit.
+            use manifold_core::AudioSendSource;
+            let audio_layers: Vec<manifold_core::LayerId> = project
+                .timeline
+                .layers
+                .iter()
+                .filter(|l| l.is_audio())
+                .map(|l| l.layer_id.clone())
+                .collect();
+            let current = project.audio_setup.find_send(id).map(|s| s.source.clone());
+            let next = match current {
+                Some(AudioSendSource::Capture) => match audio_layers.first() {
+                    Some(first) => AudioSendSource::Layer(first.clone()),
+                    None => return DispatchResult::structural(), // nothing to route to
+                },
+                Some(AudioSendSource::Layer(lid)) => {
+                    // Advance to the next audio layer, or wrap back to capture.
+                    match audio_layers.iter().position(|l| *l == lid) {
+                        Some(i) if i + 1 < audio_layers.len() => {
+                            AudioSendSource::Layer(audio_layers[i + 1].clone())
+                        }
+                        _ => AudioSendSource::Capture,
+                    }
+                }
+                None => return DispatchResult::structural(), // send vanished
+            };
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioSendSourceCommand::new(id.clone(), next)),
             )
         }
         PanelAction::AudioCrossoverDragBegin => {

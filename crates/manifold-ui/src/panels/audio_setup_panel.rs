@@ -59,6 +59,13 @@ pub struct AudioSendRow {
     /// Number of parameters this send currently drives. Surfaced on the row and
     /// gates a confirm-before-delete so a bound send isn't silently severed.
     pub driven_count: usize,
+    /// Compact source indicator for the source button: "Cap" for a capture
+    /// (channel) source, or the audio layer's name when the send is fed by a
+    /// timeline audio layer. Resolved by the data layer.
+    pub source_label: String,
+    /// Whether the send is fed by an audio layer (controls the source button's
+    /// accent so a layer-fed send reads distinctly from a capture send).
+    pub layer_fed: bool,
 }
 
 /// Height of the spectrogram scope section (title + waterfall).
@@ -101,6 +108,8 @@ struct SendRowIds {
     /// Identity-colour swatch — clicking it selects the send for the scope.
     swatch: i32,
     label: i32,
+    /// Signal-source cycle button: capture channels ↔ an audio layer.
+    source: i32,
     ch_dropdown: i32,
     gain_minus: i32,
     gain_plus: i32,
@@ -480,8 +489,23 @@ impl AudioSetupPanel {
                 "\u{002B}", // +
             ) as i32;
 
+            // Source cycle button: capture channels ↔ an audio layer. A
+            // layer-fed send accents the button and shows the layer's name; this
+            // is how an audio layer is routed to drive modulation (design §3).
+            const SRC_W: f32 = 48.0;
+            let src_x = label_x + LABEL_W + 4.0;
+            self.send_ids[i].source = tree.add_button(
+                self.bg_id,
+                src_x,
+                cy,
+                SRC_W,
+                ROW_H,
+                btn_style(send.layer_fed),
+                &send.source_label,
+            ) as i32;
+
             // Channel dropdown fills the gap, showing the resolved name(s).
-            let ch_x = label_x + LABEL_W + 4.0;
+            let ch_x = src_x + SRC_W + 4.0;
             let ch_w = (gain_x - 4.0 - ch_x).max(40.0);
             self.send_ids[i].ch_dropdown = tree.add_button(
                 self.bg_id,
@@ -815,6 +839,7 @@ impl AudioSetupPanel {
         self.send_ids.iter().any(|r| {
             id == r.swatch
                 || id == r.label
+                || id == r.source
                 || id == r.ch_dropdown
                 || id == r.gain_minus
                 || id == r.gain_plus
@@ -952,6 +977,8 @@ impl AudioSetupPanel {
                 Some((i, RowControl::Select))
             } else if id == ids.label {
                 Some((i, RowControl::Label))
+            } else if id == ids.source {
+                Some((i, RowControl::Source))
             } else if id == ids.ch_dropdown {
                 Some((i, RowControl::Channel))
             } else if id == ids.gain_minus {
@@ -979,6 +1006,10 @@ impl AudioSetupPanel {
             RowControl::Label => {
                 self.delete_armed = None;
                 Some(PanelAction::AudioSendLabelClicked(send_id))
+            }
+            RowControl::Source => {
+                self.delete_armed = None;
+                Some(PanelAction::AudioSendSourceClicked(send_id))
             }
             RowControl::Channel => {
                 self.delete_armed = None;
@@ -1018,6 +1049,7 @@ impl AudioSetupPanel {
 enum RowControl {
     Select,
     Label,
+    Source,
     Channel,
     GainDown,
     GainUp,
@@ -1206,6 +1238,8 @@ mod tests {
                     channel_label: "Channel 1".into(),
                     gain_db: 0.0,
                     driven_count: 0,
+                    source_label: "Cap".into(),
+                    layer_fed: false,
                 },
                 AudioSendRow {
                     id: AudioSendId::new("s2"),
@@ -1214,6 +1248,8 @@ mod tests {
                     channel_label: "MacBook Mic".into(),
                     gain_db: 0.0,
                     driven_count: 0,
+                    source_label: "Cap".into(),
+                    layer_fed: false,
                 },
             ],
             None,
@@ -1269,6 +1305,20 @@ mod tests {
         // Closed → no scope rect.
         p.close();
         assert!(p.scope_rect().is_none());
+    }
+
+    #[test]
+    fn source_button_emits_source_clicked_and_is_owned() {
+        let mut p = panel_with_two_sends();
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+
+        let src = p.send_ids[0].source;
+        assert!(p.owns_node(src), "source button is a panel-owned node");
+        match p.handle_click(src) {
+            Some(PanelAction::AudioSendSourceClicked(id)) => assert_eq!(id.as_str(), "s1"),
+            other => panic!("expected AudioSendSourceClicked, got {other:?}"),
+        }
     }
 
     #[test]
