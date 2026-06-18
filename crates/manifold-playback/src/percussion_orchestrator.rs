@@ -23,7 +23,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use manifold_core::Beats;
 use manifold_core::ClipId;
 use manifold_core::audio_clip_detection::AudioClipDetection;
-use manifold_core::percussion_analysis::{PercussionAnalysisData, ProjectBeatTimeConverter};
+use manifold_core::percussion_analysis::{
+    ClipDetectionAnchor, PercussionAnalysisData, ProjectBeatTimeConverter,
+};
 use manifold_core::percussion_binding::ProjectPercussionBindingResolver;
 use manifold_core::percussion_settings::{
     PercussionImportOptionsFactory, PercussionPipelineSettings,
@@ -219,7 +221,6 @@ enum ReImportStemsSubPhase {
 /// The clip owns the result (cached analysis + tagged triggers); no global state.
 struct DetectClipState {
     clip_id: ClipId,
-    audio_start_beat: f32,
     sub_phase: DetectClipSubPhase,
     temp_output_json: String,
     invocation: PercussionPipelineInvocation,
@@ -557,9 +558,9 @@ impl PercussionImportOrchestrator {
             return;
         }
 
-        // Resolve the clip's audio file and timeline anchor.
-        let (audio_path, audio_start_beat) = match project.timeline.find_clip_by_id(&clip_id) {
-            Some(c) if c.is_audio() => (c.audio_file_path.clone(), c.start_beat.as_f32()),
+        // Resolve the clip's audio file (geometry is read at apply time).
+        let audio_path = match project.timeline.find_clip_by_id(&clip_id) {
+            Some(c) if c.is_audio() => c.audio_file_path.clone(),
             _ => {
                 self.set_percussion_import_status(
                     "Detect: not an audio clip",
@@ -633,7 +634,6 @@ impl PercussionImportOrchestrator {
         );
         self.phase = OrchestratorPhase::DetectClip(DetectClipState {
             clip_id,
-            audio_start_beat,
             sub_phase: DetectClipSubPhase::RunningPipeline,
             temp_output_json,
             invocation,
@@ -1620,21 +1620,14 @@ impl PercussionImportOrchestrator {
 
             DetectClipSubPhase::ApplyingResult { pipeline_ok } => {
                 let pipeline_ok = *pipeline_ok;
-                let (clip_id, temp_json, audio_start_beat) =
-                    if let OrchestratorPhase::DetectClip(s) = &self.phase {
-                        (s.clip_id.clone(), s.temp_output_json.clone(), s.audio_start_beat)
-                    } else {
-                        return;
-                    };
+                let (clip_id, temp_json) = if let OrchestratorPhase::DetectClip(s) = &self.phase {
+                    (s.clip_id.clone(), s.temp_output_json.clone())
+                } else {
+                    return;
+                };
 
                 if pipeline_ok {
-                    self.apply_clip_detection(
-                        &clip_id,
-                        &temp_json,
-                        audio_start_beat,
-                        project,
-                        editing_service,
-                    );
+                    self.apply_clip_detection(&clip_id, &temp_json, project, editing_service);
                 }
                 let _ = std::fs::remove_file(&temp_json);
 
@@ -1651,7 +1644,6 @@ impl PercussionImportOrchestrator {
         &mut self,
         clip_id: &ClipId,
         temp_json: &str,
-        audio_start_beat: f32,
         project: &mut Project,
         editing_service: &mut manifold_editing::service::EditingService,
     ) -> bool {
@@ -1689,27 +1681,32 @@ impl PercussionImportOrchestrator {
             }
         };
 
-        // Cache the analysis on the clip (the clip owns its events) and read its
-        // detection config. The energy envelope rides inside the cached analysis,
-        // so no project-global state is written.
-        let config = {
+        // Cache the analysis on the clip (the clip owns its events), read its
+        // detection config, and build the clip-anchored, warp-aware converter
+        // from the clip's geometry. The energy envelope rides inside the cached
+        // analysis, so no project-global state is written.
+        let project_bpm = project.settings.bpm;
+        let (config, anchor) = {
             let clip = match project.timeline.find_clip_by_id_mut(clip_id) {
                 Some(c) => c,
                 None => return false,
             };
+            let anchor = ClipDetectionAnchor::new(
+                clip.start_beat,
+                clip.duration_beats,
+                clip.in_point,
+                clip.recorded_bpm,
+                project_bpm,
+            );
             let detection = clip
                 .audio_detection
                 .get_or_insert_with(AudioClipDetection::new);
             detection.analysis = Some(analysis.clone());
-            detection.config.clone()
+            (detection.config.clone(), anchor)
         };
 
-        let options = build_clip_detection_options(
-            project,
-            self.pipeline_settings.as_ref(),
-            &config,
-            Beats::from_f32(audio_start_beat),
-        );
+        let options =
+            build_clip_detection_options(project, self.pipeline_settings.as_ref(), &config, anchor);
 
         let binding_resolver = ProjectPercussionBindingResolver::new(project, &options);
         let plan = {

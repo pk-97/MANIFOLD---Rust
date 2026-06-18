@@ -525,6 +525,69 @@ impl PercussionClipBinding {
     }
 }
 
+// ─── ClipDetectionAnchor ───
+
+/// Maps a source-file time to a timeline beat for per-clip detection, folding in
+/// where the clip sits (`start_beat`), how much of the file it skips (`in_point`),
+/// and warp. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md` §4.
+///
+/// `seconds_per_beat` is precomputed at build time from both the clip and the
+/// project, so the mapping needs no tempo-map access:
+/// - **warp on** (`recorded_bpm > 0`): `60 / recorded_bpm`. Warp locks the
+///   source's musical tempo to the project, so one source-beat is one
+///   timeline-beat and a trigger lands on what is heard.
+/// - **warp off** (`recorded_bpm == 0`): `60 / project_bpm`. The source plays at
+///   native speed; source-seconds become timeline-seconds, mapped at the project
+///   tempo (exact for a flat tempo map).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipDetectionAnchor {
+    pub start_beat: Beats,
+    pub end_beat: Beats,
+    pub in_point: Seconds,
+    pub seconds_per_beat: f32,
+}
+
+impl ClipDetectionAnchor {
+    /// Build from a clip's geometry and the project tempo.
+    pub fn new(
+        start_beat: Beats,
+        duration_beats: Beats,
+        in_point: Seconds,
+        recorded_bpm: f32,
+        project_bpm: Bpm,
+    ) -> Self {
+        let effective_bpm = if recorded_bpm > 0.0 {
+            recorded_bpm
+        } else {
+            project_bpm.0.max(1.0)
+        };
+        Self {
+            start_beat,
+            end_beat: start_beat + duration_beats,
+            in_point: in_point.max(Seconds::ZERO),
+            seconds_per_beat: 60.0 / effective_bpm,
+        }
+    }
+
+    /// Map a source-file time to a timeline beat, or `None` if the event falls
+    /// outside the clip's trimmed window (before `in_point` or past the end).
+    pub fn map_source_seconds(&self, source_seconds: Seconds) -> Option<Beats> {
+        if !source_seconds.0.is_finite()
+            || source_seconds < self.in_point
+            || self.seconds_per_beat <= 0.0
+        {
+            return None;
+        }
+        let delta_secs = (source_seconds - self.in_point).as_f32();
+        let beat = self.start_beat + Beats::from_f32(delta_secs / self.seconds_per_beat);
+        if !beat.0.is_finite() || beat >= self.end_beat {
+            return None;
+        }
+        Some(beat.max(Beats::ZERO))
+    }
+}
+
 // ─── PercussionImportOptions ───
 
 /// Port of Unity PercussionImportOptions class.
@@ -539,6 +602,11 @@ pub struct PercussionImportOptions {
     pub onset_compensation_seconds: Seconds,
     pub minimum_energy_gate: f32,
     pub bindings: Vec<PercussionClipBinding>,
+    /// When set (per-clip detection), the planner maps event times through this
+    /// clip-anchored, warp-aware converter and trims to the clip window instead
+    /// of using the project beat-time converter. `None` for the legacy wizard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_anchor: Option<ClipDetectionAnchor>,
 }
 
 impl Default for PercussionImportOptions {
@@ -551,6 +619,7 @@ impl Default for PercussionImportOptions {
             onset_compensation_seconds: Seconds::ZERO,
             minimum_energy_gate: 0.0,
             bindings: Vec::new(),
+            clip_anchor: None,
         }
     }
 }
@@ -614,6 +683,9 @@ pub struct PercussionPlacementPlan {
     pub skipped_low_confidence: i32,
     pub skipped_by_quantized_dedup: i32,
     pub skipped_low_energy: i32,
+    /// Events trimmed because they fall outside the clip's window (per-clip
+    /// detection only — before `in_point` or past the clip end).
+    pub skipped_out_of_clip: i32,
 }
 
 impl PercussionPlacementPlan {
@@ -871,5 +943,52 @@ mod tests {
         let resolved = binding.with_video_clip_id("clip_123");
         assert_eq!(resolved.video_clip_id.as_deref(), Some("clip_123"));
         assert_eq!(resolved.trigger_type, PercussionTriggerType::Kick);
+    }
+
+    #[test]
+    fn anchor_warp_on_locks_source_beats_to_timeline() {
+        // 120-BPM clip on a 128-BPM project: a hit 0.5s into the file is 1
+        // source-beat in, which warp places at timeline beat 1 (start + 1).
+        let anchor = ClipDetectionAnchor::new(
+            Beats::ZERO,
+            Beats(8.0),
+            Seconds::ZERO,
+            120.0,
+            Bpm(128.0),
+        );
+        let beat = anchor.map_source_seconds(Seconds(0.5)).unwrap();
+        assert!((beat.0 - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn anchor_warp_off_uses_project_tempo() {
+        // No recorded BPM: native playback, mapped at the project tempo.
+        let anchor =
+            ClipDetectionAnchor::new(Beats::ZERO, Beats(8.0), Seconds::ZERO, 0.0, Bpm(120.0));
+        // 0.5s native at 120 BPM = 1 beat.
+        let beat = anchor.map_source_seconds(Seconds(0.5)).unwrap();
+        assert!((beat.0 - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn anchor_respects_start_beat_and_in_point() {
+        // Clip starts at beat 4 and skips the first 2s of the file.
+        let anchor =
+            ClipDetectionAnchor::new(Beats(4.0), Beats(8.0), Seconds(2.0), 120.0, Bpm(120.0));
+        // Before in_point: trimmed off.
+        assert!(anchor.map_source_seconds(Seconds(1.5)).is_none());
+        // 2.5s file = 0.5s past in_point = 1 beat past start (4) -> beat 5.
+        let beat = anchor.map_source_seconds(Seconds(2.5)).unwrap();
+        assert!((beat.0 - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn anchor_trims_events_past_clip_end() {
+        // 2-beat clip (end_beat = 2). A hit mapping past the end is dropped.
+        let anchor =
+            ClipDetectionAnchor::new(Beats::ZERO, Beats(2.0), Seconds::ZERO, 120.0, Bpm(120.0));
+        assert!(anchor.map_source_seconds(Seconds(0.5)).is_some()); // beat 1, inside
+        assert!(anchor.map_source_seconds(Seconds(1.0)).is_none()); // beat 2 == end, trimmed
+        assert!(anchor.map_source_seconds(Seconds(5.0)).is_none()); // well past
     }
 }

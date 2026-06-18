@@ -12,7 +12,7 @@ use manifold_core::layer::Layer;
 use manifold_core::math::{BeatQuantizer, MathUtils};
 use manifold_core::percussion::ImportedPercussionClipPlacement;
 use manifold_core::percussion_analysis::{
-    PercussionAnalysisData, PercussionClipBinding, PercussionImportOptions,
+    ClipDetectionAnchor, PercussionAnalysisData, PercussionClipBinding, PercussionImportOptions,
     PercussionPlacementPlan, PercussionTriggerType,
 };
 use manifold_core::audio_clip_detection::DetectionConfig;
@@ -522,24 +522,28 @@ impl Default for PercussionImportService {
 /// Starts from the default/project options factory (which carries the proven
 /// per-instrument generator + duration defaults), then overlays the clip's own
 /// knobs: quantize, onset compensation, the enabled instrument set, and the
-/// sensitivity → `minimum_confidence` mapping. Routing stays by trigger name for
-/// now; explicit per-instrument `target_layer` is honoured once the inspector
-/// (P4) drives it. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
+/// sensitivity → `minimum_confidence` mapping. The `anchor` makes placement
+/// clip-anchored and warp-aware (the planner maps event times through it and
+/// trims to the clip window), so `start_beat_offset` stays zero. Routing stays
+/// by trigger name for now; explicit per-instrument `target_layer` is honoured
+/// once the inspector (P4) drives it. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
 pub fn build_clip_detection_options(
     project: &Project,
     pipeline_settings: Option<&PercussionPipelineSettings>,
     config: &DetectionConfig,
-    start_beat_offset: Beats,
+    anchor: ClipDetectionAnchor,
 ) -> PercussionImportOptions {
+    // The anchor owns placement, so the factory's start-beat offset is zero.
     let mut options = PercussionImportOptionsFactory::create_default_with_settings(
         project,
         pipeline_settings,
-        start_beat_offset,
+        Beats::ZERO,
     );
 
     options.quantize_to_grid = config.quantize_on;
     options.quantize_step_beats = config.quantize_step_beats;
     options.onset_compensation_seconds = config.onset_compensation;
+    options.clip_anchor = Some(anchor);
 
     // Keep only instruments the clip has enabled, and apply per-instrument
     // sensitivity as the confidence gate.
@@ -718,9 +722,19 @@ mod tests {
             }
         }
 
-        let options = build_clip_detection_options(&project, None, &config, Beats::from_f32(2.0));
+        let anchor = ClipDetectionAnchor::new(
+            Beats(4.0),
+            Beats(8.0),
+            Seconds::ZERO,
+            120.0,
+            manifold_core::units::Bpm(120.0),
+        );
+        let options = build_clip_detection_options(&project, None, &config, anchor);
 
-        assert_eq!(options.start_beat_offset, Beats::from_f32(2.0));
+        // The anchor owns placement; the legacy start-beat offset stays zero.
+        assert_eq!(options.start_beat_offset, Beats::ZERO);
+        let a = options.clip_anchor.expect("anchor is set");
+        assert_eq!(a.start_beat, Beats(4.0));
         let kick = options
             .bindings
             .iter()

@@ -413,6 +413,7 @@ impl PercussionPipelineSettings {
             onset_compensation_seconds: self.global.onset_compensation_seconds,
             minimum_energy_gate: 0.0,
             bindings: Vec::with_capacity(9),
+            clip_anchor: None,
         };
 
         options.bindings.push(PercussionClipBinding::new(
@@ -679,6 +680,7 @@ impl PercussionImportOptionsFactory {
             onset_compensation_seconds: Seconds(0.010),
             minimum_energy_gate: 0.0,
             bindings: Vec::with_capacity(8),
+            clip_anchor: None,
         };
 
         // Kick — punchy geometric wireframes, top of stack.

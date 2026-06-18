@@ -83,13 +83,27 @@ impl<'a> PercussionTimelinePlanner<'a> {
 
             let compensated_time =
                 Seconds(percussion_event.time_seconds as f64) + options.onset_compensation_seconds;
-            let mapped_beat = match analysis
-                .try_map_seconds_to_beat(compensated_time, Some(self.beat_time_converter.as_mut()))
-            {
-                Some(b) => b,
-                None => {
-                    plan.skipped_invalid_timing += 1;
-                    continue;
+            // Per-clip detection maps through the clip-anchored, warp-aware
+            // converter and trims to the clip window; the legacy wizard uses the
+            // project beat-time converter.
+            let mapped_beat = if let Some(anchor) = &options.clip_anchor {
+                match anchor.map_source_seconds(compensated_time) {
+                    Some(b) => b,
+                    None => {
+                        plan.skipped_out_of_clip += 1;
+                        continue;
+                    }
+                }
+            } else {
+                match analysis.try_map_seconds_to_beat(
+                    compensated_time,
+                    Some(self.beat_time_converter.as_mut()),
+                ) {
+                    Some(b) => b,
+                    None => {
+                        plan.skipped_invalid_timing += 1;
+                        continue;
+                    }
                 }
             };
 
@@ -163,5 +177,73 @@ impl<'a> PercussionTimelinePlanner<'a> {
 
     fn compose_quantized_slot_key(spacing_key: i32, quantized_tick: i32) -> i64 {
         ((spacing_key as i64) << 32) | (quantized_tick as u32 as i64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::percussion_analysis::{
+        ClipDetectionAnchor, PercussionClipBinding, PercussionEvent,
+    };
+    use manifold_core::preset_type_id::PresetTypeId;
+    use manifold_core::units::Bpm;
+
+    /// The anchored path must never touch the project beat-time converter.
+    struct PanicConverter;
+    impl BeatTimeConverter for PanicConverter {
+        fn seconds_to_beat(&mut self, _seconds: Seconds) -> Beats {
+            panic!("anchored detection must not use the project converter");
+        }
+    }
+
+    struct KickResolver;
+    impl PercussionBindingResolver for KickResolver {
+        fn try_resolve(&self, event: &PercussionEvent) -> Option<PercussionClipBinding> {
+            Some(PercussionClipBinding::new(
+                event.trigger_type,
+                0,
+                None,
+                PresetTypeId::from_string("Gen".to_string()),
+                Beats(0.25),
+                0.0,
+            ))
+        }
+    }
+
+    #[test]
+    fn anchored_plan_places_on_heard_beats_and_trims() {
+        // 120-BPM clip on a 128-BPM project, anchored at beat 0, 4 beats long.
+        let events = vec![
+            // 0.5s into the file = 1 source-beat = timeline beat 1 (inside).
+            PercussionEvent::new(PercussionTriggerType::Kick, 0.5, 0.9, 0.0),
+            // Far past the 4-beat clip window: trimmed.
+            PercussionEvent::new(PercussionTriggerType::Kick, 50.0, 0.9, 0.0),
+        ];
+        let analysis = PercussionAnalysisData::new_simple("t", Bpm(120.0), events);
+
+        let anchor =
+            ClipDetectionAnchor::new(Beats::ZERO, Beats(4.0), Seconds::ZERO, 120.0, Bpm(128.0));
+        let options = PercussionImportOptions {
+            quantize_to_grid: false,
+            clip_anchor: Some(anchor),
+            bindings: vec![PercussionClipBinding::new(
+                PercussionTriggerType::Kick,
+                0,
+                None,
+                PresetTypeId::from_string("Gen".to_string()),
+                Beats(0.25),
+                0.0,
+            )],
+            ..Default::default()
+        };
+
+        let mut planner =
+            PercussionTimelinePlanner::new(Box::new(PanicConverter), Box::new(KickResolver));
+        let plan = planner.build_plan(Some(&analysis), Some(&options));
+
+        assert_eq!(plan.accepted_events(), 1, "one kick inside the clip window");
+        assert_eq!(plan.skipped_out_of_clip, 1, "one kick trimmed past the end");
+        assert!((plan.placements()[0].start_beat.0 - 1.0).abs() < 1e-6);
     }
 }
