@@ -1,10 +1,12 @@
-<!-- index: A timeline audio layer: drag an audio file onto a layer, it plays through a real output stream, draws a waveform, and feeds a send for audio modulation. The architectural spine is offline analysis — a decoded file is analyzed once on import into a per-send feature curve sampled at the playhead (deterministic, look-ahead, no realtime glitch risk), so only the audio *output* stays realtime. Covers the data model, the offline-vs-live modulation fork, the output backend + mixer + declick + warp (Signalsmith pitch-preserving first-class, varispeed fallback) + transport-follow sync, export integration, and the doubling-the-same-stem usage rule with Ableton. -->
+<!-- index: A timeline audio layer: drag an audio file onto a layer, it plays through the existing kira playback subsystem, draws a waveform, and feeds a send for audio modulation. The architectural spine is offline analysis — a decoded file is analyzed once on import into a per-send feature curve sampled at the playhead (deterministic, look-ahead, no realtime glitch risk). The playback half (decode, kira output/mixing, sample-accurate transport sync, multi-stem) ALREADY EXISTS, bolted to the percussion-import pipeline; the feature mostly promotes it to a first-class LayerType::Audio and adds send-routing for modulation + warp. Covers the data model, the offline modulation curve, the kira-based playback reuse, warp (Signalsmith first-class / varispeed via kira playback_rate), export, and the recon-anchored phase plan (§12). -->
 
 # Audio Layer — Design Doc
 
-Drag an audio file onto a layer and it becomes a track: it plays through a real output stream, draws its waveform on the lane, and routes to a send for audio modulation. No effects, no compositing — an audio track sits in the same lane list as video and generator layers, the way audio, MIDI, and return tracks coexist in an Ableton arrangement. This is the studio half of "Visual DAW": compose the modulation *into* the arrangement, deterministically, instead of riding live capture.
+Drag an audio file onto a layer and it becomes a track: it plays through Manifold's audio output, draws its waveform on the lane, and routes to a send for audio modulation. No effects, no compositing — an audio track sits in the same lane list as video and generator layers, the way audio, MIDI, and return tracks coexist in an Ableton arrangement. This is the studio half of "Visual DAW": compose the modulation *into* the arrangement, deterministically, instead of riding live capture.
 
-Status: **design only.** Decode + waveform rendering already exist (the percussion import pipeline). The modulation path downstream of a send already exists (the analysis worker, features, onset, `AudioSendId`). What's new is realtime audio *output* — Manifold has none today — plus the layer/clip model and a sync policy. Build order and the one architectural fork are in §2.
+Status: **design only — but most of the playback half already exists.** A recon pass (2026-06-18) found a working **kira**-based subsystem already wired and running, bolted to the percussion-import pipeline: [audio_decoder.rs](../crates/manifold-playback/src/audio_decoder.rs) decodes any format to f32 PCM (symphonia); [audio_sync.rs](../crates/manifold-playback/src/audio_sync.rs) (`ImportedAudioSyncController`) plays an imported track through kira **sample-accurately synced to the transport** (seek-on-drift, replay-on-stop, encoder-delay, volume); [stem_audio.rs](../crates/manifold-playback/src/stem_audio.rs) does the same for *multiple stems*; both are driven each tick from [content_thread.rs](../crates/manifold-app/src/content_thread.rs) via `update_sync`. So **kira is already the output backend and the mixer**, and the follow-the-transport sync policy is already built. What's genuinely new: the layer/clip data model, **send-routing for modulation** (the offline curve), and **warp**. Build order is §12.
+
+> **Correction (2026-06-18):** an earlier draft of this doc claimed "Manifold has no realtime audio output" and scoped a from-scratch cpal output backend + mixer + sync as the risky new work (§4, §9). That was wrong — kira already provides all three. §4 and §9 are rewritten around reusing it; the from-scratch framing is struck.
 
 ---
 
@@ -16,7 +18,7 @@ A live capture source has no choice but to analyze reactively. Samples arrive as
 
 1. **Deterministic.** The modulation is identical every show. The curve is computed from the samples, not from whatever the realtime worker happened to catch this pass. A timing bug can't become the show because there is no realtime timing in the modulation path.
 2. **Look-ahead.** Because the curve is fully known, modulation can read *ahead* of the playhead — anticipate the kick instead of reacting 20 ms after it. A riser can start swelling the visual before the drop lands. The live path can never do this; the file path gets it for free.
-3. **No glitch risk.** The content thread runs at 60 fps. Feeding a continuous realtime analysis off a 60 fps producer means a content-thread hitch becomes a modulation dropout. Sampling a precomputed curve is a table lookup — a stall just reads a slightly stale index, inaudible and invisible. **Only the audio output stays realtime**, and that's isolated behind its own ring (§4).
+3. **No glitch risk.** The content thread runs at 60 fps. Feeding a continuous realtime analysis off a 60 fps producer means a content-thread hitch becomes a modulation dropout. Sampling a precomputed curve is a table lookup — a stall just reads a slightly stale index, inaudible and invisible. The audio *output* is realtime, but that's kira's own audio thread (it buffers ahead of the content tick), not a ring the content thread has to feed sample-by-sample — see §4.
 
 So the modulation half of this feature is built **offline**, not by reusing the live ring. The live analysis worker stays exactly as it is for microphones and taps; the audio layer is a different, simpler source that hands the modulation system a curve instead of a stream. This is the spine of the whole design.
 
@@ -37,25 +39,29 @@ Audio layers ignore the visual half of `Layer` (opacity, effects, blend, composi
 
 ## 2. Build scope and the one fork
 
-Split by what exists versus what's genuinely new.
+Split by what exists versus what's genuinely new. The recon (status line) moved a lot from "new" to "reuse."
 
-**Reuse:**
-- File import + decode to samples — the percussion pipeline (`percussion_analysis` / `percussion_settings`).
-- Waveform rendering on a lane — `waveform_painter` / `WaveformRenderer`.
-- Per-layer solo/mute fields — `Layer.is_solo` / `is_muted`.
-- The modulation path downstream of a send — analysis worker, features, onset, `AudioSendId`.
+**Reuse (already built):**
+- **Decode** — `audio_decoder::decode_audio_to_pcm(path) -> DecodedAudio { samples, sample_rate, channels }` (symphonia; WAV/AIFF/FLAC/MP3/AAC/OGG).
+- **Playback output + mixing** — **kira** (`audio_sync::ImportedAudioSyncController`, `stem_audio`). Plays one track + N stems, summed, with volume. kira owns the realtime audio thread.
+- **Transport sync** — `ImportedAudioSyncController::update_sync(engine)` / the stem controller's `update_sync(master, engine)`: sample-accurate seek-on-drift, replay-on-stop, encoder-delay compensation. This *is* the follow-the-transport policy.
+- **Waveform** — `WaveformRenderer::set_audio_data(&samples, channels, sample_rate)` + `waveform_painter` + the `waveform_lane` panel.
+- **Per-layer solo/mute fields** — `Layer.is_solo` / `is_muted`.
+- **Modulation downstream of a send** — `AudioFeatureSnapshot` → `evaluate_all_audio_mods`, features/onset/`AudioSendId` — entirely source-agnostic.
 
-**New — data model (§1):** `LayerType::Audio`, the audio clip field, the send-source enum, per-layer send + gain.
+**New — data model (§1):** `LayerType::Audio = 3`, the audio clip field, the send-source enum, per-layer send + gain.
 
-**New — offline modulation (§3):** analyze the decoded file once on import into a per-send feature curve; sample it at the playhead. This is *simpler* than the live path, not harder — no ring, no realtime worker, no glitch budget.
+**New — offline modulation (§3):** analyze the decoded file once on import into a per-send feature curve; sample it at the playhead into `AudioFeatureSnapshot`. Simpler than the live path — no ring, no worker, no glitch budget.
 
-**New — realtime output (§4):** the output backend (the missing twin of `CaptureBackend`), the mixer, declicking, warp/time-stretch (Signalsmith first-class, varispeed fallback — §4.1), and the transport-follow sync policy. This is the only genuinely new realtime surface, and the only place the glitch risk lives.
+**New — promote playback to layers (§4):** the existing kira controllers play a *single global* imported track + its stems (the percussion model). The work is generalizing that to **per-layer, multi-clip** playback driven by `LayerType::Audio` clips, and giving mute/solo audible meaning. Not a from-scratch output backend — a refactor of what exists.
+
+**New — warp (§4.1):** kira's `playback_rate` gives varispeed nearly free; pitch-preserving (Signalsmith) is the real new build.
 
 **New — UI (§6) and serialization (§7).**
 
-**Nearly free — export (§8):** audio layers feed the export's audio track through the `audio_muxer` that already exists.
+**Nearly free — export (§8):** render the kira master to a temp WAV, mux via the existing `audio_muxer`.
 
-**The fork:** modulation is offline (§3); output is realtime (§4). They are independent subsystems that happen to share a decoded buffer. A first cut could ship *either* alone — silent-but-modulating (offline only) or audible-but-unanalyzed (output only). Recommended order: offline modulation first (it's cheaper and it's the studio payoff), output second.
+**The fork:** modulation is offline (§3); playback is kira-realtime (§4). Independent subsystems sharing a decoded buffer. A first cut can ship *either* — silent-but-modulating (offline only, skips the layer-playback refactor) or audible-but-unanalyzed (playback only). Recommended order: offline modulation first (cheaper, the studio payoff, zero playback risk), layer-playback promotion second.
 
 ---
 
@@ -73,25 +79,31 @@ This reuses the *extractors* (the feature seam in `analysis.rs`) without reusing
 
 ---
 
-## 4. Realtime output
+## 4. Playback (via kira — already built, needs promotion to layers)
 
-The genuinely new subsystem. Manifold opens no output device today.
+**Manifold already plays audio.** kira is a workspace dependency and owns a realtime audio thread that decodes, mixes, and outputs to the default device. The percussion pipeline drives it today through two controllers; the work here is generalizing them from "one global imported track + its stems" to "per-layer, multi-clip."
 
-- **Output backend.** The twin of `CaptureBackend`: open an output device, RT callback **drains** a ring under the same contract capture obeys — no alloc, no lock, no log, no panic. Backend-neutral seam, same shape as capture, so a future Linux/Windows output drops in where capture's does.
-- **Feeder.** The content thread, each tick, decodes/reads the active clip's sample window for every audible audio layer and pushes into the mixer. This is the realtime producer; its depth is the glitch budget (§9).
-- **Mixer.** Sum audible layers → master, per-layer gain, mute (drop from mix), solo (audio-solo bus). Optional master gain/limiter. Feeds the output ring.
-- **Declick.** Audio is unforgiving where video is not. Short fade ramps at every clip start/end, on pause, on loop-wrap, and on scrub-stop — a hard cut anywhere produces an audible click. This is not polish; it's correctness for audio.
-- **Sync.** Transport stays master (it already is, and in a live show Ableton is master above it via OSC/MIDI). Audio *follows*: reseek the sample position on jump/loop/scrub, tolerate sub-frame drift. **Audio is never the master clock** — that would fight the Ableton-sync reality the whole instrument is built around.
-- **Warp.** Each audio clip carries a **clip BPM**; the warp ratio is `project_tempo / clip_bpm`, so the clip tracks tempo and stays on the beat grid (Ableton's warp-marker model, minus the markers). Both the player and the offline analysis index through this ratio. The stretch sits behind a single `warp(samples, ratio)` seam with two implementations (§4.1).
+What exists and is reused as-is:
+- **Output + mixing** — kira's `AudioManager` plays multiple `StaticSoundData` sounds summed to the default output, each with its own volume `Tween`. That is the mixer; no cpal output backend is needed.
+- **Transport sync** — `ImportedAudioSyncController::update_sync(engine)` already does the whole policy: it computes the expected sample position from the playhead beat (`beat_to_timeline_time`), and on drift beyond a threshold calls `handle.seek_to(expected)`; on a stopped source mid-play it re-plays from `StaticSoundData` to get a fresh handle; it compensates an encoder delay. Transport stays master; audio follows. Done.
+- **Stems** — `stem_audio` already syncs N stems sample-perfectly to the master's position with its own `update_sync` and `reset_stems`. The multi-source machinery exists.
 
-### 4.1 Time-stretch — Signalsmith first-class, varispeed fallback
+What's new (the promotion):
+- **Per-layer / multi-clip generalization.** Today there is one `Option<ImportedAudioSyncController>` on the content thread (`audio_sync`). Generalize to one playing handle per active audio clip (keyed by `ClipId`, per the pool-keyed-by-identity invariant), driven from the same `update_sync` each tick. A clip becoming active under the playhead `play()`s its `StaticSoundData`; becoming inactive stops it. This is the bulk of the work and it's a refactor of `audio_sync` + `stem_audio`, not new realtime code.
+- **Mute / solo audible meaning** — §5. kira volume tweens make mute/solo a per-handle volume ramp (which also gives free declick — see below).
+- **Gain** — per-layer gain → the handle's volume (in dB, matching `AudioSend::gain_db`'s convention).
+
+- **Declick.** Audio clicks where video doesn't — a hard cut at a clip start/end, pause, loop-wrap, or scrub-stop pops. kira's volume `Tween` (already used for `set_volume`) covers most of it: ramp in/out over a few ms instead of hard start/stop. Verify kira's seek/replay paths don't click; add short fades where they do.
+- **Warp** — each clip carries a **clip BPM** (`TimelineClip::recorded_bpm` already exists, clamped 20–300); warp ratio = `project_tempo / clip_bpm`. Both the player and the offline-curve index (§3) go through this ratio. See §4.1.
+
+### 4.1 Time-stretch — Signalsmith first-class, varispeed (kira playback_rate) fallback
 
 Pitch-preserving stretch is **first-class**, because the material that warps worst — drums, percussive transients — is exactly what drives the modulation and what the audience hears.
 
-- **Signalsmith Stretch** (primary): MIT-licensed, modern, single-header C++ with good transient handling, designed for easy integration; wrapped via a Rust binding / thin FFI. MIT keeps it clean for a product. This is the default warp path.
-- **Varispeed** (fallback): resample at the ratio — trivial, but pitch moves with tempo. Used only where Signalsmith is unavailable or as a cheap preview; inaudible near ratio 1.0.
+- **Varispeed (fallback / preview)** — kira exposes `playback_rate`; setting it to the warp ratio stretches by resampling, **nearly free**, but pitch moves with tempo. Inaudible near ratio 1.0. This is the quickest path to *any* warp and validates the clip-BPM → ratio wiring end-to-end before Signalsmith lands.
+- **Signalsmith Stretch (primary)** — MIT-licensed, single-header C++, good transient handling, easy FFI. Pitch-preserving. Because kira plays decoded `StaticSoundData`, the Signalsmith path stretches the **decoded buffer offline/ahead** (or in a streaming wrapper) and hands kira the warped samples at `playback_rate = 1.0` — i.e. Signalsmith replaces the resample, it doesn't fight kira's rate. 
 
-Both take the *same* input — the clip-BPM ratio — so they're interchangeable behind `warp(samples, ratio)`. **Don't roll your own** phase vocoder: the naive version is ~200 lines and smears transients (the kicks you care about); the difficulty is transient handling and phase locking, which Signalsmith already solves.
+Both are driven by the *same* clip-BPM ratio, interchangeable behind a `warp(samples, ratio)` seam. **Don't roll your own** phase vocoder: the naive version smears the transients you care about; Signalsmith already solves transient handling + phase locking.
 
 ---
 
@@ -127,18 +139,22 @@ Audio layers feed the export's audio track through the `audio_muxer` (`manifold-
 
 ---
 
-## 9. The realtime risk
+## 9. The realtime risk (largely retired by kira)
 
-The content thread runs at 60 fps and, in the audible path (§4), *feeds* a continuous audio stream. A content-thread hitch that is invisible in video becomes an **audible glitch** — audio is far less forgiving of frame stutter than the compositor. The output ring between content and the RT callback needs enough decode-ahead depth to ride out a hitch, deeper than intuition suggests.
+The earlier draft worried that the content thread (60 fps) would *feed* a continuous audio stream, so a frame hitch would become an audible glitch. **kira makes that mostly moot**: kira owns its own realtime audio thread and buffers ahead of the content tick. The content thread only sends it *control* messages (`play`/`seek_to`/`set_volume`) via `update_sync` — it does not hand kira samples frame-by-frame. A content-thread hitch delays the next sync correction by a frame; it doesn't starve the output.
 
-Note the offline modulation path (§3) is **immune** to this — it's a table lookup, not a realtime producer. The risk is confined to audio output. This is the strongest reason to treat the two halves as separable subsystems.
+What remains worth watching:
+- **Seek frequency.** `update_sync` seeks on drift. If the per-clip generalization (§4) causes many simultaneous seeks (e.g. a transport jump re-seeking every active clip at once), that's a burst of kira work — check it stays smooth with several active audio clips. The existing single-controller path doesn't exercise this.
+- **Signalsmith on the content thread.** Pitch-preserving stretch must not run synchronously on the content tick for a long clip — do it on import/ahead (offline), like the feature curve, or in kira's streaming path. Varispeed has no such cost (it's a rate set).
+
+The offline modulation path (§3) is **immune** regardless — a table lookup, not a realtime producer.
 
 ---
 
 ## 10. Decisions to make up front
 
-1. **Decode strategy** — whole-file-to-RAM (simplest; a 5-min stereo stem ≈ 50 MB; percussion already decodes the whole file) vs. streaming. Recommend RAM for v1.
-2. **Output device** — default output only, or a picker? Recommend default first.
+1. **Decode strategy** — *settled by kira:* `StaticSoundData` is whole-file-in-RAM, which is already how the percussion path loads. Keep it for v1 (a 5-min stereo stem ≈ 50 MB). Streaming is a kira option only if RAM becomes a problem with many clips.
+2. **Output device** — kira plays to the system default output. A device picker means threading kira's `AudioManagerSettings`/backend config through; defer — default first.
 3. **Bundle audio into the project ZIP** vs. reference by path (§7).
 4. **Warp / time-stretch** — *decided:* warp is in scope, pitch-preserving (Signalsmith) first-class, varispeed fallback, clip-BPM ratio behind `warp(samples, ratio)` (§4.1). Not an open question; recorded here for visibility.
 5. **Tap feedback loop** — playing audio out *while* tapping system audio re-enters the tapped mix → feedback. Needs a guard or a documented "don't route these together."
@@ -152,3 +168,52 @@ Note the offline modulation path (§3) is **immune** to this — it's a table lo
 - **Output metering** — mirror the per-send capture meters for the master out.
 - **Scrub audio** — do you hear grains while scrubbing (DAW-style) or silence? Recommend silent scrub for v1 (with declick on stop).
 - **Curve/send slot pressure** — `MAX_SENDS = 16` is shared between live capture and audio layers; many audio layers each claiming a send competes with live sources.
+
+---
+
+## 12. Implementation plan (recon-anchored, 2026-06-18)
+
+Phases ordered so each ships something usable. Anchors are real file:line from the recon. Crate in brackets.
+
+### P0 — Data model + plumbing *(foundation; nothing audible yet)*
+- `LayerType::Audio = 3` — extend the enum + **both** match arms (int *and* string) in `Serialize`/`Deserialize` at [types.rs:116](../crates/manifold-core/src/types.rs#L116). Note `Group=2` already exists, so Audio is `3`. Then find every exhaustive `match` on `layer_type` (compositor skip, lane rendering) and add the `Audio` arm. [core, renderer, ui]
+- Audio clip field on `TimelineClip` — flat struct, discriminated by populated field (`video_clip_id` / `generator_type`); add `audio_file_path` + an analysis-artifact handle, and a `new_audio(...)` constructor mirroring `new_video` at [clip.rs:190](../crates/manifold-core/src/clip.rs#L190). **`recorded_bpm` already exists** ([clip.rs:27](../crates/manifold-core/src/clip.rs#L27), clamped 20–300) — that's the clip-BPM for warp, no new field. [core]
+- Send source enum on `AudioSend` — today `{ id, label, channels, gain_db, analysis }` at [audio_setup.rs:79](../crates/manifold-core/src/audio_setup.rs#L79). Add a source discriminator: capture-channels (current) | audio-layer(`LayerId`). [core]
+- Per-layer: `Option<AudioSendId>` send target + gain on `Layer`. `is_solo`/`is_muted` already on `Layer` (§5). [core]
+- Command: `AddLayerCommand` already takes `LayerType` ([commands/layer.rs:39](../crates/manifold-editing/src/commands/layer.rs#L39)) → `Layer::new(name, LayerType::Audio, idx)` once the variant exists. Add assign-send / set-gain commands following the same `Command` impl pattern. [editing]
+- Serialize/deserialize roundtrip. [io]
+
+### P1 — Import + waveform *(file on a lane, silent)* — **mostly exists**
+- Decode: reuse `audio_decoder::decode_audio_to_pcm` [playback]. Waveform: reuse `WaveformRenderer::set_audio_data` + `waveform_lane`. The single-global-import path is at [app_lifecycle.rs `poll_pending_audio_load`](../crates/manifold-app/src/app_lifecycle.rs#L483) — generalize it from one `waveform_lane` to per-audio-layer.
+- Drag-drop an audio file → `AddLayerCommand(Audio)` + audio clip. [ui/app]
+- Lane draws waveform; compositor skips `Audio` layers. [renderer/ui]
+
+### P2 — Offline modulation *(studio payoff; silent; SHIPPABLE; zero playback risk)*
+- Make the `analysis.rs` extractors callable on an arbitrary buffer. The DSP is already free functions over a VQT column — `band_reduce` / `reduce_send` / `band_edges` / `tilt_weights` / `relative_flux` ([analysis.rs:805+](../crates/manifold-audio/src/analysis.rs#L805)) — with sequential state in `SendState`. Offline analyzer = a sequential pass over decoded samples driving a `SendState` through `CqtTransform`, emitting `Vec<SendFeatures>` (the curve). Identical math → "what you see is what modulates" holds. [audio]
+- Sample the curve at the playhead and write into `AudioFeatureSnapshot.sends[i]` at [audio_mod_runtime.rs:203](../crates/manifold-app/src/audio_mod_runtime.rs#L203). Downstream (`evaluate_all_audio_mods`, [modulation.rs:355](../crates/manifold-playback/src/modulation.rs#L355)) is unchanged. [app/playback]
+- **The one real P2 decision — index alignment.** `AudioFeatureSnapshot.sends` is indexed by *position* in `AudioSetup::sends`, and the worker only produces device-fed sends. Two options: (a) pass layer-fed sends to the worker with empty `channels` (silent), then overwrite their slots from the curve — trivial alignment, wastes a VQT slot on silence; (b) keep a project-send-index → worker-send-index map, fill device slots from the worker frame and layer slots from the curve — no wasted compute, needs the map. Recommend (b) given `MAX_SENDS=16` pressure. [app]
+- Send dropdown on the layer header; reanalyze action; look-ahead offset (stub). [ui/audio]
+
+### P3 — Promote playback to layers *(makes it audible)* — **kira refactor, not from-scratch**
+- Generalize `audio_sync::ImportedAudioSyncController` + `stem_audio` from one global track+stems to one kira handle per active audio clip (keyed by `ClipId`), driven from `update_sync` each tick in [content_thread.rs](../crates/manifold-app/src/content_thread.rs). Active-under-playhead → `play()`; inactive → stop. [playback/app]
+- Mute/solo → per-handle kira volume tween (§5); per-layer gain → handle volume (dB). [playback]
+- Declick: confirm kira seek/replay don't click; add short volume ramps where they do. [playback]
+- Watch simultaneous-seek burst on transport jumps with many active clips (§9). [playback]
+
+### P4 — Warp
+- Clip-BPM (`recorded_bpm`) → ratio `project_tempo / clip_bpm`; feed both the player and the offline-curve index (§3). [core/playback/audio]
+- Varispeed first via kira `playback_rate` (proves the wiring). Then Signalsmith (MIT FFI) stretching the decoded buffer offline, handed to kira at `playback_rate = 1.0`. Behind one `warp(samples, ratio)` seam. [media/playback]
+- Set-clip-BPM UI. [ui]
+
+### P5 — Export *(nearly free)*
+- Render kira master → temp WAV → `AudioMuxer::mux(ffmpeg, video, audio_wav, out, offset)` ([audio_muxer.rs:52](../crates/manifold-media/src/audio_muxer.rs#L52), already `-itsoffset`-aligned). [media]
+
+### P6 — Decisions + hardening
+- Bundle audio into V2 ZIP vs path-reference (§7, decision 3) [io]; tap-feedback guard (§10.5) [audio]; silent scrub v1 [playback]; `MAX_SENDS=16` slot pressure (§11) [audio]; master metering [ui].
+
+**Checkpoints:** end of **P2** = working file-driven modulation, silent, zero playback risk — a real shippable milestone. End of **P3** = audible. P4–6 layer on quality and integration.
+
+### Cross-phase coupling
+- The send-source enum (P0) is the hinge: P2's curve path and P3's playback both read which clip/layer owns which send.
+- `recorded_bpm` (existing) couples P0, P3, P4 — it's the clip BPM everywhere.
+- The offline analyzer (P2) and Signalsmith warp (P4) both want an "operate on a decoded buffer ahead of playback" home; build P2's buffer-analysis path so P4 can sit beside it.
