@@ -681,20 +681,19 @@ impl WorkerLoop {
             // at the front while the window is still filling.
             let end = send.window.len().saturating_sub(j * hop);
             let start = end.saturating_sub(n_fft);
-            let seg = &send.window[start..end];
-            let pad = n_fft - seg.len();
-            for v in self.vqt_in[..pad].iter_mut() {
-                *v = 0.0;
-            }
-            self.vqt_in[pad..].copy_from_slice(seg);
-            self.cqt.process_magnitudes(&self.vqt_in, &mut self.vqt_raw);
-
-            // Tilt the raw magnitudes into the feature/flux column (the exact
-            // per-bin pink weight the colourmap uses), then reduce all five
-            // features per band off it.
-            for (c, (&raw, &w)) in send.col.iter_mut().zip(self.vqt_raw.iter().zip(self.tilt_w.iter())) {
-                *c = raw * w;
-            }
+            // Form the tilted VQT column (the exact column the scope draws) from
+            // the window slice, then reduce all five features per band off it.
+            // Shared with the offline analyzer so features are bit-for-bit the
+            // same path. Disjoint borrows: `send.window` (read) vs `send.col`
+            // (write) are distinct fields, so this single call type-checks.
+            form_tilted_column(
+                &send.window[start..end],
+                &mut self.cqt,
+                &self.tilt_w,
+                &mut self.vqt_in,
+                &mut self.vqt_raw,
+                &mut send.col,
+            );
             reduce_send(send, nb, self.low_bin, self.mid_bin, db_min, db_max);
             send.prev_col.copy_from_slice(&send.col);
             // Flux features only arm once the window has actually filled — a
@@ -753,6 +752,34 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
         }
     }
     if n == 0 { 0.0 } else { acc / n as f32 }
+}
+
+/// Form the tilted variable-Q column for `seg` (a window slice no longer than
+/// `vqt_in`, right-aligned and zero-padded at the front) into `out_col`, using
+/// the shared transform + per-bin pink-tilt weights. This is the exact column
+/// the live worker reduces and the scope draws; the offline analyzer
+/// ([`OfflineSendAnalyzer`]) calls the same function so an audio layer's
+/// precomputed feature curve is bit-for-bit identical to what the live path
+/// would produce ("what you see is what modulates"). On return, `vqt_raw` holds
+/// the untilted magnitudes (the scope pushes those as-is). `seg.len()` must be
+/// `<= vqt_in.len()`.
+fn form_tilted_column(
+    seg: &[f32],
+    cqt: &mut CqtTransform,
+    tilt_w: &[f32],
+    vqt_in: &mut [f32],
+    vqt_raw: &mut [f32],
+    out_col: &mut [f32],
+) {
+    let pad = vqt_in.len().saturating_sub(seg.len());
+    for v in vqt_in[..pad].iter_mut() {
+        *v = 0.0;
+    }
+    vqt_in[pad..].copy_from_slice(seg);
+    cqt.process_magnitudes(vqt_in, vqt_raw);
+    for (c, (&raw, &w)) in out_col.iter_mut().zip(vqt_raw.iter().zip(tilt_w.iter())) {
+        *c = raw * w;
+    }
 }
 
 // ── Onset (transient) detection ──────────────────────────────────────────
@@ -997,6 +1024,157 @@ fn reduce_send(
 /// the ratio doesn't blow up.
 fn relative_flux(flux: f32, energy: f32) -> f32 {
     if energy > FLUX_ENERGY_GATE { (flux / energy).clamp(0.0, 1.0) } else { 0.0 }
+}
+
+// ── Offline feature analysis (audio-layer modulation curve) ──────────────────
+//
+// An audio layer's modulation is precomputed, not analysed live: decode the file
+// once, run the SAME variable-Q transform + band reductions the live worker uses
+// over the whole buffer, and store one [`SendFeatures`] per hop as a
+// [`FeatureCurve`]. At playback the content thread samples the curve at the
+// playhead (docs/AUDIO_LAYER_DESIGN.md §3) — deterministic, look-ahead capable,
+// and immune to content-thread hitches. The reductions are shared with the live
+// worker ([`form_tilted_column`] + [`reduce_send`]), so the curve is bit-for-bit
+// what the live path would produce.
+
+/// A fresh per-send analysis state for the offline pass (no channels — the
+/// offline analyzer feeds mono samples directly).
+fn new_send_state(num_bins: usize) -> SendState {
+    SendState {
+        channels: Vec::new(),
+        gain: 1.0,
+        window: Vec::new(),
+        since_hop: 0,
+        col: vec![0.0; num_bins],
+        prev_col: vec![0.0; num_bins],
+        transient_refractory: [0; 4],
+        energy_avg: [0.0; 4],
+        has_prev: false,
+        centroid_yfb: [-1.0; 4],
+        features: SendFeatures::default(),
+    }
+}
+
+/// A precomputed per-hop feature curve for one audio source. `features[i]`
+/// describes the analysis window ending at sample `i * hop` (at `sample_rate`).
+#[derive(Clone, Debug, Default)]
+pub struct FeatureCurve {
+    features: Vec<SendFeatures>,
+    hop: usize,
+    sample_rate: f32,
+}
+
+impl FeatureCurve {
+    pub fn is_empty(&self) -> bool {
+        self.features.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.features.len()
+    }
+
+    /// Hop in samples between successive feature frames (the live worker's rate).
+    pub fn hop(&self) -> usize {
+        self.hop
+    }
+
+    /// Sample the curve at `seconds` into the source, clamped to the analysed
+    /// range. `look_ahead_seconds` (≥ 0) reads ahead of the playhead so the
+    /// modulation can anticipate a hit; pass 0 for the level-aligned reading.
+    /// Returns silence (`SendFeatures::default`) for an empty curve.
+    pub fn at_seconds(&self, seconds: f32, look_ahead_seconds: f32) -> SendFeatures {
+        if self.features.is_empty() {
+            return SendFeatures::default();
+        }
+        let t = (seconds + look_ahead_seconds.max(0.0)).max(0.0);
+        let idx = (t * self.sample_rate / self.hop.max(1) as f32) as usize;
+        self.features[idx.min(self.features.len() - 1)]
+    }
+}
+
+/// Offline per-send analyzer: reduces a mono sample buffer into a [`FeatureCurve`]
+/// using the same transform, tilt, band edges, and reductions as the live worker.
+/// Build one per analysis pass (it owns the transform, scratch, and sequential
+/// transient/flux state); cheap to construct, not a hot path.
+pub struct OfflineSendAnalyzer {
+    cqt: CqtTransform,
+    spec_config: SpectrogramConfig,
+    num_bins: usize,
+    n_fft: usize,
+    hop: usize,
+    tilt_w: Vec<f32>,
+    low_bin: usize,
+    mid_bin: usize,
+    sample_rate: f32,
+    vqt_in: Vec<f32>,
+    vqt_raw: Vec<f32>,
+}
+
+impl OfflineSendAnalyzer {
+    /// Build for `sample_rate` and the project's Low/Mid/High crossovers (Hz) —
+    /// the same crossovers a live send reads, so a layer's curve and a live send
+    /// analyse identically.
+    pub fn new(sample_rate: u32, low_hz: f32, mid_hz: f32) -> Self {
+        let spec_config = SpectrogramConfig::default();
+        let sr = sample_rate as f32;
+        let num_bins = spec_config.num_bins(sr).max(1);
+        let n_fft = spec_config.n_fft;
+        let hop = spec_config.hop.max(1);
+        let cqt = spec_config.build_transform(sr);
+        let tilt_w = tilt_weights(&spec_config, sr, num_bins);
+        let (low_bin, mid_bin) = band_edges(&spec_config, sr, num_bins, low_hz, mid_hz);
+        Self {
+            cqt,
+            spec_config,
+            num_bins,
+            n_fft,
+            hop,
+            tilt_w,
+            low_bin,
+            mid_bin,
+            sample_rate: sr,
+            vqt_in: vec![0.0; n_fft],
+            vqt_raw: vec![0.0; num_bins],
+        }
+    }
+
+    /// Hop in samples between feature frames (matches the live worker's rate).
+    pub fn hop(&self) -> usize {
+        self.hop
+    }
+
+    /// Reduce a mono sample buffer (already at unity or pre-multiplied by the
+    /// send's gain) into a per-hop feature curve. One column per hop, ending at
+    /// sample positions `hop, 2*hop, …` — the same accumulate-and-emit cadence
+    /// as the live worker, zero-padded at the front while the window fills.
+    pub fn analyze(&mut self, mono: &[f32]) -> FeatureCurve {
+        let db_min = self.spec_config.db_min;
+        let db_max = self.spec_config.db_max;
+        let mut state = new_send_state(self.num_bins);
+        let mut features = Vec::with_capacity(mono.len() / self.hop + 1);
+
+        let mut end = self.hop;
+        while end <= mono.len() {
+            let start = end.saturating_sub(self.n_fft);
+            form_tilted_column(
+                &mono[start..end],
+                &mut self.cqt,
+                &self.tilt_w,
+                &mut self.vqt_in,
+                &mut self.vqt_raw,
+                &mut state.col,
+            );
+            reduce_send(&mut state, self.num_bins, self.low_bin, self.mid_bin, db_min, db_max);
+            state.prev_col.copy_from_slice(&state.col);
+            // Arm flux/transients once the window has actually filled — matches
+            // the live worker, so the warm-up ramp never reads as a transient.
+            state.has_prev = end >= self.n_fft;
+            features.push(state.features);
+            end += self.hop;
+        }
+
+        FeatureCurve { features, hop: self.hop, sample_rate: self.sample_rate }
+    }
 }
 
 #[cfg(test)]
@@ -1445,5 +1623,57 @@ mod tests {
             "full-band amplitude in 0..1: {}",
             s.bands[full].amplitude,
         );
+    }
+
+    // ── Offline analyzer (audio-layer feature curve) ──
+
+    #[test]
+    fn offline_analyzer_localizes_a_tone_in_the_curve() {
+        // A 1 kHz tone, several windows long, must yield mid-band-dominant
+        // amplitude in the curve — same result the live worker gives (it shares
+        // the reduction path), proving the offline curve is the live analysis.
+        let mono = sine(1000.0, nfft() * 4);
+        let mut a = OfflineSendAnalyzer::new(SR, 250.0, 2000.0);
+        let curve = a.analyze(&mono);
+        assert!(!curve.is_empty());
+        let (_full, low, mid, high) = bands();
+        let secs = mono.len() as f32 / SR as f32;
+        let f = curve.at_seconds(secs, 0.0);
+        assert!(
+            f.bands[mid].amplitude > f.bands[low].amplitude
+                && f.bands[mid].amplitude > f.bands[high].amplitude,
+            "1 kHz tone lands in mid band: {:?}",
+            f.bands.map(|b| b.amplitude),
+        );
+    }
+
+    #[test]
+    fn offline_curve_matches_worker_hop_rate() {
+        let a = OfflineSendAnalyzer::new(SR, 250.0, 2000.0);
+        assert_eq!(a.hop(), SpectrogramConfig::default().hop.max(1));
+    }
+
+    #[test]
+    fn feature_curve_sampling_clamps_and_looks_ahead() {
+        let mono = sine(1000.0, nfft() * 4);
+        let mut a = OfflineSendAnalyzer::new(SR, 250.0, 2000.0);
+        let curve = a.analyze(&mono);
+        // Out-of-range times clamp to the ends rather than panic.
+        let _ = curve.at_seconds(-5.0, 0.0);
+        let _ = curve.at_seconds(1e6, 0.0);
+        // Look-ahead reads a later, window-full frame; a t=0 read with no
+        // look-ahead lands on the zero-padded warm-up with less mid energy.
+        let mid = bands().2;
+        let early = curve.at_seconds(0.0, 0.0);
+        let ahead = curve.at_seconds(0.0, mono.len() as f32 / SR as f32);
+        assert!(ahead.bands[mid].amplitude >= early.bands[mid].amplitude);
+    }
+
+    #[test]
+    fn empty_buffer_yields_empty_curve_and_silent_sample() {
+        let mut a = OfflineSendAnalyzer::new(SR, 250.0, 2000.0);
+        let curve = a.analyze(&[]);
+        assert!(curve.is_empty());
+        assert_eq!(curve.at_seconds(0.0, 0.0), SendFeatures::default());
     }
 }

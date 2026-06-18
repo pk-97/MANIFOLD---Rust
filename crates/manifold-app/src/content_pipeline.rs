@@ -63,7 +63,9 @@ fn compute_occluded_layer_indices(
     out: &mut Vec<i32>,
 ) {
     out.clear();
-    let any_solo = layers.iter().any(|l| l.is_solo);
+    // Audio layers have their own solo/mute bus (audible, not visual) — they must
+    // never affect compositing. See docs/AUDIO_LAYER_DESIGN.md §5.
+    let any_solo = layers.iter().filter(|l| !l.is_audio()).any(|l| l.is_solo);
     let mut cutoff: Option<i32> = None;
     for l in layers {
         if l.is_group() || l.parent_layer_id.is_some() {
@@ -1260,6 +1262,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         let layer_descs: Vec<CompositeLayerDescriptor> = layers
             .iter()
+            // Audio layers produce no visual output and must not enter the
+            // compositor (their solo/mute is an audible bus). §5 of the design.
+            .filter(|layer| !layer.is_audio())
             .map(|layer| CompositeLayerDescriptor {
                 layer_index: layer.index,
                 layer_id: &layer.layer_id,

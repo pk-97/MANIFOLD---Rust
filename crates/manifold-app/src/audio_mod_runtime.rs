@@ -105,6 +105,11 @@ pub struct AudioModRuntime {
     /// Worker index of the scope-tapped send, resolved each tick. Lets the
     /// content thread pull that send's features for the scope's per-band meters.
     tapped_index: Option<usize>,
+    /// Offline modulation curves for layer-fed sends (audio layers). Decoded +
+    /// analysed once per clip and cached; sampled at the playhead each tick and
+    /// written into the snapshot alongside the live capture sends. See
+    /// [`crate::audio_layer_curves`] and `docs/AUDIO_LAYER_DESIGN.md` §3.
+    curves: crate::audio_layer_curves::AudioLayerCurves,
 }
 
 impl Default for AudioModRuntime {
@@ -135,6 +140,7 @@ impl Default for AudioModRuntime {
                 manifold_core::audio_setup::DEFAULT_MID_HZ,
             )),
             tapped_index: None,
+            curves: crate::audio_layer_curves::AudioLayerCurves::default(),
         }
     }
 }
@@ -175,6 +181,19 @@ impl AudioModRuntime {
                 self.capture = None;
             }
             self.reconcile(engine.project());
+            // Evict cached layer curves for clips no longer in the project (runs
+            // only on a project change, never per tick — keeps the cache bounded
+            // without allocating on the hot path).
+            if let Some(project) = engine.project() {
+                let live: std::collections::HashSet<manifold_core::id::ClipId> = project
+                    .timeline
+                    .layers
+                    .iter()
+                    .filter(|l| l.is_audio())
+                    .flat_map(|l| l.clips.iter().filter(|c| c.is_audio()).map(|c| c.id.clone()))
+                    .collect();
+                self.curves.retain_live(&live);
+            }
             self.last_version = data_version;
             self.spec_dirty = false;
         }
@@ -198,6 +217,44 @@ impl AudioModRuntime {
                 .set(p.audio_setup.low_hz, p.audio_setup.mid_hz);
         }
 
+        // ── Layer-fed sends: sample the offline curve at the playhead ──
+        // Computed under an immutable engine borrow, then applied below under the
+        // mutable snapshot borrow. The snapshot is indexed by `AudioSetup::sends`
+        // order; layer-fed sends were silent slots from the worker (empty-channel
+        // SendSpec) or absent (capture dark), so we overwrite them here. See
+        // `docs/AUDIO_LAYER_DESIGN.md` §3.
+        let mut layer_features: Vec<(usize, manifold_core::SendFeatures)> = Vec::new();
+        let mut send_count = 0usize;
+        if let Some(project) = engine.project() {
+            send_count = project.audio_setup.sends.len();
+            let beat = engine.current_beat();
+            let now_s = engine.beat_to_timeline_time_immut(beat).0;
+            let (low_hz, mid_hz) = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
+            for (i, send) in project.audio_setup.sends.iter().enumerate() {
+                let Some(layer_id) = send.layer_source() else {
+                    continue;
+                };
+                let Some(layer) = project
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|l| &l.layer_id == layer_id)
+                else {
+                    continue;
+                };
+                let Some(clip) = crate::audio_layer_curves::active_audio_clip(layer, beat) else {
+                    continue;
+                };
+                // Offset into the source file the playhead is over (warp is P4;
+                // ratio 1 for now). `in_point` is the clip's start within the file.
+                let clip_start_s = engine.beat_to_timeline_time_immut(clip.start_beat).0;
+                let clip_local = (clip.in_point.0 + (now_s - clip_start_s)) as f32;
+                if let Some(f) = self.curves.sample_clip(clip, low_hz, mid_hz, clip_local) {
+                    layer_features.push((i, f));
+                }
+            }
+        }
+
         // Feed the engine. Reuse the snapshot's Vec capacity → no per-frame
         // allocation once warmed. An empty `sends` disables the audio phase.
         let snap = engine.audio_snapshot_mut();
@@ -209,6 +266,19 @@ impl AudioModRuntime {
                 if let Some(f) = frame.send(i) {
                     snap.sends.push(f);
                 }
+            }
+        }
+        // Ensure a slot per project send so layer-fed sends have a home even when
+        // capture is dark (no worker frame), keeping the snapshot index aligned
+        // with `AudioSetup::sends`.
+        if snap.sends.len() < send_count {
+            snap.sends
+                .resize(send_count, manifold_core::SendFeatures::default());
+        }
+        // Overwrite layer-fed slots with their offline-curve sample.
+        for (i, f) in layer_features {
+            if let Some(slot) = snap.sends.get_mut(i) {
+                *slot = f;
             }
         }
     }
