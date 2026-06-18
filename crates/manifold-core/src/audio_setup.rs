@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::audio_mod::AudioBand;
 use crate::audio_trigger::TriggerRoute;
 use crate::id::{AudioSendId, LayerId};
 use crate::math::short_id;
@@ -148,6 +149,31 @@ impl AudioSend {
     /// indicator on the send row and the per-tick evaluator's skip check.
     pub fn has_active_triggers(&self) -> bool {
         self.triggers.iter().any(|t| t.enabled)
+    }
+
+    /// The route reading `band`, if one exists.
+    pub fn trigger_for(&self, band: AudioBand) -> Option<&TriggerRoute> {
+        self.triggers.iter().find(|t| t.source == band)
+    }
+
+    /// A copy of this send's routes with the route for `band` modified by `f`,
+    /// creating a default route for the band if none exists yet. The single
+    /// find-or-create path the inspector uses to build a
+    /// `SetAudioSendTriggersCommand` without duplicating the upsert per edit.
+    pub fn triggers_with_route<F: FnOnce(&mut TriggerRoute)>(
+        &self,
+        band: AudioBand,
+        f: F,
+    ) -> Vec<TriggerRoute> {
+        let mut routes = self.triggers.clone();
+        if let Some(route) = routes.iter_mut().find(|r| r.source == band) {
+            f(route);
+        } else {
+            let mut route = TriggerRoute::new(band);
+            f(&mut route);
+            routes.push(route);
+        }
+        routes
     }
 
     /// The layer feeding this send, if it is a layer source.

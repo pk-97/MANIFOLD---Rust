@@ -1139,8 +1139,9 @@ pub fn sync_inspector_data(
     // the modal is up) gives each send row its real channel name, grouped or
     // not, instead of a bare index.
     if ui.audio_setup_panel.is_open() {
+        use manifold_core::audio_mod::AudioBand;
         use manifold_core::{AudioSendSource, AudioSourceKind};
-        use manifold_ui::panels::audio_setup_panel::AudioSendRow;
+        use manifold_ui::panels::audio_setup_panel::{AudioSendRow, TriggerRouteRow};
         let dir = manifold_audio::directory::system_directory();
         // Tap sources (system / app output) don't live in the input-device list,
         // so resolving them there would always read "missing". Only resolve a
@@ -1171,6 +1172,27 @@ pub fn sync_inspector_data(
                     }
                     AudioSendSource::Capture => ("Cap".to_string(), false),
                 };
+                // One trigger row per band (Whole/Low/Mid/High), defaulting when
+                // the send carries no route for that band yet. The target label
+                // resolves to the layer's name, or "Auto" (route by send name).
+                let triggers = AudioBand::ALL
+                    .iter()
+                    .map(|&band| {
+                        let route = s.trigger_for(band);
+                        let layer_label = route
+                            .and_then(|r| r.target_layer.as_ref())
+                            .and_then(|lid| {
+                                project.timeline.layers.iter().find(|l| &l.layer_id == lid)
+                            })
+                            .map(|l| l.name.clone())
+                            .unwrap_or_else(|| "Auto".to_string());
+                        TriggerRouteRow {
+                            enabled: route.is_some_and(|r| r.enabled),
+                            sensitivity: route.map_or(0.5, |r| r.sensitivity),
+                            layer_label,
+                        }
+                    })
+                    .collect();
                 AudioSendRow {
                     id: s.id.clone(),
                     label: s.label.clone(),
@@ -1180,6 +1202,7 @@ pub fn sync_inspector_data(
                     driven_count: project.audio_send_usage_count(&s.id),
                     source_label,
                     layer_fed,
+                    triggers,
                 }
             })
             .collect();
@@ -1212,6 +1235,17 @@ pub fn sync_inspector_data(
 
         ui.audio_setup_panel
             .configure(project.audio_setup.device.clone(), sends, status_warning);
+
+        // Candidate target layers for the trigger rows' layer dropdowns (every
+        // non-group layer), so a fire can be pointed at any look.
+        let trigger_layers: Vec<(manifold_core::LayerId, String)> = project
+            .timeline
+            .layers
+            .iter()
+            .filter(|l| l.layer_type != manifold_core::types::LayerType::Group)
+            .map(|l| (l.layer_id.clone(), l.name.clone()))
+            .collect();
+        ui.set_audio_trigger_layers(trigger_layers);
     }
 
     // Master effects → inspector (envelopes ride on each instance)

@@ -373,6 +373,22 @@ pub enum PanelAction {
     AudioCrossoverChanged(BandDivider, f32),
     /// Commit the band-divider drag as one undo step.
     AudioCrossoverCommit,
+    /// Live audio triggers (Audio Setup modal): a send's transient on a band
+    /// fires one-shot clips on a layer. The band identifies the route within the
+    /// selected send.
+    /// Toggle a band's trigger route on/off (creates it if absent).
+    AudioTriggerToggled(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand),
+    /// Step a band route's sensitivity by a delta (the row's −/＋ buttons). The
+    /// host reads the current value, applies + clamps, and commits.
+    AudioTriggerSensitivityStep(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand, f32),
+    /// Open a band route's target-layer dropdown (anchored to the clicked trigger).
+    AudioTriggerLayerClicked(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand),
+    /// Set a band route's target layer (`None` = auto-route by send name).
+    AudioTriggerSetLayer(
+        manifold_core::AudioSendId,
+        manifold_core::audio_mod::AudioBand,
+        Option<manifold_core::LayerId>,
+    ),
     /// A modulator output sub-range handle moved during a drag. `TrimKind`
     /// selects which modulator (driver / Ableton / audio) — the three formerly
     /// parallel `*TrimChanged` variants are one path now.

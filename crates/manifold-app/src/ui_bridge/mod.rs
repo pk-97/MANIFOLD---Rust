@@ -215,6 +215,10 @@ pub fn dispatch(
         | PanelAction::AudioSendStereoToggle(..)
         | PanelAction::AudioSetupDeviceClicked
         | PanelAction::AudioSendChannelClicked(..)
+        | PanelAction::AudioTriggerToggled(..)
+        | PanelAction::AudioTriggerSensitivityStep(..)
+        | PanelAction::AudioTriggerLayerClicked(..)
+        | PanelAction::AudioTriggerSetLayer(..)
         | PanelAction::TrimChanged(..)
         | PanelAction::TargetChanged(..)
         | PanelAction::TrimSnapshot(..)

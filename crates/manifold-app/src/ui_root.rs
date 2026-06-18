@@ -115,6 +115,7 @@ pub enum DropdownContext {
     LayerAudioSend(usize),                        // audio layer header: pick which send it feeds
     ClipDetectQuantize,                           // audio clip inspector: detection quantize grid
     ClipDetectLayer(usize),                       // audio clip inspector: instrument N target layer
+    AudioTriggerLayer(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand), // Audio Setup: a send/band route's target layer
 }
 
 /// A selectable entry in the Audio Setup source dropdown. The dropdown mixes the
@@ -272,6 +273,10 @@ pub struct UIRoot {
     /// target-layer dropdowns. Refreshed by `state_sync` when an audio clip is
     /// selected; read when an instrument's layer dropdown opens.
     clip_detect_layers: Vec<(manifold_core::LayerId, String)>,
+    /// Candidate routing layers (id + name) for the Audio Setup modal's live
+    /// trigger layer dropdowns. Refreshed by `state_sync` while the modal is
+    /// open; read when a trigger row's layer dropdown opens.
+    audio_trigger_layers: Vec<(manifold_core::LayerId, String)>,
 
     // Inspector resize state
     pub inspector_resize_dragging: bool,
@@ -381,6 +386,7 @@ impl UIRoot {
             audio_channel_item_map: Vec::new(),
             layer_send_map: Vec::new(),
             clip_detect_layers: Vec::new(),
+            audio_trigger_layers: Vec::new(),
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
@@ -932,6 +938,15 @@ impl UIRoot {
         self.clip_detect_layers = layers;
     }
 
+    /// Cache the candidate target layers for the Audio Setup modal's live
+    /// trigger layer dropdowns. Set by `state_sync` while the modal is open.
+    pub fn set_audio_trigger_layers(
+        &mut self,
+        layers: Vec<(manifold_core::LayerId, String)>,
+    ) {
+        self.audio_trigger_layers = layers;
+    }
+
     /// Refresh the embedded-preset list surfaced into the Add pickers from the
     /// project snapshot. Change-gated by the embedded-preset fingerprint so the
     /// Vec rebuilds only when a fork / import / remove actually changed the set,
@@ -1297,6 +1312,21 @@ impl UIRoot {
                     items.push(DropdownItem::new(name));
                 }
                 self.open_dropdown_at(DropdownContext::ClipDetectLayer(*idx), items, trigger);
+                true
+            }
+            PanelAction::AudioTriggerLayerClicked(send_id, band) => {
+                // "Auto" (route by send name) first, then every candidate layer
+                // cached by state_sync while the modal is open.
+                let mut items = Vec::with_capacity(self.audio_trigger_layers.len() + 1);
+                items.push(DropdownItem::new("Auto"));
+                for (_, name) in &self.audio_trigger_layers {
+                    items.push(DropdownItem::new(name));
+                }
+                self.open_dropdown_at(
+                    DropdownContext::AudioTriggerLayer(send_id.clone(), *band),
+                    items,
+                    trigger,
+                );
                 true
             }
             PanelAction::AudioSendClicked(idx) => {
@@ -1916,6 +1946,15 @@ impl UIRoot {
                     self.clip_detect_layers.get(index - 1).map(|(id, _)| id.clone())
                 };
                 Some(PanelAction::ClipDetectSetLayer(inst_idx, layer))
+            }
+            DropdownContext::AudioTriggerLayer(send_id, band) => {
+                // Index 0 = "Auto" (None); the rest map to a cached layer.
+                let layer = if index == 0 {
+                    None
+                } else {
+                    self.audio_trigger_layers.get(index - 1).map(|(id, _)| id.clone())
+                };
+                Some(PanelAction::AudioTriggerSetLayer(send_id, band, layer))
             }
             DropdownContext::CardContext(gpt) => {
                 // Label-matched: Copy/Paste are generator-only + conditional, so

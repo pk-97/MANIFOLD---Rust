@@ -12,6 +12,7 @@
 //! gain trim. Per-send labels are auto-assigned ("Audio N") until a text-field
 //! rename lands; multi-channel downmix and the v2 analysis toggles are future.
 
+use manifold_core::audio_mod::AudioBand;
 use manifold_core::{AudioDeviceRef, AudioSendId};
 
 use crate::color;
@@ -66,6 +67,23 @@ pub struct AudioSendRow {
     /// Whether the send is fed by an audio layer (controls the source button's
     /// accent so a layer-fed send reads distinctly from a capture send).
     pub layer_fed: bool,
+    /// Live audio → visual trigger rows for this send, one per band in
+    /// [`AudioBand::ALL`] order (Whole/Low/Mid/High). Always four entries (a
+    /// band with no route reads as a disabled default), so the inspector renders
+    /// a fixed four-row matrix. Built by `state_sync` from the send's routes.
+    pub triggers: Vec<TriggerRouteRow>,
+}
+
+/// One band's trigger row in the Audio Setup modal — the display state of a
+/// (potential) [`TriggerRoute`](manifold_core::audio_trigger::TriggerRoute).
+#[derive(Clone, Debug, Default)]
+pub struct TriggerRouteRow {
+    /// Whether a route exists for this band and is enabled.
+    pub enabled: bool,
+    /// 0..1 sensitivity (the route threshold), shown as a percent on the stepper.
+    pub sensitivity: f32,
+    /// Resolved target label: "Auto" (route by name) or a layer's name.
+    pub layer_label: String,
 }
 
 /// Height of the spectrogram scope section (title + waterfall).
@@ -101,6 +119,33 @@ fn band_color(band: usize) -> Color32 {
 }
 /// L/M/H labels in band order.
 const BAND_METER_LABELS: [&str; 3] = ["L", "M", "H"];
+
+/// Trigger section geometry.
+const TRIG_TITLE_H: f32 = 18.0;
+const TRIG_ROW_H: f32 = 22.0;
+/// Row layout widths: source label, sensitivity stepper [−] val [＋].
+const TRIG_LABEL_W: f32 = 52.0;
+const TRIG_ENABLE_W: f32 = 22.0;
+const TRIG_SENS_BTN_W: f32 = 16.0;
+const TRIG_SENS_VAL_W: f32 = 40.0;
+const TRIG_ARROW_W: f32 = 16.0;
+/// Per-row band, in `AudioBand::ALL` order, with its display label. `Full` reads
+/// as "Whole" — the whole-signal onset for a separated stem.
+const TRIG_BANDS: [(AudioBand, &str); 4] = [
+    (AudioBand::Full, "Whole"),
+    (AudioBand::Low, "Low"),
+    (AudioBand::Mid, "Mid"),
+    (AudioBand::High, "High"),
+];
+
+/// Per-trigger-row interactive node ids (one row per band).
+#[derive(Default, Clone)]
+struct TriggerRowIds {
+    enable: i32,
+    sens_minus: i32,
+    sens_plus: i32,
+    layer: i32,
+}
 
 /// Per-send interactive node ids.
 #[derive(Default, Clone)]
@@ -178,6 +223,9 @@ pub struct AudioSetupPanel {
     /// frame by [`AudioSetupPanel::update_band_meters`] so they track the moving
     /// crossovers. `-1` when not built.
     band_meter_ids: [(i32, i32, i32); 3],
+    /// Per-band trigger-row node ids for the selected send (Whole/Low/Mid/High
+    /// order). Rebuilt with the panel; clicks map back via [`TRIG_BANDS`].
+    trigger_row_ids: Vec<TriggerRowIds>,
 }
 
 impl AudioSetupPanel {
@@ -271,7 +319,19 @@ impl AudioSetupPanel {
             + (ROW_H + ROW_GAP) * rows as f32
             + ROW_H // add-send button
             + scope_chrome
+            + self.trigger_section_height()
             + PAD * 2.0
+    }
+
+    /// Height of the trigger section (title + four band rows) under the scope.
+    /// Zero when there are no sends (nothing is selected, so nothing to route).
+    /// Fixed for a given send count, so the scope absorbs the rest deterministically.
+    fn trigger_section_height(&self) -> f32 {
+        if self.sends.is_empty() {
+            0.0
+        } else {
+            ROW_GAP + TRIG_TITLE_H + (TRIG_ROW_H + ROW_GAP) * TRIG_BANDS.len() as f32
+        }
     }
 
     /// Total body height for the configured send count.
@@ -728,6 +788,157 @@ impl AudioSetupPanel {
                 );
                 *slot = (track as i32, fill as i32, label);
             }
+
+            // ── Live triggers (selected send) — laid out below the scope ──
+            cy += self.scope_h + ROW_GAP;
+            self.build_trigger_section(tree, inner_x, inner_w, cy);
+        }
+    }
+
+    /// Build the four-band trigger matrix for the selected send. Each row:
+    /// `[enable swatch] [band] [−] sens% [＋]  ->  [ layer ▼ ]`. The swatch's
+    /// colour matches the scope's per-band transient ticks (Whole = neutral), so
+    /// the legend reads across the scope and the routes. Click-only controls,
+    /// consistent with the panel's gain stepper and channel dropdown — no drag.
+    fn build_trigger_section(&mut self, tree: &mut UITree, inner_x: f32, inner_w: f32, mut cy: f32) {
+        self.trigger_row_ids.clear();
+
+        let sel_label = self
+            .selected_send
+            .as_ref()
+            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+            .map(|s| s.label.as_str())
+            .unwrap_or("—");
+        tree.add_label(
+            self.bg_id,
+            inner_x,
+            cy,
+            inner_w,
+            TRIG_TITLE_H,
+            &format!("Triggers — {sel_label}"),
+            UIStyle {
+                text_color: Color32::new(170, 170, 180, 255),
+                font_size: color::FONT_LABEL,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        );
+        cy += TRIG_TITLE_H;
+
+        // The selected send's four band rows (Whole/Low/Mid/High), defaulting to
+        // a disabled row when the send carries no route for a band yet.
+        let rows: Vec<TriggerRouteRow> = self
+            .selected_send
+            .as_ref()
+            .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+            .map(|s| s.triggers.clone())
+            .unwrap_or_default();
+
+        for (i, (_band, band_label)) in TRIG_BANDS.iter().enumerate() {
+            let row = rows.get(i).cloned().unwrap_or_default();
+            let mut ids = TriggerRowIds::default();
+            let mut x = inner_x;
+
+            // Enable swatch — band-coloured (Whole = neutral), dim when disabled.
+            ids.enable = tree.add_button(
+                self.bg_id,
+                x,
+                cy,
+                TRIG_ENABLE_W,
+                TRIG_ROW_H,
+                trigger_swatch_style(i, row.enabled),
+                "",
+            ) as i32;
+            x += TRIG_ENABLE_W + 4.0;
+
+            // Band label — brighter when the route is active.
+            tree.add_label(
+                self.bg_id,
+                x,
+                cy,
+                TRIG_LABEL_W,
+                TRIG_ROW_H,
+                band_label,
+                UIStyle {
+                    text_color: if row.enabled {
+                        Color32::new(214, 214, 220, 255)
+                    } else {
+                        Color32::new(120, 120, 130, 255)
+                    },
+                    font_size: BTN_FONT,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            x += TRIG_LABEL_W + 4.0;
+
+            // Sensitivity stepper [−] value [＋] (percent), matching the gain
+            // stepper's glyphs and discrete-step behaviour.
+            ids.sens_minus = tree.add_button(
+                self.bg_id,
+                x,
+                cy,
+                TRIG_SENS_BTN_W,
+                TRIG_ROW_H,
+                btn_style(false),
+                "\u{2212}",
+            ) as i32;
+            tree.add_label(
+                self.bg_id,
+                x + TRIG_SENS_BTN_W,
+                cy,
+                TRIG_SENS_VAL_W,
+                TRIG_ROW_H,
+                &format!("{}%", (row.sensitivity.clamp(0.0, 1.0) * 100.0).round() as i32),
+                UIStyle {
+                    text_color: Color32::new(190, 190, 198, 255),
+                    font_size: color::FONT_LABEL,
+                    text_align: TextAlign::Center,
+                    ..UIStyle::default()
+                },
+            );
+            ids.sens_plus = tree.add_button(
+                self.bg_id,
+                x + TRIG_SENS_BTN_W + TRIG_SENS_VAL_W,
+                cy,
+                TRIG_SENS_BTN_W,
+                TRIG_ROW_H,
+                btn_style(false),
+                "\u{002B}",
+            ) as i32;
+            x += TRIG_SENS_BTN_W * 2.0 + TRIG_SENS_VAL_W + 4.0;
+
+            // "->" connector to the destination layer.
+            tree.add_label(
+                self.bg_id,
+                x,
+                cy,
+                TRIG_ARROW_W,
+                TRIG_ROW_H,
+                "\u{2192}",
+                UIStyle {
+                    text_color: Color32::new(120, 120, 130, 255),
+                    font_size: BTN_FONT,
+                    text_align: TextAlign::Center,
+                    ..UIStyle::default()
+                },
+            );
+            x += TRIG_ARROW_W + 4.0;
+
+            // Target-layer dropdown trigger (Auto or a layer name).
+            let layer_w = (inner_x + inner_w - x).max(40.0);
+            ids.layer = tree.add_button(
+                self.bg_id,
+                x,
+                cy,
+                layer_w,
+                TRIG_ROW_H,
+                dropdown_trigger_style(),
+                &format!("{}   \u{25BC}", row.layer_label),
+            ) as i32;
+
+            self.trigger_row_ids.push(ids);
+            cy += TRIG_ROW_H + ROW_GAP;
         }
     }
 
@@ -846,7 +1057,7 @@ impl AudioSetupPanel {
         {
             return true;
         }
-        self.send_ids.iter().any(|r| {
+        if self.send_ids.iter().any(|r| {
             id == r.swatch
                 || id == r.label
                 || id == r.source
@@ -855,6 +1066,11 @@ impl AudioSetupPanel {
                 || id == r.gain_plus
                 || id == r.stereo
                 || id == r.delete
+        }) {
+            return true;
+        }
+        self.trigger_row_ids.iter().any(|r| {
+            id == r.enable || id == r.sens_minus || id == r.sens_plus || id == r.layer
         })
     }
 
@@ -1003,6 +1219,34 @@ impl AudioSetupPanel {
                 None
             }
         });
+        // Trigger-row controls (selected send's band routes). Checked before the
+        // send-row `hit?` early-return so a trigger click isn't swallowed.
+        if let Some((band, ctl)) = self.trigger_row_ids.iter().enumerate().find_map(|(ri, ids)| {
+            let band = TRIG_BANDS.get(ri).map(|(b, _)| *b)?;
+            if id == ids.enable {
+                Some((band, TrigControl::Toggle))
+            } else if id == ids.sens_minus {
+                Some((band, TrigControl::SensDown))
+            } else if id == ids.sens_plus {
+                Some((band, TrigControl::SensUp))
+            } else if id == ids.layer {
+                Some((band, TrigControl::Layer))
+            } else {
+                None
+            }
+        }) {
+            self.delete_armed = None;
+            let send = self.selected_send.clone()?;
+            return Some(match ctl {
+                TrigControl::Toggle => PanelAction::AudioTriggerToggled(send, band),
+                TrigControl::SensDown => {
+                    PanelAction::AudioTriggerSensitivityStep(send, band, -0.1)
+                }
+                TrigControl::SensUp => PanelAction::AudioTriggerSensitivityStep(send, band, 0.1),
+                TrigControl::Layer => PanelAction::AudioTriggerLayerClicked(send, band),
+            });
+        }
+
         let (i, control) = hit?;
         let send_id = self.sends[i].id.clone();
         match control {
@@ -1054,6 +1298,14 @@ impl AudioSetupPanel {
             }
         }
     }
+}
+
+/// Which interactive control of a trigger row was clicked.
+enum TrigControl {
+    Toggle,
+    SensDown,
+    SensUp,
+    Layer,
 }
 
 /// Which interactive control of a send row was clicked.
@@ -1201,6 +1453,27 @@ fn label_style() -> UIStyle {
     }
 }
 
+/// Enable swatch for a trigger row: filled with the band colour when enabled
+/// (Whole = neutral white, Low/Mid/High = red/green/blue, matching the scope
+/// ticks), a bordered dark cell when disabled. `row` is the row index in
+/// [`TRIG_BANDS`] order.
+fn trigger_swatch_style(row: usize, enabled: bool) -> UIStyle {
+    let band = if row == 0 {
+        Color32::new(190, 190, 200, 255) // Whole — neutral
+    } else {
+        band_color(row - 1)
+    };
+    UIStyle {
+        bg_color: if enabled { band } else { Color32::new(40, 40, 46, 255) },
+        hover_bg_color: if enabled { band } else { Color32::new(56, 56, 64, 255) },
+        pressed_bg_color: Color32::new(30, 30, 34, 255),
+        border_color: Color32::new(70, 70, 78, 255),
+        border_width: 1.0,
+        corner_radius: 3.0,
+        ..UIStyle::default()
+    }
+}
+
 /// The send-name button — looks like a label, hovers like an editable field.
 fn label_button_style() -> UIStyle {
     UIStyle {
@@ -1251,6 +1524,7 @@ mod tests {
                     driven_count: 0,
                     source_label: "Cap".into(),
                     layer_fed: false,
+                    triggers: Vec::new(),
                 },
                 AudioSendRow {
                     id: AudioSendId::new("s2"),
@@ -1261,6 +1535,7 @@ mod tests {
                     driven_count: 0,
                     source_label: "Cap".into(),
                     layer_fed: false,
+                    triggers: Vec::new(),
                 },
             ],
             None,
@@ -1297,6 +1572,40 @@ mod tests {
         // Close button toggles closed and yields no action.
         assert!(p.handle_click(p.close_id).is_none());
         assert!(!p.is_open());
+    }
+
+    #[test]
+    fn trigger_row_clicks_resolve_to_actions() {
+        let mut p = panel_with_two_sends();
+        // Selected send (s1) gets four band rows so the section renders.
+        p.sends[0].triggers = vec![TriggerRouteRow::default(); 4];
+        let mut tree = UITree::new();
+        p.build(&mut tree, 1280.0, 720.0);
+        assert_eq!(p.trigger_row_ids.len(), 4);
+
+        // Whole (row 0) enable → toggle on the selected send + Full band.
+        match p.handle_click(p.trigger_row_ids[0].enable) {
+            Some(PanelAction::AudioTriggerToggled(id, band)) => {
+                assert_eq!(id.as_str(), "s1");
+                assert_eq!(band, AudioBand::Full);
+            }
+            other => panic!("expected toggle, got {other:?}"),
+        }
+        // Low (row 1) [＋] → positive sensitivity step.
+        match p.handle_click(p.trigger_row_ids[1].sens_plus) {
+            Some(PanelAction::AudioTriggerSensitivityStep(_, band, d)) => {
+                assert_eq!(band, AudioBand::Low);
+                assert!(d > 0.0);
+            }
+            other => panic!("expected sens step, got {other:?}"),
+        }
+        // High (row 3) layer field → opens the layer dropdown.
+        match p.handle_click(p.trigger_row_ids[3].layer) {
+            Some(PanelAction::AudioTriggerLayerClicked(_, band)) => {
+                assert_eq!(band, AudioBand::High);
+            }
+            other => panic!("expected layer dropdown open, got {other:?}"),
+        }
     }
 
     #[test]

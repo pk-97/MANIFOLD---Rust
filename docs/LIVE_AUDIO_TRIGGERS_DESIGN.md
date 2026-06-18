@@ -8,10 +8,11 @@ Created 2026-06-18.
 
 ## 0. CURRENT POSITION (read first, update last)
 
-- **Done:** Phase 0–2. Phase 3 (`SetAudioSendTriggersCommand` in editing's `audio_setup`
-  module, captures whole route vec, round-trip test; clippy clean).
-- **Next action:** Phase 4+5 together (interdependent) — PanelActions + ui_bridge dispatch +
-  state_sync view, and the `audio_setup_panel` Triggers section.
+- **Done:** Phase 0–3. Phase 4+5 (full UI + app wiring: panel Triggers section, PanelActions,
+  ui_root dropdown ctx + layer cache, ui_bridge dispatch, state_sync view). Builds + clippy
+  clean across the workspace; ui (293) + editing (7) tests green.
+- **Next action:** Phase 6 — polish/edge cases, runtime verification, ship (commit/push +
+  memory). **Runtime verification on a real stem still pending** (needs the app).
 
 ## 1. What this is
 
@@ -119,10 +120,16 @@ transient has no NoteOff. Engine runs expiry + fire in `tick_playing` after modu
       `AudioClipDetection` literal missing `last_counts` in `clip_detection.rs`.)
 - [ ] **Phase 4 — App wiring.** `ContentCommand` variant + dispatch; auto-route-by-name on
       add/edit; `state_sync` builds the per-send route view + `⚡` flag.
-- [ ] **Phase 5 — UI.** `audio_setup_panel` "Triggers — <send>" section: route rows
-      (`[enable] source [sensitivity slider] → [layer ▼] [quantize ▼]`) reusing BitmapSlider
-      + build_dropdown_trigger; new PanelActions; `DropdownContext::AudioTrigger{Layer,Quantize}`
-      in ui_root; ui_bridge dispatch. `⚡` per send row.
+- [x] **Phase 4+5 — UI + app wiring.** `audio_setup_panel` "Triggers — <send>" section under
+      the scope: four band rows `[enable swatch][band][−] sens% [＋] -> [layer ▼]`, using the
+      panel's native idioms (gain-style stepper, channel-style dropdown) — no drag plumbing,
+      no new framework, glyphs proven in-atlas. `TriggerRouteRow` on `AudioSendRow`; new
+      `PanelAction::AudioTrigger{Toggled,SensitivityStep,LayerClicked,SetLayer}`;
+      `DropdownContext::AudioTriggerLayer` + `audio_trigger_layers` cache in ui_root;
+      `AudioSend::triggers_with_route` find-or-create helper drives the dispatch →
+      `SetAudioSendTriggersCommand`; state_sync builds the rows + caches candidate layers.
+      ui (293) + editing (7) tests green; workspace clippy clean. **Deferred:** per-route
+      one-shot length control (model supports it, defaulted 1 beat); the `⚡` send-row badge.
 - [ ] **Phase 6 — Polish + ship.** Auto-route UX, edge cases (no layers, send delete with
       routes), clippy `-D warnings` (core/playback/editing/ui/app), focused tests, commit/push.
 

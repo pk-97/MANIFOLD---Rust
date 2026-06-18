@@ -22,6 +22,7 @@ use manifold_editing::commands::audio_mod::{
 use manifold_editing::commands::audio_setup::{
     AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand, SetAudioCrossoversCommand,
     SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendGainCommand,
+    SetAudioSendTriggersCommand,
 };
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
@@ -1569,6 +1570,48 @@ pub(super) fn dispatch_inspector(
                 content_tx,
                 Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
             )
+        }
+        PanelAction::AudioTriggerToggled(id, band) => {
+            let Some(send) = project.audio_setup.find_send(id) else {
+                return DispatchResult::structural();
+            };
+            let old = send.triggers.clone();
+            let new = send.triggers_with_route(*band, |r| r.enabled = !r.enabled);
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
+            )
+        }
+        PanelAction::AudioTriggerSensitivityStep(id, band, delta) => {
+            let Some(send) = project.audio_setup.find_send(id) else {
+                return DispatchResult::structural();
+            };
+            let old = send.triggers.clone();
+            let new = send
+                .triggers_with_route(*band, |r| r.sensitivity = (r.sensitivity + *delta).clamp(0.0, 1.0));
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
+            )
+        }
+        PanelAction::AudioTriggerSetLayer(id, band, layer) => {
+            let Some(send) = project.audio_setup.find_send(id) else {
+                return DispatchResult::structural();
+            };
+            let old = send.triggers.clone();
+            let new = send.triggers_with_route(*band, |r| r.target_layer = layer.clone());
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
+            )
+        }
+        PanelAction::AudioTriggerLayerClicked(_, _) => {
+            // The layer dropdown is opened by UIRoot::try_open_dropdown before
+            // dispatch; reaching here (e.g. no candidate layers) is a no-op.
+            DispatchResult::structural()
         }
         PanelAction::AudioCrossoverDragBegin => {
             // Snapshot the pre-drag crossovers so the commit records one undo step.
