@@ -217,3 +217,21 @@ Phases ordered so each ships something usable. Anchors are real file:line from t
 - The send-source enum (P0) is the hinge: P2's curve path and P3's playback both read which clip/layer owns which send.
 - `recorded_bpm` (existing) couples P0, P3, P4 — it's the clip BPM everywhere.
 - The offline analyzer (P2) and Signalsmith warp (P4) both want an "operate on a decoded buffer ahead of playback" home; build P2's buffer-analysis path so P4 can sit beside it.
+
+---
+
+## 13. Build status (2026-06-18, branch `audio-layer`)
+
+**Landed — the functional pipeline is end-to-end and tested.**
+- **P0 data model** ✓ — `LayerType::Audio`, `TimelineClip.audio_file_path` + `new_audio`/`is_audio`, `AudioSendSource` enum (Capture/Layer) with `bind_send_to_layer`/`send_for_layer`/`unbind_layer`, `Layer.audio_gain_db` + `is_audio`/`active_audio_clip_at`/`audio_gain_linear`, commands `SetAudioSendSourceCommand` + `SetLayerAudioGainCommand`. Roundtrip + undo tests.
+- **P1 compositor** ✓ — audio layers skipped from compositing and excluded from the visual solo bus (§5).
+- **P1 drag-drop** ✓ — dropping a `wav/mp3/flac/aif/aiff/ogg/m4a/aac` file appends an audio layer + clip at the drop beat (one undo step). `is_supported_audio_extension` + `audio_duration_beats`.
+- **P2 offline modulation** ✓ — `OfflineSendAnalyzer` + `FeatureCurve` (manifold-audio), sharing the live worker's `form_tilted_column`/`reduce_send` so the curve is bit-for-bit the live analysis. `AudioLayerCurves` cache (manifold-app) wired into the snapshot fill with worker-index alignment; layer-fed slots overwritten with the playhead curve sample. Look-ahead supported. Tests for tone localization, hop-rate parity, look-ahead, cache.
+- **P3 playback** ✓ — `AudioLayerPlayback` (manifold-playback): one kira voice per active audio clip, transport-following (seek-on-drift/replay-on-stop), mute/solo (audio bus)/gain via per-voice volume tween, 5 ms declick. Driven from the content tick; decode reuses `audio_sync::preload_audio`.
+
+**Remaining — UI affordances (need the app running to build safely; data + commands already in place behind them):**
+- **Send-source selector UI** — a control to invoke `SetAudioSendSourceCommand` (route a layer → a send). Natural home: a per-send source row in the Audio Setup panel (it already manages sends) or a dropdown on the audio layer header. The command, model, and modulation wiring are done; this is the missing way to *set* the binding from the UI.
+- **In-clip waveform painting** — audio clips currently render as plain clip blocks on their lane. Drawing the waveform inside needs per-clip decoded levels plumbed to the UI thread (background-decoded, like the percussion `waveform_lane`) and `WaveformRenderer`/`waveform_painter` wired into the timeline clip draw.
+- **Warp (P4), export (P5), hardening (P6)** — not started; `recorded_bpm` is already the clip-BPM field warp will use.
+
+Both remaining UI items were deferred deliberately rather than authored blind: they are sizable bitmap-UI features (layout + hit-testing + input) on the live-performance surface, where a layout/interaction regression is high-cost and can't be verified without running the app.
