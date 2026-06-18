@@ -115,6 +115,13 @@ pub enum ContentCommand {
     /// handler is wired now so the orchestrator path is complete and testable.
     #[allow(dead_code)]
     DetectClip(ClipId),
+    /// Re-place a clip's triggers from its cached analysis (no backend run).
+    /// Driven by the inspector's live knobs (P4). Instant.
+    #[allow(dead_code)]
+    ReplanClip(ClipId),
+    /// Remove every trigger a given audio clip produced (one undoable step).
+    #[allow(dead_code)]
+    ClearClipTriggers(ClipId),
     /// Trigger percussion import pipeline with the selected audio/JSON file path.
     /// Port of Unity: percussionImportController.OnImportPercussionMap(path).
     PercussionImport(String),

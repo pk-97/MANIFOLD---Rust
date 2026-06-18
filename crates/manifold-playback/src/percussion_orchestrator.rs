@@ -32,6 +32,7 @@ use manifold_core::percussion_settings::{
 };
 use manifold_core::project::Project;
 use manifold_editing::command::Command;
+use manifold_editing::commands::clip::DeleteClipCommand;
 
 use crate::percussion_backend::{PercussionPipelineBackendResolver, PercussionPipelineInvocation};
 use crate::percussion_import::{
@@ -1681,6 +1682,123 @@ impl PercussionImportOrchestrator {
             }
         };
 
+        self.plan_and_apply_for_clip(clip_id, &analysis, project, editing_service)
+    }
+
+    /// Re-place a clip's triggers from its cached analysis, with no backend run.
+    /// Drives the live inspector knobs (sensitivity / quantize / onset / routing)
+    /// — they all act at plan/apply time, so a re-plan is instant. Caches nothing
+    /// new (the analysis is already on the clip from a prior Detect).
+    pub fn replan_clip(
+        &mut self,
+        clip_id: ClipId,
+        project: &mut Project,
+        editing_service: &mut manifold_editing::service::EditingService,
+    ) {
+        if self.percussion_import_in_progress {
+            self.set_percussion_import_status(
+                "Detection running",
+                COLOR_ORANGE,
+                false,
+                2.0,
+                PERCUSSION_PROGRESS_UNKNOWN,
+                false,
+            );
+            return;
+        }
+
+        let analysis = match project
+            .timeline
+            .find_clip_by_id_mut(&clip_id)
+            .and_then(|c| c.audio_detection.as_ref())
+            .and_then(|d| d.analysis.clone())
+        {
+            Some(a) => a,
+            None => {
+                self.set_percussion_import_status(
+                    "Replan: detect first",
+                    COLOR_ORANGE,
+                    false,
+                    3.0,
+                    PERCUSSION_PROGRESS_UNKNOWN,
+                    false,
+                );
+                return;
+            }
+        };
+
+        self.plan_and_apply_for_clip(&clip_id, &analysis, project, editing_service);
+    }
+
+    /// Remove every trigger this audio clip produced (tagged `detection_source`),
+    /// as one undoable step. Leaves other clips' triggers and hand-placed clips.
+    pub fn clear_clip_triggers(
+        &mut self,
+        clip_id: ClipId,
+        project: &mut Project,
+        editing_service: &mut manifold_editing::service::EditingService,
+    ) {
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        for layer in project.timeline.layers.iter_mut() {
+            let layer_lid = layer.layer_id.clone();
+            let owned: Vec<_> = layer
+                .clips
+                .iter()
+                .filter(|c| c.detection_source.as_ref() == Some(&clip_id))
+                .cloned()
+                .collect();
+            for clip in owned {
+                commands.push(Box::new(DeleteClipCommand::new(clip.clone(), layer_lid.clone())));
+                layer.remove_clip(&clip.id);
+            }
+        }
+
+        if commands.is_empty() {
+            self.set_percussion_import_status(
+                "No triggers to clear",
+                COLOR_GREY,
+                false,
+                2.0,
+                PERCUSSION_PROGRESS_UNKNOWN,
+                false,
+            );
+            return;
+        }
+
+        project.timeline.mark_clip_lookup_dirty();
+        let count = commands.len();
+        let command: Box<dyn Command> = if commands.len() == 1 {
+            commands.remove(0)
+        } else {
+            Box::new(manifold_editing::command::CompositeCommand::new(
+                commands,
+                "Clear clip triggers".to_string(),
+            ))
+        };
+        editing_service.record(command);
+
+        self.set_percussion_import_status(
+            &format!("Cleared {} clips", count),
+            COLOR_GREEN,
+            false,
+            3.0,
+            PERCUSSION_PROGRESS_UNKNOWN,
+            false,
+        );
+    }
+
+    /// Cache `analysis` on the clip, build the clip-anchored options from its
+    /// `DetectionConfig`, plan, and place its triggers (tagged with the clip id,
+    /// clearing only this clip's prior triggers). Shared by Detect (post-backend)
+    /// and Replan (from the cached analysis — no backend run). Returns whether
+    /// any clips were placed.
+    fn plan_and_apply_for_clip(
+        &mut self,
+        clip_id: &ClipId,
+        analysis: &PercussionAnalysisData,
+        project: &mut Project,
+        editing_service: &mut manifold_editing::service::EditingService,
+    ) -> bool {
         // Cache the analysis on the clip (the clip owns its events), read its
         // detection config, and build the clip-anchored, warp-aware converter
         // from the clip's geometry. The energy envelope rides inside the cached
@@ -1715,12 +1833,12 @@ impl PercussionImportOrchestrator {
                 Box::new(beat_time_converter),
                 Box::new(binding_resolver),
             );
-            planner.build_plan(Some(&analysis), Some(&options))
+            planner.build_plan(Some(analysis), Some(&options))
         };
 
         if plan.accepted_events() == 0 {
             self.set_percussion_import_status(
-                "Detect: no accepted triggers",
+                "No accepted triggers",
                 COLOR_ORANGE,
                 false,
                 6.0,
@@ -1740,7 +1858,7 @@ impl PercussionImportOrchestrator {
         }
 
         self.set_percussion_import_status(
-            &format!("Detected {} clips", result.added_clips),
+            &format!("Placed {} clips", result.added_clips),
             COLOR_GREEN,
             false,
             5.0,
@@ -3049,5 +3167,105 @@ fn apply_energy_envelope_to_project(analysis: &PercussionAnalysisData, project: 
             .percussion_import
             .get_or_insert_with(Default::default);
         state.energy_envelope = Some(envelope.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::audio_clip_detection::AudioClipDetection;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::percussion_analysis::{PercussionEvent, PercussionTriggerType};
+    use manifold_core::types::LayerType;
+    use manifold_core::units::{Bpm, Seconds};
+    use manifold_core::PresetTypeId;
+    use manifold_editing::service::EditingService;
+
+    fn orchestrator() -> PercussionImportOrchestrator {
+        PercussionImportOrchestrator::new(None, String::new())
+    }
+
+    #[test]
+    fn clear_clip_triggers_removes_only_tagged() {
+        let mut project = Project::default();
+        let idx = project
+            .timeline
+            .add_layer("Kick", LayerType::Generator, PresetTypeId::from_string("Gen".into()));
+        let audio_a = ClipId::new("audioA");
+        {
+            let layer = &mut project.timeline.layers[idx];
+            let mut a = TimelineClip::new_generator(Beats(1.0), Beats(0.25));
+            a.detection_source = Some(audio_a.clone());
+            layer.restore_clip(a);
+            let mut b = TimelineClip::new_generator(Beats(5.0), Beats(0.25));
+            b.detection_source = Some(ClipId::new("audioB"));
+            layer.restore_clip(b);
+            layer.restore_clip(TimelineClip::new_generator(Beats(9.0), Beats(0.25)));
+        }
+        project.timeline.mark_clip_lookup_dirty();
+
+        let mut es = EditingService::new();
+        orchestrator().clear_clip_triggers(audio_a.clone(), &mut project, &mut es);
+
+        let clips = &project.timeline.layers[idx].clips;
+        assert_eq!(clips.len(), 2, "only audioA's trigger removed");
+        assert!(clips.iter().all(|c| c.detection_source.as_ref() != Some(&audio_a)));
+        assert!(es.undo(&mut project), "clear is one undoable step");
+        assert_eq!(project.timeline.layers[idx].clips.len(), 3, "undo restores it");
+    }
+
+    #[test]
+    fn replan_clip_places_from_cache_without_backend() {
+        let mut project = Project::default();
+        let aidx = project
+            .timeline
+            .add_layer("Audio", LayerType::Audio, PresetTypeId::NONE);
+        let mut clip =
+            TimelineClip::new_audio("song.wav".into(), Beats(0.0), Beats(64.0), Seconds(0.0), Seconds(120.0));
+        // Seed a cached analysis with one kick (as if a prior Detect ran).
+        let analysis = PercussionAnalysisData::new_simple(
+            "t",
+            Bpm(120.0),
+            vec![PercussionEvent::new(PercussionTriggerType::Kick, 0.5, 0.9, 0.0)],
+        );
+        clip.audio_detection = Some(AudioClipDetection {
+            config: Default::default(),
+            analysis: Some(analysis),
+        });
+        let clip_id = clip.id.clone();
+        project.timeline.layers[aidx].restore_clip(clip);
+        project.timeline.mark_clip_lookup_dirty();
+
+        let mut es = EditingService::new();
+        orchestrator().replan_clip(clip_id.clone(), &mut project, &mut es);
+
+        // A kick trigger was placed somewhere, tagged with the source clip — no
+        // backend run, no temp file.
+        let placed = project
+            .timeline
+            .layers
+            .iter()
+            .flat_map(|l| l.clips.iter())
+            .any(|c| c.detection_source.as_ref() == Some(&clip_id));
+        assert!(placed, "replan places triggers from the cached analysis");
+    }
+
+    #[test]
+    fn replan_clip_without_analysis_is_noop() {
+        let mut project = Project::default();
+        let aidx = project
+            .timeline
+            .add_layer("Audio", LayerType::Audio, PresetTypeId::NONE);
+        let clip =
+            TimelineClip::new_audio("song.wav".into(), Beats(0.0), Beats(8.0), Seconds(0.0), Seconds(8.0));
+        let clip_id = clip.id.clone();
+        project.timeline.layers[aidx].restore_clip(clip);
+        project.timeline.mark_clip_lookup_dirty();
+
+        let before: usize = project.timeline.layers.iter().map(|l| l.clips.len()).sum();
+        let mut es = EditingService::new();
+        orchestrator().replan_clip(clip_id, &mut project, &mut es);
+        let after: usize = project.timeline.layers.iter().map(|l| l.clips.len()).sum();
+        assert_eq!(before, after, "no cached analysis -> nothing placed");
     }
 }

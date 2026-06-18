@@ -590,6 +590,24 @@ impl ContentThread {
                     self.percussion_orchestrator.detect_clip(clip_id, p);
                 }
             }
+            ContentCommand::ReplanClip(clip_id) => {
+                if let Some(p) = self.engine.project_mut() {
+                    self.percussion_orchestrator.replan_clip(
+                        clip_id,
+                        p,
+                        &mut self.editing_service,
+                    );
+                }
+            }
+            ContentCommand::ClearClipTriggers(clip_id) => {
+                if let Some(p) = self.engine.project_mut() {
+                    self.percussion_orchestrator.clear_clip_triggers(
+                        clip_id,
+                        p,
+                        &mut self.editing_service,
+                    );
+                }
+            }
             ContentCommand::PercussionImport(path) => {
                 let beat = self.engine.current_beat();
                 let beats_per_bar = self
