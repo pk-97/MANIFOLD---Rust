@@ -119,6 +119,7 @@ The sliders/cards are already the same shared components, so the timeline mostly
 - **Per-layer colour identity** — already supported by `get_clip_color`; verify layers actually have distinct colours assigned (the screenshot showed uniform salmon).
 - **Clips show their output thumbnail** — uses the preview engine; future.
 - **Transport bar grouping** — cluster transport / tempo / file / render with dividers, weight the primary action.
+- **Per-clip content UI/UX (TODO — not yet designed).** Clips can carry editable *content*, not just params — the obvious case is a `Text` generator clip needing a text box to type/edit its string, but the pattern generalises to any clip-level "thing": text input, multi-line editing, content fields. We have no UX for this today. Needs a design pass: where the editor lives (clip inspector vs in-timeline popover), how it routes through `EditingService` (content is a generator param, so it's a mutation like any other), focus/keyboard capture on the bitmap UI, and how it reads on the live perform surface. Likely warrants its own short design doc once scoped.
 
 ## F. Parked ideas (revisit after the above)
 
