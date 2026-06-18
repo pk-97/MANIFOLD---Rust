@@ -333,6 +333,18 @@ impl LayerChromePanel {
         }
         Vec::new()
     }
+
+    /// Node-intent dispatch for the layer opacity slider's right-click reset.
+    /// Mirrors `handle_right_click`; see `docs/NODE_INTENT_DISPATCH.md`.
+    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        if let Some(ids) = self.opacity.ids() {
+            intents.on(
+                ids.track,
+                crate::intent::Gesture::RightClick,
+                PanelAction::LayerOpacityRightClick,
+            );
+        }
+    }
 }
 
 impl Default for LayerChromePanel {

@@ -475,6 +475,24 @@ impl MacrosPanel {
         Vec::new()
     }
 
+    /// Node-intent dispatch for the macro sliders: track → reset, label → open
+    /// mappings dropdown. Mirrors `handle_right_click`; the value cell + gaps
+    /// fall through (single-slider rows, no dense lottery — unlike param cards).
+    /// See `docs/NODE_INTENT_DISPATCH.md`.
+    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        use crate::intent::Gesture::RightClick;
+        for (i, s) in self.sliders.iter().enumerate() {
+            if let Some(track) = s.track_id() {
+                intents.on(track, RightClick, PanelAction::MacroRightClick(i));
+            }
+            if let Some(ids) = s.ids()
+                && ids.label >= 0
+            {
+                intents.on(ids.label as u32, RightClick, PanelAction::MacroLabelRightClick(i));
+            }
+        }
+    }
+
     /// Check if a node belongs to this panel.
     pub fn owns_node(&self, node_id: u32) -> bool {
         if self.first_node == usize::MAX {

@@ -445,6 +445,18 @@ impl MasterChromePanel {
         Vec::new()
     }
 
+    /// Node-intent dispatch for the master chrome sliders' right-click resets.
+    /// Mirrors `handle_right_click`; see `docs/NODE_INTENT_DISPATCH.md`.
+    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        use crate::intent::Gesture::RightClick;
+        if let Some(ids) = self.opacity.ids() {
+            intents.on(ids.track, RightClick, PanelAction::MasterOpacityRightClick);
+        }
+        if let Some(ids) = self.led_brightness.ids() {
+            intents.on(ids.track, RightClick, PanelAction::LedBrightnessRightClick);
+        }
+    }
+
     pub fn exit_path_button_rect(&self, tree: &UITree) -> Rect {
         if self.exit_path_btn_id >= 0 {
             tree.get_bounds(self.exit_path_btn_id as u32)
