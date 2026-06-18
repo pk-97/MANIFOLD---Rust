@@ -8,9 +8,10 @@ Created 2026-06-18.
 
 ## 0. CURRENT POSITION (read first, update last)
 
-- **Done:** Phase 0 (setup). Phase 1 (core). Phase 2 (engine path: evaluator + one-shot
-  fire + expiry, wired into `tick_playing`; 5 evaluator + 4 sink tests; clippy clean).
-- **Next action:** Phase 3 — `SetAudioSendTriggersCommand` through EditingService.
+- **Done:** Phase 0–2. Phase 3 (`SetAudioSendTriggersCommand` in editing's `audio_setup`
+  module, captures whole route vec, round-trip test; clippy clean).
+- **Next action:** Phase 4+5 together (interdependent) — PanelActions + ui_bridge dispatch +
+  state_sync view, and the `audio_setup_panel` Triggers section.
 
 ## 1. What this is
 
@@ -112,8 +113,10 @@ transient has no NoteOff. Engine runs expiry + fire in `tick_playing` after modu
       `resolve_trigger_layer` (explicit + auto-route-by-name). 5 evaluator + 4 sink tests;
       full playback suite (103+18) + clippy clean. **Runtime verification on a real stem is
       still pending** (needs the app; can't run headless here).
-- [ ] **Phase 3 — Editing command.** `SetAudioSendTriggersCommand` through EditingService
-      (mirror `SetClipDetectionConfigCommand`). Test.
+- [x] **Phase 3 — Editing command.** `SetAudioSendTriggersCommand` in editing's
+      `commands::audio_setup` (mirrors `SetAudioSendAnalysisCommand`; captures the whole
+      route vec → one undo step). Round-trip test; clippy clean. (Also fixed a pre-existing
+      `AudioClipDetection` literal missing `last_counts` in `clip_detection.rs`.)
 - [ ] **Phase 4 — App wiring.** `ContentCommand` variant + dispatch; auto-route-by-name on
       add/edit; `state_sync` builds the per-send route view + `⚡` flag.
 - [ ] **Phase 5 — UI.** `audio_setup_panel` "Triggers — <send>" section: route rows

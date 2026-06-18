@@ -9,6 +9,7 @@
 
 use crate::command::Command;
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSend, AudioSendSource, SendAnalysisConfig};
+use manifold_core::audio_trigger::TriggerRoute;
 use manifold_core::id::{AudioSendId, LayerId};
 use manifold_core::project::Project;
 
@@ -268,6 +269,42 @@ impl Command for SetAudioSendAnalysisCommand {
     }
 }
 
+/// Set a send's live audio → visual trigger routes. Captures the whole route
+/// vector (not a single route) so adding, removing, re-pointing, or tuning a
+/// route is one undo step regardless of which field the UI touched. Applied
+/// live by the trigger evaluator without restarting capture — like gain and
+/// analysis, the routes act at evaluation time.
+#[derive(Debug)]
+pub struct SetAudioSendTriggersCommand {
+    id: AudioSendId,
+    old: Vec<TriggerRoute>,
+    new: Vec<TriggerRoute>,
+}
+
+impl SetAudioSendTriggersCommand {
+    pub fn new(id: AudioSendId, old: Vec<TriggerRoute>, new: Vec<TriggerRoute>) -> Self {
+        Self { id, old, new }
+    }
+}
+
+impl Command for SetAudioSendTriggersCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
+            s.triggers = self.new.clone();
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
+            s.triggers = self.old.clone();
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Set Audio Send Triggers"
+    }
+}
+
 /// Route a send's signal source — capture downmix (the default) or a timeline
 /// audio layer. Binding to a layer clears any other send that was pointing at
 /// the same layer (one layer → one send); both the new binding and the cleared
@@ -432,6 +469,25 @@ mod tests {
         c2.undo(&mut project);
         assert_eq!(project.audio_setup.find_send(&a_id).unwrap().layer_source(), Some(&layer));
         assert!(!project.audio_setup.find_send(&b_id).unwrap().is_layer_fed());
+    }
+
+    #[test]
+    fn triggers_round_trip() {
+        use manifold_core::audio_mod::AudioBand;
+        let mut project = Project::default();
+        let send = AudioSend::new("Kick");
+        let id = send.id.clone();
+        project.audio_setup.sends.push(send);
+        assert!(project.audio_setup.find_send(&id).unwrap().triggers.is_empty());
+
+        let mut route = TriggerRoute::new(AudioBand::Full);
+        route.enabled = true;
+        let mut cmd = SetAudioSendTriggersCommand::new(id.clone(), Vec::new(), vec![route]);
+        cmd.execute(&mut project);
+        assert_eq!(project.audio_setup.find_send(&id).unwrap().triggers.len(), 1);
+        assert!(project.audio_setup.find_send(&id).unwrap().has_active_triggers());
+        cmd.undo(&mut project);
+        assert!(project.audio_setup.find_send(&id).unwrap().triggers.is_empty());
     }
 
     #[test]

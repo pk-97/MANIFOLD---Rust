@@ -138,6 +138,7 @@ mod tests {
                     manifold_core::units::Bpm(128.0),
                     vec![],
                 )),
+                ..Default::default()
             });
         }
 
