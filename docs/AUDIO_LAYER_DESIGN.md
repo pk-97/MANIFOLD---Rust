@@ -239,6 +239,12 @@ Phases ordered so each ships something usable. Anchors are real file:line from t
 - **Curve alignment** ✓ — `audio_mod_runtime` scales the playhead→curve-seconds by the same ratio, so a warped clip's modulation features track what's heard.
 - **Set-clip-BPM UI** ✓ — audio clips get a "Clip BPM" button in the clip chrome (new `mode_audio` section) reusing the existing `ClipBpmClicked` → `ChangeClipRecordedBpmCommand` path; "Auto" = no warp. Tests for `warp_ratio` + the audio chrome section.
 
+**Landed — P4 warp (Signalsmith seam):**
+- **Pitch-preserving stretch** ✓ — Signalsmith Stretch (MIT) vendored under `manifold-playback/vendor/signalsmith` (3 headers, terminate at the C++ stdlib); a thin `extern "C"` wrapper (`native/signalsmith_stretch.cpp`, built by a new `build.rs`) calls `SignalsmithStretch::exact()` (the library's documented whole-buffer offline recipe). `audio_warp::warp_interleaved(samples, channels, sample_rate, ratio)` is the `warp(samples, ratio)` seam: stretches the decoded buffer offline so it plays at kira `playback_rate = 1.0`, pitch preserved. Returns `None` (→ varispeed fallback) for no-warp / degenerate / too-short input. Tests verify pitch preservation + length (2× halves at constant 440 Hz, 0.5× doubles at constant 330 Hz) without needing audio.
+
+**Remaining — P4 wiring (the audible swap):**
+- Signalsmith isn't yet in the live voice. The plan: an **async stretch cache** in `AudioLayerPlayback` keyed by `(ClipId, ratio)` — kick the offline stretch off the content thread, keep **varispeed playing as the instant preview/fallback**, and **swap the voice to the stretched buffer** (played at rate 1.0, position = `in_point/ratio + elapsed`) once ready; re-stretch on clip-BPM or project-tempo change. Open decision: build the kira `StaticSoundData` from the stretched samples via an **in-memory WAV round-trip** (portable) vs kira-internal frame construction (version-fragile). Needs a runtime ear check (swap click? alignment across the swap?), so it's deliberately a separate step.
+- Also coupled here: clip *timeline length* doesn't yet rescale when clip BPM changes, and the waveform isn't trim-aware — both touch clip-content mapping.
+
 **Remaining — later phases:**
-- **Warp (P4) — Signalsmith** — pitch-preserving stretch behind the `warp(samples, ratio)` seam (offline/ahead, handed to kira at `playback_rate = 1.0`). The varispeed ratio wiring above is the proof-of-wiring it slots into. Note: clip *timeline length* doesn't yet rescale when clip BPM changes, and the waveform isn't trim-aware — both touch clip-content mapping and pair naturally with this step.
 - **Export (P5), hardening (P6)** — not started.
