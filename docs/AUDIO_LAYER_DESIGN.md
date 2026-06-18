@@ -1,4 +1,4 @@
-<!-- index: A timeline audio layer: drag an audio file onto a layer, it plays through a real output stream, draws a waveform, and feeds a send for audio modulation. The architectural spine is offline analysis — a decoded file is analyzed once on import into a per-send feature curve sampled at the playhead (deterministic, look-ahead, no realtime glitch risk), so only the audio *output* stays realtime. Covers the data model, the offline-vs-live modulation fork, the output backend + mixer + declick + transport-follow sync, export integration, and the live-clock reality with Ableton. -->
+<!-- index: A timeline audio layer: drag an audio file onto a layer, it plays through a real output stream, draws a waveform, and feeds a send for audio modulation. The architectural spine is offline analysis — a decoded file is analyzed once on import into a per-send feature curve sampled at the playhead (deterministic, look-ahead, no realtime glitch risk), so only the audio *output* stays realtime. Covers the data model, the offline-vs-live modulation fork, the output backend + mixer + declick + warp (Signalsmith pitch-preserving first-class, varispeed fallback) + transport-follow sync, export integration, and the doubling-the-same-stem usage rule with Ableton. -->
 
 # Audio Layer — Design Doc
 
@@ -49,7 +49,7 @@ Split by what exists versus what's genuinely new.
 
 **New — offline modulation (§3):** analyze the decoded file once on import into a per-send feature curve; sample it at the playhead. This is *simpler* than the live path, not harder — no ring, no realtime worker, no glitch budget.
 
-**New — realtime output (§4):** the output backend (the missing twin of `CaptureBackend`), the mixer, declicking, and the transport-follow sync policy. This is the only genuinely new realtime surface, and the only place the glitch risk lives.
+**New — realtime output (§4):** the output backend (the missing twin of `CaptureBackend`), the mixer, declicking, warp/time-stretch (Signalsmith first-class, varispeed fallback — §4.1), and the transport-follow sync policy. This is the only genuinely new realtime surface, and the only place the glitch risk lives.
 
 **New — UI (§6) and serialization (§7).**
 
@@ -63,7 +63,7 @@ Split by what exists versus what's genuinely new.
 
 On import, after decode, run the same feature extractors the live worker uses (band energy, RMS, Centroid, onset) across the whole file at a fixed hop, producing a per-send **feature curve**: a time-indexed array of `SendFeatures`. Store it as the clip's analysis artifact (§7).
 
-At each content tick, for each audio layer with a send assignment, find the active clip, convert the playhead to a curve index, and publish that `SendFeatures` into the same latest-wins slot the live worker would have written. **Downstream is byte-identical to live capture** — the modulation system never learns whether its features came from a ring or a table.
+At each content tick, for each audio layer with a send assignment, find the active clip, convert the playhead to a curve index (through the clip's warp ratio, §4.1, so a warped clip's features stay aligned to what's heard), and publish that `SendFeatures` into the same latest-wins slot the live worker would have written. **Downstream is byte-identical to live capture** — the modulation system never learns whether its features came from a ring or a table.
 
 - **Look-ahead** is a per-binding offset added to the sample index — optional, defaults to zero, exposed later if wanted.
 - **Reanalyze** is cheap and offline; changing analysis settings re-runs on the decoded buffer with no playback consequence.
@@ -81,7 +81,17 @@ The genuinely new subsystem. Manifold opens no output device today.
 - **Feeder.** The content thread, each tick, decodes/reads the active clip's sample window for every audible audio layer and pushes into the mixer. This is the realtime producer; its depth is the glitch budget (§9).
 - **Mixer.** Sum audible layers → master, per-layer gain, mute (drop from mix), solo (audio-solo bus). Optional master gain/limiter. Feeds the output ring.
 - **Declick.** Audio is unforgiving where video is not. Short fade ramps at every clip start/end, on pause, on loop-wrap, and on scrub-stop — a hard cut anywhere produces an audible click. This is not polish; it's correctness for audio.
-- **Sync.** Transport stays master (it already is, and in a live show Ableton is master above it via OSC/MIDI). Audio *follows*: reseek the sample position on jump/loop/scrub, tolerate sub-frame drift, resample only if drift accumulates. **Audio is never the master clock** — that would fight the Ableton-sync reality the whole instrument is built around.
+- **Sync.** Transport stays master (it already is, and in a live show Ableton is master above it via OSC/MIDI). Audio *follows*: reseek the sample position on jump/loop/scrub, tolerate sub-frame drift. **Audio is never the master clock** — that would fight the Ableton-sync reality the whole instrument is built around.
+- **Warp.** Each audio clip carries a **clip BPM**; the warp ratio is `project_tempo / clip_bpm`, so the clip tracks tempo and stays on the beat grid (Ableton's warp-marker model, minus the markers). Both the player and the offline analysis index through this ratio. The stretch sits behind a single `warp(samples, ratio)` seam with two implementations (§4.1).
+
+### 4.1 Time-stretch — Signalsmith first-class, varispeed fallback
+
+Pitch-preserving stretch is **first-class**, because the material that warps worst — drums, percussive transients — is exactly what drives the modulation and what the audience hears.
+
+- **Signalsmith Stretch** (primary): MIT-licensed, modern, single-header C++ with good transient handling, designed for easy integration; wrapped via a Rust binding / thin FFI. MIT keeps it clean for a product. This is the default warp path.
+- **Varispeed** (fallback): resample at the ratio — trivial, but pitch moves with tempo. Used only where Signalsmith is unavailable or as a cheap preview; inaudible near ratio 1.0.
+
+Both take the *same* input — the clip-BPM ratio — so they're interchangeable behind `warp(samples, ratio)`. **Don't roll your own** phase vocoder: the naive version is ~200 lines and smears transients (the kicks you care about); the difficulty is transient handling and phase locking, which Signalsmith already solves.
 
 ---
 
@@ -130,9 +140,9 @@ Note the offline modulation path (§3) is **immune** to this — it's a table lo
 1. **Decode strategy** — whole-file-to-RAM (simplest; a 5-min stereo stem ≈ 50 MB; percussion already decodes the whole file) vs. streaming. Recommend RAM for v1.
 2. **Output device** — default output only, or a picker? Recommend default first.
 3. **Bundle audio into the project ZIP** vs. reference by path (§7).
-4. **Warp / time-stretch** — "beat DAW" *implies* tempo-follow, but real time-stretching is a deep rabbit hole. Recommend **no warp in v1** — audio plays at native speed, placed by hand. Must be explicit; it's an expectation gap, not an oversight.
+4. **Warp / time-stretch** — *decided:* warp is in scope, pitch-preserving (Signalsmith) first-class, varispeed fallback, clip-BPM ratio behind `warp(samples, ratio)` (§4.1). Not an open question; recorded here for visibility.
 5. **Tap feedback loop** — playing audio out *while* tapping system audio re-enters the tapped mix → feedback. Needs a guard or a documented "don't route these together."
-6. **The live-clock reality** — if Ableton is master *and* also playing audio, two independent audio sources can't sample-align (flam against Ableton's own output). The honest scenario is: Manifold audio **replaces** that stem, or it's for Manifold-is-the-audio-source shows. Nail down which; it shapes the sync design (§4).
+6. **Doubling the same stem** — two apps mixing is fine (macOS sums them like any players); the *only* hazard is Manifold and Ableton playing the **same material** expecting tight lock, because transport sync (OSC/MIDI) isn't sample-accurate and the two copies flam. Manifold audio stays sample-tight to Manifold's *visuals* (one playhead) and only needs rough alignment with Ableton, which transport sync gives. **Constraint: don't double the same sound in both.** This is a usage rule, not a subsystem cost.
 
 ---
 
