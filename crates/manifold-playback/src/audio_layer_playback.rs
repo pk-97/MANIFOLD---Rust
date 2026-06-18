@@ -267,3 +267,99 @@ impl AudioLayerPlayback {
         self.voices.len()
     }
 }
+
+/// SPIKE (step 1 of the realtime-tap plan): proves kira 0.9 lets us hang a
+/// pass-through effect on a sub-track and read the *played* (post-rate,
+/// post-volume) samples off it — the signal we'll feed the send analysis.
+/// Ignored because it opens the default output device; run with:
+///   cargo test -p manifold-playback tap_spike -- --ignored --nocapture
+#[cfg(test)]
+mod tap_spike {
+    use std::sync::{Arc, Mutex};
+
+    use kira::clock::clock_info::ClockInfoProvider;
+    use kira::Frame;
+    use kira::effect::{Effect, EffectBuilder};
+    use kira::modulator::value_provider::ModulatorValueProvider;
+    use kira::sound::static_sound::{StaticSoundData, StaticSoundSettings};
+    use kira::track::TrackBuilder;
+
+    use super::*;
+
+    /// Pass-through effect: copies the left channel into a shared sink, returns
+    /// the frame untouched. (A Mutex is fine for a one-shot spike; the real tap
+    /// will push into a lock-free ring, never lock on the audio thread.)
+    struct TapEffect {
+        sink: Arc<Mutex<Vec<f32>>>,
+    }
+
+    impl Effect for TapEffect {
+        fn process(
+            &mut self,
+            input: Frame,
+            _dt: f64,
+            _clock: &ClockInfoProvider,
+            _mods: &ModulatorValueProvider,
+        ) -> Frame {
+            if let Ok(mut v) = self.sink.lock() {
+                v.push(input.left);
+            }
+            input
+        }
+    }
+
+    struct TapBuilder {
+        sink: Arc<Mutex<Vec<f32>>>,
+    }
+
+    impl EffectBuilder for TapBuilder {
+        type Handle = ();
+        fn build(self) -> (Box<dyn Effect>, Self::Handle) {
+            (Box::new(TapEffect { sink: self.sink }), ())
+        }
+    }
+
+    #[test]
+    #[ignore = "opens the default audio output device; run with --ignored"]
+    fn tap_receives_played_samples() {
+        let sink = Arc::new(Mutex::new(Vec::<f32>::new()));
+
+        let mut manager =
+            AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())
+                .expect("open default output device");
+
+        // Sub-track carrying the tap effect.
+        let mut tb = TrackBuilder::new();
+        tb.add_effect(TapBuilder { sink: sink.clone() });
+        let track = manager.add_sub_track(tb).expect("create sub-track");
+
+        // 50 ms of a 440 Hz sine at 0.2 amplitude, routed to the tap track.
+        let sr = 48_000u32;
+        let frames: Arc<[Frame]> = (0..sr / 20)
+            .map(|i| {
+                let s = (std::f32::consts::TAU * 440.0 * i as f32 / sr as f32).sin() * 0.2;
+                Frame::new(s, s)
+            })
+            .collect();
+        let data = StaticSoundData {
+            sample_rate: sr,
+            frames,
+            settings: StaticSoundSettings::default(),
+            slice: None,
+        }
+        .output_destination(&track);
+
+        let _handle = manager.play(data).expect("play sound on tap track");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+
+        let captured = sink.lock().unwrap();
+        let n = captured.len();
+        let peak = captured.iter().fold(0.0f32, |a, &x| a.max(x.abs()));
+        println!("[tap_spike] captured {n} samples, peak {peak:.4}");
+        assert!(n > 1000, "tap saw too few samples ({n}); effect not on the played path");
+        assert!(
+            peak > 0.05,
+            "tap saw silence (peak {peak:.4}); sound rate/volume is applied AFTER the track tap?"
+        );
+    }
+}
