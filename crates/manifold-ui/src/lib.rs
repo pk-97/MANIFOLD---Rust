@@ -10,6 +10,7 @@ pub mod cursors;
 pub mod driver_waveform_icons;
 pub mod input;
 pub mod inspector_layout;
+pub mod intent;
 pub mod interaction_overlay;
 pub mod layout;
 pub mod node;
