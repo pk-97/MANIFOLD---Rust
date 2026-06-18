@@ -2778,103 +2778,13 @@ impl ParamCardPanel {
         Vec::new()
     }
 
-    pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
-        match self.kind {
-            ParamCardKind::Effect => self.handle_right_click_effect(node_id),
-            ParamCardKind::Generator => self.handle_right_click_generator(node_id),
-        }
-    }
-
-    fn handle_right_click_effect(&self, node_id: u32) -> Vec<PanelAction> {
-        let ei = self.effect_index;
-        for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if let Some(ids) = slider {
-                // Right-click slider track → reset to default
-                if node_id == ids.track {
-                    let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
-                    return vec![PanelAction::ParamRightClick(
-                        GraphParamTarget::Effect(ei),
-                        self.pid_at(pi),
-                        default,
-                    )];
-                }
-                // Right-click label → perform-mapping menu. Suppressed in
-                // Author: the sideways mapping drawer (right-edge chevron) is
-                // the authoring surface, and the perform menu maps drivers /
-                // Ableton, which belong to the live card.
-                if self.context == CardContext::Perform
-                    && ids.label >= 0
-                    && node_id == ids.label as u32
-                {
-                    return vec![PanelAction::ParamLabelRightClick(GraphParamTarget::Effect(ei), self.pid_at(pi))];
-                }
-            }
-        }
-        // Header / card-body right-click → open the card context menu (make
-        // unique / export / import). The same affordance the generator card
-        // carries, emitted with this card's effect target so the dispatch runs
-        // one path keyed by GraphParamTarget.
-        let id = node_id as i32;
-        if id == self.header_bg_id
-            || id == self.name_label_id
-            || id == self.border_id
-            || id == self.inner_bg_id
-        {
-            return vec![PanelAction::CardRightClicked(GraphParamTarget::Effect(ei))];
-        }
-        Vec::new()
-    }
-
-    fn handle_right_click_generator(&self, node_id: u32) -> Vec<PanelAction> {
-        let id = node_id as i32;
-
-        // Header right-click → context menu (copy/paste + make unique/export/import)
-        if id == self.header_bg_id
-            || id == self.name_label_id
-            || id == self.border_id
-            || id == self.inner_bg_id
-        {
-            return vec![PanelAction::CardRightClicked(GraphParamTarget::Generator)];
-        }
-
-        for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if self
-                .param_info
-                .get(pi)
-                .map(|i| i.is_toggle || i.is_trigger)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            if let Some(ids) = slider {
-                // Right-click slider track → reset to default
-                if node_id == ids.track {
-                    let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
-                    return vec![PanelAction::ParamRightClick(GraphParamTarget::Generator, self.pid_at(pi), default)];
-                }
-                // Right-click label → perform-mapping menu. Suppressed in
-                // Author (see effect path above).
-                if self.context == CardContext::Perform
-                    && ids.label >= 0
-                    && node_id == ids.label as u32
-                {
-                    return vec![PanelAction::ParamLabelRightClick(GraphParamTarget::Generator, self.pid_at(pi))];
-                }
-            }
-        }
-        Vec::new()
-    }
-
-    /// Node-intent dispatch for this card's right-click gestures. Replaces the
-    /// exact-id matching in `handle_right_click` with declarative intent +
-    /// fold-up: specific intents on the slider track (reset) and label (perform
-    /// mapping) win, and the card root claims its whole area so a right-click on
-    /// any dead zone — slider fill/thumb/value cell, row gaps, padding — folds
-    /// up to the card context menu instead of being silently swallowed.
-    ///
-    /// See `docs/NODE_INTENT_DISPATCH.md`. Once every right-click surface is
-    /// migrated, the `handle_right_click*` methods and the `RightClick` arms in
-    /// the inspector are deleted.
+    /// Node-intent dispatch for this card's right-click gestures. The sole
+    /// right-click path for both the inspector and the graph-editor card.
+    /// Declarative intent + fold-up: specific intents on the slider track
+    /// (reset) and label (perform mapping) win, and the card root claims its
+    /// whole area so a right-click on any dead zone — slider fill/thumb/value
+    /// cell, row gaps, padding — folds up to the card context menu instead of
+    /// being silently swallowed. See `docs/NODE_INTENT_DISPATCH.md`.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         use crate::intent::Gesture::RightClick;
 

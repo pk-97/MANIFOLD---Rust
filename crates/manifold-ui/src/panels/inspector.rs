@@ -1315,37 +1315,6 @@ impl InspectorCompositePanel {
         }
     }
 
-    fn route_right_click(&mut self, node_id: u32) -> Vec<PanelAction> {
-        if let Some(target) = self.find_target_for_node(node_id) {
-            // Right-click also targets a sub-panel — keep last_effect_tab in sync
-            // so dispatch routes UnmapParamAbleton etc. to the correct list.
-            self.update_last_effect_tab(&target);
-            match target {
-                PressedTarget::Macros => self.macros_panel.handle_right_click(node_id),
-                PressedTarget::MasterChrome => self.master_chrome.handle_right_click(node_id),
-                PressedTarget::LayerChrome => self.layer_chrome.handle_right_click(node_id),
-                PressedTarget::ClipChrome => self.clip_chrome.handle_right_click(node_id),
-                PressedTarget::MasterEffect(i) => self
-                    .master_effects
-                    .get(i)
-                    .map(|c| c.handle_right_click(node_id))
-                    .unwrap_or_default(),
-                PressedTarget::LayerEffect(i) => self
-                    .layer_effects
-                    .get(i)
-                    .map(|c| c.handle_right_click(node_id))
-                    .unwrap_or_default(),
-                PressedTarget::GenParam => self
-                    .gen_params
-                    .as_ref()
-                    .map(|gp| gp.handle_right_click(node_id))
-                    .unwrap_or_default(),
-                PressedTarget::Scrollbar => Vec::new(),
-            }
-        } else {
-            Vec::new()
-        }
-    }
 }
 
 impl Panel for InspectorCompositePanel {
@@ -1597,12 +1566,8 @@ impl Panel for InspectorCompositePanel {
                 }
                 Vec::new()
             }
-            UIEvent::RightClick { node_id, pos, .. } => {
-                if !self.viewport_rect.contains(*pos) {
-                    return Vec::new();
-                }
-                self.route_right_click(*node_id)
-            }
+            // Right-click is handled entirely by node-intent dispatch (see
+            // `register_intents` below); the inspector no longer routes it.
             _ => Vec::new(),
         }
     }

@@ -1556,24 +1556,25 @@ impl LayerHeaderPanel {
         Vec::new()
     }
 
-    fn handle_right_click(&self, pos: Vec2) -> Vec<PanelAction> {
-        // Reject right-clicks outside the layer controls X bounds.
-        // All panels receive all events; without this check, a right-click
-        // in the inspector (same Y as a layer) would open the layer context menu.
-        if self.panel_width > 0.0 {
-            let local_x = pos.x - self.panel_origin.x;
-            if local_x < 0.0 || local_x > self.panel_width {
-                return Vec::new();
-            }
+    /// Node-intent dispatch for right-click: a right-click anywhere in layer
+    /// row `i` opens that layer's context menu. Every node of the row is
+    /// registered (the row's `bg` plus all controls are flat siblings under the
+    /// shared scroll-clip node, so there's no single container to fold up to),
+    /// which reproduces the old whole-row positional behaviour through the
+    /// registry — and the hit test now scopes it to this panel for free, so the
+    /// former manual X-bounds guard is gone. See `docs/NODE_INTENT_DISPATCH.md`.
+    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        for (i, row) in self.rows.iter().enumerate() {
+            row.for_each_id(|id| {
+                if id >= 0 {
+                    intents.on(
+                        id as u32,
+                        crate::intent::Gesture::RightClick,
+                        PanelAction::LayerHeaderRightClicked(i),
+                    );
+                }
+            });
         }
-        // Position-based lookup: find which layer the Y coordinate falls in
-        let local_y = pos.y - self.panel_origin.y;
-        for (i, layer) in self.layers.iter().enumerate() {
-            if local_y >= layer.y_offset && local_y < layer.y_offset + layer.height {
-                return vec![PanelAction::LayerHeaderRightClicked(i)];
-            }
-        }
-        Vec::new()
     }
 
     // ── Update-in-place (vertical scroll) ─────────────────────
@@ -1822,7 +1823,7 @@ impl Panel for LayerHeaderPanel {
                 self.handle_click(*node_id, *modifiers)
             }
             UIEvent::DoubleClick { node_id, .. } => self.handle_double_click(*node_id),
-            UIEvent::RightClick { pos, .. } => self.handle_right_click(*pos),
+            // RightClick is handled by node-intent dispatch (register_intents).
             // PointerDown on drag handle → save index for DragBegin fallback.
             // Do NOT return LayerClicked here: that triggers a structural rebuild
             // which invalidates node IDs before DragBegin fires, breaking drag.
@@ -1944,6 +1945,32 @@ mod tests {
         let a = panel.handle_click(panel.rows[0].solo as u32, crate::input::Modifiers::NONE);
         assert_eq!(a.len(), 1);
         assert!(matches!(a[0], PanelAction::ToggleSolo(0)));
+    }
+
+    #[test]
+    fn intent_resolves_right_click_anywhere_in_row_to_layer_menu() {
+        use crate::intent::{Gesture, IntentRegistry};
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = LayerHeaderPanel::new();
+        panel.set_layers(vec![
+            make_video_layer("L0", 0.0, 140.0),
+            make_video_layer("L1", 140.0, 140.0),
+        ]);
+        panel.build(&mut tree, &layout);
+
+        let mut intents = IntentRegistry::new();
+        panel.register_intents(&mut intents);
+
+        // A right-click on any control in a row resolves to that layer's menu —
+        // the bg, the mute button, and the name all map to the same layer index.
+        for node in [panel.rows[1].bg, panel.rows[1].mute, panel.rows[1].name] {
+            let action = intents.resolve(&tree, node, Gesture::RightClick);
+            assert!(
+                matches!(action, Some(PanelAction::LayerHeaderRightClicked(1))),
+                "node {node} should resolve to layer 1's menu, got {action:?}"
+            );
+        }
     }
 
     #[test]

@@ -327,15 +327,8 @@ impl LayerChromePanel {
         Vec::new()
     }
 
-    pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
-        if self.opacity.ids().is_some_and(|ids| node_id == ids.track) {
-            return vec![PanelAction::LayerOpacityRightClick];
-        }
-        Vec::new()
-    }
-
     /// Node-intent dispatch for the layer opacity slider's right-click reset.
-    /// Mirrors `handle_right_click`; see `docs/NODE_INTENT_DISPATCH.md`.
+    /// See `docs/NODE_INTENT_DISPATCH.md`.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         if let Some(ids) = self.opacity.ids() {
             intents.on(

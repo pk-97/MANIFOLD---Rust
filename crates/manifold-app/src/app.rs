@@ -332,6 +332,11 @@ pub struct Application {
     /// instrument card, not a read-only mirror, so slider/driver/mapping
     /// edits happen on it directly.
     pub(crate) editor_card: manifold_ui::panels::param_card::ParamCardPanel,
+    /// Node-intent dispatch for the editor card's right-click, so the graph
+    /// editor window resolves it through the same fold-up catcher as the main
+    /// inspector (rather than the card's old exact-id `handle_right_click`).
+    /// Repopulated from the card's node ids each editor frame that has events.
+    pub(crate) editor_card_intents: manifold_ui::intent::IntentRegistry,
     /// Hash of the editor card's last-applied `ParamCardConfig`. `configure`
     /// rebuilds the card's transient UI state (open driver/envelope drawers,
     /// the mapping drawer), so — exactly like the inspector, whose
@@ -562,6 +567,7 @@ impl Application {
                 card
             },
             editor_card_config_hash: None,
+            editor_card_intents: manifold_ui::intent::IntentRegistry::new(),
             editor_mapping_popover: crate::mapping_popover::MappingPopover::new(),
             graph_node_clipboard: None,
             palette_atoms_cache: {
