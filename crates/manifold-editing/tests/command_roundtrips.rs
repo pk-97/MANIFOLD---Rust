@@ -242,6 +242,34 @@ fn change_clip_recorded_bpm_undo_roundtrip() {
 }
 
 #[test]
+fn change_clip_recorded_bpm_rescales_audio_clip_length() {
+    // Audio clip: 4 beats at the project's 120 BPM, warp off. Declaring it a
+    // 60-BPM clip holds the played audio (2 s) constant, so it now occupies
+    // 2 beats. Undo restores the original length. A non-audio clip is unaffected
+    // (covered by the roundtrip test above).
+    let mut project = make_test_project();
+    let audio = TimelineClip::new_audio(
+        "/x.wav".into(),
+        Beats(0.0),
+        Beats(4.0),
+        manifold_core::units::Seconds(0.0),
+        manifold_core::units::Seconds(2.0),
+    );
+    let clip_id = audio.id.clone();
+    project.timeline.layers[1].restore_clip(audio);
+    project.timeline.rebuild_clip_lookup();
+
+    let mut cmd = ChangeClipRecordedBpmCommand::new(clip_id.clone(), 0.0, 60.0);
+    cmd.execute(&mut project);
+    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
+    assert!((clip.duration_beats.0 - 2.0).abs() < 1e-6, "60 BPM → 2 beats");
+
+    cmd.undo(&mut project);
+    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
+    assert!((clip.duration_beats.0 - 4.0).abs() < 1e-6, "undo restores 4 beats");
+}
+
+#[test]
 fn split_clip_undo_roundtrip() {
     let mut project = make_test_project();
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
