@@ -8,11 +8,15 @@ Created 2026-06-18.
 
 ## 0. CURRENT POSITION (read first, update last)
 
-- **Done:** Phase 0–3. Phase 4+5 (full UI + app wiring: panel Triggers section, PanelActions,
-  ui_root dropdown ctx + layer cache, ui_bridge dispatch, state_sync view). Builds + clippy
-  clean across the workspace; ui (293) + editing (7) tests green.
-- **Next action:** Phase 6 — polish/edge cases, runtime verification, ship (commit/push +
-  memory). **Runtime verification on a real stem still pending** (needs the app).
+- **Status: FEATURE COMPLETE (pending runtime verification).** Phases 0–6 all done. Builds +
+  clippy clean across touched crates; core (275), io (17), ui (293), playback (103+18),
+  editing (7) tests green. Amber send-label cue marks sends with active routes.
+- **The ONE remaining task is Peter's:** run the app, point a real stem at a send, enable a
+  route, confirm onsets fire clips on the target layer and the latency/feel is right. Watch
+  for: octave/feel of sensitivity steps, layout/spacing of the Triggers rows at the modal
+  width, and whether the ~85 ms detector latency feels tight enough.
+- **Deferred (documented, not blocking):** per-route one-shot length control (model supports
+  it, defaulted to 1 beat); stopped-transport live triggering (v1 fires in `tick_playing`).
 
 ## 1. What this is
 
@@ -130,8 +134,12 @@ transient has no NoteOff. Engine runs expiry + fire in `tick_playing` after modu
       `SetAudioSendTriggersCommand`; state_sync builds the rows + caches candidate layers.
       ui (293) + editing (7) tests green; workspace clippy clean. **Deferred:** per-route
       one-shot length control (model supports it, defaulted 1 beat); the `⚡` send-row badge.
-- [ ] **Phase 6 — Polish + ship.** Auto-route UX, edge cases (no layers, send delete with
-      routes), clippy `-D warnings` (core/playback/editing/ui/app), focused tests, commit/push.
+- [x] **Phase 6 — Polish + ship.** Amber send-label cue for sends with active routes
+      (glyph-free, no layout churn). Edge cases handled: no candidate layers → dropdown is
+      Auto-only; missing/orphaned target layer → reads "Auto"; send delete drops routes with
+      the send (RemoveAudioSendCommand). Clippy clean (core/editing/playback/ui/app); io +
+      core serialization round-trips green (empty triggers skip-serialize, old projects
+      byte-identical). Committed + pushed; memory updated.
 
 ## 6. Invariants / guardrails
 

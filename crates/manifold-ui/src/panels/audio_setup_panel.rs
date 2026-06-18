@@ -477,15 +477,22 @@ impl AudioSetupPanel {
                 "",
             ) as i32;
 
-            // Label is a button — clicking it opens the inline rename editor.
+            // Label is a button — clicking it opens the inline rename editor. A
+            // send with active trigger routes reads in an amber accent, so which
+            // sends fire visuals is legible without selecting each one.
             let label_x = inner_x + SWATCH_W + 6.0;
+            let has_triggers = send.triggers.iter().any(|t| t.enabled);
+            let mut lbl_style = label_button_style();
+            if has_triggers {
+                lbl_style.text_color = Color32::new(240, 196, 110, 255); // amber
+            }
             self.send_ids[i].label = tree.add_button(
                 self.bg_id,
                 label_x,
                 cy,
                 LABEL_W,
                 ROW_H,
-                label_button_style(),
+                lbl_style,
                 &send.label,
             ) as i32;
 
