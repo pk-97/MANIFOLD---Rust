@@ -316,6 +316,9 @@ impl ContentThread {
                 if let Some(ref mut stem) = self.stem_audio {
                     stem.reset_stems(self.audio_sync.as_mut());
                 }
+                if let Some(ref mut alp) = self.audio_layer_playback {
+                    alp.reset();
+                }
                 // Reset link beat offset and tempo recorder on project load.
                 // Port of C# PlaybackController.OnProjectLoading lines 550-551.
                 self.link_beat_offset = f64::NAN;

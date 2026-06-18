@@ -242,7 +242,7 @@ impl AudioModRuntime {
                 else {
                     continue;
                 };
-                let Some(clip) = crate::audio_layer_curves::active_audio_clip(layer, beat) else {
+                let Some(clip) = layer.active_audio_clip_at(beat) else {
                     continue;
                 };
                 // Offset into the source file the playhead is over (warp is P4;

@@ -19,6 +19,7 @@ use manifold_playback::osc_receiver::OscReceiver;
 use manifold_playback::osc_sender::OscPositionSender;
 use manifold_playback::osc_sync::OscSyncController;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
+use manifold_playback::audio_layer_playback::AudioLayerPlayback;
 use manifold_playback::stem_audio::StemAudioController;
 use manifold_playback::sync::{SyncArbiter, SyncTargetSnapshot};
 use manifold_playback::tempo_recorder::TempoRecorder;
@@ -59,6 +60,9 @@ pub struct ContentThread {
     pub content_pipeline: ContentPipeline,
     pub audio_sync: Option<ImportedAudioSyncController>,
     pub stem_audio: Option<StemAudioController>,
+    /// Per-clip audio-layer playback (one kira voice per active audio clip).
+    /// `None` if the kira backend failed to open. See `docs/AUDIO_LAYER_DESIGN.md`.
+    pub audio_layer_playback: Option<AudioLayerPlayback>,
     pub percussion_orchestrator: PercussionImportOrchestrator,
     pub transport_controller: TransportController,
     pub gpu: GpuContext,
@@ -619,6 +623,14 @@ impl ContentThread {
             && let Some(ref audio_sync) = self.audio_sync
         {
             stem_audio.update_sync(audio_sync, &self.engine);
+        }
+
+        // 5c. Audio-layer playback — one kira voice per active audio clip,
+        // following the transport. See docs/AUDIO_LAYER_DESIGN.md §4.
+        if let Some(ref mut audio_layer_playback) = self.audio_layer_playback
+            && let Some(project) = self.engine.project()
+        {
+            audio_layer_playback.update(project, &self.engine);
         }
 
         // 6. Percussion tick

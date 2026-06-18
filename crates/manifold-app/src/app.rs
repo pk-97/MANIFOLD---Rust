@@ -1934,6 +1934,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 }
             };
 
+            let audio_layer_playback =
+                match manifold_playback::audio_layer_playback::AudioLayerPlayback::new() {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        log::warn!("[AudioLayer] Failed to initialize audio-layer playback: {e}");
+                        None
+                    }
+                };
+
             let mut midi_input = manifold_playback::midi_input::MidiInputController::new();
             midi_input.start();
 
@@ -1943,6 +1952,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 content_pipeline,
                 audio_sync,
                 stem_audio,
+                audio_layer_playback,
                 percussion_orchestrator: PercussionImportOrchestrator::new(
                     None,
                     std::env::current_exe()

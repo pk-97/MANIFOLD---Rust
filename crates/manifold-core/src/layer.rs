@@ -264,6 +264,15 @@ impl Layer {
         self.layer_type == LayerType::Audio
     }
 
+    /// The audio clip active on this layer at `beat`, if any. Layers enforce
+    /// non-overlap, so there is at most one. Shared by the modulation-curve path
+    /// and the playback path so they agree on "which clip is playing."
+    pub fn active_audio_clip_at(&self, beat: Beats) -> Option<&TimelineClip> {
+        self.clips
+            .iter()
+            .find(|c| c.is_audio() && c.is_active_at_beat(beat))
+    }
+
     /// Per-layer audio gain as a linear multiplier (0 dB → 1.0).
     #[inline]
     pub fn audio_gain_linear(&self) -> f32 {
@@ -987,6 +996,27 @@ mod tests {
 
         assert_eq!(layer.clips.len(), 1);
         assert_eq!(layer.clips[0].layer_id, layer.layer_id);
+    }
+
+    #[test]
+    fn active_audio_clip_at_finds_clip_under_playhead() {
+        use crate::units::{Beats, Seconds};
+        let mut layer = Layer::new_audio("Drums".into(), 0);
+        assert!(layer.is_audio());
+        layer.clips.push(TimelineClip::new_audio(
+            "/x.wav".into(),
+            Beats(4.0),
+            Beats(8.0),
+            Seconds(0.0),
+        ));
+        assert!(layer.active_audio_clip_at(Beats(6.0)).is_some());
+        assert!(layer.active_audio_clip_at(Beats(2.0)).is_none());
+        assert!(layer.active_audio_clip_at(Beats(20.0)).is_none());
+        // A non-audio clip on the layer is never returned as an audio clip.
+        let mut vid = Layer::new_video("V".into(), 1);
+        vid.clips
+            .push(TimelineClip::new_video("v1".into(), Beats(0.0), Beats(4.0), Seconds(0.0)));
+        assert!(vid.active_audio_clip_at(Beats(1.0)).is_none());
     }
 
     #[test]

@@ -15,19 +15,7 @@ use ahash::AHashMap;
 use manifold_audio::analysis::{FeatureCurve, OfflineSendAnalyzer};
 use manifold_core::clip::TimelineClip;
 use manifold_core::id::ClipId;
-use manifold_core::layer::Layer;
-use manifold_core::units::Beats;
 use manifold_core::SendFeatures;
-
-/// The audio clip active on `layer` at `beat`, if any. Layers enforce
-/// non-overlap, so there is at most one. Shared lookup so the playback path
-/// (Phase 3) and the modulation path agree on "which clip is playing."
-pub fn active_audio_clip(layer: &Layer, beat: Beats) -> Option<&TimelineClip> {
-    layer
-        .clips
-        .iter()
-        .find(|c| c.is_audio() && c.is_active_at_beat(beat))
-}
 
 /// Downmix interleaved PCM to mono (mean of channels). `channels` 0 or 1 is a
 /// passthrough.
@@ -134,27 +122,7 @@ impl AudioLayerCurves {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::id::LayerId;
-    use manifold_core::types::LayerType;
-    use manifold_core::units::Seconds;
-
-    #[test]
-    fn active_audio_clip_finds_the_clip_under_the_playhead() {
-        let mut layer = Layer::new_audio("Drums".into(), 0);
-        layer.layer_id = LayerId::new("L1");
-        assert_eq!(layer.layer_type, LayerType::Audio);
-        layer.clips.push(TimelineClip::new_audio(
-            "/x.wav".into(),
-            Beats(4.0),
-            Beats(8.0),
-            Seconds(0.0),
-        ));
-        // Inside the clip.
-        assert!(active_audio_clip(&layer, Beats(6.0)).is_some());
-        // Before / after it.
-        assert!(active_audio_clip(&layer, Beats(2.0)).is_none());
-        assert!(active_audio_clip(&layer, Beats(20.0)).is_none());
-    }
+    use manifold_core::units::{Beats, Seconds};
 
     #[test]
     fn downmix_to_mono_averages_channels() {
