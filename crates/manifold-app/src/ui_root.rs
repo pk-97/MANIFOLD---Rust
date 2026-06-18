@@ -178,9 +178,13 @@ pub struct UIRoot {
     pub layout: ScreenLayout,
     /// Node-intent dispatch: maps a gesture on a node to a `PanelAction`,
     /// resolved by folding a hit node up its parent chain. Repopulated from
-    /// panel-stored node ids each `process_events` (cheap; tree is stable
-    /// between structural rebuilds). See `docs/NODE_INTENT_DISPATCH.md`.
+    /// panel-stored node ids only when the tree structurally changes (gated on
+    /// `intents_structure_version`) — never per-frame, so no hot-path
+    /// allocation. See `docs/NODE_INTENT_DISPATCH.md`.
     intents: manifold_ui::intent::IntentRegistry,
+    /// Tree `structure_version` the intent registry was last built against.
+    /// `u64::MAX` forces a repopulate on the first `process_events`.
+    intents_structure_version: u64,
 
     // Panels
     pub transport: TransportPanel,
@@ -333,6 +337,7 @@ impl UIRoot {
             input: UIInputSystem::new(),
             layout: ScreenLayout::new(1280.0, 720.0),
             intents: manifold_ui::intent::IntentRegistry::new(),
+            intents_structure_version: u64::MAX,
             transport: TransportPanel::new(),
             header: HeaderPanel::new(),
             footer: FooterPanel::new(),
@@ -965,10 +970,15 @@ impl UIRoot {
             return Vec::new();
         }
 
-        // Refresh node-intent dispatch from the current tree. Cheap: a handful
-        // of inserts per migrated panel, and the tree is stable between
-        // structural rebuilds. (Future: dirty-gate on tree rebuild.)
-        self.repopulate_intents();
+        // Refresh node-intent dispatch only when the tree structurally changed
+        // (gated on the tree's structure_version) — never per-frame, so the
+        // registry's per-entry boxing stays off the hot path. Set-only frames
+        // (hover, value sync) leave node ids intact and skip this entirely.
+        let sv = self.tree.structure_version();
+        if sv != self.intents_structure_version {
+            self.repopulate_intents();
+            self.intents_structure_version = sv;
+        }
 
         let events = self.input.drain_events();
         let mut actions = Vec::new();
