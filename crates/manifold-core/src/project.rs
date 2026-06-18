@@ -61,6 +61,11 @@ pub struct Project {
     pub tempo_map: TempoMap,
     #[serde(default)]
     pub recording_provenance: RecordingProvenance,
+    /// DEPRECATED — project-global percussion import state. Being replaced by
+    /// per-clip detection (`TimelineClip.audio_detection`). Slated for deletion
+    /// in P1 of the audio-clip-detection work, once the orchestrator no longer
+    /// writes here. Do not add new readers/writers. See
+    /// `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percussion_import: Option<PercussionImportState>,
     #[serde(skip)]

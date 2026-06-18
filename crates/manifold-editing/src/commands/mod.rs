@@ -2,6 +2,7 @@ pub mod ableton;
 pub mod audio_mod;
 pub mod audio_setup;
 pub mod clip;
+pub mod clip_detection;
 pub mod drivers;
 pub mod effect_groups;
 pub mod effect_target;

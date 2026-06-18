@@ -492,9 +492,11 @@ mod tests {
 
     #[test]
     fn non_default_crossovers_round_trip_and_are_not_empty() {
-        let mut setup = AudioSetup::default();
-        setup.low_hz = 180.0;
-        setup.mid_hz = 3000.0;
+        let setup = AudioSetup {
+            low_hz: 180.0,
+            mid_hz: 3000.0,
+            ..Default::default()
+        };
         assert!(!setup.is_empty(), "edited crossovers must serialize");
         let json = serde_json::to_string(&setup).unwrap();
         assert!(json.contains("lowHz"));
@@ -583,8 +585,10 @@ mod tests {
     #[test]
     fn bind_send_to_layer_is_one_to_one() {
         use crate::id::LayerId;
-        let mut setup = AudioSetup::default();
-        setup.sends = vec![AudioSend::new("A"), AudioSend::new("B")];
+        let mut setup = AudioSetup {
+            sends: vec![AudioSend::new("A"), AudioSend::new("B")],
+            ..Default::default()
+        };
         let a = setup.sends[0].id.clone();
         let b = setup.sends[1].id.clone();
         let layer = LayerId::new("L1");
