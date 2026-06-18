@@ -41,11 +41,11 @@ pub struct ViewportClip {
     /// An audio-layer clip. Renders distinctly (no video thumbnail); the hook
     /// for in-clip waveform painting. See `docs/AUDIO_LAYER_DESIGN.md`.
     pub is_audio: bool,
-    /// Normalized peak amplitudes (0..1) across the whole source file, for the
-    /// in-clip waveform. `None` until the file is decoded in the background.
-    /// Shared (`Arc`) so attaching it to a clip each sync is a cheap refcount
-    /// bump, not a copy.
-    pub waveform: Option<std::sync::Arc<Vec<f32>>>,
+    /// Zoom-aware waveform renderer (MIP chain + spectral color) for the source
+    /// file, shared with the audio-import lanes. `None` until the file is decoded
+    /// in the background. Shared (`Arc`) so attaching it to a clip each sync is a
+    /// cheap refcount bump, not a copy.
+    pub waveform: Option<std::sync::Arc<crate::waveform_renderer::WaveformRenderer>>,
 }
 
 /// Which part of a clip was hit.

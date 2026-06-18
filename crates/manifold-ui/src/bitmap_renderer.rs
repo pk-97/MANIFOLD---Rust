@@ -4,9 +4,7 @@
 //! Mechanical translation of `Assets/Scripts/UI/Timeline/LayerBitmapRenderer.cs`.
 //! GPU texture management lives in `manifold-renderer::layer_bitmap_gpu`.
 
-use crate::bitmap_painter::{
-    self, INSERT_CURSOR_COLOR, REGION_HIGHLIGHT_COLOR, WAVEFORM_OVERLAY_COLOR,
-};
+use crate::bitmap_painter::{self, INSERT_CURSOR_COLOR, REGION_HIGHLIGHT_COLOR};
 use crate::color;
 use crate::node::Color32;
 use crate::panels::viewport::{SelectionRegion, ViewportClip};
@@ -437,21 +435,35 @@ impl LayerBitmapRenderer {
             );
 
             // Audio-layer clips paint their waveform inside the rect (over the
-            // clip fill). Bounds-clamped per bar; no-op until peaks are decoded.
+            // clip fill), using the same MIP + spectral-color engine as the
+            // audio-import lanes. The waveform is mapped across the clip's FULL
+            // pixel rect (which may run off-screen left/right) and only the
+            // visible columns are painted — so it stays locked to the audio as
+            // you zoom/scroll instead of squashing into the clamped on-screen
+            // rect. No-op until the file is decoded in the background.
             if clip.is_audio
-                && let Some(peaks) = clip.waveform.as_ref()
+                && let Some(renderer) = clip.waveform.as_ref()
             {
-                bitmap_painter::draw_clip_waveform(
-                    &mut self.pixel_buffer,
-                    tex_w,
-                    tex_h,
-                    x,
-                    clip_y,
-                    w,
-                    clip_h,
-                    peaks,
-                    WAVEFORM_OVERLAY_COLOR,
-                );
+                let full_x = (clip_start_f32 - viewport_min_beat) * scaled_ppb;
+                let full_w = clip.duration_beats.as_f32() * scaled_ppb;
+                // scaled_ppb already folds in render_scale, so pass 1.0 here to
+                // avoid double-scaling the level selection.
+                if let Some(level) = renderer.select_level_for_zoom(full_w, 1.0) {
+                    let x_start = x.max(paint_x0 as i32);
+                    let x_end = (x + w).min(paint_x1 as i32);
+                    crate::waveform_painter::draw_waveform(
+                        &mut self.pixel_buffer,
+                        tex_w,
+                        tex_h,
+                        level,
+                        x_start,
+                        x_end,
+                        clip_y,
+                        clip_h,
+                        full_x,
+                        full_w,
+                    );
+                }
             }
         }
 

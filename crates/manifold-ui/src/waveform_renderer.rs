@@ -20,6 +20,7 @@ const FINEST_FRAMES_PER_TEXEL: usize = 16;
 /// A single resolution level in the MIP chain.
 ///
 /// Unity: `WaveformRenderer.WaveformLevel` (inner class, lines 416-483).
+#[derive(Debug)]
 pub struct WaveformLevel {
     /// Audio frames represented by each texel at this level.
     pub frames_per_texel: usize,
@@ -67,6 +68,7 @@ impl WaveformLevel {
 /// 1. Call `set_audio_data()` with raw PCM samples
 /// 2. Call `select_level_for_zoom()` to pick the right resolution
 /// 3. Read amplitude/color from the selected level to draw
+#[derive(Debug)]
 pub struct WaveformRenderer {
     levels: Vec<WaveformLevel>,
     ready: bool,

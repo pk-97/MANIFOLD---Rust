@@ -15,9 +15,6 @@ const CLIP_SEPARATOR: Color32 = color::CLIP_SEPARATOR;
 
 pub const REGION_HIGHLIGHT_COLOR: Color32 = color::ACCENT_BLUE_SELECTION;
 pub const INSERT_CURSOR_COLOR: Color32 = color::INSERT_CURSOR_BLUE;
-/// Dark translucent overlay for the in-clip audio waveform — reads as a
-/// classic dark waveform over the clip's layer colour.
-pub const WAVEFORM_OVERLAY_COLOR: Color32 = Color32::new(16, 20, 26, 150);
 
 /// Scale a logical pixel value to texture pixels, minimum 1.
 /// Unity: `private static int S(int logicalPx, float renderScale)
@@ -118,44 +115,6 @@ pub fn draw_border(
     );
 }
 
-/// Paint a peak-mirrored waveform inside a clip rect (for audio-layer clips).
-/// `peaks` are normalized 0..1 amplitudes across the whole source file; each
-/// pixel column samples one bucket and draws a vertical bar centered on the
-/// clip's mid-line. Every bar goes through [`fill_rect`], so all writes are
-/// bounds-clamped — out-of-range columns/rows are clipped, never overrun.
-/// See `docs/AUDIO_LAYER_DESIGN.md`.
-#[allow(clippy::too_many_arguments)]
-pub fn draw_clip_waveform(
-    buffer: &mut [Color32],
-    tex_w: usize,
-    tex_h: usize,
-    clip_x: i32,
-    clip_y: i32,
-    clip_w: i32,
-    clip_h: i32,
-    peaks: &[f32],
-    color: Color32,
-) {
-    if peaks.is_empty() || clip_w <= 0 || clip_h <= 2 {
-        return;
-    }
-    let n = peaks.len();
-    let center_y = clip_y + clip_h / 2;
-    // Small vertical margin so the waveform doesn't kiss the clip's edges.
-    let max_half = ((clip_h / 2) - 2).max(1);
-    for col in 0..clip_w {
-        // Map the column to a peak bucket (down-sampling: n ≫ clip_w on screen).
-        let t = col as f32 / clip_w as f32;
-        let idx = ((t * n as f32) as usize).min(n - 1);
-        let amp = peaks[idx].clamp(0.0, 1.0);
-        let half = (amp * max_half as f32).round() as i32;
-        if half <= 0 {
-            continue;
-        }
-        // A 1px vertical bar mirrored about the mid-line.
-        fill_rect(buffer, tex_w, tex_h, clip_x + col, center_y - half, 1, half * 2, color);
-    }
-}
 
 /// Draw a single clip rectangle with background, separator, borders, and trim hints.
 /// Unity: LayerBitmapPainter.DrawClip (lines 52-92).
@@ -390,21 +349,6 @@ mod tests {
         for p in &buf {
             assert_eq!(*p, c);
         }
-    }
-
-    #[test]
-    fn draw_clip_waveform_is_bounds_safe_and_paints() {
-        let mut buf = vec![Color32::TRANSPARENT; 16 * 8];
-        let color = Color32::new(0, 0, 0, 200);
-        // Full-amplitude peaks; clip rect that partly spills past the buffer and
-        // a degenerate one — must never panic, only clip.
-        let peaks: Vec<f32> = (0..64).map(|i| (i % 2) as f32).collect();
-        draw_clip_waveform(&mut buf, 16, 8, 10, 2, 12, 6, &peaks, color); // spills right
-        draw_clip_waveform(&mut buf, 16, 8, -4, -4, 8, 20, &peaks, color); // spills top-left
-        draw_clip_waveform(&mut buf, 16, 8, 0, 0, 0, 6, &peaks, color); // zero width: no-op
-        draw_clip_waveform(&mut buf, 16, 8, 0, 0, 8, 6, &[], color); // empty peaks: no-op
-        // At least one pixel got painted by the in-bounds calls.
-        assert!(buf.iter().any(|p| p.a > 0), "waveform painted something");
     }
 
     #[test]
