@@ -513,17 +513,21 @@ impl UIInputSystem {
     }
 
     /// Process a right-click at `pos`.
-    /// Unity only fires right-click event if hitId >= 0.
-    /// Port of UIInputSystem.cs right-click guard.
+    ///
+    /// Always emits a `RightClick` event, even when the hit test misses
+    /// (`node_id == u32::MAX` sentinel). A miss carries no tree node but still
+    /// carries `pos`, so position-based consumers (timeline overlay, canvas)
+    /// and intent fold-up get their shot — historically a miss was dropped
+    /// silently here, which is why right-click "sometimes" did nothing on any
+    /// pixel not covered by an interactive node. See
+    /// `docs/NODE_INTENT_DISPATCH.md`.
     pub fn process_right_click(&mut self, tree: &UITree, pos: Vec2) {
         let hit_id = tree.hit_test(pos);
-        if hit_id >= 0 {
-            self.pending_events.push(UIEvent::RightClick {
-                node_id: hit_id as u32,
-                pos,
-                modifiers: self.modifiers,
-            });
-        }
+        self.pending_events.push(UIEvent::RightClick {
+            node_id: if hit_id >= 0 { hit_id as u32 } else { u32::MAX },
+            pos,
+            modifiers: self.modifiers,
+        });
     }
 
     /// Process a scroll wheel event at `pos` with pixel `delta`.

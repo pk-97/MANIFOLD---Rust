@@ -176,6 +176,11 @@ pub struct UIRoot {
     pub tree: UITree,
     pub input: UIInputSystem,
     pub layout: ScreenLayout,
+    /// Node-intent dispatch: maps a gesture on a node to a `PanelAction`,
+    /// resolved by folding a hit node up its parent chain. Repopulated from
+    /// panel-stored node ids each `process_events` (cheap; tree is stable
+    /// between structural rebuilds). See `docs/NODE_INTENT_DISPATCH.md`.
+    intents: manifold_ui::intent::IntentRegistry,
 
     // Panels
     pub transport: TransportPanel,
@@ -327,6 +332,7 @@ impl UIRoot {
             tree: UITree::new(),
             input: UIInputSystem::new(),
             layout: ScreenLayout::new(1280.0, 720.0),
+            intents: manifold_ui::intent::IntentRegistry::new(),
             transport: TransportPanel::new(),
             header: HeaderPanel::new(),
             footer: FooterPanel::new(),
@@ -923,12 +929,46 @@ impl UIRoot {
             .collect();
     }
 
+    /// Clear and repopulate node-intent dispatch from every panel's currently
+    /// stored node ids. A full rebuild each call keeps the registry consistent
+    /// with partial tree rebuilds (truncate_from) without per-range bookkeeping
+    /// — panels register against whatever ids they hold now.
+    fn repopulate_intents(&mut self) {
+        use manifold_ui::panels::Panel;
+        self.intents.clear();
+        self.transport.register_intents(&mut self.intents);
+        self.header.register_intents(&mut self.intents);
+        self.footer.register_intents(&mut self.intents);
+        self.layer_headers.register_intents(&mut self.intents);
+        self.inspector.register_intents(&mut self.intents);
+        self.viewport.register_intents(&mut self.intents);
+    }
+
+    /// Resolve a discrete-gesture event through node-intent dispatch. Returns
+    /// the registered `PanelAction` for the nearest intent-bearing ancestor of
+    /// the hit node, or None for non-gesture events / un-registered surfaces.
+    fn resolve_intent(&self, event: &UIEvent) -> Option<PanelAction> {
+        use manifold_ui::intent::Gesture;
+        let (node_id, gesture) = match event {
+            UIEvent::Click { node_id, .. } => (*node_id, Gesture::Click),
+            UIEvent::DoubleClick { node_id, .. } => (*node_id, Gesture::DoubleClick),
+            UIEvent::RightClick { node_id, .. } => (*node_id, Gesture::RightClick),
+            _ => return None,
+        };
+        self.intents.resolve(&self.tree, node_id as i32, gesture)
+    }
+
     /// Drain events from the input system and route to panels.
     /// Returns all panel actions for the app layer to dispatch.
     pub fn process_events(&mut self) -> Vec<PanelAction> {
         if !self.built {
             return Vec::new();
         }
+
+        // Refresh node-intent dispatch from the current tree. Cheap: a handful
+        // of inserts per migrated panel, and the tree is stable between
+        // structural rebuilds. (Future: dirty-gate on tree rebuild.)
+        self.repopulate_intents();
 
         let events = self.input.drain_events();
         let mut actions = Vec::new();
@@ -965,6 +1005,18 @@ impl UIRoot {
             // captures it), lower any stashed selection and skip the panels below.
             if self.route_overlay_event(event, &mut actions) {
                 self.drain_overlay_selections(&mut actions);
+                continue;
+            }
+
+            // Node-intent dispatch: discrete gestures (click / double-click /
+            // right-click) resolve by folding the hit node up its parent chain
+            // to the nearest ancestor carrying intent. Migrated panels register
+            // intent in `build`/`register_intents` and drop their `handle_event`
+            // arms; for un-migrated surfaces `resolve` returns None and the
+            // event flows to the per-panel handlers below unchanged. A resolved
+            // gesture is consumed here — it would otherwise double-fire.
+            if let Some(action) = self.resolve_intent(event) {
+                actions.push(action);
                 continue;
             }
 

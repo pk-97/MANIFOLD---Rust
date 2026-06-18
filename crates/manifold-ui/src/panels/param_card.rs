@@ -2856,6 +2856,62 @@ impl ParamCardPanel {
         }
         Vec::new()
     }
+
+    /// Node-intent dispatch for this card's right-click gestures. Replaces the
+    /// exact-id matching in `handle_right_click` with declarative intent +
+    /// fold-up: specific intents on the slider track (reset) and label (perform
+    /// mapping) win, and the card root claims its whole area so a right-click on
+    /// any dead zone — slider fill/thumb/value cell, row gaps, padding — folds
+    /// up to the card context menu instead of being silently swallowed.
+    ///
+    /// See `docs/NODE_INTENT_DISPATCH.md`. Once every right-click surface is
+    /// migrated, the `handle_right_click*` methods and the `RightClick` arms in
+    /// the inspector are deleted.
+    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        use crate::intent::Gesture::RightClick;
+
+        let target = match self.kind {
+            ParamCardKind::Effect => GraphParamTarget::Effect(self.effect_index),
+            ParamCardKind::Generator => GraphParamTarget::Generator,
+        };
+
+        // Card root: claim the whole area + the context-menu action. Any
+        // descendant without a more specific intent folds here.
+        if self.border_id >= 0 {
+            intents.claim_area(self.border_id as u32);
+            intents.on(self.border_id as u32, RightClick, PanelAction::CardRightClicked(target));
+        }
+
+        // Per-param specific intents.
+        for (pi, slider) in self.slider_ids.iter().enumerate() {
+            // Generator toggle/trigger rows have no reset/map gesture — they
+            // fall through to the card claim like any other dead zone.
+            if matches!(self.kind, ParamCardKind::Generator)
+                && self
+                    .param_info
+                    .get(pi)
+                    .map(|i| i.is_toggle || i.is_trigger)
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            let Some(ids) = slider else { continue };
+
+            // Slider track → reset to default.
+            let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
+            intents.on(ids.track, RightClick, PanelAction::ParamRightClick(target, self.pid_at(pi), default));
+
+            // Label → perform-mapping menu (Perform context only; Author uses
+            // the right-edge mapping drawer instead).
+            if self.context == CardContext::Perform && ids.label >= 0 {
+                intents.on(
+                    ids.label as u32,
+                    RightClick,
+                    PanelAction::ParamLabelRightClick(target, self.pid_at(pi)),
+                );
+            }
+        }
+    }
 }
 
 impl Default for ParamCardPanel {

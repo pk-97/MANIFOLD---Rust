@@ -860,6 +860,15 @@ pub trait Panel {
     /// Handle a UI event. Returns actions for the app layer to process.
     fn handle_event(&mut self, event: &UIEvent, tree: &UITree) -> Vec<PanelAction>;
 
+    /// Register node-intent dispatch for this panel's discrete gestures
+    /// (click / double-click / right-click). Called after `build()` from the
+    /// node ids the panel stored during build. Migrated panels override this
+    /// and drop the matching arms from `handle_event`; un-migrated panels keep
+    /// the default no-op and their existing `handle_event` matching.
+    ///
+    /// See `docs/NODE_INTENT_DISPATCH.md`.
+    fn register_intents(&self, _intents: &mut crate::intent::IntentRegistry) {}
+
     /// First node index in the tree. Returns usize::MAX if not built.
     fn first_node(&self) -> usize {
         usize::MAX

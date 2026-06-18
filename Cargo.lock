@@ -1973,6 +1973,7 @@ name = "manifold-playback"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "cc",
  "inventory",
  "kira",
  "log",

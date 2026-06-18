@@ -1607,6 +1607,23 @@ impl Panel for InspectorCompositePanel {
         }
     }
 
+    /// Forward node-intent registration to the param cards. Right-clicks on
+    /// effect/generator cards now resolve through intent dispatch (with fold-up
+    /// over dead zones) instead of `route_right_click`'s exact-id matching.
+    /// Chrome sub-panels (macros, master/layer/clip) are not yet migrated and
+    /// keep their `handle_event` path.
+    fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        for card in &self.master_effects {
+            card.register_intents(intents);
+        }
+        for card in &self.layer_effects {
+            card.register_intents(intents);
+        }
+        if let Some(gp) = self.gen_params.as_ref() {
+            gp.register_intents(intents);
+        }
+    }
+
     fn first_node(&self) -> usize {
         self.cache_first_node
     }
