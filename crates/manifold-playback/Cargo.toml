@@ -17,6 +17,9 @@ rosc = "0.10"
 rusty_link = "0.4"
 parking_lot = { workspace = true }
 ahash = { workspace = true }
+# Lock-free SPSC ring for the per-layer post-fader tap: the kira audio thread
+# pushes mono samples, the content thread drains them into the send analyzer.
+ringbuf = "0.4"
 
 [build-dependencies]
 cc = "1"

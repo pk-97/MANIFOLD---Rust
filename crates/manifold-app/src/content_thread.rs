@@ -560,8 +560,11 @@ impl ContentThread {
         // 3d. Audio modulation: reconcile capture against the project (on change)
         // and feed the engine the latest per-send feature snapshot. Must run
         // BEFORE engine.tick() (the modulation pipeline reads the snapshot).
-        self.audio_mod_runtime
-            .update(&mut self.engine, self.editing_service.data_version());
+        self.audio_mod_runtime.update(
+            &mut self.engine,
+            self.editing_service.data_version(),
+            self.audio_layer_playback.as_mut(),
+        );
 
         // 4. Tick engine
         #[cfg(feature = "profiling")]

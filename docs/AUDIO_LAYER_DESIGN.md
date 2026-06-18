@@ -128,23 +128,34 @@ Send dropdown, one mutation through `SetAudioSendSourceCommand` (§6).
 **Pre/post-fader:** post (mute/gain kill modulation), matching a normal mixer
 send. Revisit only if a muted layer should still drive visuals.
 
-**Build order (`tap_spike` = step 1, done):**
+**Build order — SHIPPED 2026-06-18 (steps 1–6 done; step 7 partial):**
 
 1. ✓ Confirm kira sub-track + pass-through tap effect (runtime spike).
-2. Route each audio layer through its own kira sub-track (today: flat `manager.play`).
-3. Add the lock-free tap effect on each layer track → ring.
-4. Analyze the tapped stream with the existing CQT/band DSP → `SendFeatures`.
-5. Write features into the snapshot at the layer's send index.
-6. Delete the offline system: `OfflineSendAnalyzer`, `AudioLayerCurves`, the
-   background-decode fix, and the curve-sampling in `audio_mod_runtime`.
-7. Verify on a real run (warp / gain / mute behave).
+2. ✓ Route each audio layer through its own kira sub-track. `AudioLayerPlayback`
+   creates a sub-track per audio layer (`ensure_layer_track`); each clip voice
+   routes there via `StaticSoundData::output_destination(&track)`.
+3. ✓ Lock-free tap on each layer track → ring. `LayerTap` (a kira `Effect`)
+   copies post-fader mono into a `ringbuf` SPSC. kira requires `Effect: Sync`
+   but the producer is `Send`-only, so it's wrapped in an uncontended `Mutex`
+   (only the audio thread touches it; the content thread drains the consumer).
+   Sample rate is learned from `Effect::init`.
+4. ✓ Analyze the tapped stream. `StreamingSendAnalyzer` (manifold-audio) runs
+   the same `form_tilted_column`/`reduce_send` DSP as the live worker → `SendFeatures`.
+5. ✓ Write features into the snapshot at the layer's send index.
+   `audio_mod_runtime` drains each layer-fed send's tap and overwrites its slot.
+6. ✓ Deleted the offline system: `OfflineSendAnalyzer`, `FeatureCurve`,
+   `AudioLayerCurves`, the background-decode fix, and the curve-sampling.
+7. ◑ Verify. DSP + real-hardware route proven by tests
+   (`streaming_analyzer_*`, the ignored `layer_tap_streams_post_fader_samples`:
+   routed tone tapped post-fader at peak 0.2000, decay-to-silence confirmed).
+   **In-app warp/gain/mute on a live audio layer still needs a real session.**
 
-**Open architecture choice (step 4):** the live worker is *one ring → many
-sends* (a device split by channel); layer taps are *one ring per layer → one
-send each*. Either (a) a small analyzer per layer-fed send (reuses the DSP,
-mirrors the worker, one thread per active layer-send) or (b) generalize the one
-worker to drain device + tap rings. Starting with (a) — lower risk to the live
-path that already works.
+**Architecture choice (step 4) — resolved (a).** The live worker is *one ring →
+many sends*; layer taps are *one ring per layer → one send each*. Chose (a): a
+`StreamingSendAnalyzer` per layer-fed send, run **inline on the content thread**
+(not a per-layer thread — the tap's audio thread is kira's; the analysis is a
+handful of VQT hops per tick with pre-allocated scratch, no per-frame alloc).
+Lower risk to the live capture path, which is untouched.
 
 ---
 
@@ -295,7 +306,8 @@ Phases ordered so each ships something usable. Anchors are real file:line from t
 - **P0 data model** ✓ — `LayerType::Audio`, `TimelineClip.audio_file_path` + `new_audio`/`is_audio`, `AudioSendSource` enum (Capture/Layer) with `bind_send_to_layer`/`send_for_layer`/`unbind_layer`, `Layer.audio_gain_db` + `is_audio`/`active_audio_clip_at`/`audio_gain_linear`, commands `SetAudioSendSourceCommand` + `SetLayerAudioGainCommand`. Roundtrip + undo tests.
 - **P1 compositor** ✓ — audio layers skipped from compositing and excluded from the visual solo bus (§5).
 - **P1 drag-drop** ✓ — dropping a `wav/mp3/flac/aif/aiff/ogg/m4a/aac` file appends an audio layer + clip at the drop beat (one undo step). `is_supported_audio_extension` + `audio_duration_beats`. The OS file-drop dispatcher in `app.rs` routes audio through the same `process_dropped_files` path as MIDI (was previously a "not yet implemented" stub that never reached the import — fixed 2026-06-18).
-- **P2 offline modulation** ⚠ **BEING REMOVED — superseded by §3R (realtime tap).** Shipped as `OfflineSendAnalyzer` + `FeatureCurve` (manifold-audio) + `AudioLayerCurves` cache (manifold-app), wired into the snapshot fill with worker-index alignment. Reversed 2026-06-18: it decoded+analyzed the whole file synchronously on the content tick, freezing the app when a send was bound (a later fix moved the decode off-thread, but the whole approach is being replaced by streaming kira's played output to the live analysis — §3R). This entire path (analyzer, curve cache, `audio_mod_runtime` curve sampling) is deleted in §3R step 6.
+- **P2 offline modulation** ✗ **REMOVED 2026-06-18 — replaced by §3R realtime tap.** Was `OfflineSendAnalyzer` + `FeatureCurve` (manifold-audio) + `AudioLayerCurves` cache (manifold-app). It decoded+analyzed the whole file synchronously on the content tick, freezing the app when a send was bound. Deleted in full (analyzer, curve, cache, and the `audio_mod_runtime` curve sampling) and replaced by the realtime kira tap below.
+- **§3R realtime modulation tap** ✓ — each audio layer gets a kira sub-track (`AudioLayerPlayback::ensure_layer_track`); a `LayerTap` `Effect` copies post-fader mono into a lock-free `ringbuf`; `StreamingSendAnalyzer` (manifold-audio) runs the live worker's exact CQT/band DSP on the drained stream and `audio_mod_runtime` writes the result into the snapshot at the layer's send index. Post-fader, so warp/gain/mute are baked into the modulation. Proven by `streaming_analyzer_*` unit tests + the ignored real-hardware `layer_tap_streams_post_fader_samples` (routed tone tapped at peak 0.2000); in-app warp/gain/mute behaviour still wants a live session (§3R step 7).
 - **P3 playback** ✓ — `AudioLayerPlayback` (manifold-playback): one kira voice per active audio clip, transport-following (seek-on-drift/replay-on-stop), mute/solo (audio bus)/gain via per-voice volume tween, 5 ms declick. Driven from the content tick; decode reuses `audio_sync::preload_audio`.
 
 **Landed — UI (P1/P2 complete):**

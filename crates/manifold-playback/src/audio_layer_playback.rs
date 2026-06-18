@@ -1,5 +1,5 @@
 //! Per-clip audio-layer playback (Phase 3 of the Audio Layer feature — see
-//! `docs/AUDIO_LAYER_DESIGN.md` §4).
+//! `docs/AUDIO_LAYER_DESIGN.md` §4) plus the realtime modulation tap (§3R).
 //!
 //! Generalizes the single-track [`crate::audio_sync::ImportedAudioSyncController`]
 //! to **one kira voice per active audio clip**, keyed by `ClipId`. Each tick the
@@ -9,21 +9,39 @@
 //! the same policy the imported-audio controller uses). Mute/solo/gain become a
 //! per-voice volume tween, which also declicks start/stop/seek.
 //!
+//! Each audio **layer** owns a kira sub-track; its clip voices route to that
+//! track, and a pass-through [`LayerTap`] effect on the track copies the
+//! post-fader mono signal (warp + gain already applied by the mixer) into a
+//! lock-free ring. The content thread drains that ring into a
+//! [`StreamingSendAnalyzer`](manifold_audio::analysis::StreamingSendAnalyzer) to
+//! drive a layer-fed send's modulation — what you hear is what modulates. This
+//! replaces the old offline decode-the-whole-file approach (see §3R).
+//!
 //! Decoding reuses [`crate::audio_sync::preload_audio`] (symphonia + encoder-delay
 //! probe), so there is no second decode path.
 
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use ahash::AHashMap;
+use parking_lot::Mutex;
+use kira::clock::clock_info::ClockInfoProvider;
+use kira::effect::{Effect, EffectBuilder};
+use kira::modulator::value_provider::ModulatorValueProvider;
+use kira::track::{TrackBuilder, TrackHandle};
 use kira::{
+    Frame,
     manager::{AudioManager, AudioManagerSettings, backend::DefaultBackend},
     sound::PlaybackState as KiraPlaybackState,
     sound::static_sound::{StaticSoundData, StaticSoundHandle},
     tween::Tween,
 };
+use ringbuf::HeapRb;
+use ringbuf::traits::{Consumer, Producer, Split};
 
-use manifold_core::id::ClipId;
+use manifold_core::id::{ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_core::types::PlaybackState;
 use manifold_core::{Beats, Seconds};
@@ -38,16 +56,93 @@ const HARD_RESYNC_SECONDS: f64 = 0.20;
 const PAUSED_SEEK_TOLERANCE_SECONDS: f64 = 0.06;
 /// Short fade for start/stop/volume changes so clip edges and mutes don't click.
 const DECLICK_MS: u64 = 5;
+/// Per-layer tap ring capacity (mono f32 samples). At 48 kHz this is ~0.34 s —
+/// generous headroom over the ~800 samples a 60 Hz content tick consumes, so a
+/// brief content-thread stall doesn't lose audio before the analyzer drains it.
+/// On overflow the audio thread drops the newest sample (non-blocking) rather
+/// than ever blocking the mixer.
+const TAP_RING_CAPACITY: usize = 16_384;
 
 /// A short volume/transport tween that declicks an edge (start, stop, seek-jump).
 fn declick() -> Tween {
     Tween { duration: Duration::from_millis(DECLICK_MS), ..Default::default() }
 }
 
+/// Pass-through tap effect on a layer's sub-track: copies the post-fader mono
+/// signal into the layer's lock-free ring and returns the frame untouched, so it
+/// reads the same audio that reaches the speakers (warp + gain already applied).
+/// Lives on the kira audio thread — never allocates.
+///
+/// kira requires `Effect: Send + Sync`, but the ring producer is `Send`-only (it
+/// caches an index in a `Cell`). The producer is wrapped in a `Mutex` purely to
+/// satisfy that bound: only the audio thread ever locks it (the content thread
+/// drains the *consumer*, a separate ring end), so the lock is uncontended and
+/// `try_lock` never blocks the mixer.
+struct LayerTap {
+    prod: Mutex<ringbuf::HeapProd<f32>>,
+    /// Renderer sample rate, learned from [`Effect::init`] and read by the
+    /// content thread to build the matching analyzer. 0 until the first init.
+    sample_rate: Arc<AtomicU32>,
+}
+
+impl Effect for LayerTap {
+    fn init(&mut self, sample_rate: u32) {
+        self.sample_rate.store(sample_rate, Ordering::Relaxed);
+    }
+
+    fn on_change_sample_rate(&mut self, sample_rate: u32) {
+        self.sample_rate.store(sample_rate, Ordering::Relaxed);
+    }
+
+    fn process(
+        &mut self,
+        input: Frame,
+        _dt: f64,
+        _clock: &ClockInfoProvider,
+        _mods: &ModulatorValueProvider,
+    ) -> Frame {
+        // Mono downmix of the stereo bus. On a full ring drop the sample (the
+        // analyzer fell behind); never block the audio thread.
+        let mono = (input.left + input.right) * 0.5;
+        if let Some(mut prod) = self.prod.try_lock() {
+            let _ = prod.try_push(mono);
+        }
+        input
+    }
+}
+
+/// Builds a [`LayerTap`] when the sub-track is created. The handle is unused —
+/// the content thread reaches the tap through the ring + atomic it was built
+/// with, not through a kira effect handle.
+struct LayerTapBuilder {
+    prod: ringbuf::HeapProd<f32>,
+    sample_rate: Arc<AtomicU32>,
+}
+
+impl EffectBuilder for LayerTapBuilder {
+    type Handle = ();
+    fn build(self) -> (Box<dyn Effect>, Self::Handle) {
+        (Box::new(LayerTap { prod: Mutex::new(self.prod), sample_rate: self.sample_rate }), ())
+    }
+}
+
+/// One audio layer's kira sub-track plus the read end of its post-fader tap.
+struct LayerTrack {
+    /// Kept alive to keep the kira track alive (dropping the handle removes it).
+    /// Clip voices route here via [`StaticSoundData::output_destination`].
+    track: TrackHandle,
+    /// Read end of the tap ring — drained on the content thread each tick.
+    tap: ringbuf::HeapCons<f32>,
+    /// Renderer sample rate, written by the tap on init (0 until then).
+    sample_rate: Arc<AtomicU32>,
+}
+
 /// One playing (or paused) clip voice.
 struct Voice {
     handle: StaticSoundHandle,
     /// Kept so a voice that kira auto-stops at the natural end can be replayed.
+    /// Carries the layer's track as its output destination, so a replay re-routes
+    /// through the same tap.
     data: StaticSoundData,
     /// The clip's file path the voice was built from — a change rebuilds it.
     path: String,
@@ -55,9 +150,14 @@ struct Voice {
     encoder_delay: Seconds,
 }
 
-/// Build a fresh voice for `path` (decode + start paused at 0). `None` on a
-/// decode/play failure (logged) — a genuine "no audio," not a silent stand-in.
-fn make_voice(manager: &mut AudioManager<DefaultBackend>, path: &str) -> Option<Voice> {
+/// Build a fresh voice for `path` routed to `track` (decode + start paused at 0).
+/// `None` on a decode/play failure (logged) — a genuine "no audio," not a silent
+/// stand-in.
+fn make_voice(
+    manager: &mut AudioManager<DefaultBackend>,
+    track: &TrackHandle,
+    path: &str,
+) -> Option<Voice> {
     let pre = match preload_audio(path, Beats::ZERO) {
         Ok(p) => p,
         Err(e) => {
@@ -65,7 +165,9 @@ fn make_voice(manager: &mut AudioManager<DefaultBackend>, path: &str) -> Option<
             return None;
         }
     };
-    let mut handle = match manager.play(pre.sound_data.clone()) {
+    // Route to the layer's sub-track so the tap sees this voice's output.
+    let data = pre.sound_data.output_destination(track);
+    let mut handle = match manager.play(data.clone()) {
         Ok(h) => h,
         Err(e) => {
             log::warn!("[AudioLayerPlayback] play failed for '{path}': {e}");
@@ -76,17 +178,19 @@ fn make_voice(manager: &mut AudioManager<DefaultBackend>, path: &str) -> Option<
     handle.seek_to(0.0);
     Some(Voice {
         handle,
-        data: pre.sound_data,
+        data,
         path: path.to_string(),
         duration: pre.clip_duration,
         encoder_delay: pre.encoder_delay,
     })
 }
 
-/// Owns the kira manager + one voice per active audio clip. Lives on the content
-/// thread beside the imported-audio controller.
+/// Owns the kira manager, one sub-track per audio layer, and one voice per active
+/// audio clip. Lives on the content thread beside the imported-audio controller.
 pub struct AudioLayerPlayback {
     manager: AudioManager<DefaultBackend>,
+    /// One sub-track + tap per audio layer, keyed by `LayerId`.
+    layer_tracks: AHashMap<LayerId, LayerTrack>,
     voices: AHashMap<ClipId, Voice>,
 }
 
@@ -95,7 +199,11 @@ impl AudioLayerPlayback {
     pub fn new() -> Result<Self, String> {
         let manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())
             .map_err(|e| format!("Failed to create audio-layer manager: {e}"))?;
-        Ok(Self { manager, voices: AHashMap::new() })
+        Ok(Self {
+            manager,
+            layer_tracks: AHashMap::new(),
+            voices: AHashMap::new(),
+        })
     }
 
     /// Drive every audio clip under the playhead. Called each content tick.
@@ -109,6 +217,10 @@ impl AudioLayerPlayback {
 
         let mut active: HashSet<ClipId> = HashSet::new();
         for layer in project.timeline.layers.iter().filter(|l| l.is_audio()) {
+            // Every audio layer gets a sub-track + tap, so a layer-fed send sees a
+            // silence-decaying stream even while the layer is paused or muted.
+            self.ensure_layer_track(&layer.layer_id);
+
             let audible = !layer.is_muted && (!any_solo || layer.is_solo);
             let volume = if audible { layer.audio_gain_linear() as f64 } else { 0.0 };
             let Some(clip) = layer.active_audio_clip_at(beat) else {
@@ -122,7 +234,24 @@ impl AudioLayerPlayback {
             let ratio = clip.warp_ratio(project.settings.bpm.0);
             let clip_start = engine.beat_to_timeline_time_immut(clip.start_beat);
             let expected = (now - clip_start) * ratio as f64 + clip.in_point;
-            self.sync_clip(&clip.id, &clip.audio_file_path, expected, state, volume, ratio);
+            // Disjoint field borrows: the track (read) vs the manager + voices
+            // (write) are distinct fields of `self`, so this type-checks without a
+            // self method that would borrow all of `self`.
+            let Some(lt) = self.layer_tracks.get(&layer.layer_id) else {
+                continue;
+            };
+            let track = &lt.track;
+            Self::sync_clip(
+                &mut self.manager,
+                &mut self.voices,
+                track,
+                &clip.id,
+                &clip.audio_file_path,
+                expected,
+                state,
+                volume,
+                ratio,
+            );
         }
 
         // Pause voices whose clip isn't active this tick (declicked).
@@ -133,13 +262,41 @@ impl AudioLayerPlayback {
         }
 
         self.evict_absent_clips(project);
+        self.evict_absent_layer_tracks(project);
     }
 
-    /// Sync a single clip's voice to the transport-expected position + volume.
-    /// The voice is removed from the map for the duration so kira's manager and
-    /// the voice can be borrowed independently, then reinserted.
+    /// Ensure the layer has a sub-track carrying its post-fader tap. Cheap no-op
+    /// when it already exists; on first sight it creates the kira sub-track, the
+    /// tap effect, and the ring the content thread drains.
+    fn ensure_layer_track(&mut self, layer_id: &LayerId) {
+        if self.layer_tracks.contains_key(layer_id) {
+            return;
+        }
+        let (prod, cons) = HeapRb::<f32>::new(TAP_RING_CAPACITY).split();
+        let sample_rate = Arc::new(AtomicU32::new(0));
+        let mut builder = TrackBuilder::new();
+        builder.add_effect(LayerTapBuilder { prod, sample_rate: sample_rate.clone() });
+        match self.manager.add_sub_track(builder) {
+            Ok(track) => {
+                self.layer_tracks
+                    .insert(layer_id.clone(), LayerTrack { track, tap: cons, sample_rate });
+            }
+            Err(e) => {
+                log::warn!("[AudioLayerPlayback] failed to create layer sub-track: {e}");
+            }
+        }
+    }
+
+    /// Sync a single clip's voice to the transport-expected position + volume,
+    /// routed to its layer's `track`. The voice is removed from the map for the
+    /// duration so the manager and the voice can be borrowed independently, then
+    /// reinserted. Associated (not `&mut self`) so the caller can hold a borrow of
+    /// the layer track concurrently with the manager + voice map.
+    #[allow(clippy::too_many_arguments)]
     fn sync_clip(
-        &mut self,
+        manager: &mut AudioManager<DefaultBackend>,
+        voices: &mut AHashMap<ClipId, Voice>,
+        track: &TrackHandle,
         id: &ClipId,
         path: &str,
         expected: Seconds,
@@ -148,7 +305,7 @@ impl AudioLayerPlayback {
         ratio: f32,
     ) {
         // Take the existing voice if its file still matches; otherwise (re)build.
-        let mut voice = match self.voices.remove(id) {
+        let mut voice = match voices.remove(id) {
             Some(v) if v.path == path => v,
             stale => {
                 if let Some(mut old) = stale {
@@ -157,7 +314,7 @@ impl AudioLayerPlayback {
                 if path.is_empty() {
                     return;
                 }
-                match make_voice(&mut self.manager, path) {
+                match make_voice(manager, track, path) {
                     Some(v) => v,
                     None => return,
                 }
@@ -185,8 +342,10 @@ impl AudioLayerPlayback {
                 } else if !playing {
                     if voice.handle.state() == KiraPlaybackState::Stopped {
                         // Kira stops a handle at the natural end; replay for a
-                        // fresh one seeked to the expected position.
-                        match self.manager.play(voice.data.clone()) {
+                        // fresh one seeked to the expected position. `data` carries
+                        // the layer track as its destination, so the replay still
+                        // routes through the tap.
+                        match manager.play(voice.data.clone()) {
                             Ok(mut h) => {
                                 h.seek_to(target.0);
                                 h.set_volume(volume, Tween::default());
@@ -228,7 +387,34 @@ impl AudioLayerPlayback {
             }
         }
 
-        self.voices.insert(id.clone(), voice);
+        voices.insert(id.clone(), voice);
+    }
+
+    /// Drain the layer's post-fader tap, handing each chunk of mono samples to
+    /// `f` (oldest → newest). No-op for a layer with no sub-track yet. Called once
+    /// per tick by the audio-mod runtime to feed the send analyzer.
+    pub fn drain_layer_tap(&mut self, layer_id: &LayerId, mut f: impl FnMut(&[f32])) {
+        let Some(lt) = self.layer_tracks.get_mut(layer_id) else {
+            return;
+        };
+        let mut buf = [0.0f32; 2048];
+        loop {
+            let n = lt.tap.pop_slice(&mut buf);
+            if n == 0 {
+                break;
+            }
+            f(&buf[..n]);
+        }
+    }
+
+    /// The renderer sample rate of a layer's tap, or `None` until the tap's first
+    /// `init` reports it (or if the layer has no sub-track). The analyzer is built
+    /// for this rate, since the mixer resamples the source to the output rate.
+    pub fn layer_tap_sample_rate(&self, layer_id: &LayerId) -> Option<u32> {
+        self.layer_tracks.get(layer_id).and_then(|lt| {
+            let sr = lt.sample_rate.load(Ordering::Relaxed);
+            (sr > 0).then_some(sr)
+        })
     }
 
     /// Drop voices whose clip is no longer present in the project (stopping the
@@ -253,12 +439,31 @@ impl AudioLayerPlayback {
         });
     }
 
-    /// Stop and drop every voice (e.g. on project close / reset).
+    /// Drop sub-tracks for layers that are gone or no longer audio (dropping the
+    /// `TrackHandle` removes the kira track + its tap). Bounded scan, only when
+    /// tracks exist.
+    fn evict_absent_layer_tracks(&mut self, project: &Project) {
+        if self.layer_tracks.is_empty() {
+            return;
+        }
+        let present: HashSet<&LayerId> = project
+            .timeline
+            .layers
+            .iter()
+            .filter(|l| l.is_audio())
+            .map(|l| &l.layer_id)
+            .collect();
+        self.layer_tracks.retain(|id, _| present.contains(id));
+    }
+
+    /// Stop and drop every voice and layer track (e.g. on project close / reset).
     pub fn reset(&mut self) {
         for voice in self.voices.values_mut() {
             voice.handle.stop(Tween::default());
         }
         self.voices.clear();
+        // Dropping the track handles removes the kira sub-tracks + their taps.
+        self.layer_tracks.clear();
     }
 
     /// Number of live voices (test/diagnostic).
@@ -268,72 +473,31 @@ impl AudioLayerPlayback {
     }
 }
 
-/// SPIKE (step 1 of the realtime-tap plan): proves kira 0.9 lets us hang a
-/// pass-through effect on a sub-track and read the *played* (post-rate,
-/// post-volume) samples off it — the signal we'll feed the send analysis.
-/// Ignored because it opens the default output device; run with:
-///   cargo test -p manifold-playback tap_spike -- --ignored --nocapture
+/// Realtime-tap path (steps 2–3 of the §3R plan): proves a clip routed to a
+/// layer's sub-track is captured post-fader off the [`LayerTap`] and reaches the
+/// content thread through [`AudioLayerPlayback::drain_layer_tap`] — the exact
+/// signal the send analyzer consumes. Ignored because it opens the default
+/// output device; run with:
+///   cargo test -p manifold-playback layer_tap -- --ignored --nocapture
 #[cfg(test)]
-mod tap_spike {
-    use std::sync::{Arc, Mutex};
+mod layer_tap_tests {
+    use std::sync::Arc;
 
-    use kira::clock::clock_info::ClockInfoProvider;
     use kira::Frame;
-    use kira::effect::{Effect, EffectBuilder};
-    use kira::modulator::value_provider::ModulatorValueProvider;
     use kira::sound::static_sound::{StaticSoundData, StaticSoundSettings};
-    use kira::track::TrackBuilder;
 
     use super::*;
 
-    /// Pass-through effect: copies the left channel into a shared sink, returns
-    /// the frame untouched. (A Mutex is fine for a one-shot spike; the real tap
-    /// will push into a lock-free ring, never lock on the audio thread.)
-    struct TapEffect {
-        sink: Arc<Mutex<Vec<f32>>>,
-    }
-
-    impl Effect for TapEffect {
-        fn process(
-            &mut self,
-            input: Frame,
-            _dt: f64,
-            _clock: &ClockInfoProvider,
-            _mods: &ModulatorValueProvider,
-        ) -> Frame {
-            if let Ok(mut v) = self.sink.lock() {
-                v.push(input.left);
-            }
-            input
-        }
-    }
-
-    struct TapBuilder {
-        sink: Arc<Mutex<Vec<f32>>>,
-    }
-
-    impl EffectBuilder for TapBuilder {
-        type Handle = ();
-        fn build(self) -> (Box<dyn Effect>, Self::Handle) {
-            (Box::new(TapEffect { sink: self.sink }), ())
-        }
-    }
-
     #[test]
     #[ignore = "opens the default audio output device; run with --ignored"]
-    fn tap_receives_played_samples() {
-        let sink = Arc::new(Mutex::new(Vec::<f32>::new()));
+    fn layer_tap_streams_post_fader_samples() {
+        let mut playback = AudioLayerPlayback::new().expect("open default output device");
+        let layer_id = LayerId::new("test-layer");
 
-        let mut manager =
-            AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())
-                .expect("open default output device");
+        // Create the layer's sub-track + tap, then route a tone to it.
+        playback.ensure_layer_track(&layer_id);
+        let track = &playback.layer_tracks.get(&layer_id).expect("layer track").track;
 
-        // Sub-track carrying the tap effect.
-        let mut tb = TrackBuilder::new();
-        tb.add_effect(TapBuilder { sink: sink.clone() });
-        let track = manager.add_sub_track(tb).expect("create sub-track");
-
-        // 50 ms of a 440 Hz sine at 0.2 amplitude, routed to the tap track.
         let sr = 48_000u32;
         let frames: Arc<[Frame]> = (0..sr / 20)
             .map(|i| {
@@ -347,19 +511,22 @@ mod tap_spike {
             settings: StaticSoundSettings::default(),
             slice: None,
         }
-        .output_destination(&track);
+        .output_destination(track);
+        let _handle = playback.manager.play(data).expect("play tone on layer track");
 
-        let _handle = manager.play(data).expect("play sound on tap track");
         std::thread::sleep(std::time::Duration::from_millis(150));
 
-        let captured = sink.lock().unwrap();
+        let mut captured = Vec::<f32>::new();
+        playback.drain_layer_tap(&layer_id, |chunk| captured.extend_from_slice(chunk));
         let n = captured.len();
         let peak = captured.iter().fold(0.0f32, |a, &x| a.max(x.abs()));
-        println!("[tap_spike] captured {n} samples, peak {peak:.4}");
+        println!("[layer_tap] drained {n} samples, peak {peak:.4}");
         assert!(n > 1000, "tap saw too few samples ({n}); effect not on the played path");
-        assert!(
-            peak > 0.05,
-            "tap saw silence (peak {peak:.4}); sound rate/volume is applied AFTER the track tap?"
+        assert!(peak > 0.05, "tap saw silence (peak {peak:.4}); routing/fader applied after the tap?");
+        assert_eq!(
+            playback.layer_tap_sample_rate(&layer_id),
+            Some(sr),
+            "tap should report the renderer sample rate via init"
         );
     }
 }

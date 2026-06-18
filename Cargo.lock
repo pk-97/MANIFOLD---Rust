@@ -1982,6 +1982,7 @@ dependencies = [
  "manifold-io",
  "midir",
  "parking_lot",
+ "ringbuf 0.4.8",
  "rosc",
  "rusty_link",
  "serde",

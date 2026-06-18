@@ -14,14 +14,17 @@
 
 use std::sync::Arc;
 
+use ahash::AHashMap;
+
 use manifold_audio::analysis::{
     AudioFeatureWorker, ColumnReader, CrossoverBank, FeatureReader, GainBank, ScalarReader,
-    SendSpec, SpectrogramTap,
+    SendSpec, SpectrogramTap, StreamingSendAnalyzer,
 };
 use manifold_audio::capture::{self, CaptureBackend, CaptureSource};
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSetup, AudioSourceKind};
 use manifold_core::id::AudioSendId;
 use manifold_core::project::Project;
+use manifold_playback::audio_layer_playback::AudioLayerPlayback;
 use manifold_playback::engine::PlaybackEngine;
 
 /// The capture-relevant fingerprint of an [`AudioSetup`]. Changes here force a
@@ -105,11 +108,13 @@ pub struct AudioModRuntime {
     /// Worker index of the scope-tapped send, resolved each tick. Lets the
     /// content thread pull that send's features for the scope's per-band meters.
     tapped_index: Option<usize>,
-    /// Offline modulation curves for layer-fed sends (audio layers). Decoded +
-    /// analysed once per clip and cached; sampled at the playhead each tick and
-    /// written into the snapshot alongside the live capture sends. See
-    /// [`crate::audio_layer_curves`] and `docs/AUDIO_LAYER_DESIGN.md` §3.
-    curves: crate::audio_layer_curves::AudioLayerCurves,
+    /// Realtime per-send analyzers for layer-fed sends (audio layers). Each
+    /// drains its layer's post-fader kira tap and reduces it to [`SendFeatures`]
+    /// with the same DSP as a live capture send — so the modulation tracks what's
+    /// actually heard (warp, gain, mute all baked in). Keyed by the send's id;
+    /// the stored `u32` is the sample rate the analyzer was built for, so a rate
+    /// change rebuilds it. See `docs/AUDIO_LAYER_DESIGN.md` §3R.
+    layer_analyzers: AHashMap<AudioSendId, (u32, StreamingSendAnalyzer)>,
 }
 
 impl Default for AudioModRuntime {
@@ -140,7 +145,7 @@ impl Default for AudioModRuntime {
                 manifold_core::audio_setup::DEFAULT_MID_HZ,
             )),
             tapped_index: None,
-            curves: crate::audio_layer_curves::AudioLayerCurves::default(),
+            layer_analyzers: AHashMap::new(),
         }
     }
 }
@@ -148,8 +153,14 @@ impl Default for AudioModRuntime {
 impl AudioModRuntime {
     /// Reconcile the capture lifecycle (when the project changed, or a device
     /// hot-plugged) and feed the engine the latest feature snapshot. Call once
-    /// per tick, before `engine.tick`.
-    pub fn update(&mut self, engine: &mut PlaybackEngine, data_version: u64) {
+    /// per tick, before `engine.tick`. `layer_playback` (when present) carries the
+    /// per-layer post-fader taps that feed layer-fed sends.
+    pub fn update(
+        &mut self,
+        engine: &mut PlaybackEngine,
+        data_version: u64,
+        layer_playback: Option<&mut AudioLayerPlayback>,
+    ) {
         let hotplugged = self
             .devices_dirty
             .swap(false, std::sync::atomic::Ordering::Relaxed);
@@ -181,18 +192,17 @@ impl AudioModRuntime {
                 self.capture = None;
             }
             self.reconcile(engine.project());
-            // Evict cached layer curves for clips no longer in the project (runs
-            // only on a project change, never per tick — keeps the cache bounded
-            // without allocating on the hot path).
+            // Drop analyzers for sends that are no longer layer-fed (runs only on
+            // a project change, never per tick — keeps the map bounded without
+            // allocating on the hot path).
             if let Some(project) = engine.project() {
-                let live: std::collections::HashSet<manifold_core::id::ClipId> = project
-                    .timeline
-                    .layers
-                    .iter()
-                    .filter(|l| l.is_audio())
-                    .flat_map(|l| l.clips.iter().filter(|c| c.is_audio()).map(|c| c.id.clone()))
-                    .collect();
-                self.curves.retain_live(&live);
+                self.layer_analyzers.retain(|id, _| {
+                    project
+                        .audio_setup
+                        .sends
+                        .iter()
+                        .any(|s| &s.id == id && s.layer_source().is_some())
+                });
             }
             self.last_version = data_version;
             self.spec_dirty = false;
@@ -217,45 +227,51 @@ impl AudioModRuntime {
                 .set(p.audio_setup.low_hz, p.audio_setup.mid_hz);
         }
 
-        // ── Layer-fed sends: sample the offline curve at the playhead ──
+        // ── Layer-fed sends: drain each layer's post-fader tap → features ──
         // Computed under an immutable engine borrow, then applied below under the
         // mutable snapshot borrow. The snapshot is indexed by `AudioSetup::sends`
-        // order; layer-fed sends were silent slots from the worker (empty-channel
-        // SendSpec) or absent (capture dark), so we overwrite them here. See
-        // `docs/AUDIO_LAYER_DESIGN.md` §3.
+        // order; layer-fed sends are silent slots from the live worker (empty-
+        // channel SendSpec) or absent (capture dark), so we overwrite them here.
+        // The samples come post-fader off kira, so warp + gain + mute are already
+        // applied — the features track exactly what's heard. See §3R.
         let mut layer_features: Vec<(usize, manifold_core::SendFeatures)> = Vec::new();
         let mut send_count = 0usize;
-        if let Some(project) = engine.project() {
+        if let (Some(project), Some(playback)) = (engine.project(), layer_playback) {
             send_count = project.audio_setup.sends.len();
-            let beat = engine.current_beat();
-            let now_s = engine.beat_to_timeline_time_immut(beat).0;
             let (low_hz, mid_hz) = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
             for (i, send) in project.audio_setup.sends.iter().enumerate() {
                 let Some(layer_id) = send.layer_source() else {
                     continue;
                 };
-                let Some(layer) = project
-                    .timeline
-                    .layers
-                    .iter()
-                    .find(|l| &l.layer_id == layer_id)
-                else {
+                // The tap reports the mixer's output rate via its first init; until
+                // then there's nothing to analyze (no audio has flowed). Build (or
+                // rebuild on a rate change) the analyzer for that rate.
+                let Some(sample_rate) = playback.layer_tap_sample_rate(layer_id) else {
                     continue;
                 };
-                let Some(clip) = layer.active_audio_clip_at(beat) else {
-                    continue;
+                let analyzer = match self.layer_analyzers.entry(send.id.clone()) {
+                    std::collections::hash_map::Entry::Occupied(e) => {
+                        let slot = e.into_mut();
+                        if slot.0 != sample_rate {
+                            *slot = (sample_rate, StreamingSendAnalyzer::new(sample_rate, low_hz, mid_hz));
+                        }
+                        &mut slot.1
+                    }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        &mut e
+                            .insert((sample_rate, StreamingSendAnalyzer::new(sample_rate, low_hz, mid_hz)))
+                            .1
+                    }
                 };
-                // Offset into the source file the playhead is over. Elapsed since
-                // the clip start is scaled by the same warp ratio the voice plays
-                // at, so the features sampled here track what's actually heard.
-                // `in_point` is the clip's start within the file.
-                let ratio = clip.warp_ratio(project.settings.bpm.0) as f64;
-                let clip_start_s = engine.beat_to_timeline_time_immut(clip.start_beat).0;
-                let clip_local = (clip.in_point.0 + (now_s - clip_start_s) * ratio) as f32;
-                if let Some(f) = self.curves.sample_clip(clip, low_hz, mid_hz, clip_local) {
-                    layer_features.push((i, f));
-                }
+                // Live-retune the bands to the project crossovers (cheap), then
+                // feed everything the tap produced since last tick. Silence in →
+                // features decay, so a muted/paused layer reads as no modulation.
+                analyzer.set_crossovers(low_hz, mid_hz);
+                playback.drain_layer_tap(layer_id, |chunk| analyzer.push(chunk));
+                layer_features.push((i, analyzer.latest()));
             }
+        } else if let Some(project) = engine.project() {
+            send_count = project.audio_setup.sends.len();
         }
 
         // Feed the engine. Reuse the snapshot's Vec capacity → no per-frame

@@ -4,7 +4,6 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod app;
 mod app_lifecycle;
 mod app_render;
-mod audio_layer_curves;
 mod audio_mod_runtime;
 mod audio_waveform_cache;
 mod content_command;
