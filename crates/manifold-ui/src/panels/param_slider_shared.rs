@@ -1015,6 +1015,13 @@ pub(crate) enum AbletonConfigClick {
 /// Node IDs produced by [`build_param_row`] for one parameter row. The caller
 /// stores each into its parallel per-param vectors at the row's index.
 pub(crate) struct ParamRowIds {
+    /// Transparent, interactive full-row hit catcher sitting *behind* the
+    /// slider widgets (added first, so the track/label win on top). Carries the
+    /// param's right-click menu intent so a right-click on the value cell, the
+    /// gaps, or anywhere on the row that isn't the track folds to the param
+    /// menu — instead of each narrow widget being its own lottery target.
+    /// See `docs/NODE_INTENT_DISPATCH.md`.
+    pub(crate) row_catcher: i32,
     pub(crate) slider: Option<SliderNodeIds>,
     pub(crate) trim: Option<TrimHandleIds>,
     /// Orange envelope target handle on the slider track (when armed).
@@ -1076,6 +1083,7 @@ pub(crate) fn build_param_row(
     label_width: f32,
 ) -> ParamRowIds {
     let mut ids = ParamRowIds {
+        row_catcher: -1,
         slider: None,
         trim: None,
         audio_trim: None,
@@ -1101,6 +1109,19 @@ pub(crate) fn build_param_row(
         info.value_labels.as_deref(),
     );
     let slider_rect = Rect::new(x, cy, slider_w, ROW_HEIGHT);
+
+    // Full-row hit catcher, added BEFORE the slider widgets so reverse-insertion
+    // hit-testing lets the track/label win on top and the catcher only collects
+    // the value cell + gaps. Transparent + interactive; carries no visual.
+    ids.row_catcher = tree.add_node(
+        parent,
+        slider_rect,
+        UINodeType::Panel,
+        UIStyle::default(),
+        None,
+        UIFlags::VISIBLE | UIFlags::INTERACTIVE,
+    ) as i32;
+
     let slider = BitmapSlider::build(
         tree,
         parent,

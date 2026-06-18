@@ -395,6 +395,10 @@ pub struct ParamCardPanel {
 
     // ── Node IDs — per-param (shared) ──
     slider_ids: Vec<Option<SliderNodeIds>>,
+    /// Per-param transparent full-row hit catcher behind the slider widgets.
+    /// Carries the param's right-click menu intent so the value cell + gaps
+    /// resolve to the param menu (track stays instant-reset). -1 if unbuilt.
+    row_catcher_ids: Vec<i32>,
     driver_btn_ids: Vec<i32>,
     envelope_btn_ids: Vec<i32>,
     driver_config_ids: Vec<Option<DriverConfigIds>>,
@@ -481,6 +485,7 @@ impl ParamCardPanel {
             cached_has_abl: false,
             cached_has_graph_mod: false,
             slider_ids: Vec::new(),
+            row_catcher_ids: Vec::new(),
             driver_btn_ids: Vec::new(),
             envelope_btn_ids: Vec::new(),
             driver_config_ids: Vec::new(),
@@ -553,6 +558,7 @@ impl ParamCardPanel {
             .collect();
         self.copied_flash.clear();
         self.slider_ids = vec![None; n];
+        self.row_catcher_ids = vec![-1; n];
         self.driver_btn_ids = vec![-1; n];
         self.envelope_btn_ids = vec![-1; n];
         self.driver_config_ids = Vec::new();
@@ -1309,6 +1315,7 @@ impl ParamCardPanel {
                 label_width,
             );
             self.slider_ids[i] = row.slider;
+            self.row_catcher_ids[i] = row.row_catcher;
             self.trim_ids[i] = row.trim;
             self.target_ids[i] = row.target;
             self.envelope_config_ids[i] = row.envelope_config;
@@ -1607,6 +1614,7 @@ impl ParamCardPanel {
                         label_width,
                     );
                     self.slider_ids[i] = row.slider;
+                    self.row_catcher_ids[i] = row.row_catcher;
                     self.trim_ids[i] = row.trim;
                     self.target_ids[i] = row.target;
                     self.envelope_config_ids[i] = row.envelope_config;
@@ -2901,14 +2909,22 @@ impl ParamCardPanel {
             let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
             intents.on(ids.track, RightClick, PanelAction::ParamRightClick(target, self.pid_at(pi), default));
 
-            // Label → perform-mapping menu (Perform context only; Author uses
-            // the right-edge mapping drawer instead).
-            if self.context == CardContext::Perform && ids.label >= 0 {
-                intents.on(
-                    ids.label as u32,
-                    RightClick,
-                    PanelAction::ParamLabelRightClick(target, self.pid_at(pi)),
-                );
+            // Rest of the row → perform-mapping menu (Perform context only;
+            // Author uses the right-edge mapping drawer instead). Registered on
+            // both the interactive label and the full-row catcher behind the
+            // value cell + gaps, so a right-click anywhere on the row that isn't
+            // the track reliably opens the param menu — no narrow-target lottery.
+            if self.context == CardContext::Perform {
+                let menu = PanelAction::ParamLabelRightClick(target, self.pid_at(pi));
+                if ids.label >= 0 {
+                    intents.on(ids.label as u32, RightClick, menu.clone());
+                }
+                if let Some(catcher) = self.row_catcher_ids.get(pi).copied()
+                    && catcher >= 0
+                {
+                    intents.claim_area(catcher as u32);
+                    intents.on(catcher as u32, RightClick, menu);
+                }
             }
         }
     }
