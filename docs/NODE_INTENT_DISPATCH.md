@@ -157,40 +157,65 @@ the node id + intent in one call. (Built after the core lands.)
 runs the central resolve pass in `process_events` *before* the per-panel
 `handle_event` loop.
 
-## Migration plan (one panel at a time, behavior-preserving)
+## Remaining work — ALL optional (consistency, not correctness)
 
-The registry runs **alongside** the existing `handle_event` path. A panel is
-migrated when its `node_id ==` matches move into build-time `intents.on(...)`
-and its `handle_event` static-dispatch arms are deleted. Stateful/positional
-handlers (slider drag math, scrub, card reorder drag) **stay** in
-`handle_event` — intent dispatch is for discrete node→action gestures only.
+Right-click is fully migrated; everything below is about putting **left-click**
+on the same registry and removing the leftover scatter. None of it fixes a bug —
+left-click never had the dead-zone problem (solid buttons + a working miss path).
+Do it only to finish unifying the dispatch layer. A panel is "done" when its
+`node_id ==` click matches move into `register_intents` and its `handle_click`
+arm is deleted. Stateful/positional handlers (slider drag, scrub, card/layer
+reorder drag) **stay** in `handle_event` — the registry is for discrete
+node→action gestures only.
 
-Order (broken-surface-first):
+**A. Delete the click twins (clicks already on the registry).**
+`transport`, `header`, `footer` register Click intents *and* still keep
+`handle_click` as a tested twin. Delete each `handle_click` + rewrite its
+`handle_click_*` unit tests to assert via `IntentRegistry::resolve` (the pattern
+`transport::intent_resolves_play_button_click` already uses).
 
-1. **Core** — `intent.rs`, `UITree::parent_of`, `UIRoot` wiring, central resolve
-   pass, `Unhandled` fallback for misses. Unit tests for fold-up + miss.
-2. **param_card** (the densest dead-zone surface) — right-click + click intents;
-   prove sliders' fill/thumb/value fold to the card.
-3. **inspector** chrome (master/layer/clip), **macros_panel**, **master_chrome**.
-4. **header / footer / transport** (simple button grids — mechanical).
-5. **layer_header**, **browser_popup**, **ableton_picker**, **audio_setup_panel**.
-6. **waveform_lane / stem_lane** (mixed positional + node — partial migration).
-7. Delete dead `*_id` fields and the `node_id ==` arms left behind.
+**B. Migrate left-click on panels whose right-click is already done.**
+These have a `register_intents` (right-click) but their *click* still routes
+through `handle_click`/`handle_event`: `param_card` (chevron / driver+envelope+
+audio buttons / toggle params / gen-type), `macros_panel`, `master_chrome`,
+`layer_chrome`, `layer_header` (mute/solo/chevron/blend/midi/folder/new-clip),
+`clip_chrome` (bpm / loop toggle).
 
-`graph_editor` canvas is **out of scope** — it has its own hit model
-(`on_right_button_down` resolves node+param by geometry already).
+**C. Migrate click on panels not yet touched at all.**
+`inspector` (tab + chevron clicks, in its `handle_event`), `browser_popup`,
+`ableton_picker`, `audio_setup_panel`, `graph_palette`.
 
-## Verification per panel
+**D. Graph editor (its own `ui_root`).** The editor window's hand-rolled loop in
+`app_render` already resolves the editor card's *right-click* via
+`editor_card_intents`. Its *clicks* still call `editor_card.handle_click`, the
+in-editor `browser_popup.handle_click`, and `graph_editor_panel.handle_event`.
+Give that loop a click-resolve pass too.
 
-- Unit test: a right-click at a known dead-zone pixel resolves to the expected
-  action (fold-up), and an in-strip pixel still resolves to the specific action.
-- Manual: every previously-enumerated affordance still fires; previously-dead
-  padding now fires the container action.
-- No new per-frame allocation — registry is built during `build()` only
-  (interaction frames are `set_*` only, per the tree invariant).
+**E. Timeline markers → tree nodes (prerequisite, separate change).** Markers are
+the one right-click surface still positional, because they're painted directly
+rather than being `UITree` nodes (`viewport::hit_test_marker_flag`). They can't
+join the registry until they're built as nodes — a rendering change, out of scope
+for the dispatch work.
 
-## What "done" looks like
+## Verification recipe (per panel)
 
-Zero `event.node_id == self.*_id` comparisons remain in panel `handle_event`
-for discrete gestures. Right-click (and click) behave identically across every
-surface because they all flow through one resolver with the same fold-up rule.
+- Build the panel, call `register_intents` into a fresh `IntentRegistry`, assert
+  `resolve(&tree, node_id, gesture)` returns the expected action — for a control
+  node *and* (where a catcher/claims_area is used) a dead-zone node that should
+  fold to it. See `layer_header::intent_resolves_right_click_anywhere_in_row_*`
+  and `transport::intent_resolves_play_button_click`.
+- No new per-frame allocation: registration runs only on structural rebuild
+  (gated by `UITree::structure_version`), never on interaction frames.
+
+## What fully-"done" would look like
+
+Zero `event.node_id == self.*_id` comparisons remain in any panel for discrete
+click/right-click gestures (only stateful drag/scrub and the painted-marker
+positional path stay outside the registry). Today right-click already meets that
+bar; click meets it for the three button grids.
+
+---
+
+*History: this doc originally carried a broken-surface-first 7-step migration
+plan. It's been replaced by the Outcome + Remaining-work sections above now that
+the right-click migration is complete; the original plan lives in git history.*
