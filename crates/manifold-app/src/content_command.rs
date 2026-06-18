@@ -109,6 +109,12 @@ pub enum ContentCommand {
     MutateProjectLive(Box<dyn FnOnce(&mut Project) + Send>),
 
     // ── Percussion ─────────────────────────────────────────────────
+    /// Run per-clip detection on an existing audio clip (audio-clip-detection).
+    /// Analyzes the clip's file and places its triggers, owned by the clip.
+    /// Producer is the audio-clip inspector's Detect button (P4); the content-side
+    /// handler is wired now so the orchestrator path is complete and testable.
+    #[allow(dead_code)]
+    DetectClip(ClipId),
     /// Trigger percussion import pipeline with the selected audio/JSON file path.
     /// Port of Unity: percussionImportController.OnImportPercussionMap(path).
     PercussionImport(String),

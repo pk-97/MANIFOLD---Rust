@@ -15,7 +15,8 @@ use manifold_core::percussion_analysis::{
     PercussionAnalysisData, PercussionClipBinding, PercussionImportOptions,
     PercussionPlacementPlan, PercussionTriggerType,
 };
-use manifold_core::percussion_settings::PercussionPipelineSettings;
+use manifold_core::audio_clip_detection::DetectionConfig;
+use manifold_core::percussion_settings::{PercussionImportOptionsFactory, PercussionPipelineSettings};
 use manifold_core::project::Project;
 use manifold_core::types::{LayerType, TempoPointSource};
 
@@ -74,11 +75,20 @@ impl PercussionImportService {
         }
     }
 
+    /// Apply a placement plan to the timeline.
+    ///
+    /// `source_clip_id` distinguishes the two ownership models:
+    /// - `Some(id)` — per-clip detection (audio-clip-detection). Generated
+    ///   triggers are tagged `detection_source = id`; a re-detect clears only
+    ///   this clip's own prior triggers; no project-global state is written.
+    /// - `None` — legacy global import wizard. Clears whole reused layers and
+    ///   writes `project.percussion_import`. Slated for removal in P5.
     pub fn apply_placement_plan(
         &self,
         project: &mut Project,
         plan: Option<&PercussionPlacementPlan>,
         options: Option<&PercussionImportOptions>,
+        source_clip_id: Option<&ClipId>,
     ) -> PercussionImportResult {
         let mut result = PercussionImportResult::default();
 
@@ -114,7 +124,10 @@ impl PercussionImportService {
             }
         }
 
-        // Clear existing clips on reused layers (preserves layer effects, blend mode, gen params, etc.)
+        // Clear existing clips on reused layers. Per-clip detection clears only
+        // the triggers this audio clip produced (multi-source safe, preserves
+        // hand-placed clips and other clips' triggers); the legacy wizard clears
+        // the whole layer (preserving layer effects, blend mode, gen params).
         for &layer_index in &layers_to_clear {
             let layer = match project.timeline.layers.get_mut(layer_index as usize) {
                 Some(l) => l,
@@ -123,6 +136,12 @@ impl PercussionImportService {
             let layer_lid = layer.layer_id.clone();
             let existing_clips: Vec<TimelineClip> = layer.clips.clone();
             for existing in existing_clips {
+                if let Some(src) = source_clip_id
+                    && existing.detection_source.as_ref() != Some(src)
+                {
+                    // Per-clip mode: leave clips this source didn't create.
+                    continue;
+                }
                 commands.push(Box::new(DeleteClipCommand::new(
                     existing.clone(),
                     layer_lid.clone(),
@@ -158,7 +177,7 @@ impl PercussionImportService {
                 .map(|l| l.layer_id.clone())
                 .unwrap_or_default();
 
-            let timeline_clip: TimelineClip = if placement.is_generator() {
+            let mut timeline_clip: TimelineClip = if placement.is_generator() {
                 TimelineClip::new_generator(placement.start_beat, placement.duration_beats)
             } else {
                 let video_clip_id = match &placement.video_clip_id {
@@ -212,6 +231,10 @@ impl PercussionImportService {
                 }
             }
 
+            // Tag the trigger with its source audio clip (per-clip detection),
+            // so a later re-detect of that clip clears only these triggers.
+            timeline_clip.detection_source = source_clip_id.cloned();
+
             let clip_id = timeline_clip.id.clone();
             let spb = 60.0 / project.settings.bpm.0.max(1.0);
             let mut add_cmd = AddClipCommand::new(timeline_clip, target_layer_lid.clone(), spb);
@@ -249,12 +272,16 @@ impl PercussionImportService {
 
         result.undo_command = Some(command);
 
-        // Update import provenance on the project.
-        let perc_import = project
-            .percussion_import
-            .get_or_insert_with(Default::default);
-        perc_import.clip_placements.clear();
-        perc_import.clip_placements.extend(import_provenance);
+        // Legacy global wizard only: record provenance into project state.
+        // Per-clip detection (source_clip_id = Some) caches its analysis on the
+        // clip instead and writes no project-global state.
+        if source_clip_id.is_none() {
+            let perc_import = project
+                .percussion_import
+                .get_or_insert_with(Default::default);
+            perc_import.clip_placements.clear();
+            perc_import.clip_placements.extend(import_provenance);
+        }
         result.success = true;
 
         if result.cleared_clips > 0 {
@@ -488,6 +515,48 @@ impl Default for PercussionImportService {
     }
 }
 
+// ─── Per-clip detection options ───
+
+/// Build `PercussionImportOptions` for one audio clip from its `DetectionConfig`.
+///
+/// Starts from the default/project options factory (which carries the proven
+/// per-instrument generator + duration defaults), then overlays the clip's own
+/// knobs: quantize, onset compensation, the enabled instrument set, and the
+/// sensitivity → `minimum_confidence` mapping. Routing stays by trigger name for
+/// now; explicit per-instrument `target_layer` is honoured once the inspector
+/// (P4) drives it. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
+pub fn build_clip_detection_options(
+    project: &Project,
+    pipeline_settings: Option<&PercussionPipelineSettings>,
+    config: &DetectionConfig,
+    start_beat_offset: Beats,
+) -> PercussionImportOptions {
+    let mut options = PercussionImportOptionsFactory::create_default_with_settings(
+        project,
+        pipeline_settings,
+        start_beat_offset,
+    );
+
+    options.quantize_to_grid = config.quantize_on;
+    options.quantize_step_beats = config.quantize_step_beats;
+    options.onset_compensation_seconds = config.onset_compensation;
+
+    // Keep only instruments the clip has enabled, and apply per-instrument
+    // sensitivity as the confidence gate.
+    options.bindings.retain(|b| {
+        config
+            .instrument(b.trigger_type)
+            .is_some_and(|i| i.enabled)
+    });
+    for binding in options.bindings.iter_mut() {
+        if let Some(instrument) = config.instrument(binding.trigger_type) {
+            binding.minimum_confidence = instrument.min_confidence();
+        }
+    }
+
+    options
+}
+
 // ─── Helper functions ───
 
 fn get_trigger_layer_name(trigger_type: PercussionTriggerType) -> String {
@@ -510,4 +579,160 @@ fn find_layer_by_name_index(layers: &[Layer], name: &str) -> Option<usize> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::audio_clip_detection::DetectionConfig;
+    use manifold_core::clip::TimelineClip;
+    use manifold_core::percussion_analysis::PercussionClipPlacement;
+
+    fn gen_type() -> PresetTypeId {
+        PresetTypeId::from_string("TestGen".to_string())
+    }
+
+    fn project_with_kick_layer() -> (Project, usize) {
+        let mut project = Project::default();
+        let idx = project
+            .timeline
+            .add_layer("Kick", LayerType::Generator, gen_type());
+        (project, idx)
+    }
+
+    fn kick_options() -> PercussionImportOptions {
+        let mut options = PercussionImportOptions::default();
+        options.bindings.push(PercussionClipBinding::new(
+            PercussionTriggerType::Kick,
+            0,
+            None,
+            gen_type(),
+            Beats(0.25),
+            0.0,
+        ));
+        options
+    }
+
+    fn kick_plan(beat: f32) -> PercussionPlacementPlan {
+        let mut plan = PercussionPlacementPlan::new();
+        plan.add_placement(PercussionClipPlacement::new(
+            PercussionTriggerType::Kick,
+            0,
+            None,
+            gen_type(),
+            Beats::from_f32(beat),
+            Beats(0.25),
+            0.9,
+            beat,
+        ));
+        plan
+    }
+
+    #[test]
+    fn per_clip_apply_tags_source_and_skips_global_state() {
+        let (mut project, idx) = project_with_kick_layer();
+        let svc = PercussionImportService::new();
+        let clip_id = ClipId::new("audioA");
+
+        let result = svc.apply_placement_plan(
+            &mut project,
+            Some(&kick_plan(1.0)),
+            Some(&kick_options()),
+            Some(&clip_id),
+        );
+
+        assert!(result.success);
+        assert_eq!(result.added_clips, 1);
+        let layer = &project.timeline.layers[idx];
+        assert_eq!(layer.clips.len(), 1);
+        assert_eq!(layer.clips[0].detection_source.as_ref(), Some(&clip_id));
+        assert!(
+            project.percussion_import.is_none(),
+            "per-clip path writes no project-global state"
+        );
+    }
+
+    #[test]
+    fn per_clip_redetect_clears_only_own_triggers() {
+        let (mut project, idx) = project_with_kick_layer();
+        let foreign_id = ClipId::new("audioB");
+
+        // Seed a foreign trigger + a hand-placed clip, away from the trigger beat.
+        {
+            let layer = &mut project.timeline.layers[idx];
+            let mut foreign = TimelineClip::new_generator(Beats::from_f32(10.0), Beats(0.25));
+            foreign.detection_source = Some(foreign_id.clone());
+            layer.restore_clip(foreign);
+            layer.restore_clip(TimelineClip::new_generator(Beats::from_f32(20.0), Beats(0.25)));
+        }
+        project.timeline.mark_clip_lookup_dirty();
+
+        let svc = PercussionImportService::new();
+        let clip_id = ClipId::new("audioA");
+
+        svc.apply_placement_plan(
+            &mut project,
+            Some(&kick_plan(1.0)),
+            Some(&kick_options()),
+            Some(&clip_id),
+        );
+        assert_eq!(project.timeline.layers[idx].clips.len(), 3);
+
+        // Re-detect audioA: clears only audioA's prior trigger, re-adds one.
+        svc.apply_placement_plan(
+            &mut project,
+            Some(&kick_plan(1.0)),
+            Some(&kick_options()),
+            Some(&clip_id),
+        );
+
+        let clips = &project.timeline.layers[idx].clips;
+        assert_eq!(clips.len(), 3, "foreign + hand-placed preserved, audioA replaced");
+        let own = clips
+            .iter()
+            .filter(|c| c.detection_source.as_ref() == Some(&clip_id))
+            .count();
+        assert_eq!(own, 1, "exactly one audioA trigger after re-detect");
+        assert!(
+            clips
+                .iter()
+                .any(|c| c.detection_source.as_ref() == Some(&foreign_id)),
+            "another clip's triggers are untouched"
+        );
+        assert!(
+            clips.iter().any(|c| c.detection_source.is_none()),
+            "hand-placed clip is untouched"
+        );
+    }
+
+    #[test]
+    fn options_from_config_filters_disabled_and_maps_sensitivity() {
+        let project = Project::default();
+        let mut config = DetectionConfig::default();
+        // Disable Snare; crank Kick sensitivity to max (-> confidence 0).
+        for inst in config.instruments.iter_mut() {
+            match inst.trigger_type {
+                PercussionTriggerType::Snare => inst.enabled = false,
+                PercussionTriggerType::Kick => inst.sensitivity = 1.0,
+                _ => {}
+            }
+        }
+
+        let options = build_clip_detection_options(&project, None, &config, Beats::from_f32(2.0));
+
+        assert_eq!(options.start_beat_offset, Beats::from_f32(2.0));
+        let kick = options
+            .bindings
+            .iter()
+            .find(|b| b.trigger_type == PercussionTriggerType::Kick)
+            .expect("enabled Kick survives");
+        assert!(kick.minimum_confidence.abs() < 1e-6, "max sensitivity -> 0 threshold");
+        assert!(
+            !options
+                .bindings
+                .iter()
+                .any(|b| b.trigger_type == PercussionTriggerType::Snare),
+            "disabled Snare is dropped"
+        );
+    }
 }

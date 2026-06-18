@@ -585,6 +585,11 @@ impl ContentThread {
             }
 
             // ── Percussion ────────────────────────────────────────
+            ContentCommand::DetectClip(clip_id) => {
+                if let Some(p) = self.engine.project_mut() {
+                    self.percussion_orchestrator.detect_clip(clip_id, p);
+                }
+            }
             ContentCommand::PercussionImport(path) => {
                 let beat = self.engine.current_beat();
                 let beats_per_bar = self

@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use manifold_core::Beats;
+use manifold_core::ClipId;
+use manifold_core::audio_clip_detection::AudioClipDetection;
 use manifold_core::percussion_analysis::{PercussionAnalysisData, ProjectBeatTimeConverter};
 use manifold_core::percussion_binding::ProjectPercussionBindingResolver;
 use manifold_core::percussion_settings::{
@@ -30,7 +32,9 @@ use manifold_core::project::Project;
 use manifold_editing::command::Command;
 
 use crate::percussion_backend::{PercussionPipelineBackendResolver, PercussionPipelineInvocation};
-use crate::percussion_import::{PercussionBpmDecision, PercussionImportService};
+use crate::percussion_import::{
+    PercussionBpmDecision, PercussionImportService, build_clip_detection_options,
+};
 use crate::percussion_parser::{JsonPercussionAnalysisParser, PercussionAnalysisParser};
 use crate::percussion_planner::PercussionTimelinePlanner;
 use crate::process_runner::{ExternalProcessRunner, ProcessHandle, ProcessRunnerImpl};
@@ -104,6 +108,9 @@ enum OrchestratorPhase {
 
     // ── Re-Import Stems (OnReImportStemsAsync) ──
     ReImportStems(ReImportStemsState),
+
+    // ── Per-clip detection (audio-clip-detection) ──
+    DetectClip(DetectClipState),
 }
 
 // ──────────────────────────────────────
@@ -206,6 +213,22 @@ struct ReImportStemsState {
 enum ReImportStemsSubPhase {
     RunningPipeline,
     Done,
+}
+
+/// Per-clip detection: analyze one audio clip's file and place its triggers.
+/// The clip owns the result (cached analysis + tagged triggers); no global state.
+struct DetectClipState {
+    clip_id: ClipId,
+    audio_start_beat: f32,
+    sub_phase: DetectClipSubPhase,
+    temp_output_json: String,
+    invocation: PercussionPipelineInvocation,
+    pipeline_run: Option<PipelineRunState>,
+}
+
+enum DetectClipSubPhase {
+    RunningPipeline,
+    ApplyingResult { pipeline_ok: bool },
 }
 
 // ──────────────────────────────────────
@@ -337,6 +360,9 @@ impl PercussionImportOrchestrator {
             }
             OrchestratorPhase::ReImportStems(_) => {
                 self.tick_re_import_stems(unscaled_time, project, editing_service);
+            }
+            OrchestratorPhase::DetectClip(_) => {
+                self.tick_detect_clip(unscaled_time, project, editing_service);
             }
         }
     }
@@ -507,6 +533,108 @@ impl PercussionImportOrchestrator {
             old_audio,
             import_start_beat,
             selected_path,
+            temp_output_json,
+            invocation,
+            pipeline_run: None,
+        });
+    }
+
+    /// Per-clip detection entry (audio-clip-detection). Analyze one audio clip's
+    /// file and place its triggers, owned by that clip. Runs the same backend as
+    /// the legacy wizard but caches the analysis on the clip and writes no
+    /// project-global state. The clip must already exist (dropped on an audio
+    /// layer); detection is a manual action, not automatic on drop.
+    pub fn detect_clip(&mut self, clip_id: ClipId, project: &mut Project) {
+        if self.percussion_import_in_progress {
+            self.set_percussion_import_status(
+                "Detection already running",
+                COLOR_ORANGE,
+                false,
+                2.0,
+                PERCUSSION_PROGRESS_UNKNOWN,
+                false,
+            );
+            return;
+        }
+
+        // Resolve the clip's audio file and timeline anchor.
+        let (audio_path, audio_start_beat) = match project.timeline.find_clip_by_id(&clip_id) {
+            Some(c) if c.is_audio() => (c.audio_file_path.clone(), c.start_beat.as_f32()),
+            _ => {
+                self.set_percussion_import_status(
+                    "Detect: not an audio clip",
+                    COLOR_RED,
+                    false,
+                    3.0,
+                    PERCUSSION_PROGRESS_UNKNOWN,
+                    false,
+                );
+                return;
+            }
+        };
+
+        if audio_path.trim().is_empty() || !std::path::Path::new(&audio_path).exists() {
+            self.set_percussion_import_status(
+                "Detect: audio file not found",
+                COLOR_RED,
+                false,
+                3.0,
+                PERCUSSION_PROGRESS_UNKNOWN,
+                false,
+            );
+            return;
+        }
+
+        let temp_output_json = Self::build_temp_percussion_output_path(&audio_path);
+        let invocation = if let Some(settings) = self.pipeline_settings.as_ref() {
+            PercussionPipelineBackendResolver::build_invocation_with_settings(
+                &self.application_data_path,
+                &audio_path,
+                &temp_output_json,
+                settings,
+                None,
+            )
+        } else {
+            PercussionPipelineBackendResolver::build_invocation(
+                &self.application_data_path,
+                &audio_path,
+                &temp_output_json,
+            )
+        };
+
+        let invocation = match invocation {
+            Some(inv) => inv,
+            None => {
+                log::error!(
+                    "[PercussionImportOrchestrator] Detection backend unavailable. \
+                    Expected bundled runtime at Resources/{}",
+                    PercussionPipelineBackendResolver::BUNDLED_RUNTIME_FOLDER_NAME
+                );
+                self.set_percussion_import_status(
+                    "Detect: analysis backend missing",
+                    COLOR_RED,
+                    false,
+                    4.0,
+                    PERCUSSION_PROGRESS_UNKNOWN,
+                    false,
+                );
+                return;
+            }
+        };
+
+        self.percussion_import_in_progress = true;
+        self.set_percussion_import_status(
+            "Detecting triggers",
+            COLOR_BLUE,
+            true,
+            0.0,
+            PERCUSSION_PROGRESS_UNKNOWN,
+            true,
+        );
+        self.phase = OrchestratorPhase::DetectClip(DetectClipState {
+            clip_id,
+            audio_start_beat,
+            sub_phase: DetectClipSubPhase::RunningPipeline,
             temp_output_json,
             invocation,
             pipeline_run: None,
@@ -1440,6 +1568,191 @@ impl PercussionImportOrchestrator {
         }
     }
 
+    fn tick_detect_clip(
+        &mut self,
+        _unscaled_time: f32,
+        project: &mut Project,
+        editing_service: &mut manifold_editing::service::EditingService,
+    ) {
+        let state = match &mut self.phase {
+            OrchestratorPhase::DetectClip(s) => s,
+            _ => return,
+        };
+
+        match &state.sub_phase {
+            DetectClipSubPhase::RunningPipeline => {
+                let (done, ok, details) = drive_pipeline_run(
+                    &mut state.pipeline_run,
+                    &state.invocation,
+                    &self.pipeline_progress_parser,
+                );
+
+                self.percussion_import_status_message = "Detecting triggers".to_string();
+                self.percussion_import_status_color = COLOR_BLUE;
+                self.percussion_import_status_animate = true;
+                self.percussion_import_status_progress01 = PERCUSSION_PROGRESS_UNKNOWN;
+                self.percussion_import_status_show_progress = true;
+
+                if done {
+                    if !ok {
+                        log::error!(
+                            "[PercussionImportOrchestrator] Clip detection failed. {}",
+                            details
+                        );
+                        if let OrchestratorPhase::DetectClip(s) = &self.phase {
+                            let _ = std::fs::remove_file(&s.temp_output_json);
+                        }
+                        self.set_percussion_import_status(
+                            "Detect: analysis failed",
+                            COLOR_RED,
+                            false,
+                            6.0,
+                            PERCUSSION_PROGRESS_UNKNOWN,
+                            false,
+                        );
+                        self.percussion_import_in_progress = false;
+                        self.phase = OrchestratorPhase::Idle;
+                    } else if let OrchestratorPhase::DetectClip(s) = &mut self.phase {
+                        s.sub_phase = DetectClipSubPhase::ApplyingResult { pipeline_ok: true };
+                    }
+                }
+            }
+
+            DetectClipSubPhase::ApplyingResult { pipeline_ok } => {
+                let pipeline_ok = *pipeline_ok;
+                let (clip_id, temp_json, audio_start_beat) =
+                    if let OrchestratorPhase::DetectClip(s) = &self.phase {
+                        (s.clip_id.clone(), s.temp_output_json.clone(), s.audio_start_beat)
+                    } else {
+                        return;
+                    };
+
+                if pipeline_ok {
+                    self.apply_clip_detection(
+                        &clip_id,
+                        &temp_json,
+                        audio_start_beat,
+                        project,
+                        editing_service,
+                    );
+                }
+                let _ = std::fs::remove_file(&temp_json);
+
+                self.percussion_import_in_progress = false;
+                self.phase = OrchestratorPhase::Idle;
+            }
+        }
+    }
+
+    /// Parse the detection JSON, cache it on the clip, plan from the clip's
+    /// `DetectionConfig`, and place its triggers (tagged with the clip id).
+    /// Returns whether any clips were placed.
+    fn apply_clip_detection(
+        &mut self,
+        clip_id: &ClipId,
+        temp_json: &str,
+        audio_start_beat: f32,
+        project: &mut Project,
+        editing_service: &mut manifold_editing::service::EditingService,
+    ) -> bool {
+        let raw_json = match std::fs::read_to_string(temp_json) {
+            Ok(j) if !j.trim().is_empty() => j,
+            _ => {
+                self.set_percussion_import_status(
+                    "Detect: no analysis output",
+                    COLOR_ORANGE,
+                    false,
+                    5.0,
+                    PERCUSSION_PROGRESS_UNKNOWN,
+                    false,
+                );
+                return false;
+            }
+        };
+
+        let analysis = match self.percussion_analysis_parser.try_parse(&raw_json) {
+            Ok(a) => a,
+            Err(parse_error) => {
+                log::error!(
+                    "[PercussionImportOrchestrator] Clip detection parse failed: {}",
+                    parse_error
+                );
+                self.set_percussion_import_status(
+                    "Detect: JSON parse failed",
+                    COLOR_RED,
+                    false,
+                    6.0,
+                    PERCUSSION_PROGRESS_UNKNOWN,
+                    false,
+                );
+                return false;
+            }
+        };
+
+        // Cache the analysis on the clip (the clip owns its events) and read its
+        // detection config. The energy envelope rides inside the cached analysis,
+        // so no project-global state is written.
+        let config = {
+            let clip = match project.timeline.find_clip_by_id_mut(clip_id) {
+                Some(c) => c,
+                None => return false,
+            };
+            let detection = clip
+                .audio_detection
+                .get_or_insert_with(AudioClipDetection::new);
+            detection.analysis = Some(analysis.clone());
+            detection.config.clone()
+        };
+
+        let options = build_clip_detection_options(
+            project,
+            self.pipeline_settings.as_ref(),
+            &config,
+            Beats::from_f32(audio_start_beat),
+        );
+
+        let binding_resolver = ProjectPercussionBindingResolver::new(project, &options);
+        let plan = {
+            let beat_time_converter = ProjectBeatTimeConverter::new(project);
+            let mut planner = PercussionTimelinePlanner::new(
+                Box::new(beat_time_converter),
+                Box::new(binding_resolver),
+            );
+            planner.build_plan(Some(&analysis), Some(&options))
+        };
+
+        if plan.accepted_events() == 0 {
+            self.set_percussion_import_status(
+                "Detect: no accepted triggers",
+                COLOR_ORANGE,
+                false,
+                6.0,
+                PERCUSSION_PROGRESS_UNKNOWN,
+                false,
+            );
+            return false;
+        }
+
+        let import_service =
+            PercussionImportService::new_with_settings(self.pipeline_settings.as_ref());
+        let result =
+            import_service.apply_placement_plan(project, Some(&plan), Some(&options), Some(clip_id));
+
+        if result.success && let Some(cmd) = result.undo_command {
+            editing_service.record(cmd);
+        }
+
+        self.set_percussion_import_status(
+            &format!("Detected {} clips", result.added_clips),
+            COLOR_GREEN,
+            false,
+            5.0,
+            PERCUSSION_PROGRESS_UNKNOWN,
+            false,
+        );
+        result.success
+    }
+
     fn tick_import_audio_only(
         &mut self,
         _unscaled_time: f32,
@@ -1892,7 +2205,8 @@ impl PercussionImportOrchestrator {
 
         let import_service =
             PercussionImportService::new_with_settings(self.pipeline_settings.as_ref());
-        let result = import_service.apply_placement_plan(project, Some(&plan), Some(&options));
+        let result =
+            import_service.apply_placement_plan(project, Some(&plan), Some(&options), None);
 
         if result.success {
             if let Some(cmd) = result.undo_command {
@@ -2055,7 +2369,8 @@ impl PercussionImportOrchestrator {
             return false;
         }
 
-        let result = import_service.apply_placement_plan(project, Some(&plan), Some(&options));
+        let result =
+            import_service.apply_placement_plan(project, Some(&plan), Some(&options), None);
         if result.success {
             if let Some(cmd) = result.undo_command {
                 editing_service.record(cmd);
