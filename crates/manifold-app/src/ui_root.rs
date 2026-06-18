@@ -1224,9 +1224,27 @@ impl UIRoot {
         filtered
     }
 
-    /// If the action is a dropdown trigger, open the dropdown anchored to the
-    /// clicked button and return true (action consumed). Otherwise return false.
+    /// If the action is a dropdown / context-menu / picker trigger, open the
+    /// overlay anchored appropriately and return true (action consumed).
+    /// Otherwise return false.
+    ///
+    /// Single source of truth for "an overlay just opened → mark `overlay_dirty`".
+    /// Every open path (dropdowns, right-click context menus, the browser popup,
+    /// the Ableton picker) flows through here, so flagging the dirty bit once on a
+    /// `true` return guarantees the next build re-records the overlay into
+    /// `overlay_draw` and it actually paints this interaction. The bare
+    /// `open_context` arms used to forget this individually, which is exactly why
+    /// right-click context menus were flaky: they drew only when some *unrelated*
+    /// state change happened to trigger a rebuild that same frame.
     fn try_open_dropdown(&mut self, action: &PanelAction, click_node: i32) -> bool {
+        let opened = self.try_open_dropdown_inner(action, click_node);
+        if opened {
+            self.overlay_dirty = true;
+        }
+        opened
+    }
+
+    fn try_open_dropdown_inner(&mut self, action: &PanelAction, click_node: i32) -> bool {
         let right_click_pos = self.last_right_click_pos;
         let trigger = if click_node >= 0 {
             self.tree.get_bounds(click_node as u32)
