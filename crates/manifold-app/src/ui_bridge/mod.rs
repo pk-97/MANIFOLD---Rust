@@ -169,9 +169,13 @@ pub fn dispatch(
         | PanelAction::ClipWarpToggled
         | PanelAction::ClipDetectClicked
         | PanelAction::ClipClearTriggersClicked
-        | PanelAction::ClipDetectQuantizeToggled
         | PanelAction::ClipDetectInstrumentToggled(_)
-        | PanelAction::ClipDetectSensitivityCycled(_)
+        | PanelAction::ClipDetectSensitivityChanged(..)
+        | PanelAction::ClipDetectOnsetChanged(_)
+        | PanelAction::ClipDetectQuantizeClicked
+        | PanelAction::ClipDetectLayerClicked(_)
+        | PanelAction::ClipDetectSetQuantize(_)
+        | PanelAction::ClipDetectSetLayer(..)
         | PanelAction::ClipLoopToggle
         | PanelAction::ClipSlipSnapshot
         | PanelAction::ClipSlipChanged(_)

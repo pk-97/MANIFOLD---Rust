@@ -114,6 +114,35 @@ impl DetectionConfig {
     }
 }
 
+/// The quantize-grid options the inspector dropdown offers, as `(label, step)`.
+/// A `None` step means quantize off. Beats are quarter-note based (1 beat = a
+/// 1/4 note), so 1/16 = 0.25 beats. Single source of truth shared by the UI
+/// (label + dropdown items) so the menu and the displayed value can't drift.
+pub fn quantize_grid_options() -> [(&'static str, Option<Beats>); 5] {
+    [
+        ("Off", None),
+        ("1/4", Some(Beats(1.0))),
+        ("1/8", Some(Beats(0.5))),
+        ("1/16", Some(Beats(0.25))),
+        ("1/32", Some(Beats(0.125))),
+    ]
+}
+
+/// Display label for the current quantize setting — matches a
+/// [`quantize_grid_options`] entry, else a formatted step fallback.
+pub fn quantize_grid_label(on: bool, step: Beats) -> String {
+    if !on {
+        return "Off".to_string();
+    }
+    quantize_grid_options()
+        .iter()
+        .find_map(|(label, s)| match s {
+            Some(b) if (b.0 - step.0).abs() < 1e-4 => Some(label.to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| format!("{:.3}", step.0))
+}
+
 /// Detection state owned by one audio clip: its settings plus the cached events
 /// from the last run. `analysis` is `None` until the first Detect.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -195,5 +224,27 @@ mod tests {
     fn fresh_detection_has_no_analysis() {
         let d = AudioClipDetection::new();
         assert!(!d.has_analysis());
+    }
+
+    #[test]
+    fn quantize_grid_label_round_trips_options() {
+        // Off + every on-step label matches its option entry.
+        assert_eq!(quantize_grid_label(false, Beats(0.25)), "Off");
+        for (label, step) in quantize_grid_options() {
+            if let Some(beats) = step {
+                assert_eq!(quantize_grid_label(true, beats), label);
+            }
+        }
+        // The default config's step (0.25 beat) reads as 1/16.
+        assert_eq!(quantize_grid_label(true, Beats(0.25)), "1/16");
+    }
+
+    #[test]
+    fn count_reads_last_counts() {
+        let mut d = AudioClipDetection::new();
+        assert_eq!(d.count(PercussionTriggerType::Kick), 0);
+        d.last_counts.insert(PercussionTriggerType::Kick, 64);
+        assert_eq!(d.count(PercussionTriggerType::Kick), 64);
+        assert_eq!(d.count(PercussionTriggerType::Snare), 0);
     }
 }

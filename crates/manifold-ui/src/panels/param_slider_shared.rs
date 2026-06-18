@@ -581,6 +581,48 @@ pub(crate) fn toggle_btn_style(enabled: bool) -> UIStyle {
     }
 }
 
+/// Style for a dropdown trigger — a control cell that shows the current
+/// selection and opens a `DropdownPanel` on click. Reads like the card config
+/// buttons but distinct enough to signal "opens a menu". Shared so the
+/// detection inspector, string-param cards, and any future picker look identical.
+pub(crate) fn dropdown_trigger_style(font_size: u16) -> UIStyle {
+    UIStyle {
+        bg_color: color::CONFIG_BTN_INACTIVE_C32,
+        hover_bg_color: color::CONFIG_BTN_HOVER_C32,
+        pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
+        text_color: color::TEXT_NORMAL,
+        font_size,
+        corner_radius: color::SMALL_RADIUS,
+        text_align: TextAlign::Left,
+        ..UIStyle::default()
+    }
+}
+
+/// Build a dropdown trigger button at `rect` showing `current` plus a trailing
+/// `▾`. Returns the node id; the owning panel emits a "clicked" `PanelAction`
+/// whose app-side `try_open_dropdown` opens the menu anchored to this node.
+/// One builder so every dropdown affordance in the inspector looks the same.
+pub(crate) fn build_dropdown_trigger(
+    tree: &mut UITree,
+    parent: i32,
+    rect: Rect,
+    current: &str,
+    font_size: u16,
+) -> i32 {
+    // Trailing chevron kept inside the same button so the whole cell is one
+    // hit target. A leading space pads the label off the left edge.
+    let text = format!(" {current}   \u{25BE}");
+    tree.add_button(
+        parent,
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        dropdown_trigger_style(font_size),
+        &text,
+    ) as i32
+}
+
 // ── Shared builder functions ────────────────────────────────────
 
 pub(crate) fn build_driver_config(

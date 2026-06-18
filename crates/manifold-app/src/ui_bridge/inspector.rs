@@ -767,14 +767,6 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::handled()
         }
-        PanelAction::ClipDetectQuantizeToggled => {
-            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
-                apply_detection_edit(project, content_tx, &clip_id, |c| {
-                    c.quantize_on = !c.quantize_on;
-                });
-            }
-            DispatchResult::structural()
-        }
         PanelAction::ClipDetectInstrumentToggled(idx) => {
             let idx = *idx;
             if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
@@ -786,23 +778,54 @@ pub(super) fn dispatch_inspector(
             }
             DispatchResult::structural()
         }
-        PanelAction::ClipDetectSensitivityCycled(idx) => {
-            let idx = *idx;
+        PanelAction::ClipDetectSensitivityChanged(idx, value) => {
+            let (idx, value) = (*idx, *value);
             if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
                 apply_detection_edit(project, content_tx, &clip_id, |c| {
                     if let Some(inst) = c.instruments.get_mut(idx) {
-                        // Cycle Lo (0.2) -> Md (0.5) -> Hi (0.8) -> Lo.
-                        inst.sensitivity = if inst.sensitivity < 0.35 {
-                            0.5
-                        } else if inst.sensitivity < 0.65 {
-                            0.8
-                        } else {
-                            0.2
-                        };
+                        inst.sensitivity = value.clamp(0.0, 1.0);
                     }
                 });
             }
             DispatchResult::structural()
+        }
+        PanelAction::ClipDetectOnsetChanged(ms) => {
+            let secs = manifold_core::Seconds((*ms / 1000.0) as f64);
+            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
+                apply_detection_edit(project, content_tx, &clip_id, |c| {
+                    c.onset_compensation = secs;
+                });
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::ClipDetectSetQuantize(step) => {
+            let step = *step;
+            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
+                apply_detection_edit(project, content_tx, &clip_id, |c| match step {
+                    Some(beats) => {
+                        c.quantize_on = true;
+                        c.quantize_step_beats = beats;
+                    }
+                    None => c.quantize_on = false,
+                });
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::ClipDetectSetLayer(idx, layer) => {
+            let (idx, layer) = (*idx, layer.clone());
+            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
+                apply_detection_edit(project, content_tx, &clip_id, |c| {
+                    if let Some(inst) = c.instruments.get_mut(idx) {
+                        inst.target_layer = layer;
+                    }
+                });
+            }
+            DispatchResult::structural()
+        }
+        // The open actions are consumed by UIRoot::try_open_dropdown before
+        // dispatch; these arms are defensive no-ops.
+        PanelAction::ClipDetectQuantizeClicked | PanelAction::ClipDetectLayerClicked(_) => {
+            DispatchResult::handled()
         }
         PanelAction::ClipLoopToggle => {
             if let Some(clip_id) = &selection.primary_selected_clip_id {

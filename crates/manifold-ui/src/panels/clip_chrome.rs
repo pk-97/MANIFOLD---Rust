@@ -1,6 +1,8 @@
 use super::PanelAction;
+use super::param_slider_shared::build_dropdown_trigger;
 use crate::color;
 use crate::node::*;
+use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
 use crate::tree::UITree;
 use manifold_core::{Beats, Seconds};
 
@@ -13,6 +15,15 @@ const BPM_ROW_H: f32 = 22.5;
 const LOOP_BUTTON_H: f32 = 24.0;
 const PROGRESS_H: f32 = 6.0;
 const INSTR_ROW_H: f32 = 20.0;
+/// Disabled instruments collapse to a thin name + enable line.
+const DISABLED_ROW_H: f32 = 15.0;
+/// The quantize-grid + onset row (one line, two halves).
+const QO_ROW_H: f32 = 22.0;
+/// Square enable toggle at the left of each instrument row.
+const TOGGLE_W: f32 = 18.0;
+/// Bipolar onset-compensation slider range, in milliseconds.
+const ONSET_MIN_MS: f32 = -50.0;
+const ONSET_MAX_MS: f32 = 50.0;
 const DIVIDER_H: f32 = 1.0;
 const PAD_H: f32 = 2.0;
 const PAD_V: f32 = 2.0;
@@ -27,17 +38,6 @@ const SMALL_FONT_SIZE: u16 = color::FONT_LABEL;
 
 use crate::color::{BPM_BTN_COLOR, BPM_BTN_HOVER, GEN_TYPE_COLOR, LOOP_OFF_COLOR, LOOP_ON_COLOR};
 
-/// Coarse label for a 0..1 sensitivity (the per-instrument cycle button).
-fn sensitivity_label(sensitivity: f32) -> &'static str {
-    if sensitivity < 0.35 {
-        "Lo"
-    } else if sensitivity < 0.65 {
-        "Md"
-    } else {
-        "Hi"
-    }
-}
-
 // ── ClipChromePanel ──────────────────────────────────────────────
 
 /// One row in the per-clip detection instrument list (audio-clip detection).
@@ -45,7 +45,26 @@ fn sensitivity_label(sensitivity: f32) -> &'static str {
 pub struct DetectInstrumentRow {
     pub label: String,
     pub enabled: bool,
+    /// 0..1 sensitivity (drives the drag slider).
     pub sensitivity: f32,
+    /// Triggers this instrument placed on the last plan (shown as a count).
+    pub count: u32,
+    /// Display name of the routed target layer, or "Auto".
+    pub layer_label: String,
+}
+
+/// Everything the detection inspector renders, assembled in `state_sync` from
+/// the clip's `AudioClipDetection` (config + cached counts) and the project's
+/// layer names. One struct so `set_detection` takes a single argument.
+#[derive(Clone, Debug, Default)]
+pub struct DetectionView {
+    /// Grid label for the quantize dropdown ("Off", "1/4" … "1/32").
+    pub quantize_label: String,
+    /// Onset compensation in milliseconds (drives the onset slider).
+    pub onset_ms: f32,
+    /// Whether the clip has a cached analysis (drives Detect vs Re-detect).
+    pub has_analysis: bool,
+    pub instruments: Vec<DetectInstrumentRow>,
 }
 
 pub struct ClipChromePanel {
@@ -65,9 +84,13 @@ pub struct ClipChromePanel {
     detect_progress_bg_id: i32,
     detect_progress_fill_id: i32,
     detect_progress_bg_rect: Rect,
-    quantize_btn_id: i32,
+    quantize_dropdown_id: i32,
+    onset_slider: SliderDragState,
     instrument_enable_btn_ids: Vec<i32>,
-    instrument_sens_btn_ids: Vec<i32>,
+    /// Per-instrument sensitivity drag sliders (same widget as the cards).
+    instrument_sens_sliders: Vec<SliderDragState>,
+    /// Per-instrument target-layer dropdown triggers.
+    instrument_layer_btn_ids: Vec<i32>,
     gen_type_label_id: i32,
     effects_label_id: i32,
     divider_ids: [i32; 3],
@@ -90,7 +113,9 @@ pub struct ClipChromePanel {
     cached_detect_status: String,
     cached_detect_progress: f32,
     cached_detect_show: bool,
-    cached_quantize_on: bool,
+    cached_quantize_label: String,
+    cached_onset_ms: f32,
+    cached_has_analysis: bool,
     cached_instruments: Vec<DetectInstrumentRow>,
 
     // Node range
@@ -116,9 +141,11 @@ impl ClipChromePanel {
             detect_progress_bg_id: -1,
             detect_progress_fill_id: -1,
             detect_progress_bg_rect: Rect::ZERO,
-            quantize_btn_id: -1,
+            quantize_dropdown_id: -1,
+            onset_slider: SliderDragState::with_range(ONSET_MIN_MS, ONSET_MAX_MS, true),
             instrument_enable_btn_ids: Vec::new(),
-            instrument_sens_btn_ids: Vec::new(),
+            instrument_sens_sliders: Vec::new(),
+            instrument_layer_btn_ids: Vec::new(),
             gen_type_label_id: -1,
             effects_label_id: -1,
             divider_ids: [-1; 3],
@@ -137,7 +164,9 @@ impl ClipChromePanel {
             cached_detect_status: String::new(),
             cached_detect_progress: 0.0,
             cached_detect_show: false,
-            cached_quantize_on: true,
+            cached_quantize_label: "1/16".into(),
+            cached_onset_ms: 0.0,
+            cached_has_analysis: false,
             cached_instruments: Vec::new(),
             first_node: 0,
             node_count: 0,
@@ -154,9 +183,14 @@ impl ClipChromePanel {
                 // Source label + filename + warp toggle + clip-BPM row.
                 h += SECTION_LABEL_H + SMALL_ROW_H + LOOP_BUTTON_H + BPM_ROW_H;
                 // Detection: label + status + progress bar + Detect + Clear +
-                // quantize toggle + one row per instrument.
-                h += SECTION_LABEL_H + SMALL_ROW_H + PROGRESS_H + LOOP_BUTTON_H * 3.0;
-                h += self.cached_instruments.len() as f32 * INSTR_ROW_H;
+                // quantize/onset row, then one row per instrument (disabled rows
+                // collapse to a thin line).
+                h += SECTION_LABEL_H + SMALL_ROW_H + PROGRESS_H + LOOP_BUTTON_H * 2.0 + QO_ROW_H;
+                h += self
+                    .cached_instruments
+                    .iter()
+                    .map(|r| if r.enabled { INSTR_ROW_H } else { DISABLED_ROW_H })
+                    .sum::<f32>();
             } else if self.mode_generator {
                 h += SMALL_ROW_H;
             }
@@ -182,7 +216,8 @@ impl ClipChromePanel {
         self.node_count = 0;
     }
     pub fn is_dragging(&self) -> bool {
-        false
+        self.onset_slider.is_dragging()
+            || self.instrument_sens_sliders.iter().any(|s| s.is_dragging())
     }
     pub fn is_collapsed(&self) -> bool {
         self.is_collapsed
@@ -618,7 +653,15 @@ impl ClipChromePanel {
         }
         cy += PROGRESS_H;
 
-        // Detect button — runs analysis on the clip's file and places triggers.
+        // Detect / Re-detect button — runs analysis on the clip's file. While a
+        // run is in flight (progress bar shown) it reads "Detecting…".
+        let detect_label = if self.cached_detect_show {
+            "Detecting…"
+        } else if self.cached_has_analysis {
+            "Re-detect"
+        } else {
+            "Detect"
+        };
         self.detect_btn_id = tree.add_button(
             -1,
             cx,
@@ -635,11 +678,171 @@ impl ClipChromePanel {
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-            "Detect",
+            detect_label,
         ) as i32;
         cy += LOOP_BUTTON_H;
 
-        // Clear button — removes only this clip's own triggers.
+        // Quantize grid + onset row: quantize dropdown (left half), onset slider
+        // (right half). Both re-plan from the cache on change.
+        let half = (w - GAP) * 0.5;
+        self.quantize_dropdown_id = build_dropdown_trigger(
+            tree,
+            -1,
+            Rect::new(cx, cy + (QO_ROW_H - 18.0) * 0.5, half, 18.0),
+            &format!("Grid {}", self.cached_quantize_label),
+            SMALL_FONT_SIZE,
+        );
+        // Onset slider — the same widget the effect cards use, here mapping a
+        // bipolar ±ms compensation.
+        self.onset_slider.clear();
+        let onset_rect = Rect::new(cx + half + GAP, cy + (QO_ROW_H - 18.0) * 0.5, half, 18.0);
+        let onset_norm =
+            BitmapSlider::value_to_normalized(self.cached_onset_ms, ONSET_MIN_MS, ONSET_MAX_MS);
+        let onset_ids = BitmapSlider::build(
+            tree,
+            -1,
+            onset_rect,
+            Some("Onset"),
+            onset_norm,
+            &format!("{:+.0}ms", self.cached_onset_ms),
+            &SliderColors::default_slider(),
+            SMALL_FONT_SIZE,
+            34.0,
+        );
+        self.onset_slider.set_ids(onset_ids);
+        cy += QO_ROW_H;
+
+        // Per-instrument rows. Enabled rows show enable · name · sensitivity
+        // slider · count · target-layer dropdown; disabled rows collapse to a
+        // thin enable · name line.
+        self.instrument_enable_btn_ids.clear();
+        self.instrument_layer_btn_ids.clear();
+        for slider in self.instrument_sens_sliders.iter_mut() {
+            slider.clear();
+        }
+        for (i, inst) in self.cached_instruments.clone().iter().enumerate() {
+            let row_h = if inst.enabled { INSTR_ROW_H } else { DISABLED_ROW_H };
+            let toggle_h = (row_h - 2.0).max(10.0);
+            let toggle_y = cy + (row_h - toggle_h) * 0.5;
+
+            // Enable toggle (square, filled when on).
+            let en_base = if inst.enabled { LOOP_ON_COLOR } else { LOOP_OFF_COLOR };
+            let en_id = tree.add_button(
+                -1,
+                cx,
+                toggle_y,
+                TOGGLE_W,
+                toggle_h,
+                UIStyle {
+                    bg_color: en_base,
+                    hover_bg_color: lighten(en_base, 10),
+                    pressed_bg_color: darken(en_base, 10),
+                    text_color: color::TEXT_PRIMARY_C32,
+                    font_size: color::FONT_CAPTION,
+                    corner_radius: color::SMALL_RADIUS,
+                    text_align: TextAlign::Center,
+                    ..UIStyle::default()
+                },
+                if inst.enabled { "\u{2713}" } else { "" },
+            ) as i32;
+            self.instrument_enable_btn_ids.push(en_id);
+
+            let after_toggle = cx + TOGGLE_W + GAP;
+
+            if !inst.enabled {
+                // Collapsed line: just the dimmed name.
+                tree.add_label(
+                    -1,
+                    after_toggle,
+                    cy,
+                    w - TOGGLE_W - GAP,
+                    row_h,
+                    &inst.label,
+                    UIStyle {
+                        text_color: color::TEXT_DIMMED_C32,
+                        font_size: SMALL_FONT_SIZE,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                );
+                self.instrument_layer_btn_ids.push(-1);
+                cy += row_h;
+                continue;
+            }
+
+            // Layout: name | slider | count | layer dropdown.
+            let name_w = 46.0;
+            let layer_w = 64.0;
+            let count_w = 24.0;
+            let slider_w = (w - TOGGLE_W - GAP - name_w - count_w - layer_w - GAP * 3.0).max(30.0);
+            let mut x = after_toggle;
+
+            tree.add_label(
+                -1,
+                x,
+                cy,
+                name_w,
+                row_h,
+                &inst.label,
+                UIStyle {
+                    text_color: color::TEXT_PRIMARY_C32,
+                    font_size: SMALL_FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            x += name_w + GAP;
+
+            // Sensitivity slider (no label cell — the row name labels it).
+            let sens_norm = inst.sensitivity.clamp(0.0, 1.0);
+            let sens_ids = BitmapSlider::build(
+                tree,
+                -1,
+                Rect::new(x, cy, slider_w, row_h),
+                None,
+                sens_norm,
+                "",
+                &SliderColors::default_slider(),
+                SMALL_FONT_SIZE,
+                0.0,
+            );
+            if let Some(slot) = self.instrument_sens_sliders.get_mut(i) {
+                slot.set_ids(sens_ids);
+            }
+            x += slider_w + GAP;
+
+            // Count of placed triggers.
+            tree.add_label(
+                -1,
+                x,
+                cy,
+                count_w,
+                row_h,
+                &inst.count.to_string(),
+                UIStyle {
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: color::FONT_CAPTION,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                },
+            );
+            x += count_w + GAP;
+
+            // Target-layer dropdown.
+            let layer_id = build_dropdown_trigger(
+                tree,
+                -1,
+                Rect::new(x, cy + (row_h - 16.0) * 0.5, layer_w, 16.0),
+                &inst.layer_label,
+                color::FONT_CAPTION,
+            );
+            self.instrument_layer_btn_ids.push(layer_id);
+
+            cy += row_h;
+        }
+
+        // Clear button — removes only this clip's own triggers. Sits at the
+        // bottom as a secondary action.
         self.clear_triggers_btn_id = tree.add_button(
             -1,
             cx,
@@ -659,104 +862,6 @@ impl ClipChromePanel {
             "Clear Triggers",
         ) as i32;
         cy += LOOP_BUTTON_H;
-
-        // Quantize toggle.
-        let q_base = if self.cached_quantize_on {
-            LOOP_ON_COLOR
-        } else {
-            LOOP_OFF_COLOR
-        };
-        self.quantize_btn_id = tree.add_button(
-            -1,
-            cx,
-            cy,
-            w,
-            LOOP_BUTTON_H,
-            UIStyle {
-                bg_color: q_base,
-                hover_bg_color: lighten(q_base, 10),
-                pressed_bg_color: darken(q_base, 10),
-                text_color: color::TEXT_PRIMARY_C32,
-                font_size: SMALL_FONT_SIZE,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            if self.cached_quantize_on {
-                "Quantize ON"
-            } else {
-                "Quantize OFF"
-            },
-        ) as i32;
-        cy += LOOP_BUTTON_H;
-
-        // Per-instrument rows: name · enable · sensitivity. Buttons re-plan live.
-        self.instrument_enable_btn_ids.clear();
-        self.instrument_sens_btn_ids.clear();
-        let name_w = (w * 0.45).max(20.0);
-        let enable_w = (w * 0.22).max(16.0);
-        let sens_w = (w - name_w - enable_w - GAP * 2.0).max(16.0);
-        let btn_h = (INSTR_ROW_H - PAD_V).max(12.0);
-        for inst in self.cached_instruments.clone().iter() {
-            tree.add_label(
-                -1,
-                cx,
-                cy,
-                name_w,
-                INSTR_ROW_H,
-                &inst.label,
-                UIStyle {
-                    text_color: if inst.enabled {
-                        color::TEXT_PRIMARY_C32
-                    } else {
-                        color::TEXT_DIMMED_C32
-                    },
-                    font_size: SMALL_FONT_SIZE,
-                    text_align: TextAlign::Left,
-                    ..UIStyle::default()
-                },
-            );
-            let en_base = if inst.enabled { LOOP_ON_COLOR } else { LOOP_OFF_COLOR };
-            let en_id = tree.add_button(
-                -1,
-                cx + name_w + GAP,
-                cy + (INSTR_ROW_H - btn_h) * 0.5,
-                enable_w,
-                btn_h,
-                UIStyle {
-                    bg_color: en_base,
-                    hover_bg_color: lighten(en_base, 10),
-                    pressed_bg_color: darken(en_base, 10),
-                    text_color: color::TEXT_PRIMARY_C32,
-                    font_size: SMALL_FONT_SIZE,
-                    corner_radius: color::SMALL_RADIUS,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
-                },
-                if inst.enabled { "On" } else { "Off" },
-            ) as i32;
-            let sens_id = tree.add_button(
-                -1,
-                cx + name_w + GAP + enable_w + GAP,
-                cy + (INSTR_ROW_H - btn_h) * 0.5,
-                sens_w,
-                btn_h,
-                UIStyle {
-                    bg_color: BPM_BTN_COLOR,
-                    hover_bg_color: BPM_BTN_HOVER,
-                    pressed_bg_color: darken(BPM_BTN_COLOR, 10),
-                    text_color: color::TEXT_PRIMARY_C32,
-                    font_size: SMALL_FONT_SIZE,
-                    corner_radius: color::SMALL_RADIUS,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
-                },
-                sensitivity_label(inst.sensitivity),
-            ) as i32;
-            self.instrument_enable_btn_ids.push(en_id);
-            self.instrument_sens_btn_ids.push(sens_id);
-            cy += INSTR_ROW_H;
-        }
 
         cy
     }
@@ -848,23 +953,20 @@ impl ClipChromePanel {
         }
     }
 
-    /// Set the detection config the rows render from. Called before build (with
-    /// `set_mode`) so the row count drives layout height. The actual values
-    /// (enabled/sensitivity/quantize) are read by `build`.
-    pub fn set_detection(
-        &mut self,
-        config: &manifold_core::audio_clip_detection::DetectionConfig,
-    ) {
-        self.cached_quantize_on = config.quantize_on;
-        self.cached_instruments = config
-            .instruments
-            .iter()
-            .map(|i| DetectInstrumentRow {
-                label: format!("{:?}", i.trigger_type),
-                enabled: i.enabled,
-                sensitivity: i.sensitivity,
-            })
-            .collect();
+    /// Set the detection view the rows render from. Called before build (with
+    /// `set_mode`) so the row count drives layout height. The view is assembled
+    /// in `state_sync` from the clip's config + cached counts + layer names.
+    pub fn set_detection(&mut self, view: &DetectionView) {
+        self.cached_quantize_label = view.quantize_label.clone();
+        self.cached_onset_ms = view.onset_ms;
+        self.cached_has_analysis = view.has_analysis;
+        self.cached_instruments = view.instruments.clone();
+        // Keep one sensitivity drag-state per instrument row. Node ids are
+        // (re)bound in `build`; here we only size the vec and set the 0..1 range.
+        self.instrument_sens_sliders
+            .resize_with(self.cached_instruments.len(), || {
+                SliderDragState::with_range(0.0, 1.0, false)
+            });
     }
 
     /// Update the detection status line + progress bar in place (no rebuild).
@@ -937,14 +1039,15 @@ impl ClipChromePanel {
         if id == self.warp_toggle_btn_id && self.mode_audio {
             return vec![PanelAction::ClipWarpToggled];
         }
-        if id == self.detect_btn_id && self.mode_audio {
+        // Detect is inert while a run is in flight (label reads "Detecting…").
+        if id == self.detect_btn_id && self.mode_audio && !self.cached_detect_show {
             return vec![PanelAction::ClipDetectClicked];
         }
         if id == self.clear_triggers_btn_id && self.mode_audio {
             return vec![PanelAction::ClipClearTriggersClicked];
         }
-        if id == self.quantize_btn_id && self.mode_audio {
-            return vec![PanelAction::ClipDetectQuantizeToggled];
+        if id == self.quantize_dropdown_id && self.mode_audio {
+            return vec![PanelAction::ClipDetectQuantizeClicked];
         }
         if self.mode_audio {
             if let Some(idx) = self
@@ -954,8 +1057,12 @@ impl ClipChromePanel {
             {
                 return vec![PanelAction::ClipDetectInstrumentToggled(idx)];
             }
-            if let Some(idx) = self.instrument_sens_btn_ids.iter().position(|&b| b == id) {
-                return vec![PanelAction::ClipDetectSensitivityCycled(idx)];
+            if let Some(idx) = self
+                .instrument_layer_btn_ids
+                .iter()
+                .position(|&b| b == id)
+            {
+                return vec![PanelAction::ClipDetectLayerClicked(idx)];
             }
         }
         if id == self.loop_toggle_btn_id && self.mode_video {
@@ -964,19 +1071,61 @@ impl ClipChromePanel {
         Vec::new()
     }
 
-    pub fn handle_pointer_down(&mut self, _node_id: u32, _pos: Vec2) -> Vec<PanelAction> {
+    /// Begin a sensitivity/onset slider drag if the press hit a track.
+    pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
+        if !self.mode_audio {
+            return Vec::new();
+        }
+        // Onset slider.
+        if self.onset_slider.try_start_drag(node_id, pos.x).is_some() {
+            return Vec::new();
+        }
+        // Per-instrument sensitivity sliders.
+        for slider in self.instrument_sens_sliders.iter_mut() {
+            if slider.try_start_drag(node_id, pos.x).is_some() {
+                return Vec::new();
+            }
+        }
         Vec::new()
     }
 
-    pub fn handle_drag(&mut self, _pos: Vec2, _tree: &mut UITree) -> Vec<PanelAction> {
+    /// Continue an active slider drag — visual feedback only. The re-plan fires
+    /// once on release (see `handle_drag_end`), so dragging never churns the
+    /// timeline or spams the undo stack.
+    pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
+        if self.onset_slider.is_dragging() {
+            self.onset_slider
+                .apply_drag(pos.x, tree, &|v| format!("{v:+.0}ms"));
+            return Vec::new();
+        }
+        for slider in self.instrument_sens_sliders.iter_mut() {
+            if slider.is_dragging() {
+                slider.apply_drag(pos.x, tree, &|_| String::new());
+                return Vec::new();
+            }
+        }
         Vec::new()
     }
 
+    /// Commit a slider drag on release: emit the change so the inspector records
+    /// the config edit and re-plans from the cache (one undo step).
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
+        if self.onset_slider.end_drag() {
+            return vec![PanelAction::ClipDetectOnsetChanged(
+                self.onset_slider.cached_value(),
+            )];
+        }
+        for (i, slider) in self.instrument_sens_sliders.iter_mut().enumerate() {
+            if slider.end_drag() {
+                return vec![PanelAction::ClipDetectSensitivityChanged(
+                    i,
+                    slider.cached_value(),
+                )];
+            }
+        }
         Vec::new()
     }
 
-    /// Coarse sensitivity label for the per-instrument cycle button.
     pub fn detect_instruments(&self) -> &[DetectInstrumentRow] {
         &self.cached_instruments
     }
@@ -1021,6 +1170,32 @@ mod tests {
     use super::*;
     use crate::tree::UITree;
 
+    /// Build a `DetectionView` from a config (test stand-in for state_sync's
+    /// assembly — no counts, all rows route "Auto").
+    fn detection_view_from(
+        cfg: &manifold_core::audio_clip_detection::DetectionConfig,
+    ) -> DetectionView {
+        DetectionView {
+            quantize_label: manifold_core::audio_clip_detection::quantize_grid_label(
+                cfg.quantize_on,
+                cfg.quantize_step_beats,
+            ),
+            onset_ms: (cfg.onset_compensation.0 * 1000.0) as f32,
+            has_analysis: false,
+            instruments: cfg
+                .instruments
+                .iter()
+                .map(|i| DetectInstrumentRow {
+                    label: format!("{:?}", i.trigger_type),
+                    enabled: i.enabled,
+                    sensitivity: i.sensitivity,
+                    count: 0,
+                    layer_label: "Auto".to_string(),
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn build_clip_chrome_no_clip() {
         let mut tree = UITree::new();
@@ -1050,7 +1225,9 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = ClipChromePanel::new();
         panel.set_mode(true, false, false, true, false);
-        panel.set_detection(&manifold_core::audio_clip_detection::DetectionConfig::default());
+        let cfg = manifold_core::audio_clip_detection::DetectionConfig::default();
+        let view = detection_view_from(&cfg);
+        panel.set_detection(&view);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 600.0));
 
         // Audio mode exposes the clip-BPM button but no loop toggle.
@@ -1073,16 +1250,20 @@ mod tests {
         assert!(matches!(detect.as_slice(), [PanelAction::ClipDetectClicked]));
         let clear = panel.handle_click(panel.clear_triggers_btn_id as u32);
         assert!(matches!(clear.as_slice(), [PanelAction::ClipClearTriggersClicked]));
-        // Quantize toggle + per-instrument rows exist and fire indexed actions.
-        assert!(panel.quantize_btn_id >= 0);
-        let q = panel.handle_click(panel.quantize_btn_id as u32);
-        assert!(matches!(q.as_slice(), [PanelAction::ClipDetectQuantizeToggled]));
+        // Quantize dropdown opens its picker; per-instrument rows fire indexed actions.
+        assert!(panel.quantize_dropdown_id >= 0);
+        let q = panel.handle_click(panel.quantize_dropdown_id as u32);
+        assert!(matches!(q.as_slice(), [PanelAction::ClipDetectQuantizeClicked]));
         assert_eq!(panel.instrument_enable_btn_ids.len(), 9);
-        assert_eq!(panel.instrument_sens_btn_ids.len(), 9);
+        // Default config enables 4 drums → 4 sensitivity sliders + 4 layer dropdowns
+        // are built (disabled rows collapse to name + toggle only).
         let en = panel.handle_click(panel.instrument_enable_btn_ids[2] as u32);
         assert!(matches!(en.as_slice(), [PanelAction::ClipDetectInstrumentToggled(2)]));
-        let sn = panel.handle_click(panel.instrument_sens_btn_ids[4] as u32);
-        assert!(matches!(sn.as_slice(), [PanelAction::ClipDetectSensitivityCycled(4)]));
+        // The first enabled instrument's layer dropdown opens its picker.
+        let layer_id = panel.instrument_layer_btn_ids[0];
+        assert!(layer_id >= 0, "enabled row has a layer dropdown");
+        let ld = panel.handle_click(layer_id as u32);
+        assert!(matches!(ld.as_slice(), [PanelAction::ClipDetectLayerClicked(0)]));
     }
 
     #[test]
@@ -1130,8 +1311,34 @@ mod tests {
     }
 
     #[test]
-    fn is_dragging_always_false() {
+    fn is_dragging_false_when_idle() {
         let panel = ClipChromePanel::new();
+        assert!(!panel.is_dragging());
+    }
+
+    #[test]
+    fn sensitivity_drag_emits_change_on_release() {
+        let mut tree = UITree::new();
+        let mut panel = ClipChromePanel::new();
+        panel.set_mode(true, false, false, true, false);
+        let cfg = manifold_core::audio_clip_detection::DetectionConfig::default();
+        panel.set_detection(&detection_view_from(&cfg));
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 600.0));
+
+        // Grab the first enabled instrument's sensitivity slider track and drag.
+        let track = panel.instrument_sens_sliders[0]
+            .track_id()
+            .expect("enabled row has a slider");
+        let track_rect = tree.get_bounds(track);
+        let down = panel.handle_pointer_down(track, Vec2::new(track_rect.x, track_rect.y));
+        assert!(down.is_empty(), "press starts a drag, emits nothing");
+        assert!(panel.is_dragging());
+        // Release → one sensitivity-change action for instrument 0.
+        let up = panel.handle_drag_end(&mut tree);
+        assert!(matches!(
+            up.as_slice(),
+            [PanelAction::ClipDetectSensitivityChanged(0, _)]
+        ));
         assert!(!panel.is_dragging());
     }
 }

@@ -243,12 +243,21 @@ pub enum PanelAction {
     ClipDetectClicked,
     /// Audio clip: remove the triggers this clip produced.
     ClipClearTriggersClicked,
-    /// Audio clip: toggle detection quantize on/off (re-plans from cache).
-    ClipDetectQuantizeToggled,
     /// Audio clip: toggle whether instrument N is detected (re-plans from cache).
     ClipDetectInstrumentToggled(usize),
-    /// Audio clip: cycle instrument N's sensitivity Lo/Md/Hi (re-plans from cache).
-    ClipDetectSensitivityCycled(usize),
+    /// Audio clip: instrument N's sensitivity changed to this 0..1 value (drag
+    /// commit — re-plans from cache). Emitted on slider release, not per-tick.
+    ClipDetectSensitivityChanged(usize, f32),
+    /// Audio clip: onset compensation changed, in milliseconds (drag commit).
+    ClipDetectOnsetChanged(f32),
+    /// Audio clip: open the quantize-grid dropdown (anchored to the trigger).
+    ClipDetectQuantizeClicked,
+    /// Audio clip: open instrument N's target-layer dropdown (anchored to trigger).
+    ClipDetectLayerClicked(usize),
+    /// Audio clip: set the quantize grid (None = off; Some(beats) = on at step).
+    ClipDetectSetQuantize(Option<manifold_core::Beats>),
+    /// Audio clip: route instrument N to a layer (None = Auto / by-name).
+    ClipDetectSetLayer(usize, Option<manifold_core::LayerId>),
     ClipLoopToggle,
     ClipSlipSnapshot,
     ClipSlipChanged(f32),

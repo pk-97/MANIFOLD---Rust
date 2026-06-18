@@ -1285,15 +1285,61 @@ pub fn sync_inspector_data(
                 .set_mode(true, is_video, is_gen, is_audio, clip.is_looping);
             // Feed the detection rows before build so the row count drives layout.
             if is_audio {
+                use manifold_core::audio_clip_detection::{
+                    quantize_grid_label, DetectionConfig,
+                };
+                use manifold_core::types::LayerType;
+                use manifold_ui::panels::clip_chrome::{DetectInstrumentRow, DetectionView};
+
                 let default_cfg;
-                let cfg = match clip.audio_detection.as_ref() {
-                    Some(d) => &d.config,
+                let (cfg, detection) = match clip.audio_detection.as_ref() {
+                    Some(d) => (&d.config, Some(d)),
                     None => {
-                        default_cfg = manifold_core::audio_clip_detection::DetectionConfig::default();
-                        &default_cfg
+                        default_cfg = DetectionConfig::default();
+                        (&default_cfg, None)
                     }
                 };
-                ui.inspector.clip_chrome_mut().set_detection(cfg);
+
+                // Candidate routing layers (non-group) for the per-row dropdowns.
+                let candidates: Vec<(manifold_core::LayerId, String)> = project
+                    .timeline
+                    .layers
+                    .iter()
+                    .filter(|l| l.layer_type != LayerType::Group)
+                    .map(|l| (l.layer_id.clone(), l.name.clone()))
+                    .collect();
+
+                let instruments = cfg
+                    .instruments
+                    .iter()
+                    .map(|inst| {
+                        let count =
+                            detection.map_or(0, |d| d.count(inst.trigger_type));
+                        let layer_label = inst
+                            .target_layer
+                            .as_ref()
+                            .and_then(|id| {
+                                candidates.iter().find(|(lid, _)| lid == id).map(|(_, n)| n.clone())
+                            })
+                            .unwrap_or_else(|| "Auto".to_string());
+                        DetectInstrumentRow {
+                            label: format!("{:?}", inst.trigger_type),
+                            enabled: inst.enabled,
+                            sensitivity: inst.sensitivity,
+                            count,
+                            layer_label,
+                        }
+                    })
+                    .collect();
+
+                let view = DetectionView {
+                    quantize_label: quantize_grid_label(cfg.quantize_on, cfg.quantize_step_beats),
+                    onset_ms: (cfg.onset_compensation.0 * 1000.0) as f32,
+                    has_analysis: detection.is_some_and(|d| d.analysis.is_some()),
+                    instruments,
+                };
+                ui.inspector.clip_chrome_mut().set_detection(&view);
+                ui.set_clip_detect_layers(candidates);
             }
         } else {
             ui.inspector

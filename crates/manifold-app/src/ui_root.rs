@@ -113,6 +113,8 @@ pub enum DropdownContext {
     AudioSetupDevice,         // Audio Setup modal: capture input source
     AudioSendChannel(manifold_core::AudioSendId), // Audio Setup: a send's input channel
     LayerAudioSend(usize),                        // audio layer header: pick which send it feeds
+    ClipDetectQuantize,                           // audio clip inspector: detection quantize grid
+    ClipDetectLayer(usize),                       // audio clip inspector: instrument N target layer
 }
 
 /// A selectable entry in the Audio Setup source dropdown. The dropdown mixes the
@@ -266,6 +268,10 @@ pub struct UIRoot {
     /// Item-index → send-id map for the currently-open layer Send dropdown.
     /// Index 0 is "No send" (`None`); the rest map to a named send.
     layer_send_map: Vec<Option<manifold_core::AudioSendId>>,
+    /// Candidate routing layers (id + name) for the audio-clip detection
+    /// target-layer dropdowns. Refreshed by `state_sync` when an audio clip is
+    /// selected; read when an instrument's layer dropdown opens.
+    clip_detect_layers: Vec<(manifold_core::LayerId, String)>,
 
     // Inspector resize state
     pub inspector_resize_dragging: bool,
@@ -374,6 +380,7 @@ impl UIRoot {
             audio_setup_source_map: Vec::new(),
             audio_channel_item_map: Vec::new(),
             layer_send_map: Vec::new(),
+            clip_detect_layers: Vec::new(),
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
@@ -915,6 +922,16 @@ impl UIRoot {
         self.overlay_dirty = true;
     }
 
+    /// Cache the candidate target layers for the audio-clip detection layer
+    /// dropdowns. Set by `state_sync` when an audio clip is selected; read when
+    /// an instrument's layer dropdown opens.
+    pub fn set_clip_detect_layers(
+        &mut self,
+        layers: Vec<(manifold_core::LayerId, String)>,
+    ) {
+        self.clip_detect_layers = layers;
+    }
+
     /// Refresh the embedded-preset list surfaced into the Add pickers from the
     /// project snapshot. Change-gated by the embedded-preset fingerprint so the
     /// Vec rebuilds only when a fork / import / remove actually changed the set,
@@ -1260,6 +1277,26 @@ impl UIRoot {
                     .map(|m| DropdownItem::new(m.display_name()))
                     .collect();
                 self.open_dropdown_at(DropdownContext::BlendMode(*idx), items, trigger);
+                true
+            }
+            PanelAction::ClipDetectQuantizeClicked => {
+                let items: Vec<DropdownItem> =
+                    manifold_core::audio_clip_detection::quantize_grid_options()
+                        .iter()
+                        .map(|(label, _)| DropdownItem::new(label))
+                        .collect();
+                self.open_dropdown_at(DropdownContext::ClipDetectQuantize, items, trigger);
+                true
+            }
+            PanelAction::ClipDetectLayerClicked(idx) => {
+                // "Auto" (route by trigger name) first, then every candidate
+                // layer cached by state_sync.
+                let mut items = Vec::with_capacity(self.clip_detect_layers.len() + 1);
+                items.push(DropdownItem::new("Auto"));
+                for (_, name) in &self.clip_detect_layers {
+                    items.push(DropdownItem::new(name));
+                }
+                self.open_dropdown_at(DropdownContext::ClipDetectLayer(*idx), items, trigger);
                 true
             }
             PanelAction::AudioSendClicked(idx) => {
@@ -1866,6 +1903,20 @@ impl UIRoot {
                 .get(index)
                 .cloned()
                 .map(|send_id| PanelAction::SetLayerAudioSend(layer_idx, send_id)),
+            DropdownContext::ClipDetectQuantize => {
+                manifold_core::audio_clip_detection::quantize_grid_options()
+                    .get(index)
+                    .map(|(_, step)| PanelAction::ClipDetectSetQuantize(*step))
+            }
+            DropdownContext::ClipDetectLayer(inst_idx) => {
+                // Index 0 = "Auto" (None); the rest map to a cached layer.
+                let layer = if index == 0 {
+                    None
+                } else {
+                    self.clip_detect_layers.get(index - 1).map(|(id, _)| id.clone())
+                };
+                Some(PanelAction::ClipDetectSetLayer(inst_idx, layer))
+            }
             DropdownContext::CardContext(gpt) => {
                 // Label-matched: Copy/Paste are generator-only + conditional, so
                 // item indices shift — match the label, not a fixed position.
