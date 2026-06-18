@@ -38,6 +38,9 @@ pub struct ViewportClip {
     pub is_muted: bool,
     pub is_locked: bool,
     pub is_generator: bool,
+    /// An audio-layer clip. Renders distinctly (no video thumbnail); the hook
+    /// for in-clip waveform painting. See `docs/AUDIO_LAYER_DESIGN.md`.
+    pub is_audio: bool,
 }
 
 /// Which part of a clip was hit.
@@ -2679,6 +2682,7 @@ mod tests {
                 is_muted: false,
                 is_locked: false,
                 is_generator: false,
+                is_audio: false,
             },
             ViewportClip {
                 clip_id: "clip_002".into(),
@@ -2690,6 +2694,7 @@ mod tests {
                 is_muted: false,
                 is_locked: false,
                 is_generator: true,
+                is_audio: false,
             },
         ]
     }
@@ -2896,6 +2901,7 @@ mod tests {
             is_muted: false,
             is_locked: false,
             is_generator: false,
+            is_audio: false,
         }]);
         panel.build(&mut tree, &layout);
 

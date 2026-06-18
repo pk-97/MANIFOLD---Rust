@@ -708,6 +708,7 @@ mod tests {
             is_muted: false,
             is_locked: false,
             is_generator: false,
+            is_audio: false,
         }
     }
 

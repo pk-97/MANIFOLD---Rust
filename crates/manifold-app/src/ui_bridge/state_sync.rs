@@ -964,21 +964,7 @@ pub fn sync_project_data(
         for (i, layer) in project.timeline.layers.iter().enumerate() {
             for clip in &layer.clips {
                 let is_gen = layer.layer_type == LayerType::Generator;
-                let name = if is_gen {
-                    layer
-                        .gen_params()
-                        .map(|gp| {
-                            manifold_core::preset_type_registry::display_name(
-                                gp.generator_type(),
-                            )
-                            .to_string()
-                        })
-                        .unwrap_or_else(|| "Gen".to_string())
-                } else if !clip.video_clip_id.is_empty() {
-                    clip.video_clip_id.clone()
-                } else {
-                    "Clip".to_string()
-                };
+                let name = clip_display_name(layer, clip);
                 use manifold_ui::panels::viewport::ViewportClip;
                 let clip_color = manifold_ui::node::Color32::from_f32(
                     layer.layer_color.r,
@@ -996,6 +982,7 @@ pub fn sync_project_data(
                     is_muted: clip.is_muted,
                     is_locked: false,
                     is_generator: is_gen,
+                    is_audio: layer.is_audio(),
                 });
             }
         }
@@ -1012,6 +999,33 @@ pub fn sync_project_data(
     }
 }
 
+/// Display name for a timeline clip in the viewport: the generator's name, a
+/// ♪-prefixed file name for an audio clip, the video clip id, or a fallback.
+/// Shared by both clip-sync paths so they label clips identically.
+fn clip_display_name(
+    layer: &manifold_core::layer::Layer,
+    clip: &manifold_core::clip::TimelineClip,
+) -> String {
+    if layer.layer_type == LayerType::Generator {
+        layer
+            .gen_params()
+            .map(|gp| {
+                manifold_core::preset_type_registry::display_name(gp.generator_type()).to_string()
+            })
+            .unwrap_or_else(|| "Gen".to_string())
+    } else if clip.is_audio() {
+        let stem = std::path::Path::new(&clip.audio_file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        format!("\u{266A} {stem}") // ♪ <name>
+    } else if !clip.video_clip_id.is_empty() {
+        clip.video_clip_id.clone()
+    } else {
+        "Clip".to_string()
+    }
+}
+
 /// Lightweight per-frame clip position sync.
 /// Refreshes viewport.clips_by_layer from the live project model so that
 /// drag mutations (clip move, trim) are visible in the bitmap renderer.
@@ -1024,19 +1038,7 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
     for (i, layer) in project.timeline.layers.iter().enumerate() {
         let is_gen = layer.layer_type == LayerType::Generator;
         for clip in &layer.clips {
-            let name = if is_gen {
-                layer
-                    .gen_params()
-                    .map(|gp| {
-                        manifold_core::preset_type_registry::display_name(gp.generator_type())
-                            .to_string()
-                    })
-                    .unwrap_or_else(|| "Gen".to_string())
-            } else if !clip.video_clip_id.is_empty() {
-                clip.video_clip_id.clone()
-            } else {
-                "Clip".to_string()
-            };
+            let name = clip_display_name(layer, clip);
             let clip_color = manifold_ui::node::Color32::from_f32(
                 layer.layer_color.r,
                 layer.layer_color.g,
@@ -1053,6 +1055,7 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
                 is_muted: clip.is_muted,
                 is_locked: false,
                 is_generator: is_gen,
+                is_audio: layer.is_audio(),
             });
         }
     }
