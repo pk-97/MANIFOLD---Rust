@@ -46,10 +46,6 @@ pub struct TriggerRoute {
     pub target_layer: Option<LayerId>,
     /// 0..1. High sensitivity = low transient threshold (more onsets fire).
     pub sensitivity: f32,
-    /// Quantize the fire to a beat grid. `None` = off (tightest latency, the
-    /// default); `Some(step)` = snap to the next multiple of `step` beats.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quantize: Option<Beats>,
     /// How long the fired one-shot clip holds. A transient has no note-off, so
     /// the fire length is fixed here rather than by a release event.
     pub one_shot_beats: Beats,
@@ -57,14 +53,14 @@ pub struct TriggerRoute {
 
 impl TriggerRoute {
     /// A new route reading `source`, disabled by default (the user enables a row
-    /// once they've pointed it at a layer), mid sensitivity, quantize off.
+    /// once they've pointed it at a layer), mid sensitivity. Fires snap to the
+    /// project quantize grid (the same setting MIDI clip-launch uses).
     pub fn new(source: AudioBand) -> Self {
         Self {
             enabled: false,
             source,
             target_layer: None,
             sensitivity: 0.5,
-            quantize: None,
             one_shot_beats: Beats(DEFAULT_ONE_SHOT_BEATS),
         }
     }
@@ -96,7 +92,6 @@ mod tests {
         assert_eq!(r.source, AudioBand::Full);
         assert!(r.target_layer.is_none());
         assert_eq!(r.sensitivity, 0.5);
-        assert!(r.quantize.is_none());
     }
 
     #[test]

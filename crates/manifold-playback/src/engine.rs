@@ -117,6 +117,10 @@ pub struct PlaybackEngine {
     // Live clip manager (MIDI phantom clips)
     live_clip_manager: Option<LiveClipManager>,
 
+    // Live audio trigger edge-detection state (per-route armed flags). Drives
+    // one-shot fires from incoming audio transients each tick.
+    live_trigger_state: crate::live_trigger::LiveTriggerState,
+
     // Compositor
     compositor_dirty_deadline: f64,
 
@@ -220,6 +224,7 @@ impl PlaybackEngine {
             scheduler: ClipScheduler::new(),
 
             live_clip_manager: None,
+            live_trigger_state: crate::live_trigger::LiveTriggerState::default(),
             compositor_dirty_deadline: 0.0,
             sync_clips_dirty: false,
             live_external_tempo: None,
@@ -687,6 +692,14 @@ impl PlaybackEngine {
         };
         if live_activated {
             self.sync_clips_dirty = true;
+        }
+
+        // 3b. Live audio triggers — fire one-shot clips from incoming transients
+        //     and expire elapsed ones, before the sync below picks up the new
+        //     slots (same-frame, matching the MIDI activation above). Uses the
+        //     audio snapshot set by the content thread before this tick.
+        if self.tick_audio_triggers(ctx.realtime_now.0) {
+            self.mark_compositor_dirty(ctx.realtime_now);
         }
 
         // 4. Sync clips to current time (start/stop as needed).
@@ -1265,6 +1278,67 @@ impl PlaybackEngine {
             self,
             realtime_now,
         );
+    }
+
+    /// Evaluate live audio triggers against the latest audio snapshot, fire any
+    /// one-shot clips, and expire one-shots whose length has elapsed. Returns
+    /// true if the live-slot set changed this tick (caller marks dirty + sync).
+    ///
+    /// Called from `tick_playing` after modulation, so it reads the same fresh
+    /// snapshot. Stopped-transport triggering is intentionally not handled here
+    /// (one-shot expiry is beat-based and the clock is frozen when stopped).
+    fn tick_audio_triggers(&mut self, realtime_now: f64) -> bool {
+        if self.project.is_none() || self.live_clip_manager.is_none() {
+            return false;
+        }
+
+        // 1. Pure decision — which routes fired this tick (immutable reads).
+        let fires = {
+            let setup = &self.project.as_ref().unwrap().audio_setup;
+            if setup.sends.iter().any(|s| s.has_active_triggers()) {
+                self.live_trigger_state.evaluate(&self.audio_snapshot, setup)
+            } else {
+                Vec::new()
+            }
+        };
+
+        // 2. Expire elapsed one-shots (no host needed; stop renderers here).
+        let current_beat = self.current_beat as f32;
+        let expired = self
+            .live_clip_manager
+            .as_mut()
+            .unwrap()
+            .expire_due_oneshots(current_beat);
+        for (_, clip_id) in &expired {
+            PlaybackEngine::stop_clip(self, clip_id);
+            self.stopped_this_tick.push(clip_id.clone());
+        }
+
+        if fires.is_empty() {
+            return !expired.is_empty();
+        }
+
+        // 3. Fire. Borrow split (mirrors `tick_midi_input`): raw pointers to
+        //    project + live_clip_manager free `self` to act as &dyn LiveClipHost.
+        //    SAFETY: the host methods fire_layer_oneshot calls only read state or
+        //    mutate fields distinct from project / live_clip_manager.
+        let project = self.project.as_mut().unwrap() as *mut manifold_core::project::Project;
+        let lcm = self.live_clip_manager.as_mut().unwrap()
+            as *mut crate::live_clip_manager::LiveClipManager;
+        let project_ref = unsafe { &mut *project };
+        let lcm_ref = unsafe { &mut *lcm };
+        for req in &fires {
+            if let Some(layer_index) = resolve_trigger_layer(project_ref, req) {
+                lcm_ref.fire_layer_oneshot(
+                    project_ref,
+                    self,
+                    layer_index,
+                    req.one_shot_beats,
+                    realtime_now,
+                );
+            }
+        }
+        true
     }
 
     // ─── Live external tempo ───
@@ -2079,6 +2153,28 @@ impl PlaybackEngine {
 
         Some(prewarm_set)
     }
+}
+
+/// Resolve a live audio [`FireRequest`](crate::live_trigger::FireRequest) to a
+/// layer index: the explicit `target_layer` when set, else auto-route by the
+/// send's label (a "Kick" send finds a case-insensitively matching layer name).
+/// Returns `None` when nothing matches — the fire is then skipped.
+fn resolve_trigger_layer(
+    project: &manifold_core::project::Project,
+    req: &crate::live_trigger::FireRequest,
+) -> Option<i32> {
+    if let Some(layer_id) = &req.target_layer {
+        return project
+            .timeline
+            .layer_index_for_id(layer_id)
+            .map(|i| i as i32);
+    }
+    project
+        .timeline
+        .layers
+        .iter()
+        .find(|l| l.name.eq_ignore_ascii_case(&req.send_label))
+        .map(|l| l.index)
 }
 
 // ─── LiveClipHost impl for PlaybackEngine ───────────────────────────────────

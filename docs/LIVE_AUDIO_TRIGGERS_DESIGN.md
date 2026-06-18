@@ -8,8 +8,9 @@ Created 2026-06-18.
 
 ## 0. CURRENT POSITION (read first, update last)
 
-- **Done:** Phase 0 (setup). Phase 1 (core `TriggerRoute` + `AudioSend.triggers`).
-- **Next action:** Phase 2 — engine evaluator + `LiveClipManager` one-shot fire.
+- **Done:** Phase 0 (setup). Phase 1 (core). Phase 2 (engine path: evaluator + one-shot
+  fire + expiry, wired into `tick_playing`; 5 evaluator + 4 sink tests; clippy clean).
+- **Next action:** Phase 3 — `SetAudioSendTriggersCommand` through EditingService.
 
 ## 1. What this is
 
@@ -44,8 +45,14 @@ no BPM — just edge-detect the transient that's already computed and fire a cli
 3. **Routes are per-send, edited under the scope** in the Audio Setup modal (not a global
    table). The modal is the right home — the scope already draws the transient ticks you
    trigger on. A `⚡` on each send row lights when it has active routes.
-4. **Quantize is opt-in, off by default** (off = tightest ~85 ms latency; on = snap to grid,
-   adds up to one grid step of lag). Reuse the quantize-grid options from clip detection.
+4. **Quantize = the project quantize_mode**, reused verbatim from the MIDI clip-launch path
+   (Off/¼/Beat/Bar). REVISED from a per-route grid: audio fires pass
+   `event_absolute_tick = get_current_absolute_tick()` + `midi_note = -1` into the *same*
+   proven `trigger_live_clip` path MIDI uses, so there is zero new timing math and no
+   tick-domain risk (a timing bug becomes the show). The per-route `quantize` field was
+   dropped. Stopped-transport live triggering is deferred (beat-based expiry needs a running
+   clock); v1 fires in `tick_playing` — which is exactly when you perform (transport follows
+   Link/MIDI clock from the incoming music).
 5. **Auto-route by name** — a send named "Kick" routes to a layer named "Kick" (reuse the
    name-match idea from `percussion` auto-route). Explicit routes override.
 
@@ -68,19 +75,28 @@ pub struct TriggerRoute {
     pub source: AudioBand,            // Full = "Whole"; Low/Mid/High = mix split
     pub target_layer: Option<LayerId>,// None = auto-route by name
     pub sensitivity: f32,             // 0..1 → transient fire threshold
-    pub quantize: Option<Beats>,      // None = off (default)
-    pub one_shot_beats: Beats,        // fire length
+    pub one_shot_beats: Beats,        // fire length (quantize = project quantize_mode)
 }
 ```
 Reuse `AudioFeature{Transients, band}.extract(&SendFeatures)` to read the impulse — do not
 re-index `bands` by hand.
 
-### Evaluator (Phase 2) — the only real risk
-Edge-detect on the decaying impulse with a per-route refractory. Lesson from
-`[[audio-onset-detector]]`: you MUST fall below a re-arm floor (+ a min-gap) before firing
-again, or a single decaying impulse machine-guns. The detector is already solved upstream;
-this is just arm/fire/re-arm on its output. State (armed flag, last-fire beat) lives in the
-evaluator (runtime, content thread), keyed by (send_id, source) — NOT in the serialized model.
+### Evaluator (Phase 2) — `live_trigger.rs`, `LiveTriggerState`
+Pure edge-detection on the impulse: fire on the rising edge above the route threshold, then
+re-arm only once the impulse falls below `threshold * REARM_RATIO`. The upstream detector
+already enforces one-impulse-per-onset (its own ~106 ms refractory, `[[audio-onset-detector]]`),
+so the evaluator needs no time/beat refractory — just the arm flag prevents multi-firing on a
+single impulse's plateau. Tempo-independent. State (armed flag) is runtime, content-thread,
+keyed by `(send_id, source)` — NOT serialized. `evaluate(&snapshot, &audio_setup) -> Vec<FireRequest>`
+is a pure decision (unit-tested without the engine); the engine resolves each `FireRequest`'s
+layer + calls the fire sink.
+
+### Sink (Phase 2) — `LiveClipManager::fire_layer_oneshot`
+Resolves the target layer's content (`resolve_layer_live_content`: generator vs first
+`source_clip_id`, shared with the MIDI from-layer path — no copy-paste) and calls the existing
+`trigger_live_{clip,generator_clip}`. A new per-clip expiry map (`end_beat`, layer) ends the
+one-shot when `current_beat` passes its end — the only state MIDI doesn't already have, since a
+transient has no NoteOff. Engine runs expiry + fire in `tick_playing` after modulation eval.
 
 ## 5. Phase checklist (tick + commit as you go)
 
@@ -88,10 +104,14 @@ evaluator (runtime, content thread), keyed by (send_id, source) — NOT in the s
 - [x] **Phase 1 — Core.** `TriggerRoute` (`audio_trigger.rs`) + `AudioSend.triggers`
       (serde default/skip-empty) + `has_active_triggers`; sensitivity→threshold mapping;
       reuse `AudioFeature::extract` to read the impulse; 4 unit tests pass; clippy clean.
-- [ ] **Phase 2 — Engine path.** Trigger evaluator (arm/fire/re-arm + refractory) in
-      manifold-playback reading the per-send snapshot; `LiveClipManager` one-shot fire
-      (refactor shared clip-creation out of `trigger_live_clip`). Prove with a hardcoded
-      route + `println!` on a real stem before any UI. `cargo test -p manifold-playback --lib`.
+- [x] **Phase 2 — Engine path.** `live_trigger.rs` `LiveTriggerState::evaluate` (pure
+      edge-detect → `FireRequest`); `LiveClipManager::fire_layer_oneshot` (reuses the MIDI
+      trigger primitives via shared `resolve_layer_live_content`, also refactored into the
+      MIDI from-layer path — no copy-paste) + `expire_due_oneshots`; engine
+      `tick_audio_triggers` (borrow-split fire + expiry) wired into `tick_playing` step 3b;
+      `resolve_trigger_layer` (explicit + auto-route-by-name). 5 evaluator + 4 sink tests;
+      full playback suite (103+18) + clippy clean. **Runtime verification on a real stem is
+      still pending** (needs the app; can't run headless here).
 - [ ] **Phase 3 — Editing command.** `SetAudioSendTriggersCommand` through EditingService
       (mirror `SetClipDetectionConfigCommand`). Test.
 - [ ] **Phase 4 — App wiring.** `ContentCommand` variant + dispatch; auto-route-by-name on

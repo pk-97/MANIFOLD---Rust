@@ -7,7 +7,9 @@ use manifold_core::project::Project;
 use manifold_core::tempo::TempoMapConverter;
 use manifold_core::video::VideoClip;
 
-use crate::live_clip_manager::{LiveClipHost, LiveClipManager};
+use crate::live_clip_manager::{
+    LayerLiveContent, LiveClipHost, LiveClipManager, resolve_layer_live_content,
+};
 
 /// Callback type for clip launch events.
 /// Args: midi_note, video_clip_id, layer_index, start_time, in_point
@@ -359,13 +361,14 @@ impl ClipLauncher {
             None => return false,
         };
 
-        // Check generator path
-        let generator_type = project
-            .timeline
-            .layers
-            .get(layer_index as usize)
-            .map(|l| l.generator_type().clone())
-            .unwrap_or(PresetTypeId::NONE);
+        // Resolve what this layer fires (generator vs video folder vs nothing) —
+        // shared with the audio one-shot path so the rule lives in one place.
+        let (generator_type, source_clip_ids) = match resolve_layer_live_content(project, layer_index)
+        {
+            LayerLiveContent::Generator(g) => (g, Vec::new()),
+            LayerLiveContent::Video(ids) => (PresetTypeId::NONE, ids),
+            LayerLiveContent::Empty => return false,
+        };
 
         if generator_type != PresetTypeId::NONE {
             let bpm = project.settings.bpm;
@@ -433,17 +436,7 @@ impl ClipLauncher {
             return true;
         }
 
-        let source_clip_ids: Vec<String> = project
-            .timeline
-            .layers
-            .get(layer_index as usize)
-            .map(|l| l.source_clip_ids.clone())
-            .unwrap_or_default();
-
-        if source_clip_ids.is_empty() {
-            return false;
-        }
-
+        // `source_clip_ids` is non-empty here — the Video arm guaranteed it.
         // Select a random clip from the layer's folder
         let video_clip_id = match Self::select_random_clip(
             &mut self.last_triggered_clip_id,

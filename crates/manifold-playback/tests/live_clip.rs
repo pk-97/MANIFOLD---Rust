@@ -458,6 +458,76 @@ fn notify_clip_stopped_removes_only_clip_id() {
     assert!(!mgr.is_live_slot_clip(&clip.id)); // but clip ID removed from tracking set
 }
 
+// ─── Audio one-shot fire + expiry ───
+
+#[test]
+fn fire_oneshot_on_video_layer_creates_slot_and_tracks_expiry() {
+    let mut project = make_project();
+    project.timeline.layers[0].source_clip_ids = vec!["clipA".into()];
+    let host = MockHost::new(); // beat 0, tick 0, 120 BPM, quantize Beat
+    let mut mgr = LiveClipManager::new();
+
+    let clip = mgr.fire_layer_oneshot(&mut project, &host, 0, Beats(1.0), 0.0);
+    let clip = clip.expect("video layer fires");
+
+    assert_eq!(mgr.live_slots().len(), 1);
+    assert!(mgr.is_live_slot_clip(&clip.id));
+    // 1 beat one-shot at 120 BPM, snapped to the beat grid → ends at beat 1.0.
+    assert!(mgr.expire_due_oneshots(0.5).is_empty(), "not due yet");
+    assert_eq!(mgr.live_slots().len(), 1);
+}
+
+#[test]
+fn expire_due_oneshot_ends_the_slot() {
+    let mut project = make_project();
+    project.timeline.layers[0].source_clip_ids = vec!["clipA".into()];
+    let host = MockHost::new();
+    let mut mgr = LiveClipManager::new();
+
+    let clip = mgr
+        .fire_layer_oneshot(&mut project, &host, 0, Beats(1.0), 0.0)
+        .unwrap();
+
+    let ended = mgr.expire_due_oneshots(1.0);
+    assert_eq!(ended, vec![(0, clip.id.clone())]);
+    assert_eq!(mgr.live_slots().len(), 0);
+    assert!(!mgr.is_live_slot_clip(&clip.id));
+}
+
+#[test]
+fn fire_oneshot_on_empty_layer_returns_none() {
+    let mut project = make_project(); // layers have no source_clip_ids
+    let host = MockHost::new();
+    let mut mgr = LiveClipManager::new();
+    assert!(
+        mgr.fire_layer_oneshot(&mut project, &host, 0, Beats(1.0), 0.0)
+            .is_none()
+    );
+    assert_eq!(mgr.live_slots().len(), 0);
+}
+
+#[test]
+fn retrigger_drops_old_oneshot_expiry_so_it_cannot_end_new_slot() {
+    let mut project = make_project();
+    project.timeline.layers[0].source_clip_ids = vec!["clipA".into()];
+    let host = MockHost::new();
+    let mut mgr = LiveClipManager::new();
+
+    let first = mgr
+        .fire_layer_oneshot(&mut project, &host, 0, Beats(1.0), 0.0)
+        .unwrap();
+    // Retrigger the same layer before the first expires.
+    let second = mgr
+        .fire_layer_oneshot(&mut project, &host, 0, Beats(1.0), 0.1)
+        .unwrap();
+    assert_ne!(first.id, second.id);
+    assert_eq!(mgr.live_slots().len(), 1);
+
+    // The first one-shot's expiry must not end the (now-replaced) slot.
+    let ended = mgr.expire_due_oneshots(1.0);
+    assert_eq!(ended, vec![(0, second.id.clone())]);
+}
+
 // ─── Quantize math (pure functions) ───
 
 #[test]

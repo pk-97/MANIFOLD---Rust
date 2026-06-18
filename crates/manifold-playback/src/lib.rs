@@ -8,6 +8,7 @@ pub mod clip_launcher;
 pub mod engine;
 pub mod link_sync;
 pub mod live_clip_manager;
+pub mod live_trigger;
 pub mod midi_clock_sync;
 pub mod midi_import;
 pub mod midi_input;

@@ -51,6 +51,40 @@ struct PendingLiveLaunch {
 /// Port of C# ClipLauncher STALE_NOTE_OFF_THRESHOLD (lines 129-143).
 const NOTE_OFF_TIMING_GUARD: f64 = 0.005;
 
+/// Synthetic MIDI note used by audio-triggered one-shots. They have no real note
+/// and never receive a NoteOff (the one-shot ends by its own duration), so a
+/// sentinel keeps them out of the note-keyed MIDI tracking maps.
+const AUDIO_TRIGGER_NOTE: i32 = -1;
+
+/// What a layer plays when triggered live: a generator, a video clip from its
+/// folder, or nothing. Resolved from the layer's authoring state and shared by
+/// the MIDI from-layer path and the audio one-shot path so the "what does this
+/// layer fire" rule lives in exactly one place.
+pub(crate) enum LayerLiveContent {
+    Generator(PresetTypeId),
+    /// The layer's `source_clip_ids` (non-empty), newest-folder order.
+    Video(Vec<String>),
+    Empty,
+}
+
+/// Classify what `layer_index` fires when triggered live. A generator layer
+/// fires its generator; otherwise its video folder; otherwise nothing.
+pub(crate) fn resolve_layer_live_content(project: &Project, layer_index: i32) -> LayerLiveContent {
+    let Some(layer) = project.timeline.layers.get(layer_index as usize) else {
+        return LayerLiveContent::Empty;
+    };
+    let generator = layer.generator_type().clone();
+    if generator != PresetTypeId::NONE {
+        return LayerLiveContent::Generator(generator);
+    }
+    let ids = layer.source_clip_ids.clone();
+    if ids.is_empty() {
+        LayerLiveContent::Empty
+    } else {
+        LayerLiveContent::Video(ids)
+    }
+}
+
 /// Start-of-clip recording provenance snapshot.
 /// Port of C# TempoRecorder.RecordingClipStartInfo (lines 254-265).
 #[allow(dead_code)]
@@ -90,6 +124,11 @@ pub struct LiveClipManager {
     // Recording provenance: pending clip start snapshots.
     // Port of C# TempoRecorder.clipStarts (line 22-23).
     clip_starts: HashMap<ClipId, RecordingClipStartInfo>,
+
+    // Audio-trigger one-shots: clip_id → (layer_index, end_beat). A live audio
+    // trigger has no NoteOff, so the slot is ended here when the playhead passes
+    // `end_beat` (see `expire_due_oneshots`). MIDI slots never appear here.
+    oneshot_ends: HashMap<ClipId, (i32, f32)>,
 }
 
 impl LiveClipManager {
@@ -105,6 +144,7 @@ impl LiveClipManager {
             slot_creation_times: HashMap::with_capacity(8),
             slot_creation_sequences: HashMap::with_capacity(8),
             clip_starts: HashMap::with_capacity(8),
+            oneshot_ends: HashMap::with_capacity(8),
         }
     }
 
@@ -159,6 +199,7 @@ impl LiveClipManager {
         self.slot_creation_times.clear();
         self.slot_creation_sequences.clear();
         self.clip_starts.clear();
+        self.oneshot_ends.clear();
     }
 
     /// Clear live slots on large seek. Only clears when seek_delta > 1.0.
@@ -173,6 +214,7 @@ impl LiveClipManager {
             self.live_slots.clear();
             self.live_slots_list.clear();
             self.live_slot_clip_ids.clear();
+            self.oneshot_ends.clear();
         }
         if seek_delta > 1.0 {
             self.pending_by_clip_id.clear();
@@ -347,6 +389,9 @@ impl LiveClipManager {
             }
             self.live_slot_clip_ids.remove(&old_clip.id);
             self.live_slots_list.retain(|(l, _)| *l != layer_index);
+            // A retriggered layer drops the old one-shot's expiry so it can't
+            // later end the *new* slot on this layer.
+            self.oneshot_ends.remove(&old_clip.id);
             // Port of C# ActivateLiveSlotNow line 337.
             self.remove_recording_clip_start(&old_clip.id);
         }
@@ -623,6 +668,112 @@ impl LiveClipManager {
 
         self.last_live_trigger_at = realtime_now;
         Some(clip)
+    }
+
+    /// Fire a fixed-length one-shot on `layer_index` from a live audio trigger.
+    ///
+    /// Resolves the layer's content ([`resolve_layer_live_content`]) and reuses
+    /// the MIDI trigger primitives ([`Self::trigger_live_clip`] /
+    /// [`Self::trigger_live_generator_clip`]) — no duplicated clip creation. The
+    /// fire snaps to the project quantize grid exactly as a MIDI launch does
+    /// (`event_absolute_tick` = the host's current tick, no `beat_stamp`), so
+    /// there is no audio-specific timing math. Records the slot's end beat so
+    /// [`Self::expire_due_oneshots`] can close it (a transient has no NoteOff).
+    /// Returns `None` if the layer has no content to fire.
+    pub fn fire_layer_oneshot(
+        &mut self,
+        project: &mut Project,
+        host: &dyn LiveClipHost,
+        layer_index: i32,
+        one_shot_beats: Beats,
+        realtime_now: f64,
+    ) -> Option<TimelineClip> {
+        let bpm = host.get_bpm_at_beat(host.current_beat());
+        let spb = 60.0 / bpm.max(1.0);
+        let duration_seconds = (one_shot_beats.0 as f32 * spb).max(0.05);
+        let tick = host.get_current_absolute_tick();
+
+        let clip = match resolve_layer_live_content(project, layer_index) {
+            LayerLiveContent::Generator(generator) => self.trigger_live_generator_clip(
+                project,
+                host,
+                generator,
+                layer_index,
+                duration_seconds,
+                None,
+                tick,
+                realtime_now,
+                AUDIO_TRIGGER_NOTE,
+            )?,
+            LayerLiveContent::Video(ids) => {
+                let video_clip_id = ids.into_iter().next()?;
+                // Cap the one-shot to the source clip's own length when known so
+                // a long one-shot can't run past the media.
+                let clip_len = project
+                    .video_library
+                    .find_clip_by_id(&video_clip_id)
+                    .map(|c| c.duration)
+                    .unwrap_or(0.0);
+                let dur = if clip_len > 0.0 {
+                    duration_seconds.min(clip_len)
+                } else {
+                    duration_seconds
+                };
+                self.trigger_live_clip(
+                    project,
+                    host,
+                    video_clip_id,
+                    layer_index,
+                    dur,
+                    0.0,
+                    None,
+                    tick,
+                    realtime_now,
+                    AUDIO_TRIGGER_NOTE,
+                )?
+            }
+            LayerLiveContent::Empty => return None,
+        };
+
+        let end_beat = (clip.start_beat + clip.duration_beats).as_f32();
+        self.oneshot_ends
+            .insert(clip.id.clone(), (layer_index, end_beat));
+        Some(clip)
+    }
+
+    /// End every audio one-shot whose `end_beat` the playhead has passed.
+    /// Removes the live slot and returns `(layer_index, clip_id)` for each so the
+    /// engine can stop the renderer. MIDI slots are untouched (they never carry
+    /// an entry here).
+    pub fn expire_due_oneshots(&mut self, current_beat: f32) -> Vec<(i32, ClipId)> {
+        if self.oneshot_ends.is_empty() {
+            return Vec::new();
+        }
+        let due: Vec<ClipId> = self
+            .oneshot_ends
+            .iter()
+            .filter(|(_, (_, end_beat))| current_beat >= *end_beat)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        let mut ended = Vec::with_capacity(due.len());
+        for clip_id in due {
+            let Some((layer_index, _)) = self.oneshot_ends.remove(&clip_id) else {
+                continue;
+            };
+            // Only end it if this clip still owns the layer's slot — a retrigger
+            // may already have replaced it (and dropped this entry, but guard
+            // anyway).
+            if self.live_slots.get(&layer_index).map(|c| &c.id) == Some(&clip_id) {
+                self.live_slots.remove(&layer_index);
+                self.live_slots_list.retain(|(l, _)| *l != layer_index);
+                self.live_slot_clip_ids.remove(&clip_id);
+                self.slot_creation_times.remove(&layer_index);
+                self.slot_creation_sequences.remove(&layer_index);
+                ended.push((layer_index, clip_id));
+            }
+        }
+        ended
     }
 
     fn compute_trigger_snap_beat(
