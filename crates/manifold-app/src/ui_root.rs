@@ -184,6 +184,9 @@ pub struct UIRoot {
     pub layer_headers: LayerHeaderPanel,
     pub inspector: InspectorCompositePanel,
     pub viewport: TimelineViewportPanel,
+    /// Background-decoded per-clip waveform peaks for audio-layer clips, attached
+    /// to each `ViewportClip` on sync. See `docs/AUDIO_LAYER_DESIGN.md`.
+    pub audio_waveforms: crate::audio_waveform_cache::AudioWaveformCache,
     pub dropdown: DropdownPanel,
     pub browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel,
     pub audio_setup_panel: manifold_ui::panels::audio_setup_panel::AudioSetupPanel,
@@ -330,6 +333,7 @@ impl UIRoot {
             layer_headers: LayerHeaderPanel::new(),
             inspector: InspectorCompositePanel::new(),
             viewport: TimelineViewportPanel::new(),
+            audio_waveforms: crate::audio_waveform_cache::AudioWaveformCache::default(),
             dropdown: DropdownPanel::new(),
             browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel::new(),
             audio_setup_panel: manifold_ui::panels::audio_setup_panel::AudioSetupPanel::new(),

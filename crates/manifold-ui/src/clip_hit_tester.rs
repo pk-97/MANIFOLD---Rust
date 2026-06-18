@@ -196,6 +196,7 @@ mod tests {
             is_locked: false,
             is_generator: false,
             is_audio: false,
+            waveform: None,
         }
     }
 

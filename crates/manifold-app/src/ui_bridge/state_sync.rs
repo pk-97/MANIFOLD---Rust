@@ -983,6 +983,11 @@ pub fn sync_project_data(
                     is_locked: false,
                     is_generator: is_gen,
                     is_audio: layer.is_audio(),
+                    waveform: if layer.is_audio() {
+                        ui.audio_waveforms.peaks(&clip.id)
+                    } else {
+                        None
+                    },
                 });
             }
         }
@@ -1056,6 +1061,11 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
                 is_locked: false,
                 is_generator: is_gen,
                 is_audio: layer.is_audio(),
+                waveform: if layer.is_audio() {
+                    ui.audio_waveforms.peaks(&clip.id)
+                } else {
+                    None
+                },
             });
         }
     }

@@ -620,6 +620,25 @@ impl Application {
         // 1b. Poll for completed background audio load (waveform stays on UI thread)
         self.poll_pending_audio_load();
 
+        // 1b2. Drive per-clip audio-layer waveform decode/cache: gather the live
+        // audio clips and let the cache background-decode any new ones, drain
+        // finished peaks, and evict departed clips. The peaks are attached to
+        // each ViewportClip on the next sync. See docs/AUDIO_LAYER_DESIGN.md.
+        let audio_clips: Vec<(manifold_core::id::ClipId, String)> = self
+            .local_project
+            .timeline
+            .layers
+            .iter()
+            .filter(|l| l.is_audio())
+            .flat_map(|l| {
+                l.clips
+                    .iter()
+                    .filter(|c| c.is_audio())
+                    .map(|c| (c.id.clone(), c.audio_file_path.clone()))
+            })
+            .collect();
+        self.ws.ui_root.audio_waveforms.poll_and_request(&audio_clips);
+
         // 1c. Push the latest graph snapshot into the editor canvas
         // (read-only viewer of the running NodeGraphTestFX).
         if let (Some(canvas), Some(snap)) = (

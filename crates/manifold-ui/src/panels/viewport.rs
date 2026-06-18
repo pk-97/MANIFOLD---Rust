@@ -41,6 +41,11 @@ pub struct ViewportClip {
     /// An audio-layer clip. Renders distinctly (no video thumbnail); the hook
     /// for in-clip waveform painting. See `docs/AUDIO_LAYER_DESIGN.md`.
     pub is_audio: bool,
+    /// Normalized peak amplitudes (0..1) across the whole source file, for the
+    /// in-clip waveform. `None` until the file is decoded in the background.
+    /// Shared (`Arc`) so attaching it to a clip each sync is a cheap refcount
+    /// bump, not a copy.
+    pub waveform: Option<std::sync::Arc<Vec<f32>>>,
 }
 
 /// Which part of a clip was hit.
@@ -2683,6 +2688,7 @@ mod tests {
                 is_locked: false,
                 is_generator: false,
                 is_audio: false,
+                waveform: None,
             },
             ViewportClip {
                 clip_id: "clip_002".into(),
@@ -2695,6 +2701,7 @@ mod tests {
                 is_locked: false,
                 is_generator: true,
                 is_audio: false,
+                waveform: None,
             },
         ]
     }
@@ -2902,6 +2909,7 @@ mod tests {
             is_locked: false,
             is_generator: false,
             is_audio: false,
+            waveform: None,
         }]);
         panel.build(&mut tree, &layout);
 

@@ -4,7 +4,9 @@
 //! Mechanical translation of `Assets/Scripts/UI/Timeline/LayerBitmapRenderer.cs`.
 //! GPU texture management lives in `manifold-renderer::layer_bitmap_gpu`.
 
-use crate::bitmap_painter::{self, INSERT_CURSOR_COLOR, REGION_HIGHLIGHT_COLOR};
+use crate::bitmap_painter::{
+    self, INSERT_CURSOR_COLOR, REGION_HIGHLIGHT_COLOR, WAVEFORM_OVERLAY_COLOR,
+};
 use crate::color;
 use crate::node::Color32;
 use crate::panels::viewport::{SelectionRegion, ViewportClip};
@@ -433,6 +435,24 @@ impl LayerBitmapRenderer {
                 show_trim_hints,
                 self.render_scale,
             );
+
+            // Audio-layer clips paint their waveform inside the rect (over the
+            // clip fill). Bounds-clamped per bar; no-op until peaks are decoded.
+            if clip.is_audio
+                && let Some(peaks) = clip.waveform.as_ref()
+            {
+                bitmap_painter::draw_clip_waveform(
+                    &mut self.pixel_buffer,
+                    tex_w,
+                    tex_h,
+                    x,
+                    clip_y,
+                    w,
+                    clip_h,
+                    peaks,
+                    WAVEFORM_OVERLAY_COLOR,
+                );
+            }
         }
 
         // Paint region highlight ON TOP of clips (Unity lines 234-249)
@@ -539,6 +559,11 @@ fn compute_clip_fingerprint(clips: &[ViewportClip], min_beat: f32, max_beat: f32
         hash = hash
             .wrapping_mul(31)
             .wrapping_add(if clip.is_locked { 1 } else { 0 });
+        // Waveform presence: flips once when the background decode finishes, so
+        // the clip repaints to show its waveform (then stays cached → no churn).
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(if clip.waveform.is_some() { 1 } else { 0 });
     }
     hash
 }
@@ -709,6 +734,7 @@ mod tests {
             is_locked: false,
             is_generator: false,
             is_audio: false,
+            waveform: None,
         }
     }
 
