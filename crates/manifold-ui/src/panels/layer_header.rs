@@ -2135,12 +2135,13 @@ mod tests {
         panel.register_intents(&mut intents);
 
         // A right-click on any control in a row resolves to that layer's menu —
-        // the bg, the mute button, and the name all map to the same layer index.
-        for node in [panel.rows[1].bg, panel.rows[1].mute, panel.rows[1].name] {
+        // the name, mute, and solo controls all map to the same layer index.
+        for ctrl in [LayerControl::Name, LayerControl::Mute, LayerControl::Solo] {
+            let node = panel.rows[1].id(ctrl);
             let action = intents.resolve(&tree, node, Gesture::RightClick);
             assert!(
                 matches!(action, Some(PanelAction::LayerHeaderRightClicked(1))),
-                "node {node} should resolve to layer 1's menu, got {action:?}"
+                "node {node} ({ctrl:?}) should resolve to layer 1's menu, got {action:?}"
             );
         }
     }
