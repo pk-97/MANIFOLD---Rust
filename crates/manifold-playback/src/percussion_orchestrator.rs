@@ -1698,6 +1698,24 @@ impl PercussionImportOrchestrator {
             }
         };
 
+        // Detect path only: record the file's true tempo from a confident
+        // detection. recorded_bpm is the clip's native tempo, and the analysis
+        // events are in file-seconds — so the warp-on placement anchor
+        // (60/recorded_bpm) needs the real BPM, not the project-tempo default the
+        // warp toggle seeds. Set directly (no length rescale, per the chosen
+        // behaviour) and only when warp is already on (recorded_bpm > 0), so
+        // detection never flips a native-speed clip into warp.
+        const CLIP_BPM_CONFIDENCE: f32 = 0.72;
+        let detected = analysis.bpm.0;
+        if detected.is_finite()
+            && detected > 0.0
+            && analysis.bpm_confidence >= CLIP_BPM_CONFIDENCE
+            && let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id)
+            && clip.recorded_bpm > 0.0
+        {
+            clip.set_recorded_bpm(detected);
+        }
+
         // Detect path only: pre-fill routing so the inspector dropdowns land on
         // sensible layers without 9 manual picks. Only fills instruments left on
         // "Auto" (target_layer == None); never overrides an explicit choice.
