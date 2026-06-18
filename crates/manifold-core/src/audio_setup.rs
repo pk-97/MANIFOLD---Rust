@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::audio_trigger::TriggerRoute;
 use crate::id::{AudioSendId, LayerId};
 use crate::math::short_id;
 
@@ -117,6 +118,11 @@ pub struct AudioSend {
     /// Which extractors run for this send.
     #[serde(default)]
     pub analysis: SendAnalysisConfig,
+    /// Live audio → visual trigger routes: this send's transients firing
+    /// one-shot clips on layers. Empty (the default) means the send only feeds
+    /// modulation. See `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<TriggerRoute>,
     /// Where the send's signal comes from — a capture downmix (default) or a
     /// timeline audio layer. Skipped on serialize when `Capture`, so pre-audio-
     /// layer project fixtures round-trip byte-identically.
@@ -133,8 +139,15 @@ impl AudioSend {
             channels: Vec::new(),
             gain_db: 0.0,
             analysis: SendAnalysisConfig::default(),
+            triggers: Vec::new(),
             source: AudioSendSource::Capture,
         }
+    }
+
+    /// Whether this send has any enabled trigger route — drives the `⚡`
+    /// indicator on the send row and the per-tick evaluator's skip check.
+    pub fn has_active_triggers(&self) -> bool {
+        self.triggers.iter().any(|t| t.enabled)
     }
 
     /// The layer feeding this send, if it is a layer source.

@@ -5,6 +5,7 @@ pub mod audio_clip_detection;
 pub mod audio_features;
 pub mod audio_mod;
 pub mod audio_setup;
+pub mod audio_trigger;
 pub mod clip;
 pub mod color;
 pub mod effect_graph_def;
@@ -50,6 +51,7 @@ pub use audio_mod::{
 pub use audio_setup::{
     AudioDeviceRef, AudioSend, AudioSendSource, AudioSetup, AudioSourceKind, SendAnalysisConfig,
 };
+pub use audio_trigger::TriggerRoute;
 pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
 pub use layer::OverlapAction;
 pub use macro_bank::{
