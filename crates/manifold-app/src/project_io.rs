@@ -547,7 +547,14 @@ impl ProjectIOService {
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "Audio".to_string());
             let path_str = file_path.to_string_lossy().into_owned();
-            let duration_beats = audio_duration_beats(&path_str, seconds_per_beat);
+            // Decode once: the full file length bounds trimming (source_duration)
+            // and, at the project tempo, sets the initial clip length.
+            let source_duration = audio_source_duration(&path_str);
+            let duration_beats = if seconds_per_beat > 0.0 {
+                manifold_core::Beats::from_f32(source_duration.as_f32() / seconds_per_beat)
+            } else {
+                manifold_core::Beats::ZERO
+            };
 
             // New audio layer appended at the bottom of the stack.
             let insert_index = project.timeline.layers.len();
@@ -573,6 +580,7 @@ impl ProjectIOService {
                 manifold_core::Beats::from_f32(drop_beat),
                 duration_beats,
                 manifold_core::Seconds::ZERO,
+                source_duration,
             );
             let mut add_clip = AddClipCommand::new(clip, layer_id, seconds_per_beat);
             add_clip.execute(project);
@@ -773,23 +781,23 @@ pub fn is_supported_audio_extension(path: &Path) -> bool {
 /// Decoded duration of an audio file expressed in beats (0 on failure). Used to
 /// size a dropped audio clip. Decodes the file; drops are infrequent and the
 /// playback/analysis paths re-decode through their own caches.
-fn audio_duration_beats(path: &str, seconds_per_beat: f32) -> manifold_core::Beats {
-    if seconds_per_beat <= 0.0 {
-        return manifold_core::Beats::ZERO;
-    }
+/// Decoded length of an audio file in seconds (0 on failure / empty). This is the
+/// clip's `source_duration` — the bound for right-edge trimming — and, divided by
+/// seconds-per-beat, its initial timeline length.
+fn audio_source_duration(path: &str) -> manifold_core::Seconds {
     match manifold_playback::audio_decoder::decode_audio_to_pcm(path) {
         Ok(d) if d.channels > 0 && d.sample_rate > 0 => {
             let frames = d.samples.len() / d.channels;
-            let secs = frames as f32 / d.sample_rate as f32;
-            manifold_core::Beats::from_f32(secs / seconds_per_beat)
+            manifold_core::Seconds::from_f32(frames as f32 / d.sample_rate as f32)
         }
-        Ok(_) => manifold_core::Beats::ZERO,
+        Ok(_) => manifold_core::Seconds::ZERO,
         Err(e) => {
             log::warn!("[ProjectIO] audio duration decode failed for '{path}': {e}");
-            manifold_core::Beats::ZERO
+            manifold_core::Seconds::ZERO
         }
     }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -810,11 +818,13 @@ mod tests {
     }
 
     #[test]
-    fn audio_duration_beats_is_zero_for_unreadable_path() {
-        let beats = audio_duration_beats("/no/such/file.wav", 0.5);
-        assert_eq!(beats, manifold_core::Beats::ZERO);
-        // Non-positive seconds-per-beat is a guard, not a panic.
-        assert_eq!(audio_duration_beats("/x.wav", 0.0), manifold_core::Beats::ZERO);
+    fn audio_source_duration_is_zero_for_unreadable_path() {
+        // A bad path yields a zero source length (no panic), which collapses the
+        // initial clip length to zero rather than guessing.
+        assert_eq!(
+            audio_source_duration("/no/such/file.wav"),
+            manifold_core::Seconds::ZERO
+        );
     }
 
     #[test]

@@ -1008,6 +1008,7 @@ mod tests {
             Beats(4.0),
             Beats(8.0),
             Seconds(0.0),
+            Seconds(0.0),
         ));
         assert!(layer.active_audio_clip_at(Beats(6.0)).is_some());
         assert!(layer.active_audio_clip_at(Beats(2.0)).is_none());

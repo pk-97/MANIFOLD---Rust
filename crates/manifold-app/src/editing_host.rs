@@ -607,6 +607,25 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             Some(c) => c,
             None => return Beats::ZERO,
         };
+
+        // Audio clips bound to their decoded file length, warped: the source
+        // advances at `warped_spb = spb * warp_ratio` per beat, so the most beats
+        // we can show is the remaining file (after in_point) divided by that.
+        if clip.is_audio() {
+            let file_secs = clip.source_duration.as_f32();
+            if file_secs <= 0.0 {
+                return Beats::ZERO;
+            }
+            let available = (file_secs - clip.in_point.as_f32()).max(0.0);
+            let warped_spb =
+                self.get_seconds_per_beat() * clip.warp_ratio(self.project.settings.bpm.0);
+            return if warped_spb > 0.0 {
+                Beats(available as f64 / warped_spb as f64)
+            } else {
+                Beats::ZERO
+            };
+        }
+
         if clip.video_clip_id.is_empty() {
             return Beats::ZERO;
         }

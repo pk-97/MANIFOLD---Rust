@@ -251,6 +251,13 @@ impl Seconds {
         self.0 as f32
     }
 
+    /// True when exactly zero. Used by serde `skip_serializing_if` to keep the
+    /// audio-only `source_duration` field out of non-audio clip JSON.
+    #[inline]
+    pub fn is_zero(&self) -> bool {
+        self.0 == 0.0
+    }
+
     #[inline]
     pub fn abs(self) -> Self {
         Seconds(self.0.abs())

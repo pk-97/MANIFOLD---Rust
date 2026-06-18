@@ -28,6 +28,11 @@ pub struct TimelineClip {
     // ── Seconds (video source offset, BPM-independent) ──
     #[serde(default)]
     pub in_point: Seconds,
+    /// Audio only: the full decoded length of the source file (seconds), captured
+    /// at import. Bounds right-edge trimming — an audio clip can't be lengthened
+    /// past the end of its file (Ableton model). Zero / unset for non-audio clips.
+    #[serde(default, skip_serializing_if = "Seconds::is_zero")]
+    pub source_duration: Seconds,
 
     // ── Metadata ──
     #[serde(default)]
@@ -241,12 +246,14 @@ impl TimelineClip {
         start_beat: Beats,
         duration_beats: Beats,
         in_point: Seconds,
+        source_duration: Seconds,
     ) -> Self {
         Self {
             audio_file_path,
             start_beat,
             duration_beats: duration_beats.max(Beats::ZERO),
             in_point: in_point.max(Seconds::ZERO),
+            source_duration: source_duration.max(Seconds::ZERO),
             ..Default::default()
         }
     }
@@ -277,6 +284,7 @@ impl Default for TimelineClip {
             start_beat: Beats::ZERO,
             duration_beats: Beats::ONE,
             in_point: Seconds::ZERO,
+            source_duration: Seconds::ZERO,
             recorded_bpm: 0.0,
             is_locked: false,
             is_muted: false,
@@ -449,8 +457,10 @@ mod tests {
             Beats(4.0),
             Beats(8.0),
             Seconds(1.5),
+            Seconds(10.0),
         );
         assert!(clip.is_audio());
+        assert_eq!(clip.source_duration, Seconds(10.0));
         assert!(!TimelineClip::new_generator(Beats(0.0), Beats(1.0)).is_audio());
         assert_eq!(clip.in_point, Seconds(1.5));
 

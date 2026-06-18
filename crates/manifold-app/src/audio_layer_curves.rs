@@ -135,7 +135,8 @@ mod tests {
     #[test]
     fn missing_path_yields_no_curve() {
         let mut curves = AudioLayerCurves::default();
-        let clip = TimelineClip::new_audio(String::new(), Beats(0.0), Beats(1.0), Seconds(0.0));
+        let clip =
+            TimelineClip::new_audio(String::new(), Beats(0.0), Beats(1.0), Seconds(0.0), Seconds(0.0));
         assert!(curves.sample_clip(&clip, 250.0, 2000.0, 0.0).is_none());
         assert_eq!(curves.cached_len(), 0);
     }
