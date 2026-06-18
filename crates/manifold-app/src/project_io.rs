@@ -17,6 +17,7 @@ use manifold_core::project::Project;
 use manifold_core::video::VideoClip;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::AddClipCommand;
+use manifold_editing::commands::layer::AddLayerCommand;
 use manifold_editing::service::EditingService;
 
 use crate::dialog_path_memory::{self, DialogContext};
@@ -528,6 +529,68 @@ impl ProjectIOService {
             imported_count += 1;
         }
 
+        // Process audio files → one audio layer + clip each (Audio Layer feature,
+        // docs/AUDIO_LAYER_DESIGN.md). Each dropped audio file becomes its own
+        // audio track appended to the layer list, with the clip at the drop beat.
+        let mut audio_imported = 0;
+        for raw_path in file_paths {
+            let file_path = match resolve_dropped_file_path(raw_path) {
+                Some(fp) => fp,
+                None => continue,
+            };
+            if !file_path.exists() || !is_supported_audio_extension(&file_path) {
+                continue;
+            }
+
+            let file_name = file_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Audio".to_string());
+            let path_str = file_path.to_string_lossy().into_owned();
+            let duration_beats = audio_duration_beats(&path_str, seconds_per_beat);
+
+            // New audio layer appended at the bottom of the stack.
+            let insert_index = project.timeline.layers.len();
+            let mut add_layer = AddLayerCommand::new(
+                file_name,
+                manifold_core::types::LayerType::Audio,
+                PresetTypeId::NONE,
+                insert_index,
+                None,
+            );
+            add_layer.execute(project);
+            let Some(layer_id) = project
+                .timeline
+                .layers
+                .get(insert_index)
+                .map(|l| l.layer_id.clone())
+            else {
+                continue;
+            };
+
+            let clip = TimelineClip::new_audio(
+                path_str,
+                manifold_core::Beats::from_f32(drop_beat),
+                duration_beats,
+                manifold_core::Seconds::ZERO,
+            );
+            let mut add_clip = AddClipCommand::new(clip, layer_id, seconds_per_beat);
+            add_clip.execute(project);
+
+            // One undo step per dropped audio file: remove the clip, then the layer.
+            action.record_commands.push(Box::new(CompositeCommand::new(
+                vec![Box::new(add_layer), Box::new(add_clip)],
+                "Drop audio".to_string(),
+            )));
+            action.needs_clip_sync = true;
+            audio_imported += 1;
+        }
+        if audio_imported > 0 {
+            log::info!(
+                "[ProjectIO] Dropped {audio_imported} audio file(s) as audio layer(s) at beat {drop_beat:.2}"
+            );
+        }
+
         if imported_count > 0 {
             let description = if imported_count == 1 {
                 "Drop clip".to_string()
@@ -695,6 +758,39 @@ pub fn is_supported_midi_extension(path: &Path) -> bool {
     )
 }
 
+/// Audio file extensions that drop onto an audio layer. Mirrors what the
+/// decoder (symphonia) and kira can read. See `docs/AUDIO_LAYER_DESIGN.md`.
+pub fn is_supported_audio_extension(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .as_deref(),
+        Some("wav" | "mp3" | "flac" | "aif" | "aiff" | "ogg" | "m4a" | "aac")
+    )
+}
+
+/// Decoded duration of an audio file expressed in beats (0 on failure). Used to
+/// size a dropped audio clip. Decodes the file; drops are infrequent and the
+/// playback/analysis paths re-decode through their own caches.
+fn audio_duration_beats(path: &str, seconds_per_beat: f32) -> manifold_core::Beats {
+    if seconds_per_beat <= 0.0 {
+        return manifold_core::Beats::ZERO;
+    }
+    match manifold_playback::audio_decoder::decode_audio_to_pcm(path) {
+        Ok(d) if d.channels > 0 && d.sample_rate > 0 => {
+            let frames = d.samples.len() / d.channels;
+            let secs = frames as f32 / d.sample_rate as f32;
+            manifold_core::Beats::from_f32(secs / seconds_per_beat)
+        }
+        Ok(_) => manifold_core::Beats::ZERO,
+        Err(e) => {
+            log::warn!("[ProjectIO] audio duration decode failed for '{path}': {e}");
+            manifold_core::Beats::ZERO
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -702,6 +798,24 @@ mod tests {
     use manifold_core::layer::Layer;
     use manifold_core::types::LayerType;
     use manifold_core::units::Bpm;
+
+    #[test]
+    fn audio_extensions_recognized_and_others_rejected() {
+        for ok in ["a.wav", "a.MP3", "a.flac", "a.aiff", "a.ogg", "a.m4a"] {
+            assert!(is_supported_audio_extension(Path::new(ok)), "{ok}");
+        }
+        for no in ["a.mp4", "a.mid", "a.png", "a"] {
+            assert!(!is_supported_audio_extension(Path::new(no)), "{no}");
+        }
+    }
+
+    #[test]
+    fn audio_duration_beats_is_zero_for_unreadable_path() {
+        let beats = audio_duration_beats("/no/such/file.wav", 0.5);
+        assert_eq!(beats, manifold_core::Beats::ZERO);
+        // Non-positive seconds-per-beat is a guard, not a panic.
+        assert_eq!(audio_duration_beats("/x.wav", 0.0), manifold_core::Beats::ZERO);
+    }
 
     #[test]
     fn dropped_video_enforces_non_overlap_immediately() {
