@@ -5,6 +5,7 @@ use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
+use crate::id::LayerId;
 use crate::preset_type_id::PresetTypeId;
 use crate::percussion::ImportedPercussionClipPlacement;
 use crate::project::Project;
@@ -475,6 +476,11 @@ pub struct PercussionClipBinding {
     pub generator_type: PresetTypeId,
     pub duration_beats: Beats,
     pub minimum_confidence: f32,
+    /// Explicit target layer chosen by the audio-clip inspector. When set and it
+    /// resolves to an existing layer, placement routes there directly (bypassing
+    /// the trigger-name layout). `None` = route by trigger name (the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_layer: Option<LayerId>,
 }
 
 impl PercussionClipBinding {
@@ -493,6 +499,7 @@ impl PercussionClipBinding {
             generator_type,
             duration_beats: duration_beats.max(Beats::ZERO),
             minimum_confidence: minimum_confidence.clamp(0.0, 1.0),
+            target_layer: None,
         }
     }
 
@@ -509,6 +516,7 @@ impl PercussionClipBinding {
             generator_type: self.generator_type.clone(),
             duration_beats: self.duration_beats,
             minimum_confidence: self.minimum_confidence,
+            target_layer: self.target_layer.clone(),
         }
     }
 
@@ -521,6 +529,7 @@ impl PercussionClipBinding {
             generator_type: resolved_generator_type,
             duration_beats: self.duration_beats,
             minimum_confidence: self.minimum_confidence,
+            target_layer: self.target_layer.clone(),
         }
     }
 }

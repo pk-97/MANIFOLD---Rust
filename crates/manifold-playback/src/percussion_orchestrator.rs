@@ -17,6 +17,7 @@
 // File-dialog stub: callers supply a `selected_path: Option<String>` directly;
 // the host is responsible for running a dialog before calling into the orchestrator.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -24,19 +25,21 @@ use manifold_core::Beats;
 use manifold_core::ClipId;
 use manifold_core::audio_clip_detection::AudioClipDetection;
 use manifold_core::percussion_analysis::{
-    ClipDetectionAnchor, PercussionAnalysisData, ProjectBeatTimeConverter,
+    ClipDetectionAnchor, PercussionAnalysisData, PercussionTriggerType, ProjectBeatTimeConverter,
 };
 use manifold_core::percussion_binding::ProjectPercussionBindingResolver;
 use manifold_core::percussion_settings::{
     PercussionImportOptionsFactory, PercussionPipelineSettings,
 };
 use manifold_core::project::Project;
+use manifold_core::types::LayerType;
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::DeleteClipCommand;
 
 use crate::percussion_backend::{PercussionPipelineBackendResolver, PercussionPipelineInvocation};
 use crate::percussion_import::{
     PercussionBpmDecision, PercussionImportService, build_clip_detection_options,
+    get_trigger_layer_name,
 };
 use crate::percussion_parser::{JsonPercussionAnalysisParser, PercussionAnalysisParser};
 use crate::percussion_planner::PercussionTimelinePlanner;
@@ -86,6 +89,10 @@ enum PipelineRunState {
     Running {
         handle: ProcessHandle,
         latest_process_line: String,
+        /// Most recent parsed progress (phase label + 0..1). Retained across
+        /// ticks so the status keeps showing the last known phase between the
+        /// process's output lines.
+        latest_progress: PipelineProgress,
     },
     /// Done (success or failure stored in `result`).
     Done {
@@ -1380,7 +1387,7 @@ impl PercussionImportOrchestrator {
         match &state.sub_phase {
             ImportMapSubPhase::RunningPipeline => {
                 // Drive pipeline runner.
-                let (done, ok, details) = drive_pipeline_run(
+                let (done, ok, details, _progress) = drive_pipeline_run(
                     &mut state.pipeline_run,
                     &state.invocation,
                     &self.pipeline_progress_parser,
@@ -1582,16 +1589,25 @@ impl PercussionImportOrchestrator {
 
         match &state.sub_phase {
             DetectClipSubPhase::RunningPipeline => {
-                let (done, ok, details) = drive_pipeline_run(
+                let (done, ok, details, progress) = drive_pipeline_run(
                     &mut state.pipeline_run,
                     &state.invocation,
                     &self.pipeline_progress_parser,
                 );
 
-                self.percussion_import_status_message = "Detecting triggers".to_string();
+                // Surface the real backend phase ("separating stems", "writing
+                // analysis JSON", …) and its 0..1 progress instead of a static
+                // "Detecting triggers" with an indeterminate bar.
+                self.percussion_import_status_message = match &progress {
+                    Some(p) if !p.message.is_empty() => p.message.clone(),
+                    _ => "Detecting triggers".to_string(),
+                };
                 self.percussion_import_status_color = COLOR_BLUE;
                 self.percussion_import_status_animate = true;
-                self.percussion_import_status_progress01 = PERCUSSION_PROGRESS_UNKNOWN;
+                self.percussion_import_status_progress01 = match &progress {
+                    Some(p) if p.has_progress => p.progress01,
+                    _ => PERCUSSION_PROGRESS_UNKNOWN,
+                };
                 self.percussion_import_status_show_progress = true;
 
                 if done {
@@ -1682,7 +1698,40 @@ impl PercussionImportOrchestrator {
             }
         };
 
+        // Detect path only: pre-fill routing so the inspector dropdowns land on
+        // sensible layers without 9 manual picks. Only fills instruments left on
+        // "Auto" (target_layer == None); never overrides an explicit choice.
+        Self::auto_route_unset_instruments(clip_id, project);
+
         self.plan_and_apply_for_clip(clip_id, &analysis, project, editing_service)
+    }
+
+    /// For each enabled instrument still routed to "Auto", point it at an
+    /// existing non-group layer whose name matches the trigger ("Kick", "Snare",
+    /// …) if one exists. Routing already falls back to by-name, so this only
+    /// pre-populates the dropdown selection; it never creates layers.
+    fn auto_route_unset_instruments(clip_id: &ClipId, project: &mut Project) {
+        let name_to_id: Vec<(String, manifold_core::id::LayerId)> = project
+            .timeline
+            .layers
+            .iter()
+            .filter(|l| l.layer_type != LayerType::Group)
+            .map(|l| (l.name.clone(), l.layer_id.clone()))
+            .collect();
+        if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
+            let detection = clip
+                .audio_detection
+                .get_or_insert_with(AudioClipDetection::new);
+            for inst in detection.config.instruments.iter_mut() {
+                if !inst.enabled || inst.target_layer.is_some() {
+                    continue;
+                }
+                let want = get_trigger_layer_name(inst.trigger_type);
+                if let Some((_, id)) = name_to_id.iter().find(|(n, _)| *n == want) {
+                    inst.target_layer = Some(id.clone());
+                }
+            }
+        }
     }
 
     /// Re-place a clip's triggers from its cached analysis, with no backend run.
@@ -1836,6 +1885,19 @@ impl PercussionImportOrchestrator {
             planner.build_plan(Some(analysis), Some(&options))
         };
 
+        // Per-instrument trigger counts for the inspector rows ("Kick 64").
+        // Recomputed every plan/replan; written even when empty so a tightened
+        // sensitivity that drops an instrument to zero clears its stale count.
+        let mut counts: HashMap<PercussionTriggerType, u32> = HashMap::new();
+        for placement in plan.placements() {
+            *counts.entry(placement.trigger_type).or_insert(0) += 1;
+        }
+        if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id)
+            && let Some(detection) = clip.audio_detection.as_mut()
+        {
+            detection.last_counts = counts;
+        }
+
         if plan.accepted_events() == 0 {
             self.set_percussion_import_status(
                 "No accepted triggers",
@@ -1889,7 +1951,7 @@ impl PercussionImportOrchestrator {
             }
 
             ImportAudioOnlySubPhase::RunningBpmPipeline => {
-                let (done, ok, _details) = drive_pipeline_run(
+                let (done, ok, _details, _progress) = drive_pipeline_run(
                     &mut state.pipeline_run,
                     &state.invocation,
                     &self.pipeline_progress_parser,
@@ -2097,7 +2159,7 @@ impl PercussionImportOrchestrator {
 
         match &state.sub_phase {
             ReAnalyzeSubPhase::RunningPipeline => {
-                let (done, ok, details) = drive_pipeline_run(
+                let (done, ok, details, _progress) = drive_pipeline_run(
                     &mut state.pipeline_run,
                     &state.invocation,
                     &self.pipeline_progress_parser,
@@ -2184,7 +2246,7 @@ impl PercussionImportOrchestrator {
 
         match &state.sub_phase {
             ReImportStemsSubPhase::RunningPipeline => {
-                let (done, ok, details) = drive_pipeline_run(
+                let (done, ok, details, _progress) = drive_pipeline_run(
                     &mut state.pipeline_run,
                     &state.invocation,
                     &self.pipeline_progress_parser,
@@ -2914,19 +2976,21 @@ impl PercussionImportOrchestrator {
 // Pipeline runner helper (drives PipelineRunState)
 // ──────────────────────────────────────
 
-/// Drive the pipeline run one tick. Returns (done, ok, last_details).
-/// This is the Rust equivalent of `RunPercussionPipelineAsync`'s per-frame logic.
-/// With the simplified bundled-only backend, there is exactly one invocation to run.
+/// Drive the pipeline run one tick. Returns (done, ok, last_details, progress).
+/// `progress` is the most recent parsed phase (label + 0..1), `None` until the
+/// backend emits a recognizable line. This is the Rust equivalent of
+/// `RunPercussionPipelineAsync`'s per-frame logic. With the simplified
+/// bundled-only backend, there is exactly one invocation to run.
 fn drive_pipeline_run(
     pipeline_run: &mut Option<PipelineRunState>,
     invocation: &PercussionPipelineInvocation,
     parser: &PercussionPipelineProgressParser,
-) -> (bool, bool, String) {
+) -> (bool, bool, String, Option<PipelineProgress>) {
     // If no active run, start the invocation.
     if pipeline_run.is_none() {
         if invocation.command.trim().is_empty() {
             let details = "No analysis backend invocation candidates were resolved.".to_string();
-            return (true, false, details);
+            return (true, false, details, None);
         }
 
         log::info!(
@@ -2947,56 +3011,59 @@ fn drive_pipeline_run(
                 ok: false,
                 details: details.clone(),
             });
-            return (true, false, details);
+            return (true, false, details, None);
         }
 
         *pipeline_run = Some(PipelineRunState::Running {
             handle,
             latest_process_line: String::new(),
+            latest_progress: PipelineProgress::default(),
         });
     }
 
-    let (finished, exit_code, new_lines, latest_line) = match pipeline_run.as_mut() {
+    let (finished, exit_code, new_lines, latest_line, progress) = match pipeline_run.as_mut() {
         Some(PipelineRunState::Running {
             handle,
             latest_process_line,
+            latest_progress,
         }) => {
             let new_lines = handle.poll();
             let mut latest = latest_process_line.clone();
+            // Parse progress lines; keep the most recent one that carried a phase.
             for line_info in &new_lines {
-                if !line_info.line.trim().is_empty() {
-                    latest = line_info.line.trim().to_string();
+                if line_info.line.trim().is_empty() {
+                    continue;
+                }
+                latest = line_info.line.trim().to_string();
+                let parsed = parser.parse_line(&line_info.line, line_info.is_stderr);
+                if parsed.has_progress {
+                    *latest_progress = parsed;
                 }
             }
+            *latest_process_line = latest.clone();
             let finished = handle.is_finished();
             let exit_code = handle.exit_code();
-            (finished, exit_code, new_lines, latest)
+            let progress = if latest_progress.has_progress {
+                Some(latest_progress.clone())
+            } else {
+                None
+            };
+            (finished, exit_code, new_lines, latest, progress)
         }
         Some(PipelineRunState::Done { ok, details }) => {
             let ok = *ok;
             let details = details.clone();
-            return (true, ok, details);
+            return (true, ok, details, None);
         }
         None => {
-            return (true, false, "No pipeline run active.".to_string());
+            return (true, false, "No pipeline run active.".to_string(), None);
         }
     };
-
-    // Parse progress lines and surface to status.
-    for line_info in &new_lines {
-        if line_info.line.trim().is_empty() {
-            continue;
-        }
-        let progress = parser.parse_line(&line_info.line, line_info.is_stderr);
-        if progress.has_progress {
-            // Status update captured; callers will read it from the orchestrator.
-            let _ = progress;
-        }
-    }
+    let _ = &new_lines;
 
     if !finished {
         // Not done yet — return without advancing.
-        return (false, false, String::new());
+        return (false, false, String::new(), progress);
     }
 
     // Process finished. Check result.
@@ -3018,7 +3085,7 @@ fn drive_pipeline_run(
             ok: true,
             details: String::new(),
         });
-        return (true, true, String::new());
+        return (true, true, String::new(), None);
     }
 
     // Failure — single backend, no fallback.
@@ -3052,7 +3119,7 @@ fn drive_pipeline_run(
         ok: false,
         details: details.clone(),
     });
-    (true, false, details)
+    (true, false, details, None)
 }
 
 // ──────────────────────────────────────
@@ -3231,6 +3298,7 @@ mod tests {
         clip.audio_detection = Some(AudioClipDetection {
             config: Default::default(),
             analysis: Some(analysis),
+            ..Default::default()
         });
         let clip_id = clip.id.clone();
         project.timeline.layers[aidx].restore_clip(clip);
@@ -3248,6 +3316,15 @@ mod tests {
             .flat_map(|l| l.clips.iter())
             .any(|c| c.detection_source.as_ref() == Some(&clip_id));
         assert!(placed, "replan places triggers from the cached analysis");
+
+        // The per-instrument count is recorded on the clip for the inspector.
+        let kick_count = project
+            .timeline
+            .find_clip_by_id(&clip_id)
+            .and_then(|c| c.audio_detection.as_ref())
+            .map(|d| d.count(PercussionTriggerType::Kick))
+            .unwrap_or(0);
+        assert_eq!(kick_count, 1, "replan records the placed-kick count");
     }
 
     #[test]

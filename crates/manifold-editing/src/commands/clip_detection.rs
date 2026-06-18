@@ -49,6 +49,7 @@ impl Command for SetClipDetectionConfigCommand {
                 clip.audio_detection = Some(AudioClipDetection {
                     config: self.new_config.clone(),
                     analysis: None,
+                    ..Default::default()
                 });
             }
         }

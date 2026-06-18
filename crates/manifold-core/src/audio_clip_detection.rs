@@ -6,6 +6,8 @@
 // quantize, or routing can re-plan instantly without re-running the analysis
 // backend. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::id::LayerId;
@@ -122,6 +124,12 @@ pub struct AudioClipDetection {
     /// routing re-plan without re-running the backend. `None` until first Detect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis: Option<PercussionAnalysisData>,
+    /// Triggers placed per instrument by the last plan/replan. Drives the
+    /// per-row count in the inspector ("Kick 64"). Derived from the cached
+    /// analysis + config, so it is recomputed on every Detect/Replan and not
+    /// persisted.
+    #[serde(default, skip)]
+    pub last_counts: HashMap<PercussionTriggerType, u32>,
 }
 
 impl AudioClipDetection {
@@ -132,6 +140,11 @@ impl AudioClipDetection {
 
     pub fn has_analysis(&self) -> bool {
         self.analysis.is_some()
+    }
+
+    /// Triggers this clip placed for `trigger_type` on the last plan/replan.
+    pub fn count(&self, trigger_type: PercussionTriggerType) -> u32 {
+        self.last_counts.get(&trigger_type).copied().unwrap_or(0)
     }
 }
 

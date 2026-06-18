@@ -160,14 +160,18 @@ impl PercussionImportService {
                 continue;
             }
 
-            // Set trigger-based layer name if not already matching.
-            let trigger_layer_name = get_trigger_layer_name(placement.trigger_type);
-            if !trigger_layer_name.is_empty()
-                && let Some(target_layer) =
-                    project.timeline.layers.get_mut(target_layer_index as usize)
-                && target_layer.name != trigger_layer_name
-            {
-                target_layer.name = trigger_layer_name.clone();
+            // Set trigger-based layer name if not already matching. Legacy wizard
+            // only: per-clip detection may route to a user-named layer ("Drums"),
+            // so renaming it to the trigger ("Kick") would be wrong.
+            if source_clip_id.is_none() {
+                let trigger_layer_name = get_trigger_layer_name(placement.trigger_type);
+                if !trigger_layer_name.is_empty()
+                    && let Some(target_layer) =
+                        project.timeline.layers.get_mut(target_layer_index as usize)
+                    && target_layer.name != trigger_layer_name
+                {
+                    target_layer.name = trigger_layer_name.clone();
+                }
             }
 
             let target_layer_lid = project
@@ -482,6 +486,17 @@ impl PercussionImportService {
                 continue;
             }
 
+            // Explicit per-instrument routing (audio-clip inspector) wins: if the
+            // chosen layer still exists, place there directly and skip the
+            // trigger-name layout. A stale id (layer deleted) falls through to
+            // name resolution.
+            if let Some(target) = &binding.target_layer
+                && let Some(idx) = project.timeline.layer_index_for_id(target)
+            {
+                layout_map.insert(binding.trigger_type, idx as i32);
+                continue;
+            }
+
             let layer_name = get_trigger_layer_name(binding.trigger_type);
             let existing_index = find_layer_by_name_index(&project.timeline.layers, &layer_name);
 
@@ -524,9 +539,10 @@ impl Default for PercussionImportService {
 /// knobs: quantize, onset compensation, the enabled instrument set, and the
 /// sensitivity → `minimum_confidence` mapping. The `anchor` makes placement
 /// clip-anchored and warp-aware (the planner maps event times through it and
-/// trims to the clip window), so `start_beat_offset` stays zero. Routing stays
-/// by trigger name for now; explicit per-instrument `target_layer` is honoured
-/// once the inspector (P4) drives it. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
+/// trims to the clip window), so `start_beat_offset` stays zero. Per-instrument
+/// `target_layer` (set by the inspector dropdown) is carried onto each binding
+/// and honoured at apply time; `None` routes by trigger name (the default).
+/// See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
 pub fn build_clip_detection_options(
     project: &Project,
     pipeline_settings: Option<&PercussionPipelineSettings>,
@@ -555,6 +571,7 @@ pub fn build_clip_detection_options(
     for binding in options.bindings.iter_mut() {
         if let Some(instrument) = config.instrument(binding.trigger_type) {
             binding.minimum_confidence = instrument.min_confidence();
+            binding.target_layer = instrument.target_layer.clone();
         }
     }
 
@@ -563,7 +580,7 @@ pub fn build_clip_detection_options(
 
 // ─── Helper functions ───
 
-fn get_trigger_layer_name(trigger_type: PercussionTriggerType) -> String {
+pub(crate) fn get_trigger_layer_name(trigger_type: PercussionTriggerType) -> String {
     if trigger_type == PercussionTriggerType::Unknown {
         return "Percussion".to_string();
     }
@@ -707,6 +724,38 @@ mod tests {
             clips.iter().any(|c| c.detection_source.is_none()),
             "hand-placed clip is untouched"
         );
+    }
+
+    #[test]
+    fn explicit_target_layer_routes_there_and_skips_rename() {
+        // Two layers: a user-named "Drums" layer and a separate "Kick" layer.
+        // A Kick binding routed explicitly to "Drums" must land on "Drums" and
+        // must NOT rename it to "Kick".
+        let mut project = Project::default();
+        let drums_idx =
+            project
+                .timeline
+                .add_layer("Drums", LayerType::Generator, gen_type());
+        let drums_lid = project.timeline.layers[drums_idx].layer_id.clone();
+        project
+            .timeline
+            .add_layer("Kick", LayerType::Generator, gen_type());
+
+        let mut options = kick_options();
+        options.bindings[0].target_layer = Some(drums_lid.clone());
+
+        let svc = PercussionImportService::new();
+        let clip_id = ClipId::new("audioA");
+        let result = svc.apply_placement_plan(
+            &mut project,
+            Some(&kick_plan(1.0)),
+            Some(&options),
+            Some(&clip_id),
+        );
+
+        assert!(result.success);
+        assert_eq!(project.timeline.layers[drums_idx].clips.len(), 1, "routed to Drums");
+        assert_eq!(project.timeline.layers[drums_idx].name, "Drums", "user layer not renamed");
     }
 
     #[test]
