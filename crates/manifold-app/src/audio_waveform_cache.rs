@@ -75,7 +75,6 @@ impl AudioWaveformCache {
     pub fn poll_and_request(&mut self, audio_clips: &[(ClipId, String)]) -> bool {
         let mut newly_ready = false;
         while let Ok((id, renderer)) = self.rx.try_recv() {
-            log::info!("[AudioWaveform] decode ready, cached for clip {id:?}");
             self.ready.insert(id, Arc::new(renderer));
             newly_ready = true;
         }

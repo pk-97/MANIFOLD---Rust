@@ -466,8 +466,14 @@ impl LayerBitmapRenderer {
                 // doesn't get a too-coarse level. scaled_ppb already folds in
                 // render_scale, so pass 1.0 to avoid double-scaling.
                 if let Some(level) = renderer.select_level_for_zoom(full_w / frac, 1.0) {
-                    let x_start = x.max(paint_x0 as i32);
-                    let x_end = (x + w).min(paint_x1 as i32);
+                    // Cover the SAME span draw_clip just filled (the full visible
+                    // clip rect), not the scroll-exposed strip. draw_clip repaints
+                    // the whole rect over the pixel-shifted buffer, so clamping the
+                    // waveform to the strip would let the fill erase the shifted
+                    // waveform everywhere outside that strip — the waveform wiping
+                    // away as you scroll horizontally.
+                    let x_start = x.max(0);
+                    let x_end = (x + w).min(tex_w as i32);
                     crate::waveform_painter::draw_waveform(
                         &mut self.pixel_buffer,
                         tex_w,
