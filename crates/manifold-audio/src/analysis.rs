@@ -1082,6 +1082,13 @@ pub struct StreamingSendAnalyzer {
     vqt_raw: Vec<f32>,
     state: SendState,
     latest: SendFeatures,
+    /// When set, `push` buffers the raw column + overlay scalars per hop so the
+    /// Audio Setup scope can draw this send (the runtime turns it on only for the
+    /// send the scope shows, and drains every tick). Same data the capture worker
+    /// pushes to its scope rings — so a layer-fed send draws identically.
+    scope: bool,
+    scope_cols: Vec<f32>,
+    scope_scalars: Vec<f32>,
 }
 
 impl StreamingSendAnalyzer {
@@ -1111,6 +1118,9 @@ impl StreamingSendAnalyzer {
             vqt_raw: vec![0.0; num_bins],
             state: new_send_state(num_bins),
             latest: SendFeatures::default(),
+            scope: false,
+            scope_cols: Vec::new(),
+            scope_scalars: Vec::new(),
         }
     }
 
@@ -1118,6 +1128,49 @@ impl StreamingSendAnalyzer {
     /// the mixer's output rate ever changes under it.
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate as u32
+    }
+
+    /// Number of spectrogram bins per column (the scope's vertical resolution).
+    pub fn num_bins(&self) -> usize {
+        self.num_bins
+    }
+
+    /// Analysed frequency range `(fmin, fmax)` Hz, for the scope's frequency axis.
+    pub fn freq_range(&self) -> (f32, f32) {
+        (self.spec_config.fmin, self.spec_config.effective_fmax(self.sample_rate))
+    }
+
+    /// Turn scope-column capture on/off. On only for the send the Audio Setup
+    /// scope shows; off clears any buffered columns so they don't pile up while
+    /// undrained.
+    pub fn set_scope(&mut self, on: bool) {
+        if on != self.scope {
+            self.scope = on;
+            if !on {
+                self.scope_cols.clear();
+                self.scope_scalars.clear();
+            }
+        }
+    }
+
+    /// Drain buffered raw spectrogram columns (oldest → newest), one `num_bins`
+    /// slice per call, then clear. No-op when scope capture is off / nothing new.
+    pub fn drain_scope_columns(&mut self, mut f: impl FnMut(&[f32])) {
+        let nb = self.num_bins.max(1);
+        for col in self.scope_cols.chunks_exact(nb) {
+            f(col);
+        }
+        self.scope_cols.clear();
+    }
+
+    /// Drain buffered overlay scalars in lockstep with the columns: four per-band
+    /// centroid heights `[full, low, mid, high]` + three per-band onset impulses
+    /// `[low, mid, high]`. Same stride the scope shader reads.
+    pub fn drain_scope_scalars(&mut self, mut f: impl FnMut([f32; 4], [f32; 3])) {
+        for s in self.scope_scalars.chunks_exact(SCOPE_SCALAR_STRIDE) {
+            f([s[0], s[1], s[2], s[3]], [s[4], s[5], s[6]]);
+        }
+        self.scope_scalars.clear();
     }
 
     /// Retune the analysis band edges to new Low/Mid crossovers (cheap; no
@@ -1149,6 +1202,9 @@ impl StreamingSendAnalyzer {
             vqt_raw,
             state,
             latest,
+            scope,
+            scope_cols,
+            scope_scalars,
             ..
         } = self;
         let (n_fft, hop, nb) = (*n_fft, *hop, *num_bins);
@@ -1196,6 +1252,23 @@ impl StreamingSendAnalyzer {
             // Flux/transients arm only once the window has filled, so the warm-up
             // ramp never reads as a transient (matches the live worker).
             state.has_prev = state.window.len() >= n_fft;
+
+            // Scope capture: buffer the raw (untilted) column + overlay scalars,
+            // exactly what the live worker pushes to its scope rings — the shader
+            // applies its own display tilt. Drained by the runtime each tick.
+            if *scope {
+                scope_cols.extend_from_slice(vqt_raw);
+                let b = &state.features.bands;
+                scope_scalars.extend_from_slice(&[
+                    state.centroid_yfb[0],
+                    state.centroid_yfb[1],
+                    state.centroid_yfb[2],
+                    state.centroid_yfb[3],
+                    b[1].transients,
+                    b[2].transients,
+                    b[3].transients,
+                ]);
+            }
         }
         state.since_hop -= owed * hop;
         *latest = state.features;
@@ -1711,5 +1784,40 @@ mod tests {
     fn streaming_analyzer_sample_rate_round_trips() {
         let a = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
         assert_eq!(a.sample_rate(), SR);
+    }
+
+    #[test]
+    fn streaming_analyzer_scope_emits_columns_in_lockstep() {
+        let mut a = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        let nb = a.num_bins();
+        // Off by default → no columns buffered.
+        for chunk in sine(1000.0, nfft() * 2).chunks(257) {
+            a.push(chunk);
+        }
+        let mut none = 0;
+        a.drain_scope_columns(|_| none += 1);
+        assert_eq!(none, 0, "no columns buffered while scope is off");
+
+        // On → columns + scalars buffer, one scalar set per num_bins column.
+        a.set_scope(true);
+        for chunk in sine(1000.0, nfft() * 4).chunks(257) {
+            a.push(chunk);
+        }
+        let mut scal = 0;
+        a.drain_scope_scalars(|_, _| scal += 1);
+        let mut cols = 0;
+        a.drain_scope_columns(|c| {
+            cols += 1;
+            assert_eq!(c.len(), nb, "each column is num_bins wide");
+        });
+        assert!(cols > 0, "scope buffers columns when enabled");
+        assert_eq!(cols, scal, "one overlay-scalar set per column");
+
+        // Drained → empty; disabling clears any residue.
+        a.push(&sine(1000.0, nfft() * 2));
+        a.set_scope(false);
+        let mut after = 0;
+        a.drain_scope_columns(|_| after += 1);
+        assert_eq!(after, 0, "disabling scope clears buffered columns");
     }
 }

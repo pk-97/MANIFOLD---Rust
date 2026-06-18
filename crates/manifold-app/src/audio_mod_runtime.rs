@@ -113,8 +113,13 @@ pub struct AudioModRuntime {
     /// with the same DSP as a live capture send — so the modulation tracks what's
     /// actually heard (warp, gain, mute all baked in). Keyed by the send's id;
     /// the stored `u32` is the sample rate the analyzer was built for, so a rate
-    /// change rebuilds it. See `docs/AUDIO_LAYER_DESIGN.md` §3R.
+    /// change rebuilds it. When a layer-fed send is the scope's tapped send, its
+    /// analyzer also buffers spectrogram columns (so it draws like a live input).
+    /// See `docs/AUDIO_LAYER_DESIGN.md` §3R.
     layer_analyzers: AHashMap<AudioSendId, (u32, StreamingSendAnalyzer)>,
+    /// The scope's tapped send when it is layer-fed (its columns come from the
+    /// inline analyzer, not the capture worker). `None` = capture send / nothing.
+    tapped_layer_send: Option<AudioSendId>,
 }
 
 impl Default for AudioModRuntime {
@@ -146,6 +151,7 @@ impl Default for AudioModRuntime {
             )),
             tapped_index: None,
             layer_analyzers: AHashMap::new(),
+            tapped_layer_send: None,
         }
     }
 }
@@ -208,34 +214,30 @@ impl AudioModRuntime {
             self.spec_dirty = false;
         }
 
-        // Resolve the scope's send id → worker index against the live project and
-        // write the tap (cheap, every tick — survives rebuilds).
-        let tap_index = self
-            .spec_send
-            .as_ref()
-            .and_then(|id| engine.project().and_then(|p| p.audio_setup.send_index(id)));
-        if let Some(cap) = &self.capture {
-            cap.tap.set_selected(tap_index);
-        }
-        self.tapped_index = tap_index;
-
         // Sync the Low/Mid/High crossovers from the project every tick (cheap
-        // atomic stores). The worker reads this bank live, so a band-divider drag
-        // retunes the analysis bands with no capture restart — same model as gain.
+        // atomic stores). The capture worker AND every per-layer worker read this
+        // shared bank live, so a band-divider drag retunes all analyses with no
+        // restart — same model as gain.
         if let Some(p) = engine.project() {
             self.crossovers
                 .set(p.audio_setup.low_hz, p.audio_setup.mid_hz);
         }
 
-        // ── Layer-fed sends: drain each layer's post-fader tap → features ──
-        // Computed under an immutable engine borrow, then applied below under the
-        // mutable snapshot borrow. The snapshot is indexed by `AudioSetup::sends`
-        // order; layer-fed sends are silent slots from the live worker (empty-
-        // channel SendSpec) or absent (capture dark), so we overwrite them here.
-        // The samples come post-fader off kira, so warp + gain + mute are already
-        // applied — the features track exactly what's heard. See §3R.
+        // ── Layer-fed sends: feed each layer's post-fader tap into its own
+        // AudioFeatureWorker (a one-channel mono "device") — the *same* analysis a
+        // capture send runs. So a layer-fed send produces features + spectrogram
+        // columns + overlay scalars identically to a live input: scope, meters,
+        // and modulation all work, because it IS an input. Spawn lazily once the
+        // layer has a track and the tap has reported its rate; respawn if the
+        // feeding layer changes. Samples are post-fader, so warp/gain/mute are
+        // already baked in. See §3R.
+        //
+        // Features collected here, applied below under the snapshot borrow. The
+        // snapshot is indexed by `AudioSetup::sends` order; layer-fed sends are
+        // silent slots in the capture worker, so we overwrite them.
         let mut layer_features: Vec<(usize, manifold_core::SendFeatures)> = Vec::new();
         let mut send_count = 0usize;
+        let mut tapped_layer_send: Option<AudioSendId> = None;
         if let (Some(project), Some(playback)) = (engine.project(), layer_playback) {
             send_count = project.audio_setup.sends.len();
             let (low_hz, mid_hz) = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
@@ -244,8 +246,8 @@ impl AudioModRuntime {
                     continue;
                 };
                 // The tap reports the mixer's output rate via its first init; until
-                // then there's nothing to analyze (no audio has flowed). Build (or
-                // rebuild on a rate change) the analyzer for that rate.
+                // then no audio has flowed. Build (or rebuild on a rate change) the
+                // analyzer for that rate.
                 let Some(sample_rate) = playback.layer_tap_sample_rate(layer_id) else {
                     continue;
                 };
@@ -263,16 +265,38 @@ impl AudioModRuntime {
                             .1
                     }
                 };
-                // Live-retune the bands to the project crossovers (cheap), then
-                // feed everything the tap produced since last tick. Silence in →
-                // features decay, so a muted/paused layer reads as no modulation.
+                // Live-retune the bands, mark this analyzer as the scope source if
+                // it's the tapped send (so it buffers columns), then feed it the
+                // post-fader samples. Silence in → features decay, so a muted/
+                // paused layer reads as no modulation and a dark scope.
+                let is_tapped = self.spec_send.as_ref() == Some(&send.id);
+                if is_tapped {
+                    tapped_layer_send = Some(send.id.clone());
+                }
                 analyzer.set_crossovers(low_hz, mid_hz);
+                analyzer.set_scope(is_tapped);
                 playback.drain_layer_tap(layer_id, |chunk| analyzer.push(chunk));
                 layer_features.push((i, analyzer.latest()));
             }
         } else if let Some(project) = engine.project() {
             send_count = project.audio_setup.sends.len();
         }
+
+        // Resolve the scope's send → snapshot index (project order) for the
+        // per-band meters. The capture worker draws columns only when the tapped
+        // send is a capture send; a layer-fed send's columns come from its inline
+        // analyzer, so mute the capture tap to avoid producing columns nobody
+        // drains.
+        let tap_index = self
+            .spec_send
+            .as_ref()
+            .and_then(|id| engine.project().and_then(|p| p.audio_setup.send_index(id)));
+        if let Some(cap) = &self.capture {
+            cap.tap
+                .set_selected(if tapped_layer_send.is_some() { None } else { tap_index });
+        }
+        self.tapped_index = tap_index;
+        self.tapped_layer_send = tapped_layer_send;
 
         // Feed the engine. Reuse the snapshot's Vec capacity → no per-frame
         // allocation once warmed. An empty `sends` disables the audio phase.
@@ -294,7 +318,7 @@ impl AudioModRuntime {
             snap.sends
                 .resize(send_count, manifold_core::SendFeatures::default());
         }
-        // Overwrite layer-fed slots with their offline-curve sample.
+        // Overwrite layer-fed slots with their inline-analyzer features.
         for (i, f) in layer_features {
             if let Some(slot) = snap.sends.get_mut(i) {
                 *slot = f;
@@ -312,21 +336,41 @@ impl AudioModRuntime {
         }
     }
 
-    /// Bin count of the current column stream, or 0 if capture is inactive.
+    /// The analyzer feeding the scope when the tapped send is layer-fed (its
+    /// columns come from the inline analyzer, not the capture worker).
+    fn tapped_layer_analyzer(&self) -> Option<&StreamingSendAnalyzer> {
+        let id = self.tapped_layer_send.as_ref()?;
+        self.layer_analyzers.get(id).map(|(_, a)| a)
+    }
+
+    /// Bin count of the current column stream, or 0 if nothing is tapped. Reads
+    /// the layer analyzer when the tapped send is layer-fed, else the capture
+    /// worker.
     pub fn spectrogram_num_bins(&self) -> usize {
+        if let Some(a) = self.tapped_layer_analyzer() {
+            return a.num_bins();
+        }
         self.capture.as_ref().map_or(0, |c| c.columns.num_bins())
     }
 
-    /// Worker index of the scope-tapped send, or `None` when nothing is tapped.
-    /// The content thread uses this to pull the tapped send's features for the
-    /// scope's per-band meters.
+    /// Snapshot index (project send order) of the scope-tapped send, or `None`
+    /// when nothing is tapped. The content thread uses this to pull the tapped
+    /// send's features for the scope's per-band meters. Correct for both capture
+    /// and layer-fed sends, since the snapshot is indexed by project send order.
     pub fn tapped_send_index(&self) -> Option<usize> {
         self.tapped_index
     }
 
     /// Drain all complete VQT columns produced since the last call, oldest →
-    /// newest. No-op when capture is inactive.
+    /// newest. Reads the layer analyzer for a layer-fed tapped send, else the
+    /// capture worker. No-op when nothing is tapped.
     pub fn drain_spectrogram_columns(&mut self, f: impl FnMut(&[f32])) {
+        if let Some(id) = self.tapped_layer_send.clone() {
+            if let Some((_, a)) = self.layer_analyzers.get_mut(&id) {
+                a.drain_scope_columns(f);
+            }
+            return;
+        }
         if let Some(cap) = &mut self.capture {
             cap.columns.drain_columns(f);
         }
@@ -335,16 +379,27 @@ impl AudioModRuntime {
     /// Drain the per-column overlay scalars `([centroid_full, centroid_low,
     /// centroid_mid, centroid_high], [onset_low, onset_mid, onset_high])` produced
     /// since the last call, oldest → newest and in lockstep with
-    /// [`Self::drain_spectrogram_columns`]. No-op when capture is inactive.
+    /// [`Self::drain_spectrogram_columns`]. Layer analyzer for a layer-fed tapped
+    /// send, else the capture worker.
     pub fn drain_spectrogram_scalars(&mut self, f: impl FnMut([f32; 4], [f32; 3])) {
+        if let Some(id) = self.tapped_layer_send.clone() {
+            if let Some((_, a)) = self.layer_analyzers.get_mut(&id) {
+                a.drain_scope_scalars(f);
+            }
+            return;
+        }
         if let Some(cap) = &mut self.capture {
             cap.scalars.drain(f);
         }
     }
 
     /// The scope's analysed frequency range `(fmin, fmax)` Hz — for the
-    /// frequency axis and band-divider overlays. `None` when capture is inactive.
+    /// frequency axis and band-divider overlays. Layer analyzer for a layer-fed
+    /// tapped send, else the capture worker. `None` when nothing is tapped.
     pub fn spectrogram_freq_range(&self) -> Option<(f32, f32)> {
+        if let Some(a) = self.tapped_layer_analyzer() {
+            return Some(a.freq_range());
+        }
         let cap = self.capture.as_ref()?;
         let cfg = manifold_spectral::SpectrogramConfig::default();
         Some((cfg.fmin, cfg.effective_fmax(cap.sample_rate)))

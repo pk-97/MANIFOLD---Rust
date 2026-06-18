@@ -198,7 +198,6 @@ pub fn dispatch(
         | PanelAction::AudioAddSend
         | PanelAction::AudioRemoveSend(..)
         | PanelAction::AudioSendGainStep(..)
-        | PanelAction::AudioSendSourceClicked(..)
         | PanelAction::AudioCrossoverDragBegin
         | PanelAction::AudioCrossoverChanged(..)
         | PanelAction::AudioCrossoverCommit

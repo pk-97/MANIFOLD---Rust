@@ -150,12 +150,31 @@ send. Revisit only if a muted layer should still drive visuals.
    routed tone tapped post-fader at peak 0.2000, decay-to-silence confirmed).
    **In-app warp/gain/mute on a live audio layer still needs a real session.**
 
-**Architecture choice (step 4) — resolved (a).** The live worker is *one ring →
-many sends*; layer taps are *one ring per layer → one send each*. Chose (a): a
-`StreamingSendAnalyzer` per layer-fed send, run **inline on the content thread**
-(not a per-layer thread — the tap's audio thread is kira's; the analysis is a
-handful of VQT hops per tick with pre-allocated scratch, no per-frame alloc).
-Lower risk to the live capture path, which is untouched.
+**Scope unification (2026-06-18 follow-up).** A layer-fed send is now a *real*
+input: the inline analyzer also produces the Audio Setup **spectrogram** columns
++ overlay scalars (same data the capture worker pushes), so selecting a layer-fed
+send draws the scope and per-band meters exactly like a mic/system input. The
+runtime routes the scope drains (`drain_spectrogram_columns`/`_scalars`,
+`spectrogram_num_bins`/`_freq_range`) to the tapped send's analyzer when it's
+layer-fed, and mutes the capture worker's tap so it doesn't produce columns
+nobody reads. The per-band meters already worked (they read the snapshot slot,
+which the analyzer fills). Before this, a layer-fed send drove modulation but the
+scope stayed black — it only ever listened to the capture worker.
+
+**Source is layer-driven, not send-driven.** A send does not pick its source. An
+audio layer routes itself to a send from the **layer header** Send control
+(`SetAudioSendSourceCommand` from the layer side). The Audio Setup panel's
+per-send source chip is a **read-only indicator** ("Cap" or the feeding layer's
+name) — the earlier cycle-the-source-on-the-send button was the wrong direction
+(DAW model: track → send) and was removed.
+
+**Architecture choice (step 4) — resolved (a), inline.** The live worker is *one
+ring → many sends*; layer taps are *one ring per layer → one send each*. Chose a
+`StreamingSendAnalyzer` per layer-fed send run **inline on the content thread** —
+NOT a worker thread per layer. The analysis is a handful of VQT hops per tick
+with pre-allocated scratch (no per-frame alloc); a content hitch only delays
+analysis a frame, it can't glitch audio (kira plays on its own thread). This
+keeps the proven live-capture path untouched and adds zero threads.
 
 ---
 

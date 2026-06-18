@@ -498,9 +498,10 @@ impl AudioSetupPanel {
                 "\u{002B}", // +
             ) as i32;
 
-            // Source cycle button: capture channels ↔ an audio layer. A
-            // layer-fed send accents the button and shows the layer's name; this
-            // is how an audio layer is routed to drive modulation (design §3).
+            // Source indicator (read-only): "Cap" for a capture send, or the
+            // feeding audio layer's name (accented). A send doesn't pick its
+            // source — an audio layer routes itself to a send from the layer
+            // header (design §3R). This is status, not a control.
             const SRC_W: f32 = 48.0;
             let src_x = label_x + LABEL_W + 4.0;
             self.send_ids[i].source = tree.add_button(
@@ -1017,8 +1018,9 @@ impl AudioSetupPanel {
                 Some(PanelAction::AudioSendLabelClicked(send_id))
             }
             RowControl::Source => {
-                self.delete_armed = None;
-                Some(PanelAction::AudioSendSourceClicked(send_id))
+                // Read-only source indicator — routing is driven from the layer
+                // header, not here. No action.
+                None
             }
             RowControl::Channel => {
                 self.delete_armed = None;
@@ -1317,17 +1319,16 @@ mod tests {
     }
 
     #[test]
-    fn source_button_emits_source_clicked_and_is_owned() {
+    fn source_indicator_is_owned_and_read_only() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
         p.build(&mut tree, 1280.0, 720.0);
 
         let src = p.send_ids[0].source;
-        assert!(p.owns_node(src), "source button is a panel-owned node");
-        match p.handle_click(src) {
-            Some(PanelAction::AudioSendSourceClicked(id)) => assert_eq!(id.as_str(), "s1"),
-            other => panic!("expected AudioSendSourceClicked, got {other:?}"),
-        }
+        assert!(p.owns_node(src), "source indicator is a panel-owned node");
+        // Read-only status — a click does nothing (routing is driven from the
+        // layer header, not the send).
+        assert!(p.handle_click(src).is_none(), "source indicator must not act on click");
     }
 
     #[test]

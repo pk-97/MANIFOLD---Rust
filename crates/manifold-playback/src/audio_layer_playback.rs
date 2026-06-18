@@ -131,7 +131,9 @@ struct LayerTrack {
     /// Kept alive to keep the kira track alive (dropping the handle removes it).
     /// Clip voices route here via [`StaticSoundData::output_destination`].
     track: TrackHandle,
-    /// Read end of the tap ring — drained on the content thread each tick.
+    /// Read end of the tap ring — drained on the content thread each tick and fed
+    /// to the send's `StreamingSendAnalyzer` (the analysis runs inline, no worker
+    /// thread; the kira audio thread is the only producer).
     tap: ringbuf::HeapCons<f32>,
     /// Renderer sample rate, written by the tap on init (0 until then).
     sample_rate: Arc<AtomicU32>,
