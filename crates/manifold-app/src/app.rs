@@ -3575,8 +3575,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if crate::project_io::is_supported_video_extension(&path) {
                     // Video files → shared import path (same as Cmd+I)
                     self.import_video_files(std::slice::from_ref(&path));
-                } else if crate::project_io::is_supported_midi_extension(&path) {
-                    // MIDI files → route through ProjectIOService
+                } else if crate::project_io::is_supported_midi_extension(&path)
+                    || crate::project_io::is_supported_audio_extension(&path)
+                {
+                    // MIDI + audio files → route through ProjectIOService.
+                    // Audio drops append a new audio layer + clip at the drop beat.
                     let drop_beat = self.content_state.current_beat.as_f32();
                     let drop_layer = self
                         .active_layer_id
@@ -3597,11 +3600,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else if ext == "json" || ext == "manifold" {
                     // Project files → load project
                     self.open_project_from_path(path.clone());
-                } else if matches!(ext.as_str(), "wav" | "mp3" | "flac" | "aiff" | "ogg") {
-                    log::info!(
-                        "Audio file dropped: {} (audio import not yet implemented)",
-                        path.to_string_lossy()
-                    );
                 } else {
                     log::debug!("Unrecognized file type dropped: {}", path.to_string_lossy());
                 }
