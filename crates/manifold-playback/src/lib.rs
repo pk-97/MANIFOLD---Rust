@@ -3,6 +3,7 @@ pub mod active_window;
 pub mod audio_decoder;
 pub mod audio_layer_playback;
 pub mod audio_sync;
+pub mod audio_warp;
 pub mod clip_launcher;
 pub mod engine;
 pub mod link_sync;
