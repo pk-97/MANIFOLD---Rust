@@ -243,6 +243,12 @@ pub enum PanelAction {
     ClipDetectClicked,
     /// Audio clip: remove the triggers this clip produced.
     ClipClearTriggersClicked,
+    /// Audio clip: toggle detection quantize on/off (re-plans from cache).
+    ClipDetectQuantizeToggled,
+    /// Audio clip: toggle whether instrument N is detected (re-plans from cache).
+    ClipDetectInstrumentToggled(usize),
+    /// Audio clip: cycle instrument N's sensitivity Lo/Md/Hi (re-plans from cache).
+    ClipDetectSensitivityCycled(usize),
     ClipLoopToggle,
     ClipSlipSnapshot,
     ClipSlipChanged(f32),

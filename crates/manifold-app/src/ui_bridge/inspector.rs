@@ -6,9 +6,11 @@ use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_core::{Beats, LayerId, Seconds};
 use manifold_editing::commands::ableton::ChangeAbletonTrimCommand;
+use manifold_core::audio_clip_detection::DetectionConfig;
 use manifold_editing::commands::clip::{
     ChangeClipLoopCommand, ChangeClipRecordedBpmCommand, SlipClipCommand,
 };
+use manifold_editing::commands::clip_detection::SetClipDetectionConfigCommand;
 use manifold_editing::commands::drivers::{
     AddDriverCommand, ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand, ChangeTrimCommand,
     ToggleDriverEnabledCommand, ToggleDriverReversedCommand,
@@ -335,6 +337,32 @@ fn audio_setup_command(
         crate::content_command::ContentCommand::Execute(cmd),
     );
     DispatchResult::structural()
+}
+
+/// Apply an edit to a clip's `DetectionConfig` and re-place its triggers from the
+/// cached analysis. Reads the current config (or default), mutates it, records the
+/// config change (local + content thread), then asks the orchestrator to re-plan
+/// — instant, no backend run. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
+fn apply_detection_edit(
+    project: &mut Project,
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    clip_id: &manifold_core::ClipId,
+    mutate: impl FnOnce(&mut DetectionConfig),
+) {
+    use crate::content_command::ContentCommand;
+    let mut config = project
+        .timeline
+        .find_clip_by_id(clip_id)
+        .and_then(|c| c.audio_detection.as_ref())
+        .map(|d| d.config.clone())
+        .unwrap_or_default();
+    mutate(&mut config);
+
+    let mut cmd: Box<dyn manifold_editing::command::Command + Send> =
+        Box::new(SetClipDetectionConfigCommand::new(clip_id.clone(), config));
+    cmd.execute(project);
+    ContentCommand::send(content_tx, ContentCommand::Execute(cmd));
+    ContentCommand::send(content_tx, ContentCommand::ReplanClip(clip_id.clone()));
 }
 
 pub(super) fn dispatch_inspector(
@@ -738,6 +766,43 @@ pub(super) fn dispatch_inspector(
                 );
             }
             DispatchResult::handled()
+        }
+        PanelAction::ClipDetectQuantizeToggled => {
+            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
+                apply_detection_edit(project, content_tx, &clip_id, |c| {
+                    c.quantize_on = !c.quantize_on;
+                });
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::ClipDetectInstrumentToggled(idx) => {
+            let idx = *idx;
+            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
+                apply_detection_edit(project, content_tx, &clip_id, |c| {
+                    if let Some(inst) = c.instruments.get_mut(idx) {
+                        inst.enabled = !inst.enabled;
+                    }
+                });
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::ClipDetectSensitivityCycled(idx) => {
+            let idx = *idx;
+            if let Some(clip_id) = selection.primary_selected_clip_id.clone() {
+                apply_detection_edit(project, content_tx, &clip_id, |c| {
+                    if let Some(inst) = c.instruments.get_mut(idx) {
+                        // Cycle Lo (0.2) -> Md (0.5) -> Hi (0.8) -> Lo.
+                        inst.sensitivity = if inst.sensitivity < 0.35 {
+                            0.5
+                        } else if inst.sensitivity < 0.65 {
+                            0.8
+                        } else {
+                            0.2
+                        };
+                    }
+                });
+            }
+            DispatchResult::structural()
         }
         PanelAction::ClipLoopToggle => {
             if let Some(clip_id) = &selection.primary_selected_clip_id {

@@ -737,6 +737,18 @@ pub fn push_state(
                 } else {
                     chrome.sync_bpm(tree, "Auto");
                 }
+                // Detection status + progress (what the pipeline is doing).
+                let progress = if content_state.percussion_progress < 0.0 {
+                    0.0
+                } else {
+                    content_state.percussion_progress
+                };
+                chrome.sync_detect_status(
+                    tree,
+                    &content_state.percussion_status_message,
+                    progress,
+                    content_state.percussion_show_progress,
+                );
             } else if is_gen {
                 chrome.sync_name(
                     tree,
@@ -1271,6 +1283,18 @@ pub fn sync_inspector_data(
             ui.inspector
                 .clip_chrome_mut()
                 .set_mode(true, is_video, is_gen, is_audio, clip.is_looping);
+            // Feed the detection rows before build so the row count drives layout.
+            if is_audio {
+                let default_cfg;
+                let cfg = match clip.audio_detection.as_ref() {
+                    Some(d) => &d.config,
+                    None => {
+                        default_cfg = manifold_core::audio_clip_detection::DetectionConfig::default();
+                        &default_cfg
+                    }
+                };
+                ui.inspector.clip_chrome_mut().set_detection(cfg);
+            }
         } else {
             ui.inspector
                 .clip_chrome_mut()
