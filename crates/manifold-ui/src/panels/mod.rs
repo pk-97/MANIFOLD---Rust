@@ -226,6 +226,8 @@ pub enum PanelAction {
     // Inspector chrome — Clip
     ClipChromeCollapseToggle,
     ClipBpmClicked,
+    /// Audio clip: toggle warp on/off (sets recorded BPM to project tempo / 0).
+    ClipWarpToggled,
     ClipLoopToggle,
     ClipSlipSnapshot,
     ClipSlipChanged(f32),

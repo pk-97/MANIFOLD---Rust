@@ -163,6 +163,7 @@ pub fn dispatch(
         | PanelAction::LayerOpacityRightClick
         | PanelAction::ClipChromeCollapseToggle
         | PanelAction::ClipBpmClicked
+        | PanelAction::ClipWarpToggled
         | PanelAction::ClipLoopToggle
         | PanelAction::ClipSlipSnapshot
         | PanelAction::ClipSlipChanged(_)

@@ -36,6 +36,7 @@ pub struct ClipChromePanel {
     source_name_label_id: i32,
     bpm_label_id: i32,
     bpm_value_btn_id: i32,
+    warp_toggle_btn_id: i32,
     loop_toggle_btn_id: i32,
     gen_type_label_id: i32,
     effects_label_id: i32,
@@ -55,6 +56,7 @@ pub struct ClipChromePanel {
     cached_bpm_text: String,
     cached_gen_type: String,
     cached_loop_enabled: bool,
+    cached_warp_enabled: bool,
 
     // Node range
     first_node: usize,
@@ -71,6 +73,7 @@ impl ClipChromePanel {
             source_name_label_id: -1,
             bpm_label_id: -1,
             bpm_value_btn_id: -1,
+            warp_toggle_btn_id: -1,
             loop_toggle_btn_id: -1,
             gen_type_label_id: -1,
             effects_label_id: -1,
@@ -86,6 +89,7 @@ impl ClipChromePanel {
             cached_bpm_text: "Auto".into(),
             cached_gen_type: String::new(),
             cached_loop_enabled: false,
+            cached_warp_enabled: false,
             first_node: 0,
             node_count: 0,
         }
@@ -98,8 +102,8 @@ impl ClipChromePanel {
             if self.mode_video {
                 h += SECTION_LABEL_H + SMALL_ROW_H + BPM_ROW_H + LOOP_BUTTON_H;
             } else if self.mode_audio {
-                // Source label + filename + clip-BPM row (no loop row for now).
-                h += SECTION_LABEL_H + SMALL_ROW_H + BPM_ROW_H;
+                // Source label + filename + warp toggle + clip-BPM row.
+                h += SECTION_LABEL_H + SMALL_ROW_H + LOOP_BUTTON_H + BPM_ROW_H;
             } else if self.mode_generator {
                 h += SMALL_ROW_H;
             }
@@ -413,6 +417,38 @@ impl ClipChromePanel {
         ) as i32;
         cy += SMALL_ROW_H;
 
+        // Warp toggle — on locks the clip's bars to the project tempo (varispeed
+        // for now); off plays the file at its native speed. Drives recorded_bpm
+        // (project tempo / 0) via ChangeClipRecordedBpmCommand.
+        let warp_base = if self.cached_warp_enabled {
+            LOOP_ON_COLOR
+        } else {
+            LOOP_OFF_COLOR
+        };
+        self.warp_toggle_btn_id = tree.add_button(
+            -1,
+            cx,
+            cy,
+            w,
+            LOOP_BUTTON_H,
+            UIStyle {
+                bg_color: warp_base,
+                hover_bg_color: lighten(warp_base, 10),
+                pressed_bg_color: darken(warp_base, 10),
+                text_color: color::TEXT_PRIMARY_C32,
+                font_size: SMALL_FONT_SIZE,
+                corner_radius: color::BUTTON_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+            if self.cached_warp_enabled {
+                "Warp ON"
+            } else {
+                "Warp OFF"
+            },
+        ) as i32;
+        cy += LOOP_BUTTON_H;
+
         // Clip-BPM row
         self.bpm_label_id = tree.add_label(
             -1,
@@ -516,6 +552,30 @@ impl ClipChromePanel {
         }
     }
 
+    pub fn sync_warp_enabled(&mut self, tree: &mut UITree, enabled: bool) {
+        self.cached_warp_enabled = enabled;
+        if self.warp_toggle_btn_id >= 0 {
+            tree.set_text(
+                self.warp_toggle_btn_id as u32,
+                if enabled { "Warp ON" } else { "Warp OFF" },
+            );
+            let base = if enabled { LOOP_ON_COLOR } else { LOOP_OFF_COLOR };
+            tree.set_style(
+                self.warp_toggle_btn_id as u32,
+                UIStyle {
+                    bg_color: base,
+                    hover_bg_color: lighten(base, 10),
+                    pressed_bg_color: darken(base, 10),
+                    text_color: color::TEXT_PRIMARY_C32,
+                    font_size: SMALL_FONT_SIZE,
+                    corner_radius: color::BUTTON_RADIUS,
+                    text_align: TextAlign::Center,
+                    ..UIStyle::default()
+                },
+            );
+        }
+    }
+
     pub fn sync_gen_type(&mut self, tree: &mut UITree, gen_type: &str) {
         self.cached_gen_type = gen_type.into();
         if self.gen_type_label_id >= 0 {
@@ -561,6 +621,9 @@ impl ClipChromePanel {
         }
         if id == self.bpm_value_btn_id && (self.mode_video || self.mode_audio) {
             return vec![PanelAction::ClipBpmClicked];
+        }
+        if id == self.warp_toggle_btn_id && self.mode_audio {
+            return vec![PanelAction::ClipWarpToggled];
         }
         if id == self.loop_toggle_btn_id && self.mode_video {
             return vec![PanelAction::ClipLoopToggle];
@@ -659,9 +722,15 @@ mod tests {
         assert!(panel.bpm_value_btn_id >= 0);
         assert!(panel.source_name_label_id >= 0);
         assert!(panel.effects_label_id >= 0);
+        // Audio mode adds a warp toggle (but no loop toggle).
+        assert!(panel.warp_toggle_btn_id >= 0);
+        assert_eq!(panel.loop_toggle_btn_id, -1);
         // BPM click is live in audio mode.
         let actions = panel.handle_click(panel.bpm_value_btn_id as u32);
         assert!(matches!(actions.as_slice(), [PanelAction::ClipBpmClicked]));
+        // Warp toggle click fires the warp action.
+        let warp = panel.handle_click(panel.warp_toggle_btn_id as u32);
+        assert!(matches!(warp.as_slice(), [PanelAction::ClipWarpToggled]));
     }
 
     #[test]

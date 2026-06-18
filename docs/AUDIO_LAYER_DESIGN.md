@@ -244,7 +244,7 @@ Phases ordered so each ships something usable. Anchors are real file:line from t
 
 **DEFERRED — P4 wiring (the audible Signalsmith swap):**
 - Varispeed warp is the shipping default; Signalsmith stays the verified-but-unwired seam until revisited. The plan when picked up: an **async stretch cache** in `AudioLayerPlayback` keyed by `(ClipId, ratio)` — kick the offline stretch off the content thread, keep **varispeed playing as the instant preview/fallback**, and **swap the voice to the stretched buffer** (rate 1.0, position = `in_point/ratio + elapsed`) once ready; re-stretch on clip-BPM or project-tempo change. Build the kira `StaticSoundData` directly from `frames: Arc<[Frame]>` (public field — no WAV round-trip; confirmed in kira 0.9.6). Needs a runtime ear check (swap click? alignment across the swap?).
-- Also coupled here: clip *timeline length* doesn't yet rescale when clip BPM changes, and the waveform isn't trim-aware — both touch clip-content mapping.
+- Coupled clip-content mapping — **both done 2026-06-18**: the waveform is now trim/warp-aware (a window onto the file, not stretched to fit), and changing clip BPM rescales the clip's *timeline length* (holding the played source span constant) via `ChangeClipRecordedBpmCommand`. A **Warp on/off toggle** alongside the existing Clip-BPM value lives in the audio clip's inspector chrome.
 
 **Remaining — later phases:**
 - **Export (P5), hardening (P6)** — not started.

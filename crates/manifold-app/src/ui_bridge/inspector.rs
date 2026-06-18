@@ -6,7 +6,9 @@ use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_core::{Beats, LayerId, Seconds};
 use manifold_editing::commands::ableton::ChangeAbletonTrimCommand;
-use manifold_editing::commands::clip::{ChangeClipLoopCommand, SlipClipCommand};
+use manifold_editing::commands::clip::{
+    ChangeClipLoopCommand, ChangeClipRecordedBpmCommand, SlipClipCommand,
+};
 use manifold_editing::commands::drivers::{
     AddDriverCommand, ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand, ChangeTrimCommand,
     ToggleDriverEnabledCommand, ToggleDriverReversedCommand,
@@ -660,6 +662,25 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::ClipBpmClicked => DispatchResult::handled(),
+        PanelAction::ClipWarpToggled => {
+            // Audio warp toggle: off (recorded_bpm 0, native speed) ⇄ on (lock to
+            // the project tempo as a sensible default). One BPM command, which
+            // also rescales the clip's timeline length to hold the audio span.
+            if let Some(clip_id) = &selection.primary_selected_clip_id {
+                let clip_id = clip_id.clone();
+                let project_bpm = project.settings.bpm.0;
+                if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
+                    let old_bpm = clip.recorded_bpm;
+                    let new_bpm = if old_bpm > 0.0 { 0.0 } else { project_bpm };
+                    let cmd = ChangeClipRecordedBpmCommand::new(clip_id, old_bpm, new_bpm);
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
+            DispatchResult::structural()
+        }
         PanelAction::ClipLoopToggle => {
             if let Some(clip_id) = &selection.primary_selected_clip_id {
                 let clip_id = clip_id.clone();

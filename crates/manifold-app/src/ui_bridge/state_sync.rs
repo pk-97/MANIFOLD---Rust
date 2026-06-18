@@ -729,6 +729,8 @@ pub fn push_state(
                     .unwrap_or_else(|| "Audio".to_string());
                 chrome.sync_name(tree, &file_name);
                 chrome.sync_source_name(tree, &file_name);
+                // Warp on ⇔ a recorded BPM is set; off (0) plays at native speed.
+                chrome.sync_warp_enabled(tree, clip.recorded_bpm > 0.0);
                 // Clip BPM drives warp; "Auto" (0) means play at native speed.
                 if clip.recorded_bpm > 0.0 {
                     chrome.sync_bpm(tree, &format!("{:.1}", clip.recorded_bpm));
