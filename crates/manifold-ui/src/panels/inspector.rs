@@ -420,11 +420,26 @@ impl InspectorCompositePanel {
         h
     }
 
+    /// Height of the Clip section card (its own card below the layer section),
+    /// or 0 when no clip is selected. BPM / warp / loop chrome lives here.
+    fn clip_section_height(&self) -> f32 {
+        if self.clip_visible && self.clip_chrome.has_clip() {
+            SECTION_CARD_PAD + self.clip_chrome.compute_height() + SECTION_CARD_PAD + SECTION_GAP
+        } else {
+            0.0
+        }
+    }
+
+    /// Total scrollable content height for the right (Layer + Clip) column.
+    fn right_column_height(&self) -> f32 {
+        self.layer_column_height() + self.clip_section_height()
+    }
+
     fn update_scroll_bounds(&mut self) {
         self.master_scroll
             .set_content_height(self.master_column_height());
         self.layer_scroll
-            .set_content_height(self.layer_column_height());
+            .set_content_height(self.right_column_height());
     }
 
     fn update_scrollbar(&self, tree: &mut UITree) {
@@ -1535,6 +1550,47 @@ impl Panel for InspectorCompositePanel {
                         "+ Add Effect",
                     ) as i32;
                 }
+            }
+
+            // Clip section — its own card below the layer section, shown when a
+            // clip is selected. Holds the per-clip chrome (BPM / warp / loop).
+            if self.clip_visible && self.clip_chrome.has_clip() {
+                let clip_top = self.layer_scroll.content_y(0.0) + self.layer_column_height();
+                let section_h =
+                    SECTION_CARD_PAD + self.clip_chrome.compute_height() + SECTION_CARD_PAD;
+                tree.add_panel(
+                    -1,
+                    right_x,
+                    clip_top,
+                    right_content_w,
+                    section_h,
+                    UIStyle {
+                        bg_color: SECTION_CARD_BORDER,
+                        corner_radius: SECTION_CARD_RADIUS,
+                        ..UIStyle::default()
+                    },
+                );
+                tree.add_panel(
+                    -1,
+                    right_x + 1.0,
+                    clip_top + 1.0,
+                    right_content_w - 2.0,
+                    section_h - 2.0,
+                    UIStyle {
+                        bg_color: SECTION_CARD_BG,
+                        corner_radius: SECTION_CARD_RADIUS - 1.0,
+                        ..UIStyle::default()
+                    },
+                );
+                let inner_x = right_x + SECTION_INSET;
+                let inner_w = right_content_w - SECTION_INSET * 2.0;
+                let chrome_h = self.clip_chrome.compute_height();
+                self.clip_chrome.build(
+                    tree,
+                    Rect::new(inner_x, clip_top + SECTION_CARD_PAD, inner_w, chrome_h),
+                );
+            } else {
+                self.clip_chrome.clear_nodes();
             }
         }
         self.layer_scroll.reparent_content(tree, right_start);

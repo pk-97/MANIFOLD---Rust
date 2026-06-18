@@ -119,6 +119,15 @@ impl ClipChromePanel {
     pub fn node_count(&self) -> usize {
         self.node_count
     }
+    /// Whether a clip is currently selected (the chrome has content to show).
+    pub fn has_clip(&self) -> bool {
+        self.has_clip
+    }
+    /// Mark the panel as contributing no nodes this frame (used when the inspector
+    /// skips building it, so a stale node range can't catch a later hit-test).
+    pub fn clear_nodes(&mut self) {
+        self.node_count = 0;
+    }
     pub fn is_dragging(&self) -> bool {
         false
     }
