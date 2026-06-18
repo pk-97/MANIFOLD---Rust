@@ -245,10 +245,13 @@ impl AudioModRuntime {
                 let Some(clip) = layer.active_audio_clip_at(beat) else {
                     continue;
                 };
-                // Offset into the source file the playhead is over (warp is P4;
-                // ratio 1 for now). `in_point` is the clip's start within the file.
+                // Offset into the source file the playhead is over. Elapsed since
+                // the clip start is scaled by the same warp ratio the voice plays
+                // at, so the features sampled here track what's actually heard.
+                // `in_point` is the clip's start within the file.
+                let ratio = clip.warp_ratio(project.settings.bpm.0) as f64;
                 let clip_start_s = engine.beat_to_timeline_time_immut(clip.start_beat).0;
-                let clip_local = (clip.in_point.0 + (now_s - clip_start_s)) as f32;
+                let clip_local = (clip.in_point.0 + (now_s - clip_start_s) * ratio) as f32;
                 if let Some(f) = self.curves.sample_clip(clip, low_hz, mid_hz, clip_local) {
                     layer_features.push((i, f));
                 }

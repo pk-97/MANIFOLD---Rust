@@ -46,6 +46,7 @@ pub struct ClipChromePanel {
     has_clip: bool,
     mode_video: bool,
     mode_generator: bool,
+    mode_audio: bool,
     mode_looping: bool,
 
     // Cached values
@@ -78,6 +79,7 @@ impl ClipChromePanel {
             has_clip: false,
             mode_video: false,
             mode_generator: false,
+            mode_audio: false,
             mode_looping: false,
             cached_name: String::new(),
             cached_source_name: String::new(),
@@ -95,6 +97,9 @@ impl ClipChromePanel {
             h += DIVIDER_H;
             if self.mode_video {
                 h += SECTION_LABEL_H + SMALL_ROW_H + BPM_ROW_H + LOOP_BUTTON_H;
+            } else if self.mode_audio {
+                // Source label + filename + clip-BPM row (no loop row for now).
+                h += SECTION_LABEL_H + SMALL_ROW_H + BPM_ROW_H;
             } else if self.mode_generator {
                 h += SMALL_ROW_H;
             }
@@ -131,11 +136,13 @@ impl ClipChromePanel {
         has_clip: bool,
         is_video: bool,
         is_generator: bool,
+        is_audio: bool,
         is_looping: bool,
     ) -> bool {
         if self.has_clip == has_clip
             && self.mode_video == is_video
             && self.mode_generator == is_generator
+            && self.mode_audio == is_audio
             && self.mode_looping == is_looping
         {
             return false;
@@ -143,6 +150,7 @@ impl ClipChromePanel {
         self.has_clip = has_clip;
         self.mode_video = is_video;
         self.mode_generator = is_generator;
+        self.mode_audio = is_audio;
         self.mode_looping = is_looping;
         true
     }
@@ -204,6 +212,8 @@ impl ClipChromePanel {
 
             if self.mode_video {
                 cy = self.build_video_section(tree, cx, cy, content_w, &source_name, &bpm_text);
+            } else if self.mode_audio {
+                cy = self.build_audio_section(tree, cx, cy, content_w, &source_name, &bpm_text);
             } else if self.mode_generator {
                 cy = self.build_gen_type_row(tree, cx, cy, content_w, &gen_type);
             }
@@ -357,6 +367,92 @@ impl ClipChromePanel {
         cy
     }
 
+    /// Audio-clip section: "Source" label, the file name, and the clip-BPM
+    /// button (the recorded tempo warp locks to the project — Audio Layer §4.1).
+    /// Reuses the same `bpm_value_btn_id` → `ClipBpmClicked` path as video.
+    fn build_audio_section(
+        &mut self,
+        tree: &mut UITree,
+        cx: f32,
+        mut cy: f32,
+        w: f32,
+        source_name: &str,
+        bpm_text: &str,
+    ) -> f32 {
+        // "Source" section label
+        self.source_section_label_id = tree.add_label(
+            -1,
+            cx,
+            cy,
+            w,
+            SECTION_LABEL_H,
+            "Source",
+            UIStyle {
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: SMALL_FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        ) as i32;
+        cy += SECTION_LABEL_H;
+
+        // File name
+        self.source_name_label_id = tree.add_label(
+            -1,
+            cx,
+            cy,
+            w,
+            SMALL_ROW_H,
+            source_name,
+            UIStyle {
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        ) as i32;
+        cy += SMALL_ROW_H;
+
+        // Clip-BPM row
+        self.bpm_label_id = tree.add_label(
+            -1,
+            cx,
+            cy,
+            BPM_LABEL_W,
+            BPM_ROW_H,
+            "Clip BPM",
+            UIStyle {
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+        ) as i32;
+
+        let bpm_btn_w = (w - BPM_LABEL_W - GAP).max(20.0);
+        self.bpm_value_btn_id = tree.add_button(
+            -1,
+            cx + BPM_LABEL_W + GAP,
+            cy + (BPM_ROW_H - 18.0) * 0.5,
+            bpm_btn_w,
+            18.0,
+            UIStyle {
+                bg_color: BPM_BTN_COLOR,
+                hover_bg_color: BPM_BTN_HOVER,
+                pressed_bg_color: color::SLIDER_TRACK_PRESSED_C32,
+                text_color: color::TEXT_PRIMARY_C32,
+                font_size: FONT_SIZE,
+                corner_radius: color::SMALL_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+            bpm_text,
+        ) as i32;
+        cy += BPM_ROW_H;
+
+        cy
+    }
+
     fn build_gen_type_row(
         &mut self,
         tree: &mut UITree,
@@ -463,7 +559,7 @@ impl ClipChromePanel {
         if id == self.chevron_btn_id {
             return vec![PanelAction::ClipChromeCollapseToggle];
         }
-        if id == self.bpm_value_btn_id && self.mode_video {
+        if id == self.bpm_value_btn_id && (self.mode_video || self.mode_audio) {
             return vec![PanelAction::ClipBpmClicked];
         }
         if id == self.loop_toggle_btn_id && self.mode_video {
@@ -544,7 +640,7 @@ mod tests {
     fn build_clip_chrome_video_mode() {
         let mut tree = UITree::new();
         let mut panel = ClipChromePanel::new();
-        panel.set_mode(true, true, false, false);
+        panel.set_mode(true, true, false, false, false);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         assert!(panel.bpm_value_btn_id >= 0);
@@ -553,10 +649,26 @@ mod tests {
     }
 
     #[test]
+    fn build_clip_chrome_audio_mode() {
+        let mut tree = UITree::new();
+        let mut panel = ClipChromePanel::new();
+        panel.set_mode(true, false, false, true, false);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+
+        // Audio mode exposes the clip-BPM button but no loop toggle.
+        assert!(panel.bpm_value_btn_id >= 0);
+        assert!(panel.source_name_label_id >= 0);
+        assert!(panel.effects_label_id >= 0);
+        // BPM click is live in audio mode.
+        let actions = panel.handle_click(panel.bpm_value_btn_id as u32);
+        assert!(matches!(actions.as_slice(), [PanelAction::ClipBpmClicked]));
+    }
+
+    #[test]
     fn build_clip_chrome_gen_mode() {
         let mut tree = UITree::new();
         let mut panel = ClipChromePanel::new();
-        panel.set_mode(true, false, true, false);
+        panel.set_mode(true, false, true, false, false);
         panel.cached_gen_type = "Plasma".into();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
@@ -567,16 +679,16 @@ mod tests {
     #[test]
     fn set_mode_returns_changed() {
         let mut panel = ClipChromePanel::new();
-        assert!(panel.set_mode(true, true, false, false));
-        assert!(!panel.set_mode(true, true, false, false));
-        assert!(panel.set_mode(true, true, false, true));
+        assert!(panel.set_mode(true, true, false, false, false));
+        assert!(!panel.set_mode(true, true, false, false, false));
+        assert!(panel.set_mode(true, true, false, false, true));
     }
 
     #[test]
     fn handle_click_bpm() {
         let mut tree = UITree::new();
         let mut panel = ClipChromePanel::new();
-        panel.set_mode(true, true, false, false);
+        panel.set_mode(true, true, false, false, false);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         let actions = panel.handle_click(panel.bpm_value_btn_id as u32);
@@ -588,7 +700,7 @@ mod tests {
     fn handle_click_loop_toggle() {
         let mut tree = UITree::new();
         let mut panel = ClipChromePanel::new();
-        panel.set_mode(true, true, false, false);
+        panel.set_mode(true, true, false, false, false);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         let actions = panel.handle_click(panel.loop_toggle_btn_id as u32);

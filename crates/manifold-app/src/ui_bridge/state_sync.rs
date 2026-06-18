@@ -722,6 +722,19 @@ pub fn push_state(
                 let clip_dur_s = Seconds::from_f32(clip.duration_beats.as_f32() * spb);
                 chrome.set_slip_range(clip_dur_s.max(Seconds(1.0)));
                 chrome.set_loop_range(clip.duration_beats.max(Beats(1.0)));
+            } else if clip.is_audio() {
+                let file_name = std::path::Path::new(&clip.audio_file_path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Audio".to_string());
+                chrome.sync_name(tree, &file_name);
+                chrome.sync_source_name(tree, &file_name);
+                // Clip BPM drives warp; "Auto" (0) means play at native speed.
+                if clip.recorded_bpm > 0.0 {
+                    chrome.sync_bpm(tree, &format!("{:.1}", clip.recorded_bpm));
+                } else {
+                    chrome.sync_bpm(tree, "Auto");
+                }
             } else if is_gen {
                 chrome.sync_name(
                     tree,
@@ -1229,18 +1242,19 @@ pub fn sync_inspector_data(
             // Value sync (name, bpm, etc.) happens in push_state after build.
             let is_video = !clip.video_clip_id.is_empty();
             let is_gen = clip.generator_type != PresetTypeId::NONE;
+            let is_audio = clip.is_audio();
             ui.inspector
                 .clip_chrome_mut()
-                .set_mode(true, is_video, is_gen, clip.is_looping);
+                .set_mode(true, is_video, is_gen, is_audio, clip.is_looping);
         } else {
             ui.inspector
                 .clip_chrome_mut()
-                .set_mode(false, false, false, false);
+                .set_mode(false, false, false, false, false);
         }
     } else {
         ui.inspector
             .clip_chrome_mut()
-            .set_mode(false, false, false, false);
+            .set_mode(false, false, false, false, false);
     }
 }
 

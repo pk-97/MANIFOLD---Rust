@@ -174,6 +174,21 @@ impl TimelineClip {
         }
     }
 
+    /// Warp ratio for this clip at `project_bpm` (Audio Layer §4.1): how much
+    /// faster than 1× the source must play to lock the clip's recorded tempo to
+    /// the project. `project_bpm / recorded_bpm`, or **1.0 when the clip has no
+    /// recorded BPM** (0 = warp off → source plays at its native speed). The
+    /// single source for both the audio voice (`playback_rate`) and the offline
+    /// modulation-curve index, so what modulates stays aligned to what is heard.
+    pub fn warp_ratio(&self, project_bpm: f32) -> f32 {
+        let clip_bpm = self.recorded_bpm_resolved();
+        if clip_bpm <= 0.0 || project_bpm <= 0.0 {
+            1.0
+        } else {
+            project_bpm / clip_bpm
+        }
+    }
+
     /// Set recorded BPM with clamping. Unity TimelineClip.cs lines 126-133.
     pub fn set_recorded_bpm(&mut self, v: f32) {
         if v <= 0.0 {
@@ -326,6 +341,24 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(clip.recorded_bpm_resolved(), 0.0);
+    }
+
+    #[test]
+    fn test_warp_ratio_passthrough_when_no_clip_bpm() {
+        // recorded_bpm 0 ⇒ warp off ⇒ ratio 1.0 regardless of project tempo.
+        let clip = TimelineClip { recorded_bpm: 0.0, ..Default::default() };
+        assert_eq!(clip.warp_ratio(128.0), 1.0);
+        assert_eq!(clip.warp_ratio(0.0), 1.0);
+    }
+
+    #[test]
+    fn test_warp_ratio_project_over_clip() {
+        // 120-BPM clip on a 128-BPM project must play 128/120× faster.
+        let clip = TimelineClip { recorded_bpm: 120.0, ..Default::default() };
+        assert!((clip.warp_ratio(128.0) - 128.0 / 120.0).abs() < 1e-6);
+        // Clamp applies through recorded_bpm_resolved (10 ⇒ 20).
+        let slow = TimelineClip { recorded_bpm: 10.0, ..Default::default() };
+        assert!((slow.warp_ratio(120.0) - 120.0 / 20.0).abs() < 1e-6);
     }
 
     #[test]

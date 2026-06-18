@@ -233,5 +233,12 @@ Phases ordered so each ships something usable. Anchors are real file:line from t
 - **Send-source selector UI** ✓ — a per-send source button in the Audio Setup panel cycles capture → each audio layer → capture, committing `SetAudioSendSourceCommand`. `state_sync` resolves the label/`layer_fed`; the inspector handler cycles and dispatches.
 - **In-clip waveform painting** ✓ — `AudioWaveformCache` background-decodes each audio clip into a `WaveformRenderer` (the same zoom-aware MIP + spectral-color engine the audio-import lanes use), cached by `ClipId` (lazy, self-evicting), attached to `ViewportClip.waveform` each sync. The bitmap renderer selects the MIP level for the current zoom and paints via `waveform_painter::draw_waveform` across the clip's **full** pixel rect (clamped to visible columns) — so the waveform stays locked to the audio under zoom/scroll. (Earlier flat-peak `draw_clip_waveform` path replaced 2026-06-18: it mapped buckets across the clamped on-screen rect, which broke zoom tracking.)
 
-**Remaining — later phases (not in P0–P3 scope):**
-- **Warp (P4), export (P5), hardening (P6)** — not started; `recorded_bpm` is already the clip-BPM field warp will use.
+**Landed — P4 warp (varispeed half):**
+- **Warp ratio** ✓ — `TimelineClip::warp_ratio(project_bpm)` = `project_bpm / recorded_bpm` (1.0 when `recorded_bpm == 0`, i.e. warp off). The single source for both paths.
+- **Varispeed playback** ✓ — `AudioLayerPlayback` sets the kira voice `playback_rate` to the ratio (declicked) and scales the transport-elapsed term by it; pitch moves with tempo (Signalsmith replaces this next).
+- **Curve alignment** ✓ — `audio_mod_runtime` scales the playhead→curve-seconds by the same ratio, so a warped clip's modulation features track what's heard.
+- **Set-clip-BPM UI** ✓ — audio clips get a "Clip BPM" button in the clip chrome (new `mode_audio` section) reusing the existing `ClipBpmClicked` → `ChangeClipRecordedBpmCommand` path; "Auto" = no warp. Tests for `warp_ratio` + the audio chrome section.
+
+**Remaining — later phases:**
+- **Warp (P4) — Signalsmith** — pitch-preserving stretch behind the `warp(samples, ratio)` seam (offline/ahead, handed to kira at `playback_rate = 1.0`). The varispeed ratio wiring above is the proof-of-wiring it slots into. Note: clip *timeline length* doesn't yet rescale when clip BPM changes, and the waveform isn't trim-aware — both touch clip-content mapping and pair naturally with this step.
+- **Export (P5), hardening (P6)** — not started.

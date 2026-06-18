@@ -115,12 +115,14 @@ impl AudioLayerPlayback {
                 continue;
             };
             active.insert(clip.id.clone());
-            // Source position the playhead is over: elapsed since the clip start,
-            // offset into the file by the clip's in-point. Warp (P4) would scale
-            // the elapsed term; ratio 1 for now.
+            // Source position the playhead is over: wall-clock elapsed since the
+            // clip start, scaled by the warp ratio (varispeed — the voice advances
+            // `ratio` seconds of source per wall second), offset into the file by
+            // the clip's in-point.
+            let ratio = clip.warp_ratio(project.settings.bpm.0);
             let clip_start = engine.beat_to_timeline_time_immut(clip.start_beat);
-            let expected = (now - clip_start) + clip.in_point;
-            self.sync_clip(&clip.id, &clip.audio_file_path, expected, state, volume);
+            let expected = (now - clip_start) * ratio as f64 + clip.in_point;
+            self.sync_clip(&clip.id, &clip.audio_file_path, expected, state, volume, ratio);
         }
 
         // Pause voices whose clip isn't active this tick (declicked).
@@ -143,6 +145,7 @@ impl AudioLayerPlayback {
         expected: Seconds,
         state: PlaybackState,
         volume: f64,
+        ratio: f32,
     ) {
         // Take the existing voice if its file still matches; otherwise (re)build.
         let mut voice = match self.voices.remove(id) {
@@ -162,6 +165,11 @@ impl AudioLayerPlayback {
         };
 
         voice.handle.set_volume(volume, declick());
+        // Varispeed warp: play the source faster/slower so its recorded tempo
+        // locks to the project. Pitch moves with rate (Signalsmith replaces this
+        // for pitch-preserving stretch in the next P4 step). Declicked so a
+        // mid-clip BPM change glides instead of zippering.
+        voice.handle.set_playback_rate(ratio as f64, declick());
         let duration = voice.duration;
         let in_range = expected >= Seconds::ZERO && expected < duration;
         let target = (expected + voice.encoder_delay)
@@ -182,6 +190,7 @@ impl AudioLayerPlayback {
                             Ok(mut h) => {
                                 h.seek_to(target.0);
                                 h.set_volume(volume, Tween::default());
+                                h.set_playback_rate(ratio as f64, Tween::default());
                                 voice.handle = h;
                             }
                             Err(e) => log::warn!("[AudioLayerPlayback] replay failed: {e}"),
