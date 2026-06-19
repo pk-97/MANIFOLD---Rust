@@ -62,6 +62,13 @@ pub struct SpectrogramConfig {
     pub db_min: f32,
     /// Colour-ramp dynamic range ceiling (dB).
     pub db_max: f32,
+    /// Pink-noise spectral tilt (dB/octave) applied to the colourmap and the
+    /// feature reductions alike: pink noise reads as a flat field so a real-world
+    /// mix isn't dominated by its bass. Auto-centred over the displayed range
+    /// (mean 0). This is the SINGLE definition shared by the display shader and
+    /// the detector's `tilt_weights` — they must tilt by the same slope or "what
+    /// you see" and "what triggers" diverge. `0.0` is the raw "Flat" look.
+    pub tilt_slope: f32,
 }
 
 impl Default for SpectrogramConfig {
@@ -89,6 +96,7 @@ impl Default for SpectrogramConfig {
             history_len: 2048,
             db_min: -59.0,
             db_max: 0.0,
+            tilt_slope: 3.0,
         }
     }
 }

@@ -29,13 +29,6 @@ const BUFFER_ROTATION: usize = 3;
 /// `[onset_low, onset_mid, onset_high]`. The shader reads the same stride.
 const SCALAR_STRIDE: usize = 7;
 
-/// Pink-noise spectral tilt (dB/octave) applied to the colourmap, matching the
-/// Analyzer VST's default weighting: pink noise reads as a flat field, so a
-/// real-world mix isn't dominated by its bass energy. Auto-centred over the
-/// displayed range (mean 0) so overall brightness is preserved — see the
-/// shader. `0.0` would be the raw "Flat" look (bass blows out to white).
-const PINK_SLOPE_DB_PER_OCT: f32 = 3.0;
-
 /// Uniform params for the shader. `#[repr(C)]`, 16-byte aligned (two `vec4`-
 /// sized rows) per the GPU uniform-alignment convention.
 #[repr(C)]
@@ -85,15 +78,24 @@ pub struct Spectrogram {
     scalar_bufs: Vec<GpuBuffer>,
     buf_frame: usize,
     pipeline: GpuRenderPipeline,
+    /// Colour-ramp floor (dB) = the single audio floor. Black at/below this. Live:
+    /// the Audio Setup scope updates it per frame via [`set_db_min`](Self::set_db_min)
+    /// from the tapped send's resolved floor, so the display's black point is the
+    /// same number that zeros the detector's column.
     db_min: f32,
     db_max: f32,
+    /// Pink-tilt slope (dB/oct) — the one [`SpectrogramConfig::tilt_slope`], passed
+    /// at construction so the shader tilts by the same slope the detector does.
+    tilt_slope: f32,
 }
 
 impl Spectrogram {
     /// Create a renderer for `num_bins`-tall columns across `num_cols` pixel
     /// columns (pass the scope's physical-pixel width). `color_format` must
     /// match the texture passed to [`render`](Self::render). `db_min`/`db_max`
-    /// set the magnitude→colour dynamic range (e.g. −59 dB → 0 dB).
+    /// set the magnitude→colour dynamic range (e.g. −59 dB → 0 dB); `db_min` is the
+    /// audio floor and may be updated live via [`set_db_min`](Self::set_db_min).
+    /// `tilt_slope` is [`SpectrogramConfig::tilt_slope`] (dB/oct).
     pub fn new(
         device: &GpuDevice,
         num_bins: usize,
@@ -101,6 +103,7 @@ impl Spectrogram {
         color_format: GpuTextureFormat,
         db_min: f32,
         db_max: f32,
+        tilt_slope: f32,
     ) -> Self {
         let elems = num_bins * num_cols;
         let bytes = (elems * std::mem::size_of::<f32>()) as u64;
@@ -141,7 +144,15 @@ impl Spectrogram {
             pipeline,
             db_min,
             db_max,
+            tilt_slope,
         }
+    }
+
+    /// Update the colour-ramp floor (dB) live — the single audio floor. The Audio
+    /// Setup scope calls this each frame with the tapped send's resolved floor so
+    /// the display's black point matches the value that zeros the detector's column.
+    pub fn set_db_min(&mut self, db_min: f32) {
+        self.db_min = db_min;
     }
 
     pub fn num_bins(&self) -> usize {
@@ -182,7 +193,7 @@ impl Spectrogram {
     pub fn sample_db_weighted(&self, ux: f32, uy: f32, freq_log_ratio: f32) -> f32 {
         let raw = self.sample_db(ux, uy);
         if freq_log_ratio > 0.0 {
-            raw + PINK_SLOPE_DB_PER_OCT * freq_log_ratio * (0.5 - uy.clamp(0.0, 1.0))
+            raw + self.tilt_slope * freq_log_ratio * (0.5 - uy.clamp(0.0, 1.0))
         } else {
             raw
         }
@@ -263,7 +274,7 @@ impl Spectrogram {
             db_max: self.db_max,
             band_lo_y: band_ys[0],
             band_hi_y: band_ys[1],
-            tilt_slope: if freq_log_ratio > 0.0 { PINK_SLOPE_DB_PER_OCT } else { 0.0 },
+            tilt_slope: if freq_log_ratio > 0.0 { self.tilt_slope } else { 0.0 },
             freq_log_ratio,
             cursor_y,
             hovered_divider,
