@@ -653,14 +653,16 @@ impl ClipChromePanel {
         }
         cy += PROGRESS_H;
 
-        // Detect / Re-detect button — runs analysis on the clip's file. While a
-        // run is in flight (progress bar shown) it reads "Detecting…".
+        // Detect and Group button — runs analysis on the clip's file, then splits
+        // stems into analysis-only lanes and groups the set (see Detect-and-Group,
+        // AUDIO_CLIP_DETECTION_DESIGN §8). While a run is in flight (progress bar
+        // shown) it reads "Detecting…".
         let detect_label = if self.cached_detect_show {
             "Detecting…"
         } else if self.cached_has_analysis {
-            "Re-detect"
+            "Re-detect & Group"
         } else {
-            "Detect"
+            "Detect and Group"
         };
         self.detect_btn_id = tree.add_button(
             -1,

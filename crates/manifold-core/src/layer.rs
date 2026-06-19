@@ -81,6 +81,12 @@ pub struct Layer {
     /// `docs/AUDIO_LAYER_DESIGN.md` §5 / `LAYER_CONTROLS_DESIGN.md` §5.3.
     #[serde(default, skip_serializing_if = "is_false")]
     pub analysis_only: bool,
+    /// Set ONLY on a Detect-and-Group **group** layer: the source audio lane this
+    /// set was built for. Drives lane-keyed reuse — re-detecting any clip on that
+    /// lane reuses this group's stem lanes + sends instead of making a second set.
+    /// `None` on every other layer. See `docs/AUDIO_CLIP_DETECTION_DESIGN.md` §8.3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detect_group_source: Option<LayerId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effects: Option<Vec<PresetInstance>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -947,6 +953,7 @@ impl Default for Layer {
             opacity: 1.0,
             audio_gain_db: 0.0,
             analysis_only: false,
+            detect_group_source: None,
             effects: None,
             effect_groups: None,
             gen_params: None,
