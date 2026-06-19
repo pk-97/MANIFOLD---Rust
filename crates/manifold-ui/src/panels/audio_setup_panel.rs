@@ -57,6 +57,9 @@ pub struct AudioSendRow {
     pub channel_label: String,
     /// Input gain trim in decibels (0 = unity). Shown on the row's −/＋ stepper.
     pub gain_db: f32,
+    /// Pre-analysis noise floor (dB) for the spectrogram squelch. `<= FLOOR_DB_OFF`
+    /// reads as "Off" on the scope's Floor stepper.
+    pub floor_db: f32,
     /// Number of parameters this send currently drives. Surfaced on the row and
     /// gates a confirm-before-delete so a bound send isn't silently severed.
     pub driven_count: usize,
@@ -271,6 +274,10 @@ pub struct AudioSetupPanel {
     /// present pass blits on top), updated in place each frame by
     /// [`AudioSetupPanel::update_scope_readout`]. `-1` when not built.
     scope_readout_label: i32,
+    /// Pre-analysis floor stepper [−]/[＋] in the scope title row (the spectrogram
+    /// squelch). `-1` when not built.
+    floor_minus_id: i32,
+    floor_plus_id: i32,
     /// Current Low/Mid/High crossovers (Hz) and the scope's analysed frequency
     /// range, pushed every frame by [`AudioSetupPanel::set_scope_bands`]. The
     /// divider lines are drawn shader-side; the panel keeps these only to
@@ -727,14 +734,83 @@ impl AudioSetupPanel {
                     ..UIStyle::default()
                 },
             );
+            // Pre-analysis floor stepper ("Floor [−] val [＋]"): the spectrogram
+            // squelch. Bins below it are gated before display + detection, so the
+            // wash blacks out as it's raised. Sits in the title row, left of the
+            // hover readout. "Off" = no gate.
+            self.floor_minus_id = -1;
+            self.floor_plus_id = -1;
+            let floor_db = self
+                .selected_send
+                .as_ref()
+                .and_then(|id| self.sends.iter().find(|s| &s.id == id))
+                .map(|s| s.floor_db)
+                .unwrap_or(manifold_core::audio_setup::FLOOR_DB_OFF);
+            let floor_text = if floor_db <= manifold_core::audio_setup::FLOOR_DB_OFF {
+                "Off".to_string()
+            } else {
+                format!("{floor_db:.0} dB")
+            };
+            let fl_label_w = 30.0;
+            let fl_btn = 16.0;
+            let fl_val = 52.0;
+            let mut fx = inner_x + inner_w * 0.40;
+            tree.add_label(
+                self.bg_id,
+                fx,
+                cy,
+                fl_label_w,
+                SCOPE_TITLE_H,
+                "Floor",
+                UIStyle {
+                    text_color: Color32::new(150, 150, 160, 255),
+                    font_size: color::FONT_LABEL,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            );
+            fx += fl_label_w;
+            self.floor_minus_id = tree.add_button(
+                self.bg_id,
+                fx,
+                cy,
+                fl_btn,
+                SCOPE_TITLE_H,
+                btn_style(false),
+                "\u{2212}",
+            ) as i32;
+            tree.add_label(
+                self.bg_id,
+                fx + fl_btn,
+                cy,
+                fl_val,
+                SCOPE_TITLE_H,
+                &floor_text,
+                UIStyle {
+                    text_color: Color32::new(190, 190, 198, 255),
+                    font_size: color::FONT_LABEL,
+                    text_align: TextAlign::Center,
+                    ..UIStyle::default()
+                },
+            );
+            self.floor_plus_id = tree.add_button(
+                self.bg_id,
+                fx + fl_btn + fl_val,
+                cy,
+                fl_btn,
+                SCOPE_TITLE_H,
+                btn_style(false),
+                "\u{002B}",
+            ) as i32;
+
             // Hover readout (freq + dB at the cursor), right-aligned in the same
             // title row — outside the waterfall rect, so the present pass's blit
             // doesn't cover it. Empty until the app feeds a value on hover.
             self.scope_readout_label = tree.add_label(
                 self.bg_id,
-                inner_x + inner_w * 0.35,
+                inner_x + inner_w * 0.62,
                 cy,
-                inner_w * 0.65,
+                inner_w * 0.38,
                 SCOPE_TITLE_H,
                 "",
                 UIStyle {
@@ -1212,6 +1288,8 @@ impl AudioSetupPanel {
             || id == self.close_id
             || id == self.device_dropdown_id
             || id == self.add_send_id
+            || (self.floor_minus_id >= 0
+                && (id == self.floor_minus_id || id == self.floor_plus_id))
         {
             return true;
         }
@@ -1228,7 +1306,12 @@ impl AudioSetupPanel {
             return true;
         }
         self.trigger_row_ids.iter().any(|r| {
-            id == r.enable || id == r.sens_minus || id == r.sens_plus || id == r.layer
+            id == r.enable
+                || id == r.sens_minus
+                || id == r.sens_plus
+                || id == r.len_minus
+                || id == r.len_plus
+                || id == r.layer
         })
     }
 
@@ -1381,6 +1464,13 @@ impl AudioSetupPanel {
         if id == self.add_send_id {
             self.delete_armed = None;
             return Some(PanelAction::AudioAddSend);
+        }
+        // Pre-analysis floor stepper (the spectrogram squelch) for the selected send.
+        if self.floor_minus_id >= 0 && (id == self.floor_minus_id || id == self.floor_plus_id) {
+            self.delete_armed = None;
+            let send = self.selected_send.clone()?;
+            let delta = if id == self.floor_plus_id { 6.0 } else { -6.0 };
+            return Some(PanelAction::AudioSendFloorStep(send, delta));
         }
         // Find which send row + control was hit (clone out so we don't hold a
         // borrow across the delete-arm mutation).
@@ -1718,6 +1808,7 @@ mod tests {
                     channels: vec![0],
                     channel_label: "Channel 1".into(),
                     gain_db: 0.0,
+                    floor_db: manifold_core::audio_setup::FLOOR_DB_OFF,
                     driven_count: 0,
                     source_label: "Cap".into(),
                     layer_fed: false,
@@ -1730,6 +1821,7 @@ mod tests {
                     channels: vec![2],
                     channel_label: "MacBook Mic".into(),
                     gain_db: 0.0,
+                    floor_db: manifold_core::audio_setup::FLOOR_DB_OFF,
                     driven_count: 0,
                     source_label: "Cap".into(),
                     layer_fed: false,

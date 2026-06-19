@@ -1228,6 +1228,7 @@ pub fn sync_inspector_data(
                     channel_label: ch_label,
                     channels: s.channels.clone(),
                     gain_db: s.gain_db,
+                    floor_db: s.floor_db,
                     driven_count: project.audio_send_usage_count(&s.id),
                     source_label,
                     layer_fed,

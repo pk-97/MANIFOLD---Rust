@@ -368,6 +368,9 @@ pub enum PanelAction {
     /// The host reads the send's current gain, applies the delta, clamps, and
     /// commits — so the project stays the single source of truth.
     AudioSendGainStep(manifold_core::AudioSendId, f32),
+    /// Step the selected send's pre-analysis noise floor by a dB delta (the
+    /// spectrogram's Floor −/＋). Off ⇄ engaged is handled host-side.
+    AudioSendFloorStep(manifold_core::AudioSendId, f32),
     /// Begin dragging a band-divider line on the spectrogram — snapshot the
     /// current crossovers so the commit records one undo step.
     AudioCrossoverDragBegin,

@@ -39,6 +39,17 @@ fn is_default_source(s: &AudioSendSource) -> bool {
     s.layers.is_empty()
 }
 
+/// The "gate off" floor sentinel — below the colourmap's own dB window, so every
+/// bin passes. Sends default to this; the field skip-serializes when off, so
+/// pre-floor projects round-trip byte-identically.
+pub const FLOOR_DB_OFF: f32 = -120.0;
+fn floor_db_off() -> f32 {
+    FLOOR_DB_OFF
+}
+fn floor_is_off(v: &f32) -> bool {
+    *v <= FLOOR_DB_OFF
+}
+
 /// Per-send analysis configuration: which extractors run for this send.
 ///
 /// Band energy is always computed (the cheap baseline feature). The flags here
@@ -117,6 +128,14 @@ pub struct AudioSend {
     /// required step. Applied live by the worker (no capture restart on change).
     #[serde(default)]
     pub gain_db: f32,
+    /// Pre-analysis noise floor in **decibels**. VQT bins quieter than this are
+    /// gated to silence *before* the column is displayed, band-sliced, or
+    /// feature-extracted — a per-send squelch so quiet bleed between hits can't
+    /// trigger and doesn't clutter the scope. Default = OFF (passes everything).
+    /// Applied live (no capture restart), like [`AudioSend::gain_db`]. See
+    /// `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md` §7.
+    #[serde(default = "floor_db_off", skip_serializing_if = "floor_is_off")]
+    pub floor_db: f32,
     /// Which extractors run for this send.
     #[serde(default)]
     pub analysis: SendAnalysisConfig,
@@ -141,6 +160,7 @@ impl AudioSend {
             label: label.into(),
             channels: Vec::new(),
             gain_db: 0.0,
+            floor_db: FLOOR_DB_OFF,
             analysis: SendAnalysisConfig::default(),
             triggers: Vec::new(),
             source: AudioSendSource::default(),
@@ -528,6 +548,27 @@ mod tests {
         // Default crossovers must not break the empty round-trip.
         assert!(setup.is_empty());
         assert_eq!(serde_json::to_string(&setup).unwrap(), r#"{"sends":[]}"#);
+    }
+
+    #[test]
+    fn floor_db_defaults_off_skips_serialize_and_round_trips_when_set() {
+        // A fresh send is floor-off and must not emit `floorDb` (old projects
+        // round-trip byte-identically).
+        let mut send = AudioSend::new("Kick");
+        assert_eq!(send.floor_db, FLOOR_DB_OFF);
+        assert!(!serde_json::to_string(&send).unwrap().contains("floorDb"));
+
+        // A loaded send without the field reads as off.
+        let loaded: AudioSend =
+            serde_json::from_str(r#"{"id":"x","label":"Kick","channels":[0]}"#).unwrap();
+        assert_eq!(loaded.floor_db, FLOOR_DB_OFF);
+
+        // An engaged floor serializes and round-trips.
+        send.floor_db = -48.0;
+        let json = serde_json::to_string(&send).unwrap();
+        assert!(json.contains("floorDb"));
+        let back: AudioSend = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.floor_db, -48.0);
     }
 
     #[test]

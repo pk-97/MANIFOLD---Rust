@@ -21,8 +21,8 @@ use manifold_editing::commands::audio_mod::{
 };
 use manifold_editing::commands::audio_setup::{
     AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand, SetAudioCrossoversCommand,
-    SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendGainCommand,
-    SetAudioSendTriggersCommand,
+    SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendFloorCommand,
+    SetAudioSendGainCommand, SetAudioSendTriggersCommand,
 };
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
@@ -1569,6 +1569,33 @@ pub(super) fn dispatch_inspector(
                 project,
                 content_tx,
                 Box::new(SetAudioSendGainCommand::new(id.clone(), old, new)),
+            )
+        }
+        PanelAction::AudioSendFloorStep(id, delta_db) => {
+            // Pre-analysis squelch (dB). Off is a sentinel below the usable range:
+            // stepping up from off engages the gate at its bottom; stepping below
+            // the bottom turns it back off. Applied live (AudioModRuntime).
+            const FLOOR_MIN_DB: f32 = -100.0;
+            const FLOOR_MAX_DB: f32 = -6.0;
+            let off = manifold_core::audio_setup::FLOOR_DB_OFF;
+            let old = project
+                .audio_setup
+                .find_send(id)
+                .map(|s| s.floor_db)
+                .unwrap_or(off);
+            let new = if old <= off {
+                if *delta_db > 0.0 { FLOOR_MIN_DB } else { off }
+            } else {
+                let v = old + *delta_db;
+                if v < FLOOR_MIN_DB { off } else { v.min(FLOOR_MAX_DB) }
+            };
+            if (new - old).abs() < f32::EPSILON {
+                return DispatchResult::structural();
+            }
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioSendFloorCommand::new(id.clone(), old, new)),
             )
         }
         PanelAction::AudioTriggerToggled(id, band) => {

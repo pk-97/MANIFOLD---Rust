@@ -809,6 +809,11 @@ pub struct StreamingSendAnalyzer {
     scope: bool,
     scope_cols: Vec<f32>,
     scope_scalars: Vec<f32>,
+    /// Pre-analysis noise floor (dB). Bins quieter than this are zeroed in the
+    /// raw + tilted column before scope display and feature reduction, so the
+    /// squelch is identical in what you see and what you detect. `FLOOR_DB_OFF`
+    /// = no gate (the default).
+    floor_db: f32,
 }
 
 impl StreamingSendAnalyzer {
@@ -841,7 +846,14 @@ impl StreamingSendAnalyzer {
             scope: false,
             scope_cols: Vec::new(),
             scope_scalars: Vec::new(),
+            floor_db: manifold_core::audio_setup::FLOOR_DB_OFF,
         }
+    }
+
+    /// Set the pre-analysis noise floor (dB). Applied live every hop; no rebuild.
+    /// `FLOOR_DB_OFF` (or anything at/below it) disables the gate.
+    pub fn set_floor_db(&mut self, floor_db: f32) {
+        self.floor_db = floor_db;
     }
 
     /// The sample rate this analyzer was built for — the caller rebuilds it if
@@ -909,6 +921,7 @@ impl StreamingSendAnalyzer {
         if mono.is_empty() {
             return;
         }
+        let floor_db = self.floor_db;
         let Self {
             cqt,
             spec_config,
@@ -967,6 +980,19 @@ impl StreamingSendAnalyzer {
                 vqt_raw,
                 &mut state.col,
             );
+            // Pre-analysis floor: zero every bin whose raw magnitude is below the
+            // dB floor, in BOTH the scope (`vqt_raw`) and feature (`state.col`)
+            // column — so the squelch the user sees on the spectrogram is exactly
+            // the signal the bands + transients detect on. Off (sentinel) skips.
+            if floor_db > manifold_core::audio_setup::FLOOR_DB_OFF {
+                let lin_floor = 10f32.powf(floor_db / 20.0);
+                for (raw, c) in vqt_raw.iter_mut().zip(state.col.iter_mut()) {
+                    if *raw < lin_floor {
+                        *raw = 0.0;
+                        *c = 0.0;
+                    }
+                }
+            }
             reduce_send(state, nb, *low_bin, *mid_bin, db_min, db_max);
             state.prev_col.copy_from_slice(&state.col);
             // Flux/transients arm only once the window has filled, so the warm-up
@@ -1508,6 +1534,33 @@ mod tests {
                 && f.bands[mid].amplitude > f.bands[high].amplitude,
             "1 kHz tone lands in mid band: {:?}",
             f.bands.map(|b| b.amplitude),
+        );
+    }
+
+    #[test]
+    fn floor_gate_squelches_below_threshold() {
+        // The same tone, analyzed with the floor off vs. a floor above any bin's
+        // magnitude. Off → mid band has energy; a high floor zeroes every bin
+        // before reduction, so the detected amplitude collapses to silence.
+        let mono = sine(1000.0, nfft() * 4);
+        let (_full, _low, mid, _high) = bands();
+
+        let mut open = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        for chunk in mono.chunks(257) {
+            open.push(chunk);
+        }
+        let amp_open = open.latest().bands[mid].amplitude;
+        assert!(amp_open > 0.0, "floor off: tone is detected ({amp_open})");
+
+        let mut gated = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        gated.set_floor_db(20.0); // lin floor = 10, above every normalized bin
+        for chunk in mono.chunks(257) {
+            gated.push(chunk);
+        }
+        assert_eq!(
+            gated.latest().bands[mid].amplitude,
+            0.0,
+            "a floor above every bin squelches the whole column",
         );
     }
 

@@ -305,6 +305,8 @@ impl AudioModRuntime {
                 };
                 entry.analyzer.set_crossovers(low_hz, mid_hz);
                 entry.analyzer.set_scope(is_tapped);
+                // Pre-analysis squelch: applied live, identical for scope + features.
+                entry.analyzer.set_floor_db(send.floor_db);
 
                 // Build the send's mixed mono for this tick.
                 mono_mix.clear();

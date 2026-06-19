@@ -204,6 +204,41 @@ impl Command for SetAudioSendGainCommand {
     }
 }
 
+/// Set a send's pre-analysis noise floor (dB). The analyzer gates bins below it
+/// before scope display + feature/transient extraction — a per-send squelch.
+/// Applied live by the runtime without restarting capture, like
+/// [`SetAudioSendGainCommand`].
+#[derive(Debug)]
+pub struct SetAudioSendFloorCommand {
+    id: AudioSendId,
+    old_db: f32,
+    new_db: f32,
+}
+
+impl SetAudioSendFloorCommand {
+    pub fn new(id: AudioSendId, old_db: f32, new_db: f32) -> Self {
+        Self { id, old_db, new_db }
+    }
+}
+
+impl Command for SetAudioSendFloorCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
+            s.floor_db = self.new_db;
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(s) = project.audio_setup.find_send_mut(&self.id) {
+            s.floor_db = self.old_db;
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Set Audio Send Floor"
+    }
+}
+
 /// Set the global Low/Mid/High crossover frequencies (Hz) — the band splits the
 /// analysis worker reads and the spectrogram draws as divider lines. One command
 /// captures both so a drag on either line is a single undo step. Applied live by
