@@ -8,15 +8,18 @@ Created 2026-06-18.
 
 ## 0. CURRENT POSITION (read first, update last)
 
-- **Status: FEATURE COMPLETE (pending runtime verification).** Phases 0–6 all done. Builds +
-  clippy clean across touched crates; core (275), io (17), ui (293), playback (103+18),
-  editing (7) tests green. Amber send-label cue marks sends with active routes.
-- **The ONE remaining task is Peter's:** run the app, point a real stem at a send, enable a
-  route, confirm onsets fire clips on the target layer and the latency/feel is right. Watch
-  for: octave/feel of sensitivity steps, layout/spacing of the Triggers rows at the modal
-  width, and whether the ~85 ms detector latency feels tight enough.
-- **Deferred (documented, not blocking):** per-route one-shot length control (model supports
-  it, defaulted to 1 beat); stopped-transport live triggering (v1 fires in `tick_playing`).
+- **Status: FIRES + RENDERS end-to-end (verified live 2026-06-19).** Phases 0–6 done. The
+  render bug is fixed (see the §3.4 note + `[[live-audio-triggers]]` memory): a one-shot now
+  snaps on the **beat clock** (`beat_stamp = current_beat`, `event_absolute_tick = -1`), not
+  `get_current_absolute_tick()` — that returns a frame counter with no external MIDI clock, so
+  the slot's window looked long-expired and `start_clip` never ran (black viewport). Regression
+  test `fire_oneshot_starts_at_playhead_when_abs_tick_is_frame_based`.
+- **NOW IN PROGRESS — Phase 7, the legibility & tuning upgrades (§7).** The panel works but
+  reads as a config form, not an instrument: you can't see triggers fire, can't see why they
+  fire/don't, and there's no upstream squelch. Four upgrades make the analysis legible and
+  tunable by eye while the track plays. Build order: flash → meter → floor → Whole/length.
+- **Deferred (documented, not blocking):** stopped-transport live triggering (v1 fires in
+  `tick_playing`). Per-route one-shot length is now IN scope (§7 upgrade 4).
 
 ## 1. What this is
 
@@ -51,13 +54,15 @@ no BPM — just edge-detect the transient that's already computed and fire a cli
 3. **Routes are per-send, edited under the scope** in the Audio Setup modal (not a global
    table). The modal is the right home — the scope already draws the transient ticks you
    trigger on. A `⚡` on each send row lights when it has active routes.
-4. **Quantize = the project quantize_mode**, reused verbatim from the MIDI clip-launch path
-   (Off/¼/Beat/Bar). REVISED from a per-route grid: audio fires pass
-   `event_absolute_tick = get_current_absolute_tick()` + `midi_note = -1` into the *same*
-   proven `trigger_live_clip` path MIDI uses, so there is zero new timing math and no
-   tick-domain risk (a timing bug becomes the show). The per-route `quantize` field was
-   dropped. Stopped-transport live triggering is deferred (beat-based expiry needs a running
-   clock); v1 fires in `tick_playing` — which is exactly when you perform (transport follows
+4. **Quantize = the project quantize_mode**, reused from the MIDI clip-launch path
+   (Off/¼/Beat/Bar). **CORRECTED 2026-06-19:** a live audio fire has NO musical tick (it fires
+   in real time at the playhead), so it passes `beat_stamp = current_beat` + `event_absolute_tick
+   = -1` + `midi_note = -1` into the *same* `trigger_live_clip` path MIDI uses — routing through
+   the beat-domain snap. The earlier `event_absolute_tick = get_current_absolute_tick()` was the
+   render bug: that resolver returns a frame counter without an external MIDI clock, producing a
+   start_beat unrelated to the playhead (a timing bug became the show). The per-route `quantize`
+   field stays dropped. Stopped-transport live triggering is deferred (beat-based expiry needs a
+   running clock); v1 fires in `tick_playing` — which is exactly when you perform (transport follows
    Link/MIDI clock from the incoming music).
 5. **Auto-route by name** — a send named "Kick" routes to a layer named "Kick" (reuse the
    name-match idea from `percussion` auto-route). Explicit routes override.
@@ -150,3 +155,100 @@ transient has no NoteOff. Engine runs expiry + fire in `tick_playing` after modu
 - Refactor for reuse; **do not copy-paste** `trigger_live_clip` for the one-shot path.
 - Don't build this on a future UI API — current widgets only; Phase 2b of the UI overhaul
   will migrate this panel with the rest (see `docs/UI_ARCHITECTURE_OVERHAUL.md`).
+
+## 7. Legibility & tuning upgrades (Phase 7)
+
+The panel fires and renders, but it reads as a config form. Four upgrades turn it into an
+instrument you can tune **by eye while the track plays**. One goal: *what you see is what you
+detect on, and you can see it fire.*
+
+### The signal path (where each upgrade lives)
+
+```
+ PER SEND  (once — "what you see = what you detect")
+ ─────────────────────────────────────────────
+   capture + layer taps
+        │
+        ▼
+   [ input gain ]                                         (exists: send gain)
+        │
+        ▼
+   [ floor / gate ] ◄── draggable line on spectrogram     UPGRADE 3  (per-bin spectral floor)
+        │
+        ▼
+   [ 4096-pt VQT ] ──┬──► SPECTROGRAM  (what you see)
+                     │
+                     └──► Low · Mid · High · Whole  (SLICES of the same gated column)
+                                   │
+ PER ROW  (post — the firing decision)
+ ─────────────────────────────────────
+                                   ▼
+                          [ sensitivity threshold ] ◄── live level meter   UPGRADE 2
+                                   │ crosses → FIRE   ──► row flash         UPGRADE 1
+                                   ▼
+                          one-shot (length) ──► target layer                UPGRADE 4
+```
+
+The floor is **one control per send**, applied to the single VQT column before display AND
+before band slicing AND before features — it is NOT per band (there is one 4096-pt VQT per
+send; bands are reductions of it; `[[audio-vqt-feature-unification]]`). The per-row sensitivity
+is the only *post*-analysis control: it does not change the spectrogram, only the fire decision.
+
+### Upgrade 1 — Firing flash (do first; cheapest, highest leverage)
+Each trigger row pulses in its band colour the instant it fires. Proves the loop is alive and
+lets you confirm a band is catching the hits without looking away at the output. Needs: the
+engine surfaces *which routes fired this tick* to the UI (a per-send, per-band fire pulse in
+the `ContentState` snapshot, decaying like the transient impulse), and the panel row draws a
+colour flash driven by it. No model change — pure runtime/UI.
+
+### Upgrade 2 — Level + threshold meter per row
+Replace the blind `50%` with a live horizontal meter: the band's current transient level, with
+the sensitivity **threshold marked as a line**. Tuning becomes visual — "kick peaks clearly
+cross the line, snare bleed doesn't." The `%` stepper stays (sets the threshold line); the meter
+just shows level-vs-line. Needs: per-send per-band level in the snapshot (same plumbing as the
+flash). No model change.
+
+```
+ NOW:        [■] Low    - 50% +   →    Kick ▼
+
+ UPGRADED:        level ▕▆▆▆▅▃▁··········┊······▏   ┊ = threshold (the % sets it)
+             [■]⚡ Low    ▕▔▔ 50% ▔▏   1 beat ▼    Kick ▼
+                  │                     │
+               flash on fire       one-shot length
+```
+
+### Upgrade 3 — Input floor / spectral gate (most code — touches the analyzer)
+A per-send **floor**: VQT bins below it are zeroed *before* the column is displayed, sliced, or
+feature-extracted. Acts as a squelch — quiet bleed/noise between hits can't trigger and doesn't
+clutter the view. NOTE: onset detection keys on *change*, not absolute level, so the floor is a
+squelch (mute-below), not "only loud things have onsets." Drawn as a **draggable horizontal line
+on the spectrogram**; drag up, the wash below vanishes and the onset ticks thin to just the hits.
+Model: a `floor_db` (or 0..1) field on `AudioSend` (serialized, default = no gate); editing
+command to set it; analyzer applies it to the VQT column once per hop. Per-bin spectral gate
+preferred over a broadband RMS gate (cleaner spectrogram, matches the drag gesture).
+
+```
+ 20k ┤ ░░░  ░░   ░░░░   ░░ ░░░
+  1k ┤ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+     ╞═══════════════════════════  ◄ FLOOR — drag up, wash below is gated + hidden
+ 100 ┤ ·· (below floor: gated, never detected)
+     └───────────────────────────► time
+        ▎   ▎    ▎   ▎    ▎   ▎      onset ticks — only surviving hits remain
+```
+
+### Upgrade 4 — Clarify "Whole" + expose one-shot length, drop the `→`
+"Whole" is the *parent* (full-mix transient), not a peer of L/M/H — separate or relabel
+("Full mix") so the relationship reads. Expose **per-route one-shot length** (model already has
+`one_shot_beats`, defaulted 1 beat) as a small stepper/dropdown — flash-vs-sustain matters live.
+Drop the decorative `→` between sensitivity and target.
+
+### Phase 7 checklist (tick + commit as you go)
+- [ ] **7.1 Fire pulse plumbing.** Engine surfaces per-send per-band `fired`/`level` in the
+      `ContentState` snapshot (decaying pulse, no per-frame alloc). state_sync → `AudioSendRow`.
+- [ ] **7.2 Row flash (Upgrade 1).** Panel draws the band-colour flash from the pulse.
+- [ ] **7.3 Row meter (Upgrade 2).** Level-vs-threshold meter on each row; `%` sets the line.
+- [ ] **7.4 Input floor (Upgrade 3).** `AudioSend.floor` field + editing command + analyzer
+      gate (per-bin, pre-display/slice/features) + draggable spectrogram line. Migration bump.
+- [ ] **7.5 Whole/length/arrow (Upgrade 4).** Relabel Whole; one-shot length control; drop `→`.
+- [ ] **7.6 Ship.** Builds + clippy clean; core/io/ui/playback/editing tests green; migration
+      round-trip; commit + push; update §0 + memory.
