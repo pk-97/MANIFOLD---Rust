@@ -393,6 +393,7 @@ impl ProjectIOService {
         file_paths: &[PathBuf],
         drop_beat: f32,
         drop_layer_index: i32,
+        join_audio_layer: Option<manifold_core::LayerId>,
         project: &mut Project,
         seconds_per_beat: f32,
     ) -> ProjectIOAction {
@@ -529,9 +530,19 @@ impl ProjectIOService {
             imported_count += 1;
         }
 
-        // Process audio files → one audio layer + clip each (Audio Layer feature,
-        // docs/AUDIO_LAYER_DESIGN.md). Each dropped audio file becomes its own
-        // audio track appended to the layer list, with the clip at the drop beat.
+        // Process audio files (Audio Layer feature, docs/AUDIO_LAYER_DESIGN.md §6).
+        // A file dropped ONTO an existing audio lane joins it (a new clip on that
+        // lane at the drop beat); a file dropped on empty timeline space appends
+        // its own new audio lane. `join_audio_layer` is the lane under the cursor,
+        // validated here to still exist and be audio.
+        let join_target: Option<manifold_core::LayerId> = join_audio_layer.and_then(|id| {
+            project
+                .timeline
+                .layers
+                .iter()
+                .find(|l| l.layer_id == id && l.is_audio())
+                .map(|l| l.layer_id.clone())
+        });
         let mut audio_imported = 0;
         for raw_path in file_paths {
             let file_path = match resolve_dropped_file_path(raw_path) {
@@ -542,10 +553,6 @@ impl ProjectIOService {
                 continue;
             }
 
-            let file_name = file_path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Audio".to_string());
             let path_str = file_path.to_string_lossy().into_owned();
             // Decode once: the full file length bounds trimming (source_duration)
             // and, at the project tempo, sets the initial clip length.
@@ -556,23 +563,32 @@ impl ProjectIOService {
                 manifold_core::Beats::ZERO
             };
 
-            // New audio layer appended at the bottom of the stack.
-            let insert_index = project.timeline.layers.len();
-            let mut add_layer = AddLayerCommand::new(
-                file_name,
-                manifold_core::types::LayerType::Audio,
-                PresetTypeId::NONE,
-                insert_index,
-                None,
-            );
-            add_layer.execute(project);
-            let Some(layer_id) = project
-                .timeline
-                .layers
-                .get(insert_index)
-                .map(|l| l.layer_id.clone())
-            else {
-                continue;
+            // Join the targeted audio lane, or append a new one for this file.
+            let (layer_id, add_layer_cmd) = if let Some(ref target) = join_target {
+                (target.clone(), None)
+            } else {
+                let file_name = file_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Audio".to_string());
+                let insert_index = project.timeline.layers.len();
+                let mut add_layer = AddLayerCommand::new(
+                    file_name,
+                    manifold_core::types::LayerType::Audio,
+                    PresetTypeId::NONE,
+                    insert_index,
+                    None,
+                );
+                add_layer.execute(project);
+                let Some(lid) = project
+                    .timeline
+                    .layers
+                    .get(insert_index)
+                    .map(|l| l.layer_id.clone())
+                else {
+                    continue;
+                };
+                (lid, Some(add_layer))
             };
 
             let clip = TimelineClip::new_audio(
@@ -585,17 +601,23 @@ impl ProjectIOService {
             let mut add_clip = AddClipCommand::new(clip, layer_id, seconds_per_beat);
             add_clip.execute(project);
 
-            // One undo step per dropped audio file: remove the clip, then the layer.
-            action.record_commands.push(Box::new(CompositeCommand::new(
-                vec![Box::new(add_layer), Box::new(add_clip)],
-                "Drop audio".to_string(),
-            )));
+            // One undo step per file: a new lane removes clip + lane; a join removes
+            // just the clip.
+            let cmd: Box<dyn Command> = match add_layer_cmd {
+                Some(add_layer) => Box::new(CompositeCommand::new(
+                    vec![Box::new(add_layer), Box::new(add_clip)],
+                    "Drop audio".to_string(),
+                )),
+                None => Box::new(add_clip),
+            };
+            action.record_commands.push(cmd);
             action.needs_clip_sync = true;
             audio_imported += 1;
         }
         if audio_imported > 0 {
+            let how = if join_target.is_some() { "onto lane" } else { "as new lane(s)" };
             log::info!(
-                "[ProjectIO] Dropped {audio_imported} audio file(s) as audio layer(s) at beat {drop_beat:.2}"
+                "[ProjectIO] Dropped {audio_imported} audio file(s) {how} at beat {drop_beat:.2}"
             );
         }
 
@@ -851,6 +873,7 @@ mod tests {
             std::slice::from_ref(&temp_path),
             0.0,
             0,
+            None,
             &mut project,
             0.5,
         );

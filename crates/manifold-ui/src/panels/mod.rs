@@ -845,6 +845,7 @@ pub enum PanelAction {
     ContextPasteAtTrack(f32, usize), // beat, layer
     ContextAddVideoLayer(usize),     // after_layer
     ContextAddGeneratorLayer(usize), // after_layer
+    ContextAddAudioLayer(usize),     // after_layer
     ContextDeleteLayer(usize),       // layer_index
     ContextDuplicateLayer(usize),    // layer_index
     ContextPasteAtLayer(usize),      // layer_index

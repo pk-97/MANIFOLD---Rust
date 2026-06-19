@@ -253,6 +253,21 @@ pub(super) fn dispatch_editing(
             }
             DispatchResult::structural()
         }
+        PanelAction::ContextAddAudioLayer(after_layer) => {
+            {
+                let idx = after_layer + 1;
+                let name = format!("Audio {}", project.timeline.layers.len() + 1);
+                let cmd =
+                    AddLayerCommand::new(name, LayerType::Audio, PresetTypeId::NONE, idx, None);
+                {
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
+            DispatchResult::structural()
+        }
 
         PanelAction::ContextDeleteLayer(layer_idx) => {
             {

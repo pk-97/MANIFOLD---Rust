@@ -122,6 +122,7 @@ pub fn dispatch(
         | PanelAction::ContextPasteAtTrack(..)
         | PanelAction::ContextAddVideoLayer(_)
         | PanelAction::ContextAddGeneratorLayer(_)
+        | PanelAction::ContextAddAudioLayer(_)
         | PanelAction::ContextDeleteLayer(_)
         | PanelAction::ContextDuplicateLayer(_)
         | PanelAction::ContextPasteAtLayer(_)

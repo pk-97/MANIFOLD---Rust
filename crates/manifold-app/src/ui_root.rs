@@ -1639,6 +1639,7 @@ impl UIRoot {
                     DropdownItem::new("Import MIDI File"),
                     DropdownItem::new("Insert Video Layer"),
                     DropdownItem::new("Insert Generator Layer"),
+                    DropdownItem::new("Insert Audio Layer"),
                 ];
                 self.dropdown_context = Some(DropdownContext::TrackContext(*beat, *layer));
                 self.dropdown
@@ -1655,6 +1656,7 @@ impl UIRoot {
                 }
                 items.push(DropdownItem::new("Insert Video Layer"));
                 items.push(DropdownItem::new("Insert Generator Layer"));
+                items.push(DropdownItem::new("Insert Audio Layer"));
                 items.push(DropdownItem::new("Duplicate Layer"));
                 // "Group" only when 2+ non-group, non-nested layers are selected
                 let can_group = self.layer_headers.layer_count() >= 2 && !is_group;
@@ -1869,6 +1871,7 @@ impl UIRoot {
                 1 => Some(PanelAction::ContextImportMidi(layer)),
                 2 => Some(PanelAction::ContextAddVideoLayer(layer)),
                 3 => Some(PanelAction::ContextAddGeneratorLayer(layer)),
+                4 => Some(PanelAction::ContextAddAudioLayer(layer)),
                 _ => None,
             },
             DropdownContext::LayerContext(layer_idx) => match self.dropdown.item_label(index) {
@@ -1878,6 +1881,7 @@ impl UIRoot {
                 Some("Insert Generator Layer") => {
                     Some(PanelAction::ContextAddGeneratorLayer(layer_idx))
                 }
+                Some("Insert Audio Layer") => Some(PanelAction::ContextAddAudioLayer(layer_idx)),
                 Some("Duplicate Layer") => Some(PanelAction::ContextDuplicateLayer(layer_idx)),
                 Some("Group Selected Layers") => Some(PanelAction::ContextGroupSelectedLayers),
                 Some("Ungroup") => Some(PanelAction::ContextUngroup(layer_idx)),

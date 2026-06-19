@@ -3591,8 +3591,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     || crate::project_io::is_supported_audio_extension(&path)
                 {
                     // MIDI + audio files → route through ProjectIOService.
-                    // Audio drops append a new audio layer + clip at the drop beat.
-                    let drop_beat = self.content_state.current_beat.as_f32();
+                    // winit's file-drop carries no coordinates, so resolve the drop
+                    // target from the last tracked cursor position: over an existing
+                    // audio lane → the file joins it; over empty timeline → a new lane.
+                    // Beat comes from the cursor x when inside the tracks area.
+                    let pos = self.cursor_pos;
+                    let vp = &self.ws.ui_root.viewport;
+                    let in_tracks = vp.get_tracks_rect().contains(pos);
+                    let drop_beat = if in_tracks {
+                        vp.pixel_to_beat(pos.x).as_f32().max(0.0)
+                    } else {
+                        self.content_state.current_beat.as_f32()
+                    };
+                    let join_audio_layer = if in_tracks {
+                        vp.layer_at_y(pos.y)
+                            .and_then(|i| self.local_project.timeline.layers.get(i))
+                            .filter(|l| l.is_audio())
+                            .map(|l| l.layer_id.clone())
+                    } else {
+                        None
+                    };
                     let drop_layer = self
                         .active_layer_id
                         .as_ref()
@@ -3605,6 +3623,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         std::slice::from_ref(&path),
                         drop_beat,
                         drop_layer,
+                        join_audio_layer,
                         &mut self.local_project,
                         spb,
                     );
