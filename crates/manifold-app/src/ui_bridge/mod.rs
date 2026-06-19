@@ -218,6 +218,7 @@ pub fn dispatch(
         | PanelAction::AudioSendChannelClicked(..)
         | PanelAction::AudioTriggerToggled(..)
         | PanelAction::AudioTriggerSensitivityStep(..)
+        | PanelAction::AudioTriggerLengthStep(..)
         | PanelAction::AudioTriggerLayerClicked(..)
         | PanelAction::AudioTriggerSetLayer(..)
         | PanelAction::TrimChanged(..)

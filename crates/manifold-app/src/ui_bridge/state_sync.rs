@@ -1217,6 +1217,7 @@ pub fn sync_inspector_data(
                                 || manifold_core::audio_trigger::TriggerRoute::new(band).threshold(),
                                 |r| r.threshold(),
                             ),
+                            one_shot_beats: route.map_or(1.0, |r| r.one_shot_beats.as_f32()),
                             layer_label,
                         }
                     })

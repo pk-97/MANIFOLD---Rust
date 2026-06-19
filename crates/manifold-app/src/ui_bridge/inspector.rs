@@ -1596,6 +1596,22 @@ pub(super) fn dispatch_inspector(
                 Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
             )
         }
+        PanelAction::AudioTriggerLengthStep(id, band, factor) => {
+            let Some(send) = project.audio_setup.find_send(id) else {
+                return DispatchResult::structural();
+            };
+            let old = send.triggers.clone();
+            // Multiplicative (halve/double), clamped to a musical 1/4..16 beat range.
+            let new = send.triggers_with_route(*band, |r| {
+                let beats = (r.one_shot_beats.as_f32() * *factor).clamp(0.25, 16.0);
+                r.one_shot_beats = manifold_core::units::Beats::from_f32(beats);
+            });
+            audio_setup_command(
+                project,
+                content_tx,
+                Box::new(SetAudioSendTriggersCommand::new(id.clone(), old, new)),
+            )
+        }
         PanelAction::AudioTriggerSetLayer(id, band, layer) => {
             let Some(send) = project.audio_setup.find_send(id) else {
                 return DispatchResult::structural();

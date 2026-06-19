@@ -90,6 +90,8 @@ pub struct TriggerRouteRow {
     /// `sensitivity` by core's `TriggerRoute::threshold()`. The row meter marks
     /// it so tuning is "does the level cross this line," not a blind percent.
     pub threshold: f32,
+    /// One-shot length in beats — how long a fired clip holds (flash vs sustain).
+    pub one_shot_beats: f32,
     /// Resolved target label: "Auto" (route by name) or a layer's name.
     pub layer_label: String,
 }
@@ -157,7 +159,23 @@ const TRIG_LABEL_W: f32 = 52.0;
 const TRIG_ENABLE_W: f32 = 22.0;
 const TRIG_SENS_BTN_W: f32 = 16.0;
 const TRIG_SENS_VAL_W: f32 = 40.0;
-const TRIG_ARROW_W: f32 = 16.0;
+/// One-shot length value width (shows "1/4", "1b", "2b" …).
+const TRIG_LEN_VAL_W: f32 = 34.0;
+
+/// Format a one-shot length (beats) compactly for the row stepper. Common
+/// musical divisions read as fractions; whole beats get a "b" suffix.
+fn format_beats(b: f32) -> String {
+    let near = |v: f32| (b - v).abs() < 0.01;
+    if near(0.25) {
+        "1/4".to_string()
+    } else if near(0.5) {
+        "1/2".to_string()
+    } else if b.fract().abs() < 0.01 {
+        format!("{}b", b.round() as i32)
+    } else {
+        format!("{b:.2}")
+    }
+}
 /// Per-row band, in `AudioBand::ALL` order, with its display label. `Full` reads
 /// as "Whole" — the whole-signal onset for a separated stem.
 const TRIG_BANDS: [(AudioBand, &str); 4] = [
@@ -173,6 +191,8 @@ struct TriggerRowIds {
     enable: i32,
     sens_minus: i32,
     sens_plus: i32,
+    len_minus: i32,
+    len_plus: i32,
     layer: i32,
     // Live level meter (resized in place each frame by `update_trigger_levels`):
     // a track + a band-coloured fill = the transient level, with a threshold
@@ -959,22 +979,41 @@ impl AudioSetupPanel {
             ) as i32;
             x += TRIG_SENS_BTN_W * 2.0 + TRIG_SENS_VAL_W + 4.0;
 
-            // "->" connector to the destination layer.
-            tree.add_label(
+            // One-shot length stepper [−] Nb [＋] — how long a fired clip holds.
+            // Multiplicative steps (halve/double) keep it on musical divisions.
+            ids.len_minus = tree.add_button(
                 self.bg_id,
                 x,
                 cy,
-                TRIG_ARROW_W,
+                TRIG_SENS_BTN_W,
                 TRIG_ROW_H,
-                "\u{2192}",
+                btn_style(false),
+                "\u{2212}",
+            ) as i32;
+            tree.add_label(
+                self.bg_id,
+                x + TRIG_SENS_BTN_W,
+                cy,
+                TRIG_LEN_VAL_W,
+                TRIG_ROW_H,
+                &format_beats(row.one_shot_beats),
                 UIStyle {
-                    text_color: Color32::new(120, 120, 130, 255),
-                    font_size: BTN_FONT,
+                    text_color: Color32::new(190, 190, 198, 255),
+                    font_size: color::FONT_LABEL,
                     text_align: TextAlign::Center,
                     ..UIStyle::default()
                 },
             );
-            x += TRIG_ARROW_W + 4.0;
+            ids.len_plus = tree.add_button(
+                self.bg_id,
+                x + TRIG_SENS_BTN_W + TRIG_LEN_VAL_W,
+                cy,
+                TRIG_SENS_BTN_W,
+                TRIG_ROW_H,
+                btn_style(false),
+                "\u{002B}",
+            ) as i32;
+            x += TRIG_SENS_BTN_W * 2.0 + TRIG_LEN_VAL_W + 4.0;
 
             // Target-layer dropdown trigger (Auto or a layer name).
             let layer_w = (inner_x + inner_w - x).max(40.0);
@@ -1031,6 +1070,20 @@ impl AudioSetupPanel {
             ids.band = i;
             ids.threshold = row.threshold;
             ids.enabled = row.enabled;
+
+            // Group divider after the Whole row: it's the whole-signal onset
+            // (the parent); Low/Mid/High below are the frequency split. A faint
+            // rule in the row gap signals that without reflowing the layout.
+            if i == 0 {
+                tree.add_panel(
+                    self.bg_id,
+                    inner_x,
+                    cy + TRIG_ROW_H + (ROW_GAP * 0.5),
+                    inner_w,
+                    1.0,
+                    UIStyle { bg_color: Color32::new(70, 70, 80, 255), ..UIStyle::default() },
+                );
+            }
 
             self.trigger_row_ids.push(ids);
             cy += TRIG_ROW_H + ROW_GAP;
@@ -1362,6 +1415,10 @@ impl AudioSetupPanel {
                 Some((band, TrigControl::SensDown))
             } else if id == ids.sens_plus {
                 Some((band, TrigControl::SensUp))
+            } else if id == ids.len_minus {
+                Some((band, TrigControl::LenDown))
+            } else if id == ids.len_plus {
+                Some((band, TrigControl::LenUp))
             } else if id == ids.layer {
                 Some((band, TrigControl::Layer))
             } else {
@@ -1376,6 +1433,9 @@ impl AudioSetupPanel {
                     PanelAction::AudioTriggerSensitivityStep(send, band, -0.1)
                 }
                 TrigControl::SensUp => PanelAction::AudioTriggerSensitivityStep(send, band, 0.1),
+                // Length steps are multiplicative (musical halve/double).
+                TrigControl::LenDown => PanelAction::AudioTriggerLengthStep(send, band, 0.5),
+                TrigControl::LenUp => PanelAction::AudioTriggerLengthStep(send, band, 2.0),
                 TrigControl::Layer => PanelAction::AudioTriggerLayerClicked(send, band),
             });
         }
@@ -1440,6 +1500,8 @@ enum TrigControl {
     Toggle,
     SensDown,
     SensUp,
+    LenDown,
+    LenUp,
     Layer,
 }
 

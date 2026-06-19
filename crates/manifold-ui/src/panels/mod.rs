@@ -385,6 +385,9 @@ pub enum PanelAction {
     /// Step a band route's sensitivity by a delta (the row's −/＋ buttons). The
     /// host reads the current value, applies + clamps, and commits.
     AudioTriggerSensitivityStep(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand, f32),
+    /// Scale a band route's one-shot length by a factor (the row's −/＋ buttons,
+    /// musical halve/double). The host reads the current length, applies + clamps.
+    AudioTriggerLengthStep(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand, f32),
     /// Open a band route's target-layer dropdown (anchored to the clicked trigger).
     AudioTriggerLayerClicked(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand),
     /// Set a band route's target layer (`None` = auto-route by send name).
