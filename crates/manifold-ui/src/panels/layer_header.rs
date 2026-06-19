@@ -2373,6 +2373,7 @@ mod tests {
         d.set(C::Solo, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
         btn_x += MS_BTN_W + 2.0;
         if is_audio {
+            d.set(C::Analysis, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
             let mut ay = y + BTN_H + 2.0;
             let right_edge = w - pad - RIGHT_GUTTER;
             d.set(C::Gain, Rect::new(pad, ay, (right_edge - pad).max(20.0), BTN_H));

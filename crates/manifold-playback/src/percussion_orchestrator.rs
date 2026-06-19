@@ -31,10 +31,15 @@ use manifold_core::percussion_binding::ProjectPercussionBindingResolver;
 use manifold_core::percussion_settings::{
     PercussionImportOptionsFactory, PercussionPipelineSettings,
 };
+use manifold_core::LayerId;
+use manifold_core::audio_setup::AudioSend;
+use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_editing::command::Command;
-use manifold_editing::commands::clip::DeleteClipCommand;
+use manifold_editing::command::{Command, CompositeCommand};
+use manifold_editing::commands::audio_setup::{AddAudioSendCommand, SetLayerAudioSendCommand};
+use manifold_editing::commands::clip::{AddClipCommand, DeleteClipCommand};
+use manifold_editing::commands::layer::{AddLayerCommand, GroupLayersCommand};
 
 use crate::percussion_backend::{PercussionPipelineBackendResolver, PercussionPipelineInvocation};
 use crate::percussion_import::{
@@ -1721,7 +1726,223 @@ impl PercussionImportOrchestrator {
         // "Auto" (target_layer == None); never overrides an explicit choice.
         Self::auto_route_unset_instruments(clip_id, project);
 
-        self.plan_and_apply_for_clip(clip_id, &analysis, project, editing_service)
+        let placed = self.plan_and_apply_for_clip(clip_id, &analysis, project, editing_service);
+        // Detect-and-Group (§8): split the demucs stems into analysis-only lanes,
+        // wrap source + stems + trigger lanes in a named group, and route each
+        // stem to its own send. Lane-keyed reuse across clips on the same lane.
+        // Gracefully no-ops if no stems landed on disk.
+        self.build_detect_group(clip_id, project, editing_service);
+        placed
+    }
+
+    /// Detect-and-Group (§8): after triggers are placed, split the demucs stems
+    /// into analysis-only audio lanes, route each to a send, and wrap the source
+    /// lane + stems + trigger lanes in a named group. Keyed to the **source audio
+    /// lane** (`Layer.detect_group_source`): re-detecting any clip on that lane
+    /// reuses the same stem lanes + sends instead of making a second set. Recorded
+    /// as one undo step. No-ops if no stems are on disk.
+    fn build_detect_group(
+        &mut self,
+        clip_id: &ClipId,
+        project: &mut Project,
+        editing_service: &mut manifold_editing::service::EditingService,
+    ) {
+        const STEM_DISPLAY: [&str; STEM_COUNT] = ["Drums", "Bass", "Other", "Vocals"];
+
+        // 1. Source clip geometry + the lane it sits on.
+        let Some((
+            source_layer_id,
+            start_beat,
+            duration_beats,
+            in_point,
+            source_duration,
+            recorded_bpm,
+            audio_path,
+        )) = project.timeline.layers.iter().find_map(|l| {
+            l.clips.iter().find(|c| c.id == *clip_id).map(|c| {
+                (
+                    l.layer_id.clone(),
+                    c.start_beat,
+                    c.duration_beats,
+                    c.in_point,
+                    c.source_duration,
+                    c.recorded_bpm,
+                    c.audio_file_path.clone(),
+                )
+            })
+        }) else {
+            return;
+        };
+
+        // 2. Stems on disk (drums/bass/other/vocals order — see resolver).
+        let present: Vec<(usize, String)> = resolve_stem_paths_from_cache(&audio_path)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.map(|p| (i, p)))
+            .collect();
+        if present.is_empty() {
+            log::warn!(
+                "[DetectAndGroup] no stems on disk for '{}' — placed triggers but skipped grouping",
+                audio_path
+            );
+            return;
+        }
+
+        let base = std::path::Path::new(&audio_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Audio")
+            .to_string();
+        let spb =
+            manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(project.settings.bpm.0);
+
+        // 3. Lane-keyed reuse: an existing group already built for this lane?
+        let existing_group = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.detect_group_source.as_ref() == Some(&source_layer_id))
+            .map(|l| l.layer_id.clone());
+
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+
+        // Clear this clip's prior stem clips (re-detect) so they don't pile up.
+        for layer in project.timeline.layers.iter_mut() {
+            let lid = layer.layer_id.clone();
+            let stale: Vec<_> = layer
+                .clips
+                .iter()
+                .filter(|c| c.is_audio() && c.detection_source.as_ref() == Some(clip_id))
+                .cloned()
+                .collect();
+            for c in stale {
+                commands.push(Box::new(DeleteClipCommand::new(c.clone(), lid.clone())));
+                layer.remove_clip(&c.id);
+            }
+        }
+
+        // 4. For each stem: ensure a lane (reuse or create), add its clip, ensure a send.
+        let mut new_stem_layers: Vec<LayerId> = Vec::new();
+        for (i, stem_path) in present {
+            let lane_name = format!("{base} \u{00b7} {}", STEM_DISPLAY[i]);
+            let lane_id = match existing_group.as_ref().and_then(|gid| {
+                project
+                    .timeline
+                    .layers
+                    .iter()
+                    .find(|l| {
+                        l.parent_layer_id.as_ref() == Some(gid)
+                            && l.is_audio()
+                            && l.name == lane_name
+                    })
+                    .map(|l| l.layer_id.clone())
+            }) {
+                Some(id) => id,
+                None => {
+                    let insert_index = project.timeline.layers.len();
+                    let mut add = AddLayerCommand::new(
+                        lane_name.clone(),
+                        LayerType::Audio,
+                        manifold_core::PresetTypeId::NONE,
+                        insert_index,
+                        existing_group.clone(),
+                    );
+                    add.execute(project);
+                    let Some(id) = project
+                        .timeline
+                        .layers
+                        .get(insert_index)
+                        .map(|l| l.layer_id.clone())
+                    else {
+                        continue;
+                    };
+                    // Stem lanes default to analysis-only: silent to master, hot to send.
+                    if let Some((_, l)) = project.timeline.find_layer_by_id_mut(&id) {
+                        l.analysis_only = true;
+                    }
+                    commands.push(Box::new(add));
+                    new_stem_layers.push(id.clone());
+                    id
+                }
+            };
+
+            // Stem clip mirrors the source clip's placement + warp.
+            let mut clip = manifold_core::clip::TimelineClip::new_audio(
+                stem_path,
+                start_beat,
+                duration_beats,
+                in_point,
+                source_duration,
+            );
+            clip.detection_source = Some(clip_id.clone());
+            if recorded_bpm > 0.0 {
+                clip.set_recorded_bpm(recorded_bpm);
+            }
+            let mut add_clip = AddClipCommand::new(clip, lane_id.clone(), spb);
+            add_clip.execute(project);
+            commands.push(Box::new(add_clip));
+
+            // One send per stem, reused by source.
+            if project.audio_setup.send_for_layer(&lane_id).is_none() {
+                let send = AudioSend::new(lane_name.clone());
+                let send_id = send.id.clone();
+                let mut add_send = AddAudioSendCommand::new(send);
+                add_send.execute(project);
+                commands.push(Box::new(add_send));
+                let mut bind = SetLayerAudioSendCommand::new(lane_id.clone(), Some(send_id));
+                bind.execute(project);
+                commands.push(Box::new(bind));
+            }
+        }
+
+        // 5. First detect: group source + stems + trigger lanes, name + mark it.
+        if existing_group.is_none() && !new_stem_layers.is_empty() {
+            let mut to_group: Vec<LayerId> = vec![source_layer_id.clone()];
+            to_group.extend(new_stem_layers.iter().cloned());
+            for layer in &project.timeline.layers {
+                if layer.layer_type == LayerType::Group || to_group.contains(&layer.layer_id) {
+                    continue;
+                }
+                if layer
+                    .clips
+                    .iter()
+                    .any(|c| c.detection_source.as_ref() == Some(clip_id))
+                {
+                    to_group.push(layer.layer_id.clone());
+                }
+            }
+            let original_order: Vec<Layer> = project
+                .timeline
+                .layers
+                .iter()
+                .filter(|l| to_group.contains(&l.layer_id))
+                .cloned()
+                .collect();
+            let mut group_cmd = GroupLayersCommand::new(to_group, original_order);
+            group_cmd.execute(project);
+            commands.push(Box::new(group_cmd));
+            // Name + mark the new group (the source lane's freshly-set parent).
+            if let Some(gid) = project
+                .timeline
+                .layers
+                .iter()
+                .find(|l| l.layer_id == source_layer_id)
+                .and_then(|l| l.parent_layer_id.clone())
+                && let Some((_, g)) = project.timeline.find_layer_by_id_mut(&gid)
+            {
+                g.name = base.clone();
+                g.detect_group_source = Some(source_layer_id.clone());
+            }
+        }
+
+        // 6. One undo step for the whole set.
+        if !commands.is_empty() {
+            editing_service.record(Box::new(CompositeCommand::new(
+                commands,
+                "Detect and Group".to_string(),
+            )));
+            project.timeline.mark_clip_lookup_dirty();
+        }
     }
 
     /// For each enabled instrument still routed to "Auto", point it at an
@@ -3201,16 +3422,9 @@ fn resolve_stem_paths_from_cache(audio_path: &str) -> Vec<Option<String>> {
         return result;
     }
 
-    let cache_dir = {
-        let from_env = std::env::var("MANIFOLD_DEMUCS_CACHE_DIR").ok();
-        match from_env {
-            Some(ref d) if !d.trim().is_empty() => d.trim().to_string(),
-            _ => {
-                // Fallback to Library/AudioAnalysisStemCache if no env var.
-                // (same logic as append_demucs_cache_arguments in percussion_backend.rs)
-                return result;
-            }
-        }
+    let cache_dir = match crate::percussion_backend::demucs_cache_dir() {
+        Some(d) => d,
+        None => return result,
     };
 
     let track_name = Path::new(audio_path)

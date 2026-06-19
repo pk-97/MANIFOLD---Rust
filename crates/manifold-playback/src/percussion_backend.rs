@@ -475,12 +475,37 @@ fn env_bool(key: &str, default: bool) -> bool {
     }
 }
 
+/// The directory demucs stems are cached to (and resolved from by
+/// Detect-and-Group). Honours `MANIFOLD_DEMUCS_CACHE_DIR`; otherwise defaults to
+/// `~/Library/Application Support/Manifold/StemCache` so stems persist and the
+/// feature works out of the box. Falls back to a temp dir only if `$HOME` is unset.
+pub(crate) fn demucs_cache_dir() -> Option<String> {
+    if let Some(d) = env_opt("MANIFOLD_DEMUCS_CACHE_DIR")
+        && !d.trim().is_empty()
+    {
+        return Some(d);
+    }
+    let base = std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .map(|h| format!("{h}/Library/Application Support/Manifold/StemCache"))
+        .unwrap_or_else(|| {
+            std::env::temp_dir()
+                .join("ManifoldStemCache")
+                .to_string_lossy()
+                .into_owned()
+        });
+    Some(base)
+}
+
 fn append_demucs_cache_arguments(args: &mut Vec<String>) {
-    if !env_bool("MANIFOLD_DEMUCS_CACHE", false) {
+    // Caching is on by default so Detect-and-Group can resolve the split stems;
+    // set MANIFOLD_DEMUCS_CACHE=0 to opt out.
+    if !env_bool("MANIFOLD_DEMUCS_CACHE", true) {
         return;
     }
 
-    let cache_dir = match env_opt("MANIFOLD_DEMUCS_CACHE_DIR") {
+    let cache_dir = match demucs_cache_dir() {
         Some(d) => d,
         None => return,
     };
