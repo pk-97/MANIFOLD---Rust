@@ -213,7 +213,7 @@ pub fn dispatch(
         | PanelAction::AudioRenameSend(..)
         | PanelAction::AudioSetSendChannels(..)
         | PanelAction::AudioSendStereoToggle(..)
-        | PanelAction::AudioToggleSendCapture(..)
+        | PanelAction::AudioSendRoutingsClicked(..)
         | PanelAction::AudioSetupDeviceClicked
         | PanelAction::AudioSendChannelClicked(..)
         | PanelAction::AudioTriggerToggled(..)

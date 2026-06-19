@@ -357,39 +357,6 @@ impl Command for SetLayerAudioSendCommand {
     }
 }
 
-/// Toggle whether the capture device feeds a send (the device half of its input
-/// set). The send's layer routing is untouched. Edited from the Audio Setup
-/// source chip.
-#[derive(Debug)]
-pub struct SetAudioSendCaptureCommand {
-    id: AudioSendId,
-    capture: bool,
-    old: Option<bool>,
-}
-
-impl SetAudioSendCaptureCommand {
-    pub fn new(id: AudioSendId, capture: bool) -> Self {
-        Self { id, capture, old: None }
-    }
-}
-
-impl Command for SetAudioSendCaptureCommand {
-    fn execute(&mut self, project: &mut Project) {
-        self.old = project.audio_setup.find_send(&self.id).map(|s| s.has_capture());
-        project.audio_setup.set_send_capture(&self.id, self.capture);
-    }
-
-    fn undo(&mut self, project: &mut Project) {
-        if let Some(old) = self.old.take() {
-            project.audio_setup.set_send_capture(&self.id, old);
-        }
-    }
-
-    fn description(&self) -> &str {
-        "Toggle Audio Send Capture"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,11 +433,11 @@ mod tests {
         let layer = LayerId::new("L1");
         project.audio_setup.sends = vec![a, b];
 
-        // Route the layer to A — A becomes a capture+layer mix.
+        // Route the layer to A — A gains the layer (its device channels, if any,
+        // stay; the two are summed).
         let mut c1 = SetLayerAudioSendCommand::new(layer.clone(), Some(a_id.clone()));
         c1.execute(&mut project);
         assert!(project.audio_setup.find_send(&a_id).unwrap().feeds_from_layer(&layer));
-        assert!(project.audio_setup.find_send(&a_id).unwrap().has_capture());
 
         // Route it to B — A loses the layer, B gains it.
         let mut c2 = SetLayerAudioSendCommand::new(layer.clone(), Some(b_id.clone()));
@@ -489,19 +456,6 @@ mod tests {
         assert!(project.audio_setup.send_for_layer(&layer).is_none());
     }
 
-    #[test]
-    fn capture_toggle_undoes() {
-        let mut project = Project::default();
-        let a = AudioSend::new("A");
-        let id = a.id.clone();
-        project.audio_setup.sends = vec![a];
-
-        let mut cmd = SetAudioSendCaptureCommand::new(id.clone(), false);
-        cmd.execute(&mut project);
-        assert!(!project.audio_setup.find_send(&id).unwrap().has_capture());
-        cmd.undo(&mut project);
-        assert!(project.audio_setup.find_send(&id).unwrap().has_capture());
-    }
 
     #[test]
     fn triggers_round_trip() {

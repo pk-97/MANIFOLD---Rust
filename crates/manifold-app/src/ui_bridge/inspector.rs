@@ -21,8 +21,8 @@ use manifold_editing::commands::audio_mod::{
 };
 use manifold_editing::commands::audio_setup::{
     AddAudioSendCommand, RemoveAudioSendCommand, RenameAudioSendCommand, SetAudioCrossoversCommand,
-    SetAudioInputDeviceCommand, SetAudioSendCaptureCommand, SetAudioSendChannelsCommand,
-    SetAudioSendGainCommand, SetAudioSendTriggersCommand,
+    SetAudioInputDeviceCommand, SetAudioSendChannelsCommand, SetAudioSendGainCommand,
+    SetAudioSendTriggersCommand,
 };
 use manifold_editing::commands::effect_target::{DriverTarget, EffectTarget};
 use manifold_editing::commands::effects::{
@@ -1548,20 +1548,6 @@ pub(super) fn dispatch_inspector(
                 project,
                 content_tx,
                 Box::new(SetAudioSendChannelsCommand::new(id.clone(), old, new)),
-            )
-        }
-        PanelAction::AudioToggleSendCapture(id) => {
-            // Flip the capture (device) half of the send's input set. The project
-            // is the source of truth: read current, commit the inverse.
-            let now = project
-                .audio_setup
-                .find_send(id)
-                .map(|s| s.has_capture())
-                .unwrap_or(true);
-            audio_setup_command(
-                project,
-                content_tx,
-                Box::new(SetAudioSendCaptureCommand::new(id.clone(), !now)),
             )
         }
         PanelAction::AudioSendGainStep(id, delta_db) => {

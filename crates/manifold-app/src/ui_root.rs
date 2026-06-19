@@ -111,6 +111,7 @@ pub enum DropdownContext {
     GenStringParamDropdown(usize), // string_param_index (dropdown selector)
     AudioInputDevice,         // audio input device selection for live recording
     AudioSetupDevice,         // Audio Setup modal: capture input source
+    AudioSendRoutings,        // Audio Setup: read-only list of a send's routings (device + layers)
     AudioSendChannel(manifold_core::AudioSendId), // Audio Setup: a send's input channel
     LayerAudioSend(usize),                        // audio layer header: pick which send it feeds
     ClipDetectQuantize,                           // audio clip inspector: detection quantize grid
@@ -1453,6 +1454,20 @@ impl UIRoot {
                 self.open_dropdown_at(DropdownContext::AudioInputDevice, items, trigger);
                 true
             }
+            PanelAction::AudioSendRoutingsClicked(send_id) => {
+                // Read-only: list where this send is fed from (capture device +
+                // each feeding layer). Every row disabled, so nothing is
+                // selectable — routing is edited from the layer header / channel
+                // control, not here.
+                let routings = self.audio_setup_panel.send_routings(send_id);
+                let items: Vec<DropdownItem> = if routings.is_empty() {
+                    vec![DropdownItem::disabled("No routing")]
+                } else {
+                    routings.iter().map(|r| DropdownItem::disabled(r)).collect()
+                };
+                self.open_dropdown_at(DropdownContext::AudioSendRoutings, items, trigger);
+                true
+            }
             PanelAction::AudioSetupDeviceClicked => {
                 // Enumerate input devices + tappable sources on demand for the
                 // Audio Setup modal. The list is three sections: the default, the
@@ -1881,6 +1896,7 @@ impl UIRoot {
                         .map(|name| PanelAction::SetAudioInputDevice(name.clone()))
                 }
             }
+            DropdownContext::AudioSendRoutings => None, // read-only: nothing to select
             DropdownContext::AudioSetupDevice => {
                 // Map the chosen row back to a source via the parallel choice map
                 // (headers are non-selectable `None` entries and never fire here).

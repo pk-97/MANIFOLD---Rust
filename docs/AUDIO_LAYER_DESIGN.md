@@ -162,28 +162,30 @@ which the analyzer fills). Before this, a layer-fed send drove modulation but th
 scope stayed black — it only ever listened to the capture worker.
 
 **Source is an input SET, summed and analyzed once (SUPERSEDES the exclusive
-model — 2026-06-19).** A send's source is no longer "capture **or** one layer." It
-is `AudioSendSource { capture: bool, layers: Vec<LayerId> }` — the capture device
-and any number of audio layers, **mixed to one mono stream and analyzed once** so
-a send can react to live input *and* layers together ("what you hear is what
-modulates"). The unification that makes this clean: the capture worker stopped
-analyzing and now only **downmixes** the device to per-send mono (`MonoReader`);
-**all** analysis runs on the content thread, one `StreamingSendAnalyzer` per send,
-fed `capture_mono + Σ layer_taps` (layer taps resampled to the device rate via
-`LinearResampler` when they differ). That collapsed the old dual analysis paths
-(worker VQT + inline) into one, and with it the scope's capture-vs-layer routing
-(`SpectrogramTap`, `tapped_layer_send`) — the scope just reads the tapped send's
-analyzer. Migration `v1.9.0 → v1.10.0` rewrites the old `{"layer":"x"}` →
-`{capture:false, layers:["x"]}` (layer-only preserved) and drops the old unit
-`"capture"` (capture-only is the default).
+model — 2026-06-19).** A send's input is its capture **channels** (the device,
+when channels are assigned) **plus** any number of audio **layers**, **mixed to
+one mono stream and analyzed once** so a send reacts to live input *and* layers
+together ("what you hear is what modulates"). The model: `AudioSendSource {
+layers: Vec<LayerId> }` on top of the existing `AudioSend.channels`; a send taps
+the device iff it has channels (`has_capture()` is derived, NOT a stored flag —
+there is no per-send device on/off). The unification that makes this clean: the
+capture worker stopped analyzing and now only **downmixes** the device to per-send
+mono (`MonoReader`); **all** analysis runs on the content thread, one
+`StreamingSendAnalyzer` per send, fed `capture_mono + Σ layer_taps` (layer taps
+resampled to the device rate via `LinearResampler` when they differ). That
+collapsed the old dual analysis paths (worker VQT + inline) into one, and with it
+the scope's capture-vs-layer routing (`SpectrogramTap`, `tapped_layer_send`) — the
+scope just reads the tapped send's analyzer. Migration `v1.9.0 → v1.10.0` rewrites
+the old `{"layer":"x"}` → `{layers:["x"]}` and drops the old unit `"capture"`.
 
 Routing stays split by concern: an audio layer picks its send from the **layer
-header** Send control (`SetLayerAudioSendCommand`, layer-centric, additive — a
-default send becomes a capture+layer mix); the Audio Setup per-send source **chip
-toggles the capture half** (`SetAudioSendCaptureCommand`) and shows the set
-("Cap", "Cap+2", a layer name, or "Off"). The gate that runs analysis now also
-counts **active live triggers**, so triggers fire with the scope closed during a
-show.
+header** Send control (`SetLayerAudioSendCommand`, layer-centric, additive — point
+several layers at one send and it sums them); the Audio Setup per-send source
+**chip is READ-ONLY** — click it to open a dropdown listing the send's routings
+("Capture · <channels>", "Layer · <name>" …). No disable-at-this-level; channels
+are edited from the channel control, layers from the layer header. The gate that
+runs analysis now also counts **active live triggers**, so triggers fire with the
+scope closed during a show.
 
 Original §3R note (history): a send did not pick its source; the chip was a
 read-only indicator and the cycle-the-source button was removed as the wrong

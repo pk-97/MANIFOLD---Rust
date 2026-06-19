@@ -1157,19 +1157,26 @@ pub fn sync_inspector_data(
             .sends
             .iter()
             .map(|s| {
-                // Source indicator: the send's input set — the capture device
-                // ("Cap"), audio layers, or a mix of both. The chip toggles the
-                // capture half; layers are routed from the layer header.
+                // Read-only source view: a compact chip label plus the full routing
+                // lines (capture device + each feeding layer) for the dropdown.
+                // Routing is edited elsewhere — layers from the layer header,
+                // channels from the channel control.
+                let ch_label = channel_label(device.as_ref(), is_tap, &s.channels);
                 let cap = s.has_capture();
                 let n_layers = s.layers().len();
-                let first_layer = s.layers().first().and_then(|lid| {
+                let layer_name = |lid: &manifold_core::LayerId| {
                     project
                         .timeline
                         .layers
                         .iter()
                         .find(|l| &l.layer_id == lid)
-                        .map(|l| l.name.chars().take(6).collect::<String>())
-                });
+                        .map(|l| l.name.clone())
+                        .unwrap_or_else(|| "(missing layer)".to_string())
+                };
+                let first_layer = s
+                    .layers()
+                    .first()
+                    .map(|lid| layer_name(lid).chars().take(6).collect::<String>());
                 let source_label = match (cap, n_layers) {
                     (true, 0) => "Cap".to_string(),
                     (true, n) => format!("Cap+{n}"),
@@ -1178,6 +1185,14 @@ pub fn sync_inspector_data(
                     (false, n) => format!("{n} lyr"),
                 };
                 let layer_fed = n_layers > 0;
+                // Full routing lines for the read-only dropdown.
+                let mut routings: Vec<String> = Vec::new();
+                if cap {
+                    routings.push(format!("Capture \u{2022} {ch_label}"));
+                }
+                for lid in s.layers() {
+                    routings.push(format!("Layer \u{2022} {}", layer_name(lid)));
+                }
                 // One trigger row per band (Whole/Low/Mid/High), defaulting when
                 // the send carries no route for that band yet. The target label
                 // resolves to the layer's name, or "Auto" (route by send name).
@@ -1202,12 +1217,13 @@ pub fn sync_inspector_data(
                 AudioSendRow {
                     id: s.id.clone(),
                     label: s.label.clone(),
-                    channel_label: channel_label(device.as_ref(), is_tap, &s.channels),
+                    channel_label: ch_label,
                     channels: s.channels.clone(),
                     gain_db: s.gain_db,
                     driven_count: project.audio_send_usage_count(&s.id),
                     source_label,
                     layer_fed,
+                    routings,
                     triggers,
                 }
             })

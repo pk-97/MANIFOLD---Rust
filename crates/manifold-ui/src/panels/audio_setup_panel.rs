@@ -60,13 +60,17 @@ pub struct AudioSendRow {
     /// Number of parameters this send currently drives. Surfaced on the row and
     /// gates a confirm-before-delete so a bound send isn't silently severed.
     pub driven_count: usize,
-    /// Compact source indicator for the source button: "Cap" for a capture
-    /// (channel) source, or the audio layer's name when the send is fed by a
-    /// timeline audio layer. Resolved by the data layer.
+    /// Compact source indicator for the read-only source chip: "Cap" (device
+    /// only), "Cap+N" (device + N layers), a layer name, or "Off". Resolved by the
+    /// data layer.
     pub source_label: String,
-    /// Whether the send is fed by an audio layer (controls the source button's
-    /// accent so a layer-fed send reads distinctly from a capture send).
+    /// Whether the send is fed by an audio layer (controls the source chip's
+    /// accent so a mixed/layer send reads distinctly from a device-only send).
     pub layer_fed: bool,
+    /// Human-readable routing lines for the read-only routings dropdown — the
+    /// capture device (when channels are assigned) plus one line per feeding
+    /// layer. Built by `state_sync`.
+    pub routings: Vec<String>,
     /// Live audio → visual trigger rows for this send, one per band in
     /// [`AudioBand::ALL`] order (Whole/Low/Mid/High). Always four entries (a
     /// band with no route reads as a disabled default), so the inspector renders
@@ -954,6 +958,16 @@ impl AudioSetupPanel {
         self.selected_send.as_ref()
     }
 
+    /// The routing lines for `send` (device + layers), for the read-only routings
+    /// dropdown. Empty slice if the send is unknown.
+    pub fn send_routings(&self, send: &AudioSendId) -> &[String] {
+        self.sends
+            .iter()
+            .find(|s| &s.id == send)
+            .map(|s| s.routings.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// Screen-space rect (logical units) the present pass blits the spectrogram
     /// texture into, or `None` when the panel is closed / has no sends.
     pub fn scope_rect(&self) -> Option<Rect> {
@@ -1269,11 +1283,11 @@ impl AudioSetupPanel {
                 Some(PanelAction::AudioSendLabelClicked(send_id))
             }
             RowControl::Source => {
-                // The chip toggles the capture (device) half of the send's input
-                // set; audio layers are routed from the layer header. So a send can
-                // be device, layers, or both.
+                // Read-only: open a dropdown listing where this send is routed from
+                // (device + layers). Routing is edited elsewhere — layers from the
+                // layer header, channels from the channel control.
                 self.delete_armed = None;
-                Some(PanelAction::AudioToggleSendCapture(send_id))
+                Some(PanelAction::AudioSendRoutingsClicked(send_id))
             }
             RowControl::Channel => {
                 self.delete_armed = None;
@@ -1533,6 +1547,7 @@ mod tests {
                     driven_count: 0,
                     source_label: "Cap".into(),
                     layer_fed: false,
+                    routings: vec!["Capture: Channel 1".into()],
                     triggers: Vec::new(),
                 },
                 AudioSendRow {
@@ -1544,6 +1559,7 @@ mod tests {
                     driven_count: 0,
                     source_label: "Cap".into(),
                     layer_fed: false,
+                    routings: vec!["Capture: Channel 1".into()],
                     triggers: Vec::new(),
                 },
             ],
@@ -1637,18 +1653,18 @@ mod tests {
     }
 
     #[test]
-    fn source_chip_toggles_capture_and_is_owned() {
+    fn source_chip_opens_routings_and_is_owned() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
         p.build(&mut tree, 1280.0, 720.0);
 
         let src = p.send_ids[0].source;
         assert!(p.owns_node(src), "source chip is a panel-owned node");
-        // The chip toggles the send's capture (device) half; layer routing lives
-        // on the layer header.
+        // The chip is read-only — clicking opens the routings dropdown, it doesn't
+        // edit anything.
         match p.handle_click(src) {
-            Some(PanelAction::AudioToggleSendCapture(id)) => assert_eq!(id.as_str(), "s1"),
-            other => panic!("expected AudioToggleSendCapture, got {other:?}"),
+            Some(PanelAction::AudioSendRoutingsClicked(id)) => assert_eq!(id.as_str(), "s1"),
+            other => panic!("expected AudioSendRoutingsClicked, got {other:?}"),
         }
     }
 

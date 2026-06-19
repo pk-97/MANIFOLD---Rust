@@ -73,18 +73,20 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(&root)
 }
 
-/// v1.9.0 → v1.10.0: a send's `source` became a **set** of inputs (a `capture`
-/// flag plus a `layers` array) instead of a single enum, so a send can mix the
-/// capture device and audio layers into one analyzed stream.
+/// v1.9.0 → v1.10.0: a send's `source` became the set of audio **layers** feeding
+/// it (on top of its device `channels`), so a send mixes the capture device and
+/// any layers into one analyzed stream. A send always taps its channels; the
+/// `source.layers` array adds layers.
 ///
 /// Rewrites `audioSetup.sends[].source`:
-///   - legacy layer form `{ "layer": "L7" }` → `{ "capture": false, "layers": ["L7"] }`
-///     (preserving the old layer-only behavior — capture was implicitly off);
+///   - legacy layer form `{ "layer": "L7" }` → `{ "layers": ["L7"] }`;
 ///   - legacy capture form (the unit variant `"capture"`, or an absent field) →
-///     dropped, since capture-only is the new default and serializes to nothing.
+///     dropped, since device-only is the default and serializes to nothing.
 ///
 /// Idempotent: a v1.10 send carries the new object shape (or no `source` at all),
-/// neither of which matches the legacy forms, so a re-run is a no-op.
+/// neither of which matches the legacy forms, so a re-run is a no-op. An interim
+/// `{ "capture": _, "layers": [...] }` shape (briefly shipped) deserializes fine
+/// regardless — serde ignores the stray `capture` key.
 fn migrate_v190_to_v1100(root: &mut Value) {
     let Some(sends) = root
         .get_mut("audioSetup")
@@ -98,15 +100,15 @@ fn migrate_v190_to_v1100(root: &mut Value) {
             continue;
         };
         match obj.get("source") {
-            // Legacy layer form { "layer": "x" } → { capture: false, layers: ["x"] }.
+            // Legacy layer form { "layer": "x" } → { layers: ["x"] }.
             Some(Value::Object(m)) if m.contains_key("layer") => {
                 let layer = m.get("layer").cloned().unwrap_or(Value::Null);
                 obj.insert(
                     "source".to_string(),
-                    serde_json::json!({ "capture": false, "layers": [layer] }),
+                    serde_json::json!({ "layers": [layer] }),
                 );
             }
-            // Legacy capture unit variant "capture" → drop (capture-only default).
+            // Legacy capture unit variant "capture" → drop (device-only default).
             Some(Value::String(s)) if s == "capture" => {
                 obj.remove("source");
             }
@@ -1235,12 +1237,12 @@ mod tests {
         );
     }
 
-    /// v1.10.0: a send's `source` enum becomes the input-set object. The legacy
-    /// layer form `{ "layer": "x" }` → `{ capture: false, layers: ["x"] }`
-    /// (layer-only preserved); the legacy `"capture"` unit variant is dropped
-    /// (capture-only is the new default); a new-shape source is left alone.
+    /// v1.10.0: a send's `source` enum becomes the layer set. The legacy layer
+    /// form `{ "layer": "x" }` → `{ layers: ["x"] }`; the legacy `"capture"` unit
+    /// variant is dropped (device-only is the default); a new-shape source is left
+    /// alone.
     #[test]
-    fn test_v1100_send_source_becomes_input_set() {
+    fn test_v1100_send_source_becomes_layer_set() {
         let json = r#"{
             "projectVersion": "1.9.0",
             "audioSetup": {
@@ -1248,8 +1250,7 @@ mod tests {
                     { "id": "a", "label": "Layer-fed", "source": { "layer": "L7" } },
                     { "id": "b", "label": "Capture", "source": "capture" },
                     { "id": "c", "label": "Default" },
-                    { "id": "d", "label": "Already new",
-                      "source": { "capture": true, "layers": ["L9"] } }
+                    { "id": "d", "label": "Already new", "source": { "layers": ["L9"] } }
                 ]
             }
         }"#;
@@ -1258,11 +1259,11 @@ mod tests {
         assert_eq!(v["projectVersion"].as_str(), Some("1.10.0"));
         let sends = v["audioSetup"]["sends"].as_array().unwrap();
 
-        // Legacy layer → layer-only object.
-        assert_eq!(sends[0]["source"]["capture"].as_bool(), Some(false));
+        // Legacy layer → layer set.
         assert_eq!(sends[0]["source"]["layers"][0].as_str(), Some("L7"));
+        assert!(sends[0]["source"].get("capture").is_none(), "no capture flag");
         // Legacy capture unit variant → dropped.
-        assert!(sends[1].get("source").is_none(), "capture-only source dropped");
+        assert!(sends[1].get("source").is_none(), "device-only source dropped");
         // Absent → still absent.
         assert!(sends[2].get("source").is_none());
         // New shape → untouched.
