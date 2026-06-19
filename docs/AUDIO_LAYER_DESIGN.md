@@ -161,12 +161,33 @@ nobody reads. The per-band meters already worked (they read the snapshot slot,
 which the analyzer fills). Before this, a layer-fed send drove modulation but the
 scope stayed black — it only ever listened to the capture worker.
 
-**Source is layer-driven, not send-driven.** A send does not pick its source. An
-audio layer routes itself to a send from the **layer header** Send control
-(`SetAudioSendSourceCommand` from the layer side). The Audio Setup panel's
-per-send source chip is a **read-only indicator** ("Cap" or the feeding layer's
-name) — the earlier cycle-the-source-on-the-send button was the wrong direction
-(DAW model: track → send) and was removed.
+**Source is an input SET, summed and analyzed once (SUPERSEDES the exclusive
+model — 2026-06-19).** A send's source is no longer "capture **or** one layer." It
+is `AudioSendSource { capture: bool, layers: Vec<LayerId> }` — the capture device
+and any number of audio layers, **mixed to one mono stream and analyzed once** so
+a send can react to live input *and* layers together ("what you hear is what
+modulates"). The unification that makes this clean: the capture worker stopped
+analyzing and now only **downmixes** the device to per-send mono (`MonoReader`);
+**all** analysis runs on the content thread, one `StreamingSendAnalyzer` per send,
+fed `capture_mono + Σ layer_taps` (layer taps resampled to the device rate via
+`LinearResampler` when they differ). That collapsed the old dual analysis paths
+(worker VQT + inline) into one, and with it the scope's capture-vs-layer routing
+(`SpectrogramTap`, `tapped_layer_send`) — the scope just reads the tapped send's
+analyzer. Migration `v1.9.0 → v1.10.0` rewrites the old `{"layer":"x"}` →
+`{capture:false, layers:["x"]}` (layer-only preserved) and drops the old unit
+`"capture"` (capture-only is the default).
+
+Routing stays split by concern: an audio layer picks its send from the **layer
+header** Send control (`SetLayerAudioSendCommand`, layer-centric, additive — a
+default send becomes a capture+layer mix); the Audio Setup per-send source **chip
+toggles the capture half** (`SetAudioSendCaptureCommand`) and shows the set
+("Cap", "Cap+2", a layer name, or "Off"). The gate that runs analysis now also
+counts **active live triggers**, so triggers fire with the scope closed during a
+show.
+
+Original §3R note (history): a send did not pick its source; the chip was a
+read-only indicator and the cycle-the-source button was removed as the wrong
+direction (DAW model: track → send).
 
 **Architecture choice (step 4) — resolved (a), inline.** The live worker is *one
 ring → many sends*; layer taps are *one ring per layer → one send each*. Chose a

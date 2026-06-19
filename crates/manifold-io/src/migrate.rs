@@ -65,7 +65,55 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.9.0".to_string());
     }
 
+    if is_version_less_than(&version, "1.10.0") {
+        migrate_v190_to_v1100(&mut root);
+        root["projectVersion"] = Value::String("1.10.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
+}
+
+/// v1.9.0 → v1.10.0: a send's `source` became a **set** of inputs (a `capture`
+/// flag plus a `layers` array) instead of a single enum, so a send can mix the
+/// capture device and audio layers into one analyzed stream.
+///
+/// Rewrites `audioSetup.sends[].source`:
+///   - legacy layer form `{ "layer": "L7" }` → `{ "capture": false, "layers": ["L7"] }`
+///     (preserving the old layer-only behavior — capture was implicitly off);
+///   - legacy capture form (the unit variant `"capture"`, or an absent field) →
+///     dropped, since capture-only is the new default and serializes to nothing.
+///
+/// Idempotent: a v1.10 send carries the new object shape (or no `source` at all),
+/// neither of which matches the legacy forms, so a re-run is a no-op.
+fn migrate_v190_to_v1100(root: &mut Value) {
+    let Some(sends) = root
+        .get_mut("audioSetup")
+        .and_then(|a| a.get_mut("sends"))
+        .and_then(|s| s.as_array_mut())
+    else {
+        return;
+    };
+    for send in sends.iter_mut() {
+        let Some(obj) = send.as_object_mut() else {
+            continue;
+        };
+        match obj.get("source") {
+            // Legacy layer form { "layer": "x" } → { capture: false, layers: ["x"] }.
+            Some(Value::Object(m)) if m.contains_key("layer") => {
+                let layer = m.get("layer").cloned().unwrap_or(Value::Null);
+                obj.insert(
+                    "source".to_string(),
+                    serde_json::json!({ "capture": false, "layers": [layer] }),
+                );
+            }
+            // Legacy capture unit variant "capture" → drop (capture-only default).
+            Some(Value::String(s)) if s == "capture" => {
+                obj.remove("source");
+            }
+            // New object shape, or absent → leave as-is.
+            _ => {}
+        }
+    }
 }
 
 /// v1.8.0 → v1.9.0: the audio-modulation feature kinds `Brightness` and
@@ -694,7 +742,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.9.0")
+            Some("1.10.0")
         );
     }
 
@@ -710,7 +758,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.9.0")
+            Some("1.10.0")
         );
     }
 
@@ -724,7 +772,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.9.0")
+            Some("1.10.0")
         );
     }
 
@@ -739,7 +787,7 @@ mod tests {
         let v: Value = serde_json::from_str(&migrated).unwrap();
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.9.0")
+            Some("1.10.0")
         );
     }
 
@@ -783,7 +831,7 @@ mod tests {
         // The "Ghost" envelope had no matching effect → dropped.
         assert_eq!(
             v.get("projectVersion").and_then(|x| x.as_str()),
-            Some("1.9.0")
+            Some("1.10.0")
         );
     }
 
@@ -1031,7 +1079,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.9.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.10.0"));
         assert_eq!(
             v["settings"]["masterEffects"][0]["effectType"].as_str(),
             Some("WireframeDepth")
@@ -1081,7 +1129,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.9.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.10.0"));
 
         // Corrupted generator: effectType → generatorType, effectType removed.
         let gp0 = &v["timeline"]["layers"][0]["genParams"];
@@ -1155,7 +1203,7 @@ mod tests {
         }"#;
         let migrated = migrate_if_needed(json).unwrap();
         let v: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(v["projectVersion"].as_str(), Some("1.9.0"));
+        assert_eq!(v["projectVersion"].as_str(), Some("1.10.0"));
 
         let master = &v["settings"]["masterEffects"][0]["audioMods"];
         assert_eq!(master[0]["source"]["feature"]["kind"].as_str(), Some("centroid"));
@@ -1185,5 +1233,44 @@ mod tests {
             v2["settings"]["masterEffects"][0]["audioMods"][0]["source"]["feature"]["kind"].as_str(),
             Some("centroid")
         );
+    }
+
+    /// v1.10.0: a send's `source` enum becomes the input-set object. The legacy
+    /// layer form `{ "layer": "x" }` → `{ capture: false, layers: ["x"] }`
+    /// (layer-only preserved); the legacy `"capture"` unit variant is dropped
+    /// (capture-only is the new default); a new-shape source is left alone.
+    #[test]
+    fn test_v1100_send_source_becomes_input_set() {
+        let json = r#"{
+            "projectVersion": "1.9.0",
+            "audioSetup": {
+                "sends": [
+                    { "id": "a", "label": "Layer-fed", "source": { "layer": "L7" } },
+                    { "id": "b", "label": "Capture", "source": "capture" },
+                    { "id": "c", "label": "Default" },
+                    { "id": "d", "label": "Already new",
+                      "source": { "capture": true, "layers": ["L9"] } }
+                ]
+            }
+        }"#;
+        let migrated = migrate_if_needed(json).unwrap();
+        let v: Value = serde_json::from_str(&migrated).unwrap();
+        assert_eq!(v["projectVersion"].as_str(), Some("1.10.0"));
+        let sends = v["audioSetup"]["sends"].as_array().unwrap();
+
+        // Legacy layer → layer-only object.
+        assert_eq!(sends[0]["source"]["capture"].as_bool(), Some(false));
+        assert_eq!(sends[0]["source"]["layers"][0].as_str(), Some("L7"));
+        // Legacy capture unit variant → dropped.
+        assert!(sends[1].get("source").is_none(), "capture-only source dropped");
+        // Absent → still absent.
+        assert!(sends[2].get("source").is_none());
+        // New shape → untouched.
+        assert_eq!(sends[3]["source"]["layers"][0].as_str(), Some("L9"));
+
+        // Idempotent.
+        let again = migrate_if_needed(&migrated).unwrap();
+        let v2: Value = serde_json::from_str(&again).unwrap();
+        assert_eq!(v2["audioSetup"]["sends"][0]["source"]["layers"][0].as_str(), Some("L7"));
     }
 }

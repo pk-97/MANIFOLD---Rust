@@ -1269,9 +1269,11 @@ impl AudioSetupPanel {
                 Some(PanelAction::AudioSendLabelClicked(send_id))
             }
             RowControl::Source => {
-                // Read-only source indicator — routing is driven from the layer
-                // header, not here. No action.
-                None
+                // The chip toggles the capture (device) half of the send's input
+                // set; audio layers are routed from the layer header. So a send can
+                // be device, layers, or both.
+                self.delete_armed = None;
+                Some(PanelAction::AudioToggleSendCapture(send_id))
             }
             RowControl::Channel => {
                 self.delete_armed = None;
@@ -1635,16 +1637,19 @@ mod tests {
     }
 
     #[test]
-    fn source_indicator_is_owned_and_read_only() {
+    fn source_chip_toggles_capture_and_is_owned() {
         let mut p = panel_with_two_sends();
         let mut tree = UITree::new();
         p.build(&mut tree, 1280.0, 720.0);
 
         let src = p.send_ids[0].source;
-        assert!(p.owns_node(src), "source indicator is a panel-owned node");
-        // Read-only status — a click does nothing (routing is driven from the
-        // layer header, not the send).
-        assert!(p.handle_click(src).is_none(), "source indicator must not act on click");
+        assert!(p.owns_node(src), "source chip is a panel-owned node");
+        // The chip toggles the send's capture (device) half; layer routing lives
+        // on the layer header.
+        match p.handle_click(src) {
+            Some(PanelAction::AudioToggleSendCapture(id)) => assert_eq!(id.as_str(), "s1"),
+            other => panic!("expected AudioToggleSendCapture, got {other:?}"),
+        }
     }
 
     #[test]

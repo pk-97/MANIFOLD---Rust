@@ -15,27 +15,42 @@ use crate::audio_trigger::TriggerRoute;
 use crate::id::{AudioSendId, LayerId};
 use crate::math::short_id;
 
-/// Where a send's signal comes from.
+/// Where a send's signal comes from — the **set** of inputs summed into one mono
+/// stream and analyzed once ("what you hear is what modulates").
 ///
-/// The default, [`Capture`](Self::Capture), is the historical meaning: the send
-/// is a downmix of the chosen capture device's [`channels`](AudioSend::channels),
-/// analyzed live by the worker. [`Layer`](Self::Layer) feeds the send from a
-/// timeline audio layer instead — its features come from an offline curve sampled
-/// at the playhead, not the live ring (see `docs/AUDIO_LAYER_DESIGN.md` §3). This
-/// is the single source of truth for the layer↔send binding; the layer header's
-/// send dropdown edits it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// A send can feed from the capture device's [`channels`](AudioSend::channels),
+/// from any number of timeline audio **layers** (their post-fader taps), or from
+/// both at once — they're mixed before a single analysis. The default is
+/// **capture only** (`capture: true`, no layers): the historical meaning, and it
+/// serializes to nothing so pre-source projects round-trip byte-identically.
+///
+/// Layer membership is the single source of truth for the layer↔send binding;
+/// the layer header's send dropdown edits it (one layer feeds at most one send).
+/// The `capture` flag is toggled from the Audio Setup source chip. See
+/// `docs/AUDIO_LAYER_DESIGN.md` §3R.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum AudioSendSource {
-    /// Downmix of the capture device's channels (the original live path).
-    #[default]
-    Capture,
-    /// Fed by a timeline audio layer, by its stable [`LayerId`].
-    Layer(LayerId),
+pub struct AudioSendSource {
+    /// Whether the chosen capture device's [`channels`](AudioSend::channels) feed
+    /// this send (downmixed to mono). Defaults to `true` — the original live path.
+    #[serde(default = "default_true")]
+    pub capture: bool,
+    /// Timeline audio layers feeding this send, by stable [`LayerId`]. Each layer's
+    /// post-fader tap is summed in. Empty (the default) means device-only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<LayerId>,
 }
 
-fn is_capture_source(s: &AudioSendSource) -> bool {
-    matches!(s, AudioSendSource::Capture)
+impl Default for AudioSendSource {
+    fn default() -> Self {
+        Self { capture: true, layers: Vec::new() }
+    }
+}
+
+/// A send whose source is the plain default (capture device only, no layers) —
+/// skipped on serialize so pre-source project fixtures round-trip byte-identically.
+fn is_default_source(s: &AudioSendSource) -> bool {
+    s.capture && s.layers.is_empty()
 }
 
 /// Per-send analysis configuration: which extractors run for this send.
@@ -124,10 +139,11 @@ pub struct AudioSend {
     /// modulation. See `docs/LIVE_AUDIO_TRIGGERS_DESIGN.md`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<TriggerRoute>,
-    /// Where the send's signal comes from — a capture downmix (default) or a
-    /// timeline audio layer. Skipped on serialize when `Capture`, so pre-audio-
-    /// layer project fixtures round-trip byte-identically.
-    #[serde(default, skip_serializing_if = "is_capture_source")]
+    /// Where the send's signal comes from — the set of inputs (capture device
+    /// and/or audio layers) summed and analyzed as one. Skipped on serialize when
+    /// it's the plain default (capture-only), so pre-source project fixtures
+    /// round-trip byte-identically.
+    #[serde(default, skip_serializing_if = "is_default_source")]
     pub source: AudioSendSource,
 }
 
@@ -141,7 +157,7 @@ impl AudioSend {
             gain_db: 0.0,
             analysis: SendAnalysisConfig::default(),
             triggers: Vec::new(),
-            source: AudioSendSource::Capture,
+            source: AudioSendSource::default(),
         }
     }
 
@@ -176,17 +192,24 @@ impl AudioSend {
         routes
     }
 
-    /// The layer feeding this send, if it is a layer source.
-    pub fn layer_source(&self) -> Option<&LayerId> {
-        match &self.source {
-            AudioSendSource::Layer(id) => Some(id),
-            AudioSendSource::Capture => None,
-        }
+    /// The audio layers feeding this send (possibly empty).
+    pub fn layers(&self) -> &[LayerId] {
+        &self.source.layers
     }
 
-    /// Whether this send is fed by a timeline audio layer (not capture).
+    /// Whether the capture device feeds this send.
+    pub fn has_capture(&self) -> bool {
+        self.source.capture
+    }
+
+    /// Whether this send is fed by at least one timeline audio layer.
     pub fn is_layer_fed(&self) -> bool {
-        matches!(self.source, AudioSendSource::Layer(_))
+        !self.source.layers.is_empty()
+    }
+
+    /// Whether `layer` is one of this send's inputs.
+    pub fn feeds_from_layer(&self, layer: &LayerId) -> bool {
+        self.source.layers.iter().any(|l| l == layer)
     }
 
     /// Linear gain multiplier from the stored dB trim. 0 dB → 1.0 (unity).
@@ -387,37 +410,47 @@ impl AudioSetup {
     }
 
     /// The send currently fed by `layer`, if any. One layer feeds at most one
-    /// send — the reverse of [`AudioSendSource::Layer`].
+    /// send — the reverse of [`AudioSendSource::layers`].
     pub fn send_for_layer(&self, layer: &LayerId) -> Option<&AudioSend> {
-        self.sends
-            .iter()
-            .find(|s| s.layer_source() == Some(layer))
+        self.sends.iter().find(|s| s.feeds_from_layer(layer))
     }
 
-    /// Route `send` to be fed by `layer`, clearing any other send that was
-    /// pointing at the same layer (one layer → one send). Returns `true` if a
-    /// matching send existed and was (re)routed.
+    /// Route `layer` to feed `send`, removing it from any other send first (one
+    /// layer → one send). Additive: the send's existing capture flag and other
+    /// layers are kept — so a default send becomes capture+layer (a live mix).
+    /// Returns `true` if a matching send existed and was (re)routed.
     pub fn bind_send_to_layer(&mut self, send: &AudioSendId, layer: LayerId) -> bool {
         for s in &mut self.sends {
-            if s.layer_source() == Some(&layer) && &s.id != send {
-                s.source = AudioSendSource::Capture;
+            if &s.id != send {
+                s.source.layers.retain(|l| l != &layer);
             }
         }
         if let Some(s) = self.sends.iter_mut().find(|s| &s.id == send) {
-            s.source = AudioSendSource::Layer(layer);
+            if !s.source.layers.contains(&layer) {
+                s.source.layers.push(layer);
+            }
             true
         } else {
             false
         }
     }
 
-    /// Detach any layer→send binding for `layer` (e.g. when the layer is deleted),
-    /// reverting the affected send to a capture source.
+    /// Detach `layer` from every send that feeds from it (e.g. when the layer is
+    /// deleted). The sends keep their capture flag and other layers.
     pub fn unbind_layer(&mut self, layer: &LayerId) {
         for s in &mut self.sends {
-            if s.layer_source() == Some(layer) {
-                s.source = AudioSendSource::Capture;
-            }
+            s.source.layers.retain(|l| l != layer);
+        }
+    }
+
+    /// Set whether the capture device feeds `send`. Returns `true` if the send
+    /// existed. The send's layer set is untouched.
+    pub fn set_send_capture(&mut self, send: &AudioSendId, capture: bool) -> bool {
+        if let Some(s) = self.sends.iter_mut().find(|s| &s.id == send) {
+            s.source.capture = capture;
+            true
+        } else {
+            false
         }
     }
 
@@ -604,21 +637,28 @@ mod tests {
     #[test]
     fn capture_source_is_skipped_layer_source_round_trips() {
         use crate::id::LayerId;
-        // A default (capture) send must serialize without a `source` key, so
-        // pre-audio-layer fixtures round-trip byte-identically.
+        // A default (capture-only) send must serialize without a `source` key, so
+        // pre-source fixtures round-trip byte-identically.
         let send = AudioSend::new("Kick");
-        assert_eq!(send.source, AudioSendSource::Capture);
+        assert_eq!(send.source, AudioSendSource::default());
+        assert!(send.has_capture() && !send.is_layer_fed());
         let json = serde_json::to_string(&send).unwrap();
-        assert!(!json.contains("source"), "capture source must be skipped: {json}");
+        assert!(!json.contains("source"), "capture-only source must be skipped: {json}");
 
-        // A layer-fed send round-trips with its LayerId.
-        let mut layer_send = AudioSend::new("Bass");
-        layer_send.source = AudioSendSource::Layer(LayerId::new("L7"));
-        let json = serde_json::to_string(&layer_send).unwrap();
+        // A capture+layer mix round-trips with its layer set and capture flag.
+        let mut mix = AudioSend::new("Bass");
+        mix.source.layers.push(LayerId::new("L7"));
+        let json = serde_json::to_string(&mix).unwrap();
         assert!(json.contains("source"));
         let back: AudioSend = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.layer_source(), Some(&LayerId::new("L7")));
-        assert!(back.is_layer_fed());
+        assert_eq!(back.layers(), &[LayerId::new("L7")]);
+        assert!(back.is_layer_fed() && back.has_capture());
+
+        // A layer-only send (capture toggled off) also round-trips.
+        let mut layer_only = AudioSend::new("Vox");
+        layer_only.source = AudioSendSource { capture: false, layers: vec![LayerId::new("L3")] };
+        let back: AudioSend = serde_json::from_str(&serde_json::to_string(&layer_only).unwrap()).unwrap();
+        assert!(!back.has_capture() && back.feeds_from_layer(&LayerId::new("L3")));
     }
 
     #[test]
@@ -634,15 +674,33 @@ mod tests {
 
         setup.bind_send_to_layer(&a, layer.clone());
         assert_eq!(setup.send_for_layer(&layer).map(|s| &s.id), Some(&a));
+        // Additive: A keeps its capture flag and gains the layer (a live mix).
+        assert!(setup.find_send(&a).unwrap().has_capture());
+        assert!(setup.find_send(&a).unwrap().is_layer_fed());
 
-        // Binding B to the same layer moves the binding (A reverts to capture).
+        // Binding B to the same layer moves it off A.
         setup.bind_send_to_layer(&b, layer.clone());
         assert_eq!(setup.send_for_layer(&layer).map(|s| &s.id), Some(&b));
         assert!(!setup.find_send(&a).unwrap().is_layer_fed());
 
-        // Unbinding the layer reverts B too.
+        // Unbinding the layer detaches B too.
         setup.unbind_layer(&layer);
         assert!(setup.send_for_layer(&layer).is_none());
+    }
+
+    #[test]
+    fn set_send_capture_toggles_device_feed_keeping_layers() {
+        use crate::id::LayerId;
+        let mut setup = AudioSetup {
+            sends: vec![AudioSend::new("A")],
+            ..Default::default()
+        };
+        let a = setup.sends[0].id.clone();
+        setup.bind_send_to_layer(&a, LayerId::new("L1"));
+        assert!(setup.set_send_capture(&a, false));
+        let send = setup.find_send(&a).unwrap();
+        assert!(!send.has_capture(), "capture toggled off");
+        assert!(send.is_layer_fed(), "layer kept");
     }
 
     #[test]

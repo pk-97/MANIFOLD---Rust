@@ -1255,7 +1255,7 @@ impl Default for Project {
     fn default() -> Self {
         Self {
             project_name: String::new(),
-            project_version: "1.9.0".to_string(),
+            project_version: "1.10.0".to_string(),
             timeline: Timeline::default(),
             video_library: VideoLibrary::default(),
             midi_config: MidiMappingConfig::default(),

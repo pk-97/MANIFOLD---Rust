@@ -1140,7 +1140,7 @@ pub fn sync_inspector_data(
     // not, instead of a bare index.
     if ui.audio_setup_panel.is_open() {
         use manifold_core::audio_mod::AudioBand;
-        use manifold_core::{AudioSendSource, AudioSourceKind};
+        use manifold_core::AudioSourceKind;
         use manifold_ui::panels::audio_setup_panel::{AudioSendRow, TriggerRouteRow};
         let dir = manifold_audio::directory::system_directory();
         // Tap sources (system / app output) don't live in the input-device list,
@@ -1157,21 +1157,27 @@ pub fn sync_inspector_data(
             .sends
             .iter()
             .map(|s| {
-                // Source indicator: "Cap" for a capture (channel) source, or the
-                // feeding audio layer's (truncated) name when layer-fed.
-                let (source_label, layer_fed) = match &s.source {
-                    AudioSendSource::Layer(lid) => {
-                        let name = project
-                            .timeline
-                            .layers
-                            .iter()
-                            .find(|l| &l.layer_id == lid)
-                            .map(|l| l.name.chars().take(6).collect::<String>())
-                            .unwrap_or_else(|| "\u{2014}".to_string()); // — (orphaned)
-                        (name, true)
-                    }
-                    AudioSendSource::Capture => ("Cap".to_string(), false),
+                // Source indicator: the send's input set — the capture device
+                // ("Cap"), audio layers, or a mix of both. The chip toggles the
+                // capture half; layers are routed from the layer header.
+                let cap = s.has_capture();
+                let n_layers = s.layers().len();
+                let first_layer = s.layers().first().and_then(|lid| {
+                    project
+                        .timeline
+                        .layers
+                        .iter()
+                        .find(|l| &l.layer_id == lid)
+                        .map(|l| l.name.chars().take(6).collect::<String>())
+                });
+                let source_label = match (cap, n_layers) {
+                    (true, 0) => "Cap".to_string(),
+                    (true, n) => format!("Cap+{n}"),
+                    (false, 0) => "Off".to_string(),
+                    (false, 1) => first_layer.clone().unwrap_or_else(|| "\u{2014}".to_string()),
+                    (false, n) => format!("{n} lyr"),
                 };
+                let layer_fed = n_layers > 0;
                 // One trigger row per band (Whole/Low/Mid/High), defaulting when
                 // the send carries no route for that band yet. The target label
                 // resolves to the layer's name, or "Auto" (route by send name).

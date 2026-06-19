@@ -4,7 +4,7 @@ use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
 use manifold_core::types::{BlendMode, LayerType};
 use manifold_core::{Beats, LayerId};
-use manifold_editing::commands::audio_setup::SetAudioSendSourceCommand;
+use manifold_editing::commands::audio_setup::SetLayerAudioSendCommand;
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::commands::settings::ChangeLayerBlendModeCommand;
 use manifold_editing::service::EditingService;
@@ -234,24 +234,15 @@ pub(super) fn dispatch_layer(
             DispatchResult::structural()
         }
         PanelAction::SetLayerAudioSend(idx, send_id) => {
-            // One mutation path for the layer↔send binding, shared with the
-            // Audio Setup panel's source button, so the two can't disagree.
+            // Layer-centric routing: this layer feeds the chosen send (or none).
+            // Additive — the target send keeps its capture flag, so routing a
+            // layer onto a default send makes a live capture+layer mix.
             if let Some(layer) = project.timeline.layers.get(*idx) {
                 let layer_id = layer.layer_id.clone();
-                let cmd = match send_id {
-                    Some(sid) => Some(SetAudioSendSourceCommand::to_layer(sid.clone(), layer_id)),
-                    // "No send": revert whichever send this layer currently feeds.
-                    None => project
-                        .audio_setup
-                        .send_for_layer(&layer_id)
-                        .map(|s| SetAudioSendSourceCommand::to_capture(s.id.clone())),
-                };
-                if let Some(cmd) = cmd {
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(cmd);
-                    boxed.execute(project);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                }
+                let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                    Box::new(SetLayerAudioSendCommand::new(layer_id, send_id.clone()));
+                boxed.execute(project);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             }
             DispatchResult::structural()
         }

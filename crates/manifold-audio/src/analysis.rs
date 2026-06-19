@@ -8,14 +8,17 @@
 //! # Shape
 //!
 //! ```text
-//! capture ring (f32, interleaved) ─drain→ AudioFeatureWorker ─frames→ FeatureReader
-//!   (cpal RT thread fills it)              (this worker thread)         (content thread)
+//! capture ring (f32, interleaved) ─drain→ AudioFeatureWorker ─mono→ MonoReader
+//!   (cpal RT thread fills it)              (downmix worker thread)   (content thread)
 //! ```
 //!
 //! The worker owns the capture ring's [`AudioConsumer`](crate::capture::AudioConsumer),
-//! deinterleaves it, downmixes each configured **send** to mono, and runs that
-//! send's feature extractors. Frames are published latest-wins through a second
-//! SPSC `ringbuf` — no `Arc<Mutex>`, no locks on the read path.
+//! deinterleaves it, and downmixes each configured **send** to one post-gain mono
+//! sample per device frame, published interleaved-by-send through a second SPSC
+//! `ringbuf` — no `Arc<Mutex>`, no locks on the read path. Analysis itself (VQT,
+//! bands, onsets, scope columns) runs on the **content thread** via
+//! [`StreamingSendAnalyzer`], so a send can sum its capture mono with audio-layer
+//! taps before a single analysis ("what you hear is what modulates").
 //!
 //! ## Send identity
 //!
@@ -36,7 +39,7 @@
 //! it here.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -48,23 +51,15 @@ use manifold_spectral::{CqtTransform, SpectrogramConfig};
 
 use crate::capture::AudioConsumer;
 
-/// Maximum number of sends the worker tracks. Keeps [`FeatureFrame`] `Copy` and
-/// alloc-free so it can ride the SPSC ring without per-frame heap churn.
+/// Maximum number of sends the worker downmixes. Caps the per-tick work and the
+/// mono-handoff stride.
 pub const MAX_SENDS: usize = 16;
 
-/// Output ring depth (feature frames). The worker produces ~1 frame / 21 ms and
-/// the content thread drains every tick, so this is generous headroom; on the
-/// rare full ring the newest frame is dropped (next arrives ~21 ms later).
-const OUTPUT_RING_CAPACITY: usize = 16;
-
-/// One send's routing + analysis config, as the worker needs it. The project's
-/// `AudioSend` (in `manifold-core`) is resolved down to this at the wiring layer.
-#[derive(Clone, Debug, Default)]
-pub struct SendSpec {
-    /// Device input channels to downmix to mono for this send. Out-of-range
-    /// channels (≥ device channel count) are ignored at runtime.
-    pub channels: Vec<u16>,
-}
+/// Mono-handoff ring capacity (samples) for the worker→content-thread stream. At
+/// 48 kHz a content tick spans ~800 samples per send; this holds ~170 ms of
+/// generous headroom so jitter never starves a tick, and the content thread
+/// drains every tick so it never overflows in steady state.
+const MONO_RING_CAPACITY: usize = 16384;
 
 /// Live per-send input gain (linear multiplier), shared content thread → worker.
 ///
@@ -112,252 +107,131 @@ impl GainBank {
     }
 }
 
-/// Live Low/Mid/High crossover frequencies, shared content thread → worker.
-/// Like [`GainBank`], these are a calibration the performer can ride while
-/// watching the spectrogram, so they must apply without glitching the stream:
-/// the worker re-splits its analysis bands in place, no capture restart. Global
-/// to all sends — Low/Mid/High mean one consistent split everywhere.
-pub struct CrossoverBank {
-    low_hz: AtomicU32,
-    mid_hz: AtomicU32,
-}
-
-impl CrossoverBank {
-    /// Build from initial crossover frequencies (Hz).
-    pub fn new(low_hz: f32, mid_hz: f32) -> Self {
-        Self {
-            low_hz: AtomicU32::new(low_hz.to_bits()),
-            mid_hz: AtomicU32::new(mid_hz.to_bits()),
-        }
-    }
-
-    /// Set both crossover frequencies (Hz).
-    pub fn set(&self, low_hz: f32, mid_hz: f32) {
-        self.low_hz.store(low_hz.to_bits(), Ordering::Relaxed);
-        self.mid_hz.store(mid_hz.to_bits(), Ordering::Relaxed);
-    }
-
-    /// Current `(low_hz, mid_hz)`.
-    pub fn get(&self) -> (f32, f32) {
-        (
-            f32::from_bits(self.low_hz.load(Ordering::Relaxed)),
-            f32::from_bits(self.mid_hz.load(Ordering::Relaxed)),
-        )
-    }
-}
-
-/// A snapshot of every send's features at one analysis instant. `Copy` and
-/// fixed-size so it rides the SPSC ring with no allocation.
-#[derive(Clone, Copy, Debug)]
-pub struct FeatureFrame {
-    sends: [SendFeatures; MAX_SENDS],
-    count: usize,
-    /// Monotonic frame counter — lets a reader tell a fresh frame from a repeat.
-    pub seq: u64,
-}
-
-impl FeatureFrame {
-    /// Features for send `index`, or `None` if out of range.
-    pub fn send(&self, index: usize) -> Option<SendFeatures> {
-        (index < self.count).then(|| self.sends[index])
-    }
-
-    /// Number of sends carried by this frame.
-    pub fn count(&self) -> usize {
-        self.count
-    }
-}
-
-/// The content-thread end of the feature stream. Holds the SPSC consumer plus a
-/// cache of the last frame seen, so a tick with no new frame still reports the
-/// most recent value (modulation holds, it doesn't drop to zero).
-pub struct FeatureReader {
-    cons: ringbuf::HeapCons<FeatureFrame>,
-    last: Option<FeatureFrame>,
-}
-
-impl FeatureReader {
-    /// Drain all pending frames, keeping the newest, and return it. After the
-    /// first frame ever seen, always returns `Some` (the cached latest).
-    pub fn latest(&mut self) -> Option<FeatureFrame> {
-        while let Some(frame) = self.cons.try_pop() {
-            self.last = Some(frame);
-        }
-        self.last
-    }
-}
-
-/// How many columns of headroom the worker→UI column ring holds. The UI drains
-/// every frame; this only matters if the UI stalls (then oldest columns drop).
-const COLUMN_RING_COLS: usize = 128;
-
 /// Overlay scalars per spectrogram column: four per-band centroid heights
 /// `[centroid_full, centroid_low, centroid_mid, centroid_high]` followed by the
 /// three per-band onset impulses `[onset_low, onset_mid, onset_high]`. The shader
-/// reads the same stride.
+/// reads the same stride; a [`StreamingSendAnalyzer`] buffers this many floats
+/// per scope column.
 const SCOPE_SCALAR_STRIDE: usize = 7;
 
-/// Live control for the spectrogram tap, shared content thread → worker. The
-/// content thread sets which send (by index) the worker should produce VQT
-/// columns for; `-1` = none (no spectrogram work). Lock-free, like [`GainBank`].
-pub struct SpectrogramTap {
-    selected: AtomicI32,
-}
-
-impl Default for SpectrogramTap {
-    fn default() -> Self {
-        Self { selected: AtomicI32::new(-1) }
-    }
-}
-
-impl SpectrogramTap {
-    /// Select the send (by worker index) to produce columns for, or `None` to
-    /// stop. The worker resets its rolling window when this changes.
-    pub fn set_selected(&self, send_index: Option<usize>) {
-        self.selected
-            .store(send_index.map(|i| i as i32).unwrap_or(-1), Ordering::Relaxed);
-    }
-
-    fn selected(&self) -> i32 {
-        self.selected.load(Ordering::Relaxed)
-    }
-}
-
-/// Read end of the worker's VQT column stream. Each column is `num_bins`
-/// magnitudes (geometrically-spaced bins). The producer pushes whole columns
-/// only, so the ring is always a whole number of columns.
-pub struct ColumnReader {
+/// Read end of the capture worker's per-send **mono** stream.
+///
+/// The worker downmixes each send's device channels to one post-gain mono sample
+/// per device frame and pushes them here, interleaved by send (stride = send
+/// count). The content thread drains them and feeds each send's analyzer —
+/// analysis lives on the content thread now, so a send can sum its capture mono
+/// with audio-layer taps before a *single* analysis ("what you hear is what
+/// modulates"). Lock-free SPSC, no `Arc<Mutex>` on the read path.
+pub struct MonoReader {
     cons: ringbuf::HeapCons<f32>,
-    num_bins: usize,
+    send_count: usize,
+    sample_rate: u32,
+    /// Reusable drain scratch (a whole number of frames).
     scratch: Vec<f32>,
 }
 
-impl ColumnReader {
-    /// Bin count per column (the spectrogram renderer must match it).
-    pub fn num_bins(&self) -> usize {
-        self.num_bins
+impl MonoReader {
+    /// The capture device's sample rate — the rate the mono samples arrive at.
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
     }
 
-    /// Pop every complete column available, calling `f` with each in arrival
-    /// order (oldest → newest). No-op if `num_bins == 0`.
-    pub fn drain_columns(&mut self, mut f: impl FnMut(&[f32])) {
-        if self.num_bins == 0 {
-            return;
-        }
-        while self.cons.occupied_len() >= self.num_bins {
-            let got = self.cons.pop_slice(&mut self.scratch);
-            if got < self.num_bins {
-                break; // shouldn't happen (whole-column pushes), but stay safe
-            }
-            f(&self.scratch[..self.num_bins]);
-        }
+    /// Number of sends (the interleave stride).
+    pub fn send_count(&self) -> usize {
+        self.send_count
     }
-}
 
-/// Read end of the worker's per-column overlay-scalar stream:
-/// [`SCOPE_SCALAR_STRIDE`] floats per column, `[centroid_full, centroid_low,
-/// centroid_mid, centroid_high, onset_low, onset_mid, onset_high]`, produced in
-/// lockstep with [`ColumnReader`] (same column count, same order).
-pub struct ScalarReader {
-    cons: ringbuf::HeapCons<f32>,
-    scratch: [f32; SCOPE_SCALAR_STRIDE],
-}
-
-impl ScalarReader {
-    /// Pop every complete scalar record available, calling
-    /// `f([centroid_full, centroid_low, centroid_mid, centroid_high],
-    /// [onset_low, onset_mid, onset_high])` in arrival order (oldest → newest).
-    pub fn drain(&mut self, mut f: impl FnMut([f32; 4], [f32; 3])) {
-        while self.cons.occupied_len() >= SCOPE_SCALAR_STRIDE {
-            let got = self.cons.pop_slice(&mut self.scratch);
-            if got < SCOPE_SCALAR_STRIDE {
+    /// Drain every complete per-send frame produced since the last call, appending
+    /// each send's mono samples to `per_send[i]` (oldest → newest). `per_send`
+    /// must have at least [`Self::send_count`] entries; callers clear them first.
+    pub fn drain(&mut self, per_send: &mut [Vec<f32>]) {
+        let stride = self.send_count.max(1);
+        loop {
+            let frames = self.cons.occupied_len() / stride;
+            if frames == 0 {
                 break;
             }
-            f(
-                [self.scratch[0], self.scratch[1], self.scratch[2], self.scratch[3]],
-                [self.scratch[4], self.scratch[5], self.scratch[6]],
-            );
+            let cap_frames = (self.scratch.len() / stride).max(1);
+            let take = frames.min(cap_frames) * stride;
+            let got = self.cons.pop_slice(&mut self.scratch[..take]);
+            for frame in self.scratch[..got].chunks_exact(stride) {
+                for (i, &s) in frame.iter().enumerate() {
+                    if let Some(v) = per_send.get_mut(i) {
+                        v.push(s);
+                    }
+                }
+            }
+            if got < take {
+                break;
+            }
         }
     }
 }
 
-/// Spawns and owns the analysis worker thread. Stops the thread on `stop()` or
-/// drop.
+/// Spawns and owns the capture downmix worker thread. Stops the thread on
+/// `stop()` or drop.
 pub struct AudioFeatureWorker {
     running: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl AudioFeatureWorker {
-    /// Spawn the worker. Takes ownership of the capture ring's `consumer`, the
-    /// device `sample_rate` and `device_channels` (for deinterleaving), and the
-    /// `sends` to analyze. Returns the worker handle and the [`FeatureReader`]
-    /// for the content thread.
+    /// Spawn the downmix worker. Takes ownership of the capture ring's `consumer`,
+    /// the device `sample_rate` and `device_channels` (for deinterleaving), the
+    /// per-send `send_channels`, and the live `gains`. Returns the worker handle
+    /// and a [`MonoReader`] the content thread drains each tick.
+    ///
+    /// The worker only downmixes — it produces one post-gain mono sample per send
+    /// per device frame. Analysis (VQT, bands, onsets, scope columns) runs on the
+    /// content thread via [`StreamingSendAnalyzer`], so a send can mix its capture
+    /// mono with audio-layer taps before a single analysis.
     ///
     /// Sends beyond [`MAX_SENDS`] are dropped with a warning.
     pub fn spawn(
         consumer: AudioConsumer,
         sample_rate: u32,
         device_channels: u16,
-        mut sends: Vec<SendSpec>,
+        mut send_channels: Vec<Vec<u16>>,
         gains: Arc<GainBank>,
-        crossovers: Arc<CrossoverBank>,
-        tap: Arc<SpectrogramTap>,
-    ) -> (Self, FeatureReader, ColumnReader, ScalarReader) {
-        if sends.len() > MAX_SENDS {
+    ) -> (Self, MonoReader) {
+        if send_channels.len() > MAX_SENDS {
             log::warn!(
                 "[AudioAnalysis] {} sends exceeds MAX_SENDS={MAX_SENDS}; extra dropped",
-                sends.len(),
+                send_channels.len(),
             );
-            sends.truncate(MAX_SENDS);
+            send_channels.truncate(MAX_SENDS);
         }
+        let send_count = send_channels.len();
 
-        let (prod, cons) = HeapRb::<FeatureFrame>::new(OUTPUT_RING_CAPACITY).split();
-        let reader = FeatureReader { cons, last: None };
-
-        // Spectrogram column ring. Bin count is fixed by config + sample rate,
-        // so the ring and reader agree without a built transform.
-        let spec_config = SpectrogramConfig::default();
-        let num_bins = spec_config.num_bins(sample_rate as f32);
-        let (col_prod, col_cons) =
-            HeapRb::<f32>::new((num_bins * COLUMN_RING_COLS).max(1)).split();
-        let column_reader = ColumnReader {
-            cons: col_cons,
-            num_bins,
-            scratch: vec![0.0; num_bins.max(1)],
+        // Interleaved-by-send mono ring (stride = send count). Whole frames only,
+        // so the stride never desyncs.
+        let stride = send_count.max(1);
+        let (prod, cons) = HeapRb::<f32>::new((MONO_RING_CAPACITY * stride).max(1)).split();
+        let reader = MonoReader {
+            cons,
+            send_count,
+            sample_rate,
+            scratch: vec![0.0; (MONO_RING_CAPACITY * stride).max(stride)],
         };
-
-        // Overlay-scalar ring: SCOPE_SCALAR_STRIDE floats per column, sized to
-        // match the column ring's column capacity so they never desync.
-        let (scalar_prod, scalar_cons) =
-            HeapRb::<f32>::new((SCOPE_SCALAR_STRIDE * COLUMN_RING_COLS).max(1)).split();
-        let scalar_reader = ScalarReader { cons: scalar_cons, scratch: [0.0; SCOPE_SCALAR_STRIDE] };
 
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = running.clone();
 
         let handle = std::thread::Builder::new()
-            .name("manifold-audio-analysis".into())
+            .name("manifold-audio-downmix".into())
             .spawn(move || {
-                let mut worker = WorkerLoop::new(
+                let mut worker = MonoWorkerLoop::new(
                     consumer,
                     prod,
-                    sample_rate,
                     device_channels as usize,
-                    sends,
+                    send_channels,
                     gains,
-                    crossovers,
-                    tap,
-                    col_prod,
-                    scalar_prod,
-                    spec_config,
-                    num_bins,
                 );
                 worker.run(&running_thread);
             })
-            .expect("spawn audio analysis thread");
+            .expect("spawn audio downmix thread");
 
-        (Self { running, handle: Some(handle) }, reader, column_reader, scalar_reader)
+        (Self { running, handle: Some(handle) }, reader)
     }
 
     /// Stop the worker thread and join it. Idempotent.
@@ -382,9 +256,6 @@ impl Drop for AudioFeatureWorker {
 /// and the spectrogram are the *same* analysis, so "what you see is what
 /// modulates" holds per send.
 struct SendState {
-    channels: Vec<u16>,
-    /// Linear input gain, refreshed from the [`GainBank`] once per drain.
-    gain: f32,
     /// Rolling post-gain mono window, newest at the end. The VQT runs on its tail
     /// (zero-padded until it fills, so features fade in over one window rather
     /// than blacking out) every hop.
@@ -413,159 +284,74 @@ struct SendState {
     features: SendFeatures,
 }
 
-struct WorkerLoop {
+/// The capture downmix worker. Drains the device ring, deinterleaves it, and
+/// downmixes each send's channels to one post-gain mono sample per device frame,
+/// pushing the result interleaved-by-send to the content thread. No analysis —
+/// that's the content thread's [`StreamingSendAnalyzer`], so a send can mix this
+/// capture mono with audio-layer taps before a single analysis.
+struct MonoWorkerLoop {
     consumer: AudioConsumer,
-    producer: ringbuf::HeapProd<FeatureFrame>,
+    /// Interleaved-by-send mono output (stride = send count). Whole frames only.
+    producer: ringbuf::HeapProd<f32>,
     device_channels: usize,
-    sends: Vec<SendState>,
+    /// Per-send device channels to downmix to mono, in send order.
+    send_channels: Vec<Vec<u16>>,
     /// Live per-send gain, written by the content thread, read here each drain.
     gains: Arc<GainBank>,
-    /// Live Low/Mid/High crossovers, read each drain; a change re-splits every
-    /// send's bands (no capture restart).
-    crossovers: Arc<CrossoverBank>,
-    /// Last crossovers applied, to skip the band-edge recompute when unchanged.
-    last_crossovers: (f32, f32),
-    /// The one variable-Q transform every send shares — the same transform the
-    /// scope draws. Its kernels are read-only; the worker is single-threaded, so
-    /// its FFT scratch is reused for each send in turn.
-    cqt: CqtTransform,
-    sample_rate: f32,
-    spec_config: SpectrogramConfig,
-    spec_num_bins: usize,
-    /// VQT window length (`spec_config.n_fft`) and hop, cached.
-    n_fft: usize,
-    hop: usize,
-    /// Per-bin pink-tilt weight (linear multiplier) matching the scope's
-    /// colourmap. Applied to the raw VQT magnitudes so every reduction — and the
-    /// presence gate — reads the exact tilted dB the user sees. `num_bins` long.
-    tilt_w: Vec<f32>,
-    /// Cached band edges (VQT bin indices) for the current crossovers: Low =
-    /// `0..low_bin`, Mid = `low_bin..mid_bin`, High = `mid_bin..num_bins`.
-    low_bin: usize,
-    mid_bin: usize,
-    // ── Spectrogram column producer (the tapped send drives the scope) ──
-    /// Which send to produce columns for, `-1` = none. Read from `tap` each drain.
-    tap: Arc<SpectrogramTap>,
-    column_producer: ringbuf::HeapProd<f32>,
-    /// Per-column overlay scalars ([`SCOPE_SCALAR_STRIDE`] per column: a centroid
-    /// height per band [Full/Low/Mid/High] + a per-band onset for Low/Mid/High),
-    /// in lockstep with `column_producer`. The onsets ARE the tapped send's
-    /// Low/Mid/High transients, so the ticks and the modulation source are
-    /// identical.
-    scalar_producer: ringbuf::HeapProd<f32>,
-    /// Last-seen tap, to detect a selection change (resets the tapped send).
-    spec_tapped: i32,
-    /// `n_fft` scratch for the VQT input (window tail, zero-padded at the front
-    /// while the window fills, so features fade in over one window).
-    vqt_in: Vec<f32>,
-    /// `num_bins` scratch for the raw (untilted) VQT magnitudes — pushed to the
-    /// scope ring as-is, since the shader applies the display tilt itself.
-    vqt_raw: Vec<f32>,
-    /// Leftover interleaved samples that didn't complete a frame last drain.
-    /// Retains its allocation across drains (never moved out), so stashing the
-    /// remainder each tick is realloc-free in steady state.
+    /// Per-send linear gain snapshot, refreshed once per drain (avoids an atomic
+    /// load per sample).
+    gain_scratch: Vec<f32>,
+    /// Leftover interleaved samples that didn't complete a device frame last drain.
     carry: Vec<f32>,
     /// Persistent per-drain work buffer (carry-over + freshly drained samples).
-    /// Swapped out and back so the analysis loop borrows a local, not `self`.
     work: Vec<f32>,
-    /// Reusable drain buffer.
+    /// Reusable device-ring drain buffer.
     drain_buf: Vec<f32>,
-    seq: u64,
+    /// Reusable interleaved-by-send mono output buffer.
+    out: Vec<f32>,
 }
 
-impl WorkerLoop {
-    #[allow(clippy::too_many_arguments)]
+impl MonoWorkerLoop {
     fn new(
         consumer: AudioConsumer,
-        producer: ringbuf::HeapProd<FeatureFrame>,
-        sample_rate: u32,
+        producer: ringbuf::HeapProd<f32>,
         device_channels: usize,
-        specs: Vec<SendSpec>,
+        send_channels: Vec<Vec<u16>>,
         gains: Arc<GainBank>,
-        crossovers: Arc<CrossoverBank>,
-        tap: Arc<SpectrogramTap>,
-        column_producer: ringbuf::HeapProd<f32>,
-        scalar_producer: ringbuf::HeapProd<f32>,
-        spec_config: SpectrogramConfig,
-        spec_num_bins: usize,
     ) -> Self {
-        let nb = spec_num_bins.max(1);
-        let n_fft = spec_config.n_fft;
-        let hop = spec_config.hop.max(1);
-        let sends = specs
-            .into_iter()
-            .map(|s| SendState {
-                channels: s.channels,
-                gain: 1.0,
-                window: Vec::with_capacity(n_fft + WINDOW_BACKLOG_HOPS * hop),
-                since_hop: 0,
-                col: vec![0.0; nb],
-                prev_col: vec![0.0; nb],
-                transient_refractory: [0; 4],
-                energy_avg: [0.0; 4],
-                has_prev: false,
-                centroid_yfb: [-1.0; 4],
-                features: SendFeatures::default(),
-            })
-            .collect();
-
-        let sr = sample_rate as f32;
-        let cqt = spec_config.build_transform(sr);
-        let tilt_w = tilt_weights(&spec_config, sr, nb);
-        let (init_low, init_mid) = crossovers.get();
-        let (low_bin, mid_bin) = band_edges(&spec_config, sr, nb, init_low, init_mid);
-
+        let send_count = send_channels.len();
         Self {
             consumer,
             producer,
             device_channels: device_channels.max(1),
-            sends,
+            send_channels,
             gains,
-            crossovers,
-            last_crossovers: (init_low, init_mid),
-            cqt,
-            sample_rate: sr,
-            spec_config,
-            spec_num_bins,
-            n_fft,
-            hop,
-            tilt_w,
-            low_bin,
-            mid_bin,
-            tap,
-            column_producer,
-            scalar_producer,
-            spec_tapped: -1,
-            vqt_in: vec![0.0; n_fft],
-            vqt_raw: vec![0.0; nb],
+            gain_scratch: vec![1.0; send_count],
             carry: Vec::with_capacity(4096),
-            work: Vec::with_capacity(4096 + n_fft),
+            work: Vec::with_capacity(4096),
             drain_buf: vec![0.0; 4096],
-            seq: 0,
+            out: Vec::with_capacity(4096),
         }
     }
 
     fn run(&mut self, running: &AtomicBool) {
         while running.load(Ordering::Acquire) {
-            let produced = self.drain_and_analyze();
-            if !produced {
+            if !self.drain_and_downmix() {
                 // Nothing new; back off briefly so we don't spin a core.
                 std::thread::sleep(Duration::from_millis(2));
             }
         }
     }
 
-    /// Drain everything available, analyze complete windows, emit a frame if any
-    /// send updated. Returns whether a frame was produced.
-    fn drain_and_analyze(&mut self) -> bool {
+    /// Drain the device ring, downmix each complete frame to per-send post-gain
+    /// mono, and push the interleaved result. Returns whether anything was pushed.
+    fn drain_and_downmix(&mut self) -> bool {
         let available = self.consumer.occupied_len();
         if available == 0 && self.carry.is_empty() {
             return false;
         }
 
-        // Move the carry-over into the persistent work buffer (`carry` keeps its
-        // allocation), then drain the ring onto it. `work` is taken out so the
-        // analysis loop below borrows a local, not `self`.
+        // carry-over + freshly drained samples → `work` (a borrowed local).
         let mut work = std::mem::take(&mut self.work);
         work.clear();
         work.extend_from_slice(&self.carry);
@@ -584,158 +370,41 @@ impl WorkerLoop {
 
         let ch = self.device_channels;
         let usable = (work.len() / ch) * ch;
-        let mut updated = false;
 
-        // Refresh each send's live gain once per drain (the bank is lock-free;
-        // a gain edit lands here without a capture restart).
-        for (i, send) in self.sends.iter_mut().enumerate() {
-            send.gain = self.gains.get_linear(i);
+        // Refresh the per-send gain snapshot once per drain (lock-free; a gain
+        // edit lands here without a capture restart).
+        for (i, g) in self.gain_scratch.iter_mut().enumerate() {
+            *g = self.gains.get_linear(i);
         }
 
-        // Re-split the bands if the crossovers moved (a drag in the Audio Setup
-        // scope). Cheap compare-and-skip — a couple of bin lookups, paid only on
-        // an actual change. The same edges feed every send and the scope.
-        let xover = self.crossovers.get();
-        if xover != self.last_crossovers {
-            let (lo, mi) =
-                band_edges(&self.spec_config, self.sample_rate, self.spec_num_bins.max(1), xover.0, xover.1);
-            self.low_bin = lo;
-            self.mid_bin = mi;
-            self.last_crossovers = xover;
-        }
-
-        // Which send feeds the scope. Each send owns its own window + feature
-        // state, so a tap change just redirects the column stream — no splice
-        // reset needed (the new source's columns are already its own).
-        let tapped = self.tap.selected();
-        self.spec_tapped = tapped;
-
-        // Accumulate post-gain mono into each send's rolling window.
+        // Downmix each device frame → one post-gain mono sample per send,
+        // interleaved by send (stride = send count).
+        self.out.clear();
         for frame in work[..usable].chunks_exact(ch) {
-            for send in self.sends.iter_mut() {
-                let mono = downmix(frame, &send.channels) * send.gain;
-                send.window.push(mono);
-                send.since_hop += 1;
+            for (channels, &gain) in self.send_channels.iter().zip(self.gain_scratch.iter()) {
+                self.out.push(downmix(frame, channels) * gain);
             }
         }
 
-        // Run the owed VQT hops per send. `sends` is taken out so the per-send
-        // loop can borrow the shared transform, scratch, and scope producers on
-        // `self` without aliasing.
-        let mut sends = std::mem::take(&mut self.sends);
-        for (i, send) in sends.iter_mut().enumerate() {
-            if self.process_send_hops(send, i as i32 == tapped) {
-                updated = true;
-            }
-        }
-        self.sends = sends;
-
-        // Stash the partial frame remainder for next drain. `carry` kept its
-        // allocation, so this is realloc-free once warmed.
+        // Stash the partial-frame remainder; return the work buffer for reuse.
         self.carry.extend_from_slice(&work[usable..]);
-        // Return the work buffer for reuse next drain.
         self.work = work;
 
-        if updated {
-            self.emit_frame();
-        }
-        updated
-    }
-
-    /// Run any VQT hops one send has accumulated, updating its five per-band
-    /// features from the same variable-Q column the scope draws. When `tapped`,
-    /// also push the raw column + onset scalars to the scope rings — the scalars
-    /// ARE this send's Low/Mid/High transients, so the red ticks and the
-    /// modulation source are one and the same. Returns whether a hop was run.
-    fn process_send_hops(&mut self, send: &mut SendState, tapped: bool) -> bool {
-        let n_fft = self.n_fft;
-        let hop = self.hop;
-        let nb = self.spec_num_bins.max(1);
-
-        // Bound the window to one full window plus a small backlog, so `drain` is
-        // realloc-free and a brief stall doesn't lose distinct columns.
-        let cap = n_fft + WINDOW_BACKLOG_HOPS * hop;
-        if send.window.len() > cap {
-            let excess = send.window.len() - cap;
-            send.window.drain(0..excess);
-        }
-
-        let owed = send.since_hop / hop;
-        if owed == 0 {
+        if self.out.is_empty() {
             return false;
         }
-        // Distinct columns we can actually form. Before the window fills we still
-        // emit one (zero-padded) so features fade in over a window rather than
-        // blacking out; a stall backlog beyond what we retain is collapsed.
-        let avail = if send.window.len() >= n_fft {
-            1 + (send.window.len() - n_fft) / hop
-        } else {
-            1
-        };
-        let emit = owed.min(avail);
-        let db_min = self.spec_config.db_min;
-        let db_max = self.spec_config.db_max;
-
-        for j in (0..emit).rev() {
-            // Window slice ending `j` hops before the newest sample, zero-padded
-            // at the front while the window is still filling.
-            let end = send.window.len().saturating_sub(j * hop);
-            let start = end.saturating_sub(n_fft);
-            // Form the tilted VQT column (the exact column the scope draws) from
-            // the window slice, then reduce all five features per band off it.
-            // Shared with the offline analyzer so features are bit-for-bit the
-            // same path. Disjoint borrows: `send.window` (read) vs `send.col`
-            // (write) are distinct fields, so this single call type-checks.
-            form_tilted_column(
-                &send.window[start..end],
-                &mut self.cqt,
-                &self.tilt_w,
-                &mut self.vqt_in,
-                &mut self.vqt_raw,
-                &mut send.col,
-            );
-            reduce_send(send, nb, self.low_bin, self.mid_bin, db_min, db_max);
-            send.prev_col.copy_from_slice(&send.col);
-            // Flux features only arm once the window has actually filled — a
-            // zero-padded warm-up column differs from the next as content fills
-            // in, and that ramp must not read as a transient.
-            send.has_prev = send.window.len() >= n_fft;
-
-            // The tapped send drives the scope: push the raw column (the shader
-            // applies its own display tilt) and the overlay scalars — the four
-            // per-band centroid traces (Full/Low/Mid/High, each drawn within its
-            // own region) plus this send's Low/Mid/High transients as the ticks.
-            if tapped
-                && self.column_producer.vacant_len() >= self.spec_num_bins
-                && self.scalar_producer.vacant_len() >= SCOPE_SCALAR_STRIDE
-            {
-                self.column_producer.push_slice(&self.vqt_raw);
-                self.scalar_producer.push_slice(&[
-                    send.centroid_yfb[0],
-                    send.centroid_yfb[1],
-                    send.centroid_yfb[2],
-                    send.centroid_yfb[3],
-                    send.features.bands[1].transients,
-                    send.features.bands[2].transients,
-                    send.features.bands[3].transients,
-                ]);
-            }
+        // Whole frames only so the stride never desyncs. On overflow (content
+        // thread stalled) drop the OLDEST frames, keeping the newest.
+        let stride = self.send_channels.len().max(1);
+        let vacant_frames = self.producer.vacant_len() / stride;
+        let want_frames = self.out.len() / stride;
+        let push_frames = want_frames.min(vacant_frames);
+        if push_frames == 0 {
+            return false;
         }
-        // Consume the whole backlog (including any collapsed remainder).
-        send.since_hop -= owed * hop;
+        let start = (want_frames - push_frames) * stride;
+        self.producer.push_slice(&self.out[start..]);
         true
-    }
-
-    fn emit_frame(&mut self) {
-        let mut sends = [SendFeatures::default(); MAX_SENDS];
-        for (i, s) in self.sends.iter().enumerate() {
-            sends[i] = s.features;
-        }
-        self.seq += 1;
-        let frame = FeatureFrame { sends, count: self.sends.len(), seq: self.seq };
-        // Latest-wins: on a full ring we drop this frame; the reader drains to
-        // the newest each tick and another frame follows in ~21 ms.
-        let _ = self.producer.try_push(frame);
     }
 }
 
@@ -752,6 +421,59 @@ fn downmix(frame: &[f32], channels: &[u16]) -> f32 {
         }
     }
     if n == 0 { 0.0 } else { acc / n as f32 }
+}
+
+/// Incremental linear resampler for one mono stream. Feed input-rate chunks, get
+/// output-rate samples appended. Stateful across chunks (keeps the last input
+/// sample + fractional read position), so a streaming source converts cleanly.
+///
+/// Used to align an audio-layer tap (kira's output rate) to the capture device's
+/// rate before summing them into one send's analyzer. Linear interpolation is
+/// ample here — the result feeds energy/transient analysis, not playback, so band
+/// magnitudes are what matter, not reconstruction fidelity. When the rates match
+/// the runtime skips this entirely (see [`Self::is_identity`]).
+pub struct LinearResampler {
+    /// Input samples consumed per output sample (`in_rate / out_rate`).
+    step: f64,
+    /// Read position of the next output, in input-sample units, where index 0 is
+    /// `last` and index k≥1 is the current chunk's sample k−1.
+    pos: f64,
+    /// The previous chunk's final input sample (left edge across the boundary).
+    last: f32,
+}
+
+impl LinearResampler {
+    pub fn new(in_rate: u32, out_rate: u32) -> Self {
+        Self { step: in_rate as f64 / out_rate.max(1) as f64, pos: 0.0, last: 0.0 }
+    }
+
+    /// Whether input and output rates match (the runtime copies directly instead).
+    pub fn is_identity(&self) -> bool {
+        (self.step - 1.0).abs() < 1e-9
+    }
+
+    /// Resample `input` (at the input rate) into `out` (appended, at the output
+    /// rate), carrying fractional state for the next call.
+    pub fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
+        let n = input.len();
+        if n == 0 {
+            return;
+        }
+        // Extended sample s(k): s(0) = last, s(k) = input[k-1] for k in 1..=n.
+        // Emit at t = pos, pos+step, … while both s(⌊t⌋) and s(⌊t⌋+1) exist.
+        let mut t = self.pos;
+        while t < n as f64 {
+            let i = t.floor() as usize;
+            let frac = (t - i as f64) as f32;
+            let a = if i == 0 { self.last } else { input[i - 1] };
+            let b = input[i]; // s(i+1) = input[i]; valid since i < n
+            out.push(a + (b - a) * frac);
+            t += self.step;
+        }
+        // Rebase: next chunk's index 0 becomes this chunk's final sample.
+        self.last = input[n - 1];
+        self.pos = t - n as f64;
+    }
 }
 
 /// Form the tilted variable-Q column for `seg` (a window slice no longer than
@@ -1040,8 +762,6 @@ fn relative_flux(flux: f32, energy: f32) -> f32 {
 /// directly (no channel downmix) — the offline-free streaming + test paths.
 fn new_send_state(num_bins: usize) -> SendState {
     SendState {
-        channels: Vec::new(),
-        gain: 1.0,
         window: Vec::new(),
         since_hop: 0,
         col: vec![0.0; num_bins],
@@ -1319,6 +1039,58 @@ mod tests {
         assert_eq!(downmix(&frame, &[9]), 0.0);
     }
 
+    #[test]
+    fn resampler_identity_passes_rate_through() {
+        let mut r = LinearResampler::new(48_000, 48_000);
+        assert!(r.is_identity());
+        let mut out = Vec::new();
+        // At a 1:1 step the output count tracks the input across chunks (within
+        // one sample of startup); content is what matters downstream, not phase.
+        for chunk in sine(440.0, 1000).chunks(133) {
+            r.process(chunk, &mut out);
+        }
+        assert!(
+            (out.len() as i64 - 1000).abs() <= 1,
+            "identity resample preserves count: {}",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn resampler_halves_count_when_downsampling_2to1() {
+        // 48k → 24k: ~half the samples out, streamed in odd chunks (state carries).
+        let mut r = LinearResampler::new(48_000, 24_000);
+        assert!(!r.is_identity());
+        let mut out = Vec::new();
+        let input = sine(440.0, 4096);
+        for chunk in input.chunks(101) {
+            r.process(chunk, &mut out);
+        }
+        let expected = 4096 / 2;
+        assert!(
+            (out.len() as i64 - expected as i64).abs() <= 4,
+            "2:1 downsample yields ~half: got {} want ~{expected}",
+            out.len()
+        );
+    }
+
+    #[test]
+    fn resampler_doubles_count_when_upsampling_1to2() {
+        // 24k → 48k: ~double the samples out.
+        let mut r = LinearResampler::new(24_000, 48_000);
+        let mut out = Vec::new();
+        let input = sine(440.0, 2048);
+        for chunk in input.chunks(97) {
+            r.process(chunk, &mut out);
+        }
+        let expected = 2048 * 2;
+        assert!(
+            (out.len() as i64 - expected as i64).abs() <= 4,
+            "1:2 upsample yields ~double: got {} want ~{expected}",
+            out.len()
+        );
+    }
+
     // Band index helpers (AudioBand order: Full, Low, Mid, High).
     fn bands() -> (usize, usize, usize, usize) {
         use manifold_core::AudioBand::*;
@@ -1386,8 +1158,6 @@ mod tests {
         let nb = c.num_bins(SR as f32);
         let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
         let mut s = SendState {
-            channels: vec![0],
-            gain: 1.0,
             window: Vec::new(),
             since_hop: 0,
             col,
@@ -1497,8 +1267,6 @@ mod tests {
         let silence = vec![0.0f32; nb];
 
         let mut s = SendState {
-            channels: vec![0],
-            gain: 1.0,
             window: Vec::new(),
             since_hop: 0,
             col: tone.clone(),
@@ -1554,8 +1322,6 @@ mod tests {
         let bass: Vec<f32> = kick.iter().map(|m| m * 0.3).collect(); // quieter sustain
 
         let mut s = SendState {
-            channels: vec![0],
-            gain: 1.0,
             window: Vec::new(),
             since_hop: 0,
             col: bass.clone(),
@@ -1606,8 +1372,6 @@ mod tests {
         let bass: Vec<f32> = kick.iter().map(|m| m * 0.3).collect();
 
         let mut s = SendState {
-            channels: vec![0],
-            gain: 1.0,
             window: Vec::new(),
             since_hop: 0,
             col: bass.clone(),
@@ -1677,55 +1441,51 @@ mod tests {
     }
 
     #[test]
-    fn worker_end_to_end_produces_band_features() {
-        // Build a capture-style ring, fill it with a 1 kHz mono tone, run the
-        // worker, and confirm a frame arrives with energy in the mid band.
-        let cap = SR as usize; // 1 s headroom
-        let (mut prod, cons) = HeapRb::<f32>::new(cap).split();
-        let tone = sine(1000.0, nfft() * 4);
-        let pushed = prod.push_slice(&tone);
-        assert_eq!(pushed, tone.len());
+    fn downmix_worker_produces_per_send_mono() {
+        // Two device channels, two sends (one channel each). Fill the ring with a
+        // distinguishable interleaved signal and confirm the worker downmixes each
+        // send to mono, interleaved by send, post-gain.
+        let frames = 4000;
+        let (mut prod, cons) = HeapRb::<f32>::new(frames * 2 + 8).split();
+        let mut interleaved = Vec::with_capacity(frames * 2);
+        for _ in 0..frames {
+            interleaved.push(0.5); // channel 0
+            interleaved.push(-0.25); // channel 1
+        }
+        let pushed = prod.push_slice(&interleaved);
+        assert_eq!(pushed, interleaved.len());
 
-        let sends = vec![SendSpec { channels: vec![0] }];
-        let gains = Arc::new(GainBank::new(&[1.0]));
-        let crossovers = Arc::new(CrossoverBank::new(250.0, 2000.0));
-        let tap = Arc::new(SpectrogramTap::default());
-        let (mut worker, mut reader, _columns, _scalars) = AudioFeatureWorker::spawn(
+        let gains = Arc::new(GainBank::new(&[1.0, 2.0]));
+        let (mut worker, mut reader) = AudioFeatureWorker::spawn(
             cons,
             SR,
-            /* device_channels */ 1,
-            sends,
+            /* device_channels */ 2,
+            vec![vec![0], vec![1]],
             gains,
-            crossovers,
-            tap,
         );
+        assert_eq!(reader.send_count(), 2);
+        assert_eq!(reader.sample_rate(), SR);
 
-        // Poll up to ~500 ms for the first frame.
-        let mut frame = None;
+        let mut per_send = vec![Vec::new(), Vec::new()];
         for _ in 0..250 {
-            if let Some(f) = reader.latest() {
-                frame = Some(f);
+            reader.drain(&mut per_send);
+            if per_send[0].len() >= frames {
                 break;
             }
             std::thread::sleep(Duration::from_millis(2));
         }
         worker.stop();
+        reader.drain(&mut per_send);
 
-        let frame = frame.expect("worker should produce a feature frame");
-        let s = frame.send(0).expect("send 0 present");
-        let (full, low, mid, high) = bands();
         assert!(
-            s.bands[mid].amplitude > s.bands[low].amplitude
-                && s.bands[mid].amplitude > s.bands[high].amplitude,
-            "1 kHz tone should land in the mid band: {:?}",
-            s.bands.map(|b| b.amplitude),
+            per_send[0].len() >= frames - 64,
+            "send 0 mono count {} (want ~{frames})",
+            per_send[0].len()
         );
-        // Full-band amplitude is present and inside 0..1.
-        assert!(
-            s.bands[full].amplitude > 0.0 && s.bands[full].amplitude <= 1.0,
-            "full-band amplitude in 0..1: {}",
-            s.bands[full].amplitude,
-        );
+        assert_eq!(per_send[0].len(), per_send[1].len(), "sends stay in lockstep");
+        // Send 0 = channel 0 (0.5) at unity; send 1 = channel 1 (-0.25) × 2 gain.
+        assert!((per_send[0][100] - 0.5).abs() < 1e-6, "send0={}", per_send[0][100]);
+        assert!((per_send[1][100] + 0.5).abs() < 1e-6, "send1={}", per_send[1][100]);
     }
 
     // ── Streaming analyzer (audio-layer realtime tap) ──

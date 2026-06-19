@@ -360,6 +360,10 @@ pub enum PanelAction {
     AudioSetSendChannels(manifold_core::AudioSendId, Vec<u16>),
     /// Toggle a send between mono (one channel) and stereo (a channel pair).
     AudioSendStereoToggle(manifold_core::AudioSendId),
+    /// Toggle whether the capture device feeds this send (the device half of its
+    /// input set). Layers are routed separately from the layer header. The host
+    /// reads the send's current capture flag and commits the inverse.
+    AudioToggleSendCapture(manifold_core::AudioSendId),
     /// Step a send's input gain trim by a dB delta (the panel's −/＋ buttons).
     /// The host reads the send's current gain, applies the delta, clamps, and
     /// commits — so the project stays the single source of truth.

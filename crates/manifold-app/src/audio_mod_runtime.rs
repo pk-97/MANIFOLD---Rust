@@ -1,26 +1,36 @@
 //! Audio-modulation capture runtime.
 //!
-//! Owns the always-on audio capture device + feature worker for audio
+//! Owns the always-on audio capture device + downmix worker for audio
 //! modulation, and feeds the playback engine a fresh per-send feature snapshot
 //! each tick. Lives on the content thread (which owns the engine and, through
 //! it, the project). Step 3 of `docs/AUDIO_MODULATION_DESIGN.md`.
 //!
-//! Lifecycle is **gated and self-healing**: capture runs only while the project
-//! has at least one enabled audio modulation and at least one send. The device
-//! and worker rebuild when the capture-relevant config changes (device or any
-//! send's channels) — a relabel alone does not restart capture. A missing
-//! device leaves capture dark until the user re-points it (the remappable
-//! device policy), rather than failing the tick.
+//! ## One analyzer per send
+//!
+//! Analysis runs **here**, on the content thread, one [`StreamingSendAnalyzer`]
+//! per send. The capture worker only downmixes the device to per-send mono; the
+//! content thread sums that with the send's audio-layer taps (resampled to a
+//! common rate) and pushes the mix into the send's single analyzer. So a send
+//! can be fed by the capture device, by audio layers, or by **both at once** —
+//! one analysis drives features, the spectrogram scope, and the per-band meters
+//! ("what you hear is what modulates"). See `docs/AUDIO_LAYER_DESIGN.md` §3R.
+//!
+//! Lifecycle is **gated and self-healing**: the capture worker runs only while
+//! the project has at least one capture-fed send and either an active audio
+//! modulation or the Audio Setup scope open. The device and worker rebuild when
+//! the capture-relevant config changes (device or any send's channels) — a
+//! relabel alone does not restart capture. A missing device leaves capture dark
+//! until the user re-points it (the remappable device policy).
 
 use std::sync::Arc;
 
 use ahash::AHashMap;
 
 use manifold_audio::analysis::{
-    AudioFeatureWorker, ColumnReader, CrossoverBank, FeatureReader, GainBank, ScalarReader,
-    SendSpec, SpectrogramTap, StreamingSendAnalyzer,
+    AudioFeatureWorker, GainBank, LinearResampler, MonoReader, StreamingSendAnalyzer,
 };
 use manifold_audio::capture::{self, CaptureBackend, CaptureSource};
+use manifold_core::SendFeatures;
 use manifold_core::audio_setup::{AudioDeviceRef, AudioSetup, AudioSourceKind};
 use manifold_core::id::AudioSendId;
 use manifold_core::project::Project;
@@ -28,9 +38,9 @@ use manifold_playback::audio_layer_playback::AudioLayerPlayback;
 use manifold_playback::engine::PlaybackEngine;
 
 /// The capture-relevant fingerprint of an [`AudioSetup`]. Changes here force a
-/// device/worker rebuild; label-only edits compare equal and don't. The device
-/// is keyed by its stable [`AudioDeviceRef`] (UID), so renaming the OS device
-/// doesn't churn capture — it re-resolves to the same hardware.
+/// device/worker rebuild; label-only or capture-flag-only edits compare equal and
+/// don't. The device is keyed by its stable [`AudioDeviceRef`] (UID), so renaming
+/// the OS device doesn't churn capture — it re-resolves to the same hardware.
 #[derive(Clone, PartialEq, Default)]
 struct CaptureSignature {
     device: Option<AudioDeviceRef>,
@@ -48,25 +58,40 @@ impl CaptureSignature {
     }
 }
 
-/// A live capture: the device captures, the worker drains and analyzes. Both
-/// are kept alive by ownership here; dropping the struct stops capture and
+/// A live capture: the device captures, the worker downmixes each send to mono.
+/// Both are kept alive by ownership here; dropping the struct stops capture and
 /// joins the worker.
 struct AudioModCapture {
     _backend: Box<dyn CaptureBackend>,
     _worker: AudioFeatureWorker,
-    reader: FeatureReader,
+    /// Read end of the worker's per-send mono streams.
+    mono: MonoReader,
     signature: CaptureSignature,
     /// Live per-send gain shared with the worker. A gain-only edit writes here
     /// in place — no capture restart (gain isn't in [`CaptureSignature`]).
     gains: Arc<GainBank>,
-    /// Spectrogram tap control — which send the worker produces VQT columns for.
-    tap: Arc<SpectrogramTap>,
-    /// Read end of the worker's VQT column stream.
-    columns: ColumnReader,
-    /// Read end of the worker's per-column overlay scalars (centroid + onset).
-    scalars: ScalarReader,
-    /// Capture sample rate, for the scope's frequency-axis range.
-    sample_rate: f32,
+}
+
+/// One send's content-thread analysis: the single [`StreamingSendAnalyzer`] that
+/// sees the send's whole input (capture mono + layer taps, summed), plus a
+/// resampler that aligns layer taps to the analyzer's rate when a capture send
+/// also pulls in layers at a different rate.
+struct SendAnalyzer {
+    /// The rate the analyzer (and its features / scope columns) is built for.
+    rate: u32,
+    analyzer: StreamingSendAnalyzer,
+    /// Layer-tap → analyzer-rate resampler, built lazily; `(from_rate, state)`.
+    resampler: Option<(u32, LinearResampler)>,
+}
+
+impl SendAnalyzer {
+    fn new(rate: u32, low_hz: f32, mid_hz: f32) -> Self {
+        Self {
+            rate,
+            analyzer: StreamingSendAnalyzer::new(rate, low_hz, mid_hz),
+            resampler: None,
+        }
+    }
 }
 
 /// Content-thread-owned runtime that reconciles capture against the project and
@@ -92,34 +117,28 @@ pub struct AudioModRuntime {
     _process_sub: manifold_audio::directory::Subscription,
     /// Whether we've already triggered the one-time mic permission prompt.
     mic_access_requested: bool,
-    /// Send the Audio Setup scope is showing, if open. Resolved to a worker
-    /// index against the live project each tick and written to the tap, so it
-    /// survives capture rebuilds (which mint a fresh tap).
+    /// Send the Audio Setup scope is showing, if open. The tapped send's analyzer
+    /// buffers scope columns; the per-band meters read its snapshot slot.
     spec_send: Option<AudioSendId>,
     /// Set when `spec_send` changes, forcing a reconcile next tick — selecting a
     /// send opens the scope, which can start capture even with no audio mods yet
     /// (calibration precedes assignment).
     spec_dirty: bool,
-    /// Live Low/Mid/High crossovers shared with the worker. Global to all sends
-    /// and persistent across capture rebuilds (like the tap), synced from the
-    /// project each tick so a band-divider drag retunes analysis without a
-    /// capture restart.
-    crossovers: Arc<CrossoverBank>,
-    /// Worker index of the scope-tapped send, resolved each tick. Lets the
-    /// content thread pull that send's features for the scope's per-band meters.
+    /// Per-send analyzers, keyed by send id. Each is the single source of features
+    /// + scope columns for its send, fed the send's whole (mixed) input.
+    analyzers: AHashMap<AudioSendId, SendAnalyzer>,
+    /// Snapshot index (project send order) of the scope-tapped send, for the
+    /// per-band meters. Resolved each tick.
     tapped_index: Option<usize>,
-    /// Realtime per-send analyzers for layer-fed sends (audio layers). Each
-    /// drains its layer's post-fader kira tap and reduces it to [`SendFeatures`]
-    /// with the same DSP as a live capture send — so the modulation tracks what's
-    /// actually heard (warp, gain, mute all baked in). Keyed by the send's id;
-    /// the stored `u32` is the sample rate the analyzer was built for, so a rate
-    /// change rebuilds it. When a layer-fed send is the scope's tapped send, its
-    /// analyzer also buffers spectrogram columns (so it draws like a live input).
-    /// See `docs/AUDIO_LAYER_DESIGN.md` §3R.
-    layer_analyzers: AHashMap<AudioSendId, (u32, StreamingSendAnalyzer)>,
-    /// The scope's tapped send when it is layer-fed (its columns come from the
-    /// inline analyzer, not the capture worker). `None` = capture send / nothing.
-    tapped_layer_send: Option<AudioSendId>,
+    // ── Reusable scratch (no per-tick allocation once warmed) ──
+    /// Per-send capture mono, drained from the worker each tick (index = send).
+    capture_mono: Vec<Vec<f32>>,
+    /// Summed layer taps for one send, before resampling.
+    layer_mix: Vec<f32>,
+    /// One send's final mixed mono (capture + layers), pushed to its analyzer.
+    mono_mix: Vec<f32>,
+    /// Resampled layer mono (layer rate → analyzer rate) for one send.
+    resampled: Vec<f32>,
 }
 
 impl Default for AudioModRuntime {
@@ -145,13 +164,12 @@ impl Default for AudioModRuntime {
             mic_access_requested: false,
             spec_send: None,
             spec_dirty: false,
-            crossovers: Arc::new(CrossoverBank::new(
-                manifold_core::audio_setup::DEFAULT_LOW_HZ,
-                manifold_core::audio_setup::DEFAULT_MID_HZ,
-            )),
+            analyzers: AHashMap::new(),
             tapped_index: None,
-            layer_analyzers: AHashMap::new(),
-            tapped_layer_send: None,
+            capture_mono: Vec::new(),
+            layer_mix: Vec::new(),
+            mono_mix: Vec::new(),
+            resampled: Vec::new(),
         }
     }
 }
@@ -165,7 +183,7 @@ impl AudioModRuntime {
         &mut self,
         engine: &mut PlaybackEngine,
         data_version: u64,
-        layer_playback: Option<&mut AudioLayerPlayback>,
+        mut layer_playback: Option<&mut AudioLayerPlayback>,
     ) {
         let hotplugged = self
             .devices_dirty
@@ -198,128 +216,166 @@ impl AudioModRuntime {
                 self.capture = None;
             }
             self.reconcile(engine.project());
-            // Drop analyzers for sends that are no longer layer-fed (runs only on
-            // a project change, never per tick — keeps the map bounded without
-            // allocating on the hot path).
+            // Drop analyzers for sends that no longer exist (runs only on a project
+            // change, never per tick — keeps the map bounded without allocating on
+            // the hot path).
             if let Some(project) = engine.project() {
-                self.layer_analyzers.retain(|id, _| {
-                    project
-                        .audio_setup
-                        .sends
-                        .iter()
-                        .any(|s| &s.id == id && s.layer_source().is_some())
-                });
+                self.analyzers
+                    .retain(|id, _| project.audio_setup.sends.iter().any(|s| &s.id == id));
             }
             self.last_version = data_version;
             self.spec_dirty = false;
         }
 
-        // Sync the Low/Mid/High crossovers from the project every tick (cheap
-        // atomic stores). The capture worker AND every per-layer worker read this
-        // shared bank live, so a band-divider drag retunes all analyses with no
-        // restart — same model as gain.
-        if let Some(p) = engine.project() {
-            self.crossovers
-                .set(p.audio_setup.low_hz, p.audio_setup.mid_hz);
+        // Analysis runs when something reads it: an active param modulation, an
+        // active live trigger (fires clips even with the scope closed), or the
+        // Audio Setup scope is open for calibration.
+        let (active, send_count) = engine.project().map_or((false, 0), |p| {
+            let needs = p.has_active_audio_mods()
+                || self.spec_send.is_some()
+                || p.audio_setup.sends.iter().any(|s| s.has_active_triggers());
+            (needs, p.audio_setup.sends.len())
+        });
+
+        // The rate the capture worker delivers mono at (also the analyzer rate for
+        // any capture-fed send).
+        let device_rate = self.capture.as_ref().map(|c| c.mono.sample_rate());
+
+        // Drain the worker's per-send mono for this tick. Taken out so `self` can
+        // be borrowed field-wise below.
+        let mut capture_mono = std::mem::take(&mut self.capture_mono);
+        for v in capture_mono.iter_mut() {
+            v.clear();
+        }
+        if let Some(cap) = self.capture.as_mut() {
+            let n = cap.mono.send_count();
+            if capture_mono.len() < n {
+                capture_mono.resize_with(n, Vec::new);
+            }
+            cap.mono.drain(&mut capture_mono);
         }
 
-        // ── Layer-fed sends: feed each layer's post-fader tap into its own
-        // AudioFeatureWorker (a one-channel mono "device") — the *same* analysis a
-        // capture send runs. So a layer-fed send produces features + spectrogram
-        // columns + overlay scalars identically to a live input: scope, meters,
-        // and modulation all work, because it IS an input. Spawn lazily once the
-        // layer has a track and the tap has reported its rate; respawn if the
-        // feeding layer changes. Samples are post-fader, so warp/gain/mute are
-        // already baked in. See §3R.
-        //
-        // Features collected here, applied below under the snapshot borrow. The
-        // snapshot is indexed by `AudioSetup::sends` order; layer-fed sends are
-        // silent slots in the capture worker, so we overwrite them.
-        let mut layer_features: Vec<(usize, manifold_core::SendFeatures)> = Vec::new();
-        let mut send_count = 0usize;
-        let mut tapped_layer_send: Option<AudioSendId> = None;
-        if let (Some(project), Some(playback)) = (engine.project(), layer_playback) {
-            send_count = project.audio_setup.sends.len();
+        // ── Per-send analysis: one analyzer per send, fed its whole input ──
+        let mut analyzers = std::mem::take(&mut self.analyzers);
+        let mut mono_mix = std::mem::take(&mut self.mono_mix);
+        let mut layer_mix = std::mem::take(&mut self.layer_mix);
+        let mut resampled = std::mem::take(&mut self.resampled);
+        let mut features: Vec<(usize, SendFeatures)> = Vec::new();
+        let mut tapped_index = None;
+
+        if active && let Some(project) = engine.project() {
             let (low_hz, mid_hz) = (project.audio_setup.low_hz, project.audio_setup.mid_hz);
             for (i, send) in project.audio_setup.sends.iter().enumerate() {
-                let Some(layer_id) = send.layer_source() else {
-                    continue;
-                };
-                // The tap reports the mixer's output rate via its first init; until
-                // then no audio has flowed. Build (or rebuild on a rate change) the
-                // analyzer for that rate.
-                let Some(sample_rate) = playback.layer_tap_sample_rate(layer_id) else {
-                    continue;
-                };
-                let analyzer = match self.layer_analyzers.entry(send.id.clone()) {
-                    std::collections::hash_map::Entry::Occupied(e) => {
-                        let slot = e.into_mut();
-                        if slot.0 != sample_rate {
-                            *slot = (sample_rate, StreamingSendAnalyzer::new(sample_rate, low_hz, mid_hz));
-                        }
-                        &mut slot.1
-                    }
-                    std::collections::hash_map::Entry::Vacant(e) => {
-                        &mut e
-                            .insert((sample_rate, StreamingSendAnalyzer::new(sample_rate, low_hz, mid_hz)))
-                            .1
-                    }
-                };
-                // Live-retune the bands, mark this analyzer as the scope source if
-                // it's the tapped send (so it buffers columns), then feed it the
-                // post-fader samples. Silence in → features decay, so a muted/
-                // paused layer reads as no modulation and a dark scope.
                 let is_tapped = self.spec_send.as_ref() == Some(&send.id);
                 if is_tapped {
-                    tapped_layer_send = Some(send.id.clone());
+                    tapped_index = Some(i);
                 }
-                analyzer.set_crossovers(low_hz, mid_hz);
-                analyzer.set_scope(is_tapped);
-                playback.drain_layer_tap(layer_id, |chunk| analyzer.push(chunk));
-                layer_features.push((i, analyzer.latest()));
+                let has_cap = send.has_capture() && device_rate.is_some();
+                let layers = send.layers();
+                // Layer tap rate (uniform — every layer routes through one kira
+                // mixer), if any layer's tap has reported a rate yet.
+                let layer_rate = if layers.is_empty() {
+                    None
+                } else {
+                    layer_playback
+                        .as_deref()
+                        .and_then(|pb| layers.iter().find_map(|l| pb.layer_tap_sample_rate(l)))
+                };
+                // Analyzer rate: the device rate when capture feeds the send, else
+                // the layer rate. No input this tick → leave the slot at default.
+                let canonical = if has_cap {
+                    device_rate.unwrap()
+                } else if let Some(lr) = layer_rate {
+                    lr
+                } else {
+                    continue;
+                };
+
+                let entry = match analyzers.entry(send.id.clone()) {
+                    std::collections::hash_map::Entry::Occupied(e) => {
+                        let slot = e.into_mut();
+                        if slot.rate != canonical {
+                            *slot = SendAnalyzer::new(canonical, low_hz, mid_hz);
+                        }
+                        slot
+                    }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(SendAnalyzer::new(canonical, low_hz, mid_hz))
+                    }
+                };
+                entry.analyzer.set_crossovers(low_hz, mid_hz);
+                entry.analyzer.set_scope(is_tapped);
+
+                // Build the send's mixed mono for this tick.
+                mono_mix.clear();
+                if has_cap && let Some(cap_in) = capture_mono.get(i) {
+                    mono_mix.extend_from_slice(cap_in);
+                }
+                if !layers.is_empty() && let Some(pb) = layer_playback.as_deref_mut() {
+                    // Sum every feeding layer's post-fader tap.
+                    layer_mix.clear();
+                    for (li, layer_id) in layers.iter().enumerate() {
+                        if li == 0 {
+                            pb.drain_layer_tap(layer_id, |chunk| layer_mix.extend_from_slice(chunk));
+                        } else {
+                            let mut idx = 0usize;
+                            pb.drain_layer_tap(layer_id, |chunk| {
+                                for &s in chunk {
+                                    if idx < layer_mix.len() {
+                                        layer_mix[idx] += s;
+                                    } else {
+                                        layer_mix.push(s);
+                                    }
+                                    idx += 1;
+                                }
+                            });
+                        }
+                    }
+                    // Align the layer mono to the analyzer rate when capture set a
+                    // different one (mismatched device vs kira rate); identity when
+                    // they match, so the common 48k↔48k case is a direct sum.
+                    let layer_samples: &[f32] = if has_cap && layer_rate != Some(canonical) {
+                        let from = layer_rate.unwrap_or(canonical);
+                        if entry.resampler.as_ref().is_none_or(|(f, _)| *f != from) {
+                            entry.resampler = Some((from, LinearResampler::new(from, canonical)));
+                        }
+                        resampled.clear();
+                        if let Some((_, r)) = entry.resampler.as_mut() {
+                            r.process(&layer_mix, &mut resampled);
+                        }
+                        &resampled
+                    } else {
+                        &layer_mix
+                    };
+                    // Sum into the mix (element-wise, zero-extending the shorter).
+                    for (k, &s) in layer_samples.iter().enumerate() {
+                        if k < mono_mix.len() {
+                            mono_mix[k] += s;
+                        } else {
+                            mono_mix.push(s);
+                        }
+                    }
+                }
+
+                entry.analyzer.push(&mono_mix);
+                features.push((i, entry.analyzer.latest()));
             }
-        } else if let Some(project) = engine.project() {
-            send_count = project.audio_setup.sends.len();
         }
 
-        // Resolve the scope's send → snapshot index (project order) for the
-        // per-band meters. The capture worker draws columns only when the tapped
-        // send is a capture send; a layer-fed send's columns come from its inline
-        // analyzer, so mute the capture tap to avoid producing columns nobody
-        // drains.
-        let tap_index = self
-            .spec_send
-            .as_ref()
-            .and_then(|id| engine.project().and_then(|p| p.audio_setup.send_index(id)));
-        if let Some(cap) = &self.capture {
-            cap.tap
-                .set_selected(if tapped_layer_send.is_some() { None } else { tap_index });
-        }
-        self.tapped_index = tap_index;
-        self.tapped_layer_send = tapped_layer_send;
+        self.analyzers = analyzers;
+        self.mono_mix = mono_mix;
+        self.layer_mix = layer_mix;
+        self.resampled = resampled;
+        self.capture_mono = capture_mono;
+        self.tapped_index = tapped_index;
 
         // Feed the engine. Reuse the snapshot's Vec capacity → no per-frame
         // allocation once warmed. An empty `sends` disables the audio phase.
         let snap = engine.audio_snapshot_mut();
         snap.sends.clear();
-        if let Some(cap) = &mut self.capture
-            && let Some(frame) = cap.reader.latest()
-        {
-            for i in 0..frame.count() {
-                if let Some(f) = frame.send(i) {
-                    snap.sends.push(f);
-                }
-            }
-        }
-        // Ensure a slot per project send so layer-fed sends have a home even when
-        // capture is dark (no worker frame), keeping the snapshot index aligned
-        // with `AudioSetup::sends`.
-        if snap.sends.len() < send_count {
-            snap.sends
-                .resize(send_count, manifold_core::SendFeatures::default());
-        }
-        // Overwrite layer-fed slots with their inline-analyzer features.
-        for (i, f) in layer_features {
+        snap.sends
+            .resize(send_count, manifold_core::SendFeatures::default());
+        for (i, f) in features {
             if let Some(slot) = snap.sends.get_mut(i) {
                 *slot = f;
             }
@@ -336,73 +392,51 @@ impl AudioModRuntime {
         }
     }
 
-    /// The analyzer feeding the scope when the tapped send is layer-fed (its
-    /// columns come from the inline analyzer, not the capture worker).
-    fn tapped_layer_analyzer(&self) -> Option<&StreamingSendAnalyzer> {
-        let id = self.tapped_layer_send.as_ref()?;
-        self.layer_analyzers.get(id).map(|(_, a)| a)
+    /// The analyzer feeding the scope (the tapped send's), if any.
+    fn tapped_analyzer(&self) -> Option<&StreamingSendAnalyzer> {
+        let id = self.spec_send.as_ref()?;
+        self.analyzers.get(id).map(|e| &e.analyzer)
     }
 
-    /// Bin count of the current column stream, or 0 if nothing is tapped. Reads
-    /// the layer analyzer when the tapped send is layer-fed, else the capture
-    /// worker.
+    /// Bin count of the scope-tapped send's column stream, or 0 if nothing is
+    /// tapped / it has no analyzer yet.
     pub fn spectrogram_num_bins(&self) -> usize {
-        if let Some(a) = self.tapped_layer_analyzer() {
-            return a.num_bins();
-        }
-        self.capture.as_ref().map_or(0, |c| c.columns.num_bins())
+        self.tapped_analyzer().map_or(0, |a| a.num_bins())
     }
 
     /// Snapshot index (project send order) of the scope-tapped send, or `None`
     /// when nothing is tapped. The content thread uses this to pull the tapped
-    /// send's features for the scope's per-band meters. Correct for both capture
-    /// and layer-fed sends, since the snapshot is indexed by project send order.
+    /// send's features for the scope's per-band meters.
     pub fn tapped_send_index(&self) -> Option<usize> {
         self.tapped_index
     }
 
-    /// Drain all complete VQT columns produced since the last call, oldest →
-    /// newest. Reads the layer analyzer for a layer-fed tapped send, else the
-    /// capture worker. No-op when nothing is tapped.
+    /// Drain all complete VQT columns the tapped send produced since the last
+    /// call, oldest → newest. No-op when nothing is tapped.
     pub fn drain_spectrogram_columns(&mut self, f: impl FnMut(&[f32])) {
-        if let Some(id) = self.tapped_layer_send.clone() {
-            if let Some((_, a)) = self.layer_analyzers.get_mut(&id) {
-                a.drain_scope_columns(f);
-            }
-            return;
-        }
-        if let Some(cap) = &mut self.capture {
-            cap.columns.drain_columns(f);
+        if let Some(id) = self.spec_send.clone()
+            && let Some(entry) = self.analyzers.get_mut(&id)
+        {
+            entry.analyzer.drain_scope_columns(f);
         }
     }
 
-    /// Drain the per-column overlay scalars `([centroid_full, centroid_low,
-    /// centroid_mid, centroid_high], [onset_low, onset_mid, onset_high])` produced
-    /// since the last call, oldest → newest and in lockstep with
-    /// [`Self::drain_spectrogram_columns`]. Layer analyzer for a layer-fed tapped
-    /// send, else the capture worker.
+    /// Drain the tapped send's per-column overlay scalars (`[centroid_full,
+    /// centroid_low, centroid_mid, centroid_high]`, `[onset_low, onset_mid,
+    /// onset_high]`), oldest → newest, in lockstep with
+    /// [`Self::drain_spectrogram_columns`]. No-op when nothing is tapped.
     pub fn drain_spectrogram_scalars(&mut self, f: impl FnMut([f32; 4], [f32; 3])) {
-        if let Some(id) = self.tapped_layer_send.clone() {
-            if let Some((_, a)) = self.layer_analyzers.get_mut(&id) {
-                a.drain_scope_scalars(f);
-            }
-            return;
-        }
-        if let Some(cap) = &mut self.capture {
-            cap.scalars.drain(f);
+        if let Some(id) = self.spec_send.clone()
+            && let Some(entry) = self.analyzers.get_mut(&id)
+        {
+            entry.analyzer.drain_scope_scalars(f);
         }
     }
 
-    /// The scope's analysed frequency range `(fmin, fmax)` Hz — for the
-    /// frequency axis and band-divider overlays. Layer analyzer for a layer-fed
-    /// tapped send, else the capture worker. `None` when nothing is tapped.
+    /// The tapped send's analysed frequency range `(fmin, fmax)` Hz — for the
+    /// frequency axis and band-divider overlays. `None` when nothing is tapped.
     pub fn spectrogram_freq_range(&self) -> Option<(f32, f32)> {
-        if let Some(a) = self.tapped_layer_analyzer() {
-            return Some(a.freq_range());
-        }
-        let cap = self.capture.as_ref()?;
-        let cfg = manifold_spectral::SpectrogramConfig::default();
-        Some((cfg.fmin, cfg.effective_fmax(cap.sample_rate)))
+        self.tapped_analyzer().map(|a| a.freq_range())
     }
 
     /// Resolve the project's chosen input to a ready-to-open [`CaptureSource`]
@@ -462,21 +496,26 @@ impl AudioModRuntime {
         }
     }
 
-    /// Start, stop, or rebuild capture to match the project's audio setup.
+    /// Start, stop, or rebuild the capture worker to match the project's audio
+    /// setup.
     fn reconcile(&mut self, project: Option<&Project>) {
         let Some(project) = project else {
             self.capture = None;
             return;
         };
 
-        // Capture runs when there's an active audio mod OR the Audio Setup scope
-        // is open on a send (calibration before assignment), and at least one
-        // send exists.
-        let gate = (project.has_active_audio_mods() || self.spec_send.is_some())
-            && !project.audio_setup.sends.is_empty();
+        // The capture worker runs when at least one send is capture-fed AND
+        // something reads analysis: an active audio mod, an active live trigger, or
+        // the Audio Setup scope open (calibration). A project whose sends are all
+        // layer-fed needs no device.
+        let any_capture = project.audio_setup.sends.iter().any(|s| s.has_capture());
+        let needs_analysis = project.has_active_audio_mods()
+            || self.spec_send.is_some()
+            || project.audio_setup.sends.iter().any(|s| s.has_active_triggers());
+        let gate = any_capture && needs_analysis && !project.audio_setup.sends.is_empty();
         if !gate {
             if self.capture.is_some() {
-                log::info!("[AudioMod] Stopping capture — no active audio modulations");
+                log::info!("[AudioMod] Stopping capture — no capture-fed send needs the device");
                 self.capture = None;
             }
             return;
@@ -523,15 +562,15 @@ impl AudioModRuntime {
         let Some((source, source_label)) = self.resolve_source(&project.audio_setup) else {
             return;
         };
-        let specs: Vec<SendSpec> = project
+        // Worker downmixes every send in order (layer-only sends produce mono the
+        // content thread ignores) so the worker send index matches project order.
+        let send_channels: Vec<Vec<u16>> = project
             .audio_setup
             .sends
             .iter()
-            .map(|s| SendSpec {
-                channels: s.channels.clone(),
-            })
+            .map(|s| s.channels.clone())
             .collect();
-        let send_count = specs.len();
+        let send_count = send_channels.len();
         // Initial per-send linear gains, in send order — the worker reads these
         // live through the shared bank.
         let initial_gains: Vec<f32> = project
@@ -563,16 +602,8 @@ impl AudioModRuntime {
             return;
         }
 
-        let tap = Arc::new(SpectrogramTap::default());
-        let (worker, reader, columns, scalars) = AudioFeatureWorker::spawn(
-            consumer,
-            sample_rate,
-            channels,
-            specs,
-            gains.clone(),
-            self.crossovers.clone(),
-            tap.clone(),
-        );
+        let (worker, mono) =
+            AudioFeatureWorker::spawn(consumer, sample_rate, channels, send_channels, gains.clone());
         log::info!(
             "[AudioMod] Capture started: source={source_label}, {send_count} sends, \
              {sample_rate}Hz {channels}ch"
@@ -580,13 +611,9 @@ impl AudioModRuntime {
         self.capture = Some(AudioModCapture {
             _backend: backend,
             _worker: worker,
-            reader,
+            mono,
             signature: desired,
             gains,
-            tap,
-            columns,
-            scalars,
-            sample_rate: sample_rate as f32,
         });
     }
 }
