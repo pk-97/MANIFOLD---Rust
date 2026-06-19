@@ -14,10 +14,12 @@ Created 2026-06-18.
   `get_current_absolute_tick()` — that returns a frame counter with no external MIDI clock, so
   the slot's window looked long-expired and `start_clip` never ran (black viewport). Regression
   test `fire_oneshot_starts_at_playhead_when_abs_tick_is_frame_based`.
-- **NOW IN PROGRESS — Phase 7, the legibility & tuning upgrades (§7).** The panel works but
-  reads as a config form, not an instrument: you can't see triggers fire, can't see why they
-  fire/don't, and there's no upstream squelch. Four upgrades make the analysis legible and
-  tunable by eye while the track plays. Build order: flash → meter → floor → Whole/length.
+- **Phase 7 (legibility & tuning upgrades, §7) — DONE 2026-06-19.** All four shipped: per-row
+  firing flash + level/threshold meter (7.1–7.3), per-send dB input floor/squelch (7.4), per-route
+  one-shot length + Whole grouping + dropped arrow (7.5). The panel now reads as an instrument:
+  you can see triggers fire, tune by watching the level cross the line, and squelch quiet bleed.
+  Floor control is a dB stepper (the freq-axis line in the first sketch was wrong — see §7 U3).
+  Remaining: Peter's live feel check (flash latency, floor sweep, length range).
 - **Deferred (documented, not blocking):** stopped-transport live triggering (v1 fires in
   `tick_playing`). Per-route one-shot length is now IN scope (§7 upgrade 4).
 
@@ -217,23 +219,30 @@ flash). No model change.
                flash on fire       one-shot length
 ```
 
-### Upgrade 3 — Input floor / spectral gate (most code — touches the analyzer)
-A per-send **floor**: VQT bins below it are zeroed *before* the column is displayed, sliced, or
-feature-extracted. Acts as a squelch — quiet bleed/noise between hits can't trigger and doesn't
-clutter the view. NOTE: onset detection keys on *change*, not absolute level, so the floor is a
-squelch (mute-below), not "only loud things have onsets." Drawn as a **draggable horizontal line
-on the spectrogram**; drag up, the wash below vanishes and the onset ticks thin to just the hits.
-Model: a `floor_db` (or 0..1) field on `AudioSend` (serialized, default = no gate); editing
-command to set it; analyzer applies it to the VQT column once per hop. Per-bin spectral gate
-preferred over a broadband RMS gate (cleaner spectrogram, matches the drag gesture).
+### Upgrade 3 — Input floor / spectral gate (most code — touches the analyzer) — SHIPPED
+A per-send **floor** (dB): VQT bins below it are zeroed *before* the column is displayed, sliced,
+or feature-extracted. Acts as a squelch — quiet bleed/noise between hits can't trigger and
+doesn't clutter the view. NOTE: onset detection keys on *change*, not absolute level, so the
+floor is a squelch (mute-below), not "only loud things have onsets."
+
+**Control = a dB stepper, NOT a draggable freq line.** The first sketch (a draggable horizontal
+line on the spectrogram) was wrong: the spectrogram's vertical axis is **frequency**, so a
+horizontal line sets a frequency, not a loudness floor. Loudness is the *colour* axis, which has
+no spatial handle. So the floor is a **"Floor [−] val [＋]" stepper in the scope title** (reads
+"Off" by default); raise it and the quiet wash blacks out (bins gate to ‑inf dB) and the onset
+ticks thin to just the hits — same outcome, honest gesture.
+
+Implemented: `AudioSend.floor_db` (default OFF sentinel, skip-serializes); `SetAudioSendFloorCommand`
+(live, like gain); `StreamingSendAnalyzer` gate after `form_tilted_column` on raw magnitude vs
+`10^(dB/20)`, zeroing both `vqt_raw` (scope) and `state.col` (features) — one gate, both consumers.
 
 ```
- 20k ┤ ░░░  ░░   ░░░░   ░░ ░░░
-  1k ┤ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
-     ╞═══════════════════════════  ◄ FLOOR — drag up, wash below is gated + hidden
- 100 ┤ ·· (below floor: gated, never detected)
-     └───────────────────────────► time
-        ▎   ▎    ▎   ▎    ▎   ▎      onset ticks — only surviving hits remain
+ BEFORE (Off):                          AFTER (Floor −48 dB):
+ 20k ┤ ░░░  ░░   ░░░░   ░░ ░░░          20k ┤
+  1k ┤ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓           1k ┤   ▓        ▓▓
+ 100 ┤ ▒▒▒▒▒▒ wash ▒▒▒▒▒▒▒▒           100 ┤ ▓   ▓  ▓      ▓   (only the loud hits survive)
+     └────────────────────► t             └────────────────────► t
+        ▎▎▎▎▎▎▎▎▎▎▎▎ ticks                    ▎    ▎    ▎  ticks thinned
 ```
 
 ### Upgrade 4 — Clarify "Whole" + expose one-shot length, drop the `→`
@@ -243,12 +252,15 @@ preferred over a broadband RMS gate (cleaner spectrogram, matches the drag gestu
 Drop the decorative `→` between sensitivity and target.
 
 ### Phase 7 checklist (tick + commit as you go)
-- [ ] **7.1 Fire pulse plumbing.** Engine surfaces per-send per-band `fired`/`level` in the
-      `ContentState` snapshot (decaying pulse, no per-frame alloc). state_sync → `AudioSendRow`.
-- [ ] **7.2 Row flash (Upgrade 1).** Panel draws the band-colour flash from the pulse.
-- [ ] **7.3 Row meter (Upgrade 2).** Level-vs-threshold meter on each row; `%` sets the line.
-- [ ] **7.4 Input floor (Upgrade 3).** `AudioSend.floor` field + editing command + analyzer
-      gate (per-bin, pre-display/slice/features) + draggable spectrogram line. Migration bump.
-- [ ] **7.5 Whole/length/arrow (Upgrade 4).** Relabel Whole; one-shot length control; drop `→`.
-- [ ] **7.6 Ship.** Builds + clippy clean; core/io/ui/playback/editing tests green; migration
-      round-trip; commit + push; update §0 + memory.
+- [x] **7.1–7.3 Row meter + firing flash (Upgrades 1+2).** Done as one pure-UI slice: no new
+      engine channel — driven by the selected send's per-band transient impulses already on
+      `ContentState.spectrogram_features` (what-you-detect-on). `TriggerRouteRow.threshold`;
+      per-row meter nodes + flash via `update_trigger_levels`, fed in `app_render`.
+- [x] **7.4 Input floor (Upgrade 3).** `AudioSend.floor_db` (default OFF, skip-serialize, no
+      migration needed) + `SetAudioSendFloorCommand` + analyzer per-bin gate (pre-display/slice/
+      features) + **dB stepper** in the scope title (not the freq-line first sketched — see above).
+- [x] **7.5 Whole/length/arrow (Upgrade 4).** One-shot length stepper per row
+      (`AudioTriggerLengthStep`, musical halve/double 1/4..16); faint group divider after the
+      Whole row; dropped the `→`.
+- [x] **7.6 Ship.** Builds + clippy clean; core/io/ui/audio/editing tests green; floor
+      serde round-trip + analyzer gate tests; committed + pushed; §0 + memory updated.
