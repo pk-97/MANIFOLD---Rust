@@ -1328,14 +1328,34 @@ impl PlaybackEngine {
         let project_ref = unsafe { &mut *project };
         let lcm_ref = unsafe { &mut *lcm };
         for req in &fires {
-            if let Some(layer_index) = resolve_trigger_layer(project_ref, req) {
-                lcm_ref.fire_layer_oneshot(
-                    project_ref,
-                    self,
-                    layer_index,
-                    req.one_shot_beats,
-                    realtime_now,
-                );
+            match resolve_trigger_layer(project_ref, req) {
+                Some(layer_index) => {
+                    // Diagnostic: confirms a transient fired and where it routed.
+                    // Remove once the live-trigger path is verified on a real rig.
+                    eprintln!(
+                        "[Trigger] FIRE send='{}' → layer #{layer_index} ({:.2} beats, {} route) @ beat {:.2}",
+                        req.send_label,
+                        req.one_shot_beats.as_f32(),
+                        if req.target_layer.is_some() { "explicit" } else { "by-name" },
+                        self.current_beat,
+                    );
+                    lcm_ref.fire_layer_oneshot(
+                        project_ref,
+                        self,
+                        layer_index,
+                        req.one_shot_beats,
+                        realtime_now,
+                    );
+                }
+                None => {
+                    // Fired, but nowhere to send it — the usual "nothing happens"
+                    // cause: no target layer set and no layer named like the send.
+                    eprintln!(
+                        "[Trigger] fired send='{}' but NO target layer — set one in the \
+                         trigger row, or name a layer '{}' for auto-route @ beat {:.2}",
+                        req.send_label, req.send_label, self.current_beat,
+                    );
+                }
             }
         }
         true
