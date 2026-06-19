@@ -691,7 +691,16 @@ impl LiveClipManager {
         let bpm = host.get_bpm_at_beat(host.current_beat());
         let spb = 60.0 / bpm.max(1.0);
         let duration_seconds = (one_shot_beats.0 as f32 * spb).max(0.05);
-        let tick = host.get_current_absolute_tick();
+        // A live audio one-shot fires in REAL TIME at the playhead — it has no
+        // musical event tick. Snap on the beat clock (`current_beat`), NOT
+        // `get_current_absolute_tick()`: that returns a frame counter when no
+        // external MIDI clock is connected, which yields a start_beat unrelated
+        // to the playhead and a window the scheduler treats as long-expired
+        // (so `start_clip` never runs and nothing renders). Passing
+        // `event_absolute_tick = -1` + `beat_stamp = current_beat` routes
+        // through the beat-domain snap and activates the slot immediately.
+        let beat_stamp = Some(host.current_beat().as_f32());
+        let tick = -1;
 
         let clip = match resolve_layer_live_content(project, layer_index) {
             LayerLiveContent::Generator(generator) => self.trigger_live_generator_clip(
@@ -700,7 +709,7 @@ impl LiveClipManager {
                 generator,
                 layer_index,
                 duration_seconds,
-                None,
+                beat_stamp,
                 tick,
                 realtime_now,
                 AUDIO_TRIGGER_NOTE,
@@ -726,7 +735,7 @@ impl LiveClipManager {
                     layer_index,
                     dur,
                     0.0,
-                    None,
+                    beat_stamp,
                     tick,
                     realtime_now,
                     AUDIO_TRIGGER_NOTE,

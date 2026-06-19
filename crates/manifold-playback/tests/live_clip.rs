@@ -478,6 +478,36 @@ fn fire_oneshot_on_video_layer_creates_slot_and_tracks_expiry() {
 }
 
 #[test]
+fn fire_oneshot_starts_at_playhead_when_abs_tick_is_frame_based() {
+    // Regression: a live audio one-shot fires in real time at the playhead and
+    // has NO musical event tick. With no external MIDI clock the host's
+    // `get_current_absolute_tick()` returns a FRAME counter, which does not map
+    // to `current_beat`. The one-shot must snap on the beat clock, so its slot
+    // starts at the playhead — not at a tiny tick-derived beat the scheduler
+    // would treat as long-expired and never start (black screen).
+    let mut project = make_project();
+    project.timeline.layers[0].source_clip_ids = vec!["clipA".into()];
+    let mut host = MockHost::new();
+    host.beat = Beats(100.0); // playhead deep into the arrangement
+    host.current_tick = 5; // frame counter, nowhere near beat*960 — misaligned
+    let mut mgr = LiveClipManager::new();
+
+    let clip = mgr
+        .fire_layer_oneshot(&mut project, &host, 0, Beats(1.0), 0.0)
+        .expect("fires");
+
+    // Slot starts at the playhead (~beat 100), NOT ~beat 0 from tick 5.
+    assert!(
+        (clip.start_beat.as_f32() - 100.0).abs() < 0.01,
+        "start_beat should track the playhead, got {}",
+        clip.start_beat.as_f32()
+    );
+    // Window is live at the playhead: not due at 100.5, due by 101.0.
+    assert!(mgr.expire_due_oneshots(100.5).is_empty(), "not due mid-window");
+    assert_eq!(mgr.expire_due_oneshots(101.0), vec![(0, clip.id.clone())]);
+}
+
+#[test]
 fn expire_due_oneshot_ends_the_slot() {
     let mut project = make_project();
     project.timeline.layers[0].source_clip_ids = vec!["clipA".into()];
