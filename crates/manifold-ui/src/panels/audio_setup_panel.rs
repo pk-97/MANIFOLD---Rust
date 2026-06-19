@@ -86,6 +86,10 @@ pub struct TriggerRouteRow {
     pub enabled: bool,
     /// 0..1 sensitivity (the route threshold), shown as a percent on the stepper.
     pub sensitivity: f32,
+    /// The fire line in transient-impulse space (0..1), derived from
+    /// `sensitivity` by core's `TriggerRoute::threshold()`. The row meter marks
+    /// it so tuning is "does the level cross this line," not a blind percent.
+    pub threshold: f32,
     /// Resolved target label: "Auto" (route by name) or a layer's name.
     pub layer_label: String,
 }
@@ -124,6 +128,27 @@ fn band_color(band: usize) -> Color32 {
 /// L/M/H labels in band order.
 const BAND_METER_LABELS: [&str; 3] = ["L", "M", "H"];
 
+/// Trigger-row band colour, indexed in `TRIG_BANDS` order: Whole (0) is neutral
+/// (it's the whole-signal onset, not a frequency slab), Low/Mid/High reuse the
+/// spectrogram's red/green/blue so the row meters read against the same legend.
+fn trigger_band_color(row: usize) -> Color32 {
+    match row {
+        0 => Color32::new(190, 190, 200, 255), // Whole — neutral
+        n => band_color(n - 1),                 // Low/Mid/High
+    }
+}
+
+/// Scale a colour's RGB toward black by `f` (0..1), preserving alpha. Used to dim
+/// a band colour for the resting meter fill so the firing flash reads brighter.
+fn dim_color(c: Color32, f: f32) -> Color32 {
+    Color32::new(
+        (c.r as f32 * f) as u8,
+        (c.g as f32 * f) as u8,
+        (c.b as f32 * f) as u8,
+        c.a,
+    )
+}
+
 /// Trigger section geometry.
 const TRIG_TITLE_H: f32 = 18.0;
 const TRIG_ROW_H: f32 = 22.0;
@@ -149,6 +174,21 @@ struct TriggerRowIds {
     sens_minus: i32,
     sens_plus: i32,
     layer: i32,
+    // Live level meter (resized in place each frame by `update_trigger_levels`):
+    // a track + a band-coloured fill = the transient level, with a threshold
+    // tick marking the fire line. `flash` is the swatch styled bright on a fire.
+    meter_track: i32,
+    meter_fill: i32,
+    thresh_tick: i32,
+    meter_x: f32,
+    meter_y: f32,
+    meter_w: f32,
+    meter_h: f32,
+    /// Band index (0..3) for colour + level lookup, and the row's threshold +
+    /// enabled state, captured at build so the per-frame update is self-contained.
+    band: usize,
+    threshold: f32,
+    enabled: bool,
 }
 
 /// Per-send interactive node ids.
@@ -938,6 +978,7 @@ impl AudioSetupPanel {
 
             // Target-layer dropdown trigger (Auto or a layer name).
             let layer_w = (inner_x + inner_w - x).max(40.0);
+            let layer_left = x;
             ids.layer = tree.add_button(
                 self.bg_id,
                 x,
@@ -947,6 +988,49 @@ impl AudioSetupPanel {
                 dropdown_trigger_style(),
                 &format!("{}   \u{25BC}", row.layer_label),
             ) as i32;
+
+            // Live level meter — a thin underline across the tuning zone (band
+            // label → layer dropdown). Fill = the band's transient level; the
+            // tick marks the fire threshold. Resized + flashed every frame by
+            // `update_trigger_levels`. Added last so it draws over the row's
+            // bottom edge as a clean underline.
+            let meter_h = 3.0;
+            let meter_x = inner_x + TRIG_ENABLE_W + 4.0;
+            let meter_w = (layer_left - 6.0 - meter_x).max(8.0);
+            let meter_y = cy + TRIG_ROW_H - meter_h;
+            let bandc = trigger_band_color(i);
+            ids.meter_track = tree.add_panel(
+                self.bg_id,
+                meter_x,
+                meter_y,
+                meter_w,
+                meter_h,
+                UIStyle { bg_color: Color32::new(40, 40, 46, 255), ..UIStyle::default() },
+            ) as i32;
+            ids.meter_fill = tree.add_panel(
+                self.bg_id,
+                meter_x,
+                meter_y,
+                0.0, // width set per frame
+                meter_h,
+                UIStyle { bg_color: dim_color(bandc, 0.55), ..UIStyle::default() },
+            ) as i32;
+            let tick_x = meter_x + row.threshold.clamp(0.0, 1.0) * meter_w;
+            ids.thresh_tick = tree.add_panel(
+                self.bg_id,
+                tick_x,
+                meter_y - 2.0,
+                1.5,
+                meter_h + 4.0,
+                UIStyle { bg_color: Color32::new(225, 225, 235, 255), ..UIStyle::default() },
+            ) as i32;
+            ids.meter_x = meter_x;
+            ids.meter_y = meter_y;
+            ids.meter_w = meter_w;
+            ids.meter_h = meter_h;
+            ids.band = i;
+            ids.threshold = row.threshold;
+            ids.enabled = row.enabled;
 
             self.trigger_row_ids.push(ids);
             cy += TRIG_ROW_H + ROW_GAP;
@@ -1160,6 +1244,34 @@ impl AudioSetupPanel {
                     tree.set_visible(label as u32, false);
                 }
             }
+        }
+    }
+
+    /// Drive the per-row trigger meters from the selected send's live per-band
+    /// transient levels (`[whole, low, mid, high]`, each 0..1), every frame while
+    /// open. The fill grows to the level; when the level crosses the row's
+    /// threshold the fill flashes to the bright band colour (the fire cue). The
+    /// transient impulse already decays, so the flash blinks once per onset with
+    /// no extra timer. `None` / a dark scope rests every meter. No rebuild.
+    pub fn update_trigger_levels(&self, tree: &mut UITree, levels: Option<[f32; 4]>) {
+        for ids in &self.trigger_row_ids {
+            if ids.meter_fill < 0 {
+                continue;
+            }
+            let level = levels.map_or(0.0, |l| l[ids.band].clamp(0.0, 1.0));
+            let w = ids.meter_w * level;
+            tree.set_bounds(
+                ids.meter_fill as u32,
+                Rect::new(ids.meter_x, ids.meter_y, w, ids.meter_h),
+            );
+            // Flash: enabled row whose level has crossed its fire line.
+            let bandc = trigger_band_color(ids.band);
+            let firing = ids.enabled && level >= ids.threshold && ids.threshold > 0.0;
+            let fill_color = if firing { bandc } else { dim_color(bandc, 0.55) };
+            tree.set_style(
+                ids.meter_fill as u32,
+                UIStyle { bg_color: fill_color, ..UIStyle::default() },
+            );
         }
     }
 

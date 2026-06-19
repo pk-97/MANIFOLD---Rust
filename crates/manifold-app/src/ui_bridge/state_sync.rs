@@ -1210,6 +1210,13 @@ pub fn sync_inspector_data(
                         TriggerRouteRow {
                             enabled: route.is_some_and(|r| r.enabled),
                             sensitivity: route.map_or(0.5, |r| r.sensitivity),
+                            // The fire line in transient-impulse space (0..1), so
+                            // the row meter can mark it without re-deriving the
+                            // sensitivity→threshold mapping (which lives in core).
+                            threshold: route.map_or_else(
+                                || manifold_core::audio_trigger::TriggerRoute::new(band).threshold(),
+                                |r| r.threshold(),
+                            ),
                             layer_label,
                         }
                     })

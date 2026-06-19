@@ -2458,6 +2458,21 @@ impl Application {
             });
             self.ws.ui_root.update_audio_band_meters(band_amps);
 
+            // Per-row trigger meters + firing flash: the selected send's per-band
+            // transient levels (Whole/Low/Mid/High) — the exact impulse the routes
+            // fire on, so the row meter is "what gets detected," and the flash
+            // blinks when a band crosses its threshold.
+            let trig_levels = self.content_state.spectrogram_features.map(|f| {
+                use manifold_core::AudioBand;
+                [
+                    f.bands[AudioBand::Full.index()].transients,
+                    f.bands[AudioBand::Low.index()].transients,
+                    f.bands[AudioBand::Mid.index()].transients,
+                    f.bands[AudioBand::High.index()].transients,
+                ]
+            });
+            self.ws.ui_root.update_audio_trigger_levels(trig_levels);
+
             // Hover readout, suppressed while a divider drag owns the gesture.
             let readout = if self.ws.ui_root.audio_band_dragging() {
                 None

@@ -2269,6 +2269,17 @@ impl UIRoot {
         self.audio_setup_panel.update_band_meters(&mut self.tree, amps);
     }
 
+    /// Drive the per-row trigger meters + firing flash from the selected send's
+    /// live per-band transient levels `[whole, low, mid, high]` (0..1), or rest
+    /// them when `None`. In place, every frame — see `update_audio_band_meters`.
+    pub fn update_audio_trigger_levels(&mut self, levels: Option<[f32; 4]>) {
+        if !self.audio_setup_panel.is_open() {
+            return;
+        }
+        self.audio_setup_panel
+            .update_trigger_levels(&mut self.tree, levels);
+    }
+
     /// Push waveform/stem lane node visibility and style to UITree.
     /// Called from app_render after syncing mute/solo/stems_available state.
     /// Separate from update() because app_render must sync state first.
