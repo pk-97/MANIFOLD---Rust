@@ -270,10 +270,11 @@ struct SendState {
     /// Hops remaining in each band's onset refractory window — after a transient
     /// fires, suppress re-fire until this elapses. Order [Full, Low, Mid, High].
     transient_refractory: [u8; 4],
-    /// Per-band running mean of band energy — the onset detector's adaptive
-    /// baseline. A transient is energy spiking above this by `ONSET_RATIO`, so the
-    /// trigger self-calibrates to the music's level instead of a fixed threshold.
-    energy_avg: [f32; 4],
+    /// Per-band moving average of the SuperFlux ODF — the onset detector's
+    /// adaptive threshold baseline. A transient fires when the ODF spikes above
+    /// this by `SUPERFLUX_THRESH_FACTOR`, so detection self-calibrates to the
+    /// track's onset density instead of a fixed threshold. Order [Full,Low,Mid,High].
+    flux_avg: [f32; 4],
     /// Whether `prev_col` holds a real column yet (skips the startup flux spike).
     has_prev: bool,
     /// Per-band spectral-centroid height-from-bottom (0..1) for the scope overlay,
@@ -504,26 +505,34 @@ fn form_tilted_column(
     }
 }
 
-// ── Onset (transient) detection ──────────────────────────────────────────
+// ── Onset (transient) detection — SuperFlux ──────────────────────────────
 //
-// Simple, deterministic, and self-calibrating: a transient is band energy
-// spiking above its OWN running mean by `ONSET_RATIO`. The mean tracks the
-// music's level, so the trigger adapts automatically instead of fighting a
-// fixed threshold that's right for one song and wrong for the next — a kick
-// jumps well above the recent mean whether the track is quiet or loud; a steady
-// or held note sits at the mean (ratio ≈ 1). The refractory both debounces the
-// multi-hop attack and outlasts the mean's catch-up, so a held note fires once
-// (the ratio curve crosses back under `ONSET_RATIO` at a fixed hop count,
-// independent of level). Energy is the SUM over the band, so a kick isn't
-// diluted the way band-RMS amplitude was.
+// SuperFlux (Böck & Widmer, DAFx 2013): a spectral-flux onset detector with a
+// frequency MAXIMUM FILTER for vibrato/pitch-slide suppression. Per hop, the
+// onset detection function (ODF) is the band sum of POSITIVE change vs the
+// previous column after max-filtering that column across ±`MAXFILTER_RADIUS`
+// bins (see `band_reduce`). Plain flux fires on any energy rise — a bending
+// note moves energy to an adjacent bin and reads as an attack; the max-filter
+// already "covers" that neighbour, so only genuinely NEW broadband energy (a
+// real attack) survives. A band fires when its ODF spikes above a moving
+// average of its own ODF by `SUPERFLUX_THRESH_FACTOR` (self-calibrating to the
+// track's density), gated to loud bands and a short refractory so one attack's
+// multi-hop rise fires once. This replaced an energy-over-mean detector that
+// tripped on amplitude wobble in busy mixes. Shared by triggers, the
+// `Transients` modulation feature, and the scope — one detector, three readers.
 
-/// How far band energy must exceed its running mean to fire. THE sensitivity
-/// knob — lower catches softer kicks, higher is stricter.
-const ONSET_RATIO: f32 = 1.4;
-/// Per-hop smoothing of the energy mean (~50 ms at hop ≈ 5.3 ms): slow enough
-/// that a kick spikes above it, fast enough that a held note settles within the
-/// refractory.
-const ENERGY_AVG_COEFF: f32 = 0.1;
+/// How far the ODF must exceed its moving average to fire. THE sensitivity knob
+/// — lower catches softer onsets, higher is stricter.
+const SUPERFLUX_THRESH_FACTOR: f32 = 2.0;
+/// Small absolute floor added to the adaptive threshold so near-silent flux
+/// jitter (average ≈ 0) can't satisfy the multiplicative test on its own.
+const SUPERFLUX_DELTA: f32 = 1e-3;
+/// Frequency max-filter radius (bins) for vibrato suppression. The SuperFlux
+/// paper uses ±1 bin at 24 bins/octave — wide enough to cover a semitone wobble.
+const MAXFILTER_RADIUS: usize = 1;
+/// Per-hop smoothing of the ODF moving-average threshold (~50 ms at hop ≈ 5.3 ms):
+/// slow enough that an attack spikes above it, fast enough to track a build.
+const FLUX_AVG_COEFF: f32 = 0.1;
 /// A transient only fires on a band loud enough to matter — `amplitude` is the
 /// band's level on the colourmap's 0..1 dB scale (≈ −53 dBFS here).
 const ONSET_AMP_GATE: f32 = 0.12;
@@ -532,11 +541,10 @@ const ONSET_DECAY: f32 = 0.85;
 /// Below this band energy, relative flux reads 0 — avoids the flux ÷ energy ratio
 /// blowing up on near-silence.
 const FLUX_ENERGY_GATE: f32 = 1e-4;
-/// Refractory after an onset (~74 ms at hop ≈ 5.3 ms). Debounces the attack AND
-/// outlasts the energy mean's catch-up on a held note (the ratio drops back under
-/// `ONSET_RATIO` by ~13 hops regardless of level), so a held note fires once.
-/// Caps the rate at ~13/s — ample for any kick pattern.
-const ONSET_REFRACTORY_HOPS: u8 = 14;
+/// Refractory after an onset (~32 ms at hop ≈ 5.3 ms) — SuperFlux's built-in
+/// minimum inter-onset interval. Debounces one attack's multi-hop rise while
+/// still allowing fast hat runs (≈1/32 at 160 BPM). Caps the rate at ~30/s.
+const ONSET_REFRACTORY_HOPS: u8 = 6;
 /// Pink-tilt slope the scope colourmap applies (dB/oct). Must stay equal to
 /// `manifold_spectral`'s `PINK_SLOPE_DB_PER_OCT` so the worker's reductions and
 /// presence gate evaluate the exact tilted dB the user sees painted.
@@ -595,6 +603,10 @@ struct BandReduce {
     noisiness: f32,
     /// Positive spectral flux vs the previous column (liveliness input).
     flux: f32,
+    /// SuperFlux onset detection function: positive flux vs the previous column
+    /// after a frequency **maximum filter** — the vibrato/pitch-slide suppression
+    /// that makes this fire on attacks, not amplitude wobble. Onset input.
+    superflux: f32,
     /// Sum of current magnitudes (liveliness denominator).
     energy: f32,
 }
@@ -612,15 +624,18 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
             brightness: 0.0,
             noisiness: 0.0,
             flux: 0.0,
+            superflux: 0.0,
             energy: 0.0,
         };
     }
+    let n_bins = prev.len();
     let mut sum_sq = 0.0f32;
     let mut num = 0.0f32;
     let mut den = 0.0f32;
     let mut log_sum = 0.0f32;
     let mut lin_sum = 0.0f32;
     let mut flux = 0.0f32;
+    let mut superflux = 0.0f32;
     let mut energy = 0.0f32;
     for k in lo..hi {
         let m = col[k];
@@ -629,9 +644,26 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
         den += m;
         log_sum += m.max(1e-9).ln();
         lin_sum += m;
+        // Plain flux (liveliness): rise vs the same bin one hop back.
         let d = m - prev[k];
         if d > 0.0 {
             flux += d;
+        }
+        // SuperFlux ODF (onsets): rise vs the MAX of the previous column over a
+        // ±`MAXFILTER_RADIUS`-bin neighbourhood. A small pitch slide just shifts
+        // energy to an adjacent bin, which the max-filter already covers — so it
+        // contributes ~0, while a real attack (new broadband energy) still does.
+        let klo = k.saturating_sub(MAXFILTER_RADIUS);
+        let khi = (k + MAXFILTER_RADIUS + 1).min(n_bins);
+        let mut prev_max = 0.0f32;
+        for &p in &prev[klo..khi] {
+            if p > prev_max {
+                prev_max = p;
+            }
+        }
+        let ds = m - prev_max;
+        if ds > 0.0 {
+            superflux += ds;
         }
         energy += m;
     }
@@ -663,7 +695,7 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
         0.0
     };
 
-    BandReduce { amplitude, brightness, noisiness, flux, energy }
+    BandReduce { amplitude, brightness, noisiness, flux, superflux, energy }
 }
 
 /// Reduce one send's current tilted column into its five per-band features, using
@@ -713,23 +745,23 @@ fn reduce_send(
             -1.0
         };
 
-        // Energy mean tracks every hop — including warm-up — so firing arms with
-        // a settled baseline (`avg` is the PAST mean; the current energy is
-        // compared to it, then folded in).
-        let avg = send.energy_avg[bi];
-        send.energy_avg[bi] = avg + (r.energy - avg) * ENERGY_AVG_COEFF;
+        // SuperFlux ODF moving average — the adaptive threshold baseline. `avg`
+        // is the PAST average; the current ODF is tested against it, then folded
+        // in (slow, so an attack spikes above it rather than raising it).
+        let avg = send.flux_avg[bi];
 
         if have_prev {
-            // Liveliness self-scales with density (relative flux).
+            // Liveliness self-scales with density (relative plain flux).
             bf.liveliness = if loud { relative_flux(r.flux, r.energy) } else { 0.0 };
 
-            // Transient: band energy spiking above its running mean by ONSET_RATIO
-            // on a loud band. A kick jumps well above the mean; a steady note sits
-            // at it. The refractory debounces the attack and outlasts the mean's
-            // catch-up, so a held note fires once.
+            // Transient (SuperFlux peak-pick): the band's max-filtered flux ODF
+            // spiking above its own moving average by SUPERFLUX_THRESH_FACTOR, on
+            // a loud band, outside the refractory. The max-filter (in band_reduce)
+            // already rejects vibrato/pitch slides, so this fires on real attacks.
             let refractory = &mut send.transient_refractory[bi];
-            let triggered =
-                loud && *refractory == 0 && avg > 1e-9 && r.energy > avg * ONSET_RATIO;
+            let triggered = loud
+                && *refractory == 0
+                && r.superflux > avg * SUPERFLUX_THRESH_FACTOR + SUPERFLUX_DELTA;
             if triggered {
                 bf.transients = 1.0;
                 *refractory = ONSET_REFRACTORY_HOPS;
@@ -738,6 +770,9 @@ fn reduce_send(
                 *refractory = refractory.saturating_sub(1);
             }
         }
+
+        // Fold the current ODF into the moving-average threshold (after the test).
+        send.flux_avg[bi] = avg + (r.superflux - avg) * FLUX_AVG_COEFF;
     }
 }
 
@@ -767,7 +802,7 @@ fn new_send_state(num_bins: usize) -> SendState {
         col: vec![0.0; num_bins],
         prev_col: vec![0.0; num_bins],
         transient_refractory: [0; 4],
-        energy_avg: [0.0; 4],
+        flux_avg: [0.0; 4],
         has_prev: false,
         centroid_yfb: [-1.0; 4],
         features: SendFeatures::default(),
@@ -1189,7 +1224,7 @@ mod tests {
             col,
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
-            energy_avg: [0.0; 4],
+            flux_avg: [0.0; 4],
             has_prev: false,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1281,6 +1316,37 @@ mod tests {
     }
 
     #[test]
+    fn superflux_ignores_a_pitch_slide_but_keeps_real_attacks() {
+        // The SuperFlux headline: a one-bin pitch slide (energy moving to a
+        // neighbour — vibrato/bass wobble) trips PLAIN flux but not the
+        // max-filtered ODF, while a genuine attack from silence fires both.
+        let c = cfg();
+        let nb = nbins();
+        let b = nb / 2;
+        let mut prev_shifted = vec![0.0f32; nb];
+        prev_shifted[b - 1] = 1.0; // energy was one bin lower last hop
+        let mut col = vec![0.0f32; nb];
+        col[b] = 1.0; // now one bin higher — a slide, not a new onset
+
+        let slide = band_reduce(&col, &prev_shifted, 0, nb, c.db_min, c.db_max);
+        assert!(slide.flux > 0.5, "plain flux trips on the bin shift: {}", slide.flux);
+        assert!(
+            slide.superflux < 1e-6,
+            "SuperFlux's max-filter covers the neighbour, so a 1-bin slide reads ~0: {}",
+            slide.superflux,
+        );
+
+        // A real attack from silence still produces strong SuperFlux.
+        let silence = vec![0.0f32; nb];
+        let attack = band_reduce(&col, &silence, 0, nb, c.db_min, c.db_max);
+        assert!(
+            attack.superflux > 0.5,
+            "new broadband energy still fires SuperFlux: {}",
+            attack.superflux,
+        );
+    }
+
+    #[test]
     fn transient_fires_once_per_note_not_per_hop() {
         // The reported bug: a HELD note machine-gunned onsets every refractory.
         // With the envelope + re-arm detector a held note must fire exactly once;
@@ -1298,7 +1364,7 @@ mod tests {
             col: tone.clone(),
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
-            energy_avg: [0.0; 4],
+            flux_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1353,7 +1419,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
-            energy_avg: [0.0; 4],
+            flux_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1403,7 +1469,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
-            energy_avg: [0.0; 4],
+            flux_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
