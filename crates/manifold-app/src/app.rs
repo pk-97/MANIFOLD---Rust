@@ -1879,6 +1879,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ];
             let mut engine = PlaybackEngine::new(renderers);
             engine.initialize(self.local_project.clone());
+            // The live-clip sink for MIDI phantom clips AND live audio triggers.
+            // Without it both `tick_midi_input` and `tick_audio_triggers` bail at
+            // their `live_clip_manager.is_none()` guard, so nothing ever fires.
+            engine.set_live_clip_manager(
+                manifold_playback::live_clip_manager::LiveClipManager::new(),
+            );
 
             let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(Box::new(
                 LayerCompositor::new(&native_device, output_w, output_h),
