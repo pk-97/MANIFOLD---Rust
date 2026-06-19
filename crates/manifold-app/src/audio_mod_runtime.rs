@@ -441,6 +441,14 @@ impl AudioModRuntime {
         self.tapped_analyzer().map(|a| a.freq_range())
     }
 
+    /// The tapped send's resolved audio floor (dB) — the single floor that zeros
+    /// the column. The scope renderer feeds it to the display as the colour-ramp
+    /// bottom so the painted black point matches what the detector reads. `None`
+    /// when nothing is tapped.
+    pub fn spectrogram_floor_db(&self) -> Option<f32> {
+        self.tapped_analyzer().map(|a| a.resolved_floor_db())
+    }
+
     /// Resolve the project's chosen input to a ready-to-open [`CaptureSource`]
     /// plus a human label for logging. `None` means the configured source is
     /// currently unavailable (device absent, app not running, tap unsupported) —

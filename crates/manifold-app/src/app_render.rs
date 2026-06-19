@@ -3918,6 +3918,7 @@ impl Application {
                     manifold_gpu::GpuTextureFormat::Rgba8Unorm,
                     cfg.db_min,
                     cfg.db_max,
+                    cfg.tilt_slope,
                 ));
                 self.spectrogram_num_bins = num_bins;
             }
@@ -3993,6 +3994,11 @@ impl Application {
                     .ui_root
                     .audio_setup_panel
                     .divider_hover_index(cursor_screen_y);
+                // Single floor: the display's colour-ramp bottom is the tapped send's
+                // resolved floor — the exact level the detector is silenced below —
+                // so black on screen = silent to every algorithm. Falls back to the
+                // config default when nothing is tapped.
+                spectrogram.set_db_min(self.content_state.spectrogram_floor_db.unwrap_or(cfg.db_min));
                 spectrogram.render(
                     &mut encoder,
                     &target,

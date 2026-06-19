@@ -546,9 +546,6 @@ const MAXFILTER_RADIUS: usize = 1;
 /// Per-hop smoothing of the ODF moving-average threshold (~50 ms at hop ≈ 5.3 ms):
 /// slow enough that an attack spikes above it, fast enough to track a build.
 const FLUX_AVG_COEFF: f32 = 0.1;
-/// A transient only fires on a band loud enough to matter — `amplitude` is the
-/// band's level on the colourmap's 0..1 dB scale (≈ −53 dBFS here).
-const ONSET_AMP_GATE: f32 = 0.12;
 /// Per-hop decay of the transient impulse (~100 ms settle at hop ≈ 5.3 ms).
 const ONSET_DECAY: f32 = 0.85;
 /// Below this band energy, relative flux reads 0 — avoids the flux ÷ energy ratio
@@ -558,10 +555,6 @@ const FLUX_ENERGY_GATE: f32 = 1e-4;
 /// minimum inter-onset interval. Debounces one attack's multi-hop rise while
 /// still allowing fast hat runs (≈1/32 at 160 BPM). Caps the rate at ~30/s.
 const ONSET_REFRACTORY_HOPS: u8 = 6;
-/// Pink-tilt slope the scope colourmap applies (dB/oct). Must stay equal to
-/// `manifold_spectral`'s `PINK_SLOPE_DB_PER_OCT` so the worker's reductions and
-/// presence gate evaluate the exact tilted dB the user sees painted.
-const SCOPE_TILT_DB_PER_OCT: f32 = 3.0;
 /// Hops of rolling-window backlog each send keeps beyond one full window, so a
 /// brief drain stall doesn't drop distinct columns. ~85 ms at hop ≈ 5.3 ms.
 const WINDOW_BACKLOG_HOPS: usize = 16;
@@ -594,8 +587,9 @@ fn band_edges(
 /// colourmap. The shader adds `slope · log2(fmax/fmin) · (0.5 − uv.y)` dB,
 /// centred over the displayed range; as a multiplier that's `10^(tilt_db/20)`.
 /// Bin `k` sits at `uv.y = 1 − k/(nb−1)`, so `0.5 − uv.y = k/(nb−1) − 0.5`.
-/// Applying it once to the raw magnitudes makes every reduction — and the
-/// presence gate — read the same tilted dB the user sees.
+/// Slope is the single [`SpectrogramConfig::tilt_slope`] the display shader also
+/// reads, so applying it once to the raw magnitudes makes every reduction — and
+/// the floor — read the exact tilted dB the user sees painted.
 fn tilt_weights(cfg: &SpectrogramConfig, sample_rate: f32, num_bins: usize) -> Vec<f32> {
     let nb = num_bins.max(1);
     let fmin = cfg.fmin.max(1.0);
@@ -603,7 +597,7 @@ fn tilt_weights(cfg: &SpectrogramConfig, sample_rate: f32, num_bins: usize) -> V
     let inv = if nb > 1 { 1.0 / (nb - 1) as f32 } else { 0.0 };
     (0..nb)
         .map(|k| {
-            let tilt_db = SCOPE_TILT_DB_PER_OCT * flr * (k as f32 * inv - 0.5);
+            let tilt_db = cfg.tilt_slope * flr * (k as f32 * inv - 0.5);
             10.0f32.powf(tilt_db / 20.0)
         })
         .collect()
@@ -737,21 +731,20 @@ fn reduce_send(
     let have_prev = send.has_prev;
     for (bi, &(lo, hi)) in bands.iter().enumerate() {
         let r = band_reduce(&send.col, &send.prev_col, lo, hi, db_min, db_max);
-        // `loud` (band level above a musical floor) means "worth characterising."
-        // Every feature that DESCRIBES the band gates on it, so none reports on
-        // faint, near-noise-floor content (a noise floor reads as maximally
-        // flat/noisy, a tiny energy wobble reads as high liveliness, etc.).
-        let loud = r.amplitude > ONSET_AMP_GATE;
+        // The column is already floored (sub-floor bins zeroed upstream), so every
+        // reduction reads only above-floor energy — the exact content the user sees.
+        // No hidden gate: a band below the floor has zero energy, and the feature
+        // math returns 0 for it naturally. The single floor is the only gate.
         let bf = &mut send.features.bands[bi];
         bf.amplitude = r.amplitude;
-        bf.brightness = if loud { r.brightness } else { 0.0 };
-        bf.noisiness = if loud { r.noisiness } else { 0.0 };
+        bf.brightness = r.brightness;
+        bf.noisiness = r.noisiness;
 
-        // Scope overlay: the same centroid the `brightness` feature reads, but
-        // mapped from band-local 0..1 onto the global display y so each band's
-        // trace draws within its own region. Hidden (`-1`) on a non-loud band,
-        // matching the feature reading 0 there.
-        send.centroid_yfb[bi] = if loud && hi > lo + 1 {
+        // Scope overlay: the centroid the `brightness` feature reads, mapped from
+        // band-local 0..1 onto the global display y. Hidden (`-1`) when the band has
+        // no above-floor energy, so the trace is drawn only where the user sees
+        // colour — never over a black (floored) band.
+        send.centroid_yfb[bi] = if r.energy > 0.0 && hi > lo + 1 {
             let c = lo as f32 + r.brightness * (hi - 1 - lo) as f32;
             (c / (num_bins.max(1) - 1) as f32).clamp(0.0, 1.0)
         } else {
@@ -766,24 +759,25 @@ fn reduce_send(
 
         if have_prev {
             // Liveliness self-scales with density (relative plain flux).
-            bf.liveliness = if loud { relative_flux(r.flux, r.energy) } else { 0.0 };
+            bf.liveliness = relative_flux(r.flux, r.energy);
 
             // Transient = SuperFlux PEAK-PICK. The ODF (max-filtered positive flux)
             // is a curve over time; a real onset is a PEAK on it — the ODF rises
             // into the attack, then falls. We hold last hop's ODF as the candidate
             // and fire it the moment the current hop turns over (no higher than the
             // candidate), PROVIDED the ODF was rising into it, the candidate clears
-            // the adaptive threshold, the band is loud, and we're past the
-            // refractory. Firing only at the local maximum — not on every hop the
-            // ODF sits above threshold — is what stops one attack (a kick's whole
-            // sweeping body parks the ODF high for ~100 ms) from firing many times.
+            // the adaptive threshold and we're past the refractory. Firing only at
+            // the local maximum — not on every hop the ODF sits above threshold — is
+            // what stops one attack (a kick's whole sweeping body parks the ODF high
+            // for ~100 ms) from firing many times. A floored band reads superflux 0,
+            // so the floor — not a separate gate — keeps silent bands silent.
             // Fires one hop (~5 ms) after the true peak; imperceptible live.
             let odf = r.superflux;
             let candidate = send.flux_prev[bi];
             let threshold = avg * SUPERFLUX_THRESH_FACTOR + SUPERFLUX_DELTA;
             let is_peak = send.flux_rising[bi] && odf <= candidate;
             let refractory = &mut send.transient_refractory[bi];
-            let fired = loud && is_peak && *refractory == 0 && candidate > threshold;
+            let fired = is_peak && *refractory == 0 && candidate > threshold;
             if fired {
                 bf.transients = 1.0;
                 *refractory = ONSET_REFRACTORY_HOPS;
@@ -871,10 +865,12 @@ pub struct StreamingSendAnalyzer {
     scope: bool,
     scope_cols: Vec<f32>,
     scope_scalars: Vec<f32>,
-    /// Pre-analysis noise floor (dB). Bins quieter than this are zeroed in the
-    /// raw + tilted column before scope display and feature reduction, so the
-    /// squelch is identical in what you see and what you detect. `FLOOR_DB_OFF`
-    /// = no gate (the default).
+    /// The single audio floor (dB). Bins whose TILTED magnitude is below this are
+    /// zeroed in BOTH the scope and feature column before display and reduction, so
+    /// what you see (black) is exactly what every algorithm reads (silence). It is
+    /// also fed to `band_reduce` as `db_min` and to the display as the colour-ramp
+    /// bottom — one number end to end. `FLOOR_DB_OFF` resolves to the config
+    /// `db_min` (the default black point); there is no separate "off" with no floor.
     floor_db: f32,
 }
 
@@ -912,10 +908,22 @@ impl StreamingSendAnalyzer {
         }
     }
 
-    /// Set the pre-analysis noise floor (dB). Applied live every hop; no rebuild.
-    /// `FLOOR_DB_OFF` (or anything at/below it) disables the gate.
+    /// Set the single audio floor (dB). Applied live every hop; no rebuild.
+    /// `FLOOR_DB_OFF` (or anything at/below it) resolves to the config `db_min`.
     pub fn set_floor_db(&mut self, floor_db: f32) {
         self.floor_db = floor_db;
+    }
+
+    /// The resolved floor (dB) this analyzer is using — the stepper value if set,
+    /// else the config colour-ramp bottom. The Audio Setup scope feeds this to the
+    /// display as the colour-ramp bottom so the painted black point matches the
+    /// floor that zeros the column.
+    pub fn resolved_floor_db(&self) -> f32 {
+        if self.floor_db > manifold_core::audio_setup::FLOOR_DB_OFF {
+            self.floor_db
+        } else {
+            self.spec_config.db_min
+        }
     }
 
     /// The sample rate this analyzer was built for — the caller rebuilds it if
@@ -1028,8 +1036,17 @@ impl StreamingSendAnalyzer {
             1
         };
         let emit = owed.min(avail);
-        let db_min = spec_config.db_min;
         let db_max = spec_config.db_max;
+        // The single audio floor (dB): the per-send stepper if set, else the config
+        // colour-ramp bottom. This one value is the display's black point, the
+        // tilted-domain zero threshold below, AND `band_reduce`'s `db_min` — so the
+        // floor the user sees IS the floor every feature is measured against.
+        let floor_db = if floor_db > manifold_core::audio_setup::FLOOR_DB_OFF {
+            floor_db
+        } else {
+            spec_config.db_min
+        };
+        let lin_floor = 10f32.powf(floor_db / 20.0);
 
         for j in (0..emit).rev() {
             let end = state.window.len().saturating_sub(j * hop);
@@ -1042,20 +1059,20 @@ impl StreamingSendAnalyzer {
                 vqt_raw,
                 &mut state.col,
             );
-            // Pre-analysis floor: zero every bin whose raw magnitude is below the
-            // dB floor, in BOTH the scope (`vqt_raw`) and feature (`state.col`)
-            // column — so the squelch the user sees on the spectrogram is exactly
-            // the signal the bands + transients detect on. Off (sentinel) skips.
-            if floor_db > manifold_core::audio_setup::FLOOR_DB_OFF {
-                let lin_floor = 10f32.powf(floor_db / 20.0);
-                for (raw, c) in vqt_raw.iter_mut().zip(state.col.iter_mut()) {
-                    if *raw < lin_floor {
-                        *raw = 0.0;
-                        *c = 0.0;
-                    }
+            // The single floor: zero every bin whose TILTED magnitude is below the
+            // floor, in BOTH the scope (`vqt_raw`) and feature (`state.col`) column,
+            // so the black the user sees on the spectrogram is exactly the silence
+            // the bands + transients detect. Decided in the tilted domain (`*c`) —
+            // the same tilted dB the shader paints — so the floor line matches the
+            // picture. The display ramp bottom is fed this same floor, so black =
+            // floored = silent, one number end to end.
+            for (raw, c) in vqt_raw.iter_mut().zip(state.col.iter_mut()) {
+                if *c < lin_floor {
+                    *raw = 0.0;
+                    *c = 0.0;
                 }
             }
-            reduce_send(state, nb, *low_bin, *mid_bin, db_min, db_max);
+            reduce_send(state, nb, *low_bin, *mid_bin, floor_db, db_max);
             state.prev_col.copy_from_slice(&state.col);
             // Flux/transients arm only once the window has filled, so the warm-up
             // ramp never reads as a transient (matches the live worker).
@@ -1314,18 +1331,56 @@ mod tests {
     }
 
     #[test]
-    fn empty_bands_report_no_timbre() {
-        // A pure 1 kHz tone fills the mid band; low and high hold only VQT
-        // leakage — no real content. The presence gate must zero their
-        // brightness/noisiness so a modulator mapped there reads silent rather
-        // than describing the noise floor.
+    fn floored_band_reports_no_timbre() {
+        // Single-floor contract: a band reads 0 brightness/noisiness because the
+        // FLOOR zeroed its bins, not because of a hidden presence gate (deleted with
+        // ONSET_AMP_GATE). A floor above every bin blacks out the whole column, so
+        // every band's timbre collapses to silence — what you see (black) is exactly
+        // what a modulator mapped there reads (nothing).
+        let mono = sine(1000.0, nfft() * 4);
         let (_full, low, mid, high) = bands();
-        let f = reduced(vqt_col(&sine(1000.0, nfft())));
-        assert!(f.bands[mid].amplitude > 0.0, "mid band is present");
-        for b in [low, high] {
-            assert_eq!(f.bands[b].brightness, 0.0, "empty band brightness gated to 0");
-            assert_eq!(f.bands[b].noisiness, 0.0, "empty band noisiness gated to 0");
+        let mut a = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        a.set_floor_db(20.0); // lin floor 10, above every (tilted) bin
+        for chunk in mono.chunks(257) {
+            a.push(chunk);
         }
+        let f = a.latest();
+        for b in [low, mid, high] {
+            assert_eq!(f.bands[b].brightness, 0.0, "floored band brightness = 0");
+            assert_eq!(f.bands[b].noisiness, 0.0, "floored band noisiness = 0");
+        }
+    }
+
+    #[test]
+    fn floored_band_fires_no_transient() {
+        // The reported bug, pinned: a band whose energy is below the floor must fire
+        // NO transient — the floor is the only gate. Floor off → the onset fires;
+        // floor above the tone → the column is zeroed, no peak, no fire (no ticks on
+        // a band that reads black).
+        let mut attack = vec![0.0f32; nfft() * 2];
+        attack.extend(sine(1000.0, nfft() * 2)); // silence, then a 1 kHz onset
+        let (_full, _low, mid, _high) = bands();
+
+        let mut open = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        let mut fired_open = false;
+        for chunk in attack.chunks(257) {
+            open.push(chunk);
+            if open.latest().bands[mid].transients > 0.5 {
+                fired_open = true;
+            }
+        }
+        assert!(fired_open, "floor off: the onset fires a transient");
+
+        let mut gated = StreamingSendAnalyzer::new(SR, 250.0, 2000.0);
+        gated.set_floor_db(20.0);
+        let mut fired_gated = false;
+        for chunk in attack.chunks(257) {
+            gated.push(chunk);
+            if gated.latest().bands[mid].transients > 0.5 {
+                fired_gated = true;
+            }
+        }
+        assert!(!fired_gated, "floored onset must not fire — the floor is the only gate");
     }
 
     #[test]
