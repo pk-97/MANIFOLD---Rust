@@ -42,7 +42,7 @@ The layer/clip model already discriminates kinds by `LayerType` and by which cli
 - **`LayerType::Audio = 3`.** Today the enum is `Video=0, Generator=1, Group=2`; Audio is the next variant. Extend the int and string match arms in both `Serialize`/`Deserialize` paths at [crates/manifold-core/src/types.rs](../crates/manifold-core/src/types.rs) (~L116). Default stays `Video`.
 - **Audio clip.** `TimelineClip` is a flat struct discriminated by populated field — `video_clip_id` for video, `generator_type` for generators. Add an audio variant the same way: an `audio_file_path` (plus the offline-analysis artifact handle, §3) populated when the owning layer is `Audio`. `in_point` is already `Seconds` (the established convention for player time); duration stays `Beats`.
 - **Send source becomes a sum.** An `AudioSend` today means "channels on a capture device." Extend its source to an enum — capture-channels **or** audio-layer(`LayerId`). This is the one model change that touches the existing audio crate: the analysis/modulation wiring must know that a send fed by a layer reads a precomputed curve, not a live ring.
-- **Per-layer audio fields.** Which send the layer drives (`Option<AudioSendId>`) and a gain. Solo/mute already exist on `Layer` (`is_solo` / `is_muted`) and now carry audible meaning — see §5.
+- **Per-layer audio fields.** Which send the layer drives (`Option<AudioSendId>`), a gain, and the **analysis-only** flag (the third output state, §5). Solo/mute already exist on `Layer` (`is_solo` / `is_muted`) and now carry audible meaning — see §5. The analysis-only flag is a new serialized bool on `Layer` (default false = Live); stem lanes from Detect and Group default it true.
 
 Audio layers ignore the visual half of `Layer` (opacity, effects, blend, compositing). That's fine and already true of the existing types — Video and Generator don't use every field either.
 
@@ -206,19 +206,39 @@ Both are driven by the *same* clip-BPM ratio, interchangeable behind a `warp(sam
 
 ---
 
-## 5. Solo / mute semantics
+## 5. Output state (mute / analysis) and solo semantics
 
-Audio layers reuse `is_solo` / `is_muted` but they mean audible things now, parallel to how they mean visible things on video layers:
+Audio layers reuse `is_solo` / `is_muted` but they mean audible things now, parallel to how they mean visible things on video layers.
 
-- **Mute** — drop this layer from the master mix. (Does it also stop feeding its send? Decision: no — muting the speakers shouldn't silence the modulation. Mute is an output-mix concept; a separate gesture, if wanted, disables the send.)
+**Three output states, two toggles (locked with Peter 2026-06-19).** Every audio lane is one of Live / Analysis-only / Muted, driven by an independent **Mute** and **Analysis** toggle. The UX/visual spec lives in [LAYER_CONTROLS_DESIGN §5.3](LAYER_CONTROLS_DESIGN.md); this section owns the **routing**.
+
+| State | → master | → send |
+|---|---|---|
+| **Live** | audible | feeds |
+| **Analysis-only** | silent | feeds |
+| **Muted** | silent | none |
+
+- **The send tap is post-fader** ([audio_layer_playback.rs](../crates/manifold-playback/src/audio_layer_playback.rs)): a layer-sourced send drains the sub-track *after* the layer fader. So zeroing the fader silences the send too.
+- **Analysis-only** therefore needs a **routing split**, not a fader move: cut the sub-track → master contribution while leaving the post-fader send ring hot. In kira terms, separate "audible to the main bus" from "present on the sub-track that the send ring taps." This split is the one non-trivial bit of the output-state work.
+- **Muted** is the fully-off state: silent to master *and* the send sees nothing.
 - **Solo** — an audio-solo bus independent of the visual solo bus. Soloing an audio layer must not blank the video, and soloing a video layer must not silence audio. Two buses, same field name, disjoint membership by `layer_type`.
+
+> ⚠ **Reverses the earlier decision in this section.** An earlier draft decided "mute does *not* stop feeding its send — muting the speakers shouldn't silence the modulation." The three-state model overturns that: **Mute now kills the send** (fully off), and the silent-but-still-modulating case is the new **Analysis-only** state. This resolves the old "a separate gesture, if wanted, disables the send" parenthetical — that gesture is now the plain Mute. Confirm intended before building; also flagged in LAYER_CONTROLS §5.3 and AUDIO_CLIP_DETECTION §8.
 
 ---
 
 ## 6. UI
 
-- **Drag-drop** an audio file onto a layer (or onto empty lane space) creates an `Audio` layer + clip. Import UX partly exists from percussion.
-- **Layer header:** send dropdown ("which send this layer drives") + gain. Solo/mute already render.
+**Adding audio — two gestures, locked with Peter 2026-06-19:**
+
+- **Right-click → Add Audio Layer** in the add-layer menu, like the other layer types. (Today the menu omits Audio.)
+- **Drag-drop with a target-aware affordance.** Dropping is *not* always "make a new lane" (the current behavior in [project_io.rs](../crates/manifold-app/src/project_io.rs), which appends a fresh audio track per file):
+  - drop **onto an existing audio lane** → the clip **joins that lane** at the drop beat;
+  - drop **onto empty timeline space** → a **new** audio lane + clip.
+  - While dragging, the affordance shows which you'll get: the target audio lane **highlights** ("joins here"), empty space shows an **insertion line** ("new lane here"). One gesture, two outcomes, no modifier keys.
+- Import UX partly exists from percussion.
+
+- **Layer header:** mute + **analysis** toggles (§5), send dropdown ("which send this layer drives"), gain. Solo already renders.
 - **Lane:** audio clips draw the waveform (`waveform_painter`) instead of a video thumbnail. Compositor skips `Audio` layers entirely — no visual output, no render cost.
 - A **generic import+waveform path** decoupled from the percussion *trigger* pipeline: today decode/waveform are wired to onset→clip-trigger analysis. The audio layer wants "drop a file, get samples + a waveform + a feature curve" without the trigger-binding baggage.
 

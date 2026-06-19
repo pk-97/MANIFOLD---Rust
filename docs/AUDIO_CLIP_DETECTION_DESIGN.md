@@ -1,4 +1,4 @@
-<!-- index: Moves percussion detection from a global, fire-once import wizard to a per-audio-clip property. Select an audio clip on an audio layer → the inspector shows its detection settings (separation, quantize, per-instrument sensitivity + target layer) and a Detect button. Each audio clip owns its own detection state and the trigger clips it generated; re-detecting one clip only touches its own triggers. The detection backend (htdemucs+ADTOF Python pipeline, orchestrator, parser/planner/import-service) is reused as-is — the work is the ownership model, clip-anchored planning (warp-aware), the inspector UI, and deleting the global singleton path. Decisions locked 2026-06-18: existing backend now (DrumSep later), manual Detect (no auto-on-drop), one sensitivity slider per instrument, no migration of old global percussion state (start fresh). -->
+<!-- index: Moves percussion detection from a global, fire-once import wizard to a per-audio-clip property. Select an audio clip on an audio layer → the inspector shows its detection settings (separation, quantize, per-instrument sensitivity + target layer) and a Detect button. Each audio clip owns its own detection state and the trigger clips it generated; re-detecting one clip only touches its own triggers. The detection backend (htdemucs+ADTOF Python pipeline, orchestrator, parser/planner/import-service) is reused as-is — the work is the ownership model, clip-anchored planning (warp-aware), the inspector UI, and deleting the global singleton path. Decisions locked 2026-06-18: existing backend now (DrumSep later), manual Detect (no auto-on-drop), one sensitivity slider per instrument, no migration of old global percussion state (start fresh). §8 (UX locked 2026-06-19): Detect grows into "Detect and Group" — consumes the demucs stems into analysis-only audio lanes, wraps source + stems + triggers in a named group (expanded, contained), and auto-creates one per-stem send (reused by source). The set is keyed to the source lane, not the clip: re-detecting other clips on the same lane reuses its lanes/sends. -->
 
 # Audio Clip Detection — Design Doc
 
@@ -141,7 +141,85 @@ Joins the audio clip's `build_audio_section` ([clip_chrome.rs:386](../crates/man
 
 Machine config (demucs device/model, backend paths, BPM min/max) stays in global settings — not in the clip inspector.
 
-## 8. Phased plan
+Once §8 ships, the button reads **Detect and Group** and produces the full set; the mock's `[Detect]` is the pre-grouping label.
+
+## 8. Detect and Group — stems become lanes, the lane becomes a set
+
+**UX/UI locked with Peter 2026-06-19.** Infra in flux — see §8.6. The plain per-clip **Detect** (§7) grows into **Detect and Group**: one press turns an analyzed audio clip into a self-contained *set* on the timeline — the source, its stems, its triggers, and the modulation sends that listen to each stem. The mental model: drop a song → hit Detect → get a song folder, the way dragging a multitrack into Ableton gives you a track group.
+
+The demucs pass already produces 4 stems (drums / bass / vocals / other); the per-clip path **discarded** them ([percussion_orchestrator.rs](../crates/manifold-playback/src/percussion_orchestrator.rs) caches `stem_paths` only on the legacy wizard path). Detect and Group **consumes** them.
+
+### 8.1 What one press produces
+
+- **4 stem audio lanes**, one per stem file, each in the new **analysis-only** output state — silent to master, still feeding its send. See [LAYER_CONTROLS_DESIGN §5](LAYER_CONTROLS_DESIGN.md).
+- **Trigger lanes** with the detected hits placed (Kick / Snare / …), as today.
+- **One send per stem** in Audio Setup, source = that stem lane (`AudioSend.source = Layer(id)` via `SetAudioSendSourceCommand` — the exact mechanism LAYER_CONTROLS §5 already ships). **Reused by source**, so re-detect never piles up duplicates.
+- **A group** wrapping source + stems + triggers, named after the song.
+
+```
+▼ ▦ Midnight ──────────────────[set]─ ⊘all ◎all ⠿drag ─┐  ← group header
+│  ♪ Midnight        🔊 LIVE   [▓▓▓▓ source clip ▓▓▓▓] │  audible
+│  〰 Midnight·Drums  👂 ANLYS  [░░ dimmed stem ░░] →send│  silent, listening
+│  〰 Midnight·Bass   👂 ANLYS  [░░ dimmed stem ░░] →send│
+│  〰 Midnight·Vocals 👂 ANLYS  [░░ dimmed stem ░░] →send│
+│  〰 Midnight·Other  👂 ANLYS  [░░ dimmed stem ░░] →send│
+│  ◆ Kick            trig       │▌  ▌ ▌▌   ▌  ▌▌  ▌      │  placed hits
+│  ◆ Snare           trig       │   ▌  ▌▌    ▌    ▌      │
+└───────────────────────────────────────────────────────┘
+```
+
+### 8.2 The group reveals expanded and stays open
+
+Decided: **expanded, stays open** — not collapsed, not auto-collapse. The cost (a group is ~9 lanes) is paid by making the group **read as one object even when open**:
+
+- lanes **indented under a colored group header**;
+- the header carries **collapse · mute-all · solo-all · drag-the-whole-set**.
+
+Without containment, three detected songs = ~27 loose lanes and the timeline is a junk drawer. Expanded is only acceptable *because* the group is visually contained. This is a hard requirement of the choice, not a nicety.
+
+### 8.3 The set belongs to the lane, not the clip (lane-keyed reuse)
+
+The "intelligent, just-works" rule. The set is keyed to the **source audio lane**:
+
+- **First Detect** on a lane builds the set (stem lanes, trigger lanes, sends).
+- **Detect another clip on the same lane** → **reuses** the set. New stem clips and trigger clips drop onto the *existing* lanes at the new clip's position. No second folder, no duplicate lanes, no duplicate sends.
+- **Re-detect one clip** → replaces only that clip's own contributions (its `detection_source` clips); the rest is untouched.
+- **Two different songs on one lane** → they **share one set** (the lane is always the unit). A "Drums" stem lane then holds drums clips from both songs. Accepted edge case — the drop affordance (AUDIO_LAYER §6) nudges toward one song per lane anyway.
+
+```
+Detect clip ①          Detect clip ② (same lane)     Re-detect clip ①
+builds the set         REUSES the set                replaces only ①
+ +4 stem lanes          +clips at ②'s position        ① clips swapped
+ +trigger lanes         no new lanes                  ②, stems, sends
+ +4 sends               no new sends / folder         left untouched
+
+ Source: [▓①]           [▓①]      [▓②]                [▓①']     [▓②]
+ Drums : [░①]           [░①]      [░②]                [░①']     [░②]
+ Kick  : ▌① ▌①          ▌① ▌①     ▌② ▌②               ▌①' ▌①'   ▌② ▌②
+```
+
+Implementation note: this extends §2.2's `detection_source` provenance from trigger clips to the generated **stem** clips too, so reuse/replace is the same clear-by-source logic on both. The stem/trigger **lanes** persist across detects (keyed by source lane); only the **clips** on them are added or replaced.
+
+### 8.4 Where it lives & how it feels
+
+- **In the clip inspector**, alongside the offline detection controls (§7). The §7 **Detect** button becomes **Detect and Group**.
+- **Async, non-blocking.** Stem separation is slow. Progress shows **inline on the source clip** (phase label + bar), not only in a global status line. You keep working while it runs.
+
+### 8.5 Sends — naming & legibility
+
+- One send per stem, **named song + stem** ("Midnight · Drums"), so three songs don't collide on three lanes all called "Drums".
+- The stem lane **shows it owns a send** (its Send dropdown reads it). The stem → send link must be visible, never silent — otherwise the auto-created sends look like they appeared from nowhere.
+
+### 8.6 Dependency on the audio-infra rework
+
+Send creation and analysis-only routing lean on audio/send infra being reworked concurrently (2026-06-19, separate effort). This design assumes two primitives survive that rework:
+
+1. a lane that is **silent to master but hot to its own send** (the analysis-only state — AUDIO_LAYER §5, LAYER_CONTROLS §5);
+2. a send **sourced from a lane** (`AudioSend.source = Layer(id)`, already in LAYER_CONTROLS §5).
+
+If both hold, this design drops straight on top. If the send model changes, the stem → send wiring (§8.1, §8.5) is the only part that adjusts.
+
+## 9. Phased plan
 
 Each phase compiles and is testable. Branch off current HEAD.
 
@@ -151,11 +229,14 @@ Each phase compiles and is testable. Branch off current HEAD.
 - **P3 — Cached re-plan path** (§3). `ReplanClip` from cached events, no Python. Sliders feel live. *(playback, app)*
 - **P4 — Inspector UI** (§7). *(ui, app)*
 - **P5 — Re-home nudge/calibrate per-clip** (§6); delete the dead global command surface. *(playback, app)*
+- **P6 — Detect and Group** (§8). Consume the demucs stems into analysis-only lanes; build the lane-keyed set (group + stem lanes + trigger lanes + per-stem sends); extend `detection_source` to stem clips; rename the inspector action to **Detect and Group**; inline progress on the source clip. Depends on the audio-infra rework (§8.6) landing the analysis-only output state + layer-sourced sends. *(core, playback, ui, app)*
 
-**Checkpoint:** end of P3 = detection works per-clip with instant slider feedback (no UI yet). End of P4 = the feature.
+**Checkpoint:** end of P3 = detection works per-clip with instant slider feedback (no UI yet). End of P4 = per-clip detect is the feature. End of P6 = Detect and Group — the full set.
 
-## 9. Open / watch
+## 10. Open / watch
 
 - **Concurrency** — the orchestrator runs one detection at a time. Keep that: a Detect on clip B while A is running queues or rejects (status: "detection busy"). No parallel demucs.
 - **Target-layer auto-create vs explicit** — when `target_layer == None`, fall back to the current by-name auto-create (Kick → "Kick" layer). Explicit routing overrides.
 - **Hash/stem cache** — `compute_audio_hash` reads the whole file on the content thread (pre-existing). Per-clip detection calls it more often; consider hashing off-thread or by path+mtime. Pre-existing issue, flagged not fixed.
+- **Group container UI** (§8.2) — "expanded, stays open" is only viable if the layer group renders as a visually contained, collapsible, drag-as-one object with mute-all / solo-all on the header. If the group UI can't carry those, revisit the reveal decision. This is a dependency, not an afterthought.
+- **Mute reversal** (§8.1) — the analysis-only / mute split reverses AUDIO_LAYER_DESIGN §5's "mute keeps the send" rationale (a plain mute now kills the send; analysis-only is the silent-but-listening state). Flagged in both layer docs; confirm with Peter it's the intended model before P6.

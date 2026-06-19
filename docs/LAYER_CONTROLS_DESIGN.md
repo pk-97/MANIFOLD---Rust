@@ -87,20 +87,25 @@ restatement, not a redesign:
 | **Group** | + Info |
 | **Generator** | GenType (before the M/S row), + Info, AddGenClip, MidiNote, MidiChanDevice |
 | **Video** | + Info, Folder, NewClip, MidiNote, MidiChanDevice |
-| **Audio (new)** | Chevron, Name, DragHandle, Mute, Solo, Gain, Send |
+| **Audio (new)** | Chevron, Name, DragHandle, Mute, Analysis, Solo, Gain, Send |
 
 Audio omits Led (LED output is unrelated), Blend (no compositing), Folder /
 NewClip (files arrive by drag-drop), GenType, and all MIDI (no note triggering).
 Decisions confirmed with Peter 2026-06-18: cut "+ new clip" and the third
-(Led) button; Mute/Solo are the same shared buttons as other layers.
+(Led) button; Mute/Solo are the same shared buttons as other layers. The
+**Analysis** toggle (output state, §5.3) was added 2026-06-19.
 
-## 5. Audio's two new controls
+## 5. Audio's new controls
+
+### 5.1 Gain
 
 **Gain (`LayerControl::Gain`)** — a horizontal **dB slider**, extracted as a
 reusable widget so master and clip gain can reuse it later. Drives
 `Layer.audio_gain_db` via the existing `SetLayerAudioGainCommand`. Drag → live
 value; release → one undo step. This widget is the real "shared friendly API"
 the refactor yields; everything else is restatement.
+
+### 5.2 Send
 
 **Send (`LayerControl::Send`)** — a **dropdown** picking which modulation send
 this layer feeds, reusing the *existing* dropdown mechanism (the same overlay
@@ -111,6 +116,41 @@ Send routing is **one mutation** (`SetAudioSendSourceCommand`); the layer
 dropdown and the Audio Setup panel's source button both drive it, so they cannot
 disagree. (Open: whether to keep the Audio Setup button once the layer dropdown
 ships — see AUDIO_LAYER_DESIGN.)
+
+### 5.3 Output state — the Analysis toggle
+
+**Locked with Peter 2026-06-19.** Every audio lane has **three output states**,
+driven by **two independent toggles** on the header — **Mute** (the existing
+shared button) and a new **Analysis** toggle. Stem lanes from Detect and Group
+([AUDIO_CLIP_DETECTION_DESIGN §8](AUDIO_CLIP_DETECTION_DESIGN.md)) default to
+**Analysis**.
+
+| State | Toggles | → master | → send | Meaning |
+|---|---|---|---|---|
+| **Live** | Mute off, Analysis off | ● audible | ● feeds | normal: heard and modulating |
+| **Analysis-only** | Mute off, Analysis on | ✕ silent | ● feeds | silent, still listening (drives visuals) |
+| **Muted** | Mute on | ✕ silent | ✕ none | fully off — mute wins over Analysis |
+
+- **Why a third state, not just mute.** The send tap is **post-fader**
+  ([audio_layer_playback.rs](../crates/manifold-playback/src/audio_layer_playback.rs)),
+  so zeroing the fader (mute) kills the send too. "Silent to master but hot to
+  its send" is therefore a distinct routing, not a fader move — see
+  AUDIO_LAYER_DESIGN §5 for the routing split.
+- **Visual.** Analysis-only reads as an **ear / scope glyph + a dimmed
+  waveform** — output-off is implied by the dim, the glyph says "still
+  analyzed." It must never look like a plain mute.
+- **The two toggles are independent;** Mute dominates. (Mute on → Muted
+  regardless of Analysis.)
+
+> ⚠ **Reverses a prior decision.** This makes a plain **Mute kill the send**.
+> AUDIO_LAYER_DESIGN §5 previously decided the opposite ("muting the speakers
+> shouldn't silence the modulation"). The three-state model needs mute to be the
+> "fully off" state so the two toggles yield three distinct routings; the
+> silent-but-modulating case is now **Analysis-only**, not mute. Both docs carry
+> this flag — confirm intended before building.
+
+Command surface: the Analysis toggle is a per-layer state mutation following the
+existing `Set*` command pattern (sibling to mute/solo), serialized on the layer.
 
 ## 6. Height & the Y-layout constraint
 
