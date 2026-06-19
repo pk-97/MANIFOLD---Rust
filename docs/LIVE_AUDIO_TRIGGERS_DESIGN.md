@@ -20,6 +20,13 @@ Created 2026-06-18.
   you can see triggers fire, tune by watching the level cross the line, and squelch quiet bleed.
   Floor control is a dB stepper (the freq-axis line in the first sketch was wrong — see §7 U3).
   Remaining: Peter's live feel check (flash latency, floor sweep, length range).
+- **Detector upgraded to SuperFlux 2026-06-19.** The shared transient detector (`reduce_send`/
+  `band_reduce`) was energy-over-running-mean, which fired on amplitude wobble in busy mixes
+  ("rapid/overly sensitive", worst on Whole). Replaced with **SuperFlux** — spectral flux + a
+  frequency max-filter that suppresses vibrato/pitch-slide false positives. Same `bands[].transients`
+  field, so triggers + Transient modulation + scope all inherit it. Per-route min-gap idea dropped
+  (SuperFlux's built-in ~32 ms refractory covers it). PENDING Peter's A/B on real stems. Full
+  rationale + rejected-approach history: `[[audio-onset-detector]]`.
 - **Deferred (documented, not blocking):** stopped-transport live triggering (v1 fires in
   `tick_playing`). Per-route one-shot length is now IN scope (§7 upgrade 4).
 
