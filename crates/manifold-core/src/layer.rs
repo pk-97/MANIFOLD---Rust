@@ -74,6 +74,13 @@ pub struct Layer {
     /// layers. See `docs/AUDIO_LAYER_DESIGN.md`.
     #[serde(default, skip_serializing_if = "is_zero_audio_gain")]
     pub audio_gain_db: f32,
+    /// Audio output state: when `true`, this layer is **silent to the master mix
+    /// but still feeds its send** (the third state beside Live and Muted). Mute
+    /// still wins — a muted layer is silent everywhere. Default `false` (Live).
+    /// Stem lanes from Detect-and-Group default this `true`. See
+    /// `docs/AUDIO_LAYER_DESIGN.md` §5 / `LAYER_CONTROLS_DESIGN.md` §5.3.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub analysis_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effects: Option<Vec<PresetInstance>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -939,6 +946,7 @@ impl Default for Layer {
             layer_color: Color::WHITE,
             opacity: 1.0,
             audio_gain_db: 0.0,
+            analysis_only: false,
             effects: None,
             effect_groups: None,
             gen_params: None,
@@ -982,6 +990,9 @@ fn is_default_trigger_mode(mode: &MidiTriggerMode) -> bool {
 }
 fn is_zero_audio_gain(v: &f32) -> bool {
     *v == 0.0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 #[cfg(test)]

@@ -148,10 +148,13 @@ pub const DELETE_BTN_NORMAL: Color32 = Color32::new(97, 46, 46, 255);
 pub const DELETE_BTN_HIGHLIGHTED: Color32 = Color32::new(128, 61, 61, 255);
 pub const DELETE_BTN_PRESSED: Color32 = Color32::new(64, 31, 31, 255);
 
-// ── Mute / Solo / LED ───────────────────────────────────────────────
+// ── Mute / Solo / LED / Analysis ────────────────────────────────────
 pub const MUTED_COLOR: Color32 = Color32::new(255, 0, 0, 255);
 pub const SOLO_COLOR: Color32 = Color32::new(3, 127, 252, 255);
 pub const LED_COLOR: Color32 = Color32::new(0, 200, 80, 255);
+/// Audio "analysis-only" output state: silent to master, still feeding the send.
+/// Teal "listening" accent, distinct from mute (red) / solo (blue) / LED (green).
+pub const ANALYSIS_COLOR: Color32 = Color32::new(0, 178, 170, 255);
 
 // ── Effect rack ─────────────────────────────────────────────────────
 pub const RACK_BORDER: Color32 = Color32::new(56, 56, 61, 255);

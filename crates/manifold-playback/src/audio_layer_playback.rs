@@ -223,8 +223,26 @@ impl AudioLayerPlayback {
             // silence-decaying stream even while the layer is paused or muted.
             self.ensure_layer_track(&layer.layer_id);
 
-            let audible = !layer.is_muted && (!any_solo || layer.is_solo);
-            let volume = if audible { layer.audio_gain_linear() as f64 } else { 0.0 };
+            // Output state (design §5): two gates from two flags.
+            // - `tap_hot`: the layer feeds its post-fader send tap (drives visuals).
+            //   Analysis-only is NOT muted, so it stays hot.
+            // - `master_hot`: the layer reaches the speakers. Analysis-only cuts
+            //   this while leaving the tap hot — the "silent but listening" state.
+            //   Mute wins over analysis (muted → both off).
+            let tap_hot = !layer.is_muted && (!any_solo || layer.is_solo);
+            let master_hot = tap_hot && !layer.analysis_only;
+
+            // Master gate: the sub-track's OUTPUT volume, applied after its effect
+            // chain — the `LayerTap` reads the frame *before* this volume, so the
+            // send still sees signal even when the sub-track is muted to master.
+            if let Some(lt) = self.layer_tracks.get_mut(&layer.layer_id) {
+                lt.track
+                    .set_volume(if master_hot { 1.0_f64 } else { 0.0_f64 }, declick());
+            }
+
+            // Tap gate: per-voice volume. The tap sits in the sub-track chain after
+            // the voices, so zeroing the voice silences the tap (full mute).
+            let volume = if tap_hot { layer.audio_gain_linear() as f64 } else { 0.0 };
             let Some(clip) = layer.active_audio_clip_at(beat) else {
                 continue;
             };
@@ -529,6 +547,56 @@ mod layer_tap_tests {
             playback.layer_tap_sample_rate(&layer_id),
             Some(sr),
             "tap should report the renderer sample rate via init"
+        );
+    }
+
+    /// The analysis-only guarantee: with the sub-track's OUTPUT volume at 0 (silent
+    /// to master), the `LayerTap` must STILL stream the tone — proving the tap reads
+    /// the frame *before* the output volume. If this fails, kira applies the
+    /// sub-track volume before the effect chain and analysis-only needs a different
+    /// tap point (see AUDIO_LAYER_DESIGN §5).
+    #[test]
+    #[ignore = "opens the default audio output device; run with --ignored"]
+    fn tap_stays_hot_when_subtrack_muted_to_master() {
+        let mut playback = AudioLayerPlayback::new().expect("open default output device");
+        let layer_id = LayerId::new("test-layer");
+
+        playback.ensure_layer_track(&layer_id);
+        // Silence the sub-track's output to master (the analysis-only routing).
+        playback
+            .layer_tracks
+            .get_mut(&layer_id)
+            .expect("layer track")
+            .track
+            .set_volume(0.0_f64, Tween::default());
+
+        let track = &playback.layer_tracks.get(&layer_id).expect("layer track").track;
+        let sr = 48_000u32;
+        let frames: Arc<[Frame]> = (0..sr / 20)
+            .map(|i| {
+                let s = (std::f32::consts::TAU * 440.0 * i as f32 / sr as f32).sin() * 0.2;
+                Frame::new(s, s)
+            })
+            .collect();
+        let data = StaticSoundData {
+            sample_rate: sr,
+            frames,
+            settings: StaticSoundSettings::default(),
+            slice: None,
+        }
+        .output_destination(track);
+        let _handle = playback.manager.play(data).expect("play tone on layer track");
+
+        std::thread::sleep(std::time::Duration::from_millis(150));
+
+        let mut captured = Vec::<f32>::new();
+        playback.drain_layer_tap(&layer_id, |chunk| captured.extend_from_slice(chunk));
+        let peak = captured.iter().fold(0.0f32, |a, &x| a.max(x.abs()));
+        println!("[layer_tap] sub-track muted to master, tap peak {peak:.4}");
+        assert!(
+            peak > 0.05,
+            "tap went silent (peak {peak:.4}) when sub-track muted to master — \
+             output volume is applied before the tap; analysis-only needs a different tap point"
         );
     }
 }

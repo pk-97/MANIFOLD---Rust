@@ -296,6 +296,7 @@ pub fn dispatch(
         // ── Layer operations ──────────────────────────────────────
         PanelAction::ToggleMute(_)
         | PanelAction::ToggleSolo(_)
+        | PanelAction::ToggleAnalysisOnly(_)
         | PanelAction::ToggleLed(_)
         | PanelAction::LayerClicked(..)
         | PanelAction::LayerDoubleClicked(_)

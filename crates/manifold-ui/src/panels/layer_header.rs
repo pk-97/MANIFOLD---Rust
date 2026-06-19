@@ -98,6 +98,32 @@ fn mute_style(muted: bool) -> UIStyle {
     }
 }
 
+fn analysis_style(analysis: bool) -> UIStyle {
+    let bg = if analysis {
+        color::ANALYSIS_COLOR
+    } else {
+        color::BUTTON_DIM
+    };
+    UIStyle {
+        bg_color: bg,
+        hover_bg_color: if analysis {
+            lighten(color::ANALYSIS_COLOR, 30)
+        } else {
+            color::BUTTON_HIGHLIGHTED
+        },
+        pressed_bg_color: if analysis {
+            darken(color::ANALYSIS_COLOR, 20)
+        } else {
+            color::BUTTON_PRESSED
+        },
+        text_color: color::TEXT_WHITE_C32,
+        font_size: BTN_FONT,
+        corner_radius: LH_BTN_RADIUS,
+        text_align: TextAlign::Center,
+        ..UIStyle::default()
+    }
+}
+
 fn solo_style(solo: bool) -> UIStyle {
     let bg = if solo {
         color::SOLO_COLOR
@@ -209,6 +235,9 @@ pub struct LayerInfo {
     pub is_audio: bool,
     pub is_muted: bool,
     pub is_solo: bool,
+    /// Audio "analysis-only" output state: silent to master, still feeding its
+    /// send. Drives the teal `A` toggle on the audio row. See LAYER_CONTROLS §5.3.
+    pub analysis_only: bool,
     pub is_led: bool,
     pub parent_layer_id: Option<String>,
     pub blend_mode: String,
@@ -276,9 +305,10 @@ enum LayerControl {
     AddGenClip,
     Gain,
     Send,
+    Analysis,
 }
 
-const N_CONTROLS: usize = 27;
+const N_CONTROLS: usize = 28;
 
 impl LayerControl {
     /// All controls in declaration (build / z) order.
@@ -310,6 +340,7 @@ impl LayerControl {
         LayerControl::AddGenClip,
         LayerControl::Gain,
         LayerControl::Send,
+        LayerControl::Analysis,
     ];
 
     #[inline]
@@ -546,10 +577,13 @@ fn compute_audio_row(
     height: f32,
     w: f32,
     pad: f32,
-    _btn_x: f32,
+    btn_x: f32,
     y_buttons: f32,
 ) -> LayerRowData {
     use LayerControl as C;
+    // Analysis-only toggle on the button row after Mute/Solo (M | S | A): silent to
+    // master, still feeding the send. See `docs/LAYER_CONTROLS_DESIGN.md` §5.3.
+    d.set(C::Analysis, Rect::new(btn_x, y_buttons, MS_BTN_W, BTN_H));
     let mut y = y_buttons + BTN_H + 2.0;
     let right_edge = w - pad - RIGHT_GUTTER;
 
@@ -1398,6 +1432,15 @@ impl LayerHeaderPanel {
                     solo_style(layer.is_solo),
                     "S",
                 ) as i32,
+                C::Analysis => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    analysis_style(layer.analysis_only),
+                    "A",
+                ) as i32,
                 C::Led => tree.add_button(
                     clip_parent,
                     r.x,
@@ -1666,6 +1709,7 @@ impl LayerHeaderPanel {
                 return match c {
                     C::Mute => vec![PanelAction::ToggleMute(i)],
                     C::Solo => vec![PanelAction::ToggleSolo(i)],
+                    C::Analysis => vec![PanelAction::ToggleAnalysisOnly(i)],
                     C::Led => vec![PanelAction::ToggleLed(i)],
                     C::Chevron => vec![PanelAction::ChevronClicked(i)],
                     C::Blend => vec![PanelAction::BlendModeClicked(i)],
@@ -2019,6 +2063,7 @@ mod tests {
             is_audio: false,
             is_muted: false,
             is_solo: false,
+            analysis_only: false,
             is_led: false,
             parent_layer_id: None,
             blend_mode: "Normal".into(),

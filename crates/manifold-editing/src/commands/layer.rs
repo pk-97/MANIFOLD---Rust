@@ -454,3 +454,48 @@ impl Command for SetLayerAudioGainCommand {
         "Set Audio Layer Gain"
     }
 }
+
+/// Toggle an audio layer's **analysis-only** output state: silent to the master
+/// mix but still feeding its send (the third state beside Live and Muted). Mute
+/// still wins. See `docs/AUDIO_LAYER_DESIGN.md` §5 / `LAYER_CONTROLS_DESIGN.md` §5.3.
+#[derive(Debug)]
+pub struct SetLayerAnalysisOnlyCommand {
+    layer_id: LayerId,
+    old_value: bool,
+    new_value: bool,
+}
+
+impl SetLayerAnalysisOnlyCommand {
+    pub fn new(layer_id: LayerId, new_value: bool) -> Self {
+        Self { layer_id, old_value: false, new_value }
+    }
+}
+
+impl Command for SetLayerAnalysisOnlyCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(layer) = project
+            .timeline
+            .layers
+            .iter_mut()
+            .find(|l| l.layer_id == self.layer_id)
+        {
+            self.old_value = layer.analysis_only;
+            layer.analysis_only = self.new_value;
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(layer) = project
+            .timeline
+            .layers
+            .iter_mut()
+            .find(|l| l.layer_id == self.layer_id)
+        {
+            layer.analysis_only = self.old_value;
+        }
+    }
+
+    fn description(&self) -> &str {
+        "Set Audio Layer Analysis-Only"
+    }
+}

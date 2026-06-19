@@ -854,6 +854,7 @@ pub fn sync_project_data(
                                 .iter()
                                 .any(|l| l.layer_id == *pid && l.is_solo)
                         }),
+                    analysis_only: layer.analysis_only,
                     is_led: layer.blit_to_led,
                     parent_layer_id: layer.parent_layer_id.as_ref().map(|id| id.to_string()),
                     blend_mode: format!("{:?}", layer.default_blend_mode),

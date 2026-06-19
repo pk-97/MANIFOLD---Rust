@@ -178,6 +178,9 @@ pub enum PanelAction {
     // Layer
     ToggleMute(usize),
     ToggleSolo(usize),
+    /// Toggle an audio layer's analysis-only output state (silent to master, still
+    /// feeding its send). Layer index. See LAYER_CONTROLS_DESIGN §5.3.
+    ToggleAnalysisOnly(usize),
     ToggleLed(usize),
     SetBlendMode(usize, String),
     ExpandLayer(usize),
