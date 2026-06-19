@@ -264,6 +264,11 @@ fn build_default_arguments(
     args.push("electronic".to_string());
 
     append_demucs_defaults(&mut args);
+    // Detect-and-Group needs the split stems to persist on disk. The clip-detect
+    // path runs with no pipeline settings, so it lands here — enable caching the
+    // same way build_settings_arguments does, or the stems go to a temp dir and
+    // are deleted before grouping can use them.
+    append_demucs_cache_arguments(&mut args);
 
     if let Some(bin) = ffmpeg_bin
         && !bin.trim().is_empty()
