@@ -270,6 +270,11 @@ struct SendState {
     /// Hops remaining in each band's onset refractory window — after a transient
     /// fires, suppress re-fire until this elapses. Order [Full, Low, Mid, High].
     transient_refractory: [u8; 4],
+    /// Edge-trigger arm flag per band. A fire disarms the band; it re-arms only
+    /// once the ODF falls back below `threshold·SUPERFLUX_REARM_RATIO`. This is
+    /// what stops sustained/dense material (ODF parked above threshold) from
+    /// re-firing every refractory — fire on the rising edge, not the level.
+    transient_armed: [bool; 4],
     /// Per-band moving average of the SuperFlux ODF — the onset detector's
     /// adaptive threshold baseline. A transient fires when the ODF spikes above
     /// this by `SUPERFLUX_THRESH_FACTOR`, so detection self-calibrates to the
@@ -527,6 +532,11 @@ const SUPERFLUX_THRESH_FACTOR: f32 = 2.0;
 /// Small absolute floor added to the adaptive threshold so near-silent flux
 /// jitter (average ≈ 0) can't satisfy the multiplicative test on its own.
 const SUPERFLUX_DELTA: f32 = 1e-3;
+/// Edge-trigger re-arm: after firing, a band can't fire again until its ODF
+/// falls back below `threshold · this`. Stops sustained/dense material (ODF
+/// parked above threshold) from re-firing every refractory — one fire per
+/// rising edge. Real onsets dip between hits and re-arm; a sustain does not.
+const SUPERFLUX_REARM_RATIO: f32 = 0.7;
 /// Frequency max-filter radius (bins) for vibrato suppression. The SuperFlux
 /// paper uses ±1 bin at 24 bins/octave — wide enough to cover a semitone wobble.
 const MAXFILTER_RADIUS: usize = 1;
@@ -754,20 +764,28 @@ fn reduce_send(
             // Liveliness self-scales with density (relative plain flux).
             bf.liveliness = if loud { relative_flux(r.flux, r.energy) } else { 0.0 };
 
-            // Transient (SuperFlux peak-pick): the band's max-filtered flux ODF
-            // spiking above its own moving average by SUPERFLUX_THRESH_FACTOR, on
-            // a loud band, outside the refractory. The max-filter (in band_reduce)
-            // already rejects vibrato/pitch slides, so this fires on real attacks.
+            // Transient (SuperFlux peak-pick, edge-triggered): the band's
+            // max-filtered flux ODF rising above its own moving-average threshold,
+            // on a loud band, ARMED, outside the short refractory. The max-filter
+            // (band_reduce) rejects vibrato/pitch slides; the arm flag makes this
+            // fire ONCE per rising edge, so sustained/dense content (ODF parked
+            // above threshold) fires once, not every refractory.
+            let threshold = avg * SUPERFLUX_THRESH_FACTOR + SUPERFLUX_DELTA;
             let refractory = &mut send.transient_refractory[bi];
-            let triggered = loud
-                && *refractory == 0
-                && r.superflux > avg * SUPERFLUX_THRESH_FACTOR + SUPERFLUX_DELTA;
+            let armed = &mut send.transient_armed[bi];
+            let triggered = loud && *armed && *refractory == 0 && r.superflux > threshold;
             if triggered {
                 bf.transients = 1.0;
                 *refractory = ONSET_REFRACTORY_HOPS;
+                *armed = false;
             } else {
                 bf.transients *= ONSET_DECAY;
                 *refractory = refractory.saturating_sub(1);
+                // Re-arm once the ODF falls back below the re-arm floor — a real
+                // onset's flux dips between hits; a sustain's does not.
+                if r.superflux < threshold * SUPERFLUX_REARM_RATIO {
+                    *armed = true;
+                }
             }
         }
 
@@ -802,6 +820,7 @@ fn new_send_state(num_bins: usize) -> SendState {
         col: vec![0.0; num_bins],
         prev_col: vec![0.0; num_bins],
         transient_refractory: [0; 4],
+        transient_armed: [true; 4],
         flux_avg: [0.0; 4],
         has_prev: false,
         centroid_yfb: [-1.0; 4],
@@ -1224,6 +1243,7 @@ mod tests {
             col,
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
+            transient_armed: [true; 4],
             flux_avg: [0.0; 4],
             has_prev: false,
             centroid_yfb: [-1.0; 4],
@@ -1364,6 +1384,7 @@ mod tests {
             col: tone.clone(),
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
+            transient_armed: [true; 4],
             flux_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
@@ -1419,6 +1440,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
+            transient_armed: [true; 4],
             flux_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
@@ -1469,6 +1491,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
+            transient_armed: [true; 4],
             flux_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
