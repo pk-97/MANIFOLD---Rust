@@ -517,9 +517,13 @@ fn form_tilted_column(
 //
 // SuperFlux (Böck & Widmer, DAFx 2013): a spectral-flux onset detector with a
 // frequency MAXIMUM FILTER for vibrato/pitch-slide suppression. Per hop, the
-// onset detection function (ODF) is the band sum of POSITIVE change vs the
-// previous column after max-filtering that column across ±`MAXFILTER_RADIUS`
-// bins (see `band_reduce`). Plain flux fires on any energy rise — a bending
+// onset detection function (ODF) is the band sum of POSITIVE change in the LOG
+// (dB) magnitude vs the previous column after max-filtering that column across
+// ±`MAXFILTER_RADIUS` bins (see `band_reduce`). The dB domain is essential — it
+// is the same dB the spectrogram paints, so a sustained band (a flat horizontal
+// line) reads zero change and a loud sustained note can't out-fire a quiet real
+// attack the way it did when flux was measured on linear magnitude. Plain flux
+// fires on any energy rise — a bending
 // note moves energy to an adjacent bin and reads as an attack; the max-filter
 // already "covers" that neighbour, so only genuinely NEW broadband energy (a
 // real attack) survives. The ODF is then PEAK-PICKED: a band fires only at a
@@ -660,6 +664,16 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
         // ±`MAXFILTER_RADIUS`-bin neighbourhood. A small pitch slide just shifts
         // energy to an adjacent bin, which the max-filter already covers — so it
         // contributes ~0, while a real attack (new broadband energy) still does.
+        //
+        // The difference is taken in the LOG (dB) domain — the SAME dB the
+        // spectrogram paints — not in linear magnitude. This is the load-bearing
+        // detail: a sustained band is a FLAT horizontal line on the dB scope, so it
+        // must read zero change. In linear magnitude a loud band's natural wobble
+        // scales with its absolute level (a 1 dB ripple at −10 dB is a far bigger
+        // number than the same ripple at −40 dB), so loud sustained notes false-fired
+        // while quiet real attacks barely registered. In dB the ODF is loudness-
+        // invariant: it measures RELATIVE change, so a flat line reads ~0 regardless
+        // of how loud it is, and only genuine attacks (big dB jumps) clear threshold.
         let klo = k.saturating_sub(MAXFILTER_RADIUS);
         let khi = (k + MAXFILTER_RADIUS + 1).min(n_bins);
         let mut prev_max = 0.0f32;
@@ -668,7 +682,9 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
                 prev_max = p;
             }
         }
-        let ds = m - prev_max;
+        let m_db = (20.0 * m.max(1e-9).log10()).clamp(db_min, db_max);
+        let prev_db = (20.0 * prev_max.max(1e-9).log10()).clamp(db_min, db_max);
+        let ds = m_db - prev_db;
         if ds > 0.0 {
             superflux += ds;
         }
@@ -1328,6 +1344,25 @@ mod tests {
         let tone = band_reduce(&vqt_col(&sine(1000.0, n)), &prev, 0, nb, c.db_min, c.db_max).noisiness;
         let noisy = band_reduce(&vqt_col(&noise(n)), &prev, 0, nb, c.db_min, c.db_max).noisiness;
         assert!(noisy > tone, "noise flatter than a tone: {tone} vs {noisy}");
+    }
+
+    #[test]
+    fn onset_odf_is_loudness_invariant() {
+        // The fix for "loud sustained notes fire as transients": the SuperFlux ODF is
+        // computed in the dB domain, so a given FRACTIONAL level step produces the same
+        // ODF whether the band is loud or quiet. That is exactly why a loud sustained
+        // band (small fractional wobble) can no longer out-fire a quiet real attack. The
+        // old linear-domain ODF scaled with absolute level — the loud step would read
+        // ~10x the quiet one and false-fire. Same +3.5 dB step (×1.5) at two levels:
+        let c = cfg();
+        let nb = nbins();
+        let loud = band_reduce(&vec![0.45f32; nb], &vec![0.30f32; nb], 0, nb, c.db_min, c.db_max).superflux;
+        let quiet = band_reduce(&vec![0.045f32; nb], &vec![0.030f32; nb], 0, nb, c.db_min, c.db_max).superflux;
+        assert!(loud > 0.0 && quiet > 0.0, "a +3.5 dB step is a positive ODF: loud {loud}, quiet {quiet}");
+        assert!(
+            (loud - quiet).abs() / loud < 0.02,
+            "same fractional step → same dB ODF regardless of loudness: loud {loud}, quiet {quiet}"
+        );
     }
 
     #[test]

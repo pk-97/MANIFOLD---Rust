@@ -98,6 +98,31 @@ modulation have a stable scale that doesn't shift when you move the floor. The f
 still gates them — it zeroed the sub-floor bins, so the RMS only sees above-floor
 energy — but the *scale* is fixed. Floor = gate; `db_min`/`db_max` = contrast.
 
+## The onset ODF reads the dB you see (not linear magnitude)
+
+The same "what you see is what triggers" principle has a second edge. The SuperFlux
+onset detection function originally differenced **linear** VQT magnitude
+(`ds = m − prev_max`), but the spectrogram paints **dB**. A loud sustained note is a
+flat horizontal line on the dB scope — zero change to the eye — yet in linear
+magnitude its natural wobble scales with its absolute level, so it threw large flux
+and machine-gunned onset ticks under steady harmonic content. (Textbook SuperFlux runs
+on log/dB magnitude precisely to avoid this; ours had the frequency max-filter but not
+the log domain.)
+
+The ODF now differences the **same dB the shader paints**:
+`ds = clamp(20·log10(m), db_min, db_max) − clamp(20·log10(prev_max), db_min, db_max)`.
+This makes the ODF **loudness-invariant** — a given *fractional* level step produces the
+same ODF whether the band is loud or quiet — so a flat line reads ~0 regardless of
+level, and only genuine attacks (big dB jumps) clear threshold. A flat horizontal line
+on screen = zero change = no trigger, literally. Only the fire *decision* changes; the
+`transients` impulse fed to modulation stays binary, and the threshold is relative
+(`avg · SUPERFLUX_THRESH_FACTOR`), so nothing needed re-tuning. The plain liveliness
+flux stays linear — it is already loudness-normalized by dividing through band energy.
+
+Remaining tick density on a real **master** mix is genuine musical onset density (a full
+mix has constant attacks); the levers for that are per-route trigger sensitivity and a
+stronger windowed peak-pick — not the ODF domain, which is now correct.
+
 ## Layering that stays separate (by design)
 
 The single floor is "what counts as audible," shared with the display. These sit
