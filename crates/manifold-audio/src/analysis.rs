@@ -270,19 +270,14 @@ struct SendState {
     /// Hops remaining in each band's onset refractory window — after a transient
     /// fires, suppress re-fire until this elapses. Order [Full, Low, Mid, High].
     transient_refractory: [u8; 4],
-    /// Previous hop's SuperFlux ODF per band — the peak-pick candidate. A transient
-    /// fires when the ODF turns over (this value was a local maximum: the band was
-    /// rising into it and the current hop is no higher). Order [Full, Low, Mid, High].
-    flux_prev: [f32; 4],
-    /// Whether the ODF was rising into `flux_prev` per band. Only a risen-into
-    /// candidate can be a peak, so this gates the turnover test — without it a flat
-    /// or falling ODF would false-fire. Order [Full, Low, Mid, High].
-    flux_rising: [bool; 4],
-    /// Per-band moving average of the SuperFlux ODF — the onset detector's
-    /// adaptive threshold baseline. A transient fires when the ODF peak clears
-    /// this by `SUPERFLUX_THRESH_FACTOR`, so detection self-calibrates to the
-    /// track's onset density instead of a fixed threshold. Order [Full,Low,Mid,High].
-    flux_avg: [f32; 4],
+    /// Rolling history of the last `ODF_MEDIAN_HOPS` SuperFlux ODF values per band,
+    /// newest last. Serves the peak-pick twice over: its MEDIAN is the adaptive
+    /// threshold baseline (robust to the onset spikes it's compared against, where a
+    /// moving average was inflated by them and lagged), and its tail is the past
+    /// window the candidate must be a local maximum over. The candidate is the most
+    /// recent entry (one hop back); the current hop is tested before it's pushed.
+    /// Order [Full, Low, Mid, High].
+    odf_hist: [[f32; ODF_MEDIAN_HOPS]; 4],
     /// Whether `prev_col` holds a real column yet (skips the startup flux spike).
     has_prev: bool,
     /// Per-band spectral-centroid height-from-bottom (0..1) for the scope overlay,
@@ -527,10 +522,12 @@ fn form_tilted_column(
 // note moves energy to an adjacent bin and reads as an attack; the max-filter
 // already "covers" that neighbour, so only genuinely NEW broadband energy (a
 // real attack) survives. The ODF is then PEAK-PICKED: a band fires only at a
-// local maximum of its ODF (the ODF rose, then turned over) that clears a moving
-// average of its own ODF by `SUPERFLUX_THRESH_FACTOR` (self-calibrating to the
-// track's density), gated to loud bands and a short refractory. Picking the peak
-// — not every hop the ODF sits above threshold — is what stops one attack from
+// local maximum of its ODF — the candidate (one hop back) is the max over the last
+// `ODF_PEAK_LOOKBACK` hops and the current hop has turned over — that clears a
+// rolling MEDIAN of its own ODF by `SUPERFLUX_THRESH_FACTOR` plus a `SUPERFLUX_DELTA`
+// floor (self-calibrating to the track's density, robust to its own spikes), past a
+// short refractory. Picking the peak — not every hop the ODF sits above threshold —
+// is what stops one attack from
 // firing many times: a kick is a downward pitch sweep whose energy keeps moving
 // into new bins, so its ODF parks high for the whole ~100 ms body; a crossing
 // detector fired all the way down it, the peak-picker fires once at the attack.
@@ -538,18 +535,30 @@ fn form_tilted_column(
 // busy mixes. Shared by triggers, the `Transients` modulation feature, and the
 // scope — one detector, three readers.
 
-/// How far the ODF must exceed its moving average to fire. THE sensitivity knob
-/// — lower catches softer onsets, higher is stricter.
+/// How far the ODF must exceed its adaptive baseline (the rolling MEDIAN) to fire.
+/// THE sensitivity knob — lower catches softer onsets, higher is stricter.
 const SUPERFLUX_THRESH_FACTOR: f32 = 2.0;
-/// Small absolute floor added to the adaptive threshold so near-silent flux
-/// jitter (average ≈ 0) can't satisfy the multiplicative test on its own.
-const SUPERFLUX_DELTA: f32 = 1e-3;
+/// Absolute floor on the adaptive threshold, in the ODF's units (the band sum of
+/// positive dB-rise — a real attack is tens to hundreds; faint quiet-passage
+/// flicker is a few units). The median × factor does the per-band self-scaling;
+/// this δ is just the floor that stops near-silent flux from firing on the
+/// multiplicative term when the median baseline is ≈ 0 (the old 1e-3 was dead in
+/// these units). Active only in quiet passages, where band width barely differs,
+/// so one value works across bands. Tune against a real recording.
+const SUPERFLUX_DELTA: f32 = 3.0;
 /// Frequency max-filter radius (bins) for vibrato suppression. The SuperFlux
 /// paper uses ±1 bin at 24 bins/octave — wide enough to cover a semitone wobble.
 const MAXFILTER_RADIUS: usize = 1;
-/// Per-hop smoothing of the ODF moving-average threshold (~50 ms at hop ≈ 5.3 ms):
-/// slow enough that an attack spikes above it, fast enough to track a build.
-const FLUX_AVG_COEFF: f32 = 0.1;
+/// Length of the rolling ODF history per band (~85 ms at hop ≈ 5.3 ms). Its MEDIAN
+/// is the adaptive threshold baseline — robust to the onset spikes it is measured
+/// against (an EMA was inflated by them and lagged), and causal so it adds no
+/// latency. Also the buffer the peak-pick's past-window max reads from.
+const ODF_MEDIAN_HOPS: usize = 16;
+/// How many past hops the peak candidate must be the maximum over (~21 ms). A
+/// 1-hop turnover fired on every small 2-hop bump a noisy ODF throws on a busy mix;
+/// requiring the candidate to top the last few hops rejects those. Past-only data,
+/// so it costs no latency — the fire still lands one hop after the true peak.
+const ODF_PEAK_LOOKBACK: usize = 4;
 /// Per-hop decay of the transient impulse (~100 ms settle at hop ≈ 5.3 ms).
 const ONSET_DECAY: f32 = 0.85;
 /// Below this band energy, relative flux reads 0 — avoids the flux ÷ energy ratio
@@ -723,13 +732,12 @@ fn band_reduce(col: &[f32], prev: &[f32], lo: usize, hi: usize, db_min: f32, db_
 
 /// Reduce one send's current tilted column into its five per-band features, using
 /// the previous column for the flux-based ones. Band order is [Full, Low, Mid,
-/// High]. Every feature that DESCRIBES the band — brightness / noisiness /
-/// liveliness / transients — reads 0 unless the band is `loud` (level above
-/// `ONSET_AMP_GATE`), so none of them characterises faint, near-noise-floor
-/// content; amplitude is the honest level and is always reported. Flux/onset
-/// features only run once a real predecessor exists ([`SendState::has_prev`], set
-/// only after the window has filled), so neither arming nor warm-up fires a
-/// spurious onset.
+/// High]. The column is already floored upstream (sub-floor bins zeroed), so a
+/// band below the floor reads zero energy and every feature returns 0 for it
+/// naturally — the single floor is the only gate, there is no separate presence
+/// test. Flux/onset features only run once a real predecessor exists
+/// ([`SendState::has_prev`], set only after the window has filled), so warm-up
+/// never fires a spurious onset.
 fn reduce_send(
     send: &mut SendState,
     num_bins: usize,
@@ -767,31 +775,45 @@ fn reduce_send(
             -1.0
         };
 
-        // SuperFlux ODF moving average — the adaptive threshold baseline. `avg`
-        // is the PAST average; the candidate peak is tested against it, then the
-        // current ODF is folded in (slow, so an attack spikes above it rather than
-        // raising it).
-        let avg = send.flux_avg[bi];
-
         if have_prev {
             // Liveliness self-scales with density (relative plain flux).
             bf.liveliness = relative_flux(r.flux, r.energy);
 
-            // Transient = SuperFlux PEAK-PICK. The ODF (max-filtered positive flux)
-            // is a curve over time; a real onset is a PEAK on it — the ODF rises
-            // into the attack, then falls. We hold last hop's ODF as the candidate
-            // and fire it the moment the current hop turns over (no higher than the
-            // candidate), PROVIDED the ODF was rising into it, the candidate clears
-            // the adaptive threshold and we're past the refractory. Firing only at
-            // the local maximum — not on every hop the ODF sits above threshold — is
-            // what stops one attack (a kick's whole sweeping body parks the ODF high
-            // for ~100 ms) from firing many times. A floored band reads superflux 0,
-            // so the floor — not a separate gate — keeps silent bands silent.
-            // Fires one hop (~5 ms) after the true peak; imperceptible live.
+            // Transient = SuperFlux PEAK-PICK. The ODF (max-filtered positive dB
+            // flux) is a curve over time; a real onset is a PEAK on it — the ODF
+            // rises into the attack, then falls. The candidate is last hop's ODF
+            // (`hist`'s newest entry); we fire it when:
+            //   • it is a LOCAL MAXIMUM over the past `ODF_PEAK_LOOKBACK` hops AND no
+            //     lower than the current hop (it has turned over) — a wider test than
+            //     a 1-hop turnover, which rejects the small 2-hop bumps a noisy ODF
+            //     throws on a busy mix, at no latency cost (all past data);
+            //   • it clears the adaptive threshold — the rolling MEDIAN of the ODF
+            //     history times `SUPERFLUX_THRESH_FACTOR`, plus the `SUPERFLUX_DELTA`
+            //     floor. The median (not a mean) ignores the onset spikes it's
+            //     compared against, so a run of hits doesn't inflate the baseline and
+            //     mask the softer ones;
+            //   • we're past the refractory.
+            // Firing only at the local maximum — not on every hop the ODF sits above
+            // threshold — is what stops one attack (a kick's whole sweeping body
+            // parks the ODF high for ~100 ms) from firing many times. A floored band
+            // reads superflux 0, so the floor — not a separate gate — keeps silent
+            // bands silent. Fires one hop (~5 ms) after the true peak; imperceptible.
             let odf = r.superflux;
-            let candidate = send.flux_prev[bi];
-            let threshold = avg * SUPERFLUX_THRESH_FACTOR + SUPERFLUX_DELTA;
-            let is_peak = send.flux_rising[bi] && odf <= candidate;
+            let hist = &send.odf_hist[bi];
+            let candidate = hist[ODF_MEDIAN_HOPS - 1];
+
+            let mut sorted = *hist;
+            sorted.sort_unstable_by(f32::total_cmp);
+            let median = sorted[ODF_MEDIAN_HOPS / 2];
+            let threshold = median * SUPERFLUX_THRESH_FACTOR + SUPERFLUX_DELTA;
+
+            let lookback_lo = ODF_MEDIAN_HOPS - 1 - ODF_PEAK_LOOKBACK;
+            let past_max = hist[lookback_lo..ODF_MEDIAN_HOPS - 1]
+                .iter()
+                .copied()
+                .fold(0.0f32, f32::max);
+            let is_peak = candidate >= past_max && odf <= candidate;
+
             let refractory = &mut send.transient_refractory[bi];
             let fired = is_peak && *refractory == 0 && candidate > threshold;
             if fired {
@@ -801,13 +823,12 @@ fn reduce_send(
                 bf.transients *= ONSET_DECAY;
                 *refractory = refractory.saturating_sub(1);
             }
-            // Track the rising edge + candidate for next hop's turnover test.
-            send.flux_rising[bi] = odf > candidate;
-            send.flux_prev[bi] = odf;
-        }
 
-        // Fold the current ODF into the moving-average threshold (after the test).
-        send.flux_avg[bi] = avg + (r.superflux - avg) * FLUX_AVG_COEFF;
+            // Push the current ODF into the history ring (newest last).
+            let h = &mut send.odf_hist[bi];
+            h.copy_within(1.., 0);
+            h[ODF_MEDIAN_HOPS - 1] = odf;
+        }
     }
 }
 
@@ -837,9 +858,7 @@ fn new_send_state(num_bins: usize) -> SendState {
         col: vec![0.0; num_bins],
         prev_col: vec![0.0; num_bins],
         transient_refractory: [0; 4],
-        flux_prev: [0.0; 4],
-        flux_rising: [false; 4],
-        flux_avg: [0.0; 4],
+        odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
         has_prev: false,
         centroid_yfb: [-1.0; 4],
         features: SendFeatures::default(),
@@ -1284,9 +1303,7 @@ mod tests {
             col,
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
-            flux_prev: [0.0; 4],
-            flux_rising: [false; 4],
-            flux_avg: [0.0; 4],
+            odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
             has_prev: false,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1483,9 +1500,7 @@ mod tests {
             col: tone.clone(),
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
-            flux_prev: [0.0; 4],
-            flux_rising: [false; 4],
-            flux_avg: [0.0; 4],
+            odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1540,9 +1555,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
-            flux_prev: [0.0; 4],
-            flux_rising: [false; 4],
-            flux_avg: [0.0; 4],
+            odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
@@ -1592,9 +1605,7 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
-            flux_prev: [0.0; 4],
-            flux_rising: [false; 4],
-            flux_avg: [0.0; 4],
+            odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
             features: SendFeatures::default(),
