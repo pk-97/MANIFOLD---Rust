@@ -270,13 +270,16 @@ struct SendState {
     /// Hops remaining in each band's onset refractory window — after a transient
     /// fires, suppress re-fire until this elapses. Order [Full, Low, Mid, High].
     transient_refractory: [u8; 4],
-    /// Edge-trigger arm flag per band. A fire disarms the band; it re-arms only
-    /// once the ODF falls back below `threshold·SUPERFLUX_REARM_RATIO`. This is
-    /// what stops sustained/dense material (ODF parked above threshold) from
-    /// re-firing every refractory — fire on the rising edge, not the level.
-    transient_armed: [bool; 4],
+    /// Previous hop's SuperFlux ODF per band — the peak-pick candidate. A transient
+    /// fires when the ODF turns over (this value was a local maximum: the band was
+    /// rising into it and the current hop is no higher). Order [Full, Low, Mid, High].
+    flux_prev: [f32; 4],
+    /// Whether the ODF was rising into `flux_prev` per band. Only a risen-into
+    /// candidate can be a peak, so this gates the turnover test — without it a flat
+    /// or falling ODF would false-fire. Order [Full, Low, Mid, High].
+    flux_rising: [bool; 4],
     /// Per-band moving average of the SuperFlux ODF — the onset detector's
-    /// adaptive threshold baseline. A transient fires when the ODF spikes above
+    /// adaptive threshold baseline. A transient fires when the ODF peak clears
     /// this by `SUPERFLUX_THRESH_FACTOR`, so detection self-calibrates to the
     /// track's onset density instead of a fixed threshold. Order [Full,Low,Mid,High].
     flux_avg: [f32; 4],
@@ -519,12 +522,17 @@ fn form_tilted_column(
 // bins (see `band_reduce`). Plain flux fires on any energy rise — a bending
 // note moves energy to an adjacent bin and reads as an attack; the max-filter
 // already "covers" that neighbour, so only genuinely NEW broadband energy (a
-// real attack) survives. A band fires when its ODF spikes above a moving
+// real attack) survives. The ODF is then PEAK-PICKED: a band fires only at a
+// local maximum of its ODF (the ODF rose, then turned over) that clears a moving
 // average of its own ODF by `SUPERFLUX_THRESH_FACTOR` (self-calibrating to the
-// track's density), gated to loud bands and a short refractory so one attack's
-// multi-hop rise fires once. This replaced an energy-over-mean detector that
-// tripped on amplitude wobble in busy mixes. Shared by triggers, the
-// `Transients` modulation feature, and the scope — one detector, three readers.
+// track's density), gated to loud bands and a short refractory. Picking the peak
+// — not every hop the ODF sits above threshold — is what stops one attack from
+// firing many times: a kick is a downward pitch sweep whose energy keeps moving
+// into new bins, so its ODF parks high for the whole ~100 ms body; a crossing
+// detector fired all the way down it, the peak-picker fires once at the attack.
+// This replaced an energy-over-mean detector that tripped on amplitude wobble in
+// busy mixes. Shared by triggers, the `Transients` modulation feature, and the
+// scope — one detector, three readers.
 
 /// How far the ODF must exceed its moving average to fire. THE sensitivity knob
 /// — lower catches softer onsets, higher is stricter.
@@ -532,11 +540,6 @@ const SUPERFLUX_THRESH_FACTOR: f32 = 2.0;
 /// Small absolute floor added to the adaptive threshold so near-silent flux
 /// jitter (average ≈ 0) can't satisfy the multiplicative test on its own.
 const SUPERFLUX_DELTA: f32 = 1e-3;
-/// Edge-trigger re-arm: after firing, a band can't fire again until its ODF
-/// falls back below `threshold · this`. Stops sustained/dense material (ODF
-/// parked above threshold) from re-firing every refractory — one fire per
-/// rising edge. Real onsets dip between hits and re-arm; a sustain does not.
-const SUPERFLUX_REARM_RATIO: f32 = 0.7;
 /// Frequency max-filter radius (bins) for vibrato suppression. The SuperFlux
 /// paper uses ±1 bin at 24 bins/octave — wide enough to cover a semitone wobble.
 const MAXFILTER_RADIUS: usize = 1;
@@ -756,37 +759,41 @@ fn reduce_send(
         };
 
         // SuperFlux ODF moving average — the adaptive threshold baseline. `avg`
-        // is the PAST average; the current ODF is tested against it, then folded
-        // in (slow, so an attack spikes above it rather than raising it).
+        // is the PAST average; the candidate peak is tested against it, then the
+        // current ODF is folded in (slow, so an attack spikes above it rather than
+        // raising it).
         let avg = send.flux_avg[bi];
 
         if have_prev {
             // Liveliness self-scales with density (relative plain flux).
             bf.liveliness = if loud { relative_flux(r.flux, r.energy) } else { 0.0 };
 
-            // Transient (SuperFlux peak-pick, edge-triggered): the band's
-            // max-filtered flux ODF rising above its own moving-average threshold,
-            // on a loud band, ARMED, outside the short refractory. The max-filter
-            // (band_reduce) rejects vibrato/pitch slides; the arm flag makes this
-            // fire ONCE per rising edge, so sustained/dense content (ODF parked
-            // above threshold) fires once, not every refractory.
+            // Transient = SuperFlux PEAK-PICK. The ODF (max-filtered positive flux)
+            // is a curve over time; a real onset is a PEAK on it — the ODF rises
+            // into the attack, then falls. We hold last hop's ODF as the candidate
+            // and fire it the moment the current hop turns over (no higher than the
+            // candidate), PROVIDED the ODF was rising into it, the candidate clears
+            // the adaptive threshold, the band is loud, and we're past the
+            // refractory. Firing only at the local maximum — not on every hop the
+            // ODF sits above threshold — is what stops one attack (a kick's whole
+            // sweeping body parks the ODF high for ~100 ms) from firing many times.
+            // Fires one hop (~5 ms) after the true peak; imperceptible live.
+            let odf = r.superflux;
+            let candidate = send.flux_prev[bi];
             let threshold = avg * SUPERFLUX_THRESH_FACTOR + SUPERFLUX_DELTA;
+            let is_peak = send.flux_rising[bi] && odf <= candidate;
             let refractory = &mut send.transient_refractory[bi];
-            let armed = &mut send.transient_armed[bi];
-            let triggered = loud && *armed && *refractory == 0 && r.superflux > threshold;
-            if triggered {
+            let fired = loud && is_peak && *refractory == 0 && candidate > threshold;
+            if fired {
                 bf.transients = 1.0;
                 *refractory = ONSET_REFRACTORY_HOPS;
-                *armed = false;
             } else {
                 bf.transients *= ONSET_DECAY;
                 *refractory = refractory.saturating_sub(1);
-                // Re-arm once the ODF falls back below the re-arm floor — a real
-                // onset's flux dips between hits; a sustain's does not.
-                if r.superflux < threshold * SUPERFLUX_REARM_RATIO {
-                    *armed = true;
-                }
             }
+            // Track the rising edge + candidate for next hop's turnover test.
+            send.flux_rising[bi] = odf > candidate;
+            send.flux_prev[bi] = odf;
         }
 
         // Fold the current ODF into the moving-average threshold (after the test).
@@ -820,7 +827,8 @@ fn new_send_state(num_bins: usize) -> SendState {
         col: vec![0.0; num_bins],
         prev_col: vec![0.0; num_bins],
         transient_refractory: [0; 4],
-        transient_armed: [true; 4],
+        flux_prev: [0.0; 4],
+        flux_rising: [false; 4],
         flux_avg: [0.0; 4],
         has_prev: false,
         centroid_yfb: [-1.0; 4],
@@ -1243,7 +1251,8 @@ mod tests {
             col,
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
-            transient_armed: [true; 4],
+            flux_prev: [0.0; 4],
+            flux_rising: [false; 4],
             flux_avg: [0.0; 4],
             has_prev: false,
             centroid_yfb: [-1.0; 4],
@@ -1384,7 +1393,8 @@ mod tests {
             col: tone.clone(),
             prev_col: vec![0.0f32; nb],
             transient_refractory: [0; 4],
-            transient_armed: [true; 4],
+            flux_prev: [0.0; 4],
+            flux_rising: [false; 4],
             flux_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
@@ -1440,7 +1450,8 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
-            transient_armed: [true; 4],
+            flux_prev: [0.0; 4],
+            flux_rising: [false; 4],
             flux_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
@@ -1491,7 +1502,8 @@ mod tests {
             col: bass.clone(),
             prev_col: bass.clone(),
             transient_refractory: [0; 4],
-            transient_armed: [true; 4],
+            flux_prev: [0.0; 4],
+            flux_rising: [false; 4],
             flux_avg: [0.0; 4],
             has_prev: true,
             centroid_yfb: [-1.0; 4],
@@ -1522,6 +1534,50 @@ mod tests {
             }
         }
         assert!(fires >= cycles - 1, "rapid kicks must keep firing, not pin out: {fires}/{cycles}");
+    }
+
+    #[test]
+    fn downward_pitch_sweep_fires_once_not_per_hop() {
+        // The reported over-fire, faithfully: a kick is a downward PITCH SWEEP. Its
+        // energy moves into new (lower) bins every hop — faster than the max-filter's
+        // ±1-bin reach — so the SuperFlux ODF stays high for the whole sweep. A
+        // crossing detector fired all the way down it (the tick-cluster-per-kick on a
+        // clean kick); the peak-picker must fire ONCE at the attack, not per hop.
+        let c = cfg();
+        let nb = nbins();
+        let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
+        let full = bands().0;
+        let n = nfft();
+
+        let mut s = new_send_state(nb);
+        s.has_prev = true;
+
+        // Settle the baseline on silence, then a 28-hop glide 350 Hz -> 45 Hz (a
+        // long 808, ~150 ms) at full level. Count Full-band fires across the sweep.
+        let silence = vec![0.0f32; nb];
+        for _ in 0..8 {
+            s.col.copy_from_slice(&silence);
+            reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
+            s.prev_col.copy_from_slice(&s.col);
+        }
+
+        let sweep_hops = 28;
+        let mut fires = 0;
+        for h in 0..sweep_hops {
+            let t = h as f32 / (sweep_hops - 1) as f32;
+            let freq = 350.0 * (45.0f32 / 350.0).powf(t); // geometric glide
+            s.col.copy_from_slice(&vqt_col(&sine(freq, n)));
+            reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
+            if s.features.bands[full].transients > 0.99 {
+                fires += 1;
+            }
+            s.prev_col.copy_from_slice(&s.col);
+        }
+        assert!(fires >= 1, "the sweep's attack must fire: {fires}");
+        assert!(
+            fires <= 2,
+            "a single downward sweep must fire once, not per hop: {fires} over {sweep_hops} hops",
+        );
     }
 
     #[test]
