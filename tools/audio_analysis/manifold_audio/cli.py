@@ -439,6 +439,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     vocal_input: Optional[Path] = None
     vocal_source = "none"
     demucs_used = None
+    # Absolute paths of stems persisted to the demucs cache (drums/bass/other/
+    # vocals). Populated only when caching is on; surfaced in the output JSON so
+    # Detect-and-Group can build one audio lane per stem.
+    persisted_stems: Dict[str, str] = {}
 
     try:
         demucs_cmd: Optional[Sequence[str]] = None
@@ -628,6 +632,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
             if cached_stems_root is not None:
                 print(f"Demucs stems cache: {cached_stems_root}")
+                # Report every stem that actually landed on disk, so the host can
+                # map one audio lane per stem from the analysis JSON.
+                for _stem_name, _stem_path in (
+                    ("drums", cached_drum_path),
+                    ("bass", cached_bass_path),
+                    ("other", cached_other_path),
+                    ("vocals", cached_vocal_path),
+                ):
+                    if _stem_path is not None and Path(_stem_path).exists():
+                        persisted_stems[_stem_name] = str(Path(_stem_path).resolve())
 
             emit_progress(0.62, "decoding analysis audio")
             audio, sr = load_audio_mono(analysis_input, target_sr=args.sample_rate, ffmpeg_bin=args.ffmpeg_bin)
@@ -725,6 +739,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         beat_grid=beat_grid,
         events=events,
         energy_envelope=energy_envelope,
+        stem_paths=persisted_stems,
     )
 
     emit_progress(0.90, "writing analysis JSON")

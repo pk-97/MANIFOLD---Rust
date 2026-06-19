@@ -532,6 +532,7 @@ def build_output(
     beat_grid: Optional[BeatGrid],
     events: Sequence[Event],
     energy_envelope: Optional[List[float]] = None,
+    stem_paths: Optional[Dict[str, str]] = None,
 ) -> Dict[str, object]:
     payload: Dict[str, object] = {
         "trackId": track_id,
@@ -542,6 +543,15 @@ def build_output(
             for e in events
         ],
     }
+
+    # Absolute paths of the demucs stems persisted to the cache, keyed by stem
+    # name (drums/bass/other/vocals). Present only when stem caching is enabled
+    # (--demucs-cache-dir); the consumer (Detect-and-Group) reads these to build
+    # one audio lane per stem instead of guessing the on-disk cache layout.
+    if stem_paths:
+        kept = {k: v for k, v in stem_paths.items() if v}
+        if kept:
+            payload["stemPaths"] = kept
 
     if beat_grid is not None and beat_grid.beat_times:
         payload["beatGrid"] = {

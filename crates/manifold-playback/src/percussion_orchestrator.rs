@@ -1729,9 +1729,12 @@ impl PercussionImportOrchestrator {
         let placed = self.plan_and_apply_for_clip(clip_id, &analysis, project, editing_service);
         // Detect-and-Group (§8): split the demucs stems into analysis-only lanes,
         // wrap source + stems + trigger lanes in a named group, and route each
-        // stem to its own send. Lane-keyed reuse across clips on the same lane.
-        // Gracefully no-ops if no stems landed on disk.
-        self.build_detect_group(clip_id, project, editing_service);
+        // stem to its own send. The pipeline reports the persisted stem paths in
+        // its JSON (`stemPaths`); we trust those rather than guessing the cache
+        // layout. Lane-keyed reuse across clips on the same lane. No-ops if the
+        // pipeline reported no stems.
+        let stems = parse_pipeline_stem_paths(&raw_json);
+        self.build_detect_group(clip_id, &stems, project, editing_service);
         placed
     }
 
@@ -1740,10 +1743,12 @@ impl PercussionImportOrchestrator {
     /// lane + stems + trigger lanes in a named group. Keyed to the **source audio
     /// lane** (`Layer.detect_group_source`): re-detecting any clip on that lane
     /// reuses the same stem lanes + sends instead of making a second set. Recorded
-    /// as one undo step. No-ops if no stems are on disk.
+    /// as one undo step. `stems` is the pipeline-reported persisted stem paths in
+    /// drums/bass/other/vocals order; no-ops if it carries none.
     fn build_detect_group(
         &mut self,
         clip_id: &ClipId,
+        stems: &[Option<String>],
         project: &mut Project,
         editing_service: &mut manifold_editing::service::EditingService,
     ) {
@@ -1774,15 +1779,18 @@ impl PercussionImportOrchestrator {
             return;
         };
 
-        // 2. Stems on disk (drums/bass/other/vocals order — see resolver).
-        let present: Vec<(usize, String)> = resolve_stem_paths_from_cache(&audio_path)
-            .into_iter()
+        // 2. Stems the pipeline persisted, in drums/bass/other/vocals order. Only
+        //    paths that still exist on disk count — a stale JSON shouldn't make a
+        //    lane that points at nothing.
+        let present: Vec<(usize, String)> = stems
+            .iter()
             .enumerate()
-            .filter_map(|(i, s)| s.map(|p| (i, p)))
+            .filter_map(|(i, s)| s.clone().map(|p| (i, p)))
+            .filter(|(_, p)| std::path::Path::new(p).exists())
             .collect();
         if present.is_empty() {
             log::warn!(
-                "[DetectAndGroup] no stems on disk for '{}' — placed triggers but skipped grouping",
+                "[DetectAndGroup] pipeline reported no stems for '{}' — placed triggers but skipped grouping",
                 audio_path
             );
             return;
@@ -3406,6 +3414,34 @@ fn compute_audio_hash(path: &str) -> String {
     format!("{:016x}", hash)
 }
 
+/// Parse the pipeline's reported persisted stem paths (`stemPaths` in the
+/// analysis JSON) into drums/bass/other/vocals order. The pipeline owns the
+/// demucs cache layout and reports absolute paths, so the host never has to
+/// reconstruct the on-disk location. Returns four slots (a `None` slot means the
+/// pipeline did not persist that stem); all `None` when stem caching was off.
+fn parse_pipeline_stem_paths(raw_json: &str) -> Vec<Option<String>> {
+    #[derive(serde::Deserialize)]
+    struct StemPathsDto {
+        #[serde(rename = "stemPaths", default)]
+        stem_paths: Option<std::collections::HashMap<String, String>>,
+    }
+    const STEM_NAMES: [&str; STEM_COUNT] = ["drums", "bass", "other", "vocals"];
+
+    let map = serde_json::from_str::<StemPathsDto>(raw_json)
+        .ok()
+        .and_then(|d| d.stem_paths)
+        .unwrap_or_default();
+
+    STEM_NAMES
+        .iter()
+        .map(|name| {
+            map.get(*name)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .collect()
+}
+
 /// Port of Unity StemAudioController.ResolveStemPathsFromCache().
 /// Resolves the 4 stem paths (Drums, Bass, Other, Vocals) from the Demucs cache
 /// for the given audio path. Returns an array of STEM_COUNT Option<String>.
@@ -3576,5 +3612,165 @@ mod tests {
         orchestrator().replan_clip(clip_id, &mut project, &mut es);
         let after: usize = project.timeline.layers.iter().map(|l| l.clips.len()).sum();
         assert_eq!(before, after, "no cached analysis -> nothing placed");
+    }
+
+    #[test]
+    fn detect_group_builds_lanes_sends_group_and_reuses_by_lane() {
+        // Stems the pipeline "persisted" — real files so the on-disk guard passes.
+        let dir = std::env::temp_dir().join(format!("manifold_dg_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let stem_for = |name: &str| {
+            let p = dir.join(format!("{name}.wav"));
+            std::fs::write(&p, b"").unwrap();
+            Some(p.to_string_lossy().into_owned())
+        };
+        let stems = vec![
+            stem_for("drums"),
+            stem_for("bass"),
+            stem_for("other"),
+            stem_for("vocals"),
+        ];
+
+        let mut project = Project::default();
+        let aidx = project
+            .timeline
+            .add_layer("Source", LayerType::Audio, PresetTypeId::NONE);
+        let source_lane = project.timeline.layers[aidx].layer_id.clone();
+        let clip_a = TimelineClip::new_audio(
+            "MyTrack.wav".into(),
+            Beats(0.0),
+            Beats(64.0),
+            Seconds(0.0),
+            Seconds(120.0),
+        );
+        let clip_a_id = clip_a.id.clone();
+        project.timeline.layers[aidx].restore_clip(clip_a);
+        project.timeline.mark_clip_lookup_dirty();
+
+        let mut es = EditingService::new();
+        orchestrator().build_detect_group(&clip_a_id, &stems, &mut project, &mut es);
+
+        // 4 analysis-only stem lanes named "<track> · <Stem>", each with the
+        // source clip's geometry and its own send.
+        for stem in ["Drums", "Bass", "Other", "Vocals"] {
+            let want = format!("MyTrack \u{00b7} {stem}");
+            let lane = project
+                .timeline
+                .layers
+                .iter()
+                .find(|l| l.name == want)
+                .unwrap_or_else(|| panic!("missing stem lane {want}"));
+            assert!(lane.analysis_only, "{want} is analysis-only");
+            assert_eq!(lane.clips.len(), 1, "{want} has one stem clip");
+            assert_eq!(
+                lane.clips[0].detection_source.as_ref(),
+                Some(&clip_a_id),
+                "{want} clip tagged with its source"
+            );
+            assert!(
+                project.audio_setup.send_for_layer(&lane.layer_id).is_some(),
+                "{want} routed to a send"
+            );
+        }
+
+        // A group named after the track, keyed to the source lane, with the
+        // source lane reparented under it.
+        let group = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.layer_type == LayerType::Group)
+            .expect("a group was created");
+        assert_eq!(group.name, "MyTrack");
+        assert_eq!(group.detect_group_source.as_ref(), Some(&source_lane));
+        let source_parent = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.layer_id == source_lane)
+            .and_then(|l| l.parent_layer_id.clone());
+        assert_eq!(
+            source_parent.as_ref(),
+            Some(&group.layer_id),
+            "source lane is inside the group"
+        );
+
+        let sends_after_first = project.audio_setup.sends.len();
+        let layers_after_first = project.timeline.layers.len();
+        assert_eq!(sends_after_first, 4, "one send per stem");
+
+        // Re-detect a second clip on the SAME lane reuses the set: no new lanes,
+        // no new group, no new sends — just another stem clip per lane.
+        let clip_b = TimelineClip::new_audio(
+            "MyTrack.wav".into(),
+            Beats(64.0),
+            Beats(64.0),
+            Seconds(0.0),
+            Seconds(120.0),
+        );
+        let clip_b_id = clip_b.id.clone();
+        // Grouping reordered the layer vector, so `aidx` is stale — address the
+        // source lane by id.
+        let src_idx = project
+            .timeline
+            .layers
+            .iter()
+            .position(|l| l.layer_id == source_lane)
+            .expect("source lane still present");
+        project.timeline.layers[src_idx].restore_clip(clip_b);
+        project.timeline.mark_clip_lookup_dirty();
+        orchestrator().build_detect_group(&clip_b_id, &stems, &mut project, &mut es);
+
+        assert_eq!(
+            project.timeline.layers.len(),
+            layers_after_first,
+            "reuse adds no new lanes or group"
+        );
+        assert_eq!(
+            project.audio_setup.sends.len(),
+            sends_after_first,
+            "reuse adds no new sends"
+        );
+        let drums_lane = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.name == "MyTrack \u{00b7} Drums")
+            .unwrap();
+        assert_eq!(
+            drums_lane.clips.len(),
+            2,
+            "second detect adds a stem clip to the existing lane"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_group_noops_without_stems() {
+        // No persisted stems -> triggers were placed elsewhere, but no lanes,
+        // group, or sends get built.
+        let mut project = Project::default();
+        let aidx = project
+            .timeline
+            .add_layer("Source", LayerType::Audio, PresetTypeId::NONE);
+        let clip = TimelineClip::new_audio(
+            "MyTrack.wav".into(),
+            Beats(0.0),
+            Beats(8.0),
+            Seconds(0.0),
+            Seconds(8.0),
+        );
+        let clip_id = clip.id.clone();
+        project.timeline.layers[aidx].restore_clip(clip);
+        project.timeline.mark_clip_lookup_dirty();
+
+        let layers_before = project.timeline.layers.len();
+        let mut es = EditingService::new();
+        let empty: Vec<Option<String>> = vec![None, None, None, None];
+        orchestrator().build_detect_group(&clip_id, &empty, &mut project, &mut es);
+
+        assert_eq!(project.timeline.layers.len(), layers_before, "no stems -> no lanes/group");
+        assert!(project.audio_setup.sends.is_empty(), "no stems -> no sends");
     }
 }
