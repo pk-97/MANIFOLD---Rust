@@ -109,11 +109,6 @@ pub struct ContentState {
     /// The tapped (scope-selected) send's latest features, for the spectrogram's
     /// per-band level meters. `None` when no send feeds the scope.
     pub spectrogram_features: Option<manifold_core::SendFeatures>,
-    /// The tapped send's resolved audio floor (dB) — the single floor that zeros
-    /// its column. The scope renderer feeds this to the display as the colour-ramp
-    /// bottom (`db_min`), so the painted black point is the same number the detector
-    /// is silenced below. `None` when no send feeds the scope (use the config default).
-    pub spectrogram_floor_db: Option<f32>,
     pub osc_sender_enabled: bool,
     pub osc_receiving_timecode: bool,
     pub osc_timecode_display: Arc<str>,
@@ -416,7 +411,6 @@ impl Default for ContentState {
             spectrogram_low_hz: manifold_core::audio_setup::DEFAULT_LOW_HZ,
             spectrogram_mid_hz: manifold_core::audio_setup::DEFAULT_MID_HZ,
             spectrogram_features: None,
-            spectrogram_floor_db: None,
             osc_sender_enabled: false,
             osc_receiving_timecode: false,
             osc_timecode_display: Arc::from(""),

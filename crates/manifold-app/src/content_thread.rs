@@ -1116,10 +1116,6 @@ impl ContentThread {
             .audio_mod_runtime
             .tapped_send_index()
             .and_then(|i| audio_snapshot.sends.get(i).copied());
-        // The tapped send's resolved audio floor — the single floor; the scope
-        // renderer uses it as the display's colour-ramp bottom so black on screen is
-        // exactly the level the detector is silenced below.
-        let spectrogram_floor_db = self.audio_mod_runtime.spectrogram_floor_db();
 
         let state = ContentState {
             current_beat: self.engine.current_beat(),
@@ -1198,7 +1194,6 @@ impl ContentThread {
             spectrogram_low_hz,
             spectrogram_mid_hz,
             spectrogram_features,
-            spectrogram_floor_db,
             osc_sender_enabled: self.transport_controller.osc_sender_enabled,
             osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
             osc_timecode_display: self.cached_osc_timecode.clone(),

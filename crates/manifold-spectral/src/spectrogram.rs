@@ -78,10 +78,10 @@ pub struct Spectrogram {
     scalar_bufs: Vec<GpuBuffer>,
     buf_frame: usize,
     pipeline: GpuRenderPipeline,
-    /// Colour-ramp floor (dB) = the single audio floor. Black at/below this. Live:
-    /// the Audio Setup scope updates it per frame via [`set_db_min`](Self::set_db_min)
-    /// from the tapped send's resolved floor, so the display's black point is the
-    /// same number that zeros the detector's column.
+    /// Colour-ramp bottom (dB) — the FIXED display/amplitude contrast, not the audio
+    /// floor. The audio floor zeros the column upstream (a zeroed bin paints black),
+    /// so the floor is a gate; this is just how the surviving magnitudes map to
+    /// colour. Keeping it fixed means moving the floor never recolours the picture.
     db_min: f32,
     db_max: f32,
     /// Pink-tilt slope (dB/oct) — the one [`SpectrogramConfig::tilt_slope`], passed
@@ -93,9 +93,8 @@ impl Spectrogram {
     /// Create a renderer for `num_bins`-tall columns across `num_cols` pixel
     /// columns (pass the scope's physical-pixel width). `color_format` must
     /// match the texture passed to [`render`](Self::render). `db_min`/`db_max`
-    /// set the magnitude→colour dynamic range (e.g. −59 dB → 0 dB); `db_min` is the
-    /// audio floor and may be updated live via [`set_db_min`](Self::set_db_min).
-    /// `tilt_slope` is [`SpectrogramConfig::tilt_slope`] (dB/oct).
+    /// set the magnitude→colour dynamic range (e.g. −59 dB → 0 dB) — fixed contrast,
+    /// not the audio floor. `tilt_slope` is [`SpectrogramConfig::tilt_slope`] (dB/oct).
     pub fn new(
         device: &GpuDevice,
         num_bins: usize,
@@ -146,13 +145,6 @@ impl Spectrogram {
             db_max,
             tilt_slope,
         }
-    }
-
-    /// Update the colour-ramp floor (dB) live — the single audio floor. The Audio
-    /// Setup scope calls this each frame with the tapped send's resolved floor so
-    /// the display's black point matches the value that zeros the detector's column.
-    pub fn set_db_min(&mut self, db_min: f32) {
-        self.db_min = db_min;
     }
 
     pub fn num_bins(&self) -> usize {

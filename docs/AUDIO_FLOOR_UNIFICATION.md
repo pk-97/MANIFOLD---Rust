@@ -49,23 +49,34 @@ Audio flows in three layers. Only Layer 2 had the problem.
 The scope shows **one send at a time** (the tapped send). Source-of-truth is
 therefore per-send; the other sends run the identical pipeline unseen.
 
-## The unified design
+## The design
 
-**One resolved floor per send** drives everything:
+**The floor is a GATE, not a contrast knob.** This is the load-bearing correction.
+An early version merged the floor into the colour-ramp bottom (`db_min`) so "black =
+floor." That recoloured the whole spectrogram when you moved the floor — lowering it
+stretched the ramp and blew every colour out hot; it behaved as a brightness control,
+not a noise gate. The floor and the colour contrast are **different concepts** and
+must stay separate.
 
-- It is `AudioSend.floor_db` (the "Floor" stepper). When unset (`FLOOR_DB_OFF`) it
-  **resolves to the config default `db_min`** (`-59 dB`) — so an untouched project
-  behaves exactly as the display did before (no migration, byte-identical save).
-- The floor **is** the colour-ramp bottom (`db_min`). Black on screen = at/below the
-  floor. There is no second display floor.
-- The floor is applied **in the tilted domain**: a bin is zeroed when its *tilted*
-  magnitude's dB is below the floor — the same tilted dB the shader paints and the
-  detector reduces. The line you set is the line you see.
-- Below-floor bins are **zeroed** in the one column. The detector therefore needs no
-  floor knowledge: a zeroed band has zero energy → zero flux → zero amplitude → no
-  fire, for free. `ONSET_AMP_GATE` and the `if loud { … }` feature gates are deleted.
-- The pink tilt is **one constant** (`SpectrogramConfig.tilt_slope`), read by both
-  the detector's `tilt_weights` and the display widget. No duplication.
+So:
+
+- **One floor per send** — `AudioSend.floor_db` (the "Floor" stepper). Unset
+  (`FLOOR_DB_OFF`) resolves to `db_min`; clamped to `db_min` so it can't go below the
+  ramp bottom (below that, content would paint black yet still be live to the detector
+  — the mismatch we're killing). No migration, byte-identical save.
+- The floor's **only** job is to **zero** the column below it, in the **tilted
+  domain** (a bin is zeroed when its *tilted* dB < floor, the same tilted dB the
+  shader paints) — in BOTH `vqt_raw` (scope) and `state.col` (features). A zeroed bin
+  paints black (mag 0) and contributes nothing to detection. So black on screen =
+  zeroed = silent to every algorithm — *without* the floor ever touching the colour
+  ramp. Raising the floor blacks out the bottom cleanly; the colours above don't move.
+- **`db_min`/`db_max` are FIXED contrast** (−59 / 0), used by the display shader and
+  by `band_reduce`'s amplitude. They are not a floor and never move with the stepper.
+- The detector needs no floor knowledge: a zeroed band has zero energy → zero flux →
+  zero amplitude → no fire, for free. `ONSET_AMP_GATE` and the `if loud { … }` gates
+  are deleted; the centroid scope trace hides on `r.energy == 0`.
+- The pink tilt is **one constant** (`SpectrogramConfig.tilt_slope`), read by both the
+  detector's `tilt_weights` and the display widget. No duplication.
 
 ### Why keep `vqt_raw` as the scope column (not the tilted column)
 
@@ -76,17 +87,16 @@ rule** (a bin is zeroed in *both* `vqt_raw` and the tilted `state.col` when its
 tilted dB < floor). Because the worker's `tilt_w` multiplier and the shader's
 additive-dB tilt are the same slope, `20·log10(state.col)` equals the shader's
 painted tilted dB exactly — so zeroing on `state.col` matches what the shader would
-draw. The display ramp bottom is fed the same floor, so black = floor. This keeps
-the widget's existing tilt + hover behavior and minimizes blast radius.
+draw. This keeps the widget's existing tilt + hover behavior and minimizes blast
+radius. The display ramp bottom stays FIXED — the floor only blacks out via zeroing.
 
-### Amplitude normalization tracks the floor
+### Amplitude normalization uses the fixed contrast
 
 `band_reduce` maps a band's RMS through `(20·log10(rms) − db_min) / (db_max −
-db_min)`. With `db_min = floor`, amplitude reads `0` at the floor and `1` at
-`db_max`. Defaulting the floor to `-59` keeps today's amplitude scale identical, so
-the level meters and amplitude-driven modulation are unchanged by default. Raising
-the floor raises the bottom of the meter and the modulation range together — the
-intended unified behavior (one floor, end to end).
+db_min)` with the **fixed** `db_min` (−59), so the level meters and amplitude-driven
+modulation have a stable scale that doesn't shift when you move the floor. The floor
+still gates them — it zeroed the sub-floor bins, so the RMS only sees above-floor
+energy — but the *scale* is fixed. Floor = gate; `db_min`/`db_max` = contrast.
 
 ## Layering that stays separate (by design)
 
@@ -98,39 +108,45 @@ The single floor is "what counts as audible," shared with the display. These sit
 - **Gain** (per send) — input trim, applied *before* the spectrogram (the scope
   already shows post-gain).
 
-## Phases
+## Phases (as shipped)
 
 - **Phase 1 — One source for the tilt.** Add `tilt_slope` to `SpectrogramConfig`;
   delete `SCOPE_TILT_DB_PER_OCT` (analysis) and `PINK_SLOPE_DB_PER_OCT` (spectral);
   both read the config. Pure refactor, zero behavior change.
-- **Phase 2 — Floor in the tilted domain + floor == db_min.** Resolve the floor
-  (`floor_db` if set, else config `db_min`). Zero bins where the tilted dB < floor.
-  Feed the same floor to the display as the live ramp bottom (`db_min`) and to
-  `band_reduce` as its `db_min`.
+- **Phase 2 — Floor in the tilted domain.** Resolve the floor (`floor_db` if set,
+  else config `db_min`; clamped ≥ `db_min`). Zero bins where the tilted dB < floor in
+  both `vqt_raw` and `state.col`. `band_reduce` uses the **fixed** `db_min`.
 - **Phase 3 — Delete the hidden gate.** Remove `ONSET_AMP_GATE` and every `if loud`
   gate; features compute on the floored column directly.
-- **Phase 4 — Verify.** Floor-gate test rewritten for the tilted domain; a new
-  below-floor-is-silent regression; clippy + the focused audio sweep; a runtime
-  pass on a kick-only and a full-mix signal.
+- **Phase 4 — Decouple correction.** A first cut fed the floor to the display as a
+  *live* `db_min`, which made the floor recolour the whole spectrogram. Reverted:
+  `db_min` is fixed contrast; the floor only zeros. The live-`db_min` plumbing
+  (widget `set_db_min`, `resolved_floor_db`, `ContentState.spectrogram_floor_db` and
+  its wiring) was removed.
+- **Tick-smear fix (same pass).** The scope onset ticks marked the decaying impulse
+  (~5 columns/fire), smearing the true rate into a carpet. Now the scope marks only
+  the fire instant (`transients > 0.999` → 1 column); modulation still reads the
+  decaying impulse.
 
 ## Files
 
 - `crates/manifold-spectral/src/lib.rs` — `SpectrogramConfig.tilt_slope`.
-- `crates/manifold-spectral/src/spectrogram.rs` — widget reads `tilt_slope`, live
-  `db_min` setter, hover uses the field; delete the const.
-- `crates/manifold-audio/src/analysis.rs` — tilted-domain floor, floor resolution,
-  delete `ONSET_AMP_GATE` + `if loud`, `tilt_weights` reads config; tests.
-- `crates/manifold-app/src/content_state.rs` + `ui_bridge/state_sync.rs` — carry the
-  resolved per-send floor to the scope renderer.
-- `crates/manifold-app/src/app_render.rs` — feed the live floor as the widget's
-  `db_min`; pass `tilt_slope` at construction.
-- `crates/manifold-core/src/audio_setup.rs` — floor resolution helper / default.
+- `crates/manifold-spectral/src/spectrogram.rs` — widget reads `tilt_slope`; `db_min`
+  is FIXED contrast; delete the tilt const.
+- `crates/manifold-audio/src/analysis.rs` — tilted-domain floor (zeros only, clamped
+  ≥ `db_min`), `band_reduce` uses fixed `db_min`, delete `ONSET_AMP_GATE` + `if loud`,
+  `tilt_weights` reads config, fire-instant scope ticks; tests.
+- `crates/manifold-app/src/app_render.rs` — pass `tilt_slope` at construction;
+  `db_min` stays the config default (no live floor coupling).
 
 ## Invariants (do not regress)
 
-- The detector takes **no** floor or `db_min` argument that differs from the display.
-  One value, resolved once, fed to display + detector + amplitude.
-- Below the floor is **zero** in the one column. No algorithm re-implements a floor.
+- The floor is a **gate** (zeros the column); it never moves the colour ramp. Moving
+  the floor must not recolour the spectrogram.
+- `db_min`/`db_max` are **fixed** contrast, shared by the display and `band_reduce`.
+- Below the floor is **zero** in the one column. No algorithm re-implements a floor;
+  the floor is clamped ≥ `db_min` so black-on-screen always equals zeroed.
 - The tilt slope and db range have **one** definition each.
-- `floor_db` keeps its `FLOOR_DB_OFF` sentinel + skip-serialize, so old projects are
-  byte-identical; "off" resolves to the config `db_min` at runtime.
+- `floor_db` keeps its `FLOOR_DB_OFF` sentinel + skip-serialize (byte-identical old
+  projects); "off" resolves to `db_min`.
+- Scope onset ticks mark the fire instant only; the decaying impulse stays for modulation.

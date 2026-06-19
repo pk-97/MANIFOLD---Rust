@@ -867,10 +867,10 @@ pub struct StreamingSendAnalyzer {
     scope_scalars: Vec<f32>,
     /// The single audio floor (dB). Bins whose TILTED magnitude is below this are
     /// zeroed in BOTH the scope and feature column before display and reduction, so
-    /// what you see (black) is exactly what every algorithm reads (silence). It is
-    /// also fed to `band_reduce` as `db_min` and to the display as the colour-ramp
-    /// bottom — one number end to end. `FLOOR_DB_OFF` resolves to the config
-    /// `db_min` (the default black point); there is no separate "off" with no floor.
+    /// what you see (black) is exactly what every algorithm reads (silence). It is a
+    /// GATE only — it never moves the colour ramp (`db_min`/`db_max` are fixed
+    /// contrast), and is clamped to `db_min` so it can't black out content the
+    /// detector still sees. `FLOOR_DB_OFF` resolves to `db_min` (no cut).
     floor_db: f32,
 }
 
@@ -914,17 +914,6 @@ impl StreamingSendAnalyzer {
         self.floor_db = floor_db;
     }
 
-    /// The resolved floor (dB) this analyzer is using — the stepper value if set,
-    /// else the config colour-ramp bottom. The Audio Setup scope feeds this to the
-    /// display as the colour-ramp bottom so the painted black point matches the
-    /// floor that zeros the column.
-    pub fn resolved_floor_db(&self) -> f32 {
-        if self.floor_db > manifold_core::audio_setup::FLOOR_DB_OFF {
-            self.floor_db
-        } else {
-            self.spec_config.db_min
-        }
-    }
 
     /// The sample rate this analyzer was built for — the caller rebuilds it if
     /// the mixer's output rate ever changes under it.
@@ -1036,15 +1025,18 @@ impl StreamingSendAnalyzer {
             1
         };
         let emit = owed.min(avail);
+        // `db_min`/`db_max` are the FIXED colour-ramp + amplitude contrast — NOT the
+        // floor. The floor is a separate gate that only ZEROS the column below it; it
+        // never rescales the colourmap (coupling them made the floor act as a
+        // contrast knob — lowering it blew every colour out hot). The floor is
+        // clamped to `db_min`: below the ramp bottom it would black out content the
+        // detector still sees (mismatch) and reveal nothing. Off → db_min (no cut).
+        let db_min = spec_config.db_min;
         let db_max = spec_config.db_max;
-        // The single audio floor (dB): the per-send stepper if set, else the config
-        // colour-ramp bottom. This one value is the display's black point, the
-        // tilted-domain zero threshold below, AND `band_reduce`'s `db_min` — so the
-        // floor the user sees IS the floor every feature is measured against.
         let floor_db = if floor_db > manifold_core::audio_setup::FLOOR_DB_OFF {
-            floor_db
+            floor_db.max(db_min)
         } else {
-            spec_config.db_min
+            db_min
         };
         let lin_floor = 10f32.powf(floor_db / 20.0);
 
@@ -1064,15 +1056,17 @@ impl StreamingSendAnalyzer {
             // so the black the user sees on the spectrogram is exactly the silence
             // the bands + transients detect. Decided in the tilted domain (`*c`) —
             // the same tilted dB the shader paints — so the floor line matches the
-            // picture. The display ramp bottom is fed this same floor, so black =
-            // floored = silent, one number end to end.
+            // picture. A zeroed bin paints black (mag 0 → below the fixed ramp), so
+            // black = zeroed = silent. The floor only zeros; it does NOT move the
+            // colour ramp (`db_min`), so raising it cuts from the bottom without
+            // recolouring what's above.
             for (raw, c) in vqt_raw.iter_mut().zip(state.col.iter_mut()) {
                 if *c < lin_floor {
                     *raw = 0.0;
                     *c = 0.0;
                 }
             }
-            reduce_send(state, nb, *low_bin, *mid_bin, floor_db, db_max);
+            reduce_send(state, nb, *low_bin, *mid_bin, db_min, db_max);
             state.prev_col.copy_from_slice(&state.col);
             // Flux/transients arm only once the window has filled, so the warm-up
             // ramp never reads as a transient (matches the live worker).
@@ -1084,14 +1078,20 @@ impl StreamingSendAnalyzer {
             if *scope {
                 scope_cols.extend_from_slice(vqt_raw);
                 let b = &state.features.bands;
+                // Scope onset ticks: mark only the hop a transient actually FIRED
+                // (impulse == 1.0), NOT its ~5-hop decay tail. The decaying impulse
+                // feeds modulation (smooth); on the scope it smeared each hit across
+                // ~5 columns into a solid carpet that read as far busier than the
+                // real fire rate. One column per fire = the true rate, visible.
+                let fired = |t: f32| if t > 0.999 { 1.0 } else { 0.0 };
                 scope_scalars.extend_from_slice(&[
                     state.centroid_yfb[0],
                     state.centroid_yfb[1],
                     state.centroid_yfb[2],
                     state.centroid_yfb[3],
-                    b[1].transients,
-                    b[2].transients,
-                    b[3].transients,
+                    fired(b[1].transients),
+                    fired(b[2].transients),
+                    fired(b[3].transients),
                 ]);
             }
         }
