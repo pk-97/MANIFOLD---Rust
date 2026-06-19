@@ -3773,4 +3773,51 @@ mod tests {
         assert_eq!(project.timeline.layers.len(), layers_before, "no stems -> no lanes/group");
         assert!(project.audio_setup.sends.is_empty(), "no stems -> no sends");
     }
+
+    #[test]
+    fn detect_group_is_one_undo_step() {
+        let dir = std::env::temp_dir().join(format!("manifold_dg_undo_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let stems: Vec<Option<String>> = ["drums", "bass", "other", "vocals"]
+            .iter()
+            .map(|n| {
+                let p = dir.join(format!("{n}.wav"));
+                std::fs::write(&p, b"").unwrap();
+                Some(p.to_string_lossy().into_owned())
+            })
+            .collect();
+
+        let mut project = Project::default();
+        let aidx = project
+            .timeline
+            .add_layer("Source", LayerType::Audio, PresetTypeId::NONE);
+        let clip = TimelineClip::new_audio(
+            "MyTrack.wav".into(),
+            Beats(0.0),
+            Beats(32.0),
+            Seconds(0.0),
+            Seconds(60.0),
+        );
+        let clip_id = clip.id.clone();
+        project.timeline.layers[aidx].restore_clip(clip);
+        project.timeline.mark_clip_lookup_dirty();
+
+        let layers_before = project.timeline.layers.len();
+        let mut es = EditingService::new();
+        orchestrator().build_detect_group(&clip_id, &stems, &mut project, &mut es);
+        assert!(project.timeline.layers.len() > layers_before, "set was built");
+        assert_eq!(project.audio_setup.sends.len(), 4, "four sends created");
+
+        // One undo reverses the whole set — lanes, group, and sends — in a single
+        // step, so a misfire on stage is one cmd-Z, not seven.
+        assert!(es.undo(&mut project), "detect-and-group is undoable");
+        assert_eq!(
+            project.timeline.layers.len(),
+            layers_before,
+            "undo removes the stem lanes + group"
+        );
+        assert!(project.audio_setup.sends.is_empty(), "undo removes the sends");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
