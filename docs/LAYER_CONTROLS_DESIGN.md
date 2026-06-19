@@ -109,10 +109,14 @@ the refactor yields; everything else is restatement.
 
 **Send (`LayerControl::Send`)** — a **dropdown** picking which modulation send
 this layer feeds, reusing the *existing* dropdown mechanism (the same overlay
-blend-mode and the device picker open via a `*Clicked(index)` action). Writes
-`AudioSend.source = Layer(id)` through the existing `SetAudioSendSourceCommand`.
+blend-mode and the device picker open via a `*Clicked(index)` action). **Shipped
+2026-06-19.** Routes the layer to a send via `SetLayerAudioSendCommand`, which
+adds the layer to that send's `source.layers` set ([audio_setup.rs](../crates/manifold-core/src/audio_setup.rs))
+and detaches it from any other — a layer feeds **at most one** send; the send
+keeps its capture channels + other layers (a default send becomes a capture+layer
+mix). The send then reads the layer's realtime post-fader tap.
 
-Send routing is **one mutation** (`SetAudioSendSourceCommand`); the layer
+Send routing is **one mutation** (`SetLayerAudioSendCommand`); the layer
 dropdown and the Audio Setup panel's source button both drive it, so they cannot
 disagree. (Open: whether to keep the Audio Setup button once the layer dropdown
 ships — see AUDIO_LAYER_DESIGN.)
@@ -131,23 +135,24 @@ shared button) and a new **Analysis** toggle. Stem lanes from Detect and Group
 | **Analysis-only** | Mute off, Analysis on | ✕ silent | ● feeds | silent, still listening (drives visuals) |
 | **Muted** | Mute on | ✕ silent | ✕ none | fully off — mute wins over Analysis |
 
-- **Why a third state, not just mute.** The send tap is **post-fader**
-  ([audio_layer_playback.rs](../crates/manifold-playback/src/audio_layer_playback.rs)),
-  so zeroing the fader (mute) kills the send too. "Silent to master but hot to
-  its send" is therefore a distinct routing, not a fader move — see
-  AUDIO_LAYER_DESIGN §5 for the routing split.
+- **Why a third state, not just mute.** The shipped send tap is **post-fader**,
+  and the shipped mute path zeroes the sub-track volume
+  ([audio_layer_playback.rs:226](../crates/manifold-playback/src/audio_layer_playback.rs#L226)),
+  so **mute already kills the send.** "Silent to master but hot to its send" is
+  therefore a distinct routing, not a fader move — see AUDIO_LAYER_DESIGN §5 for
+  the routing split. **Status:** Mute/Solo/Gain/Send shipped; the **Analysis
+  toggle + its routing split are the part still to build.**
 - **Visual.** Analysis-only reads as an **ear / scope glyph + a dimmed
   waveform** — output-off is implied by the dim, the glyph says "still
   analyzed." It must never look like a plain mute.
 - **The two toggles are independent;** Mute dominates. (Mute on → Muted
   regardless of Analysis.)
 
-> ⚠ **Reverses a prior decision.** This makes a plain **Mute kill the send**.
-> AUDIO_LAYER_DESIGN §5 previously decided the opposite ("muting the speakers
-> shouldn't silence the modulation"). The three-state model needs mute to be the
-> "fully off" state so the two toggles yield three distinct routings; the
-> silent-but-modulating case is now **Analysis-only**, not mute. Both docs carry
-> this flag — confirm intended before building.
+> ✓ **Settled by the shipped code** (was flagged as a reversal). An early draft
+> of AUDIO_LAYER_DESIGN §5 wanted mute to keep feeding the send. The shipped
+> infra does the opposite — the post-fader tap zeroes on mute, so **mute is
+> already the "fully off" state.** The 3-state model matches what shipped; no
+> decision is owed. Analysis-only is purely the additive middle state.
 
 Command surface: the Analysis toggle is a per-layer state mutation following the
 existing `Set*` command pattern (sibling to mute/solo), serialized on the layer.

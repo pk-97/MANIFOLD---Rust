@@ -153,7 +153,7 @@ The demucs pass already produces 4 stems (drums / bass / vocals / other); the pe
 
 - **4 stem audio lanes**, one per stem file, each in the new **analysis-only** output state — silent to master, still feeding its send. See [LAYER_CONTROLS_DESIGN §5](LAYER_CONTROLS_DESIGN.md).
 - **Trigger lanes** with the detected hits placed (Kick / Snare / …), as today.
-- **One send per stem** in Audio Setup, source = that stem lane (`AudioSend.source = Layer(id)` via `SetAudioSendSourceCommand` — the exact mechanism LAYER_CONTROLS §5 already ships). **Reused by source**, so re-detect never piles up duplicates.
+- **One send per stem** in Audio Setup. Create with `AddAudioSendCommand`, then route the stem lane to it with `SetLayerAudioSendCommand` (the layer→send route the layer-header Send dropdown already drives — a layer feeds **at most one** send). The send reads the stem lane's **realtime post-fader tap** (the shipped model — §8.6). **Reused by source**, so re-detect never piles up duplicates.
 - **A group** wrapping source + stems + triggers, named after the song.
 
 ```
@@ -210,14 +210,13 @@ Implementation note: this extends §2.2's `detection_source` provenance from tri
 - One send per stem, **named song + stem** ("Midnight · Drums"), so three songs don't collide on three lanes all called "Drums".
 - The stem lane **shows it owns a send** (its Send dropdown reads it). The stem → send link must be visible, never silent — otherwise the auto-created sends look like they appeared from nowhere.
 
-### 8.6 Dependency on the audio-infra rework
+### 8.6 Status against the shipped audio infra (verified 2026-06-19)
 
-Send creation and analysis-only routing lean on audio/send infra being reworked concurrently (2026-06-19, separate effort). This design assumes two primitives survive that rework:
+The audio/send rework landed. Two primitives this feature needs — one shipped, one didn't.
 
-1. a lane that is **silent to master but hot to its own send** (the analysis-only state — AUDIO_LAYER §5, LAYER_CONTROLS §5);
-2. a send **sourced from a lane** (`AudioSend.source = Layer(id)`, already in LAYER_CONTROLS §5).
+**Shipped — layer-fed sends (the realtime tap model, AUDIO_LAYER §3R).** A send's source sums capture channels **and** audio layers: `AudioSend.source = AudioSendSource { layers: Vec<LayerId> }` ([audio_setup.rs:29](../crates/manifold-core/src/audio_setup.rs#L29)), with `is_layer_fed()` / `feeds_from_layer()` / `layers()` helpers. Each audio layer owns a kira sub-track with a **post-fader `LayerTap`**; a layer-fed send drains it live ([audio_layer_playback.rs](../crates/manifold-playback/src/audio_layer_playback.rs)). Wiring is one undoable command — `SetLayerAudioSendCommand` — already driven by the layer-header **Send** dropdown (`LayerControl::Send`, shipped). This is **not** the old "precomputed curve" of §0/§3 — it's a realtime tap, so a stem lane must *play into its tap* for the send to see signal.
 
-If both hold, this design drops straight on top. If the send model changes, the stem → send wiring (§8.1, §8.5) is the only part that adjusts.
+**Not shipped — the analysis-only output state.** No field, no toggle, no routing. And because the tap is **post-fader**, the shipped mute path zeroes the sub-track volume, so **mute already kills the send** ([audio_layer_playback.rs:226](../crates/manifold-playback/src/audio_layer_playback.rs#L226)). "Silent to master but hot to its tap" therefore needs the routing split in AUDIO_LAYER §5 / LAYER_CONTROLS §5.3 — it can't be a fader move. **This is the one primitive P6 still has to build before stem lanes can be silent-but-listening.** Everything else in §8 sits on shipped infra.
 
 ## 9. Phased plan
 
@@ -239,4 +238,4 @@ Each phase compiles and is testable. Branch off current HEAD.
 - **Target-layer auto-create vs explicit** — when `target_layer == None`, fall back to the current by-name auto-create (Kick → "Kick" layer). Explicit routing overrides.
 - **Hash/stem cache** — `compute_audio_hash` reads the whole file on the content thread (pre-existing). Per-clip detection calls it more often; consider hashing off-thread or by path+mtime. Pre-existing issue, flagged not fixed.
 - **Group container UI** (§8.2) — "expanded, stays open" is only viable if the layer group renders as a visually contained, collapsible, drag-as-one object with mute-all / solo-all on the header. If the group UI can't carry those, revisit the reveal decision. This is a dependency, not an afterthought.
-- **Mute reversal** (§8.1) — the analysis-only / mute split reverses AUDIO_LAYER_DESIGN §5's "mute keeps the send" rationale (a plain mute now kills the send; analysis-only is the silent-but-listening state). Flagged in both layer docs; confirm with Peter it's the intended model before P6.
+- **Mute vs send — settled by the shipped code (was an open reversal).** The shipped post-fader tap zeroes on mute, so **mute already kills the send** ([audio_layer_playback.rs:226](../crates/manifold-playback/src/audio_layer_playback.rs#L226)). The 3-state model's "mute = fully off" matches what shipped — no decision owed. Analysis-only is purely the additive missing state (§8.6).

@@ -41,7 +41,7 @@ The layer/clip model already discriminates kinds by `LayerType` and by which cli
 
 - **`LayerType::Audio = 3`.** Today the enum is `Video=0, Generator=1, Group=2`; Audio is the next variant. Extend the int and string match arms in both `Serialize`/`Deserialize` paths at [crates/manifold-core/src/types.rs](../crates/manifold-core/src/types.rs) (~L116). Default stays `Video`.
 - **Audio clip.** `TimelineClip` is a flat struct discriminated by populated field — `video_clip_id` for video, `generator_type` for generators. Add an audio variant the same way: an `audio_file_path` (plus the offline-analysis artifact handle, §3) populated when the owning layer is `Audio`. `in_point` is already `Seconds` (the established convention for player time); duration stays `Beats`.
-- **Send source becomes a sum.** An `AudioSend` today means "channels on a capture device." Extend its source to an enum — capture-channels **or** audio-layer(`LayerId`). This is the one model change that touches the existing audio crate: the analysis/modulation wiring must know that a send fed by a layer reads a precomputed curve, not a live ring.
+- **Send source becomes a sum.** *(Shipped 2026-06-19.)* An `AudioSend` carries `source: AudioSendSource { layers: Vec<LayerId> }` — a **struct**, not an enum, so a send can sum capture channels (`AudioSend.channels`) **and** audio layers at once (a capture+layer mix), not one-or-the-other. A layer-fed send reads the layer's **realtime post-fader tap** (the §3R model), not a precomputed curve.
 - **Per-layer audio fields.** Which send the layer drives (`Option<AudioSendId>`), a gain, and the **analysis-only** flag (the third output state, §5). Solo/mute already exist on `Layer` (`is_solo` / `is_muted`) and now carry audible meaning — see §5. The analysis-only flag is a new serialized bool on `Layer` (default false = Live); stem lanes from Detect and Group default it true.
 
 Audio layers ignore the visual half of `Layer` (opacity, effects, blend, compositing). That's fine and already true of the existing types — Video and Generator don't use every field either.
@@ -123,10 +123,12 @@ that copies played frames into a lock-free ring; the existing CQT/band DSP
 and writes `SendFeatures` into the snapshot at the layer's send index — the same
 latest-wins slot the live worker fills. Downstream is byte-identical to a live
 send. The send routing itself (which send a layer feeds) is the layer-header
-Send dropdown, one mutation through `SetAudioSendSourceCommand` (§6).
+Send dropdown, one mutation through `SetLayerAudioSendCommand` (§6).
 
 **Pre/post-fader:** post (mute/gain kill modulation), matching a normal mixer
-send. Revisit only if a muted layer should still drive visuals.
+send. Revisit only if a muted layer should still drive visuals — which is exactly
+the **analysis-only** output state (§5): silent to master, tap still hot. That
+state is the planned "revisit," still to build.
 
 **Build order — SHIPPED 2026-06-18 (steps 1–6 done; step 7 partial):**
 
@@ -241,12 +243,12 @@ Audio layers reuse `is_solo` / `is_muted` but they mean audible things now, para
 | **Analysis-only** | silent | feeds |
 | **Muted** | silent | none |
 
-- **The send tap is post-fader** ([audio_layer_playback.rs](../crates/manifold-playback/src/audio_layer_playback.rs)): a layer-sourced send drains the sub-track *after* the layer fader. So zeroing the fader silences the send too.
-- **Analysis-only** therefore needs a **routing split**, not a fader move: cut the sub-track → master contribution while leaving the post-fader send ring hot. In kira terms, separate "audible to the main bus" from "present on the sub-track that the send ring taps." This split is the one non-trivial bit of the output-state work.
-- **Muted** is the fully-off state: silent to master *and* the send sees nothing.
-- **Solo** — an audio-solo bus independent of the visual solo bus. Soloing an audio layer must not blank the video, and soloing a video layer must not silence audio. Two buses, same field name, disjoint membership by `layer_type`.
+- **The send tap is post-fader, and shipped** ([audio_layer_playback.rs:226](../crates/manifold-playback/src/audio_layer_playback.rs#L226)): a layer-fed send drains the sub-track *after* the layer fader, and the mute path sets that fader to `0.0`. So **mute already silences the send** — this is the live behavior, not a plan.
+- **Analysis-only** (not yet built) therefore needs a **routing split**, not a fader move: cut the sub-track → master contribution while leaving the post-fader tap hot. In kira terms, separate "audible to the main bus" from "present on the sub-track that the tap reads." This split is the one non-trivial bit of the output-state work, and the only part of the three-state model still to build.
+- **Muted** is the fully-off state: silent to master *and* the tap sees nothing. **This is what mute already does** (post-fader, volume `0.0`).
+- **Solo** — an audio-solo bus independent of the visual solo bus. Soloing an audio layer must not blank the video, and soloing a video layer must not silence audio. Two buses, same field name, disjoint membership by `layer_type`. (Shipped: `audible = !is_muted && (!any_solo || is_solo)`.)
 
-> ⚠ **Reverses the earlier decision in this section.** An earlier draft decided "mute does *not* stop feeding its send — muting the speakers shouldn't silence the modulation." The three-state model overturns that: **Mute now kills the send** (fully off), and the silent-but-still-modulating case is the new **Analysis-only** state. This resolves the old "a separate gesture, if wanted, disables the send" parenthetical — that gesture is now the plain Mute. Confirm intended before building; also flagged in LAYER_CONTROLS §5.3 and AUDIO_CLIP_DETECTION §8.
+> ✓ **Settled by the shipped code** (was flagged as a reversal). An earlier draft of this section wanted "mute does *not* stop feeding its send." The shipped infra does the opposite: the post-fader tap zeroes on mute, so **mute is the fully-off state** and the silent-but-still-modulating case is the new **Analysis-only** state. No decision owed — the code already chose. Also noted in LAYER_CONTROLS §5.3 and AUDIO_CLIP_DETECTION §8.6.
 
 ---
 
@@ -365,7 +367,7 @@ Phases ordered so each ships something usable. Anchors are real file:line from t
 ## 13. Build status (2026-06-18, branch `audio-layer`)
 
 **Landed — the functional pipeline is end-to-end and tested.**
-- **P0 data model** ✓ — `LayerType::Audio`, `TimelineClip.audio_file_path` + `new_audio`/`is_audio`, `AudioSendSource` enum (Capture/Layer) with `bind_send_to_layer`/`send_for_layer`/`unbind_layer`, `Layer.audio_gain_db` + `is_audio`/`active_audio_clip_at`/`audio_gain_linear`, commands `SetAudioSendSourceCommand` + `SetLayerAudioGainCommand`. Roundtrip + undo tests.
+- **P0 data model** ✓ — `LayerType::Audio`, `TimelineClip.audio_file_path` + `new_audio`/`is_audio`, `AudioSendSource` struct (`{ layers: Vec<LayerId> }`, capture+layer mix) with `bind_send_to_layer`/`send_for_layer`/`unbind_layer` on `AudioSetup`, `Layer.audio_gain_db` + `is_audio`/`active_audio_clip_at`/`audio_gain_linear`, commands `SetLayerAudioSendCommand` (layer→send routing) + `SetLayerAudioGainCommand`. Roundtrip + undo tests.
 - **P1 compositor** ✓ — audio layers skipped from compositing and excluded from the visual solo bus (§5).
 - **P1 drag-drop** ✓ — dropping a `wav/mp3/flac/aif/aiff/ogg/m4a/aac` file appends an audio layer + clip at the drop beat (one undo step). `is_supported_audio_extension` + `audio_duration_beats`. The OS file-drop dispatcher in `app.rs` routes audio through the same `process_dropped_files` path as MIDI (was previously a "not yet implemented" stub that never reached the import — fixed 2026-06-18).
 - **P2 offline modulation** ✗ **REMOVED 2026-06-18 — replaced by §3R realtime tap.** Was `OfflineSendAnalyzer` + `FeatureCurve` (manifold-audio) + `AudioLayerCurves` cache (manifold-app). It decoded+analyzed the whole file synchronously on the content tick, freezing the app when a send was bound. Deleted in full (analyzer, curve, cache, and the `audio_mod_runtime` curve sampling) and replaced by the realtime kira tap below.
@@ -373,7 +375,7 @@ Phases ordered so each ships something usable. Anchors are real file:line from t
 - **P3 playback** ✓ — `AudioLayerPlayback` (manifold-playback): one kira voice per active audio clip, transport-following (seek-on-drift/replay-on-stop), mute/solo (audio bus)/gain via per-voice volume tween, 5 ms declick. Driven from the content tick; decode reuses `audio_sync::preload_audio`.
 
 **Landed — UI (P1/P2 complete):**
-- **Send-source selector UI** ✓ — a per-send source button in the Audio Setup panel cycles capture → each audio layer → capture, committing `SetAudioSendSourceCommand`. `state_sync` resolves the label/`layer_fed`; the inspector handler cycles and dispatches.
+- **Send-source selector UI** ✓ — a per-send source button in the Audio Setup panel cycles capture → each audio layer → capture, committing `SetLayerAudioSendCommand`. `state_sync` resolves the label/`layer_fed`; the inspector handler cycles and dispatches.
 - **In-clip waveform painting** ✓ — `AudioWaveformCache` background-decodes each audio clip into a `WaveformRenderer` (the same zoom-aware MIP + spectral-color engine the audio-import lanes use), cached by `ClipId` (lazy, self-evicting), attached to `ViewportClip.waveform` each sync. The bitmap renderer selects the MIP level for the current zoom and paints via `waveform_painter::draw_waveform` across the clip's **full** pixel rect (clamped to visible columns) — so the waveform stays locked to the audio under zoom/scroll. (Earlier flat-peak `draw_clip_waveform` path replaced 2026-06-18: it mapped buckets across the clamped on-screen rect, which broke zoom tracking.)
 
 **Landed — P4 warp (varispeed half):**
