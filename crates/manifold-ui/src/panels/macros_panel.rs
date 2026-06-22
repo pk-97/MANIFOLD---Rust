@@ -1,7 +1,13 @@
-//! Macros panel: 8 horizontal sliders spanning the full inspector width.
+//! Macros panel: 8 horizontal sliders spanning the full inspector width, on the
+//! Chrome API.
 //!
-//! Positioned above the dual-column Master/Layer layout inside the inspector.
-//! Each slider controls a macro slot (0–1) that fans out to mapped parameters.
+//! The host owns the declarative chrome — the section card (border + inner bg),
+//! the header + collapse chevron, the 8 `slider_row` slots and the conditional
+//! Ableton-config-drawer slots. The sliders are materialised by the host (typed
+//! building block); the per-slot Ableton trim handles (built into each slider
+//! track) and the config drawers (built into their keyed slots) stay imperative
+//! sub-widgets — the next blocks to typify. Public interface unchanged, so the
+//! inspector composite is untouched.
 
 use super::PanelAction;
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
@@ -10,6 +16,7 @@ use super::param_slider_shared::{
     TRIM_BAR_W, TrimHandleIds, build_ableton_config, build_trim_handles_explicit,
     check_ableton_config_click,
 };
+use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
@@ -25,6 +32,7 @@ const PAD_TOP: f32 = 4.0;
 const PAD_BOTTOM: f32 = 4.0;
 const PAD_H: f32 = 4.0;
 const CHEVRON_W: f32 = 18.0;
+const CHEVRON_H: f32 = 16.0;
 const GAP: f32 = 4.0;
 const LABEL_WIDTH: f32 = crate::slider::DEFAULT_LABEL_WIDTH;
 const FONT_SIZE: u16 = color::FONT_BODY;
@@ -33,6 +41,10 @@ const SECTION_BORDER: Color32 = Color32::new(50, 50, 54, 255);
 const SECTION_BG: Color32 = Color32::new(22, 22, 23, 255);
 const SECTION_RADIUS: f32 = 4.0;
 
+const KEY_CHEVRON: u64 = 1;
+const KEY_SLIDER_BASE: u64 = 10;
+const KEY_CONFIG_BASE: u64 = 20;
+
 fn fmt_macro(v: f32) -> String {
     format!("{:.2}", v)
 }
@@ -40,6 +52,7 @@ fn fmt_macro(v: f32) -> String {
 // ── MacrosPanel ────────────────────────────────────────────────────
 
 pub struct MacrosPanel {
+    host: ChromeHost,
     sliders: [SliderDragState; MACRO_COUNT],
     first_node: Option<NodeId>,
     node_count: usize,
@@ -55,10 +68,7 @@ pub struct MacrosPanel {
     /// Which macro slot's Ableton trim bar is being dragged (-1 = none).
     dragging_ableton_trim: i32,
     dragging_ableton_trim_is_min: bool,
-    // Collapse state
     is_collapsed: bool,
-    header_label_id: Option<NodeId>,
-    chevron_btn_id: Option<NodeId>,
 }
 
 impl Default for MacrosPanel {
@@ -78,6 +88,7 @@ impl MacrosPanel {
 
     pub fn new() -> Self {
         Self {
+            host: ChromeHost::new(),
             sliders: std::array::from_fn(|_| SliderDragState::with_range(0.0, 1.0, false)),
             first_node: None,
             node_count: 0,
@@ -90,13 +101,10 @@ impl MacrosPanel {
             dragging_ableton_trim_is_min: false,
             // Default closed; project load overrides via set_collapsed().
             is_collapsed: true,
-            header_label_id: None,
-            chevron_btn_id: None,
         }
     }
 
     /// Total height of the macros panel (for inspector column Y offset).
-    /// Dynamic: includes Ableton config drawers for mapped slots.
     pub fn height(&self) -> f32 {
         if self.is_collapsed {
             return PAD_TOP + HEADER_ROW_H + PAD_BOTTOM;
@@ -127,8 +135,6 @@ impl MacrosPanel {
     }
 
     pub fn first_node(&self) -> usize {
-        // Boundary: inspector.rs builds usize index-ranges (`first != usize::MAX`)
-        // shared across all panels' first_node()/node_count(); it stays usize.
         self.first_node.map_or(usize::MAX, |id| id.index())
     }
 
@@ -185,68 +191,12 @@ impl MacrosPanel {
         }
     }
 
-    /// Build the macros panel into the tree at the given rect.
-    pub fn build(&mut self, tree: &mut UITree, rect: Rect) {
-        let first_idx = tree.count();
-        self.first_node = Some(NodeId(first_idx as u32));
+    // ── View description (chrome + slider/config slots) ──────────────
 
-        let colors = SliderColors::default_slider();
-
-        // Section card (border + inner bg)
-        tree.add_panel(
-            None,
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            UIStyle {
-                bg_color: SECTION_BORDER,
-                corner_radius: SECTION_RADIUS,
-                ..UIStyle::default()
-            },
-        );
-        tree.add_panel(
-            None,
-            rect.x + 1.0,
-            rect.y + 1.0,
-            rect.width - 2.0,
-            rect.height - 2.0,
-            UIStyle {
-                bg_color: SECTION_BG,
-                corner_radius: SECTION_RADIUS - 1.0,
-                ..UIStyle::default()
-            },
-        );
-
-        let inner_x = rect.x + PAD_H;
-        let inner_w = rect.width - PAD_H * 2.0;
-        let mut cy = rect.y + PAD_TOP;
-
-        // Header row: "Macros" label + chevron
-        let label_w = inner_w - CHEVRON_W - GAP;
-        self.header_label_id = Some(tree.add_label(
-            None,
-            inner_x,
-            cy,
-            label_w,
-            HEADER_ROW_H,
-            "Macros",
-            UIStyle {
-                text_color: color::TEXT_PRIMARY_C32,
-                font_size: color::FONT_HEADING,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        ));
-
-        let chev_x = inner_x + inner_w - CHEVRON_W;
-        self.chevron_btn_id = Some(tree.add_button(
-            None,
-            chev_x,
-            cy + (HEADER_ROW_H - 16.0) * 0.5,
-            CHEVRON_W,
-            16.0,
-            UIStyle {
+    fn chrome_view(&self) -> View {
+        let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
+            .fixed(CHEVRON_W, CHEVRON_H)
+            .style(UIStyle {
                 bg_color: Color32::TRANSPARENT,
                 hover_bg_color: color::HOVER_OVERLAY,
                 pressed_bg_color: color::PRESS_OVERLAY,
@@ -254,78 +204,129 @@ impl MacrosPanel {
                 font_size: FONT_SIZE,
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
-            },
-            if self.is_collapsed {
-                "\u{25B6}"
-            } else {
-                "\u{25BC}"
-            },
-        ));
+            })
+            .inert()
+            .key(KEY_CHEVRON);
 
-        cy += HEADER_ROW_H;
+        let header = View::row(GAP)
+            .fill_w()
+            .h(Sizing::Fixed(HEADER_ROW_H))
+            .cross_align(Align::Center)
+            .child(
+                View::label("Macros")
+                    .fill_w()
+                    .fill_h()
+                    .font(color::FONT_HEADING)
+                    .text_color(color::TEXT_PRIMARY_C32)
+                    .align_text(TextAlign::Left),
+            )
+            .child(chevron);
 
-        if self.is_collapsed {
-            // Clear slider IDs so sync_values skips them
-            for s in &mut self.sliders {
-                s.clear();
+        // Inner card surface (bg), inset 1px inside the border, content padded so
+        // the first row lands at the same place the old constant layout used.
+        let mut inner = View::column(0.0)
+            .fill()
+            .bg(SECTION_BG)
+            .radius(SECTION_RADIUS - 1.0)
+            .pad(Pad {
+                l: PAD_H - 1.0,
+                t: PAD_TOP - 1.0,
+                r: PAD_H - 1.0,
+                b: PAD_BOTTOM - 1.0,
+            })
+            .child(header);
+
+        if !self.is_collapsed {
+            for i in 0..MACRO_COUNT {
+                let v = self.sliders[i].cached_value();
+                let v = if v.is_nan() { 0.0 } else { v };
+                let spec = SliderSpec {
+                    label: Some(format!("M{}", i + 1)),
+                    value: v,
+                    value_text: fmt_macro(v),
+                    colors: SliderColors::default_slider(),
+                    font_size: FONT_SIZE,
+                    label_width: LABEL_WIDTH,
+                };
+                inner = inner.child(
+                    View::slider_row(spec)
+                        .fill_w()
+                        .h(Sizing::Fixed(ROW_HEIGHT))
+                        .key(KEY_SLIDER_BASE + i as u64),
+                );
+                if self.ableton_displays[i].is_some() {
+                    inner = inner.child(
+                        View::panel()
+                            .fill_w()
+                            .h(Sizing::Fixed(ABL_CONFIG_HEIGHT))
+                            .key(KEY_CONFIG_BASE + i as u64),
+                    );
+                }
+                if i + 1 < MACRO_COUNT {
+                    inner = inner.child(View::panel().fill_w().h(Sizing::Fixed(ROW_SPACING)));
+                }
             }
-            self.node_count = tree.count() - first_idx;
-            return;
         }
 
+        View::panel()
+            .fill()
+            .bg(SECTION_BORDER)
+            .radius(SECTION_RADIUS)
+            .pad(Pad::all(1.0))
+            .child(inner)
+    }
+
+    /// Build the macros panel into the tree at the given rect.
+    pub fn build(&mut self, tree: &mut UITree, rect: Rect) {
+        let view = self.chrome_view();
+        self.host.build(tree, &view, rect);
+        self.first_node = self.host.node_id(0);
+
+        // Wire each materialised slider, then build its Ableton trim handles +
+        // config drawer (imperative sub-widgets) into the host-laid slots.
         for i in 0..MACRO_COUNT {
-            let label = format!("M{}", i + 1);
-            let v = self.sliders[i].cached_value();
-            let v = if v.is_nan() { 0.0 } else { v };
-
-            let ids = BitmapSlider::build(
-                tree,
-                None,
-                Rect::new(inner_x, cy, inner_w, ROW_HEIGHT),
-                Some(&label),
-                v,
-                &fmt_macro(v),
-                &colors,
-                FONT_SIZE,
-                LABEL_WIDTH,
-            );
-
-            self.sliders[i].set_ids(ids);
-
-            // Ableton trim handles (when macro has an Ableton mapping)
-            if let Some((amin, amax)) = self.ableton_ranges[i] {
-                self.ableton_trim_ids[i] = Some(build_trim_handles_explicit(
-                    tree,
-                    ids.track,
-                    ids.track_rect,
-                    amin,
-                    amax,
-                    color::ABL_TRIM_BAR_C32,
-                    color::ABL_TRIM_BAR_HOVER_C32,
-                    color::ABL_TRIM_FILL_C32,
-                ));
-            } else {
-                self.ableton_trim_ids[i] = None;
+            match self.host.slider_ids(KEY_SLIDER_BASE + i as u64) {
+                Some(ids) => {
+                    self.sliders[i].set_ids(ids);
+                    if let Some((amin, amax)) = self.ableton_ranges[i] {
+                        self.ableton_trim_ids[i] = Some(build_trim_handles_explicit(
+                            tree,
+                            ids.track,
+                            ids.track_rect,
+                            amin,
+                            amax,
+                            color::ABL_TRIM_BAR_C32,
+                            color::ABL_TRIM_BAR_HOVER_C32,
+                            color::ABL_TRIM_FILL_C32,
+                        ));
+                    } else {
+                        self.ableton_trim_ids[i] = None;
+                    }
+                }
+                None => {
+                    self.sliders[i].clear();
+                    self.ableton_trim_ids[i] = None;
+                }
             }
 
-            cy += ROW_HEIGHT;
-
-            // Ableton config drawer (status dot + macro name + INV button)
-            if let Some(ref display) = self.ableton_displays[i] {
-                self.ableton_config_ids[i] = Some(build_ableton_config(
-                    tree, None, inner_x, cy, inner_w, display,
-                ));
-                cy += ABL_CONFIG_HEIGHT;
+            if let Some(display) = self.ableton_displays[i].clone() {
+                if let Some(slot) = self
+                    .host
+                    .node_id_for_key(KEY_CONFIG_BASE + i as u64)
+                    .map(|id| tree.get_bounds(id))
+                {
+                    self.ableton_config_ids[i] =
+                        Some(build_ableton_config(tree, None, slot.x, slot.y, slot.width, &display));
+                } else {
+                    self.ableton_config_ids[i] = None;
+                }
             } else {
                 self.ableton_config_ids[i] = None;
             }
-
-            if i + 1 < MACRO_COUNT {
-                cy += ROW_SPACING;
-            }
         }
 
-        self.node_count = tree.count() - first_idx;
+        let first = self.first_node.map_or(0, |id| id.index());
+        self.node_count = tree.count() - first;
     }
 
     /// Handle press on a slider track or trim bar.
@@ -433,12 +434,10 @@ impl MacrosPanel {
     /// Handle click — chevron toggles collapse, label click copies OSC address,
     /// INV button toggles invert.
     pub fn handle_click(&mut self, node_id: NodeId) -> Vec<PanelAction> {
-        // Chevron collapse toggle
-        if self.chevron_btn_id == Some(node_id) {
+        if self.host.node_id_for_key(KEY_CHEVRON) == Some(node_id) {
             return vec![PanelAction::MacrosCollapseToggle];
         }
 
-        // Ableton config INV button
         if let Some((slot_idx, AbletonConfigClick::Invert)) =
             check_ableton_config_click(node_id, &self.ableton_config_ids)
         {
@@ -457,13 +456,8 @@ impl MacrosPanel {
         Vec::new()
     }
 
-    /// Handle right-click.
-    /// Track right-click → reset to 0 (direct, like effect param slider).
-    /// Label right-click → open dropdown showing mapped params.
     /// Node-intent dispatch for the macro sliders: track → reset, label → open
-    /// mappings dropdown. The value cell + gaps fall through (single-slider
-    /// rows, no dense lottery — unlike param cards, which add a full-row
-    /// catcher). See `docs/NODE_INTENT_DISPATCH.md`.
+    /// mappings dropdown.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         use crate::intent::Gesture::RightClick;
         for (i, s) in self.sliders.iter().enumerate() {
@@ -493,5 +487,96 @@ impl MacrosPanel {
             .and_then(|slider| slider.ids())
             .and_then(|ids| ids.label)
             .map(|label| tree.get_bounds(label))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect() -> Rect {
+        Rect::new(0.0, 0.0, 300.0, 220.0)
+    }
+
+    #[test]
+    fn collapsed_builds_only_header() {
+        let mut tree = UITree::new();
+        let mut panel = MacrosPanel::new(); // default collapsed
+        panel.build(&mut tree, rect());
+        assert!(panel.host.node_id_for_key(KEY_CHEVRON).is_some());
+        assert!(panel.host.slider_ids(KEY_SLIDER_BASE).is_none());
+        assert!(panel.sliders.iter().all(|s| s.ids().is_none()));
+    }
+
+    #[test]
+    fn expanded_materialises_eight_sliders() {
+        let mut tree = UITree::new();
+        let mut panel = MacrosPanel::new();
+        panel.set_collapsed(false);
+        panel.build(&mut tree, rect());
+        for i in 0..MACRO_COUNT {
+            assert!(
+                panel.sliders[i].ids().is_some(),
+                "slider {i} materialised + wired"
+            );
+        }
+    }
+
+    #[test]
+    fn slider_slots_match_golden_layout() {
+        // Each slider slot lands at the old constant cy-tracked rect.
+        let mut tree = UITree::new();
+        let mut panel = MacrosPanel::new();
+        panel.set_collapsed(false);
+        let r = rect();
+        panel.build(&mut tree, r);
+
+        let inner_x = r.x + PAD_H;
+        let inner_w = r.width - PAD_H * 2.0;
+        let mut cy = r.y + PAD_TOP + HEADER_ROW_H;
+        for i in 0..MACRO_COUNT {
+            let slot = tree.get_bounds(panel.host.node_id_for_key(KEY_SLIDER_BASE + i as u64).unwrap());
+            let want = Rect::new(inner_x, cy, inner_w, ROW_HEIGHT);
+            assert!(
+                (slot.x - want.x).abs() < 0.01
+                    && (slot.y - want.y).abs() < 0.01
+                    && (slot.width - want.width).abs() < 0.01
+                    && (slot.height - want.height).abs() < 0.01,
+                "macro {i} slot {slot:?} != {want:?}"
+            );
+            cy += ROW_HEIGHT;
+            if i + 1 < MACRO_COUNT {
+                cy += ROW_SPACING;
+            }
+        }
+    }
+
+    #[test]
+    fn chevron_click_toggles_collapse() {
+        let mut tree = UITree::new();
+        let mut panel = MacrosPanel::new();
+        panel.build(&mut tree, rect());
+        let chev = panel.host.node_id_for_key(KEY_CHEVRON).unwrap();
+        assert!(matches!(
+            panel.handle_click(chev).as_slice(),
+            [PanelAction::MacrosCollapseToggle]
+        ));
+    }
+
+    #[test]
+    fn config_drawer_grows_height() {
+        let mut panel = MacrosPanel::new();
+        panel.set_collapsed(false);
+        let base = panel.height();
+        let mut displays: Vec<Option<AbletonMappingDisplay>> = vec![None; MACRO_COUNT];
+        displays[0] = Some(AbletonMappingDisplay {
+            macro_name: "Macro 1".into(),
+            track_name: "Track".into(),
+            device_name: "Dev".into(),
+            status: crate::panels::param_slider_shared::AbletonMappingStatus::Active,
+            inverted: false,
+        });
+        panel.set_ableton_displays(&displays);
+        assert!(panel.height() > base);
     }
 }
