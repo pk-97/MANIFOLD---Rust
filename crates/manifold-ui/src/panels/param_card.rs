@@ -18,11 +18,16 @@
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
 use super::{AudioShapeParam, GraphParamTarget, PanelAction, TrimKind};
+use crate::chrome::{ChromeHost, Pad, View};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
 use manifold_core::{EffectId, LayerId};
+
+// Stable keys for the host-owned card frame (shared by both kinds).
+const KEY_BORDER: u64 = 90_001;
+const KEY_INNER: u64 = 90_002;
 
 /// Map a 0..1 slider position to an [`AudioModShape`] scalar's value, using the
 /// per-control full-scale constants. The single conversion shared by the audio
@@ -358,6 +363,11 @@ pub struct ParamCardPanel {
     // ── State ──
     state: ParamCardState,
 
+    /// Host for the declarative card frame (border + inner bg). The header and
+    /// param rows are still built imperatively into the host-laid inner bg
+    /// (staged migration — see `frame_view`).
+    host: ChromeHost,
+
     // ── Node IDs — card shell (shared) ──
     border_id: Option<NodeId>,
     inner_bg_id: Option<NodeId>,
@@ -461,6 +471,7 @@ impl ParamCardPanel {
             param_info: Vec::new(),
             string_param_info: Vec::new(),
             state: ParamCardState::new(0),
+            host: ChromeHost::new(),
             border_id: None,
             inner_bg_id: None,
             header_bg_id: None,
@@ -862,6 +873,48 @@ impl ParamCardPanel {
         }
     }
 
+    /// The declarative card frame: an interactive border with an interactive
+    /// inner-bg child inset by the border width. Both carry no intent (clicks
+    /// select the card via `handle_click`), so they are `.inert()`.
+    fn frame_view(border_color: Color32, inner_color: Color32) -> View {
+        View::panel()
+            .fill()
+            .bg(border_color)
+            .radius(CORNER_RADIUS)
+            .interactive()
+            .inert()
+            .key(KEY_BORDER)
+            .pad(Pad::all(BORDER_W))
+            .child(
+                View::panel()
+                    .fill()
+                    .bg(inner_color)
+                    .radius(CORNER_RADIUS - BORDER_W)
+                    .interactive()
+                    .inert()
+                    .key(KEY_INNER),
+            )
+    }
+
+    /// Build the card frame on the host, record `first_node` + the border/inner
+    /// ids (resolved by key), and return the inner-bg rect the header + rows are
+    /// built into.
+    fn build_frame(
+        &mut self,
+        tree: &mut UITree,
+        rect: Rect,
+        border_color: Color32,
+        inner_color: Color32,
+    ) -> Rect {
+        let h = self.compute_height() - CARD_BOTTOM_MARGIN;
+        let frame = Self::frame_view(border_color, inner_color);
+        self.host.build(tree, &frame, Rect::new(rect.x, rect.y, rect.width, h));
+        self.first_node = self.host.first_node();
+        self.border_id = self.host.node_id_for_key(KEY_BORDER);
+        self.inner_bg_id = self.host.node_id_for_key(KEY_INNER);
+        tree.get_bounds(self.inner_bg_id.expect("frame inner bg"))
+    }
+
     fn build_effect(&mut self, tree: &mut UITree, rect: Rect) {
         self.first_node = tree.count();
         self.card_y = rect.y;
@@ -870,51 +923,16 @@ impl ParamCardPanel {
 
         let effect_name = self.name.clone();
 
-        // Border — interactive so clicks on card edge also select
+        // Card frame (border + inner bg) on the host — interactive so clicks on
+        // the edge / body select the card (resolved by id in `handle_click`).
         let border_color = if self.is_selected {
             color::SELECTED_BORDER
         } else {
             color::CARD_BORDER_C32
         };
-        let border_id = tree.add_panel(
-            None,
-            rect.x,
-            rect.y,
-            rect.width,
-            self.compute_height() - CARD_BOTTOM_MARGIN,
-            UIStyle {
-                bg_color: border_color,
-                corner_radius: CORNER_RADIUS,
-                ..UIStyle::default()
-            },
-        );
-        self.border_id = Some(border_id);
-        tree.set_flag(border_id, UIFlags::INTERACTIVE);
-
-        // Inner background — interactive so clicks anywhere on card body select the card
-        let inner = Rect::new(
-            rect.x + BORDER_W,
-            rect.y + BORDER_W,
-            rect.width - BORDER_W * 2.0,
-            self.compute_height() - CARD_BOTTOM_MARGIN - BORDER_W * 2.0,
-        );
-        let inner_bg_id = tree.add_panel(
-            Some(border_id),
-            inner.x,
-            inner.y,
-            inner.width,
-            inner.height,
-            UIStyle {
-                bg_color: color::EFFECT_CARD_INNER_BG_C32,
-                corner_radius: CORNER_RADIUS - BORDER_W,
-                ..UIStyle::default()
-            },
-        );
-        self.inner_bg_id = Some(inner_bg_id);
-        tree.set_flag(inner_bg_id, UIFlags::INTERACTIVE);
-
+        let inner = self.build_frame(tree, rect, border_color, color::EFFECT_CARD_INNER_BG_C32);
         let inner_w = inner.width;
-        let parent = inner_bg_id;
+        let parent = self.inner_bg_id.expect("frame built inner bg");
 
         // Header
         self.build_effect_header(tree, parent, inner.x, inner.y, inner_w, &effect_name);
@@ -1377,45 +1395,17 @@ impl ParamCardPanel {
         self.toggle_cache.iter_mut().for_each(|v| *v = false);
         self.label_cache.iter_mut().for_each(|v| *v = None);
 
-        let total_h = self.compute_height() - CARD_BOTTOM_MARGIN;
-
-        // ── Card shell ──
+        // ── Card frame (host) ──
         let border_color = if self.is_selected {
             color::SELECTED_BORDER
         } else {
             color::GEN_CARD_BORDER_C32
         };
-        let border_id = tree.add_panel(
-            None,
-            rect.x,
-            rect.y,
-            rect.width,
-            total_h,
-            UIStyle {
-                bg_color: border_color,
-                corner_radius: CORNER_RADIUS,
-                ..UIStyle::default()
-            },
-        );
-        self.border_id = Some(border_id);
-        tree.set_flag(border_id, UIFlags::INTERACTIVE);
+        self.build_frame(tree, rect, border_color, color::GEN_CARD_INNER_BG_C32);
 
         let inner_x = rect.x + BORDER_W;
         let inner_y = rect.y + BORDER_W;
         let inner_w = rect.width - BORDER_W * 2.0;
-        let inner_h = total_h - BORDER_W * 2.0;
-        self.inner_bg_id = Some(tree.add_panel(
-            None,
-            inner_x,
-            inner_y,
-            inner_w,
-            inner_h,
-            UIStyle {
-                bg_color: color::GEN_CARD_INNER_BG_C32,
-                corner_radius: CORNER_RADIUS - BORDER_W,
-                ..UIStyle::default()
-            },
-        ));
 
         // ── Header ──
         let header_bg_id = tree.add_panel(
