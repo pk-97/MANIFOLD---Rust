@@ -1,4 +1,5 @@
 use super::{Panel, PanelAction};
+use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
@@ -7,6 +8,11 @@ use crate::scroll_container::ScrollContainer;
 use crate::tree::UITree;
 use manifold_core::LayerId;
 use manifold_core::midi::note_number_to_name;
+
+// Stable keys for the host-owned top chrome (background + recording controls).
+const KEY_BG: u64 = 80_001;
+const KEY_RECORD: u64 = 80_002;
+const KEY_DEVICE: u64 = 80_003;
 
 // ── Layout constants (from LayerHeaderLayout.cs / UIConstants) ───────
 
@@ -733,6 +739,10 @@ pub struct LayerHeaderPanel {
     recording_active: bool,
     audio_device_name: String,
 
+    /// Host for the declarative top chrome (background + recording controls).
+    /// The per-layer scroll rows are still built imperatively below it.
+    host: ChromeHost,
+
     // Screen-space origin of the layer controls panel
     panel_origin: Vec2,
     panel_width: f32,
@@ -774,6 +784,7 @@ impl LayerHeaderPanel {
             audio_device_label_id: None,
             recording_active: false,
             audio_device_name: "No audio input".into(),
+            host: ChromeHost::new(),
             panel_origin: Vec2::ZERO,
             panel_width: 0.0,
             scroll: ScrollContainer::new(),
@@ -845,6 +856,44 @@ impl LayerHeaderPanel {
         if let Some(id) = self.audio_device_label_id {
             tree.set_text(id, name);
         }
+    }
+
+    /// The host-owned top chrome: the full-area background plus the two stacked
+    /// recording-control buttons in the spacer above the layer rows. The rows
+    /// themselves stay imperative (a scroll body of dragged per-layer widgets).
+    fn top_chrome_view(&self) -> View {
+        const REC_PAD: f32 = 6.0;
+        const REC_BTN_H: f32 = 22.0;
+        const REC_LABEL_H: f32 = 16.0;
+        View::panel()
+            .fill()
+            .bg(color::CONTROL_BG)
+            .key(KEY_BG)
+            .pad(Pad::all(REC_PAD))
+            .child(
+                View::column(4.0)
+                    .fill_w()
+                    .child(
+                        View::button(if self.recording_active {
+                            "Stop Recording"
+                        } else {
+                            "Record Live"
+                        })
+                        .fill_w()
+                        .h(Sizing::Fixed(REC_BTN_H))
+                        .style(self.record_btn_style())
+                        .inert()
+                        .key(KEY_RECORD),
+                    )
+                    .child(
+                        View::button(self.audio_device_name.as_str())
+                            .fill_w()
+                            .h(Sizing::Fixed(REC_LABEL_H))
+                            .style(field_style())
+                            .inert()
+                            .key(KEY_DEVICE),
+                    ),
+            )
     }
 
     fn record_btn_style(&self) -> UIStyle {
@@ -1794,52 +1843,13 @@ impl Panel for LayerHeaderPanel {
         self.panel_origin = Vec2::new(lc.x, lc.y + header_spacer - self.scroll.scroll_offset());
         self.panel_width = lc.width;
 
-        // Full-area background (prevents compositor blit bleed-through)
-        tree.add_panel(
-            None,
-            lc.x,
-            lc.y,
-            lc.width,
-            lc.height,
-            UIStyle {
-                bg_color: color::CONTROL_BG,
-                ..UIStyle::default()
-            },
-        );
-
-        // ── Live recording controls (in the spacer area above layers) ──
-        {
-            let rec_pad = 6.0;
-            let rec_btn_h = 22.0;
-            let rec_label_h = 16.0;
-            let rec_y = lc.y + rec_pad;
-            let rec_x = lc.x + rec_pad;
-            let rec_w = lc.width - rec_pad * 2.0;
-
-            self.record_btn_id = Some(tree.add_button(
-                None,
-                rec_x,
-                rec_y,
-                rec_w,
-                rec_btn_h,
-                self.record_btn_style(),
-                if self.recording_active {
-                    "Stop Recording"
-                } else {
-                    "Record Live"
-                },
-            ));
-
-            self.audio_device_label_id = Some(tree.add_button(
-                None,
-                rec_x,
-                rec_y + rec_btn_h + 4.0,
-                rec_w,
-                rec_label_h,
-                field_style(),
-                &self.audio_device_name,
-            ));
-        }
+        // ── Top chrome (full-area background + recording controls) on the host.
+        // The background prevents compositor blit bleed-through; the rows below
+        // are still built imperatively into the scroll region.
+        let chrome = self.top_chrome_view();
+        self.host.build(tree, &chrome, lc);
+        self.record_btn_id = self.host.node_id_for_key(KEY_RECORD);
+        self.audio_device_label_id = self.host.node_id_for_key(KEY_DEVICE);
 
         // Clip region for scrollable layer rows — prevents overflow into header/footer.
         let clip_top = lc.y + header_spacer;
