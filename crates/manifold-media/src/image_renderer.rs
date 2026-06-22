@@ -322,17 +322,25 @@ fn decode_and_fit(path: &str, target_w: u32, target_h: u32) -> Result<FittedImag
     if target_w == 0 || target_h == 0 {
         return Err("zero canvas size".into());
     }
+    let t0 = std::time::Instant::now();
     let img = image::open(path).map_err(|e| format!("open {path}: {e}"))?;
+    let decode_ms = t0.elapsed().as_secs_f32() * 1000.0;
     let (nw, nh) = (img.width(), img.height());
     // Fit within the canvas preserving aspect ratio (never upscales past
-    // the canvas; smaller images are centered at native size).
-    let fitted = img.resize(target_w, target_h, image::imageops::FilterType::Lanczos3);
+    // the canvas; smaller images are centered at native size). Triangle
+    // (bilinear) over Lanczos3: a large source (e.g. a 24MP photo) takes
+    // multiple seconds to downscale with Lanczos3's wide kernel, stalling
+    // the clip's first paint. Triangle is ~3x fewer samples and visually
+    // indistinguishable for a still shown at output resolution.
+    let fitted = img.resize(target_w, target_h, image::imageops::FilterType::Triangle);
     let fw = fitted.width();
     let fh = fitted.height();
+    let total_ms = t0.elapsed().as_secs_f32() * 1000.0;
     log::info!(
-        "[ImageRenderer] fit '{path}': native {nw}x{nh} (aspect {:.3}) -> fitted {fw}x{fh} centered in canvas {target_w}x{target_h} (aspect {:.3})",
+        "[ImageRenderer] fit '{path}': native {nw}x{nh} (aspect {:.3}) -> fitted {fw}x{fh} centered in canvas {target_w}x{target_h} (aspect {:.3}); decode {decode_ms:.0}ms, +resize {:.0}ms",
         nw as f32 / nh.max(1) as f32,
         target_w as f32 / target_h.max(1) as f32,
+        total_ms - decode_ms,
     );
     let src = fitted.to_rgba8();
     let src = src.as_raw();
