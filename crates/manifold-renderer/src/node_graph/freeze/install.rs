@@ -959,4 +959,53 @@ mod tests {
             other => panic!("binding not retargeted to a node: {other:?}"),
         }
     }
+
+    #[test]
+    fn probe_multires_fused_def_and_wgsl() {
+        let json = r#"{
+            "version": 1, "name": "multires", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.downsample", "nodeId": "down" },
+                { "id": 2, "typeId": "node.mix", "nodeId": "mix" },
+                { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "a" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let fused = fuse_canonical_def(&def, &registry()).expect("multires region fuses");
+        let wgsl_node = fused
+            .def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.wgsl_compute")
+            .expect("a fused node exists");
+        let src = wgsl_node.wgsl_source.as_deref().unwrap();
+        eprintln!("=== FUSED WGSL ===\n{src}\n=== WIRES ===");
+        for w in &fused.def.wires {
+            eprintln!(
+                "  {} {} -> {} {}",
+                w.from_node, w.from_port, w.to_node, w.to_port
+            );
+        }
+        // Both externals are read by textureLoad at the SAME canvas coord — the
+        // quarter-res downsample external (src_1) is loaded out of bounds.
+        assert!(src.contains("textureLoad(src_0, coord, 0)"));
+        assert!(src.contains("textureLoad(src_1, coord, 0)"));
+        // Confirm the downsample node (boundary, doc 1) feeds the fused node's
+        // src_1 — i.e. a quarter-res producer feeds a coincident textureLoad slot.
+        let down_doc = 1u32;
+        let fused_doc = wgsl_node.id;
+        assert!(
+            fused.def.wires.iter().any(|w| w.from_node == down_doc
+                && w.to_node == fused_doc
+                && w.to_port == "src_1"),
+            "downsample (quarter-res) wired into the fused node's src_1"
+        );
+    }
 }

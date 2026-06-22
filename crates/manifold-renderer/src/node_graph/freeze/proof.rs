@@ -1323,6 +1323,91 @@ fn fused_control_wired_param_matches_unfused() {
     );
 }
 
+/// ATTACK: a fused region with TWO coincident externals at DIFFERENT resolutions.
+/// source(canvas) → mix.a ; source → downsample(boundary, quarter-res) → mix.b ;
+/// mix → invert → final. {mix, invert} fuse into one region with two coincident
+/// externals — src_0 = source (canvas), src_1 = downsample output (quarter-res).
+/// Mixed input resolutions → the executor sizes the fused node at canvas, but the
+/// fused codegen reads BOTH externals via `textureLoad(src_e, coord, 0)` at the
+/// canvas coord. The quarter-res external is then read out of bounds for ~15/16 of
+/// the frame (textureLoad clamps/returns 0), so mix.b is garbage. UNFUSED, mix
+/// reads b via `textureSampleLevel` (UV space) and the sampler upscales the
+/// quarter-res input correctly. This must diverge.
+#[test]
+fn attack_mixed_resolution_coincident_externals_diverge() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (256u32, 256u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "mixedres", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.downsample", "nodeId": "down" },
+            { "id": 2, "typeId": "node.mix", "nodeId": "mix" },
+            { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "a" },
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+
+    // Set mix amount = 1.0 so the result is fully blend(a,b) (b matters), mode 0
+    // (= b passes straight through the blend), then crossfade keeps b's
+    // contribution maximal — so a wrong b is maximally visible.
+    let set_mix = |g: &mut Graph| {
+        let id = g
+            .node_id_by_handle("mix")
+            .or_else(|| g.instance_by_node_id(&manifold_core::NodeId::new("mix")))
+            .unwrap();
+        g.set_param(id, "amount", ParamValue::Float(0.5)).unwrap();
+        g.set_param(id, "mode", ParamValue::Enum(2)).unwrap(); // Add: a + b
+    };
+
+    let mut unfused = def.clone().into_graph(&registry).expect("unfused graph");
+    set_mix(&mut unfused);
+    let u_plan = compile(&unfused).expect("compile unfused");
+    let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
+    let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
+    let u_img = render_graph(&device, &mut unfused, &u_plan, u_src, &input, u_out);
+
+    let FusedDef { def: fdef, .. } =
+        fuse_canonical_def(&def, &registry).expect("the mixed-res region fuses");
+    let mut fused = fdef.into_graph(&registry).expect("fused graph builds");
+    let f_node = find_node(&fused, "node.wgsl_compute");
+    // Apply the same mix params onto the fused kernel via its namespaced fields.
+    // mix is member 0 of its region → n0_amount / n0_mode.
+    fused.set_param(f_node, "n0_amount", ParamValue::Float(0.5)).unwrap();
+    fused.set_param(f_node, "n0_mode", ParamValue::Float(2.0)).unwrap();
+    let f_plan = compile(&fused).expect("compile fused");
+    let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
+    let f_out = resource_for_output(&f_plan, f_node, "dst");
+    let f_img = render_graph(&device, &mut fused, &f_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &u_img.texture, &f_img.texture, 1.0e-2, 3.0e-2);
+    eprintln!(
+        "[attack mixed-res] max_abs={} max_rel={} over={}/{} ({:.4}) special={}",
+        r.max_abs, r.max_rel, r.over_count, r.total, r.over_fraction(), r.special_count
+    );
+    // If fusion were correct, this would pass. We assert it FAILS — proving the
+    // divergence. (This test documents the bug; it is expected to trip.)
+    assert!(
+        r.passes(0.005),
+        "MIXED-RES DIVERGENCE: fused reads the quarter-res external via textureLoad \
+         at canvas coord (OOB), unfused samples it in UV space. max_abs={}, \
+         over={}/{} ({:.4})",
+        r.max_abs, r.over_count, r.total, r.over_fraction()
+    );
+}
+
 /// Fan-out oracle — a region with TWO outputs renders identically fused vs
 /// unfused, end-to-end through the executor. gain forks into invert and contrast;
 /// each runs into its own `threshold` boundary; the two re-merge at a `mix`. The

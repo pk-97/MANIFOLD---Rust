@@ -1213,4 +1213,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn probe_multires_external_fuses() {
+        let json = r#"{
+            "version": 1, "name": "multires", "nodes": [
+                { "id": 0, "typeId": "system.source", "nodeId": "source" },
+                { "id": 1, "typeId": "node.downsample", "nodeId": "down" },
+                { "id": 2, "typeId": "node.mix", "nodeId": "mix" },
+                { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+            ], "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
+                { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "a" },
+                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "b" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
+        let regions = partition_regions(&def, &registry());
+        eprintln!("REGIONS: {}", regions.len());
+        for (i, r) in regions.iter().enumerate() {
+            eprintln!(
+                "  region {i}: members={:?} externals={:?} outputs={:?}",
+                r.members.iter().map(|m| m.doc_id).collect::<Vec<_>>(),
+                r.externals.iter().map(|e| (e.from_node, e.from_port.clone())).collect::<Vec<_>>(),
+                r.outputs
+            );
+        }
+        assert_eq!(regions.len(), 1, "mix+invert is one region");
+        let r = &regions[0];
+        assert!(
+            r.externals.iter().any(|e| e.from_node == 1),
+            "downsample (quarter-res) read as an external by the fused region"
+        );
+    }
 }
