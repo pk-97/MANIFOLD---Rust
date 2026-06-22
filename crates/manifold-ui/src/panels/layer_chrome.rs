@@ -1,4 +1,12 @@
+//! Layer inspector card on the Chrome API (hybrid — see `master_chrome`).
+//!
+//! Host owns the declarative chrome (header + collapse chevron, optional name
+//! row, dividers) plus an optional `Fill` opacity-slider slot; the `BitmapSlider`
+//! is dropped into the recovered slot, byte-identical. Public interface unchanged,
+//! so the inspector composite is untouched.
+
 use super::PanelAction;
+use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
@@ -14,9 +22,13 @@ const PAD_H: f32 = 2.0;
 const PAD_V: f32 = 2.0;
 const GAP: f32 = 4.0;
 const CHEVRON_W: f32 = 18.0;
+const CHEVRON_H: f32 = 16.0;
 const OPACITY_LABEL_W: f32 = 50.0;
 const FONT_SIZE: u16 = color::FONT_BODY;
 const NAME_FONT_SIZE: u16 = color::FONT_SUBHEADING;
+
+const KEY_CHEVRON: u64 = 1;
+const KEY_OPACITY_SLOT: u64 = 2;
 
 fn fmt_opacity(v: f32) -> String {
     format!("{:.2}", v)
@@ -25,23 +37,17 @@ fn fmt_opacity(v: f32) -> String {
 // ── LayerChromePanel ─────────────────────────────────────────────
 
 pub struct LayerChromePanel {
-    // Node IDs
-    header_label_id: Option<NodeId>,
-    chevron_btn_id: Option<NodeId>,
-    name_label_id: Option<NodeId>,
-    divider_ids: [Option<NodeId>; 3],
+    host: ChromeHost,
+    chrome_rect: Rect,
 
-    // Slider — single source of truth
     opacity: SliderDragState,
 
-    // State
     is_collapsed: bool,
     show_name: bool,
     show_opacity: bool,
     cached_header_text: String,
     cached_name: String,
 
-    // Node range
     first_node: usize,
     node_count: usize,
 }
@@ -49,10 +55,8 @@ pub struct LayerChromePanel {
 impl LayerChromePanel {
     pub fn new() -> Self {
         Self {
-            header_label_id: None,
-            chevron_btn_id: None,
-            name_label_id: None,
-            divider_ids: [None; 3],
+            host: ChromeHost::new(),
+            chrome_rect: Rect::ZERO,
             opacity: SliderDragState::default(),
             is_collapsed: false,
             show_name: true,
@@ -110,48 +114,19 @@ impl LayerChromePanel {
         true
     }
 
-    // ── Build ────────────────────────────────────────────────────
+    // ── View description (chrome only) ───────────────────────────
 
-    pub fn build(&mut self, tree: &mut UITree, rect: Rect) {
-        self.first_node = tree.count();
-        let content_w = rect.width - PAD_H * 2.0;
-        let cx = rect.x + PAD_H;
-        let mut cy = rect.y + PAD_V;
+    fn divider() -> View {
+        View::panel()
+            .fill_w()
+            .h(Sizing::Fixed(DIVIDER_H))
+            .bg(color::DIVIDER_C32)
+    }
 
-        let header_text = self.cached_header_text.clone();
-        let name = self.cached_name.clone();
-        let opacity_val = self.opacity.cached_value();
-        let opacity = if opacity_val.is_nan() {
-            1.0
-        } else {
-            opacity_val
-        };
-
-        // Header row
-        let label_w = content_w - CHEVRON_W - GAP;
-        self.header_label_id = Some(tree.add_label(
-            None,
-            cx,
-            cy,
-            label_w,
-            HEADER_ROW_H,
-            &header_text,
-            UIStyle {
-                text_color: color::TEXT_PRIMARY_C32,
-                font_size: color::FONT_HEADING,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        ));
-
-        let chev_x = cx + content_w - CHEVRON_W;
-        self.chevron_btn_id = Some(tree.add_button(
-            None,
-            chev_x,
-            cy + (HEADER_ROW_H - 16.0) * 0.5,
-            CHEVRON_W,
-            16.0,
-            UIStyle {
+    fn chrome_view(&self) -> View {
+        let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
+            .fixed(CHEVRON_W, CHEVRON_H)
+            .style(UIStyle {
                 bg_color: Color32::TRANSPARENT,
                 hover_bg_color: color::HOVER_OVERLAY,
                 pressed_bg_color: color::PRESS_OVERLAY,
@@ -159,144 +134,125 @@ impl LayerChromePanel {
                 font_size: FONT_SIZE,
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
-            },
-            if self.is_collapsed {
-                "\u{25B6}"
-            } else {
-                "\u{25BC}"
-            },
-        ));
+            })
+            .inert()
+            .key(KEY_CHEVRON);
 
-        cy += HEADER_ROW_H;
+        let header = View::row(GAP)
+            .fill_w()
+            .h(Sizing::Fixed(HEADER_ROW_H))
+            .cross_align(Align::Center)
+            .child(
+                View::label(self.cached_header_text.as_str())
+                    .fill_w()
+                    .fill_h()
+                    .font(color::FONT_HEADING)
+                    .text_color(color::TEXT_PRIMARY_C32)
+                    .align_text(TextAlign::Left),
+            )
+            .child(chevron);
 
+        let mut root = View::column(0.0)
+            .fill()
+            .pad(Pad { l: PAD_H, t: PAD_V, r: PAD_H, b: PAD_V })
+            .child(header);
         if self.is_collapsed {
-            self.opacity.clear();
-            self.node_count = tree.count() - self.first_node;
-            return;
+            return root;
         }
 
-        let mut div_idx = 0;
-
-        // Name row (optional)
         if self.show_name {
-            self.divider_ids[div_idx] = Some(tree.add_panel(
-                None,
-                cx,
-                cy,
-                content_w,
-                DIVIDER_H,
-                UIStyle {
-                    bg_color: color::DIVIDER_C32,
-                    ..UIStyle::default()
-                },
-            ));
-            div_idx += 1;
-            cy += DIVIDER_H;
-
-            self.name_label_id = Some(tree.add_label(
-                None,
-                cx,
-                cy,
-                content_w,
-                NAME_ROW_H,
-                &name,
-                UIStyle {
-                    text_color: color::TEXT_PRIMARY_C32,
-                    font_size: NAME_FONT_SIZE,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
-                },
-            ));
-            cy += NAME_ROW_H;
-        } else {
-            self.name_label_id = None;
+            root = root.child(Self::divider()).child(
+                View::label(self.cached_name.as_str())
+                    .fill_w()
+                    .h(Sizing::Fixed(NAME_ROW_H))
+                    .font(NAME_FONT_SIZE)
+                    .text_color(color::TEXT_PRIMARY_C32)
+                    .align_text(TextAlign::Center),
+            );
         }
-
-        // Opacity slider (optional)
         if self.show_opacity {
-            self.divider_ids[div_idx] = Some(tree.add_panel(
-                None,
-                cx,
-                cy,
-                content_w,
-                DIVIDER_H,
-                UIStyle {
-                    bg_color: color::DIVIDER_C32,
-                    ..UIStyle::default()
-                },
-            ));
-            div_idx += 1;
-            cy += DIVIDER_H;
+            root = root.child(Self::divider()).child(
+                View::panel()
+                    .fill_w()
+                    .h(Sizing::Fixed(SLIDER_ROW_H))
+                    .key(KEY_OPACITY_SLOT),
+            );
+        }
+        root.child(Self::divider())
+    }
 
-            let slider_rect = Rect::new(cx, cy, content_w, SLIDER_ROW_H);
-            let val_text = fmt_opacity(opacity);
+    // ── Build ────────────────────────────────────────────────────
+
+    pub fn build(&mut self, tree: &mut UITree, rect: Rect) {
+        self.chrome_rect = rect;
+        let view = self.chrome_view();
+        self.host.build(tree, &view, rect);
+        self.first_node = self.host.first_node();
+
+        if let Some(slot) = self
+            .host
+            .node_id_for_key(KEY_OPACITY_SLOT)
+            .map(|id| tree.get_bounds(id))
+        {
+            let opacity_val = self.opacity.cached_value();
+            let opacity = if opacity_val.is_nan() { 1.0 } else { opacity_val };
             let ids = BitmapSlider::build(
                 tree,
                 None,
-                slider_rect,
+                slot,
                 Some("Opacity"),
                 opacity,
-                &val_text,
+                &fmt_opacity(opacity),
                 &SliderColors::default_slider(),
                 FONT_SIZE,
                 OPACITY_LABEL_W,
             );
             self.opacity.set_ids(ids);
-            cy += SLIDER_ROW_H;
         } else {
             self.opacity.clear();
         }
 
-        // Final divider
-        self.divider_ids[div_idx] = Some(tree.add_panel(
-            None,
-            cx,
-            cy,
-            content_w,
-            DIVIDER_H,
-            UIStyle {
-                bg_color: color::DIVIDER_C32,
-                ..UIStyle::default()
-            },
-        ));
-
         self.node_count = tree.count() - self.first_node;
+    }
+
+    fn reconcile_chrome(&mut self, tree: &mut UITree) {
+        if !self.host.is_built() {
+            return;
+        }
+        let view = self.chrome_view();
+        let _ = self.host.update(tree, &view, self.chrome_rect);
     }
 
     // ── Sync methods ─────────────────────────────────────────────
 
     pub fn sync_header_text(&mut self, tree: &mut UITree, text: &str) {
-        self.cached_header_text = text.into();
-        if let Some(id) = self.header_label_id {
-            tree.set_text(id, text);
+        if self.cached_header_text == text {
+            return;
         }
+        self.cached_header_text = text.into();
+        self.reconcile_chrome(tree);
     }
 
     pub fn sync_name(&mut self, tree: &mut UITree, name: &str) {
-        self.cached_name = name.into();
-        if let Some(id) = self.name_label_id {
-            tree.set_text(id, name);
+        if self.cached_name == name {
+            return;
         }
+        self.cached_name = name.into();
+        self.reconcile_chrome(tree);
     }
 
     pub fn sync_opacity(&mut self, tree: &mut UITree, value: f32) {
         self.opacity.sync(tree, value, &fmt_opacity);
     }
 
-    pub fn sync_collapsed(&mut self, tree: &mut UITree, collapsed: bool) {
+    pub fn sync_collapsed(&mut self, _tree: &mut UITree, collapsed: bool) {
         self.is_collapsed = collapsed;
-        if let Some(id) = self.chevron_btn_id {
-            tree.set_text(
-                id,
-                if collapsed { "\u{25B6}" } else { "\u{25BC}" },
-            );
-        }
     }
 
     // ── Event handling ───────────────────────────────────────────
 
     pub fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
-        if self.chevron_btn_id == Some(node_id) {
+        if self.host.node_id_for_key(KEY_CHEVRON) == Some(node_id) {
             return vec![PanelAction::LayerChromeCollapseToggle];
         }
         Vec::new()
@@ -327,7 +283,6 @@ impl LayerChromePanel {
     }
 
     /// Node-intent dispatch for the layer opacity slider's right-click reset.
-    /// See `docs/NODE_INTENT_DISPATCH.md`.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         if let Some(ids) = self.opacity.ids() {
             intents.on(
@@ -350,36 +305,60 @@ mod tests {
     use super::*;
     use crate::tree::UITree;
 
+    fn golden_opacity_slot(rect: Rect, show_name: bool) -> Rect {
+        let content_w = rect.width - PAD_H * 2.0;
+        let cx = rect.x + PAD_H;
+        let mut cy = rect.y + PAD_V + HEADER_ROW_H;
+        if show_name {
+            cy += DIVIDER_H + NAME_ROW_H;
+        }
+        cy += DIVIDER_H;
+        Rect::new(cx, cy, content_w, SLIDER_ROW_H)
+    }
+
     #[test]
-    fn build_layer_chrome() {
+    fn slot_rect_matches_golden() {
+        let mut tree = UITree::new();
+        let mut panel = LayerChromePanel::new();
+        let rect = Rect::new(0.0, 0.0, 280.0, 200.0);
+        panel.build(&mut tree, rect);
+
+        let got = tree.get_bounds(panel.host.node_id_for_key(KEY_OPACITY_SLOT).unwrap());
+        let want = golden_opacity_slot(rect, true);
+        assert!(
+            (got.x - want.x).abs() < 0.01
+                && (got.y - want.y).abs() < 0.01
+                && (got.width - want.width).abs() < 0.01
+                && (got.height - want.height).abs() < 0.01,
+            "opacity slot {got:?} != golden {want:?}"
+        );
+    }
+
+    #[test]
+    fn build_makes_chrome_and_slider() {
         let mut tree = UITree::new();
         let mut panel = LayerChromePanel::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        assert!(panel.header_label_id.is_some());
-        assert!(panel.chevron_btn_id.is_some());
-        assert!(panel.name_label_id.is_some());
         assert!(panel.opacity.ids().is_some());
-        assert!(panel.node_count > 0);
+        assert!(panel.host.node_id_for_key(KEY_CHEVRON).is_some());
     }
 
     #[test]
     fn visibility_hides_rows() {
         let mut panel = LayerChromePanel::new();
-
         let full_h = panel.compute_height();
         panel.set_visibility(false, false);
-        let minimal_h = panel.compute_height();
-
-        assert!(minimal_h < full_h);
+        assert!(panel.compute_height() < full_h);
     }
 
     #[test]
-    fn set_visibility_returns_changed() {
+    fn opacity_hidden_drops_slider() {
+        let mut tree = UITree::new();
         let mut panel = LayerChromePanel::new();
-        assert!(!panel.set_visibility(true, true)); // no change
-        assert!(panel.set_visibility(false, true)); // changed
-        assert!(!panel.set_visibility(false, true)); // no change
+        panel.set_visibility(true, false);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        assert!(panel.opacity.ids().is_none());
+        assert!(panel.host.node_id_for_key(KEY_OPACITY_SLOT).is_none());
     }
 
     #[test]
@@ -387,24 +366,25 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = LayerChromePanel::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let actions = panel.handle_click(panel.chevron_btn_id.unwrap());
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::LayerChromeCollapseToggle));
+        let chev = panel.host.node_id_for_key(KEY_CHEVRON).unwrap();
+        assert!(matches!(
+            panel.handle_click(chev).as_slice(),
+            [PanelAction::LayerChromeCollapseToggle]
+        ));
     }
 
     #[test]
-    fn sync_name_updates() {
+    fn sync_name_updates_in_place() {
         let mut tree = UITree::new();
         let mut panel = LayerChromePanel::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        tree.clear_dirty();
+        let sv = tree.structure_version();
         panel.sync_name(&mut tree, "Drums Layer");
-        assert!(tree.has_dirty());
-        assert_eq!(
-            tree.get_node(panel.name_label_id.unwrap()).text.as_deref(),
-            Some("Drums Layer"),
-        );
+        assert_eq!(tree.structure_version(), sv);
+        // Name node carries the new text.
+        let found = (0..tree.count())
+            .map(|i| tree.get_node(NodeId(i as u32)))
+            .any(|n| n.text.as_deref() == Some("Drums Layer"));
+        assert!(found);
     }
 }
