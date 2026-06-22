@@ -100,8 +100,8 @@ pub enum DropdownContext {
     MidiChannel(usize),
     MidiDevice(usize),
     Resolution,
-    ClipContext(String),      // right-click on clip: clip_id
-    TrackContext(f32, usize), // right-click on empty track: beat, layer
+    // ClipContext / TrackContext retired (2b.11): their right-click menus now use
+    // typed DropdownItem::with_action, so no context/index→action map is needed.
     LayerContext(usize),      // right-click on layer header: layer_index
     MasterExitPath,           // LED exit path dropdown
     ClkDevice,                // MIDI clock device selection
@@ -1573,10 +1573,15 @@ impl UIRoot {
                     log::info!("[UIRoot] No MIDI devices available for CLK selection");
                     return false;
                 }
+                // Typed (2b.11): item i carries SetMidiClockDevice(i).
                 let items: Vec<DropdownItem> = self
                     .midi_device_names
                     .iter()
-                    .map(|name| DropdownItem::new(name))
+                    .enumerate()
+                    .map(|(i, name)| {
+                        DropdownItem::new(name)
+                            .with_action(PanelAction::SetMidiClockDevice(i as i32))
+                    })
                     .collect();
                 self.open_dropdown_at(DropdownContext::ClkDevice, items, trigger);
                 true
@@ -1586,7 +1591,7 @@ impl UIRoot {
                 let items: Vec<DropdownItem> = (0..128)
                     .map(|n| {
                         DropdownItem::new(&manifold_core::midi::note_number_to_name(n))
-                            .with_action(PanelAction::SetMidiNote(*idx, n as i32))
+                            .with_action(PanelAction::SetMidiNote(*idx, n))
                     })
                     .collect();
                 self.open_dropdown_at(DropdownContext::MidiNote(*idx), items, trigger);
@@ -1659,25 +1664,33 @@ impl UIRoot {
                 true
             }
             PanelAction::ClipRightClicked(clip_id) => {
+                // Typed (2b.11): each item carries its clip action.
                 let items = vec![
-                    DropdownItem::new("Split at Playhead"),
-                    DropdownItem::new("Delete"),
-                    DropdownItem::new("Duplicate"),
+                    DropdownItem::new("Split at Playhead")
+                        .with_action(PanelAction::ContextSplitAtPlayhead(clip_id.clone())),
+                    DropdownItem::new("Delete")
+                        .with_action(PanelAction::ContextDeleteClip(clip_id.clone())),
+                    DropdownItem::new("Duplicate")
+                        .with_action(PanelAction::ContextDuplicateClip(clip_id.clone())),
                 ];
-                self.dropdown_context = Some(DropdownContext::ClipContext(clip_id.clone()));
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::TrackRightClicked(beat, layer) => {
+                // Typed (2b.11): each item carries its track action.
                 let items = vec![
-                    DropdownItem::new("Paste"),
-                    DropdownItem::new("Import MIDI File"),
-                    DropdownItem::new("Insert Video Layer"),
-                    DropdownItem::new("Insert Generator Layer"),
-                    DropdownItem::new("Insert Audio Layer"),
+                    DropdownItem::new("Paste")
+                        .with_action(PanelAction::ContextPasteAtTrack(*beat, *layer)),
+                    DropdownItem::new("Import MIDI File")
+                        .with_action(PanelAction::ContextImportMidi(*layer)),
+                    DropdownItem::new("Insert Video Layer")
+                        .with_action(PanelAction::ContextAddVideoLayer(*layer)),
+                    DropdownItem::new("Insert Generator Layer")
+                        .with_action(PanelAction::ContextAddGeneratorLayer(*layer)),
+                    DropdownItem::new("Insert Audio Layer")
+                        .with_action(PanelAction::ContextAddAudioLayer(*layer)),
                 ];
-                self.dropdown_context = Some(DropdownContext::TrackContext(*beat, *layer));
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
@@ -1896,20 +1909,7 @@ impl UIRoot {
                     Some(PanelAction::SetDisplayResolution(*w as i32, *h as i32))
                 }
             }
-            DropdownContext::ClipContext(clip_id) => match index {
-                0 => Some(PanelAction::ContextSplitAtPlayhead(clip_id)),
-                1 => Some(PanelAction::ContextDeleteClip(clip_id)),
-                2 => Some(PanelAction::ContextDuplicateClip(clip_id)),
-                _ => None,
-            },
-            DropdownContext::TrackContext(beat, layer) => match index {
-                0 => Some(PanelAction::ContextPasteAtTrack(beat, layer)),
-                1 => Some(PanelAction::ContextImportMidi(layer)),
-                2 => Some(PanelAction::ContextAddVideoLayer(layer)),
-                3 => Some(PanelAction::ContextAddGeneratorLayer(layer)),
-                4 => Some(PanelAction::ContextAddAudioLayer(layer)),
-                _ => None,
-            },
+            // ClipContext / TrackContext retired — typed items (2b.11).
             DropdownContext::LayerContext(layer_idx) => match self.dropdown.item_label(index) {
                 Some("Paste") => Some(PanelAction::ContextPasteAtLayer(layer_idx)),
                 Some("Import MIDI File") => Some(PanelAction::ContextImportMidi(layer_idx)),

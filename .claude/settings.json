@@ -31,7 +31,8 @@
       "Bash(cargo test *)",
       "Bash(cargo run -p manifold-renderer --bin check-presets)",
       "Bash(cargo run -p manifold-renderer --bin check-presets *)",
-      "Bash(unzip -p *)"
+      "Bash(unzip -p *)",
+      "Bash(unzip -l *)"
     ]
   },
   "hooks": {

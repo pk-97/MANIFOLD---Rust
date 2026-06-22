@@ -231,8 +231,16 @@ def has_shell_pipe(structural: str) -> bool:
 
 
 def has_cd_prefix(cmd: str) -> bool:
-    """True if `cmd` starts with `cd <something> && ...` or `cd <something>; ...`."""
-    return bool(re.match(r"\s*cd\s+\S+\s*(&&|;)", cmd))
+    """True if `cmd` starts with `cd <something> && ...` or `cd <something>; ...`.
+
+    The target may be quoted (`cd "MANIFOLD - Rust" && ...`) or carry escaped
+    spaces (`cd MANIFOLD\\ -\\ Rust && ...`). A bare `\\S+` stops at the first
+    space inside the path and misses the prefix entirely — so the command
+    silently falls through to a manual prompt instead of this helpful deny.
+    Match the three target forms: double-quoted, single-quoted, or an
+    unquoted run that allows backslash-escaped chars."""
+    return bool(re.match(
+        r"""\s*cd\s+(?:"[^"]*"|'[^']*'|(?:\\.|\S)+)\s*(&&|;)""", cmd))
 
 
 def has_write_redirect(structural: str) -> bool:
