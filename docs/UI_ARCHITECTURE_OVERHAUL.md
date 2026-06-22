@@ -14,14 +14,15 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 panels fully migrated + the
-> `param_card` **frame** staged, all verified + pushed, plus the `slider_row` +
-> `dropdown_trigger` building blocks. **Key result: the heavyweights stage into
-> committable steps (frame → header → rows) — they are not all-or-nothing.**
-> `param_card` rows + the other three beasts (`layer_header`, `audio_setup`,
-> `inspector`) remain; deepen each stage with the app running (the header
-> declarativisation + the dynamic effect badges + per-row dragged widgets are what
-> a headless golden can't cover). Branch `ui-chrome-phase2b`.
+> **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 panels fully migrated; the
+> `param_card` frame + generator header staged; the `layer_header` top chrome
+> staged. All verified + pushed (~18 commits), plus the `slider_row` +
+> `dropdown_trigger` building blocks. **Key result, proven on two beasts now: the
+> heavyweights stage into committable, tested steps (frame/chrome → header → rows)
+> — not all-or-nothing.** What remains is the dynamic *bodies* — param_card rows +
+> effect-header badges, the layer_header scroll rows, and `audio_setup` /
+> `inspector` — all dragged/real-time surfaces that want the app running to verify.
+> Branch `ui-chrome-phase2b`.
 >
 > **Typed building blocks (the direction Peter steered to 2026-06-22):** the
 > repeated interactive widgets become *typed Chrome components the host
@@ -718,8 +719,12 @@ pass (see §0).
     dragged, trim-handled stateful widget (the slider/trim/drawer surface).
   The same frame-first staging applies to `layer_header` / `audio_setup` /
   `inspector`.
-- [ ] **2b.5** `layer_header` — per-layer rows (variable count), audio-gain slider,
-  MIDI fields. Runtime pass.
+- [~] **2b.5** `layer_header` — **stage 1 DONE 2026-06-22, pushed.** The top chrome
+  (full-area background + the two recording-control buttons) is host-built via
+  `top_chrome_view`; `record_btn_id` / `audio_device_label_id` resolve by key, so
+  the recording sync + click are untouched. The per-layer scroll rows (variable
+  count, gain sliders, MIDI fields, drag-reorder) are the next stage — dragged
+  per-layer widgets, runtime pass.
 - [ ] **2b.9** `inspector` (composite) — the 2588-line orchestrator. Migrate after
   its cards; runtime pass.
 - [ ] **2b.10** `audio_setup_panel` — large modal: spectrogram, live meters,
