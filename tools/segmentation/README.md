@@ -30,6 +30,9 @@ Writes to `./masks/`:
 - per-object `*_soft.png` + `*_binary.png` masks
 - `cutouts/` — each object as a tight-cropped full-color **RGBA cutout**
   (transparent background); plus a merged cutout per class region
+- `layers/` — each object as a **full-canvas RGBA layer** at original resolution
+  and position (everything else transparent); stack them to rebuild the image,
+  like masked colored layers in Photoshop
 - `cutout.png` — the whole subject set with the background knocked out
 - `background_binary.png` / `subject_soft.png` — the table mask and removal matte
 - `index_map.png`, `overlay.png` (QA), `objects.json`

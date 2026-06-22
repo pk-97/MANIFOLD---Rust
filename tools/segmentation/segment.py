@@ -174,6 +174,10 @@ def suppress_table_leak(index_map, image_rgb, protect, sat_keep=60):
     return out
 
 
+def _rel(path):
+    return os.path.join(os.path.basename(os.path.dirname(path)), os.path.basename(path))
+
+
 def write_cutout(image_rgb, alpha_u8, path, pad=8):
     """Save a tight-cropped full-color RGBA cutout (transparent background)."""
     ys, xs = np.where(alpha_u8 > 0)
@@ -185,7 +189,16 @@ def write_cutout(image_rgb, alpha_u8, path, pad=8):
     bgra = cv2.cvtColor(image_rgb[y0:y1, x0:x1], cv2.COLOR_RGB2BGRA)
     bgra[:, :, 3] = alpha_u8[y0:y1, x0:x1]
     cv2.imwrite(path, bgra)
-    return os.path.join(os.path.basename(os.path.dirname(path)), os.path.basename(path))
+    return _rel(path)
+
+
+def write_layer(image_rgb, alpha_u8, path):
+    """Save a full-canvas RGBA layer: object in its original position/resolution,
+    everything else transparent. Stack all layers to rebuild the image."""
+    bgra = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGRA)
+    bgra[:, :, 3] = alpha_u8
+    cv2.imwrite(path, bgra)
+    return _rel(path)
 
 
 def main():
@@ -274,8 +287,10 @@ def main():
                 "objects": []}
     counts = {}
     subject_soft = np.zeros((h, w), np.float32)   # feathered union of all objects
-    cut_dir = os.path.join(args.out, "cutouts")   # per-object full-color RGBA
+    cut_dir = os.path.join(args.out, "cutouts")   # per-object tight RGBA
+    lay_dir = os.path.join(args.out, "layers")    # per-object full-canvas RGBA
     os.makedirs(cut_dir, exist_ok=True)
+    os.makedirs(lay_dir, exist_ok=True)
     for i in range(len(items)):
         raw = labels[i] if i < len(labels) and labels[i] else "object"
         slug = "".join(c if c.isalnum() else "_" for c in raw.strip()).strip("_") or "object"
@@ -296,6 +311,7 @@ def main():
         cv2.imwrite(b_path, binary)
         cv2.imwrite(s_path, soft_u8)
         cut = write_cutout(image_np, soft_u8, os.path.join(cut_dir, f"obj{i}_{slug}.png"))
+        lay = write_layer(image_np, soft_u8, os.path.join(lay_dir, f"obj{i}_{slug}.png"))
         manifest["objects"].append({
             "index": i, "label": raw, "slug": slug,
             "score": round(float(scores[i]), 3),
@@ -303,6 +319,7 @@ def main():
             "binary": os.path.basename(b_path),
             "soft": os.path.basename(s_path),
             "cutout": cut,
+            "layer": lay,
             "pixels": int((binary > 0).sum()),
         })
 
@@ -329,10 +346,12 @@ def main():
         cv2.imwrite(rs, region_soft_u8)
         rcut = write_cutout(image_np, region_soft_u8,
                             os.path.join(cut_dir, f"region_{slug}.png"))
+        rlay = write_layer(image_np, region_soft_u8,
+                           os.path.join(lay_dir, f"region_{slug}.png"))
         manifest["regions"].append({
             "label": label, "slug": slug, "instances": idxs,
             "binary": os.path.basename(rb), "soft": os.path.basename(rs),
-            "cutout": rcut,
+            "cutout": rcut, "layer": rlay,
             "pixels": int((region_bin > 0).sum()),
         })
 
