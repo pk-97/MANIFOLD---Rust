@@ -260,7 +260,6 @@ pub struct TimelineViewportPanel {
     markers: Vec<TimelineMarker>,
     marker_line_cache: Vec<(f32, Color32)>,
     selected_marker_ids: Vec<MarkerId>,
-    marker_flag_rects: Vec<(MarkerId, Rect)>,
     marker_node_ids: Vec<NodeId>,
     marker_drag_id: Option<MarkerId>,
     marker_drag_start_beat: Beats,
@@ -336,7 +335,6 @@ impl TimelineViewportPanel {
             markers: Vec::new(),
             marker_line_cache: Vec::new(),
             selected_marker_ids: Vec::new(),
-            marker_flag_rects: Vec::new(),
             marker_node_ids: Vec::new(),
             marker_drag_id: None,
             marker_drag_start_beat: Beats::ZERO,
@@ -725,15 +723,34 @@ impl TimelineViewportPanel {
         self.selected_marker_ids = ids;
     }
 
+    /// The screen-space rect of a marker's ruler flag at `beat`.
+    ///
+    /// The single definition of marker-flag geometry — both the flag node
+    /// (`build_markers` / the scroll update-in-place) and the hit-test below
+    /// read it, so a marker's clickable area cannot drift from where it is
+    /// drawn. See `docs/TIMELINE_API_DESIGN.md` §3.5.
+    fn marker_flag_rect(&self, beat: Beats) -> Rect {
+        let flag_w = color::MARKER_FLAG_WIDTH;
+        let px = self.beat_to_pixel(beat);
+        Rect::new(
+            px - flag_w * 0.5,
+            self.ruler_rect.y,
+            flag_w,
+            color::MARKER_FLAG_HEIGHT,
+        )
+    }
+
     /// Hit-test a point against marker flags in the ruler area.
     /// Returns the MarkerId if a flag was hit.
+    ///
+    /// Recomputes each flag rect from the marker model — the same geometry the
+    /// flag node is drawn at — so there is no parallel rect list to keep in
+    /// sync and the clickable area can never go stale after a scroll update.
     pub fn hit_test_marker_flag(&self, pos: Vec2) -> Option<MarkerId> {
-        for (id, rect) in &self.marker_flag_rects {
-            if rect.contains(pos) {
-                return Some(id.clone());
-            }
-        }
-        None
+        self.markers
+            .iter()
+            .find(|m| self.marker_flag_rect(m.beat).contains(pos))
+            .map(|m| m.id.clone())
     }
 
     // ── Accessors ─────────────────────────────────────────────────
@@ -2134,7 +2151,6 @@ impl TimelineViewportPanel {
 
     /// Build timeline marker vertical lines and flags in the ruler.
     fn build_markers(&mut self, tree: &mut UITree) {
-        self.marker_flag_rects.clear();
         self.marker_node_ids.clear();
         self.marker_groups.clear();
 
@@ -2144,6 +2160,10 @@ impl TimelineViewportPanel {
         // Pre-allocate ALL markers (including off-screen) for update-in-place.
         // Off-screen markers get set_visible(false).
         for marker in &self.markers {
+            // One geometry source for flag node + hit-test (marker_flag_rect).
+            let flag = self.marker_flag_rect(marker.beat);
+            let flag_x = flag.x;
+            let flag_y = flag.y;
             let px = self.beat_to_pixel(marker.beat);
             let in_view =
                 px >= self.tracks_rect.x - flag_w && px <= self.tracks_rect.x_max() + flag_w;
@@ -2151,9 +2171,6 @@ impl TimelineViewportPanel {
             let mc = color::marker_color_to_color32(marker.color);
             let is_selected = self.selected_marker_ids.contains(&marker.id);
 
-            // Flag in ruler (small colored rectangle at top)
-            let flag_x = px - flag_w * 0.5;
-            let flag_y = self.ruler_rect.y;
             let flag_color = if is_selected {
                 Color32::new(
                     mc.r.saturating_add(40),
@@ -2229,10 +2246,6 @@ impl TimelineViewportPanel {
                 outline_id,
                 label_id,
             });
-
-            // Store flag rect for hit-testing
-            self.marker_flag_rects
-                .push((marker.id.clone(), Rect::new(flag_x, flag_y, flag_w, flag_h)));
         }
     }
 
@@ -2487,18 +2500,19 @@ impl TimelineViewportPanel {
 
         let flag_w = color::MARKER_FLAG_WIDTH;
         let flag_h = color::MARKER_FLAG_HEIGHT;
-        self.marker_flag_rects.clear();
 
         for (i, marker) in self.markers.iter().enumerate() {
             let group = &self.marker_groups[i];
+            // Same geometry source as build + hit-test (marker_flag_rect).
+            let flag = self.marker_flag_rect(marker.beat);
+            let flag_x = flag.x;
+            let flag_y = flag.y;
             let px = self.beat_to_pixel(marker.beat);
             let in_view =
                 px >= self.tracks_rect.x - flag_w && px <= self.tracks_rect.x_max() + flag_w;
 
             let mc = color::marker_color_to_color32(marker.color);
             let is_selected = self.selected_marker_ids.contains(&marker.id);
-            let flag_x = px - flag_w * 0.5;
-            let flag_y = self.ruler_rect.y;
 
             // Flag
             tree.set_visible(group.flag_id, in_view);
@@ -2551,9 +2565,6 @@ impl TimelineViewportPanel {
                     ),
                 );
             }
-
-            self.marker_flag_rects
-                .push((marker.id.clone(), Rect::new(flag_x, flag_y, flag_w, flag_h)));
         }
 
         // ── Update insert cursor ──
@@ -2725,6 +2736,40 @@ mod tests {
         assert_eq!(panel.bitmap_renderers.len(), 2);
         assert!(panel.bitmap_renderers[0].is_some());
         assert!(panel.bitmap_renderers[1].is_some());
+    }
+
+    #[test]
+    fn marker_hit_test_matches_drawn_flag() {
+        use manifold_core::marker::TimelineMarker;
+
+        let mut panel = TimelineViewportPanel::new();
+        panel.tracks_rect = Rect::new(100.0, 200.0, 1000.0, 500.0);
+        panel.ruler_rect = Rect::new(100.0, 160.0, 1000.0, 40.0);
+        panel.set_zoom(120.0);
+        panel.scroll_x_beats = Beats(2.0);
+
+        let marker = TimelineMarker::new(Beats::from_f32(6.0));
+        let marker_id = marker.id.clone();
+        panel.set_markers(vec![marker]);
+
+        // The hit rect must be centered on the drawn pixel, at the ruler top.
+        let rect = panel.marker_flag_rect(Beats::from_f32(6.0));
+        let cx = rect.x + rect.width * 0.5;
+        let cy = rect.y + rect.height * 0.5;
+        let px = panel.beat_to_pixel(Beats::from_f32(6.0));
+        assert!((cx - px).abs() < 0.001);
+        assert!((rect.y - panel.ruler_rect.y).abs() < 0.001);
+
+        // A click at the flag centre hits; far away misses. No parallel rect
+        // list — this proves the click area equals the drawn geometry.
+        assert_eq!(
+            panel.hit_test_marker_flag(Vec2::new(cx, cy)),
+            Some(marker_id)
+        );
+        assert_eq!(
+            panel.hit_test_marker_flag(Vec2::new(cx + 200.0, cy)),
+            None
+        );
     }
 
     #[test]
