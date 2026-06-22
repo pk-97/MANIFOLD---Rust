@@ -4,6 +4,7 @@ use super::macros_panel::MacrosPanel;
 use super::master_chrome::MasterChromePanel;
 use super::param_card::{ParamCardConfig, ParamCardPanel};
 use super::{InspectorTab, Panel, PanelAction};
+use crate::chrome::{self, Pad, View};
 use crate::color;
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
@@ -31,6 +32,49 @@ const SCROLLBAR_STYLE: ScrollbarStyle = ScrollbarStyle {
 };
 
 const ADD_EFFECT_BTN_H: f32 = 26.0;
+
+/// Key for recovering the materialised "+ Add Effect" button's node id (the same
+/// key is reused per column — each [`chrome::materialize`] call returns only its
+/// own button).
+const KEY_ADD_EFFECT_BTN: u64 = 95_001;
+
+/// A section-card background — the outer 1px border panel + the inset inner fill,
+/// as a typed Chrome view. Materialised into the section's rect each frame;
+/// byte-identical to the hand-rolled border+bg `add_panel` pair it replaces.
+fn section_card_view() -> View {
+    View::stack()
+        .fill()
+        .style(UIStyle {
+            bg_color: SECTION_CARD_BORDER,
+            corner_radius: SECTION_CARD_RADIUS,
+            ..UIStyle::default()
+        })
+        .pad(Pad::all(1.0))
+        .child(View::panel().fill().style(UIStyle {
+            bg_color: SECTION_CARD_BG,
+            corner_radius: SECTION_CARD_RADIUS - 1.0,
+            ..UIStyle::default()
+        }))
+}
+
+/// The "+ Add Effect" button as a typed Chrome view, keyed so the materialised
+/// node id is recoverable. Inert — the click routes through `handle_click`
+/// against the stored id, not a Chrome intent.
+fn add_effect_button_view() -> View {
+    View::button("+ Add Effect")
+        .fill()
+        .style(UIStyle {
+            bg_color: ADD_EFFECT_BTN_BG,
+            hover_bg_color: ADD_EFFECT_BTN_HOVER,
+            text_color: ADD_EFFECT_BTN_TEXT,
+            corner_radius: 4.0,
+            text_align: TextAlign::Center,
+            font_size: color::FONT_LABEL,
+            ..UIStyle::default()
+        })
+        .inert()
+        .key(KEY_ADD_EFFECT_BTN)
+}
 
 // ── Effect card drag-reorder constants (Unity EffectsListBitmapPanel) ──
 const DRAG_GHOST_H: f32 = 24.0;
@@ -1375,29 +1419,10 @@ impl Panel for InspectorCompositePanel {
             let mut cy = self.master_scroll.content_y(0.0);
             if self.master_visible {
                 let section_h = self.master_column_height();
-                tree.add_panel(
-                    None,
-                    left_x,
-                    cy,
-                    left_content_w,
-                    section_h,
-                    UIStyle {
-                        bg_color: SECTION_CARD_BORDER,
-                        corner_radius: SECTION_CARD_RADIUS,
-                        ..UIStyle::default()
-                    },
-                );
-                tree.add_panel(
-                    None,
-                    left_x + 1.0,
-                    cy + 1.0,
-                    left_content_w - 2.0,
-                    section_h - 2.0,
-                    UIStyle {
-                        bg_color: SECTION_CARD_BG,
-                        corner_radius: SECTION_CARD_RADIUS - 1.0,
-                        ..UIStyle::default()
-                    },
+                chrome::materialize(
+                    tree,
+                    &section_card_view(),
+                    Rect::new(left_x, cy, left_content_w, section_h),
                 );
                 cy += SECTION_CARD_PAD;
 
@@ -1415,23 +1440,14 @@ impl Panel for InspectorCompositePanel {
                         card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
                         cy += card_h + SECTION_GAP;
                     }
-                    self.add_master_effect_btn = Some(tree.add_button(
-                        None,
-                        inner_x,
-                        cy,
-                        inner_w,
-                        ADD_EFFECT_BTN_H,
-                        UIStyle {
-                            bg_color: ADD_EFFECT_BTN_BG,
-                            hover_bg_color: ADD_EFFECT_BTN_HOVER,
-                            text_color: ADD_EFFECT_BTN_TEXT,
-                            corner_radius: 4.0,
-                            text_align: TextAlign::Center,
-                            font_size: color::FONT_LABEL,
-                            ..UIStyle::default()
-                        },
-                        "+ Add Effect",
-                    ));
+                    self.add_master_effect_btn = chrome::materialize(
+                        tree,
+                        &add_effect_button_view(),
+                        Rect::new(inner_x, cy, inner_w, ADD_EFFECT_BTN_H),
+                    )
+                    .into_iter()
+                    .find(|(k, _)| *k == KEY_ADD_EFFECT_BTN)
+                    .map(|(_, id)| id);
                 }
             }
         }
@@ -1450,29 +1466,10 @@ impl Panel for InspectorCompositePanel {
             // Layer section — includes gen params above layer effects
             if self.layer_visible {
                 let section_h = self.layer_column_height();
-                tree.add_panel(
-                    None,
-                    right_x,
-                    cy,
-                    right_content_w,
-                    section_h,
-                    UIStyle {
-                        bg_color: SECTION_CARD_BORDER,
-                        corner_radius: SECTION_CARD_RADIUS,
-                        ..UIStyle::default()
-                    },
-                );
-                tree.add_panel(
-                    None,
-                    right_x + 1.0,
-                    cy + 1.0,
-                    right_content_w - 2.0,
-                    section_h - 2.0,
-                    UIStyle {
-                        bg_color: SECTION_CARD_BG,
-                        corner_radius: SECTION_CARD_RADIUS - 1.0,
-                        ..UIStyle::default()
-                    },
+                chrome::materialize(
+                    tree,
+                    &section_card_view(),
+                    Rect::new(right_x, cy, right_content_w, section_h),
                 );
                 cy += SECTION_CARD_PAD;
 
@@ -1496,23 +1493,14 @@ impl Panel for InspectorCompositePanel {
                         card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
                         cy += card_h + SECTION_GAP;
                     }
-                    self.add_layer_effect_btn = Some(tree.add_button(
-                        None,
-                        inner_x,
-                        cy,
-                        inner_w,
-                        ADD_EFFECT_BTN_H,
-                        UIStyle {
-                            bg_color: ADD_EFFECT_BTN_BG,
-                            hover_bg_color: ADD_EFFECT_BTN_HOVER,
-                            text_color: ADD_EFFECT_BTN_TEXT,
-                            corner_radius: 4.0,
-                            text_align: TextAlign::Center,
-                            font_size: color::FONT_LABEL,
-                            ..UIStyle::default()
-                        },
-                        "+ Add Effect",
-                    ));
+                    self.add_layer_effect_btn = chrome::materialize(
+                        tree,
+                        &add_effect_button_view(),
+                        Rect::new(inner_x, cy, inner_w, ADD_EFFECT_BTN_H),
+                    )
+                    .into_iter()
+                    .find(|(k, _)| *k == KEY_ADD_EFFECT_BTN)
+                    .map(|(_, id)| id);
                 }
             }
 
@@ -1522,29 +1510,10 @@ impl Panel for InspectorCompositePanel {
                 let clip_top = self.layer_scroll.content_y(0.0) + self.layer_column_height();
                 let section_h =
                     SECTION_CARD_PAD + self.clip_chrome.compute_height() + SECTION_CARD_PAD;
-                tree.add_panel(
-                    None,
-                    right_x,
-                    clip_top,
-                    right_content_w,
-                    section_h,
-                    UIStyle {
-                        bg_color: SECTION_CARD_BORDER,
-                        corner_radius: SECTION_CARD_RADIUS,
-                        ..UIStyle::default()
-                    },
-                );
-                tree.add_panel(
-                    None,
-                    right_x + 1.0,
-                    clip_top + 1.0,
-                    right_content_w - 2.0,
-                    section_h - 2.0,
-                    UIStyle {
-                        bg_color: SECTION_CARD_BG,
-                        corner_radius: SECTION_CARD_RADIUS - 1.0,
-                        ..UIStyle::default()
-                    },
+                chrome::materialize(
+                    tree,
+                    &section_card_view(),
+                    Rect::new(right_x, clip_top, right_content_w, section_h),
                 );
                 let inner_x = right_x + SECTION_INSET;
                 let inner_w = right_content_w - SECTION_INSET * 2.0;
@@ -1674,6 +1643,56 @@ mod tests {
         let mut layout = ScreenLayout::new(1920.0, 1080.0);
         layout.inspector_width = 280.0;
         layout
+    }
+
+    fn close(a: Rect, b: Rect) -> bool {
+        (a.x - b.x).abs() < 0.01
+            && (a.y - b.y).abs() < 0.01
+            && (a.width - b.width).abs() < 0.01
+            && (a.height - b.height).abs() < 0.01
+    }
+
+    #[test]
+    fn section_card_view_matches_old_pixel_math() {
+        // The typed section-card view must materialise to the exact two panels
+        // the old hand-rolled border+bg add_panel pair produced.
+        let mut tree = UITree::new();
+        let before = tree.count() as u32;
+        let rect = Rect::new(10.0, 20.0, 200.0, 100.0);
+        chrome::materialize(&mut tree, &section_card_view(), rect);
+
+        assert_eq!(tree.count() as u32, before + 2, "border + inner-bg panels");
+        let border = tree.get_node(NodeId(before));
+        assert!(close(border.bounds, rect), "border at the card rect");
+        assert_eq!(border.style.bg_color, SECTION_CARD_BORDER);
+        assert_eq!(border.style.corner_radius, SECTION_CARD_RADIUS);
+        let bg = tree.get_node(NodeId(before + 1));
+        assert!(
+            close(bg.bounds, Rect::new(11.0, 21.0, 198.0, 98.0)),
+            "inner bg inset 1px: {:?}",
+            bg.bounds
+        );
+        assert_eq!(bg.style.bg_color, SECTION_CARD_BG);
+        assert_eq!(bg.style.corner_radius, SECTION_CARD_RADIUS - 1.0);
+    }
+
+    #[test]
+    fn add_effect_button_view_matches_old_pixel_math() {
+        let mut tree = UITree::new();
+        let rect = Rect::new(5.0, 5.0, 150.0, ADD_EFFECT_BTN_H);
+        let ids = chrome::materialize(&mut tree, &add_effect_button_view(), rect);
+
+        let btn_id = ids
+            .iter()
+            .find(|(k, _)| *k == KEY_ADD_EFFECT_BTN)
+            .map(|(_, id)| *id)
+            .expect("button id recovered by key");
+        let btn = tree.get_node(btn_id);
+        assert!(close(btn.bounds, rect), "button at the given rect");
+        assert_eq!(btn.text.as_deref(), Some("+ Add Effect"));
+        assert_eq!(btn.node_type, UINodeType::Button);
+        assert!(btn.flags.contains(UIFlags::INTERACTIVE));
+        assert_eq!(btn.style.bg_color, ADD_EFFECT_BTN_BG);
     }
 
     #[test]

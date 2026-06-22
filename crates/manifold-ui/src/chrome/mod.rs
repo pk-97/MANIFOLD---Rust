@@ -20,6 +20,6 @@ pub mod diff;
 pub mod layout;
 pub mod view;
 
-pub use diff::{ChromeHost, Reconcile};
+pub use diff::{materialize, ChromeHost, Reconcile};
 pub use layout::{solve, solve_into, LaidNode};
 pub use view::{validate, Align, Layout, Pad, Sizing, SliderSpec, View, ViewIntent};

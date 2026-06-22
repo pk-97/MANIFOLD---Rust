@@ -35,6 +35,54 @@ pub enum Reconcile {
     NeedsRebuild,
 }
 
+/// Materialise a [`View`] into `tree` at `rect` once, with no retained reconcile
+/// state — for full-rebuild panels (e.g. the inspector's scroll columns) that
+/// re-emit their whole subtree every frame and so can't carry a stateful
+/// [`ChromeHost`]. Returns the `(key, id)` pairs for nodes that set a
+/// [`View::key`], letting the caller recover an interactive node id (e.g. a
+/// button) without hand-rolling `add_node`. Slider slots are not materialised
+/// here — these panels don't use them.
+pub fn materialize(tree: &mut UITree, root: &View, rect: Rect) -> Vec<(u64, NodeId)> {
+    #[cfg(debug_assertions)]
+    {
+        let warnings = validate(root);
+        debug_assert!(
+            warnings.is_empty(),
+            "Chrome validation failed:\n{}",
+            warnings.join("\n")
+        );
+    }
+
+    let mut scratch: Vec<LaidNode> = Vec::new();
+    layout::solve_into(root, rect, tree.measurer(), &mut scratch);
+
+    let mut ids: Vec<NodeId> = Vec::with_capacity(scratch.len());
+    let mut keyed: Vec<(u64, NodeId)> = Vec::new();
+    for n in &scratch {
+        // Parents always precede their children in laid order, so `ids[p]` is set.
+        let parent_id = n.parent.map(|p| ids[p]);
+        let mut extra = UIFlags::empty();
+        if n.interactive {
+            extra |= UIFlags::INTERACTIVE;
+        }
+        if n.clips {
+            extra |= UIFlags::CLIPS_CHILDREN;
+        }
+        if n.disabled {
+            extra |= UIFlags::DISABLED;
+        }
+        let id = tree.add_node(parent_id, n.rect, n.kind, n.style, n.text.as_deref(), extra);
+        if !n.visible {
+            tree.set_visible(id, false);
+        }
+        if let Some(k) = n.key {
+            keyed.push((k, id));
+        }
+        ids.push(id);
+    }
+    keyed
+}
+
 /// Retained reconciliation state for one panel built on the Chrome API.
 #[derive(Default)]
 pub struct ChromeHost {
