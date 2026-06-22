@@ -878,29 +878,6 @@ impl ParamCardPanel {
         }
     }
 
-    /// The declarative card frame: an interactive border with an interactive
-    /// inner-bg child inset by the border width. Both carry no intent (clicks
-    /// select the card via `handle_click`), so they are `.inert()`.
-    fn frame_view(border_color: Color32, inner_color: Color32) -> View {
-        View::panel()
-            .fill()
-            .bg(border_color)
-            .radius(CORNER_RADIUS)
-            .interactive()
-            .inert()
-            .key(KEY_BORDER)
-            .pad(Pad::all(BORDER_W))
-            .child(
-                View::panel()
-                    .fill()
-                    .bg(inner_color)
-                    .radius(CORNER_RADIUS - BORDER_W)
-                    .interactive()
-                    .inert()
-                    .key(KEY_INNER),
-            )
-    }
-
     /// The generator card as a host `View`: frame + a declarative header
     /// (`[name | Change | cog | chevron]`, right-to-left). The cog's three dots
     /// are added imperatively into the keyed cog button after build (absolute
@@ -1022,24 +999,45 @@ impl ParamCardPanel {
         }
     }
 
-    /// Build the card frame on the host, record `first_node` + the border/inner
-    /// ids (resolved by key), and return the inner-bg rect the header + rows are
-    /// built into.
-    fn build_frame(
-        &mut self,
-        tree: &mut UITree,
-        rect: Rect,
-        border_color: Color32,
-        inner_color: Color32,
-    ) -> Rect {
-        let h = self.compute_height() - CARD_BOTTOM_MARGIN;
-        let frame = Self::frame_view(border_color, inner_color);
-        self.host.build(tree, &frame, Rect::new(rect.x, rect.y, rect.width, h));
-        self.first_node = self.host.first_node();
-        self.border_id = self.host.node_id_for_key(KEY_BORDER);
-        self.inner_bg_id = self.host.node_id_for_key(KEY_INNER);
-        tree.get_bounds(self.inner_bg_id.expect("frame inner bg"))
+    /// The effect card frame on the host: border + inner bg + the header
+    /// background (tinted pink when the card carries a per-card graph override).
+    /// The header *contents* (drag handle, name, badges, toggle, chevron, cog)
+    /// are still built imperatively into this header bg.
+    fn effect_frame_view(&self, border_color: Color32) -> View {
+        let header_bg = if self.state.has_graph_mod {
+            color::MOD_HEADER_BG_C32
+        } else {
+            color::DRAG_HANDLE_BG_C32
+        };
+        View::panel()
+            .fill()
+            .bg(border_color)
+            .radius(CORNER_RADIUS)
+            .interactive()
+            .inert()
+            .key(KEY_BORDER)
+            .pad(Pad::all(BORDER_W))
+            .child(
+                View::panel()
+                    .fill()
+                    .bg(color::EFFECT_CARD_INNER_BG_C32)
+                    .radius(CORNER_RADIUS - BORDER_W)
+                    .interactive()
+                    .inert()
+                    .key(KEY_INNER)
+                    .child(
+                        View::panel()
+                            .fill_w()
+                            .h(Sizing::Fixed(HEADER_HEIGHT))
+                            .bg(header_bg)
+                            .radius(CORNER_RADIUS - BORDER_W)
+                            .interactive()
+                            .inert()
+                            .key(KEY_HEADER_BG),
+                    ),
+            )
     }
+
 
     fn build_effect(&mut self, tree: &mut UITree, rect: Rect) {
         self.first_node = tree.count();
@@ -1056,12 +1054,20 @@ impl ParamCardPanel {
         } else {
             color::CARD_BORDER_C32
         };
-        let inner = self.build_frame(tree, rect, border_color, color::EFFECT_CARD_INNER_BG_C32);
+        let view = self.effect_frame_view(border_color);
+        let h = self.compute_height() - CARD_BOTTOM_MARGIN;
+        self.host
+            .build(tree, &view, Rect::new(rect.x, rect.y, rect.width, h));
+        self.first_node = self.host.first_node();
+        self.border_id = self.host.node_id_for_key(KEY_BORDER);
+        self.inner_bg_id = self.host.node_id_for_key(KEY_INNER);
+        self.header_bg_id = self.host.node_id_for_key(KEY_HEADER_BG);
+        let inner = tree.get_bounds(self.inner_bg_id.expect("frame built inner bg"));
         let inner_w = inner.width;
         let parent = self.inner_bg_id.expect("frame built inner bg");
 
-        // Header
-        self.build_effect_header(tree, parent, inner.x, inner.y, inner_w, &effect_name);
+        // Header contents (built into the host-owned header bg).
+        self.build_effect_header(tree, inner.x, inner.y, inner_w, &effect_name);
 
         // Param sliders
         if !self.is_collapsed && !self.param_info.is_empty() {
@@ -1071,36 +1077,10 @@ impl ParamCardPanel {
         self.node_count = tree.count() - self.first_node;
     }
 
-    fn build_effect_header(
-        &mut self,
-        tree: &mut UITree,
-        parent: NodeId,
-        x: f32,
-        y: f32,
-        w: f32,
-        name: &str,
-    ) {
-        // Header background — interactive so clicks anywhere on header select the card.
-        // Tint pink when the card carries a per-card graph override.
-        let header_bg = if self.state.has_graph_mod {
-            color::MOD_HEADER_BG_C32
-        } else {
-            color::DRAG_HANDLE_BG_C32
-        };
-        let header_bg_id = tree.add_panel(
-            Some(parent),
-            x,
-            y,
-            w,
-            HEADER_HEIGHT,
-            UIStyle {
-                bg_color: header_bg,
-                corner_radius: CORNER_RADIUS - BORDER_W,
-                ..UIStyle::default()
-            },
-        );
-        self.header_bg_id = Some(header_bg_id);
-        tree.set_flag(header_bg_id, UIFlags::INTERACTIVE);
+    fn build_effect_header(&mut self, tree: &mut UITree, x: f32, y: f32, w: f32, name: &str) {
+        // Header background is host-owned (see `effect_frame_view`, tinted there
+        // by `has_graph_mod`); the contents below nest under it.
+        let header_bg_id = self.header_bg_id.expect("header bg built by host");
 
         // Layout (right-to-left for fixed elements). Badges pack flush against
         // the toggle — only the active ones take a slot — so the name cell is
