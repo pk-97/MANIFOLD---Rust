@@ -1735,12 +1735,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         #[cfg(target_os = "macos")]
         self.compositor.resize(native_device, render_w, render_h);
 
-        // Resize generator renderer via engine downcast (at render resolution).
+        // Resize clip renderers via engine downcast (at render resolution).
+        // Generators re-allocate their GPU targets; the image renderer
+        // re-decodes each still and re-fits it to the new canvas aspect so a
+        // window/aspect change never stretches a static image.
         let (renderers, _) = engine.split_renderer_project();
         for renderer in renderers.iter_mut() {
             if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
                 gen_renderer.resize_gpu(render_w, render_h, width, height);
-                break;
+                continue;
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(img_renderer) = renderer
+                .as_any_mut()
+                .downcast_mut::<manifold_media::image_renderer::ImageRenderer>()
+            {
+                use manifold_playback::renderer::ClipRenderer as _;
+                img_renderer.resize(render_w as i32, render_h as i32);
             }
         }
 

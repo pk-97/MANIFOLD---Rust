@@ -323,11 +323,17 @@ fn decode_and_fit(path: &str, target_w: u32, target_h: u32) -> Result<FittedImag
         return Err("zero canvas size".into());
     }
     let img = image::open(path).map_err(|e| format!("open {path}: {e}"))?;
+    let (nw, nh) = (img.width(), img.height());
     // Fit within the canvas preserving aspect ratio (never upscales past
     // the canvas; smaller images are centered at native size).
     let fitted = img.resize(target_w, target_h, image::imageops::FilterType::Lanczos3);
     let fw = fitted.width();
     let fh = fitted.height();
+    log::info!(
+        "[ImageRenderer] fit '{path}': native {nw}x{nh} (aspect {:.3}) -> fitted {fw}x{fh} centered in canvas {target_w}x{target_h} (aspect {:.3})",
+        nw as f32 / nh.max(1) as f32,
+        target_w as f32 / target_h.max(1) as f32,
+    );
     let src = fitted.to_rgba8();
     let src = src.as_raw();
 
