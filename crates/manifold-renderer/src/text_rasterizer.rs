@@ -20,7 +20,11 @@ use core_graphics::{
 use core_text::{font::CTFont, string_attributes::kCTFontAttributeName};
 use std::sync::Arc;
 
-const MAX_BITMAP_DIM: u32 = 4096;
+// Apple-silicon Metal supports 16384² 2D textures. We rasterize glyphs at
+// their full on-screen footprint, so the cap only bites for absurdly large
+// text — and when it does, `rasterize` scales the layout down to fit rather
+// than cropping it (the compositor scales it back up, linear-filtered).
+const MAX_BITMAP_DIM: u32 = 16384;
 const PADDING: u32 = 4;
 
 /// Horizontal text alignment within the rasterized bitmap.
@@ -79,6 +83,69 @@ pub struct RasterizedText {
     pub stroke: Option<Vec<u8>>,
     pub width: u32,
     pub height: u32,
+    /// Font size the bitmap was actually rendered at. Equals the requested
+    /// `font_size` unless the layout had to be scaled down to fit
+    /// `MAX_BITMAP_DIM`; the caller divides requested / rendered to get the
+    /// extra magnification the compositor must apply (linear-filtered).
+    pub rendered_font_px: f32,
+}
+
+/// One shaped line: glyph ids, their in-line positions, and the line width.
+struct LineMeasure {
+    glyphs: Vec<u16>,
+    positions: Vec<CGPoint>,
+    width: f32,
+}
+
+/// Output of shaping a whole string at one font size: the resolved font, the
+/// per-line glyph runs, and the metrics needed to size and place the bitmap.
+struct ShapeResult {
+    ct_font: CTFont,
+    line_measures: Vec<LineMeasure>,
+    max_width: f32,
+    ascent: f32,
+    content_h: f32,
+    line_height: f32,
+}
+
+/// Bitmap dimensions and stroke geometry derived from a [`ShapeResult`] at a
+/// given font size. `over` > 1 means the content exceeds `MAX_BITMAP_DIM` and
+/// the layout must be reshaped at `font_size / over` to fit.
+struct BitmapDims {
+    pad: u32,
+    stroke_px: f32,
+    want_stroke: bool,
+    bitmap_w: u32,
+    bitmap_h: u32,
+    over: f32,
+}
+
+impl BitmapDims {
+    fn compute(shaped: &ShapeResult, font_size: f32, opts: &RasterizeOptions) -> Self {
+        // A stroke straddles the glyph edge — half its width spills outward.
+        // Pad so the outline isn't clipped. No stroke → padding stays at
+        // PADDING so the fill-only bitmap is byte-identical to before.
+        let stroke_px = (opts.stroke_width * font_size).max(0.0);
+        let want_stroke = stroke_px > 0.5;
+        let pad = if want_stroke {
+            PADDING + (stroke_px * 0.5).ceil() as u32
+        } else {
+            PADDING
+        };
+        let needed_w = shaped.max_width.ceil() + (pad * 2) as f32;
+        let needed_h = shaped.content_h.ceil() + (pad * 2) as f32;
+        let over = needed_w.max(needed_h) / MAX_BITMAP_DIM as f32;
+        let bitmap_w = (needed_w as u32).min(MAX_BITMAP_DIM);
+        let bitmap_h = (needed_h as u32).min(MAX_BITMAP_DIM);
+        Self {
+            pad,
+            stroke_px,
+            want_stroke,
+            bitmap_w,
+            bitmap_h,
+            over,
+        }
+    }
 }
 
 /// Rasterizes text strings into R8 grayscale bitmaps via CoreText.
@@ -140,109 +207,41 @@ impl TextRasterizer {
             return None;
         }
 
-        // Use system font by family name if provided, fall back to embedded Inter.
-        // Cache the resolved CTFont to avoid repeated name lookups and ensure
-        // the font is fully loaded before the first glyph draw.
-        let ct_font = if let Some(family) = opts.font_family {
-            if let Some((ref cached_fam, cached_size, ref cached_font)) = self.cached_ct_font {
-                if cached_fam == family && (cached_size - font_size as f64).abs() < 0.5 {
-                    cached_font.clone()
-                } else {
-                    self.resolve_and_cache_font(family, font_size as f64)
-                }
-            } else {
-                self.resolve_and_cache_font(family, font_size as f64)
-            }
-        } else {
-            core_text::font::new_from_CGFont(&self.cg_font, font_size as f64)
-        };
-
-        let letter_spacing_px = opts.letter_spacing * font_size;
-
-        // Split into lines and shape each one.
         let lines: Vec<&str> = trimmed.split('\n').collect();
 
-        struct LineMeasure {
-            glyphs: Vec<u16>,
-            positions: Vec<CGPoint>,
-            width: f32,
-        }
-        let mut line_measures: Vec<LineMeasure> = Vec::with_capacity(lines.len());
-        let mut max_width: f32 = 0.0;
-
-        // Get font-level metrics (consistent across lines).
-        let sample_line = self.make_ct_line(&ct_font, "Hg");
-        let sample_bounds = sample_line.get_typographic_bounds();
-        let ascent = sample_bounds.ascent as f32;
-        let descent = sample_bounds.descent.abs() as f32;
-        let base_line_height = ascent + descent;
-        let line_height = base_line_height * opts.line_spacing;
-
-        for line_text in &lines {
-            let line_text = line_text.trim_end();
-            if line_text.is_empty() {
-                line_measures.push(LineMeasure {
-                    glyphs: Vec::new(),
-                    positions: Vec::new(),
-                    width: 0.0,
-                });
-                continue;
-            }
-
-            if let Some((glyphs, mut positions)) = self.shape_line(&ct_font, line_text) {
-                // Apply letter spacing: shift each glyph by index * spacing
-                if letter_spacing_px.abs() > 0.001 {
-                    for (i, pos) in positions.iter_mut().enumerate() {
-                        pos.x += i as f64 * letter_spacing_px as f64;
-                    }
-                }
-                // Compute line width from last glyph position + font metrics
-                let ct_line = self.make_ct_line(&ct_font, line_text);
-                let bounds = ct_line.get_typographic_bounds();
-                let w = bounds.width as f32
-                    + (glyphs.len().saturating_sub(1)) as f32 * letter_spacing_px;
-                max_width = max_width.max(w);
-                line_measures.push(LineMeasure {
-                    glyphs,
-                    positions,
-                    width: w,
-                });
-            } else {
-                line_measures.push(LineMeasure {
-                    glyphs: Vec::new(),
-                    positions: Vec::new(),
-                    width: 0.0,
-                });
-            }
+        // Shape at the requested size. If the resulting bitmap would exceed the
+        // texture cap, reshape once at a reduced size so the glyphs scale to
+        // fit instead of being cropped — the compositor scales the bitmap back
+        // up (linear-filtered) so the on-screen size still matches.
+        let mut eff_font = font_size.max(1.0);
+        let mut shaped = self.shape_at(&lines, eff_font, opts)?;
+        let mut dims = BitmapDims::compute(&shaped, eff_font, opts);
+        if dims.over > 1.0 {
+            eff_font = (eff_font / dims.over).max(1.0);
+            shaped = self.shape_at(&lines, eff_font, opts)?;
+            dims = BitmapDims::compute(&shaped, eff_font, opts);
         }
 
-        if line_measures.iter().all(|m| m.glyphs.is_empty()) {
-            return None;
-        }
-
-        let num_lines = lines.len();
-        // Total height: first line = base_line_height, each additional line adds
-        // line_height. This way single-line text isn't padded by line_spacing.
-        let content_h = base_line_height + (num_lines.saturating_sub(1)) as f32 * line_height;
-
-        // A stroke straddles the glyph edge — half its width spills outward.
-        // Pad the bitmap so the outline isn't clipped. When there is no
-        // stroke, padding stays at PADDING so output is byte-identical to the
-        // fill-only path.
-        let stroke_px = (opts.stroke_width * font_size).max(0.0);
-        let want_stroke = stroke_px > 0.5;
-        let pad = if want_stroke {
-            PADDING + (stroke_px * 0.5).ceil() as u32
-        } else {
-            PADDING
-        };
-
-        let bitmap_w = (max_width.ceil() as u32 + pad * 2).min(MAX_BITMAP_DIM);
-        let bitmap_h = (content_h.ceil() as u32 + pad * 2).min(MAX_BITMAP_DIM);
+        let BitmapDims {
+            pad,
+            stroke_px,
+            want_stroke,
+            bitmap_w,
+            bitmap_h,
+            ..
+        } = dims;
 
         if bitmap_w == 0 || bitmap_h == 0 {
             return None;
         }
+
+        // Local handles so the render_pass closure below reads exactly as it
+        // did before — only their source (the ShapeResult) changed.
+        let line_measures = &shaped.line_measures;
+        let max_width = shaped.max_width;
+        let ascent = shaped.ascent;
+        let line_height = shaped.line_height;
+        let ct_font = &shaped.ct_font;
 
         let w = bitmap_w as usize;
         let h = bitmap_h as usize;
@@ -323,6 +322,103 @@ impl TextRasterizer {
             stroke,
             width: bitmap_w,
             height: bitmap_h,
+            rendered_font_px: eff_font,
+        })
+    }
+
+    /// Resolve the font and shape every line at `font_size`, returning the
+    /// glyph runs plus the metrics needed to size and place the bitmap.
+    /// Returns `None` when no line produced any glyphs.
+    fn shape_at(
+        &mut self,
+        lines: &[&str],
+        font_size: f32,
+        opts: &RasterizeOptions,
+    ) -> Option<ShapeResult> {
+        // Use system font by family name if provided, fall back to embedded
+        // Inter. Cache the resolved CTFont to avoid repeated name lookups and
+        // ensure the font is fully loaded before the first glyph draw.
+        let ct_font = if let Some(family) = opts.font_family {
+            if let Some((ref cached_fam, cached_size, ref cached_font)) = self.cached_ct_font {
+                if cached_fam == family && (cached_size - font_size as f64).abs() < 0.5 {
+                    cached_font.clone()
+                } else {
+                    self.resolve_and_cache_font(family, font_size as f64)
+                }
+            } else {
+                self.resolve_and_cache_font(family, font_size as f64)
+            }
+        } else {
+            core_text::font::new_from_CGFont(&self.cg_font, font_size as f64)
+        };
+
+        let letter_spacing_px = opts.letter_spacing * font_size;
+
+        // Font-level metrics (consistent across lines).
+        let sample_line = self.make_ct_line(&ct_font, "Hg");
+        let sample_bounds = sample_line.get_typographic_bounds();
+        let ascent = sample_bounds.ascent as f32;
+        let descent = sample_bounds.descent.abs() as f32;
+        let base_line_height = ascent + descent;
+        let line_height = base_line_height * opts.line_spacing;
+
+        let mut line_measures: Vec<LineMeasure> = Vec::with_capacity(lines.len());
+        let mut max_width: f32 = 0.0;
+
+        for line_text in lines {
+            let line_text = line_text.trim_end();
+            if line_text.is_empty() {
+                line_measures.push(LineMeasure {
+                    glyphs: Vec::new(),
+                    positions: Vec::new(),
+                    width: 0.0,
+                });
+                continue;
+            }
+
+            if let Some((glyphs, mut positions)) = self.shape_line(&ct_font, line_text) {
+                // Apply letter spacing: shift each glyph by index * spacing
+                if letter_spacing_px.abs() > 0.001 {
+                    for (i, pos) in positions.iter_mut().enumerate() {
+                        pos.x += i as f64 * letter_spacing_px as f64;
+                    }
+                }
+                // Compute line width from last glyph position + font metrics
+                let ct_line = self.make_ct_line(&ct_font, line_text);
+                let bounds = ct_line.get_typographic_bounds();
+                let w = bounds.width as f32
+                    + (glyphs.len().saturating_sub(1)) as f32 * letter_spacing_px;
+                max_width = max_width.max(w);
+                line_measures.push(LineMeasure {
+                    glyphs,
+                    positions,
+                    width: w,
+                });
+            } else {
+                line_measures.push(LineMeasure {
+                    glyphs: Vec::new(),
+                    positions: Vec::new(),
+                    width: 0.0,
+                });
+            }
+        }
+
+        if line_measures.iter().all(|m| m.glyphs.is_empty()) {
+            return None;
+        }
+
+        // Total height: first line = base_line_height, each additional line
+        // adds line_height. This way single-line text isn't padded by
+        // line_spacing.
+        let content_h = base_line_height + (lines.len().saturating_sub(1)) as f32 * line_height;
+
+        Some(ShapeResult {
+            ct_font,
+            line_measures,
+            max_width,
+            ascent,
+            content_h,
+            line_height,
         })
     }
 
@@ -419,6 +515,28 @@ mod tests {
         let stroke = rt.stroke.expect("stroke mask present when stroke_width > 0");
         assert_eq!(stroke.len(), (rt.width * rt.height) as usize);
         assert!(stroke.iter().any(|&p| p > 0), "stroke mask should be lit");
+    }
+
+    #[test]
+    fn test_rasterize_caps_oversized_to_fit() {
+        let mut rasterizer = TextRasterizer::new();
+        // A font size large enough that this string would blow past the
+        // texture cap — the layout must scale down to fit, not crop.
+        let rt = rasterizer
+            .rasterize("WIDETEXTWIDETEXT", 24000.0, &RasterizeOptions::default())
+            .unwrap();
+        assert!(
+            rt.width <= MAX_BITMAP_DIM && rt.height <= MAX_BITMAP_DIM,
+            "bitmap {}x{} must fit within the cap",
+            rt.width,
+            rt.height
+        );
+        assert!(
+            rt.rendered_font_px < 24000.0,
+            "font should scale down to fit, got {}",
+            rt.rendered_font_px
+        );
+        assert!(rt.fill.iter().any(|&p| p > 0), "scaled-down text still lit");
     }
 
     #[test]

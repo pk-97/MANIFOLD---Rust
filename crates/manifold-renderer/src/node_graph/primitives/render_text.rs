@@ -28,7 +28,7 @@ use crate::text_rasterizer::{HAlign, RasterizeOptions, TextRasterizer};
 struct RenderTextUniforms {
     pos_x: f32,
     pos_y: f32,
-    scale: f32,
+    display_scale: f32,
     aspect_ratio: f32,
     // -- 16-byte boundary --
     tex_width: f32,
@@ -171,7 +171,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Text + fontFamily come via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text fields into this primitive's String params. Scalar inputs are port-shadows-param: wire upstream LFOs / envelopes into `size`, `pos_x`, `pos_y`, `scale`, `h_align`, `v_align`, `letter_spacing`, `line_spacing`, `stroke_width` to animate them. `stroke_width` is a fraction of font size; > 0 rasterizes a second outline coverage mask (so width changes re-raster, but the per-frame cost stays the composite dispatch). `fill_color` / `stroke_color` are editor-set Color params blended in the shader — free to change, never re-rasterize, but not modulatable (the binding system is scalar-only). The coverage bitmaps are dirty-cached internally — re-rasterization only happens when text, font, font size, or styling actually change. Output is premultiplied alpha on a transparent background (fill over stroke), so it keys over the layer below instead of painting a black box; with fill=white and no stroke it matches the original white-glyph behaviour.",
+    composition_notes: "Text + fontFamily come via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text fields into this primitive's String params. Scalar inputs are port-shadows-param: wire upstream LFOs / envelopes into `size`, `pos_x`, `pos_y`, `scale`, `h_align`, `v_align`, `letter_spacing`, `line_spacing`, `stroke_width` to animate them. `stroke_width` is a fraction of font size; > 0 rasterizes a second outline coverage mask (so width changes re-raster, but the per-frame cost stays the composite dispatch). `fill_color` / `stroke_color` are editor-set Color params blended in the shader — free to change, never re-rasterize, but not modulatable (the binding system is scalar-only). Crispness: the glyphs are CPU-rasterized at their true on-screen pixel footprint (size × scale × output_height), so `scale` is folded into the raster — never a GPU magnify of a fixed bitmap — and the composite samples ~1:1 through a linear sampler. The result is sharp, anti-aliased edges at any size, scale, or output resolution. Oversized layouts scale down to fit the 16384² texture cap (linear-upscaled back to size) instead of cropping. Trade-off: animating size/scale re-rasterizes each frame (sub-ms CoreText for one line); static text is dirty-cached and re-rasterizes only when text, font, footprint, or styling actually change. Output is premultiplied alpha on a transparent background (fill over stroke), so it keys over the layer below instead of painting a black box; with fill=white and no stroke it matches the original white-glyph behaviour.",
     examples: ["assets/generator-presets/Text.json"],
     picker: { label: "Render Text", category: Atom },
     summary: "Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live.",
@@ -183,6 +183,7 @@ crate::primitive! {
         text_texture: Option<manifold_gpu::GpuTexture> = None,
         stroke_texture: Option<manifold_gpu::GpuTexture> = None,
         text_tex_dims: (u32, u32) = (0, 0),
+        display_scale: f32 = 1.0,
         cached_text: String = String::new(),
         cached_font_family: String = String::new(),
         cached_pixel_size: f32 = 0.0,
@@ -218,11 +219,14 @@ impl Primitive for RenderText {
             .to_owned();
 
         // Read scalars via port-shadows-param so upstream wires animate.
+        // `scale` is folded into the rasterization size (not a GPU magnify of a
+        // fixed bitmap) so the glyphs are always rendered at their true
+        // on-screen pixel footprint — crisp at any size/scale/output res.
         let size_frac = ctx.scalar_or_param("size", 0.25).clamp(0.02, 1.0);
-        let font_size = size_frac * h as f32;
+        let scale = ctx.scalar_or_param("scale", 1.0).max(0.01);
+        let font_size = size_frac * scale * h as f32;
         let pos_x = ctx.scalar_or_param("pos_x", 0.0);
         let pos_y = ctx.scalar_or_param("pos_y", 0.0);
-        let scale = ctx.scalar_or_param("scale", 1.0).max(0.01);
         let h_align = ctx.scalar_or_param("h_align", 1.0);
         let v_align = ctx.scalar_or_param("v_align", 1.0);
         let letter_spacing = ctx.scalar_or_param("letter_spacing", 0.0);
@@ -273,6 +277,9 @@ impl Primitive for RenderText {
             };
             match self.rasterizer.rasterize(&text, font_size, &opts) {
                 Some(result) => {
+                    // Bitmap may have been capped below the requested size; the
+                    // shader upscales by this ratio (1.0 in the common case).
+                    self.display_scale = (font_size / result.rendered_font_px.max(1.0)).max(1.0);
                     self.ensure_textures(ctx, result.width, result.height, result.stroke.is_some());
                     if let Some(ref texture) = self.text_texture {
                         ctx.gpu_encoder().native_enc.upload_texture(
@@ -338,7 +345,7 @@ impl Primitive for RenderText {
         let uniforms = RenderTextUniforms {
             pos_x,
             pos_y,
-            scale,
+            display_scale: self.display_scale,
             aspect_ratio: aspect,
             tex_width: self.text_tex_dims.0 as f32,
             tex_height: self.text_tex_dims.1 as f32,
@@ -360,6 +367,11 @@ impl Primitive for RenderText {
                 "node.render_text",
             )
         });
+        // Linear + clamp-to-edge: keeps CoreText's AA crisp when the bitmap is
+        // magnified, and the transparent PADDING border AAs the glyph edges.
+        let sampler = self
+            .sampler
+            .get_or_insert_with(|| gpu.device.create_sampler(&manifold_gpu::GpuSamplerDesc::default()));
 
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -376,8 +388,12 @@ impl Primitive for RenderText {
                     binding: 2,
                     texture: stroke_tex,
                 },
-                GpuBinding::Texture {
+                GpuBinding::Sampler {
                     binding: 3,
+                    sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
                     texture: out,
                 },
             ],

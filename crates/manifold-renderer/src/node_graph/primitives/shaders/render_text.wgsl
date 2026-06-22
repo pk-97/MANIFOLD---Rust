@@ -1,12 +1,16 @@
-// node.render_text — composite a CPU-rasterized R8Unorm glyph bitmap
-// into the output with position / scale / aspect / vertical alignment.
+// node.render_text — composite a CPU-rasterized R8Unorm glyph bitmap into
+// the output with position / aspect / vertical alignment. The bitmap is
+// rasterized at its full on-screen footprint (size × scale folded in), so it
+// samples ~1:1 and a linear sampler keeps CoreText's anti-aliasing crisp.
+// `display_scale` is the residual magnification (> 1 only when the bitmap was
+// capped at MAX_BITMAP_DIM and must be upscaled to the requested size).
 // Two coverage masks: `fill_tex` (glyph interior) and `stroke_tex` (outline,
 // only sampled when has_stroke > 0). Output is premultiplied alpha.
 
 struct Uniforms {
     pos_x: f32,
     pos_y: f32,
-    scale: f32,
+    display_scale: f32,
     aspect_ratio: f32,
     // -- 16-byte boundary --
     tex_width: f32,
@@ -25,10 +29,11 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-// R8Unorm bound as texture_2d (NOT storage — R8Unorm can't be storage on Metal).
+// R8Unorm bound as texture_2d + sampler (R8Unorm is filterable on Metal).
 @group(0) @binding(1) var fill_tex: texture_2d<f32>;
 @group(0) @binding(2) var stroke_tex: texture_2d<f32>;
-@group(0) @binding(3) var output: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var tex_sampler: sampler;
+@group(0) @binding(4) var output: texture_storage_2d<rgba16float, write>;
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -38,21 +43,21 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Pixel → normalized UV [0,1]
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
 
-    // Center-relative, aspect-corrected coordinates
+    // Center-relative, aspect-corrected coordinates, then offset by position.
     var p = uv - 0.5;
     p.x *= u.aspect_ratio;
+    p = p - vec2<f32>(u.pos_x, -u.pos_y);
 
-    // Apply position offset and inverse scale
-    p = (p - vec2<f32>(u.pos_x, -u.pos_y)) / u.scale;
-
-    // Map to text texture UV space.
-    // The text bitmap covers (tex_width / output_width) × (tex_height / output_height)
-    // of the normalized output space. Center it at origin.
+    // Map to text texture UV space. The bitmap covers
+    // (tex_width / output_width) × (tex_height / output_height) of the
+    // normalized output; `display_scale` enlarges that footprint only when the
+    // bitmap was capped (otherwise 1.0, so the raster size IS the screen size).
     let text_extent = vec2<f32>(u.tex_width, u.tex_height)
         / vec2<f32>(u.output_width, u.output_height);
     // Correct for aspect in x: text_extent.x is in pixel-space ratio,
     // but p.x is aspect-corrected. Undo aspect on the extent.
-    let half = vec2<f32>(text_extent.x * u.aspect_ratio, text_extent.y) * 0.5;
+    let half = vec2<f32>(text_extent.x * u.aspect_ratio, text_extent.y)
+        * 0.5 * u.display_scale;
 
     // Vertical alignment offset (in normalized coords).
     // v_align: 0=Top, 1=Center, 2=Bottom.
@@ -69,13 +74,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // No Y-flip needed: CG bitmap context row ordering matches GPU texture
-    // layout for this upload path (Metal replace_region preserves row order).
-    let texel = vec2<i32>(vec2<f32>(u.tex_width, u.tex_height) * tex_uv);
-    let fill_cov = textureLoad(fill_tex, texel, 0).r;
+    // Linear-sample the coverage masks. The bitmap carries CoreText's own
+    // anti-aliasing plus a transparent PADDING border, so bilinear filtering
+    // keeps the edges smooth at any size instead of stair-stepping. No Y-flip:
+    // the CG bitmap row order matches the GPU texture upload path.
+    let fill_cov = textureSampleLevel(fill_tex, tex_sampler, tex_uv, 0.0).r;
     var stroke_cov = 0.0;
     if u.has_stroke > 0.5 {
-        stroke_cov = textureLoad(stroke_tex, texel, 0).r;
+        stroke_cov = textureSampleLevel(stroke_tex, tex_sampler, tex_uv, 0.0).r;
     }
 
     // Premultiplied-alpha "over": fill on top of stroke on top of transparent.
