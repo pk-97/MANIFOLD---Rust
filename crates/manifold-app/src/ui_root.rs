@@ -104,14 +104,11 @@ pub enum DropdownContext {
     ParamContext(GraphParamTarget, manifold_core::effects::ParamId, f32), // gpt, param_id, default_val
     MacroSlotContext(usize),  // macro_index (right-click on macro slider)
     GenStringParamDropdown(usize), // string_param_index (dropdown selector)
-    AudioInputDevice,         // audio input device selection for live recording
     AudioSetupDevice,         // Audio Setup modal: capture input source
     AudioSendRoutings,        // Audio Setup: read-only list of a send's routings (device + layers)
     AudioSendChannel(manifold_core::AudioSendId), // Audio Setup: a send's input channel
-    LayerAudioSend(usize),                        // audio layer header: pick which send it feeds
-    ClipDetectQuantize,                           // audio clip inspector: detection quantize grid
-    ClipDetectLayer(usize),                       // audio clip inspector: instrument N target layer
-    AudioTriggerLayer(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand), // Audio Setup: a send/band route's target layer
+    // AudioInputDevice / LayerAudioSend / ClipDetectQuantize / ClipDetectLayer /
+    // AudioTriggerLayer retired — typed items (2b.11).
 }
 
 /// A selectable entry in the Audio Setup source dropdown. The dropdown mixes the
@@ -240,8 +237,6 @@ pub struct UIRoot {
     /// Updated from ContentState each frame.
     pub midi_device_names: Vec<String>,
 
-    /// Cached audio input device names for the recording audio device dropdown.
-    pub audio_input_device_names: Vec<String>,
     /// Currently selected audio input device name for live recording.
     pub selected_audio_input_device: Option<String>,
 
@@ -262,9 +257,6 @@ pub struct UIRoot {
     /// dropdown. `None` entries are non-selectable subdevice headers; the
     /// channel dropdown is built grouped, so item index ≠ channel index.
     audio_channel_item_map: Vec<Option<u16>>,
-    /// Item-index → send-id map for the currently-open layer Send dropdown.
-    /// Index 0 is "No send" (`None`); the rest map to a named send.
-    layer_send_map: Vec<Option<manifold_core::AudioSendId>>,
     /// Candidate routing layers (id + name) for the audio-clip detection
     /// target-layer dropdowns. Refreshed by `state_sync` when an audio clip is
     /// selected; read when an instrument's layer dropdown opens.
@@ -383,13 +375,11 @@ impl UIRoot {
             display_resolutions: Vec::new(),
             master_effect_names: Vec::new(),
             midi_device_names: Vec::new(),
-            audio_input_device_names: Vec::new(),
             selected_audio_input_device: None,
             audio_setup_devices: Vec::new(),
             audio_setup_apps: Vec::new(),
             audio_setup_source_map: Vec::new(),
             audio_channel_item_map: Vec::new(),
-            layer_send_map: Vec::new(),
             clip_detect_layers: Vec::new(),
             audio_trigger_layers: Vec::new(),
             inspector_resize_dragging: false,
@@ -1316,54 +1306,66 @@ impl UIRoot {
                 true
             }
             PanelAction::ClipDetectQuantizeClicked => {
+                // Typed (2b.11): each grid option carries its quantize step.
                 let items: Vec<DropdownItem> =
                     manifold_core::audio_clip_detection::quantize_grid_options()
                         .iter()
-                        .map(|(label, _)| DropdownItem::new(label))
+                        .map(|(label, step)| {
+                            DropdownItem::new(label)
+                                .with_action(PanelAction::ClipDetectSetQuantize(*step))
+                        })
                         .collect();
-                self.open_dropdown_at(DropdownContext::ClipDetectQuantize, items, trigger);
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::ClipDetectLayerClicked(idx) => {
                 // "Auto" (route by trigger name) first, then every candidate
-                // layer cached by state_sync.
+                // layer cached by state_sync — each carries its target layer.
                 let mut items = Vec::with_capacity(self.clip_detect_layers.len() + 1);
-                items.push(DropdownItem::new("Auto"));
-                for (_, name) in &self.clip_detect_layers {
-                    items.push(DropdownItem::new(name));
+                items.push(
+                    DropdownItem::new("Auto")
+                        .with_action(PanelAction::ClipDetectSetLayer(*idx, None)),
+                );
+                for (id, name) in &self.clip_detect_layers {
+                    items.push(DropdownItem::new(name).with_action(
+                        PanelAction::ClipDetectSetLayer(*idx, Some(id.clone())),
+                    ));
                 }
-                self.open_dropdown_at(DropdownContext::ClipDetectLayer(*idx), items, trigger);
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::AudioTriggerLayerClicked(send_id, band) => {
                 // "Auto" (route by send name) first, then every candidate layer
-                // cached by state_sync while the modal is open.
+                // cached by state_sync — each carries its target layer.
                 let mut items = Vec::with_capacity(self.audio_trigger_layers.len() + 1);
-                items.push(DropdownItem::new("Auto"));
-                for (_, name) in &self.audio_trigger_layers {
-                    items.push(DropdownItem::new(name));
+                items.push(DropdownItem::new("Auto").with_action(
+                    PanelAction::AudioTriggerSetLayer(send_id.clone(), *band, None),
+                ));
+                for (id, name) in &self.audio_trigger_layers {
+                    items.push(DropdownItem::new(name).with_action(
+                        PanelAction::AudioTriggerSetLayer(send_id.clone(), *band, Some(id.clone())),
+                    ));
                 }
-                self.open_dropdown_at(
-                    DropdownContext::AudioTriggerLayer(send_id.clone(), *band),
-                    items,
-                    trigger,
-                );
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::AudioSendClicked(idx) => {
                 // "No send" first, then every named send from Audio Setup so the
-                // layer dropdown and the setup panel can never disagree.
+                // layer dropdown and the setup panel can never disagree — each
+                // carries its SetLayerAudioSend directly.
                 let sends = self.audio_setup_panel.send_options();
                 let mut items = Vec::with_capacity(sends.len() + 1);
-                let mut map: Vec<Option<manifold_core::AudioSendId>> = Vec::with_capacity(sends.len() + 1);
-                items.push(DropdownItem::new("No send"));
-                map.push(None);
+                items.push(
+                    DropdownItem::new("No send")
+                        .with_action(PanelAction::SetLayerAudioSend(*idx, None)),
+                );
                 for (id, label) in sends {
-                    items.push(DropdownItem::new(&label));
-                    map.push(Some(id));
+                    items.push(
+                        DropdownItem::new(&label)
+                            .with_action(PanelAction::SetLayerAudioSend(*idx, Some(id))),
+                    );
                 }
-                self.layer_send_map = map;
-                self.open_dropdown_at(DropdownContext::LayerAudioSend(*idx), items, trigger);
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::AddEffectClicked(tab) => {
@@ -1459,19 +1461,21 @@ impl UIRoot {
                 true
             }
             PanelAction::SelectAudioInputDevice => {
-                // Enumerate audio input devices on demand.
-                self.audio_input_device_names =
+                // Enumerate audio input devices on demand; each item carries its
+                // SetAudioInputDevice action ("" = none/video-only).
+                let device_names: Vec<String> =
                     manifold_audio::capture::AudioCaptureDevice::list_devices()
                         .into_iter()
                         .map(|d| d.name)
                         .collect();
-                let mut items: Vec<DropdownItem> = vec![DropdownItem::new("None (video only)")];
-                items.extend(
-                    self.audio_input_device_names
-                        .iter()
-                        .map(|name| DropdownItem::new(name)),
-                );
-                self.open_dropdown_at(DropdownContext::AudioInputDevice, items, trigger);
+                let mut items: Vec<DropdownItem> = vec![
+                    DropdownItem::new("None (video only)")
+                        .with_action(PanelAction::SetAudioInputDevice(String::new())),
+                ];
+                items.extend(device_names.into_iter().map(|name| {
+                    DropdownItem::new(&name).with_action(PanelAction::SetAudioInputDevice(name))
+                }));
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::AudioSendRoutingsClicked(send_id) => {
@@ -1895,17 +1899,7 @@ impl UIRoot {
                 Some("Delete Layer") => Some(PanelAction::ContextDeleteLayer(layer_idx)),
                 _ => None,
             },
-            DropdownContext::AudioInputDevice => {
-                if index == 0 {
-                    // "None (video only)"
-                    Some(PanelAction::SetAudioInputDevice(String::new()))
-                } else {
-                    let device_idx = index - 1;
-                    self.audio_input_device_names
-                        .get(device_idx)
-                        .map(|name| PanelAction::SetAudioInputDevice(name.clone()))
-                }
-            }
+            // AudioInputDevice retired — typed items (2b.11).
             DropdownContext::AudioSendRoutings => None, // read-only: nothing to select
             DropdownContext::AudioSetupDevice => {
                 // Map the chosen row back to a source via the parallel choice map
@@ -1954,34 +1948,8 @@ impl UIRoot {
                         PanelAction::AudioSetSendChannels(send_id, channels)
                     })
             }
-            DropdownContext::LayerAudioSend(layer_idx) => self
-                .layer_send_map
-                .get(index)
-                .cloned()
-                .map(|send_id| PanelAction::SetLayerAudioSend(layer_idx, send_id)),
-            DropdownContext::ClipDetectQuantize => {
-                manifold_core::audio_clip_detection::quantize_grid_options()
-                    .get(index)
-                    .map(|(_, step)| PanelAction::ClipDetectSetQuantize(*step))
-            }
-            DropdownContext::ClipDetectLayer(inst_idx) => {
-                // Index 0 = "Auto" (None); the rest map to a cached layer.
-                let layer = if index == 0 {
-                    None
-                } else {
-                    self.clip_detect_layers.get(index - 1).map(|(id, _)| id.clone())
-                };
-                Some(PanelAction::ClipDetectSetLayer(inst_idx, layer))
-            }
-            DropdownContext::AudioTriggerLayer(send_id, band) => {
-                // Index 0 = "Auto" (None); the rest map to a cached layer.
-                let layer = if index == 0 {
-                    None
-                } else {
-                    self.audio_trigger_layers.get(index - 1).map(|(id, _)| id.clone())
-                };
-                Some(PanelAction::AudioTriggerSetLayer(send_id, band, layer))
-            }
+            // LayerAudioSend / ClipDetectQuantize / ClipDetectLayer /
+            // AudioTriggerLayer retired — typed items (2b.11).
             DropdownContext::CardContext(gpt) => {
                 // Label-matched: Copy/Paste are generator-only + conditional, so
                 // item indices shift — match the label, not a fixed position.
