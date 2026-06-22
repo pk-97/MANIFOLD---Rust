@@ -178,6 +178,11 @@ pub struct ContentPipeline {
     pub edr_headroom: f64,
     /// PQ encoder for HDR export. Lazily created on first HDR export frame.
     pq_encoder: Option<manifold_renderer::pq_encoder::PqEncoder>,
+    /// Reusable GPU→CPU readback for single-frame (still image) export.
+    /// Holds the in-flight blit between `submit_still_readback` (one tick) and
+    /// `take_still_readback` (the next). Idle except during a still capture.
+    #[cfg(target_os = "macos")]
+    still_readback: manifold_renderer::gpu_readback::ReadbackRequest,
     /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
     /// MetalFX Spatial full-frame upscaler. Present only when render_scale < 1.0
@@ -374,6 +379,8 @@ impl ContentPipeline {
             compositor,
             edr_headroom: 1.0,
             pq_encoder: None,
+            #[cfg(target_os = "macos")]
+            still_readback: manifold_renderer::gpu_readback::ReadbackRequest::new(),
             shared_output: shared,
             #[cfg(target_os = "macos")]
             metalfx: None,
@@ -2108,6 +2115,47 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         enc.commit();
 
         &self.pq_encoder.as_ref().unwrap().output.texture
+    }
+
+    /// Blit the final compositor output into the still-export readback buffer,
+    /// returning the captured dimensions. Signals the render-complete event
+    /// (like `pq_encode_for_export`) so `wait_for_render_complete` covers the
+    /// copy. Must be called *after* `render_content` so the blit reads a fully
+    /// written frame; pair with `take_still_readback` on the next tick.
+    /// Mirrors the LED readback pattern (separate encoder, post-render texture).
+    #[cfg(target_os = "macos")]
+    pub fn submit_still_readback(&mut self) -> (u32, u32) {
+        let native_device = self
+            .native_device
+            .as_ref()
+            .expect("native device required for still readback");
+        let (w, h) = self.compositor.dimensions();
+        let source = self.compositor.output_texture();
+        let mut enc = native_device.create_encoder("Still Readback");
+        {
+            let mut gpu_enc = GpuEncoder::new(&mut enc, native_device);
+            self.still_readback.submit(&mut gpu_enc, source, w, h);
+        }
+        // Signal the same event so wait_for_render_complete covers the copy.
+        if let Some(ref event) = self.native_event {
+            enc.signal_event(event);
+            self.native_signal_value = event.current_value();
+        }
+        enc.commit();
+        (w, h)
+    }
+
+    /// If a still readback is in flight, wait for GPU completion and return the
+    /// tightly-packed RGBA8 pixels (stride = width × 4). Returns `None` when
+    /// nothing is pending. Dimensions are whatever `submit_still_readback`
+    /// captured — read them from its return value, not the live compositor.
+    #[cfg(target_os = "macos")]
+    pub fn take_still_readback(&mut self) -> Option<Vec<u8>> {
+        if !self.still_readback.is_pending() {
+            return None;
+        }
+        self.wait_for_render_complete();
+        self.still_readback.try_read()
     }
 
     /// Duration of the last GPU poll (wait for completion) in milliseconds.

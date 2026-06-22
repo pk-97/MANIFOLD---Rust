@@ -181,6 +181,82 @@ impl Application {
         self.send_content_cmd(ContentCommand::StartExport(Box::new(config)));
     }
 
+    /// Export the current composited frame as a still image (PNG or JPEG).
+    /// Opens a save dialog, then asks the content thread to grab the next
+    /// rendered frame. PNG keeps alpha; JPEG (chosen via the `.jpg`/`.jpeg`
+    /// extension) is opaque, for cover-art upload. The frame matches whatever
+    /// is on screen, including live audio-modulation state at that instant.
+    pub(crate) fn export_frame(&mut self) {
+        use manifold_media::still_exporter::StillFormat;
+
+        // Pause rendering while the native file dialog is open (GPU contention).
+        self.send_content_cmd(ContentCommand::PauseRendering);
+
+        let saved_dir = crate::dialog_path_memory::get_last_directory(
+            crate::dialog_path_memory::DialogContext::ExportImage,
+            &mut self.user_prefs,
+        );
+        let project_name = if self.local_project.project_name.is_empty() {
+            "MANIFOLD_Frame"
+        } else {
+            &self.local_project.project_name
+        };
+        let default_name = format!("{project_name}.png");
+
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Export Frame")
+            .add_filter("PNG Image", &["png"])
+            .add_filter("JPEG Image", &["jpg", "jpeg"])
+            .set_file_name(&default_name);
+
+        if !saved_dir.is_empty() {
+            dialog = dialog.set_directory(&saved_dir);
+        } else {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            let desktop = std::path::Path::new(&home).join("Desktop");
+            if desktop.exists() {
+                dialog = dialog.set_directory(&desktop);
+            }
+        }
+
+        let result = dialog.save_file();
+        self.send_content_cmd(ContentCommand::ResumeRendering);
+
+        let Some(mut path) = result else {
+            return; // User cancelled
+        };
+
+        // Pick format from the chosen extension; default to PNG.
+        let format = match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("jpg") | Some("jpeg") => StillFormat::Jpeg { quality: 95 },
+            Some("png") => StillFormat::Png,
+            _ => {
+                // No / unknown extension — default to PNG and append it.
+                path.set_extension("png");
+                StillFormat::Png
+            }
+        };
+
+        let path_str = path.to_string_lossy().to_string();
+        crate::dialog_path_memory::remember_directory(
+            crate::dialog_path_memory::DialogContext::ExportImage,
+            &path_str,
+            &mut self.user_prefs,
+        );
+        self.user_prefs.save();
+
+        log::info!("[Application] Exporting frame -> {path_str}");
+        self.send_content_cmd(ContentCommand::ExportFrame {
+            path: path_str,
+            format,
+        });
+    }
+
     /// Import a video file and place it on the timeline at the current playhead.
     /// Opens a native file dialog, probes metadata, adds to VideoLibrary, and
     /// creates a TimelineClip at the playhead beat on the active layer.

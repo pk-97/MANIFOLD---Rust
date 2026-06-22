@@ -431,7 +431,7 @@ impl ResolutionPreset {
             ResolutionPreset::Portrait1080 => (1080, 1920),
             ResolutionPreset::Portrait1440 => (1440, 2560),
             ResolutionPreset::Portrait4K => (2160, 3840),
-            ResolutionPreset::Square4K => (2160, 2160),
+            ResolutionPreset::Square4K => (4000, 4000),
         }
     }
 

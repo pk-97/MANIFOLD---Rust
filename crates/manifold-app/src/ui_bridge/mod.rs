@@ -352,6 +352,7 @@ pub fn dispatch(
         | PanelAction::SaveProject
         | PanelAction::SaveProjectAs
         | PanelAction::ExportVideo
+        | PanelAction::ExportFrame
         | PanelAction::ExportXml
         | PanelAction::SetMidiNote(..)
         | PanelAction::SetMidiChannel(..)

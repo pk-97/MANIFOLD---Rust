@@ -79,7 +79,7 @@ pub(super) fn dispatch_project(
             );
             DispatchResult::handled()
         }
-        PanelAction::ExportVideo | PanelAction::ExportXml => {
+        PanelAction::ExportVideo | PanelAction::ExportFrame | PanelAction::ExportXml => {
             log::info!("Export action: {:?} (not yet wired)", action);
             DispatchResult::handled()
         }

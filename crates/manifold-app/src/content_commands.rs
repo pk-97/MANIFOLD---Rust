@@ -840,6 +840,20 @@ impl ContentThread {
             ContentCommand::CancelExport => {
                 // No-op outside of export loop — cancel flag checked inside run_export.
             }
+            #[cfg(target_os = "macos")]
+            ContentCommand::ExportFrame { path, format } => {
+                // Captured over the next two ticks by submit/poll_still_export.
+                // A new request supersedes any not-yet-submitted one.
+                self.still_export = Some(crate::content_thread::StillExportJob {
+                    path,
+                    format,
+                    dims: None,
+                });
+            }
+            #[cfg(not(target_os = "macos"))]
+            ContentCommand::ExportFrame { .. } => {
+                log::warn!("[ContentThread] Frame export not supported on this platform");
+            }
 
             // ── Live Recording ──────────────────────────────────────
             #[cfg(target_os = "macos")]

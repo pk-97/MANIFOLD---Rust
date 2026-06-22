@@ -53,6 +53,19 @@ pub struct CachedGraphSnapshot {
     pub snapshot: Arc<manifold_renderer::node_graph::GraphSnapshot>,
 }
 
+/// An in-flight "export current frame" request. Captured across two content
+/// ticks so the live render never stalls: tick N submits the GPU readback (and
+/// fills `dims`), tick N+1 reads the pixels back and hands them to an off-thread
+/// encoder. See [`ContentThread::submit_still_export_if_pending`] /
+/// [`ContentThread::poll_still_export`].
+pub struct StillExportJob {
+    pub path: String,
+    pub format: manifold_media::still_exporter::StillFormat,
+    /// Captured dimensions, set once the readback has been submitted. `None`
+    /// until then — the poll step skips jobs that haven't been submitted yet.
+    pub dims: Option<(u32, u32)>,
+}
+
 /// Owns all content-side state and runs the content loop.
 pub struct ContentThread {
     pub engine: PlaybackEngine,
@@ -112,6 +125,11 @@ pub struct ContentThread {
     // ── LED output ──
     /// LED/ArtNet output controller. None when not initialized.
     pub led_controller: Option<manifold_led::LedOutputController>,
+
+    /// Pending single-frame export, if any. Set by `ContentCommand::ExportFrame`
+    /// and cleared once the frame has been read back and dispatched to the
+    /// off-thread encoder. At most one capture is in flight at a time.
+    pub still_export: Option<StillExportJob>,
 
     // ── MIDI device cache ──
     /// Cached MIDI device names, refreshed every ~2 seconds.
@@ -518,6 +536,12 @@ impl ContentThread {
         let realtime = self.timer.realtime_since_start();
         self.time_since_start = Seconds(realtime);
 
+        // Read back a still-frame export submitted on the previous tick (if any).
+        // Runs before this frame's render so the GPU completion we wait on is the
+        // capture's, not a newer frame's. The encode itself runs off-thread.
+        #[cfg(target_os = "macos")]
+        self.poll_still_export(state_tx);
+
         // Refresh MIDI device list every ~2 seconds
         if (self.time_since_start - self.last_midi_device_scan_time).0 >= 2.0 {
             self.cached_midi_device_names =
@@ -707,6 +731,11 @@ impl ContentThread {
             self.editing_service.data_version(),
         );
         let _render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
+
+        // Submit a pending still-frame readback now that the frame the user sees
+        // is fully rendered. Read back next tick (see poll_still_export above).
+        #[cfg(target_os = "macos")]
+        self.submit_still_export_if_pending();
 
         #[cfg(feature = "profiling")]
         let _render_content_ms = _t0.elapsed().as_secs_f64() * 1000.0;

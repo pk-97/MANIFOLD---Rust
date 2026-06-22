@@ -43,6 +43,7 @@ const OPEN_RECENT_W: f32 = 92.0;
 const SAVE_BUTTON_W: f32 = 42.0;
 const SAVE_AS_W: f32 = 55.0;
 const EXPORT_BUTTON_W: f32 = 55.0;
+const FRAME_BUTTON_W: f32 = 48.0;
 const HDR_BUTTON_W: f32 = 35.0;
 const PERC_BUTTON_W: f32 = 48.0;
 
@@ -143,6 +144,7 @@ struct TransportLayout {
     save_button: Rect,
     save_as: Rect,
     export_button: Rect,
+    frame_button: Rect,
     hdr_button: Rect,
     perc_button: Rect,
 }
@@ -226,6 +228,8 @@ impl TransportLayout {
         x += SAVE_AS_W + RIGHT_SPACING + SECTION_SPACER;
         self.export_button = Rect::new(x, ey, EXPORT_BUTTON_W, eh);
         x += EXPORT_BUTTON_W + RIGHT_SPACING;
+        self.frame_button = Rect::new(x, ey, FRAME_BUTTON_W, eh);
+        x += FRAME_BUTTON_W + RIGHT_SPACING;
         self.hdr_button = Rect::new(x, ey, HDR_BUTTON_W, eh);
         x += HDR_BUTTON_W + RIGHT_SPACING;
         self.perc_button = Rect::new(x, ey, PERC_BUTTON_W, eh);
@@ -293,6 +297,8 @@ impl TransportLayout {
             + SECTION_SPACER
             + EXPORT_BUTTON_W
             + RIGHT_SPACING
+            + FRAME_BUTTON_W
+            + RIGHT_SPACING
             + HDR_BUTTON_W
             + RIGHT_SPACING
             + PERC_BUTTON_W
@@ -329,6 +335,7 @@ pub struct TransportPanel {
     save_button_id: i32,
     save_as_id: i32,
     export_button_id: i32,
+    frame_button_id: i32,
     hdr_button_id: i32,
     perc_button_id: i32,
 
@@ -394,6 +401,7 @@ impl TransportPanel {
             save_button_id: -1,
             save_as_id: -1,
             export_button_id: -1,
+            frame_button_id: -1,
             hdr_button_id: -1,
             perc_button_id: -1,
             clock_authority_text: "SRC:INT".into(),
@@ -1001,6 +1009,16 @@ impl TransportPanel {
             "EXPORT",
         ) as i32;
 
+        self.frame_button_id = tree.add_button(
+            bg,
+            self.layout.frame_button.x,
+            self.layout.frame_button.y,
+            self.layout.frame_button.width,
+            self.layout.frame_button.height,
+            button_style(color::BUTTON_INACTIVE_C32),
+            "FRAME",
+        ) as i32;
+
         let hdr_bg = if self.hdr_active {
             color::SYNC_ACTIVE
         } else {
@@ -1107,6 +1125,9 @@ impl TransportPanel {
         if id == self.export_button_id {
             return vec![PanelAction::ExportVideo];
         }
+        if id == self.frame_button_id {
+            return vec![PanelAction::ExportFrame];
+        }
         if id == self.hdr_button_id {
             return vec![PanelAction::ToggleHdr];
         }
@@ -1142,6 +1163,7 @@ impl TransportPanel {
         on(self.save_button_id, PanelAction::SaveProject);
         on(self.save_as_id, PanelAction::SaveProjectAs);
         on(self.export_button_id, PanelAction::ExportVideo);
+        on(self.frame_button_id, PanelAction::ExportFrame);
         on(self.hdr_button_id, PanelAction::ToggleHdr);
         on(self.perc_button_id, PanelAction::TogglePercussion);
     }
@@ -1218,7 +1240,8 @@ mod tests {
         assert!(panel.new_button_id >= 0);
         assert!(panel.save_button_id >= 0);
         assert!(panel.export_button_id >= 0);
-        assert!(tree.count() >= 27); // bg + 11 left + 7 center + 8 right = 27
+        assert!(panel.frame_button_id >= 0);
+        assert!(tree.count() >= 28); // bg + 11 left + 7 center + 9 right = 28
     }
 
     #[test]

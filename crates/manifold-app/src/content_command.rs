@@ -223,6 +223,14 @@ pub enum ContentCommand {
     /// is a known UX gap; leave the variant and plumbing ready to wire up.
     #[allow(dead_code)]
     CancelExport,
+    /// Export the current composited frame as a still image. Captured across
+    /// two content ticks (readback submit → read) so the live render never
+    /// stalls; the encode + disk write then run off-thread. See
+    /// `ContentThread::poll_still_export`.
+    ExportFrame {
+        path: String,
+        format: manifold_media::still_exporter::StillFormat,
+    },
 
     // ── Live Recording ───────────────────────────────────────────
     /// Start live recording. Captures output frames + optional audio.

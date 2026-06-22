@@ -151,6 +151,7 @@ pub enum PanelAction {
 
     // Export
     ExportVideo,
+    ExportFrame,
     ToggleHdr,
     ExportXml,
     TogglePercussion,

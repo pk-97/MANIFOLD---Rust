@@ -17,6 +17,7 @@ pub enum DialogContext {
     ProjectOpen,
     ProjectSave,
     ExportMP4,
+    ExportImage,
     ExportResolveXML,
     MidiImport,
     PercussionImport,

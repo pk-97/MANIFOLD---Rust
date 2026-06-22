@@ -1862,6 +1862,10 @@ impl Application {
                     self.start_export();
                     continue;
                 }
+                PanelAction::ExportFrame => {
+                    self.export_frame();
+                    continue;
+                }
                 PanelAction::OpenProject => {
                     self.open_project();
                     needs_structural_sync = true;

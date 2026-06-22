@@ -461,6 +461,73 @@ impl ContentThread {
         }
     }
 
+    /// Submit a pending still-frame export's GPU readback, if one is waiting and
+    /// hasn't been submitted yet. Called right after `render_content` so the blit
+    /// reads a fully-rendered frame. Records the captured dimensions on the job.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn submit_still_export_if_pending(&mut self) {
+        if let Some(job) = self.still_export.as_mut()
+            && job.dims.is_none()
+        {
+            let dims = self.content_pipeline.submit_still_readback();
+            // Re-borrow: submit_still_readback took &mut self.content_pipeline.
+            if let Some(job) = self.still_export.as_mut() {
+                job.dims = Some(dims);
+            }
+        }
+    }
+
+    /// Read back a submitted still-frame export and dispatch the encode + disk
+    /// write to a detached thread (a 4000×4000 PNG is too heavy to encode on the
+    /// content thread). The finished event is sent from that thread. No-op until
+    /// the readback has been submitted (`dims` set) and the GPU copy is readable.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn poll_still_export(&mut self, state_tx: &Sender<ContentState>) {
+        // Only act once the readback has been submitted (dims set on the prior tick).
+        if self.still_export.as_ref().is_none_or(|j| j.dims.is_none()) {
+            return;
+        }
+        let Some(pixels) = self.content_pipeline.take_still_readback() else {
+            return;
+        };
+        let job = self.still_export.take().expect("checked above");
+        let (w, h) = job.dims.expect("checked above");
+        let path = job.path;
+        let format = job.format;
+        let tx = state_tx.clone();
+
+        std::thread::Builder::new()
+            .name("still-export-encode".into())
+            .spawn(move || {
+                let (success, message) = match manifold_media::still_exporter::save_still(
+                    &pixels,
+                    w,
+                    h,
+                    std::path::Path::new(&path),
+                    format,
+                ) {
+                    Ok(()) => {
+                        log::info!("[ContentThread] Exported frame to {path}");
+                        (true, format!("Exported frame to {path}"))
+                    }
+                    Err(e) => {
+                        log::error!("[ContentThread] Frame export failed: {e}");
+                        (false, e)
+                    }
+                };
+                let state = ContentState {
+                    export_finished: Some(ExportFinishedEvent {
+                        success,
+                        message,
+                        output_path: path,
+                    }),
+                    ..ContentState::default()
+                };
+                let _ = tx.send(state);
+            })
+            .expect("failed to spawn still-export thread");
+    }
+
     /// Send export finished event to the UI thread.
     pub(crate) fn send_export_finished(
         &self,
