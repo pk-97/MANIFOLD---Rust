@@ -103,7 +103,6 @@ pub enum DropdownContext {
     // GenStringParamDropdown.
     LayerContext(usize), // survives only for its color swatches (text items are typed)
     AudioSendRoutings,   // Audio Setup: read-only list of a send's routings (device + layers)
-    AudioSendChannel(manifold_core::AudioSendId), // Audio Setup: a send's input channel
 }
 
 /// Fine-grained tracking of what scroll-related state changed.
@@ -228,10 +227,6 @@ pub struct UIRoot {
     /// refreshed alongside `audio_setup_devices`. Empty on OSes without app-audio
     /// tapping.
     audio_setup_apps: Vec<manifold_audio::directory::AppAudioSource>,
-    /// Item-index → channel-index map for the currently-open send-channel
-    /// dropdown. `None` entries are non-selectable subdevice headers; the
-    /// channel dropdown is built grouped, so item index ≠ channel index.
-    audio_channel_item_map: Vec<Option<u16>>,
     /// Candidate routing layers (id + name) for the audio-clip detection
     /// target-layer dropdowns. Refreshed by `state_sync` when an audio clip is
     /// selected; read when an instrument's layer dropdown opens.
@@ -353,7 +348,6 @@ impl UIRoot {
             selected_audio_input_device: None,
             audio_setup_devices: Vec::new(),
             audio_setup_apps: Vec::new(),
-            audio_channel_item_map: Vec::new(),
             clip_detect_layers: Vec::new(),
             audio_trigger_layers: Vec::new(),
             inspector_resize_dragging: false,
@@ -790,11 +784,12 @@ impl UIRoot {
                     self.dropdown_context = None;
                     actions.push(action);
                 }
-                DropdownAction::Selected(index) => {
-                    if let Some(ctx) = self.dropdown_context.take()
-                        && let Some(action) = self.dropdown_to_action(ctx, index)
-                    {
-                        actions.push(action);
+                DropdownAction::Selected(_) => {
+                    // 2b.11: every selectable item is typed and fires SelectedAction
+                    // above, so a positional Selected can only be a non-action item.
+                    // Nothing to map — just drop any stale context once closed.
+                    if !self.dropdown.is_open() {
+                        self.dropdown_context = None;
                     }
                 }
                 DropdownAction::ColorSelected(color_idx) => {
@@ -1539,13 +1534,15 @@ impl UIRoot {
                 // A tap source (system / app output) is a fixed stereo mixdown, so
                 // it has no hardware channel layout — present Left/Right. A device
                 // source builds its true layout, grouped by subdevice, with
-                // platform channel names.
-                let (items, map) = if self
+                // platform channel names. Each row carries its typed channel action
+                // (2b.11), preserving the send's mono/stereo pairing.
+                let stereo = self.audio_setup_panel.is_send_stereo(send_id);
+                let items = if self
                     .audio_setup_panel
                     .current_device()
                     .is_some_and(|d| d.is_tap())
                 {
-                    build_tap_channel_dropdown()
+                    build_tap_channel_dropdown(send_id, stereo)
                 } else {
                     let dir = manifold_audio::directory::system_directory();
                     let device = match self.audio_setup_panel.current_device() {
@@ -1553,14 +1550,9 @@ impl UIRoot {
                         // No explicit device → the system default input.
                         None => dir.list_input_devices().into_iter().find(|d| d.is_default),
                     };
-                    build_channel_dropdown(device.as_ref())
+                    build_channel_dropdown(device.as_ref(), send_id, stereo)
                 };
-                self.audio_channel_item_map = map;
-                self.open_dropdown_at(
-                    DropdownContext::AudioSendChannel(send_id.clone()),
-                    items,
-                    trigger,
-                );
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::SelectClkDevice => {
@@ -1930,38 +1922,11 @@ impl UIRoot {
         }
     }
 
-    /// Convert a dropdown selection into the appropriate PanelAction based on context.
-    fn dropdown_to_action(&self, ctx: DropdownContext, index: usize) -> Option<PanelAction> {
-        match ctx {
-            // BlendMode / MidiNote / MidiChannel / MidiDevice / Resolution /
-            // ClkDevice / ClipContext / TrackContext retired — typed items (2b.11).
-            // LayerContext text items are typed (2b.11); the variant survives only
-            // so its color swatches resolve via dropdown_color_to_action, so a text
-            // Selected(index) never reaches here.
-            DropdownContext::LayerContext(_) => None,
-            // AudioInputDevice retired — typed items (2b.11).
-            DropdownContext::AudioSendRoutings => None, // read-only: nothing to select
-            // AudioSetupDevice retired — typed items (2b.11).
-            DropdownContext::AudioSendChannel(send_id) => {
-                // The channel list is grouped (subdevice headers are non-
-                // selectable), so map the item index back to a channel index.
-                // Preserve the send's mono/stereo state: a stereo send picks the
-                // chosen channel plus its pair partner.
-                let stereo = self.audio_setup_panel.is_send_stereo(&send_id);
-                self.audio_channel_item_map
-                    .get(index)
-                    .copied()
-                    .flatten()
-                    .map(|ch| {
-                        let channels = if stereo { vec![ch, ch + 1] } else { vec![ch] };
-                        PanelAction::AudioSetSendChannels(send_id, channels)
-                    })
-            }
-            // LayerAudioSend / ClipDetectQuantize / ClipDetectLayer /
-            // AudioTriggerLayer / CardContext / ParamContext / MacroSlotContext /
-            // GenStringParamDropdown / MasterExitPath retired — typed items (2b.11).
-        }
-    }
+    // dropdown_to_action removed (2b.11): every selectable dropdown item now
+    // carries its own PanelAction via DropdownItem::with_action and fires
+    // DropdownAction::SelectedAction directly. The only surviving DropdownContexts
+    // are LayerContext (its color swatches, handled below) and AudioSendRoutings
+    // (read-only), neither of which maps a positional text Selected(index).
 
     /// Convert a color swatch selection into the appropriate PanelAction.
     fn dropdown_color_to_action(
@@ -2213,50 +2178,67 @@ impl UIRoot {
     }
 }
 
-/// Build the send-channel dropdown for `device`, grouped by subdevice with
-/// platform channel names. Returns the items and a parallel item-index →
-/// channel-index map (`None` for non-selectable subdevice headers). Falls back
-/// to a single mono entry when no device metadata is available.
-/// Channel dropdown for a tap source. Output taps are a fixed stereo mixdown, so
-/// the choices are simply Left (0) and Right (1) — the same item-index → channel
-/// map shape as [`build_channel_dropdown`], so the selection handler is shared.
-fn build_tap_channel_dropdown() -> (Vec<DropdownItem>, Vec<Option<u16>>) {
-    (
-        vec![DropdownItem::new("Left"), DropdownItem::new("Right")],
-        vec![Some(0), Some(1)],
-    )
+/// The `AudioSetSendChannels` action a channel row fires (2b.11): a stereo send
+/// picks the chosen channel plus its pair partner, a mono send just the channel.
+fn send_channels_action(
+    send_id: &manifold_core::AudioSendId,
+    stereo: bool,
+    ch: u16,
+) -> PanelAction {
+    let channels = if stereo { vec![ch, ch + 1] } else { vec![ch] };
+    PanelAction::AudioSetSendChannels(send_id.clone(), channels)
 }
 
+/// Channel dropdown for a tap source. Output taps are a fixed stereo mixdown, so
+/// the choices are simply Left (0) and Right (1). Each row carries its typed
+/// channel action.
+fn build_tap_channel_dropdown(
+    send_id: &manifold_core::AudioSendId,
+    stereo: bool,
+) -> Vec<DropdownItem> {
+    vec![
+        DropdownItem::new("Left").with_action(send_channels_action(send_id, stereo, 0)),
+        DropdownItem::new("Right").with_action(send_channels_action(send_id, stereo, 1)),
+    ]
+}
+
+/// Build the send-channel dropdown for `device`, grouped by subdevice with
+/// platform channel names; each selectable row carries its typed channel action
+/// (subdevice headers stay non-selectable). Falls back to a single mono entry
+/// when no device metadata is available.
 fn build_channel_dropdown(
     device: Option<&manifold_audio::directory::DeviceInfo>,
-) -> (Vec<DropdownItem>, Vec<Option<u16>>) {
+    send_id: &manifold_core::AudioSendId,
+    stereo: bool,
+) -> Vec<DropdownItem> {
+    let fallback =
+        || vec![DropdownItem::new("Channel 1").with_action(send_channels_action(send_id, stereo, 0))];
     let Some(device) = device else {
-        return (vec![DropdownItem::new("Channel 1")], vec![Some(0)]);
+        return fallback();
     };
     if device.channels.is_empty() {
-        return (vec![DropdownItem::new("Channel 1")], vec![Some(0)]);
+        return fallback();
     }
 
     let mut items = Vec::new();
-    let mut map: Vec<Option<u16>> = Vec::new();
+    let row = |ch: &manifold_audio::directory::ChannelInfo| {
+        DropdownItem::new(&ch.display_name()).with_action(send_channels_action(send_id, stereo, ch.index))
+    };
 
     if device.subdevices.is_empty() {
         for ch in &device.channels {
-            items.push(DropdownItem::new(&ch.display_name()));
-            map.push(Some(ch.index));
+            items.push(row(ch));
         }
     } else {
         for group in &device.subdevices {
             items.push(DropdownItem::disabled(&group.name));
-            map.push(None);
             let end = group.channel_start.saturating_add(group.channel_count);
             for idx in group.channel_start..end {
                 if let Some(ch) = device.channels.get(idx as usize) {
-                    items.push(DropdownItem::new(&ch.display_name()));
-                    map.push(Some(ch.index));
+                    items.push(row(ch));
                 }
             }
         }
     }
-    (items, map)
+    items
 }
