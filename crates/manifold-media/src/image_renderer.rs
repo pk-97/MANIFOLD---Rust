@@ -195,7 +195,10 @@ impl ImageRenderer {
             width: w,
             height: h,
             depth: 1,
-            format: GpuTextureFormat::Rgba8Unorm,
+            // sRGB-typed: the compositor samples this with a sampler, so the GPU
+            // converts the sRGB-encoded PNG/JPEG bytes to linear on read, matching
+            // the linear/EDR compositing pipeline (otherwise colours blow out).
+            format: GpuTextureFormat::Rgba8UnormSrgb,
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
             label: "ImageClip",
@@ -436,6 +439,17 @@ fn fit_native(native: &NativeImage, target_w: u32, target_h: u32) -> Result<Fitt
         let d = (oy + y) * dst_row + ox * 4;
         canvas[d..d + src_row].copy_from_slice(&src[s..s + src_row]);
     }
+    // The compositor blends layers with premultiplied alpha; image decode yields
+    // straight alpha. Premultiply RGB by alpha so transparent pixels carry no
+    // colour — otherwise alpha-over adds the hidden RGB and the background bleeds
+    // through. Letterbox pixels are already (0,0,0,0). (Edge approximation: the
+    // multiply is in sRGB space, exact at alpha 0 and 1.)
+    for px in canvas.chunks_exact_mut(4) {
+        let a = px[3] as u16;
+        px[0] = (px[0] as u16 * a / 255) as u8;
+        px[1] = (px[1] as u16 * a / 255) as u8;
+        px[2] = (px[2] as u16 * a / 255) as u8;
+    }
     Ok(FittedImage {
         width: target_w,
         height: target_h,
@@ -466,6 +480,18 @@ mod tests {
     fn decode_native_reports_missing_file() {
         let err = decode_native("/definitely/not/here.png").unwrap_err();
         assert!(err.contains("open"));
+    }
+
+    #[test]
+    fn fit_premultiplies_straight_alpha() {
+        // 1x1 source, straight alpha. The compositor wants premultiplied alpha,
+        // so RGB must come out scaled by alpha (else the background bleeds).
+        let native = NativeImage { width: 1, height: 1, rgba: vec![200, 100, 50, 128] };
+        let fit = fit_native(&native, 1, 1).unwrap();
+        assert_eq!(fit.rgba[0], (200u16 * 128 / 255) as u8); // 100
+        assert_eq!(fit.rgba[1], (100u16 * 128 / 255) as u8); // 50
+        assert_eq!(fit.rgba[2], (50u16 * 128 / 255) as u8);  // 25
+        assert_eq!(fit.rgba[3], 128, "alpha is preserved straight");
     }
 
     #[test]
