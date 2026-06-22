@@ -8,18 +8,19 @@
 //! `position` scalar (0..1).
 //!
 //! File I/O happens on a background thread (`std::thread::spawn` + an
-//! `mpsc::channel`) so the 60 FPS content thread never stalls on a
-//! TIFF decode. At most one load is in flight at a time; if the user
+//! `mpsc::channel`) so the 60 FPS content thread never stalls on an
+//! image decode. At most one load is in flight at a time; if the user
 //! drags `position` fast enough that the channel hasn't returned the
 //! previous slice yet, intermediate positions get skipped. The current
 //! slice texture stays on screen until the next load lands — no black
 //! frames during scrubs.
 //!
-//! Supported formats today: TIFF (u8 / u16 / f32 grayscale). Lifted
-//! from the legacy `mri_volume_loader::load_tiff_slice` so the bit
-//! representation of an MRI scan stays identical. PNG / JPG support
-//! would add an `image` crate dependency; deferred until a second use
-//! case asks for it.
+//! Supported formats: PNG, JPEG, WebP, BMP, GIF (via the `image` crate)
+//! plus TIFF. TIFF keeps its own dedicated path (`load_tiff_slice`,
+//! lifted from the legacy `mri_volume_loader`) so the bit representation
+//! of a u8 / u16 / f32 grayscale MRI scan stays identical — the `image`
+//! crate can't decode f32-grayscale TIFFs and would clamp the others.
+//! `load_image` dispatches by extension.
 //!
 //! Aspect-fit + uv_scale zoom are built in — same math as the legacy
 //! `mri_slice_compute.wgsl`. Downstream window/level / sharpen / invert
@@ -109,7 +110,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Folder path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text field into this primitive's `folder` param. Position is port-shadowed for LFO-driven scrubbing (the MRI scan slice sweep that drives the show). Output is rgba16float; grayscale TIFF sources are broadcast to R=G=B with A=1 so the texture is uniformly RGBA downstream. Use node.smoothstep_texture downstream for window/level remapping and node.convolution_2d_9tap for sharpening. The `trigger_count` scalar output is a monotonically increasing counter that bumps each time a NEW slice actually lands on the GPU (not per position-slider movement — fast scrubs that outrun the background loader skip intermediate frames and only tick once per visible swap). Wire it into node.trigger_gate / node.sample_and_hold / node.clip_trigger_index downstream to drive per-image randomization. Fires once at startup when the first slice loads; never resets on folder change (downstream gates compare deltas, monotonic matches the system.generator_input.trigger_count convention). The `next` and `prev` scalar inputs are trigger_count-style monotonic counters: each rising edge bumps the displayed image by ±1 (clamped to [0, N-1]). Wire MIDI buttons, keyboard shortcuts, clip retriggers — anything that already emits a monotonic trigger_count. Last-input-wins between slider and buttons: a button press holds its position until the user moves the slider, at which point the slider takes over again.",
+    composition_notes: "Folder path comes via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text field into this primitive's `folder` param. Position is port-shadowed for LFO-driven scrubbing (the MRI scan slice sweep that drives the show). Output is rgba16float; color sources (png/jpg/webp/bmp/gif) decode straight to RGBA; grayscale TIFF sources are broadcast to R=G=B with A=1 so the texture is uniformly RGBA downstream. Use node.smoothstep_texture downstream for window/level remapping and node.convolution_2d_9tap for sharpening. The `trigger_count` scalar output is a monotonically increasing counter that bumps each time a NEW slice actually lands on the GPU (not per position-slider movement — fast scrubs that outrun the background loader skip intermediate frames and only tick once per visible swap). Wire it into node.trigger_gate / node.sample_and_hold / node.clip_trigger_index downstream to drive per-image randomization. Fires once at startup when the first slice loads; never resets on folder change (downstream gates compare deltas, monotonic matches the system.generator_input.trigger_count convention). The `next` and `prev` scalar inputs are trigger_count-style monotonic counters: each rising edge bumps the displayed image by ±1 (clamped to [0, N-1]). Wire MIDI buttons, keyboard shortcuts, clip retriggers — anything that already emits a monotonic trigger_count. Last-input-wins between slider and buttons: a button press holds its position until the user moves the slider, at which point the slider takes over again.",
     examples: [],
     picker: { label: "Image Folder", category: Atom },
     summary: "Plays through a folder of images with a single position knob, so you can scrub or sequence stills. Point it at a folder and drive the position.",
@@ -159,9 +160,13 @@ crate::primitive! {
     },
 }
 
-/// Image extensions recognised when scanning a folder. Sort happens
-/// after filtering so the order matches `ls` (alphabetical).
-const IMAGE_EXTENSIONS: &[&str] = &["tiff", "tif", "TIFF", "TIF"];
+/// Image extensions recognised when scanning a folder, lowercase. The
+/// scan lowercases each file's extension before comparing, so `.JPG`,
+/// `.Png`, etc. all match. Sort happens after filtering so the order
+/// matches `ls` (alphabetical). TIFF decodes on the dedicated `tiff`
+/// path (bit-exact MRI grayscale); the rest go through the `image` crate.
+const IMAGE_EXTENSIONS: &[&str] =
+    &["tiff", "tif", "png", "jpg", "jpeg", "webp", "bmp", "gif"];
 
 impl Primitive for ImageFolder {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -291,7 +296,7 @@ impl Primitive for ImageFolder {
             let (tx, rx) = mpsc::channel();
             self.pending_index = target_idx;
             std::thread::spawn(move || {
-                let _ = tx.send(load_tiff_slice(&path));
+                let _ = tx.send(load_image(&path));
             });
             self.pending_load = Some(rx);
         }
@@ -393,11 +398,35 @@ fn scan_folder(dir: &Path) -> Vec<PathBuf> {
         .filter(|p| {
             p.extension()
                 .and_then(|s| s.to_str())
-                .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext))
+                .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
         })
         .collect();
     paths.sort();
     paths
+}
+
+/// Decode any supported image file into RGBA8. TIFF routes to the
+/// dedicated `tiff` path (preserving the bit-exact u16/f32 grayscale
+/// handling that MRI scans rely on); everything else goes through the
+/// `image` crate, which already lands RGBA8 for png/jpg/webp/bmp/gif.
+fn load_image(path: &Path) -> Result<DecodedSlice, String> {
+    let is_tiff = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff"))
+        .unwrap_or(false);
+    if is_tiff {
+        return load_tiff_slice(path);
+    }
+
+    let img = image::open(path)
+        .map_err(|e| format!("decode {}: {}", path.display(), e))?;
+    let rgba = img.to_rgba8();
+    Ok(DecodedSlice {
+        width: rgba.width(),
+        height: rgba.height(),
+        rgba: rgba.into_raw(),
+    })
 }
 
 /// Decode a TIFF file into RGBA8. Grayscale sources broadcast to all
@@ -490,5 +519,24 @@ mod tests {
         assert!(paths.is_empty());
         let paths = scan_folder(Path::new("/nonexistent/path/that/does/not/exist"));
         assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn scan_matches_supported_formats_any_case_and_sorts() {
+        let dir = std::env::temp_dir().join("manifold_image_folder_scan_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A mix of supported (varied case) and unsupported extensions.
+        for name in ["b.PNG", "a.jpg", "c.tiff", "d.WebP", "e.txt", "f.mp4"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let paths = scan_folder(&dir);
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        // Sorted alphabetically; .txt and .mp4 filtered out; case-insensitive.
+        assert_eq!(names, vec!["a.jpg", "b.PNG", "c.tiff", "d.WebP"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
