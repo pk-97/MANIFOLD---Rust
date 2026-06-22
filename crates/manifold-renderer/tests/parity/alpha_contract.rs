@@ -14,6 +14,28 @@
 //! and the permanent regression guard. Genuine exceptions — effects that are
 //! opaque by design — go in [`OPAQUE_BY_DESIGN`]; everything else must be
 //! fixed to carry the input's alpha.
+//!
+//! ## Coverage and known gaps (2026-06-22)
+//!
+//! Covered: every texture→texture effect. The only display violator found
+//! was `node.color_ramp` (now fixed).
+//!
+//! The "could not probe" nodes need non-texture inputs (Channels arrays /
+//! mesh / camera / material) the transparent probe can't synthesise. They
+//! were verified alpha-correct by *reading* the shaders, not by this probe:
+//!   - `draw_dots/markers/ticks/connections/gauge` write `(src.rgb + …, src.a)`
+//!     — they preserve input alpha.
+//!   - `render_filled_rects` outputs premultiplied `(color*a, 0)` with an
+//!     additive blend that keeps the destination alpha.
+//!   - `render_3d_mesh` / `…instanced…` clear the colour target to
+//!     transparent `(0,0,0,0)` and draw opaque geometry over it → keyable.
+//!   - `downsample` is a resize (size mismatch defeats the probe, not alpha);
+//!     `feedback` is stateful (handles alpha per-mode in its shader).
+//!
+//! Not covered here: GENERATORS (no texture input, so out of this sweep).
+//! `render_text` is guarded by its own gpu_test; `basic_shape` writes coverage
+//! to alpha correctly (verified by reading). A generator-keying probe is the
+//! natural next extension if the sparse-generator surface grows.
 
 use std::panic::{self, AssertUnwindSafe};
 
