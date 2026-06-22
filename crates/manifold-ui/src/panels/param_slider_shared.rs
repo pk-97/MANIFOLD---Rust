@@ -8,6 +8,7 @@
 use super::DriverConfigAction;
 use super::TrimKind;
 use super::param_card::ParamInfo;
+use crate::chrome::View;
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -598,30 +599,14 @@ pub(crate) fn dropdown_trigger_style(font_size: u16) -> UIStyle {
     }
 }
 
-/// Build a dropdown trigger button at `rect` showing `current` plus a trailing
-/// `▾`. Returns the node id; the owning panel emits a "clicked" `PanelAction`
-/// whose app-side `try_open_dropdown` opens the menu anchored to this node.
-/// One builder so every dropdown affordance in the inspector looks the same.
-pub(crate) fn build_dropdown_trigger(
-    tree: &mut UITree,
-    parent: Option<NodeId>,
-    rect: Rect,
-    current: &str,
-    font_size: u16,
-) -> NodeId {
-    // Trailing chevron kept inside the same button so the whole cell is one
-    // hit target. A leading space pads the label off the left edge. U+25BC (▼)
-    // is in the atlas (the tree collapse chevron); U+25BE (▾) is not.
-    let text = format!(" {current}   \u{25BC}");
-    tree.add_button(
-        parent,
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
-        dropdown_trigger_style(font_size),
-        &text,
-    )
+/// A dropdown trigger as a typed Chrome [`View`] component — the declarative
+/// twin of [`build_dropdown_trigger`]. A panel drops this into its description
+/// (size it + `.key(K)` to resolve the click, and `.inert()` since the gesture
+/// routes through the panel's `handle_click`); it renders byte-identically to the
+/// imperative builder. The granular building block the inspector cards compose
+/// instead of hand-building a trigger into a slot.
+pub(crate) fn dropdown_trigger_view(current: &str, font_size: u16) -> View {
+    View::button(format!(" {current}   \u{25BC}")).style(dropdown_trigger_style(font_size))
 }
 
 // ── Shared builder functions ────────────────────────────────────

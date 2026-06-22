@@ -9,7 +9,7 @@
 //! stays with `SliderDragState`. Public interface unchanged → inspector untouched.
 
 use super::PanelAction;
-use super::param_slider_shared::build_dropdown_trigger;
+use super::param_slider_shared::dropdown_trigger_view;
 use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
 use crate::node::*;
@@ -50,12 +50,12 @@ const KEY_WARP: u64 = 2;
 const KEY_LOOP: u64 = 3;
 const KEY_DETECT: u64 = 4;
 const KEY_CLEAR: u64 = 5;
-const KEY_QUANTIZE_SLOT: u64 = 6;
+const KEY_QUANTIZE: u64 = 6;
 const KEY_ONSET: u64 = 7;
 const KEY_PROGRESS_SLOT: u64 = 8;
 const KEY_INSTR_ENABLE_BASE: u64 = 100;
 const KEY_INSTR_SLIDER_BASE: u64 = 200;
-const KEY_INSTR_LAYER_SLOT_BASE: u64 = 300;
+const KEY_INSTR_LAYER_BASE: u64 = 300;
 
 // ── ClipChromePanel ──────────────────────────────────────────────
 
@@ -90,8 +90,6 @@ pub struct ClipChromePanel {
     /// Resolved at build from the host keys — used by `handle_click`'s position().
     instrument_enable_btn_ids: Vec<Option<NodeId>>,
     instrument_layer_btn_ids: Vec<Option<NodeId>>,
-    /// Dropdown trigger id (built into its keyed slot).
-    quantize_dropdown_id: Option<NodeId>,
     /// Detection progress bar (built into its keyed slot, updated by sync).
     detect_progress_bg_id: Option<NodeId>,
     detect_progress_fill_id: Option<NodeId>,
@@ -133,7 +131,6 @@ impl ClipChromePanel {
             instrument_sens_sliders: Vec::new(),
             instrument_enable_btn_ids: Vec::new(),
             instrument_layer_btn_ids: Vec::new(),
-            quantize_dropdown_id: None,
             detect_progress_bg_id: None,
             detect_progress_fill_id: None,
             detect_progress_bg_rect: Rect::ZERO,
@@ -409,10 +406,14 @@ impl ClipChromePanel {
                 .h(Sizing::Fixed(QO_ROW_H))
                 .cross_align(Align::Center)
                 .child(
-                    View::panel()
-                        .fill_w()
-                        .h(Sizing::Fixed(ROW_BTN_H))
-                        .key(KEY_QUANTIZE_SLOT),
+                    dropdown_trigger_view(
+                        &format!("Grid {}", self.cached_quantize_label),
+                        SMALL_FONT_SIZE,
+                    )
+                    .fill_w()
+                    .h(Sizing::Fixed(ROW_BTN_H))
+                    .inert()
+                    .key(KEY_QUANTIZE),
                 )
                 .child(
                     View::slider_row(SliderSpec {
@@ -527,11 +528,11 @@ impl ClipChromePanel {
                     .align_text(TextAlign::Right),
             )
             .child(
-                // Layer-dropdown slot (trigger built imperatively).
-                View::panel()
+                dropdown_trigger_view(inst.layer_label.as_str(), color::FONT_CAPTION)
                     .w(Sizing::Fixed(layer_w))
                     .h(Sizing::Fixed(16.0))
-                    .key(KEY_INSTR_LAYER_SLOT_BASE + i as u64),
+                    .inert()
+                    .key(KEY_INSTR_LAYER_BASE + i as u64),
             );
         row
     }
@@ -590,23 +591,15 @@ impl ClipChromePanel {
             }
         }
 
-        // Imperative sub-widgets into their keyed slots.
-        self.quantize_dropdown_id = None;
+        // The quantize + per-instrument layer dropdown triggers are now typed
+        // View components (resolved by key); only the progress bar is still an
+        // imperative sub-widget dropped into its keyed slot.
         self.detect_progress_bg_id = None;
         self.detect_progress_fill_id = None;
         self.instrument_enable_btn_ids.clear();
         self.instrument_layer_btn_ids.clear();
 
         if self.mode_audio && self.has_clip {
-            if let Some(slot) = self.slot_rect(KEY_QUANTIZE_SLOT, tree) {
-                self.quantize_dropdown_id = Some(build_dropdown_trigger(
-                    tree,
-                    None,
-                    slot,
-                    &format!("Grid {}", self.cached_quantize_label),
-                    SMALL_FONT_SIZE,
-                ));
-            }
             if let Some(slot) = self.slot_rect(KEY_PROGRESS_SLOT, tree) {
                 self.detect_progress_bg_rect = slot;
                 let bg = tree.add_panel(
@@ -642,11 +635,8 @@ impl ClipChromePanel {
             for i in 0..self.cached_instruments.len() {
                 self.instrument_enable_btn_ids
                     .push(self.host.node_id_for_key(KEY_INSTR_ENABLE_BASE + i as u64));
-                let slot = self.slot_rect(KEY_INSTR_LAYER_SLOT_BASE + i as u64, tree);
-                let label = self.cached_instruments[i].layer_label.clone();
-                let layer_id =
-                    slot.map(|slot| build_dropdown_trigger(tree, None, slot, &label, color::FONT_CAPTION));
-                self.instrument_layer_btn_ids.push(layer_id);
+                self.instrument_layer_btn_ids
+                    .push(self.host.node_id_for_key(KEY_INSTR_LAYER_BASE + i as u64));
             }
         }
 
@@ -771,7 +761,7 @@ impl ClipChromePanel {
         if key_is(KEY_CLEAR) && self.mode_audio {
             return vec![PanelAction::ClipClearTriggersClicked];
         }
-        if self.quantize_dropdown_id == Some(node_id) && self.mode_audio {
+        if key_is(KEY_QUANTIZE) && self.mode_audio {
             return vec![PanelAction::ClipDetectQuantizeClicked];
         }
         if self.mode_audio {
@@ -933,7 +923,8 @@ mod tests {
         assert!(panel.instrument_sens_sliders[0].ids().is_some());
         assert!(panel.instrument_sens_sliders[1].ids().is_none());
         assert!(panel.detect_progress_bg_id.is_some());
-        assert!(panel.quantize_dropdown_id.is_some());
+        assert!(panel.host.node_id_for_key(KEY_QUANTIZE).is_some());
+        assert!(panel.host.node_id_for_key(KEY_INSTR_LAYER_BASE).is_some());
     }
 
     #[test]
