@@ -475,6 +475,19 @@
       "title": "Output"
     },
     {
+      "id": 219,
+      "nodeId": "display_key",
+      "typeId": "node.channel_mix",
+      "handle": "display_key",
+      "params": {
+        "row0": { "type": "Vec4", "value": [1.0, 0.0, 0.0, 0.0] },
+        "row1": { "type": "Vec4", "value": [0.0, 1.0, 0.0, 0.0] },
+        "row2": { "type": "Vec4", "value": [0.0, 0.0, 1.0, 0.0] },
+        "row3": { "type": "Vec4", "value": [0.2126, 0.7152, 0.0722, 0.0] }
+      },
+      "title": "Key From Luma"
+    },
+    {
       "id": 82,
       "nodeId": "particles_feedback",
       "typeId": "node.array_feedback",
@@ -3339,6 +3352,12 @@
     },
     {
       "fromNode": 215,
+      "fromPort": "out",
+      "toNode": 219,
+      "toPort": "source"
+    },
+    {
+      "fromNode": 219,
       "fromPort": "out",
       "toNode": 14,
       "toPort": "in"
