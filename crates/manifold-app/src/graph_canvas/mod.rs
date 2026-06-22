@@ -20,7 +20,10 @@
 use manifold_renderer::node_graph::{
     GraphSnapshot, GroupSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
 };
-use manifold_ui::PanelAction;
+// Re-exported so sibling submodules see both via `use super::*;`. The canvas
+// emits `GraphEditCommand` (Phase 4.3); `PanelAction` remains for the mapping
+// popover's `EffectMapping*` edits, which are a separate command family.
+pub(crate) use manifold_ui::{GraphEditCommand, PanelAction};
 use manifold_ui::transform::Axis;
 
 use manifold_core::effect_graph_def::{GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID};
@@ -272,9 +275,9 @@ pub struct GraphCanvas {
     /// "Reset to Default" affordance in the header — only shown when
     /// the user has diverged from the bundled preset.
     pub(crate) has_graph_mod: bool,
-    /// Actions accumulated this frame from canvas interactions.
+    /// Graph edits accumulated this frame from canvas interactions.
     /// Drained by the editor window's input loop after each event.
-    pub(crate) pending_actions: Vec<PanelAction>,
+    pub(crate) pending_actions: Vec<GraphEditCommand>,
     /// Per-node collapse state (UI-only, keyed by runtime node id so it
     /// survives snapshot rebuilds like positions do). A collapsed node
     /// hides its on-face param rows but keeps its header and ports, so it

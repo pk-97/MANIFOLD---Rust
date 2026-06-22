@@ -6,7 +6,7 @@
 //! list of the currently-selected node's parameters; each row carries
 //! a checkbox indicating whether that param is currently exposed on
 //! the effect card. Click a checkbox → emit
-//! [`PanelAction::EffectParamExpose`] → content thread runs
+//! [`GraphEditCommand::EffectParamExpose`] → content thread runs
 //! `ToggleEffectParamExposeCommand` → `PresetInstance.user_param_bindings`
 //! gains/loses the entry.
 //!
@@ -35,7 +35,7 @@ use crate::tree::UITree;
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::effects::ParamConvert;
 
-use super::PanelAction;
+use crate::GraphEditCommand;
 
 /// UI-facing kind for one inner-node parameter, mirroring the
 /// renderer-side `ParamSnapshotKind` without making this crate depend
@@ -169,7 +169,7 @@ pub struct GraphEditorParam {
 #[derive(Debug, Clone)]
 pub struct GraphEditorNodeView {
     /// Canvas-stable runtime id for the selected node. Used as the
-    /// `node_id` when emitting `PanelAction::SetGraphNodeParam` so the
+    /// `node_id` when emitting `GraphEditCommand::SetGraphNodeParam` so the
     /// app-side handler can build a `SetGraphNodeParamCommand` keyed
     /// on the same stable id the canvas uses for selection.
     pub runtime_node_id: u32,
@@ -245,7 +245,7 @@ const HEADER_FONT_SIZE: u16 = 14;
 enum RowState {
     /// The auto-gain toggle under the node-output preview. Click flips
     /// normalization on the preview pane via
-    /// [`PanelAction::SetNodePreviewNormalize`].
+    /// [`GraphEditCommand::SetNodePreviewNormalize`].
     PreviewNormalizeToggle { button_node_id: NodeId },
     /// A row backed by an inner-node param. Click semantics depend on
     /// whether the param is a target of one of the effect's
@@ -1373,7 +1373,7 @@ impl GraphEditorPanel {
     /// pixel delta into a value delta over `DRAG_FULL_RANGE_PX` and
     /// emit one `SetGraphNodeParam` per delta. `DragEnd` clears the
     /// captured anchor.
-    pub fn handle_event(&mut self, event: &UIEvent) -> Vec<PanelAction> {
+    pub fn handle_event(&mut self, event: &UIEvent) -> Vec<GraphEditCommand> {
         match event {
             UIEvent::Click { node_id, .. } => self.handle_click_event(*node_id),
             UIEvent::DragBegin {
@@ -1395,11 +1395,11 @@ impl GraphEditorPanel {
     /// Backwards-compatible shim — pre-Phase-B callers passed click
     /// node ids directly. Tests still use this; runtime is migrated
     /// to `handle_event`.
-    pub fn handle_click(&mut self, node_id: NodeId) -> Vec<PanelAction> {
+    pub fn handle_click(&mut self, node_id: NodeId) -> Vec<GraphEditCommand> {
         self.handle_click_event(node_id)
     }
 
-    fn handle_click_event(&mut self, node_id: NodeId) -> Vec<PanelAction> {
+    fn handle_click_event(&mut self, node_id: NodeId) -> Vec<GraphEditCommand> {
         // No effect_index guard here on purpose: post-unification the
         // graph editor is one surface for both Effect-hosted AND
         // Generator-hosted graphs. Generators have no `effect_index`
@@ -1410,7 +1410,7 @@ impl GraphEditorPanel {
         // short-circuit: if `self.rows` is empty (no selected node,
         // no inner-node rows built), every match arm falls through
         // and we return Vec::new() at the bottom. The app-side
-        // dispatcher (`PanelAction::ToggleNodeParamExpose` handler in
+        // dispatcher (`GraphEditCommand::ToggleNodeParamExpose` handler in
         // app_render.rs) already gates on `watched_graph_target` so
         // there's no risk of emitting an action without a target.
         //
@@ -1424,7 +1424,7 @@ impl GraphEditorPanel {
             match row {
                 RowState::PreviewNormalizeToggle { button_node_id } => {
                     if *button_node_id == node_id {
-                        return vec![PanelAction::SetNodePreviewNormalize(
+                        return vec![GraphEditCommand::SetNodePreviewNormalize(
                             !self.normalize_preview,
                         )];
                     }
@@ -1465,7 +1465,7 @@ impl GraphEditorPanel {
                         // command (`ToggleNodeParamExposeCommand`) does
                         // the dispatch internally.
                         let _ = static_block_slot;
-                        return vec![PanelAction::ToggleNodeParamExpose {
+                        return vec![GraphEditCommand::ToggleNodeParamExpose {
                             node_id: row_node_id.clone(),
                             node_handle: node_handle.clone(),
                             inner_param: inner_param.clone(),
@@ -1483,7 +1483,7 @@ impl GraphEditorPanel {
                         if let Some(new_value) =
                             value_cell_click_to_param(*kind, *current_value, *enum_labels_count)
                         {
-                            return vec![PanelAction::SetGraphNodeParam {
+                            return vec![GraphEditCommand::SetGraphNodeParam {
                                 node_id: *node_runtime_id,
                                 param_name: inner_param.clone(),
                                 new_value,
@@ -1501,7 +1501,7 @@ impl GraphEditorPanel {
                     param_name,
                 } => {
                     if *button_node_id == node_id {
-                        return vec![PanelAction::BrowseGraphNodePath {
+                        return vec![GraphEditCommand::BrowseGraphNodePath {
                             node_id: *node_runtime_id,
                             param_name: param_name.clone(),
                         }];
@@ -1515,7 +1515,7 @@ impl GraphEditorPanel {
                     rect,
                 } => {
                     if *button_node_id == node_id {
-                        return vec![PanelAction::EditGraphNodeStringParam {
+                        return vec![GraphEditCommand::EditGraphNodeStringParam {
                             node_id: *node_runtime_id,
                             param_name: param_name.clone(),
                             current: current.clone(),
@@ -1529,7 +1529,7 @@ impl GraphEditorPanel {
                     source,
                 } => {
                     if *button_node_id == node_id {
-                        return vec![PanelAction::EditGraphNodeWgsl {
+                        return vec![GraphEditCommand::EditGraphNodeWgsl {
                             node_id: *node_runtime_id,
                             current: source.clone(),
                             anchor: (0.0, 0.0, 0.0, 0.0),
@@ -1558,7 +1558,7 @@ impl GraphEditorPanel {
                                 .and_then(|r| r.get(*col))
                                 .copied()
                                 .unwrap_or(0.0);
-                            return vec![PanelAction::EditGraphNodeTableCell {
+                            return vec![GraphEditCommand::EditGraphNodeTableCell {
                                 node_id: *node_runtime_id,
                                 param_name: param_name.clone(),
                                 row: *row,
@@ -1575,7 +1575,7 @@ impl GraphEditorPanel {
         Vec::new()
     }
 
-    fn handle_drag_begin(&mut self, node_id: NodeId, origin_x: f32) -> Vec<PanelAction> {
+    fn handle_drag_begin(&mut self, node_id: NodeId, origin_x: f32) -> Vec<GraphEditCommand> {
         // Numeric-value-cell drag opens a scrub anchor. Bool / Enum
         // edits happen on click, so drag on them is a no-op. Wire-
         // driven rows are also a no-op: the wire wins each frame,
@@ -1646,7 +1646,7 @@ impl GraphEditorPanel {
         Vec::new()
     }
 
-    fn handle_drag(&mut self, node_id: NodeId, pos_x: f32) -> Vec<PanelAction> {
+    fn handle_drag(&mut self, node_id: NodeId, pos_x: f32) -> Vec<GraphEditCommand> {
         let Some(drag) = self.drag else {
             return Vec::new();
         };
@@ -1694,7 +1694,7 @@ impl GraphEditorPanel {
             let Some(param_name) = param_name else {
                 return Vec::new();
             };
-            return vec![PanelAction::SetGraphNodeParam {
+            return vec![GraphEditCommand::SetGraphNodeParam {
                 node_id: drag.node_runtime_id,
                 param_name,
                 new_value: serialized,
@@ -1726,7 +1726,7 @@ impl GraphEditorPanel {
         let Some(param_name) = inner_param else {
             return Vec::new();
         };
-        vec![PanelAction::SetGraphNodeParam {
+        vec![GraphEditCommand::SetGraphNodeParam {
             node_id: drag.node_runtime_id,
             param_name,
             new_value: serialized,
@@ -1736,7 +1736,7 @@ impl GraphEditorPanel {
     /// Convenience wrapper: walk a slice of clicked button ids, map
     /// each through `handle_click`. Used by the editor-window present
     /// path's compatibility shim where only click ids were captured.
-    pub fn dispatch_clicks(&mut self, clicks: &[NodeId]) -> Vec<PanelAction> {
+    pub fn dispatch_clicks(&mut self, clicks: &[NodeId]) -> Vec<GraphEditCommand> {
         clicks
             .iter()
             .flat_map(|&n| self.handle_click_event(n))
@@ -2089,7 +2089,7 @@ mod tests {
         assert!(
             matches!(
                 actions.as_slice(),
-                [PanelAction::SetNodePreviewNormalize(false)]
+                [GraphEditCommand::SetNodePreviewNormalize(false)]
             ),
             "clicking the on toggle must request off, got {actions:?}"
         );
@@ -2101,7 +2101,7 @@ mod tests {
         assert!(
             matches!(
                 actions.as_slice(),
-                [PanelAction::SetNodePreviewNormalize(true)]
+                [GraphEditCommand::SetNodePreviewNormalize(true)]
             ),
             "clicking the off toggle must request on, got {actions:?}"
         );
@@ -2131,7 +2131,7 @@ mod tests {
         let actions = panel.handle_click(translate_cb);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::ToggleNodeParamExpose {
+            GraphEditCommand::ToggleNodeParamExpose {
                 node_id,
                 node_handle,
                 inner_param,
@@ -2185,7 +2185,7 @@ mod tests {
         let actions = panel.handle_click(translate_cb);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::ToggleNodeParamExpose { expose, .. } => {
+            GraphEditCommand::ToggleNodeParamExpose { expose, .. } => {
                 assert!(!expose, "click on checked checkbox emits expose: false");
             }
             other => panic!("unexpected action: {other:?}"),
@@ -2244,7 +2244,7 @@ mod tests {
             "click on a generator inner-node row must emit one action"
         );
         assert!(
-            matches!(actions[0], PanelAction::ToggleNodeParamExpose { .. }),
+            matches!(actions[0], GraphEditCommand::ToggleNodeParamExpose { .. }),
             "must be ToggleNodeParamExpose, got {:?}",
             actions[0],
         );
@@ -2342,7 +2342,7 @@ mod tests {
         let actions = panel.handle_click(cell);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::SetGraphNodeParam {
+            GraphEditCommand::SetGraphNodeParam {
                 node_id,
                 param_name,
                 new_value,
@@ -2379,7 +2379,7 @@ mod tests {
         let actions = panel.handle_click(cell);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::SetGraphNodeParam {
+            GraphEditCommand::SetGraphNodeParam {
                 param_name,
                 new_value,
                 ..
@@ -2420,7 +2420,7 @@ mod tests {
             .unwrap();
         let cell = value_cell_id_of(mode_row).unwrap();
         match &panel.handle_click(cell)[0] {
-            PanelAction::SetGraphNodeParam { new_value, .. } => {
+            GraphEditCommand::SetGraphNodeParam { new_value, .. } => {
                 assert_eq!(*new_value, SerializedParamValue::Enum { value: 0 });
             }
             _ => unreachable!(),
@@ -2473,7 +2473,7 @@ mod tests {
         let acts = panel.handle_event(&drag);
         assert_eq!(acts.len(), 1);
         match &acts[0] {
-            PanelAction::SetGraphNodeParam {
+            GraphEditCommand::SetGraphNodeParam {
                 node_id,
                 param_name,
                 new_value,
@@ -2543,7 +2543,7 @@ mod tests {
             delta: Vec2::new(10_000.0, 0.0),
         });
         match &acts[0] {
-            PanelAction::SetGraphNodeParam {
+            GraphEditCommand::SetGraphNodeParam {
                 new_value: SerializedParamValue::Float { value },
                 ..
             } => {
@@ -2597,7 +2597,7 @@ mod tests {
         // override the outer.
         let actions = panel.handle_click(mode_cell);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(&actions[0], PanelAction::SetGraphNodeParam { .. }));
+        assert!(matches!(&actions[0], GraphEditCommand::SetGraphNodeParam { .. }));
     }
 
     #[test]
@@ -2635,7 +2635,7 @@ mod tests {
         let actions = panel.handle_click(cb_id);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::ToggleNodeParamExpose {
+            GraphEditCommand::ToggleNodeParamExpose {
                 node_handle,
                 inner_param,
                 expose,
@@ -2675,7 +2675,7 @@ mod tests {
         let actions = panel.handle_click(cb_id);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            PanelAction::ToggleNodeParamExpose {
+            GraphEditCommand::ToggleNodeParamExpose {
                 node_handle,
                 inner_param,
                 expose,
@@ -2861,7 +2861,7 @@ mod tests {
         });
         assert_eq!(acts.len(), 1);
         match &acts[0] {
-            PanelAction::SetGraphNodeParam {
+            GraphEditCommand::SetGraphNodeParam {
                 node_id,
                 param_name,
                 new_value,
@@ -2935,7 +2935,7 @@ mod tests {
             })
             .expect("a path-like String param has a Browse button");
         match panel.handle_click(browse).as_slice() {
-            [PanelAction::BrowseGraphNodePath {
+            [GraphEditCommand::BrowseGraphNodePath {
                 node_id,
                 param_name,
             }] => {
@@ -2996,7 +2996,7 @@ mod tests {
             })
             .expect("a non-path String param has a clickable value cell");
         match panel.handle_click(cell).as_slice() {
-            [PanelAction::EditGraphNodeStringParam {
+            [GraphEditCommand::EditGraphNodeStringParam {
                 node_id,
                 param_name,
                 current,
@@ -3088,7 +3088,7 @@ mod tests {
             })
             .expect("row 1 col 2 cell exists");
         match panel.handle_click(btn).as_slice() {
-            [PanelAction::EditGraphNodeTableCell {
+            [GraphEditCommand::EditGraphNodeTableCell {
                 node_id,
                 param_name,
                 row,

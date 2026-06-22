@@ -10,6 +10,7 @@ pub mod cursor_nav;
 pub mod cursors;
 pub mod drag;
 pub mod driver_waveform_icons;
+pub mod graph_edit;
 pub mod hit;
 pub mod input;
 pub mod inspector_layout;
@@ -34,6 +35,7 @@ pub mod widget_layout;
 
 pub use bitmap_renderer::{BitmapRepaintState, LayerBitmapRenderer};
 pub use coordinate_mapper::CoordinateMapper;
+pub use graph_edit::GraphEditCommand;
 pub use input::{Modifiers, PointerAction, UIEvent, UIInputSystem};
 pub use layout::ScreenLayout;
 pub use node::*;

@@ -5,14 +5,13 @@
 //! drained by the editor window each event.
 
 use super::*;
-use manifold_ui::PanelAction;
 
 #[derive(Debug, Clone)]
 pub(crate) enum DragMode {
     None,
     Pan,
     /// Dragging from an output port to draw a wire. On release over an
-    /// input port, emits `PanelAction::ConnectPorts`.
+    /// input port, emits `GraphEditCommand::ConnectPorts`.
     WireFrom {
         from_node: u32,
         from_port: String,
@@ -67,13 +66,18 @@ impl DragMode {
 }
 
 impl GraphCanvas {
-    /// Drain the queued canvas actions plus any the mapping popover emitted,
-    /// so the editor window's present path dispatches both on the same pass.
-    /// Called once per input event by the editor window's present path.
-    pub fn drain_actions(&mut self) -> Vec<PanelAction> {
-        let mut actions = std::mem::take(&mut self.pending_actions);
-        actions.extend(self.mapping_popover.drain_actions());
-        actions
+    /// Drain the queued graph edits accumulated from canvas interactions
+    /// (wire connects, node moves/deletes, param scrubs, group ops). The app
+    /// translates each into a `commands::graph::*`. Called once per input event
+    /// by the editor window's present path.
+    pub fn drain_edits(&mut self) -> Vec<GraphEditCommand> {
+        std::mem::take(&mut self.pending_actions)
+    }
+
+    /// Drain the canvas's mapping-popover edits (`EffectMapping*`), a separate
+    /// `PanelAction` command family dispatched through the normal action path.
+    pub fn drain_popover_actions(&mut self) -> Vec<PanelAction> {
+        self.mapping_popover.drain_actions()
     }
 
     /// Emit a `RemoveGraphNode` action for every currently-selected node.
@@ -83,7 +87,7 @@ impl GraphCanvas {
     pub fn request_delete_selected(&mut self) {
         for id in std::mem::take(&mut self.selected) {
             self.pending_actions
-                .push(PanelAction::RemoveGraphNode { node_id: id });
+                .push(GraphEditCommand::RemoveGraphNode { node_id: id });
         }
     }
 
@@ -110,7 +114,7 @@ impl GraphCanvas {
             "GroupSelection scope={:?} ids={node_ids:?} -> {handle:?}",
             self.scope
         );
-        self.pending_actions.push(PanelAction::GroupSelection {
+        self.pending_actions.push(GraphEditCommand::GroupSelection {
             scope_path: self.scope.clone(),
             node_ids,
             handle,
@@ -126,7 +130,7 @@ impl GraphCanvas {
             return;
         };
         group_log!("Ungroup scope={:?} group={group_id}", self.scope);
-        self.pending_actions.push(PanelAction::Ungroup {
+        self.pending_actions.push(GraphEditCommand::Ungroup {
             scope_path: self.scope.clone(),
             group_id,
         });
@@ -151,7 +155,7 @@ impl GraphCanvas {
             .map(|i| (i + 1) % GROUP_TINT_PALETTE.len())
             .unwrap_or(0);
         group_log!("CycleGroupTint group={group_id} -> palette[{next_idx}]");
-        self.pending_actions.push(PanelAction::SetGroupTint {
+        self.pending_actions.push(GraphEditCommand::SetGroupTint {
             scope_path: self.scope.clone(),
             group_id,
             tint: Some(GROUP_TINT_PALETTE[next_idx]),
@@ -397,7 +401,7 @@ impl GraphCanvas {
                 if is_int {
                     v = v.round();
                 }
-                self.pending_actions.push(PanelAction::SetGraphNodeParam {
+                self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
                     node_id,
                     param_name,
                     new_value: manifold_core::effect_graph_def::SerializedParamValue::Float {
@@ -448,7 +452,7 @@ impl GraphCanvas {
         if self.has_graph_mod {
             let rect = self.reset_button_rect(viewport);
             if sx >= rect.x && sx <= rect.x + rect.w && sy >= rect.y && sy <= rect.y + rect.h {
-                self.pending_actions.push(PanelAction::RevertEffectGraph);
+                self.pending_actions.push(GraphEditCommand::RevertEffectGraph);
                 return;
             }
         }
@@ -473,7 +477,7 @@ impl GraphCanvas {
             // Input port — if a wire feeds this port, breaking it on
             // click. Otherwise swallow so the click doesn't start a pan.
             if self.wire_into(hit.node_id, &hit.port_name).is_some() {
-                self.pending_actions.push(PanelAction::DisconnectPorts {
+                self.pending_actions.push(GraphEditCommand::DisconnectPorts {
                     to_node: hit.node_id,
                     to_port: hit.port_name,
                 });
@@ -550,7 +554,7 @@ impl GraphCanvas {
                     // Latch reset so a third press doesn't triple-fire.
                     self.last_click_time = None;
                     let (gx, gy) = self.to_graph(viewport, sx, sy);
-                    self.pending_actions.push(PanelAction::OpenNodePicker {
+                    self.pending_actions.push(GraphEditCommand::OpenNodePicker {
                         screen_pos: (sx, sy),
                         graph_pos: (gx, gy),
                     });
@@ -677,7 +681,7 @@ impl GraphCanvas {
                     && !hit.is_output
                     && hit.node_id != from_node
                 {
-                    self.pending_actions.push(PanelAction::ConnectPorts {
+                    self.pending_actions.push(GraphEditCommand::ConnectPorts {
                         from_node,
                         from_port,
                         to_node: hit.node_id,
@@ -687,7 +691,7 @@ impl GraphCanvas {
             }
             DragMode::NodeMove { node_id, .. } => {
                 if let Some(node) = self.nodes.iter().find(|n| n.id == node_id) {
-                    self.pending_actions.push(PanelAction::MoveGraphNode {
+                    self.pending_actions.push(GraphEditCommand::MoveGraphNode {
                         node_id,
                         new_pos: node.pos_graph,
                     });

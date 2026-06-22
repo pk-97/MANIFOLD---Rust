@@ -776,7 +776,7 @@ impl GraphCanvas {
         {
             let positions: Vec<(u32, (f32, f32))> =
                 self.nodes.iter().map(|n| (n.id, n.pos_graph)).collect();
-            self.pending_actions.push(PanelAction::RelayoutGraph {
+            self.pending_actions.push(GraphEditCommand::RelayoutGraph {
                 scope_path: self.scope.clone(),
                 positions,
             });

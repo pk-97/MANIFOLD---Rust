@@ -759,6 +759,10 @@ impl Application {
             .ui_root
             .sync_embedded_presets(&self.local_project);
         let mut actions = self.ws.ui_root.process_events();
+        // Graph-editor edits (canvas + sidebar) accumulate here and dispatch
+        // through their own command vocabulary (`GraphEditCommand`), separately
+        // from the `PanelAction` loop — Phase 4.3.
+        let mut graph_edits: Vec<manifold_ui::GraphEditCommand> = Vec::new();
 
         // Editor LEFT-LANE CARD actions are collected separately so they can be
         // dispatched against the editor's watched graph identity: they carry the
@@ -813,8 +817,8 @@ impl Application {
                                     // `graph_pos` is the palette-origin
                                     // canvas position captured at open — pass
                                     // it straight through, never recompute.
-                                    actions.push(
-                                        manifold_ui::panels::PanelAction::AddGraphNodeAt {
+                                    graph_edits.push(
+                                        manifold_ui::GraphEditCommand::AddGraphNodeAt {
                                             type_id,
                                             graph_pos,
                                         },
@@ -894,7 +898,7 @@ impl Application {
                     // Forward every event into the right-sidebar inspector panel
                     // too — it wants Click (toggle/cycle) plus DragBegin/Drag/
                     // DragEnd (numeric scrub) for the per-node expose rows.
-                    actions.extend(self.graph_editor_panel.handle_event(event));
+                    graph_edits.extend(self.graph_editor_panel.handle_event(event));
                 }
             }
         }
@@ -903,7 +907,8 @@ impl Application {
         // UITree event path because the canvas owns its own pointer
         // state — see `GraphCanvas::drain_actions`.
         if let Some(canvas) = self.graph_canvas.as_mut() {
-            actions.extend(canvas.drain_actions());
+            graph_edits.extend(canvas.drain_edits());
+            actions.extend(canvas.drain_popover_actions());
         }
 
         // Editor-card chevron requested the sideways mapping drawer: resolve the
@@ -1190,505 +1195,9 @@ impl Application {
                     self.pending_open_graph_editor = true;
                     continue;
                 }
-                PanelAction::AddGraphNode { type_id } => {
-                    if let (Some(eid), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        // Drop below the auto-laid catalog row so the
-                        // new node is visible without panning. Auto
-                        // layout uses (60,60) origin + (220,130)
-                        // spacing, so y≈350 sits one row below the
-                        // typical 4-node Mirror chain. The user drags
-                        // it into place from there.
-                        let drop_pos = (300.0, 350.0);
-                        let cmd = manifold_editing::commands::graph::AddGraphNodeCommand::new(
-                            eid.clone(),
-                            type_id.clone(),
-                            Some(drop_pos),
-                            default.clone(),
-                        );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                // Open the node picker over the editor canvas. This is the
-                // editor window's OWN BrowserPopupPanel (`graph_editor.ui_root
-                // .browser_popup`), not the main window's — same widget, its
-                // own tree and input path. `screen_pos` anchors the popup in
-                // editor-window logical pixels; `graph_pos` (captured against
-                // the palette-origin canvas viewport in graph_canvas) is
-                // stashed on the popup and passed straight back out on
-                // selection so the spawned node lands under the cursor.
-                PanelAction::OpenNodePicker {
-                    screen_pos,
-                    graph_pos,
-                } => {
-                    use manifold_renderer::node_graph::{Category, descriptor_for};
-                    use manifold_ui::panels::browser_popup::*;
-
-                    // Editor-window logical size — drives the popup's
-                    // edge-clamping. Falls back to a sane default if the
-                    // window isn't registered yet (shouldn't happen with
-                    // the editor open, but stay defensive).
-                    let (screen_w, screen_h) = self
-                        .graph_editor_window_id
-                        .and_then(|wid| self.window_registry.get(&wid))
-                        .map(|ws| {
-                            let s = ws.window.scale_factor();
-                            let sz = ws.window.inner_size();
-                            (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
-                        })
-                        .unwrap_or((1280.0, 720.0));
-
-                    let names: Vec<String> = self
-                        .palette_atoms_cache
-                        .iter()
-                        .map(|a| a.label.clone())
-                        .collect();
-                    let type_ids: Vec<String> = self
-                        .palette_atoms_cache
-                        .iter()
-                        .map(|a| a.type_id.clone())
-                        .collect();
-                    let categories: Vec<String> = self
-                        .palette_atoms_cache
-                        .iter()
-                        .map(|a| a.category.clone())
-                        .collect();
-                    // Search haystack per item: the friendly label plus the
-                    // descriptor's aliases (old names, plain-English, the
-                    // TouchDesigner-equivalent operator). Typing "blur top"
-                    // or a legacy name finds the node.
-                    let search: Vec<String> = self
-                        .palette_atoms_cache
-                        .iter()
-                        .map(|a| {
-                            let aliases = descriptor_for(&a.type_id)
-                                .map(|d| d.aliases.join(" "))
-                                .unwrap_or_default();
-                            if aliases.is_empty() {
-                                a.label.clone()
-                            } else {
-                                format!("{} {}", a.label, aliases)
-                            }
-                        })
-                        .collect();
-                    let cat_names: Vec<String> =
-                        Category::ALL.iter().map(|c| c.label().to_string()).collect();
-
-                    if let Some(ed) = self.graph_editor.as_mut() {
-                        ed.ui_root.browser_popup.set_screen_size(screen_w, screen_h);
-                        ed.ui_root.browser_popup.open(BrowserPopupRequest {
-                            mode: BrowserPopupMode::Node,
-                            tab: manifold_ui::panels::InspectorTab::Master,
-                            layer_id: None,
-                            item_names: names,
-                            item_categories: categories,
-                            category_names: cat_names,
-                            item_type_ids: type_ids,
-                            item_search: Some(search),
-                            spawn_graph_pos: Some(*graph_pos),
-                            paste_count: 0,
-                            screen_anchor: manifold_ui::Vec2::new(screen_pos.0, screen_pos.1),
-                        });
-                        ed.offscreen_dirty = true;
-                    }
-                    // Auto-focus the search field so the user types
-                    // immediately. The popup tree isn't built yet (it builds
-                    // next frame in present_graph_editor_window), so anchor
-                    // the overlay at the click point; the field rect is
-                    // cosmetic for the picker — keystrokes route by the
-                    // active SearchFilter field, not by hit position.
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::SearchFilter,
-                        "",
-                        crate::text_input::AnchorRect::new(
-                            screen_pos.0,
-                            screen_pos.1,
-                            200.0,
-                            24.0,
-                        ),
-                        11.0,
-                    );
-                    continue;
-                }
-                PanelAction::AddGraphNodeAt { type_id, graph_pos } => {
-                    if let (Some(eid), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd = manifold_editing::commands::graph::AddGraphNodeCommand::new(
-                            eid.clone(),
-                            type_id.clone(),
-                            Some(*graph_pos),
-                            default.clone(),
-                        )
-                        .with_scope(canvas_scope.clone());
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::ConnectPorts {
-                    from_node,
-                    from_port,
-                    to_node,
-                    to_port,
-                } => {
-                    if let (Some(eid), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd = manifold_editing::commands::graph::ConnectPortsCommand::new(
-                            eid.clone(),
-                            *from_node,
-                            from_port.clone(),
-                            *to_node,
-                            to_port.clone(),
-                            default.clone(),
-                        )
-                        .with_scope(canvas_scope.clone());
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::RevertEffectGraph => {
-                    if let Some(eid) = self.watched_graph_target.as_ref() {
-                        let cmd =
-                            manifold_editing::commands::graph::RevertEffectGraphCommand::new(
-                                eid.clone(),
-                            );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::DisconnectPorts { to_node, to_port } => {
-                    if let (Some(eid), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd = manifold_editing::commands::graph::DisconnectPortsCommand::new(
-                            eid.clone(),
-                            *to_node,
-                            to_port.clone(),
-                            default.clone(),
-                        )
-                        .with_scope(canvas_scope.clone());
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::RemoveGraphNode { node_id } => {
-                    if let (Some(eid), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        // Which card sliders would this delete orphan? Detect
-                        // against the live diverged graph if there is one, else
-                        // the catalog default. If any, confirm before deleting —
-                        // a node that backs card controls takes them with it.
-                        let orphaned = {
-                            let def = self
-                                .local_project
-                                .preset_instance(eid)
-                                .and_then(|i| i.graph.as_ref())
-                                .unwrap_or(default);
-                            manifold_editing::commands::graph::exposed_param_labels_for_node(
-                                def,
-                                &canvas_scope,
-                                *node_id,
-                            )
-                        };
-                        let proceed =
-                            orphaned.is_empty() || Self::confirm_remove_node_orphans(&orphaned);
-                        if proceed {
-                            let cmd =
-                                manifold_editing::commands::graph::RemoveGraphNodeCommand::new(
-                                    eid.clone(),
-                                    *node_id,
-                                    default.clone(),
-                                )
-                                .with_scope(canvas_scope.clone());
-                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                        }
-                    }
-                    continue;
-                }
-                PanelAction::MoveGraphNode { node_id, new_pos } => {
-                    if let (Some(eid), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd = manifold_editing::commands::graph::MoveGraphNodeCommand::new(
-                            eid.clone(),
-                            *node_id,
-                            *new_pos,
-                            default.clone(),
-                        )
-                        .with_scope(canvas_scope.clone());
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::RelayoutGraph {
-                    scope_path,
-                    positions,
-                } => {
-                    if let (Some(eid), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd = manifold_editing::commands::graph::LayoutGraphNodesCommand::new(
-                            eid.clone(),
-                            positions.clone(),
-                            default.clone(),
-                        )
-                        .with_scope(scope_path.clone());
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::SetGraphNodeParam {
-                    node_id,
-                    param_name,
-                    new_value,
-                } => {
-                    if let (Some(eid), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                            eid.clone(),
-                            *node_id,
-                            param_name.clone(),
-                            new_value.clone(),
-                            default.clone(),
-                        )
-                        .with_scope(canvas_scope.clone());
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::BrowseGraphNodePath { node_id, param_name } => {
-                    // Blocking native folder picker — fine for authoring (same as
-                    // preset import/export). On a pick, set the param to the path
-                    // through the same command SetGraphNodeParam uses.
-                    if let (Some(eid), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) && let Some(folder) = rfd::FileDialog::new().pick_folder()
-                    {
-                        let path = folder.to_string_lossy().to_string();
-                        let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
-                            eid.clone(),
-                            *node_id,
-                            param_name.clone(),
-                            manifold_core::effect_graph_def::SerializedParamValue::String {
-                                value: path,
-                            },
-                            default.clone(),
-                        )
-                        .with_scope(canvas_scope.clone());
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::EditGraphNodeStringParam {
-                    node_id,
-                    param_name,
-                    current,
-                    anchor,
-                } => {
-                    // Open the inline editor over the value cell. The param name
-                    // (not `Copy`) rides on the text-input state; commit routes
-                    // through SetGraphNodeParamCommand with a String value.
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::GraphStringParam(*node_id),
-                        current,
-                        crate::text_input::AnchorRect::new(
-                            anchor.0,
-                            anchor.1,
-                            anchor.2.max(120.0),
-                            anchor.3,
-                        ),
-                        12.0,
-                    );
-                    self.text_input.graph_param_name = Some(param_name.clone());
-                    if let Some(ed) = self.graph_editor.as_mut() {
-                        ed.offscreen_dirty = true;
-                    }
-                    continue;
-                }
-                PanelAction::EditGraphNodeWgsl {
-                    node_id,
-                    current,
-                    anchor: _,
-                } => {
-                    // The kernel editor is multiline and large — anchor it over
-                    // the canvas (top-left) rather than the small sidebar button.
-                    let anchor = self
-                        .editor_canvas_viewport()
-                        .map(|vp| {
-                            crate::text_input::AnchorRect::new(
-                                vp.x + 24.0,
-                                40.0,
-                                (vp.w - 48.0).max(240.0),
-                                22.0,
-                            )
-                        })
-                        .unwrap_or_else(|| {
-                            crate::text_input::AnchorRect::new(360.0, 40.0, 520.0, 22.0)
-                        });
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::GraphWgsl(*node_id),
-                        current,
-                        anchor,
-                        12.0,
-                    );
-                    if let Some(ed) = self.graph_editor.as_mut() {
-                        ed.offscreen_dirty = true;
-                    }
-                    continue;
-                }
-                PanelAction::EditGraphNodeTableCell {
-                    node_id,
-                    param_name,
-                    row,
-                    col,
-                    current,
-                    rows,
-                    anchor,
-                } => {
-                    // Open the inline numeric editor over the cell; stash the
-                    // whole table so commit can rebuild just this cell.
-                    self.text_input.begin(
-                        crate::text_input::TextInputField::GraphTableCell,
-                        &fmt_table_cell_seed(*current),
-                        crate::text_input::AnchorRect::new(
-                            anchor.0,
-                            anchor.1,
-                            anchor.2.max(48.0),
-                            anchor.3,
-                        ),
-                        12.0,
-                    );
-                    self.text_input.graph_table_edit = Some(crate::text_input::TableCellEdit {
-                        node_id: *node_id,
-                        param_name: param_name.clone(),
-                        row: *row,
-                        col: *col,
-                        rows: rows.clone(),
-                    });
-                    if let Some(ed) = self.graph_editor.as_mut() {
-                        ed.offscreen_dirty = true;
-                    }
-                    continue;
-                }
-                PanelAction::GroupSelection {
-                    scope_path,
-                    node_ids,
-                    handle,
-                    centroid,
-                } => {
-                    if let (Some(target), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd = manifold_editing::commands::graph::GroupNodesCommand::new(
-                            target.clone(),
-                            scope_path.clone(),
-                            node_ids.clone(),
-                            handle.clone(),
-                            *centroid,
-                            default.clone(),
-                        );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::Ungroup {
-                    scope_path,
-                    group_id,
-                } => {
-                    if let (Some(target), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd = manifold_editing::commands::graph::UngroupNodeCommand::new(
-                            target.clone(),
-                            scope_path.clone(),
-                            *group_id,
-                            default.clone(),
-                        );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::SetGroupTint {
-                    scope_path,
-                    group_id,
-                    tint,
-                } => {
-                    if let (Some(target), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd = manifold_editing::commands::graph::SetGroupTintCommand::new(
-                            target.clone(),
-                            scope_path.clone(),
-                            *group_id,
-                            *tint,
-                            default.clone(),
-                        );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::ToggleNodeParamExpose {
-                    node_id,
-                    node_handle,
-                    inner_param,
-                    expose,
-                    label,
-                    min,
-                    max,
-                    default_value,
-                    convert,
-                    is_angle,
-                    value_labels,
-                } => {
-                    if let (Some(target), Some(default)) = (
-                        self.watched_graph_target.as_ref(),
-                        self.watched_catalog_default.as_ref(),
-                    ) {
-                        let cmd =
-                            manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
-                                target.clone(),
-                                node_id.clone(),
-                                node_handle.clone(),
-                                inner_param.clone(),
-                                *expose,
-                                default.clone(),
-                                label.clone(),
-                                *min,
-                                *max,
-                                *default_value,
-                                *convert,
-                                *is_angle,
-                                value_labels.clone(),
-                            );
-                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
-                    }
-                    continue;
-                }
-                PanelAction::SetNodePreviewNormalize(on) => {
-                    // Preview-only display preference — no undo, no model
-                    // mutation. Update the UI mirror and tell the content
-                    // thread to flip the node-preview blit.
-                    self.node_preview_normalize = *on;
-                    self.send_content_cmd(ContentCommand::SetNodePreviewNormalize(*on));
-                    continue;
-                }
+                // ── Graph-editor mutations moved to the `graph_edits` loop
+                // below (Phase 4.3) — they're `GraphEditCommand` now, not
+                // `PanelAction`. ──
                 PanelAction::EffectMappingRangeSnapshot { binding_id } => {
                     // Pre-drag (min, max) so the commit can record one undo
                     // for the whole range drag. Store-aware (user binding /
@@ -2187,6 +1696,518 @@ impl Application {
             }
             if result.resolution_changed {
                 needs_resolution_resize = true;
+            }
+        }
+
+        // ── Graph-editor edits (Phase 4.3) ──────────────────────────────────
+        // The canvas + sidebar emit `GraphEditCommand` (their own vocabulary,
+        // off the PanelAction god-enum). Translate each into the matching
+        // `manifold_editing::commands::graph::*`, resolving the watched target +
+        // catalog default + canvas scope here at the boundary — exactly what the
+        // old PanelAction arms did. `canvas_scope` (computed above) is the level
+        // the user is viewing (group depth). Each arm keeps `continue` (now
+        // "next edit"); the loop body is the match alone.
+        for cmd in &graph_edits {
+            match cmd {
+                manifold_ui::GraphEditCommand::AddGraphNode { type_id } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        // Drop below the auto-laid catalog row so the
+                        // new node is visible without panning. Auto
+                        // layout uses (60,60) origin + (220,130)
+                        // spacing, so y≈350 sits one row below the
+                        // typical 4-node Mirror chain. The user drags
+                        // it into place from there.
+                        let drop_pos = (300.0, 350.0);
+                        let cmd = manifold_editing::commands::graph::AddGraphNodeCommand::new(
+                            eid.clone(),
+                            type_id.clone(),
+                            Some(drop_pos),
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                // Open the node picker over the editor canvas. This is the
+                // editor window's OWN BrowserPopupPanel (`graph_editor.ui_root
+                // .browser_popup`), not the main window's — same widget, its
+                // own tree and input path. `screen_pos` anchors the popup in
+                // editor-window logical pixels; `graph_pos` (captured against
+                // the palette-origin canvas viewport in graph_canvas) is
+                // stashed on the popup and passed straight back out on
+                // selection so the spawned node lands under the cursor.
+                manifold_ui::GraphEditCommand::OpenNodePicker {
+                    screen_pos,
+                    graph_pos,
+                } => {
+                    use manifold_renderer::node_graph::{Category, descriptor_for};
+                    use manifold_ui::panels::browser_popup::*;
+
+                    // Editor-window logical size — drives the popup's
+                    // edge-clamping. Falls back to a sane default if the
+                    // window isn't registered yet (shouldn't happen with
+                    // the editor open, but stay defensive).
+                    let (screen_w, screen_h) = self
+                        .graph_editor_window_id
+                        .and_then(|wid| self.window_registry.get(&wid))
+                        .map(|ws| {
+                            let s = ws.window.scale_factor();
+                            let sz = ws.window.inner_size();
+                            (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
+                        })
+                        .unwrap_or((1280.0, 720.0));
+
+                    let names: Vec<String> = self
+                        .palette_atoms_cache
+                        .iter()
+                        .map(|a| a.label.clone())
+                        .collect();
+                    let type_ids: Vec<String> = self
+                        .palette_atoms_cache
+                        .iter()
+                        .map(|a| a.type_id.clone())
+                        .collect();
+                    let categories: Vec<String> = self
+                        .palette_atoms_cache
+                        .iter()
+                        .map(|a| a.category.clone())
+                        .collect();
+                    // Search haystack per item: the friendly label plus the
+                    // descriptor's aliases (old names, plain-English, the
+                    // TouchDesigner-equivalent operator). Typing "blur top"
+                    // or a legacy name finds the node.
+                    let search: Vec<String> = self
+                        .palette_atoms_cache
+                        .iter()
+                        .map(|a| {
+                            let aliases = descriptor_for(&a.type_id)
+                                .map(|d| d.aliases.join(" "))
+                                .unwrap_or_default();
+                            if aliases.is_empty() {
+                                a.label.clone()
+                            } else {
+                                format!("{} {}", a.label, aliases)
+                            }
+                        })
+                        .collect();
+                    let cat_names: Vec<String> =
+                        Category::ALL.iter().map(|c| c.label().to_string()).collect();
+
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.ui_root.browser_popup.set_screen_size(screen_w, screen_h);
+                        ed.ui_root.browser_popup.open(BrowserPopupRequest {
+                            mode: BrowserPopupMode::Node,
+                            tab: manifold_ui::panels::InspectorTab::Master,
+                            layer_id: None,
+                            item_names: names,
+                            item_categories: categories,
+                            category_names: cat_names,
+                            item_type_ids: type_ids,
+                            item_search: Some(search),
+                            spawn_graph_pos: Some(*graph_pos),
+                            paste_count: 0,
+                            screen_anchor: manifold_ui::Vec2::new(screen_pos.0, screen_pos.1),
+                        });
+                        ed.offscreen_dirty = true;
+                    }
+                    // Auto-focus the search field so the user types
+                    // immediately. The popup tree isn't built yet (it builds
+                    // next frame in present_graph_editor_window), so anchor
+                    // the overlay at the click point; the field rect is
+                    // cosmetic for the picker — keystrokes route by the
+                    // active SearchFilter field, not by hit position.
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::SearchFilter,
+                        "",
+                        crate::text_input::AnchorRect::new(
+                            screen_pos.0,
+                            screen_pos.1,
+                            200.0,
+                            24.0,
+                        ),
+                        11.0,
+                    );
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::AddGraphNodeAt { type_id, graph_pos } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::AddGraphNodeCommand::new(
+                            eid.clone(),
+                            type_id.clone(),
+                            Some(*graph_pos),
+                            default.clone(),
+                        )
+                        .with_scope(canvas_scope.clone());
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::ConnectPorts {
+                    from_node,
+                    from_port,
+                    to_node,
+                    to_port,
+                } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::ConnectPortsCommand::new(
+                            eid.clone(),
+                            *from_node,
+                            from_port.clone(),
+                            *to_node,
+                            to_port.clone(),
+                            default.clone(),
+                        )
+                        .with_scope(canvas_scope.clone());
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::RevertEffectGraph => {
+                    if let Some(eid) = self.watched_graph_target.as_ref() {
+                        let cmd =
+                            manifold_editing::commands::graph::RevertEffectGraphCommand::new(
+                                eid.clone(),
+                            );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::DisconnectPorts { to_node, to_port } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::DisconnectPortsCommand::new(
+                            eid.clone(),
+                            *to_node,
+                            to_port.clone(),
+                            default.clone(),
+                        )
+                        .with_scope(canvas_scope.clone());
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::RemoveGraphNode { node_id } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        // Which card sliders would this delete orphan? Detect
+                        // against the live diverged graph if there is one, else
+                        // the catalog default. If any, confirm before deleting —
+                        // a node that backs card controls takes them with it.
+                        let orphaned = {
+                            let def = self
+                                .local_project
+                                .preset_instance(eid)
+                                .and_then(|i| i.graph.as_ref())
+                                .unwrap_or(default);
+                            manifold_editing::commands::graph::exposed_param_labels_for_node(
+                                def,
+                                &canvas_scope,
+                                *node_id,
+                            )
+                        };
+                        let proceed =
+                            orphaned.is_empty() || Self::confirm_remove_node_orphans(&orphaned);
+                        if proceed {
+                            let cmd =
+                                manifold_editing::commands::graph::RemoveGraphNodeCommand::new(
+                                    eid.clone(),
+                                    *node_id,
+                                    default.clone(),
+                                )
+                                .with_scope(canvas_scope.clone());
+                            self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                        }
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::MoveGraphNode { node_id, new_pos } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::MoveGraphNodeCommand::new(
+                            eid.clone(),
+                            *node_id,
+                            *new_pos,
+                            default.clone(),
+                        )
+                        .with_scope(canvas_scope.clone());
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::RelayoutGraph {
+                    scope_path,
+                    positions,
+                } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::LayoutGraphNodesCommand::new(
+                            eid.clone(),
+                            positions.clone(),
+                            default.clone(),
+                        )
+                        .with_scope(scope_path.clone());
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::SetGraphNodeParam {
+                    node_id,
+                    param_name,
+                    new_value,
+                } => {
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                            eid.clone(),
+                            *node_id,
+                            param_name.clone(),
+                            new_value.clone(),
+                            default.clone(),
+                        )
+                        .with_scope(canvas_scope.clone());
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::BrowseGraphNodePath { node_id, param_name } => {
+                    // Blocking native folder picker — fine for authoring (same as
+                    // preset import/export). On a pick, set the param to the path
+                    // through the same command SetGraphNodeParam uses.
+                    if let (Some(eid), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) && let Some(folder) = rfd::FileDialog::new().pick_folder()
+                    {
+                        let path = folder.to_string_lossy().to_string();
+                        let cmd = manifold_editing::commands::graph::SetGraphNodeParamCommand::new(
+                            eid.clone(),
+                            *node_id,
+                            param_name.clone(),
+                            manifold_core::effect_graph_def::SerializedParamValue::String {
+                                value: path,
+                            },
+                            default.clone(),
+                        )
+                        .with_scope(canvas_scope.clone());
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::EditGraphNodeStringParam {
+                    node_id,
+                    param_name,
+                    current,
+                    anchor,
+                } => {
+                    // Open the inline editor over the value cell. The param name
+                    // (not `Copy`) rides on the text-input state; commit routes
+                    // through SetGraphNodeParamCommand with a String value.
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::GraphStringParam(*node_id),
+                        current,
+                        crate::text_input::AnchorRect::new(
+                            anchor.0,
+                            anchor.1,
+                            anchor.2.max(120.0),
+                            anchor.3,
+                        ),
+                        12.0,
+                    );
+                    self.text_input.graph_param_name = Some(param_name.clone());
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::EditGraphNodeWgsl {
+                    node_id,
+                    current,
+                    anchor: _,
+                } => {
+                    // The kernel editor is multiline and large — anchor it over
+                    // the canvas (top-left) rather than the small sidebar button.
+                    let anchor = self
+                        .editor_canvas_viewport()
+                        .map(|vp| {
+                            crate::text_input::AnchorRect::new(
+                                vp.x + 24.0,
+                                40.0,
+                                (vp.w - 48.0).max(240.0),
+                                22.0,
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            crate::text_input::AnchorRect::new(360.0, 40.0, 520.0, 22.0)
+                        });
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::GraphWgsl(*node_id),
+                        current,
+                        anchor,
+                        12.0,
+                    );
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::EditGraphNodeTableCell {
+                    node_id,
+                    param_name,
+                    row,
+                    col,
+                    current,
+                    rows,
+                    anchor,
+                } => {
+                    // Open the inline numeric editor over the cell; stash the
+                    // whole table so commit can rebuild just this cell.
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::GraphTableCell,
+                        &fmt_table_cell_seed(*current),
+                        crate::text_input::AnchorRect::new(
+                            anchor.0,
+                            anchor.1,
+                            anchor.2.max(48.0),
+                            anchor.3,
+                        ),
+                        12.0,
+                    );
+                    self.text_input.graph_table_edit = Some(crate::text_input::TableCellEdit {
+                        node_id: *node_id,
+                        param_name: param_name.clone(),
+                        row: *row,
+                        col: *col,
+                        rows: rows.clone(),
+                    });
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.offscreen_dirty = true;
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::GroupSelection {
+                    scope_path,
+                    node_ids,
+                    handle,
+                    centroid,
+                } => {
+                    if let (Some(target), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::GroupNodesCommand::new(
+                            target.clone(),
+                            scope_path.clone(),
+                            node_ids.clone(),
+                            handle.clone(),
+                            *centroid,
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::Ungroup {
+                    scope_path,
+                    group_id,
+                } => {
+                    if let (Some(target), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::UngroupNodeCommand::new(
+                            target.clone(),
+                            scope_path.clone(),
+                            *group_id,
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::SetGroupTint {
+                    scope_path,
+                    group_id,
+                    tint,
+                } => {
+                    if let (Some(target), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd = manifold_editing::commands::graph::SetGroupTintCommand::new(
+                            target.clone(),
+                            scope_path.clone(),
+                            *group_id,
+                            *tint,
+                            default.clone(),
+                        );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::ToggleNodeParamExpose {
+                    node_id,
+                    node_handle,
+                    inner_param,
+                    expose,
+                    label,
+                    min,
+                    max,
+                    default_value,
+                    convert,
+                    is_angle,
+                    value_labels,
+                } => {
+                    if let (Some(target), Some(default)) = (
+                        self.watched_graph_target.as_ref(),
+                        self.watched_catalog_default.as_ref(),
+                    ) {
+                        let cmd =
+                            manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
+                                target.clone(),
+                                node_id.clone(),
+                                node_handle.clone(),
+                                inner_param.clone(),
+                                *expose,
+                                default.clone(),
+                                label.clone(),
+                                *min,
+                                *max,
+                                *default_value,
+                                *convert,
+                                *is_angle,
+                                value_labels.clone(),
+                            );
+                        self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
+                    }
+                    continue;
+                }
+                manifold_ui::GraphEditCommand::SetNodePreviewNormalize(on) => {
+                    // Preview-only display preference — no undo, no model
+                    // mutation. Update the UI mirror and tell the content
+                    // thread to flip the node-preview blit.
+                    self.node_preview_normalize = *on;
+                    self.send_content_cmd(ContentCommand::SetNodePreviewNormalize(*on));
+                    continue;
+                }
             }
         }
 

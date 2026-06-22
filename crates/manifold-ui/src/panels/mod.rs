@@ -428,41 +428,12 @@ pub enum PanelAction {
     EffectReorder(usize, usize),
     /// Reorder multiple effect cards as a group: (sorted source indices, target index).
     EffectReorderGroup(Vec<usize>, usize),
-    /// Toggle whether an inner-graph param is exposed on the outer
-    /// card. **Single variant for both Effect-hosted and Generator-
-    /// hosted graphs** — the graph editor is one surface and the click
-    /// handler emits this regardless of target. Dispatch resolves the
-    /// watched `GraphTarget` and routes to `ToggleNodeParamExposeCommand`.
-    ///
-    /// `label` / `min` / `max` / `default_value` / `convert` are the
-    /// inner-node ParamDef metadata captured at panel-build time. They
-    /// feed both the synthesised user binding (when the param has no
-    /// preset binding) and the undo restore path. Reading them in the
-    /// UI thread keeps the renderer registry off the click hot path.
-    ToggleNodeParamExpose {
-        /// Stable id of the inner node — the addressing identity the
-        /// expose command stores. Sourced from the node's snapshot.
-        node_id: manifold_core::NodeId,
-        /// Current display handle, carried only so the command can mint a
-        /// readable `user.<handle>.<param>.<n>` id.
-        node_handle: String,
-        inner_param: String,
-        expose: bool,
-        label: String,
-        min: f32,
-        max: f32,
-        default_value: f32,
-        convert: manifold_core::effects::ParamConvert,
-        /// Angle presentation hint, from the inner param's
-        /// `GraphEditorParamKind::Angle`. Carried onto the appended
-        /// `UserParamBinding` so the card slider shows degrees.
-        is_angle: bool,
-        /// Enum option labels from the inner param's live `ParamDef`. Carried
-        /// onto the appended `UserParamBinding` (and its `ParamSpecDef`) so an
-        /// exposed enum renders as a labelled stepped card slider. Empty for
-        /// non-enum params.
-        value_labels: Vec<String>,
-    },
+
+    // Graph-editor node-graph mutations (add/connect/move/group/param/expose…)
+    // are no longer PanelAction variants — they live in the focused
+    // `crate::graph_edit::GraphEditCommand` (UI Architecture Overhaul Phase 4.3),
+    // emitted by the canvas + sidebar and translated to `commands::graph::*` at
+    // the app boundary. ToggleNodeParamExpose moved there too.
 
     // ── User param-binding mapping edits ──────────────────────────────
     //
@@ -536,159 +507,8 @@ pub enum PanelAction {
         binding_id: String,
     },
 
-    // ── Graph editor mutations (Phase 4) ──────────────────────────────
-    //
-    // Sent by the graph-editor canvas + palette. The app layer resolves
-    // each into the matching command from
-    // `manifold_editing::commands::graph` using the watched effect's
-    // EffectId and catalog default.
-    /// Add a new node of `type_id` to the watched graph at the canvas
-    /// center. Emitted by clicking an entry in the palette.
-    AddGraphNode {
-        type_id: String,
-    },
-    /// Open the node picker over the canvas, anchored at `screen_pos`, to
-    /// spawn the chosen node at `graph_pos`. Emitted by a double-click on
-    /// empty canvas space. The app resolves the spawn into an
-    /// `AddGraphNodeAt` once a node is picked.
-    OpenNodePicker {
-        screen_pos: (f32, f32),
-        graph_pos: (f32, f32),
-    },
-    /// Add a new node of `type_id` at a specific `graph_pos`. Emitted after
-    /// a node is chosen in the picker (the positioned sibling of
-    /// `AddGraphNode`, which drops at a fixed canvas spot).
-    AddGraphNodeAt {
-        type_id: String,
-        graph_pos: (f32, f32),
-    },
-    /// Connect an output port to an input port. Emitted by the
-    /// wire-drag completion path on the canvas.
-    ConnectPorts {
-        from_node: u32,
-        from_port: String,
-        to_node: u32,
-        to_port: String,
-    },
-    /// Remove a node from the watched graph plus every wire that
-    /// touches it. Emitted by the canvas's delete-key handler.
-    RemoveGraphNode {
-        node_id: u32,
-    },
-    /// Disconnect the wire feeding `(to_node, to_port)`. The input
-    /// side uniquely identifies the wire because each input port has
-    /// at most one incoming wire. Emitted by clicking on an already-
-    /// connected input port on the canvas.
-    DisconnectPorts {
-        to_node: u32,
-        to_port: String,
-    },
-    /// Revert the watched effect's graph to the bundled preset
-    /// (`instance.graph = None`). Emitted by the "Reset to Default"
-    /// button in the graph editor header when the card is diverged
-    /// from the bundle. The "library picker" affordance from §6.6 #30
-    /// — bundled presets are the only "library" today; user-saved
-    /// named presets will plug into the same dispatch path when added.
-    RevertEffectGraph,
-    /// Update a node's editor position. Emitted by the canvas's
-    /// node-drag completion path.
-    MoveGraphNode {
-        node_id: u32,
-        new_pos: (f32, f32),
-    },
-    /// Re-position every node at `scope_path` in one undoable step. Emitted
-    /// by the canvas's Tidy command (Cmd+L), which runs the layered
-    /// auto-layout over the current level and ships the resulting positions
-    /// here. Routed to `LayoutGraphNodesCommand`.
-    RelayoutGraph {
-        scope_path: Vec<u32>,
-        positions: Vec<(u32, (f32, f32))>,
-    },
-    /// Set an inner-node parameter to a new value. Emitted by the
-    /// right-sidebar inspector when the user clicks a Bool toggle,
-    /// cycles an Enum cell, or drag-scrubs a Float/Int value. The
-    /// `node_id` matches the graph-editor canvas's stable node id;
-    /// `new_value` is already coerced to the inner param's expected
-    /// kind (Float / Int / Bool / Enum), so the app-side handler can
-    /// hand it straight to `SetGraphNodeParamCommand`.
-    SetGraphNodeParam {
-        node_id: u32,
-        param_name: String,
-        new_value: manifold_core::effect_graph_def::SerializedParamValue,
-    },
-    /// Open a native folder picker for a path-like String param and set it to
-    /// the chosen path. Emitted by the inspector's Browse button; the host runs
-    /// the (blocking) dialog and dispatches a `SetGraphNodeParam` String value.
-    BrowseGraphNodePath {
-        node_id: u32,
-        param_name: String,
-    },
-    /// Open the inline text editor over a free-text String param's value cell
-    /// (e.g. `render_text.text`). Emitted when the value cell is clicked; the
-    /// host begins a `GraphStringParam` text-input session anchored at `anchor`
-    /// (`x, y, w, h` in logical px) seeded with `current`. Commit routes back
-    /// through `SetGraphNodeParamCommand` with a String value.
-    EditGraphNodeStringParam {
-        node_id: u32,
-        param_name: String,
-        current: String,
-        anchor: (f32, f32, f32, f32),
-    },
-    /// Open the multiline WGSL code editor over the selected `wgsl_compute`
-    /// node's kernel source. Emitted by the inspector's "Edit Code" button; the
-    /// host begins a `GraphWgsl` text-input session anchored at `anchor`
-    /// (`x, y, w, h`) seeded with `current`. Commit routes to `SetWgslSourceCommand`.
-    EditGraphNodeWgsl {
-        node_id: u32,
-        current: String,
-        anchor: (f32, f32, f32, f32),
-    },
-    /// Open the inline numeric editor over one cell of a `Table` param's grid
-    /// (gradient stop / numeric sequence). Emitted when a grid cell is clicked.
-    /// The host begins a `GraphTableCell` session anchored at `anchor` seeded
-    /// with `current`, and stashes `rows` + `(row, col)` so commit can rebuild
-    /// the one edited cell into a full `Table` value through
-    /// `SetGraphNodeParamCommand`.
-    EditGraphNodeTableCell {
-        node_id: u32,
-        param_name: String,
-        row: usize,
-        col: usize,
-        current: f32,
-        rows: Vec<Vec<f32>>,
-        anchor: (f32, f32, f32, f32),
-    },
-    /// Collapse a set of nodes at `scope_path` (the canvas's current view
-    /// depth, a path of group ids; empty = document root) into a single group
-    /// node. Emitted by Ctrl+G on a canvas selection. `handle` is the new
-    /// group's stable handle — auto-named and collision-free at its level;
-    /// `centroid` is the graph-space point the group node drops at. Routed to
-    /// `GroupNodesCommand`.
-    GroupSelection {
-        scope_path: Vec<u32>,
-        node_ids: Vec<u32>,
-        handle: String,
-        centroid: (f32, f32),
-    },
-    /// Dissolve a group node at `scope_path` back into its level, splicing its
-    /// body in where the group sat. Emitted by Ctrl+Shift+G on a selected
-    /// group. Routed to `UngroupNodeCommand`.
-    Ungroup {
-        scope_path: Vec<u32>,
-        group_id: u32,
-    },
-    /// Set (or clear) the accent colour of a group node at `scope_path`.
-    /// Emitted by the recolour gesture on a selected group; routed to
-    /// `SetGroupTintCommand`. Cosmetic only — `None` restores the default tint.
-    SetGroupTint {
-        scope_path: Vec<u32>,
-        group_id: u32,
-        tint: Option<[f32; 4]>,
-    },
-    /// Flip auto-gain/normalization on the editor's node-output preview pane.
-    /// `on` is the new state. Emitted by the toggle under the preview; routed to
-    /// `ContentCommand::SetNodePreviewNormalize`. Node preview only.
-    SetNodePreviewNormalize(bool),
+    // (Graph-editor node-graph mutations moved to
+    // `crate::graph_edit::GraphEditCommand` — Phase 4.3. See the note above.)
 
     // ── Generator-only per-param actions ───────────────────────────────
     //

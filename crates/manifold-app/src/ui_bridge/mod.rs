@@ -238,7 +238,6 @@ pub fn dispatch(
         | PanelAction::RemoveEffect(_)
         | PanelAction::EffectReorder(..)
         | PanelAction::EffectReorderGroup(..)
-        | PanelAction::ToggleNodeParamExpose { .. }
         | PanelAction::GenTypeClicked(_)
         | PanelAction::GenParamToggle(_)
         | PanelAction::GenParamFire(_)
@@ -392,23 +391,8 @@ pub fn dispatch(
         | PanelAction::OpenGraphEditor(_)
         | PanelAction::OpenCardMapping(_)
         | PanelAction::OpenGeneratorGraphEditor
-        | PanelAction::AddGraphNode { .. }
-        | PanelAction::OpenNodePicker { .. }
-        | PanelAction::AddGraphNodeAt { .. }
-        | PanelAction::ConnectPorts { .. }
-        | PanelAction::DisconnectPorts { .. }
-        | PanelAction::RemoveGraphNode { .. }
-        | PanelAction::MoveGraphNode { .. }
-        | PanelAction::RelayoutGraph { .. }
-        | PanelAction::SetGraphNodeParam { .. }
-        | PanelAction::BrowseGraphNodePath { .. }
-        | PanelAction::EditGraphNodeStringParam { .. }
-        | PanelAction::EditGraphNodeWgsl { .. }
-        | PanelAction::EditGraphNodeTableCell { .. }
-        | PanelAction::GroupSelection { .. }
-        | PanelAction::Ungroup { .. }
-        | PanelAction::SetGroupTint { .. }
-        | PanelAction::SetNodePreviewNormalize(_)
+        // (Graph-editor mutations are `GraphEditCommand` now — Phase 4.3 —
+        // dispatched in app_render's `graph_edits` loop, not here.)
         | PanelAction::EffectMappingRangeSnapshot { .. }
         | PanelAction::EffectMappingRangeChanged { .. }
         | PanelAction::EffectMappingRangeCommit { .. }
@@ -423,8 +407,7 @@ pub fn dispatch(
         // Consumed in app_render (opens the inline rename editor); no-op here.
         | PanelAction::AudioSendLabelClicked(_)
         // Consumed in ui_root::try_open_dropdown (opens the send picker); no-op here.
-        | PanelAction::AudioSendClicked(_)
-        | PanelAction::RevertEffectGraph => DispatchResult::handled(),
+        | PanelAction::AudioSendClicked(_) => DispatchResult::handled(),
     }
 }
 

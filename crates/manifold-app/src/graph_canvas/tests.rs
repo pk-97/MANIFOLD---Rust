@@ -515,8 +515,8 @@ fn cycle_group_tint_emits_first_palette_colour_for_untinted_group() {
     canvas.set_snapshot(&snap);
     canvas.select_single(10); // the group node
     canvas.request_cycle_group_tint();
-    let emitted = canvas.drain_actions().into_iter().find_map(|a| match a {
-        PanelAction::SetGroupTint {
+    let emitted = canvas.drain_edits().into_iter().find_map(|a| match a {
+        GraphEditCommand::SetGroupTint {
             group_id: 10, tint, ..
         } => Some(tint),
         _ => None,
@@ -533,9 +533,9 @@ fn cycle_group_tint_noop_without_a_selected_group() {
     canvas.request_cycle_group_tint();
     assert!(
         canvas
-            .drain_actions()
+            .drain_edits()
             .iter()
-            .all(|a| !matches!(a, PanelAction::SetGroupTint { .. })),
+            .all(|a| !matches!(a, GraphEditCommand::SetGroupTint { .. })),
         "no tint action without a selected group"
     );
 }
