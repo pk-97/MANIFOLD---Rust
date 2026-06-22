@@ -477,17 +477,18 @@ impl ContentThread {
         }
     }
 
-    /// Read back a submitted still-frame export and dispatch the encode + disk
-    /// write to a detached thread (a 4000×4000 PNG is too heavy to encode on the
-    /// content thread). The finished event is sent from that thread. No-op until
-    /// the readback has been submitted (`dims` set) and the GPU copy is readable.
+    /// Read back a submitted still-frame export, then convert colour, encode,
+    /// and write to disk on a detached thread (decoding linear f16, sRGB
+    /// encoding, and PNG-ing a 4000×4000 frame is far too heavy for the content
+    /// thread). The finished event is sent from that thread. No-op until the
+    /// readback has been submitted (`dims` set) and the GPU copy is readable.
     #[cfg(target_os = "macos")]
     pub(crate) fn poll_still_export(&mut self, state_tx: &Sender<ContentState>) {
         // Only act once the readback has been submitted (dims set on the prior tick).
         if self.still_export.as_ref().is_none_or(|j| j.dims.is_none()) {
             return;
         }
-        let Some(pixels) = self.content_pipeline.take_still_readback() else {
+        let Some(packed_f16) = self.content_pipeline.take_still_readback() else {
             return;
         };
         let job = self.still_export.take().expect("checked above");
@@ -499,13 +500,24 @@ impl ContentThread {
         std::thread::Builder::new()
             .name("still-export-encode".into())
             .spawn(move || {
-                let (success, message) = match manifold_media::still_exporter::save_still(
-                    &pixels,
+                // Linear Rgba16Float → sRGB-encoded RGBA8 (faithful: no highlight
+                // rolloff, matching the on-screen image). Then encode to disk.
+                let encode = manifold_media::still_exporter::linear_f16_rgba_to_srgb8(
+                    &packed_f16,
                     w,
                     h,
-                    std::path::Path::new(&path),
-                    format,
-                ) {
+                    /* rolloff */ false,
+                )
+                .and_then(|rgba8| {
+                    manifold_media::still_exporter::save_still(
+                        &rgba8,
+                        w,
+                        h,
+                        std::path::Path::new(&path),
+                        format,
+                    )
+                });
+                let (success, message) = match encode {
                     Ok(()) => {
                         log::info!("[ContentThread] Exported frame to {path}");
                         (true, format!("Exported frame to {path}"))

@@ -2146,16 +2146,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     /// If a still readback is in flight, wait for GPU completion and return the
-    /// tightly-packed RGBA8 pixels (stride = width × 4). Returns `None` when
-    /// nothing is pending. Dimensions are whatever `submit_still_readback`
-    /// captured — read them from its return value, not the live compositor.
+    /// tightly-packed *linear* `Rgba16Float` pixels (8 bytes/px, stride =
+    /// width × 8). Returns `None` when nothing is pending. Dimensions are
+    /// whatever `submit_still_readback` captured — read them from its return
+    /// value, not the live compositor. The caller applies the colour pipeline
+    /// (rolloff + sRGB) in float off-thread; see
+    /// `manifold_media::still_exporter::linear_f16_rgba_to_srgb8`.
     #[cfg(target_os = "macos")]
     pub fn take_still_readback(&mut self) -> Option<Vec<u8>> {
         if !self.still_readback.is_pending() {
             return None;
         }
         self.wait_for_render_complete();
-        self.still_readback.try_read()
+        self.still_readback.try_read_packed()
     }
 
     /// Duration of the last GPU poll (wait for completion) in milliseconds.

@@ -136,6 +136,42 @@ impl ReadbackRequest {
 
         Some(out)
     }
+
+    /// Read the raw, tightly-packed *source-format* bytes from the shared buffer
+    /// without converting to RGBA8. For an Rgba16Float source this is
+    /// `width * height * 8` bytes of little-endian f16 channels (stride =
+    /// width * bytes_per_pixel). Used by the still-image export, which applies
+    /// its own colour pipeline (highlight rolloff + sRGB) in float before
+    /// quantizing — `try_read`'s direct f16→u8 quantize would wreck shadow
+    /// precision. The `try_read` (RGBA8, raw/linear) path used by the DNN
+    /// consumers is unchanged.
+    pub fn try_read_packed(&mut self) -> Option<Vec<u8>> {
+        if !self.pending {
+            return None;
+        }
+        let ptr = self.native_shared_ptr?;
+
+        let bytes_per_row = align_to_256(self.width * self.bpp) as usize;
+        let row_bytes = (self.width * self.bpp) as usize;
+        let mut out = vec![0u8; row_bytes * self.height as usize];
+        for row in 0..self.height as usize {
+            let src_start = row * bytes_per_row;
+            let dst_start = row * row_bytes;
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    ptr.add(src_start),
+                    out[dst_start..dst_start + row_bytes].as_mut_ptr(),
+                    row_bytes,
+                );
+            }
+        }
+
+        self.native_readback_buf = None;
+        self.native_shared_ptr = None;
+        self.pending = false;
+
+        Some(out)
+    }
 }
 
 /// Round up to the next multiple of 256 (Metal texture copy alignment).
