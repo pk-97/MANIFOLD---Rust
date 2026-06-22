@@ -26,11 +26,11 @@ const THUMB_INSET: f32 = 1.0;
 /// Stored by the owning panel for event routing and value updates.
 #[derive(Debug, Clone, Copy)]
 pub struct SliderNodeIds {
-    pub label: i32,              // -1 if no label
-    pub track: u32,              // interactive — drag target
-    pub fill: u32,               // non-interactive — subtle fill from left to value
-    pub thumb: u32,              // non-interactive — thin vertical bar at value position
-    pub value_text: u32,         // interactive — click to type
+    pub label: Option<NodeId>,   // None if no label
+    pub track: NodeId,           // interactive — drag target
+    pub fill: NodeId,            // non-interactive — subtle fill from left to value
+    pub thumb: NodeId,           // non-interactive — thin vertical bar at value position
+    pub value_text: NodeId,      // interactive — click to type
     pub track_rect: Rect,        // cached for x_to_normalized()
     pub default_normalized: f32, // for right-click reset
 }
@@ -105,7 +105,7 @@ impl BitmapSlider {
     #[allow(clippy::too_many_arguments)]
     pub fn build(
         tree: &mut UITree,
-        parent_id: i32,
+        parent_id: Option<NodeId>,
         rect: Rect,
         label: Option<&str>,
         normalized_value: f32,
@@ -114,12 +114,14 @@ impl BitmapSlider {
         font_size: u16,
         label_width: f32,
     ) -> SliderNodeIds {
+        // track/fill/thumb/value_text are placeholders overwritten below before
+        // any read; label stays None unless a label is actually built.
         let mut ids = SliderNodeIds {
-            label: -1,
-            track: 0,
-            fill: 0,
-            thumb: 0,
-            value_text: 0,
+            label: None,
+            track: NodeId(0),
+            fill: NodeId(0),
+            thumb: NodeId(0),
+            value_text: NodeId(0),
             track_rect: Rect::ZERO,
             default_normalized: normalized_value,
         };
@@ -132,7 +134,7 @@ impl BitmapSlider {
         if let Some(label_text) = label
             && !label_text.is_empty()
         {
-            ids.label = tree.add_node(
+            ids.label = Some(tree.add_node(
                 parent_id,
                 Rect::new(x, y, label_width, h),
                 UINodeType::Label,
@@ -144,7 +146,7 @@ impl BitmapSlider {
                 },
                 Some(label_text),
                 UIFlags::VISIBLE | UIFlags::INTERACTIVE,
-            ) as i32;
+            ));
             x += label_width + GAP;
         }
 
@@ -198,7 +200,7 @@ impl BitmapSlider {
             track_rect.height - FILL_INSET * 2.0,
         );
         ids.fill = tree.add_node(
-            ids.track as i32,
+            Some(ids.track),
             fill_rect,
             UINodeType::Panel,
             UIStyle {
@@ -213,7 +215,7 @@ impl BitmapSlider {
         // ── Thumb (child of track, non-interactive) ──
         let thumb_rect = compute_thumb_rect(track_rect, normalized_value);
         ids.thumb = tree.add_node(
-            ids.track as i32,
+            Some(ids.track),
             thumb_rect,
             UINodeType::Panel,
             UIStyle {
@@ -236,7 +238,7 @@ impl BitmapSlider {
         normalized_value: f32,
         value_text: &str,
     ) {
-        if (ids.track as usize) >= tree.count() {
+        if ids.track.index() >= tree.count() {
             return;
         }
 
@@ -360,7 +362,7 @@ impl SliderDragState {
     }
 
     /// Track node ID for hit-testing.
-    pub fn track_id(&self) -> Option<u32> {
+    pub fn track_id(&self) -> Option<NodeId> {
         self.ids.as_ref().map(|ids| ids.track)
     }
 
@@ -376,7 +378,7 @@ impl SliderDragState {
     /// Check if `node_id` is this slider's track. If so, begin drag,
     /// compute value from `pos_x`, update cache, and return the value.
     /// The caller emits Snapshot + Changed actions.
-    pub fn try_start_drag(&mut self, node_id: u32, pos_x: f32) -> Option<f32> {
+    pub fn try_start_drag(&mut self, node_id: NodeId, pos_x: f32) -> Option<f32> {
         let ids = self.ids.as_ref()?;
         if node_id != ids.track {
             return None;
@@ -516,11 +518,11 @@ mod tests {
     #[test]
     fn build_slider() {
         let mut tree = UITree::new();
-        let root = tree.add_panel(-1, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
 
         let ids = BitmapSlider::build(
             &mut tree,
-            root as i32,
+            Some(root),
             Rect::new(0.0, 0.0, 400.0, 20.0),
             Some("Opacity"),
             0.75,
@@ -530,21 +532,21 @@ mod tests {
             DEFAULT_LABEL_WIDTH,
         );
 
-        assert!(ids.label >= 0);
-        assert!(ids.track > 0);
-        assert!(ids.fill > 0);
-        assert!(ids.thumb > 0);
-        assert!(ids.value_text > 0);
+        assert!(ids.label.is_some());
+        assert!(ids.track > NodeId(0));
+        assert!(ids.fill > NodeId(0));
+        assert!(ids.thumb > NodeId(0));
+        assert!(ids.value_text > NodeId(0));
     }
 
     #[test]
     fn slider_without_label() {
         let mut tree = UITree::new();
-        tree.add_panel(-1, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
+        tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
 
         let ids = BitmapSlider::build(
             &mut tree,
-            0,
+            Some(NodeId(0)),
             Rect::new(0.0, 0.0, 400.0, 20.0),
             None,
             0.5,
@@ -554,7 +556,7 @@ mod tests {
             DEFAULT_LABEL_WIDTH,
         );
 
-        assert_eq!(ids.label, -1);
+        assert_eq!(ids.label, None);
     }
 
     #[test]
@@ -580,11 +582,11 @@ mod tests {
     #[test]
     fn update_value() {
         let mut tree = UITree::new();
-        tree.add_panel(-1, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
+        tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
 
         let ids = BitmapSlider::build(
             &mut tree,
-            0,
+            Some(NodeId(0)),
             Rect::new(0.0, 0.0, 400.0, 20.0),
             Some("Test"),
             0.5,

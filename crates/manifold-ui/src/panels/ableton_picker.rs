@@ -132,10 +132,10 @@ pub struct AbletonPickerPopup {
     screen_w: f32,
     screen_h: f32,
 
-    backdrop_id: i32,
-    track_row_ids: Vec<i32>,
+    backdrop_id: Option<NodeId>,
+    track_row_ids: Vec<NodeId>,
     /// (node_id, address) for each visible macro item.
-    macro_item_ids: Vec<(i32, AbletonMacroAddress)>,
+    macro_item_ids: Vec<(NodeId, AbletonMacroAddress)>,
     first_node: usize,
     node_count: usize,
     /// Selection captured by `Overlay::on_event`, drained by the app-layer
@@ -162,7 +162,7 @@ impl AbletonPickerPopup {
             popup_h: 0.0,
             screen_w: 1920.0,
             screen_h: 1080.0,
-            backdrop_id: -1,
+            backdrop_id: None,
             track_row_ids: Vec::new(),
             macro_item_ids: Vec::new(),
             first_node: 0,
@@ -248,8 +248,8 @@ impl AbletonPickerPopup {
         let ph = self.popup_h;
 
         // Fullscreen backdrop — catches clicks outside to dismiss.
-        self.backdrop_id = tree.add_button(
-            -1,
+        self.backdrop_id = Some(tree.add_button(
+            None,
             0.0,
             0.0,
             self.screen_w,
@@ -259,11 +259,11 @@ impl AbletonPickerPopup {
                 ..UIStyle::default()
             },
             "",
-        ) as i32;
+        ));
 
         // Outer border
         tree.add_panel(
-            -1,
+            None,
             px,
             py,
             pw,
@@ -277,7 +277,7 @@ impl AbletonPickerPopup {
 
         // Inner background
         tree.add_panel(
-            -1,
+            None,
             px + BORDER,
             py + BORDER,
             pw - BORDER * 2.0,
@@ -296,7 +296,7 @@ impl AbletonPickerPopup {
         // ── Header row ────────────────────────────────────────────
 
         tree.add_panel(
-            -1,
+            None,
             px + BORDER,
             py + BORDER,
             pw - BORDER * 2.0,
@@ -310,7 +310,7 @@ impl AbletonPickerPopup {
 
         // "Ableton Tracks" label
         tree.add_label(
-            -1,
+            None,
             content_x,
             content_y,
             LEFT_COL_W,
@@ -327,7 +327,7 @@ impl AbletonPickerPopup {
         // "Macros" label
         let right_x = content_x + LEFT_COL_W + DIVIDER_W + 4.0;
         tree.add_label(
-            -1,
+            None,
             right_x,
             content_y,
             RIGHT_COL_W,
@@ -344,7 +344,7 @@ impl AbletonPickerPopup {
         // Header separator line
         let sep_y = content_y + HEADER_H + 1.0;
         tree.add_panel(
-            -1,
+            None,
             px + BORDER,
             sep_y,
             pw - BORDER * 2.0,
@@ -363,7 +363,7 @@ impl AbletonPickerPopup {
         let div_x = content_x + LEFT_COL_W;
         let divider_h = ph - BORDER * 2.0 - PADDING - (HEADER_H + 3.0) - PADDING;
         tree.add_panel(
-            -1,
+            None,
             div_x,
             body_y,
             DIVIDER_W,
@@ -378,7 +378,7 @@ impl AbletonPickerPopup {
 
         if self.rack_tracks.is_empty() {
             tree.add_label(
-                -1,
+                None,
                 content_x,
                 body_y + 8.0,
                 LEFT_COL_W,
@@ -403,7 +403,7 @@ impl AbletonPickerPopup {
                 };
 
                 let id = tree.add_button(
-                    -1,
+                    None,
                     content_x,
                     row_y,
                     LEFT_COL_W - 2.0,
@@ -419,13 +419,13 @@ impl AbletonPickerPopup {
                         ..UIStyle::default()
                     },
                     &format!("  {}", track.track_name),
-                ) as i32;
+                );
                 self.track_row_ids.push(id);
 
                 // Selection arrow
                 if is_selected {
                     tree.add_label(
-                        -1,
+                        None,
                         content_x + LEFT_COL_W - 14.0,
                         row_y,
                         12.0,
@@ -460,7 +460,7 @@ impl AbletonPickerPopup {
                     }
                     // Device name section header (non-interactive)
                     tree.add_label(
-                        -1,
+                        None,
                         right_content_x,
                         ry + 2.0,
                         RIGHT_COL_W,
@@ -501,7 +501,7 @@ impl AbletonPickerPopup {
                             macro_name: mac.name.clone(),
                         };
                         let id = tree.add_button(
-                            -1,
+                            None,
                             right_content_x,
                             ry,
                             RIGHT_COL_W,
@@ -517,7 +517,7 @@ impl AbletonPickerPopup {
                                 ..UIStyle::default()
                             },
                             &format!("  {}", mac.name),
-                        ) as i32;
+                        );
                         self.macro_item_ids.push((id, addr));
                         ry += ITEM_H;
                     }
@@ -525,7 +525,7 @@ impl AbletonPickerPopup {
                     // Separator between devices (not after last)
                     if di + 1 < track.devices.len() {
                         tree.add_panel(
-                            -1,
+                            None,
                             right_content_x,
                             ry + 3.0,
                             RIGHT_COL_W,
@@ -546,7 +546,7 @@ impl AbletonPickerPopup {
                 "Select a track"
             };
             tree.add_label(
-                -1,
+                None,
                 right_content_x,
                 body_y + 8.0,
                 RIGHT_COL_W,
@@ -565,26 +565,25 @@ impl AbletonPickerPopup {
     }
 
     /// Handle a click event. Returns an action if consumed.
-    pub fn handle_click(&mut self, node_id: u32) -> Option<AbletonPickerAction> {
+    pub fn handle_click(&mut self, node_id: NodeId) -> Option<AbletonPickerAction> {
         if !self.is_open {
             return None;
         }
-        let id = node_id as i32;
 
-        if id == self.backdrop_id {
+        if self.backdrop_id == Some(node_id) {
             self.close();
             return Some(AbletonPickerAction::Dismissed);
         }
 
         // Track row → select, update right column next build
-        if let Some(idx) = self.track_row_ids.iter().position(|&tid| tid == id) {
+        if let Some(idx) = self.track_row_ids.iter().position(|&tid| tid == node_id) {
             self.selected_track_idx = Some(idx);
             return None;
         }
 
         // Macro item → map and close
         for (item_id, addr) in &self.macro_item_ids {
-            if id == *item_id {
+            if node_id == *item_id {
                 let addr = addr.clone();
                 self.close();
                 return Some(AbletonPickerAction::Selected(addr));
@@ -609,8 +608,8 @@ impl AbletonPickerPopup {
         }
     }
 
-    pub fn contains_node(&self, node_id: u32) -> bool {
-        let id = node_id as usize;
+    pub fn contains_node(&self, node_id: NodeId) -> bool {
+        let id = node_id.index();
         id >= self.first_node && id < self.first_node + self.node_count
     }
 

@@ -88,20 +88,20 @@ pub struct PerfHudPanel {
     ui_dt_history: FrameTimeHistory,
     render_dt_history: FrameTimeHistory,
     // Node IDs for push-based value updates
-    ui_fps_value_id: i32,
-    ui_frame_time_id: i32,
-    render_fps_value_id: i32,
-    render_frame_time_id: i32,
-    gpu_fence_wait_id: i32,
-    active_clips_id: i32,
-    beat_id: i32,
-    time_id: i32,
-    bpm_id: i32,
-    clock_id: i32,
-    profiling_id: i32,
+    ui_fps_value_id: Option<NodeId>,
+    ui_frame_time_id: Option<NodeId>,
+    render_fps_value_id: Option<NodeId>,
+    render_frame_time_id: Option<NodeId>,
+    gpu_fence_wait_id: Option<NodeId>,
+    active_clips_id: Option<NodeId>,
+    beat_id: Option<NodeId>,
+    time_id: Option<NodeId>,
+    bpm_id: Option<NodeId>,
+    clock_id: Option<NodeId>,
+    profiling_id: Option<NodeId>,
     // Node IDs for graph bars (stored for per-frame color/size updates)
-    ui_graph_bar_ids: Vec<i32>,
-    render_graph_bar_ids: Vec<i32>,
+    ui_graph_bar_ids: Vec<NodeId>,
+    render_graph_bar_ids: Vec<NodeId>,
     /// Y position of the UI graph area (set during build).
     ui_graph_y: f32,
     /// Y position of the render graph area (set during build).
@@ -128,17 +128,17 @@ impl PerfHudPanel {
             fmt_buf: String::with_capacity(64),
             ui_dt_history: FrameTimeHistory::new(),
             render_dt_history: FrameTimeHistory::new(),
-            ui_fps_value_id: -1,
-            ui_frame_time_id: -1,
-            render_fps_value_id: -1,
-            render_frame_time_id: -1,
-            gpu_fence_wait_id: -1,
-            active_clips_id: -1,
-            beat_id: -1,
-            time_id: -1,
-            bpm_id: -1,
-            clock_id: -1,
-            profiling_id: -1,
+            ui_fps_value_id: None,
+            ui_frame_time_id: None,
+            render_fps_value_id: None,
+            render_frame_time_id: None,
+            gpu_fence_wait_id: None,
+            active_clips_id: None,
+            beat_id: None,
+            time_id: None,
+            bpm_id: None,
+            clock_id: None,
+            profiling_id: None,
             ui_graph_bar_ids: Vec::new(),
             render_graph_bar_ids: Vec::new(),
             ui_graph_y: 0.0,
@@ -180,10 +180,10 @@ impl PerfHudPanel {
 
         macro_rules! fmt_set {
             ($id:expr, $($arg:tt)*) => {
-                if $id >= 0 {
+                if let Some(id) = $id {
                     self.fmt_buf.clear();
                     let _ = write!(self.fmt_buf, $($arg)*);
-                    tree.set_text($id as u32, &self.fmt_buf);
+                    tree.set_text(id, &self.fmt_buf);
                 }
             };
         }
@@ -196,11 +196,11 @@ impl PerfHudPanel {
             "{:.1} ms",
             m.render_frame_time_ms
         );
-        if self.gpu_fence_wait_id >= 0 {
+        if let Some(gpu_fence_wait_id) = self.gpu_fence_wait_id {
             if m.gpu_fence_wait_ms > 0.1 {
                 fmt_set!(self.gpu_fence_wait_id, "{:.1} ms", m.gpu_fence_wait_ms);
                 tree.set_style(
-                    self.gpu_fence_wait_id as u32,
+                    gpu_fence_wait_id,
                     UIStyle {
                         text_color: color::STATUS_BAD,
                         font_size: VALUE_FONT,
@@ -209,9 +209,9 @@ impl PerfHudPanel {
                     },
                 );
             } else {
-                tree.set_text(self.gpu_fence_wait_id as u32, "0.0 ms");
+                tree.set_text(gpu_fence_wait_id, "0.0 ms");
                 tree.set_style(
-                    self.gpu_fence_wait_id as u32,
+                    gpu_fence_wait_id,
                     UIStyle {
                         text_color: color::TEXT_NORMAL,
                         font_size: VALUE_FONT,
@@ -228,21 +228,21 @@ impl PerfHudPanel {
             m.preparing_clips
         );
         fmt_set!(self.beat_id, "{:.2}", m.current_beat.0);
-        if self.time_id >= 0 {
+        if self.time_id.is_some() {
             let secs = m.current_time_secs;
             let mins = (secs / 60.0).floor() as u32;
             let s = secs % 60.0;
             fmt_set!(self.time_id, "{}:{:05.2}", mins, s);
         }
         fmt_set!(self.bpm_id, "{:.1}", m.bpm.0);
-        if self.clock_id >= 0 {
-            tree.set_text(self.clock_id as u32, &m.clock_source);
+        if let Some(clock_id) = self.clock_id {
+            tree.set_text(clock_id, &m.clock_source);
         }
-        if self.profiling_id >= 0 {
+        if let Some(profiling_id) = self.profiling_id {
             if m.profiling_active {
                 fmt_set!(self.profiling_id, "REC {}", m.profiling_frame_count);
                 tree.set_style(
-                    self.profiling_id as u32,
+                    profiling_id,
                     UIStyle {
                         text_color: color::STATUS_BAD,
                         font_size: VALUE_FONT,
@@ -251,9 +251,9 @@ impl PerfHudPanel {
                     },
                 );
             } else {
-                tree.set_text(self.profiling_id as u32, "—");
+                tree.set_text(profiling_id, "—");
                 tree.set_style(
-                    self.profiling_id as u32,
+                    profiling_id,
                     UIStyle {
                         text_color: color::TEXT_NORMAL,
                         font_size: VALUE_FONT,
@@ -294,7 +294,7 @@ impl PerfHudPanel {
     fn update_graph_bars(
         &self,
         tree: &mut UITree,
-        bar_ids: &[i32],
+        bar_ids: &[NodeId],
         history: &FrameTimeHistory,
         graph_y: f32,
         budget_ms: f32,
@@ -307,9 +307,6 @@ impl PerfHudPanel {
                 break;
             }
             let id = bar_ids[i];
-            if id < 0 {
-                continue;
-            }
 
             let frac = (ms / GRAPH_MAX_MS).clamp(0.0, 1.0);
             let bar_h = (frac * GRAPH_HEIGHT).max(1.0);
@@ -326,9 +323,9 @@ impl PerfHudPanel {
             };
 
             // Preserve x/w, update y/h
-            let old = tree.get_bounds(id as u32);
+            let old = tree.get_bounds(id);
             tree.set_bounds(
-                id as u32,
+                id,
                 Rect {
                     x: old.x,
                     y: bar_y,
@@ -337,7 +334,7 @@ impl PerfHudPanel {
                 },
             );
             tree.set_style(
-                id as u32,
+                id,
                 UIStyle {
                     bg_color: col,
                     ..UIStyle::default()
@@ -346,10 +343,10 @@ impl PerfHudPanel {
         }
     }
 
-    fn add_row(tree: &mut UITree, x: f32, y: f32, width: f32, label: &str) -> (i32, f32) {
+    fn add_row(tree: &mut UITree, x: f32, y: f32, width: f32, label: &str) -> (NodeId, f32) {
         // Label on left
         tree.add_label(
-            -1,
+            None,
             x,
             y,
             width * 0.5,
@@ -364,7 +361,7 @@ impl PerfHudPanel {
         );
         // Value on right (returns node ID for push updates)
         let val_id = tree.add_label(
-            -1,
+            None,
             x + width * 0.5,
             y,
             width * 0.5,
@@ -376,19 +373,19 @@ impl PerfHudPanel {
                 text_align: TextAlign::Right,
                 ..UIStyle::default()
             },
-        ) as i32;
+        );
         (val_id, y + ROW_HEIGHT)
     }
 
     /// Build the bar graph nodes for a frame time history.
     /// Each bar is a 2px-wide panel node; height/color updated per frame.
-    fn build_graph_bars(tree: &mut UITree, x: f32, y: f32, width: f32) -> Vec<i32> {
+    fn build_graph_bars(tree: &mut UITree, x: f32, y: f32, width: f32) -> Vec<NodeId> {
         let bar_w = width / GRAPH_SAMPLES as f32;
         let mut ids = Vec::with_capacity(GRAPH_SAMPLES);
         for i in 0..GRAPH_SAMPLES {
             let bx = x + i as f32 * bar_w;
             let id = tree.add_panel(
-                -1,
+                None,
                 bx,
                 y,
                 bar_w.max(1.0),
@@ -397,7 +394,7 @@ impl PerfHudPanel {
                     bg_color: Color32::new(40, 40, 44, 255),
                     ..UIStyle::default()
                 },
-            ) as i32;
+            );
             ids.push(id);
         }
         ids
@@ -419,7 +416,7 @@ impl PerfHudPanel {
 
         // Background
         tree.add_panel(
-            -1,
+            None,
             x,
             y,
             HUD_WIDTH,
@@ -435,7 +432,7 @@ impl PerfHudPanel {
         let mut cy = y + PAD;
         let inner_w = HUD_WIDTH - PAD * 2.0;
         tree.add_label(
-            -1,
+            None,
             x + PAD,
             cy,
             inner_w,
@@ -456,10 +453,10 @@ impl PerfHudPanel {
 
         // ── UI timing ────────────────────────────────────────────
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "UI FPS");
-        self.ui_fps_value_id = id;
+        self.ui_fps_value_id = Some(id);
         cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "UI Frame");
-        self.ui_frame_time_id = id;
+        self.ui_frame_time_id = Some(id);
         cy = ny;
 
         // UI frame time graph
@@ -469,13 +466,13 @@ impl PerfHudPanel {
 
         // ── Render timing ────────────────────────────────────────
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Render FPS");
-        self.render_fps_value_id = id;
+        self.render_fps_value_id = Some(id);
         cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Render Frame");
-        self.render_frame_time_id = id;
+        self.render_frame_time_id = Some(id);
         cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "GPU Wait");
-        self.gpu_fence_wait_id = id;
+        self.gpu_fence_wait_id = Some(id);
         cy = ny;
 
         // Render frame time graph
@@ -485,27 +482,27 @@ impl PerfHudPanel {
 
         // ── Clip scheduling ──────────────────────────────────────
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Active / Prep");
-        self.active_clips_id = id;
+        self.active_clips_id = Some(id);
         cy = ny;
         cy += SECTION_GAP;
 
         // ── Playback position ────────────────────────────────────
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Beat");
-        self.beat_id = id;
+        self.beat_id = Some(id);
         cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Time");
-        self.time_id = id;
+        self.time_id = Some(id);
         cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "BPM");
-        self.bpm_id = id;
+        self.bpm_id = Some(id);
         cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Clock");
-        self.clock_id = id;
+        self.clock_id = Some(id);
         cy = ny;
 
         // ── Profiling status ─────────────────────────────────────
         let (id, _ny) = Self::add_row(tree, lx, cy, inner_w, "Profiling");
-        self.profiling_id = id;
+        self.profiling_id = Some(id);
 
         self.node_count = tree.count() - self.first_node;
     }

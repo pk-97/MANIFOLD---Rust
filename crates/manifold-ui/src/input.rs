@@ -139,17 +139,19 @@ pub enum Key {
 #[derive(Debug, Clone)]
 pub enum UIEvent {
     Click {
-        node_id: u32,
+        node_id: NodeId,
         pos: Vec2,
         modifiers: Modifiers,
     },
     DoubleClick {
-        node_id: u32,
+        node_id: NodeId,
         pos: Vec2,
         modifiers: Modifiers,
     },
+    /// Right-click fires even on an empty hit (see [`UIInputSystem::process_right_click`]),
+    /// so its node is optional: `None` is a miss that still carries `pos`.
     RightClick {
-        node_id: u32,
+        node_id: Option<NodeId>,
         pos: Vec2,
         modifiers: Modifiers,
     },
@@ -159,38 +161,38 @@ pub enum UIEvent {
         modifiers: Modifiers,
     },
     PointerDown {
-        node_id: u32,
+        node_id: NodeId,
         pos: Vec2,
         modifiers: Modifiers,
     },
     PointerUp {
-        node_id: u32,
+        node_id: NodeId,
         pos: Vec2,
     },
     HoverEnter {
-        node_id: u32,
+        node_id: NodeId,
         pos: Vec2,
     },
     HoverExit {
-        node_id: u32,
+        node_id: NodeId,
     },
     DragBegin {
-        node_id: u32,
+        node_id: NodeId,
         pos: Vec2,
         origin: Vec2,
         modifiers: Modifiers,
     },
     Drag {
-        node_id: u32,
+        node_id: NodeId,
         pos: Vec2,
         delta: Vec2,
     },
     DragEnd {
-        node_id: u32,
+        node_id: NodeId,
         pos: Vec2,
     },
     KeyDown {
-        node_id: u32,
+        node_id: NodeId,
         key: Key,
         modifiers: Modifiers,
     },
@@ -318,9 +320,9 @@ impl UIEvent {
 /// - Drag detection (4px threshold)
 /// - Hover enter/exit tracking
 pub struct UIInputSystem {
-    hovered_id: i32,
-    pressed_id: i32,
-    focused_id: i32,
+    hovered_id: Option<NodeId>,
+    pressed_id: Option<NodeId>,
+    focused_id: Option<NodeId>,
     press_origin: Vec2,
     last_drag_pos: Vec2,
     is_dragging: bool,
@@ -342,9 +344,9 @@ const DOUBLE_CLICK_TIME: f32 = crate::color::DOUBLE_CLICK_TIME_SEC;
 impl UIInputSystem {
     pub fn new() -> Self {
         Self {
-            hovered_id: -1,
-            pressed_id: -1,
-            focused_id: -1,
+            hovered_id: None,
+            pressed_id: None,
+            focused_id: None,
             press_origin: Vec2::ZERO,
             last_drag_pos: Vec2::ZERO,
             is_dragging: false,
@@ -355,15 +357,15 @@ impl UIInputSystem {
         }
     }
 
-    pub fn hovered_id(&self) -> i32 {
+    pub fn hovered_id(&self) -> Option<NodeId> {
         self.hovered_id
     }
 
-    pub fn pressed_id(&self) -> i32 {
+    pub fn pressed_id(&self) -> Option<NodeId> {
         self.pressed_id
     }
 
-    pub fn focused_id(&self) -> i32 {
+    pub fn focused_id(&self) -> Option<NodeId> {
         self.focused_id
     }
 
@@ -385,13 +387,13 @@ impl UIInputSystem {
     /// Only clears hovered_id — pressed_id and is_dragging are preserved so
     /// an in-progress drag survives a tree rebuild (matches Unity IsDragging pin).
     pub fn invalidate_hover(&mut self) {
-        self.hovered_id = -1;
+        self.hovered_id = None;
         // Do NOT clear pressed_id or is_dragging here.
     }
 
     /// Clear keyboard focus.
     pub fn clear_focus(&mut self) {
-        self.focused_id = -1;
+        self.focused_id = None;
     }
 
     /// Update modifier state (called by app on ModifiersChanged).
@@ -422,30 +424,29 @@ impl UIInputSystem {
                 self.last_drag_pos = screen_pos;
                 self.is_dragging = false;
 
-                if hit_id >= 0 {
-                    let uid = hit_id as u32;
+                if let Some(uid) = hit_id {
                     tree.set_flag(uid, UIFlags::PRESSED);
-                    self.focused_id = hit_id;
+                    self.focused_id = Some(uid);
                     self.pending_events.push(UIEvent::PointerDown {
                         node_id: uid,
                         pos: screen_pos,
                         modifiers: self.modifiers,
                     });
                 } else {
-                    self.focused_id = -1;
+                    self.focused_id = None;
                 }
             }
 
             PointerAction::Move => {
                 self.update_hover(tree, hit_id, screen_pos);
 
-                if self.pressed_id >= 0 {
+                if let Some(pid) = self.pressed_id {
                     if !self.is_dragging {
                         let dist = screen_pos.distance(self.press_origin);
                         if dist >= DRAG_THRESHOLD {
                             self.is_dragging = true;
                             self.pending_events.push(UIEvent::DragBegin {
-                                node_id: self.pressed_id as u32,
+                                node_id: pid,
                                 pos: screen_pos,
                                 origin: self.press_origin,
                                 modifiers: self.modifiers,
@@ -455,7 +456,7 @@ impl UIInputSystem {
                         let delta = screen_pos - self.last_drag_pos;
                         self.last_drag_pos = screen_pos;
                         self.pending_events.push(UIEvent::Drag {
-                            node_id: self.pressed_id as u32,
+                            node_id: pid,
                             pos: screen_pos,
                             delta,
                         });
@@ -464,8 +465,7 @@ impl UIInputSystem {
             }
 
             PointerAction::Up => {
-                if self.pressed_id >= 0 {
-                    let uid = self.pressed_id as u32;
+                if let Some(uid) = self.pressed_id {
                     tree.clear_flag(uid, UIFlags::PRESSED);
 
                     if self.is_dragging {
@@ -506,7 +506,7 @@ impl UIInputSystem {
                         pos: screen_pos,
                     });
                 }
-                self.pressed_id = -1;
+                self.pressed_id = None;
                 self.is_dragging = false;
             }
         }
@@ -524,7 +524,7 @@ impl UIInputSystem {
     pub fn process_right_click(&mut self, tree: &UITree, pos: Vec2) {
         let hit_id = tree.hit_test(pos);
         self.pending_events.push(UIEvent::RightClick {
-            node_id: if hit_id >= 0 { hit_id as u32 } else { u32::MAX },
+            node_id: hit_id,
             pos,
             modifiers: self.modifiers,
         });
@@ -541,23 +541,24 @@ impl UIInputSystem {
 
     /// Process a key press on the currently focused node.
     pub fn process_key(&mut self, key: Key, modifiers: Modifiers) {
-        if self.focused_id >= 0 {
+        if let Some(fid) = self.focused_id {
             self.pending_events.push(UIEvent::KeyDown {
-                node_id: self.focused_id as u32,
+                node_id: fid,
                 key,
                 modifiers,
             });
         }
     }
 
-    fn update_hover(&mut self, tree: &mut UITree, hit_id: i32, pos: Vec2) {
+    fn update_hover(&mut self, tree: &mut UITree, hit_id: Option<NodeId>, pos: Vec2) {
         if hit_id == self.hovered_id {
             return;
         }
 
         // Clear old hover (guard: id may be stale after tree rebuild)
-        if self.hovered_id >= 0 && (self.hovered_id as usize) < tree.count() {
-            let old_id = self.hovered_id as u32;
+        if let Some(old_id) = self.hovered_id
+            && old_id.index() < tree.count()
+        {
             tree.clear_flag(old_id, UIFlags::HOVERED);
             self.pending_events
                 .push(UIEvent::HoverExit { node_id: old_id });
@@ -565,15 +566,16 @@ impl UIInputSystem {
 
         self.hovered_id = hit_id;
 
-        if self.hovered_id >= 0 && (self.hovered_id as usize) < tree.count() {
-            let new_id = self.hovered_id as u32;
-            tree.set_flag(new_id, UIFlags::HOVERED);
-            self.pending_events.push(UIEvent::HoverEnter {
-                node_id: new_id,
-                pos,
-            });
-        } else {
-            self.hovered_id = -1;
+        if let Some(new_id) = self.hovered_id {
+            if new_id.index() < tree.count() {
+                tree.set_flag(new_id, UIFlags::HOVERED);
+                self.pending_events.push(UIEvent::HoverEnter {
+                    node_id: new_id,
+                    pos,
+                });
+            } else {
+                self.hovered_id = None;
+            }
         }
     }
 }
@@ -591,9 +593,9 @@ mod tests {
     fn setup() -> (UITree, UIInputSystem) {
         let mut tree = UITree::new();
         // Root panel
-        tree.add_panel(-1, 0.0, 0.0, 800.0, 600.0, UIStyle::default());
+        tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, UIStyle::default());
         // Button at (50,50) size 100x30
-        tree.add_button(0, 50.0, 50.0, 100.0, 30.0, UIStyle::default(), "Click me");
+        tree.add_button(Some(NodeId(0)), 50.0, 50.0, 100.0, 30.0, UIStyle::default(), "Click me");
         (tree, UIInputSystem::new())
     }
 
@@ -613,7 +615,7 @@ mod tests {
             .collect();
         assert_eq!(clicks.len(), 1);
         if let UIEvent::Click { node_id, .. } = clicks[0] {
-            assert_eq!(*node_id, 1); // button id
+            assert_eq!(*node_id, NodeId(1)); // button id
         }
     }
 
@@ -711,7 +713,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, UIEvent::HoverEnter { node_id: 1, .. }))
+                .any(|e| matches!(e, UIEvent::HoverEnter { node_id: NodeId(1), .. }))
         );
 
         // Move off button
@@ -720,7 +722,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, UIEvent::HoverExit { node_id: 1 }))
+                .any(|e| matches!(e, UIEvent::HoverExit { node_id: NodeId(1) }))
         );
     }
 
@@ -733,7 +735,7 @@ mod tests {
         input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Up, 0.0);
         input.drain_events();
 
-        assert_eq!(input.focused_id(), 1);
+        assert_eq!(input.focused_id(), Some(NodeId(1)));
 
         // Send key
         input.process_key(Key::Space, Modifiers::default());
@@ -742,7 +744,7 @@ mod tests {
         assert!(matches!(
             events[0],
             UIEvent::KeyDown {
-                node_id: 1,
+                node_id: NodeId(1),
                 key: Key::Space,
                 ..
             }
@@ -765,7 +767,7 @@ mod tests {
         input.process_right_click(&tree, Vec2::new(60.0, 60.0));
         let events = input.drain_events();
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], UIEvent::RightClick { node_id: 1, .. }));
+        assert!(matches!(events[0], UIEvent::RightClick { node_id: Some(NodeId(1)), .. }));
     }
 
     #[test]

@@ -54,12 +54,12 @@ pub struct GraphPalette {
     /// map a clicked button back to the atom's `type_id`.
     rows: Vec<RowState>,
     /// Root container id inside the editor's UITree.
-    root_id: i32,
+    root_id: Option<NodeId>,
 }
 
 #[derive(Debug, Clone)]
 struct RowState {
-    button_id: u32,
+    button_id: NodeId,
     type_id: String,
 }
 
@@ -80,8 +80,8 @@ impl GraphPalette {
     pub fn build(&mut self, tree: &mut UITree, viewport: Rect) {
         self.rows.clear();
 
-        let bg_id = tree.add_panel(
-            -1,
+        let bg_id = Some(tree.add_panel(
+            None,
             viewport.x,
             viewport.y,
             viewport.width,
@@ -90,7 +90,7 @@ impl GraphPalette {
                 bg_color: color::EFFECT_CARD_INNER_BG_C32,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
         self.root_id = bg_id;
 
         let mut y = viewport.y + PADDING;
@@ -180,7 +180,7 @@ impl GraphPalette {
     /// Map a click on a UITree button back to a `PanelAction`. Returns
     /// an empty Vec when the click didn't land on one of our rows or
     /// when the palette is inactive.
-    pub fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
+    pub fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
         if !self.active {
             return Vec::new();
         }
@@ -193,7 +193,7 @@ impl GraphPalette {
     }
 
     /// Bulk variant for the editor window's input loop.
-    pub fn dispatch_clicks(&self, clicks: &[u32]) -> Vec<PanelAction> {
+    pub fn dispatch_clicks(&self, clicks: &[NodeId]) -> Vec<PanelAction> {
         clicks.iter().flat_map(|&n| self.handle_click(n)).collect()
     }
 }
@@ -228,7 +228,7 @@ mod tests {
         palette.configure(false, sample_atoms());
         palette.build(&mut tree, viewport());
         assert!(palette.rows.is_empty());
-        assert!(palette.handle_click(123).is_empty());
+        assert!(palette.handle_click(NodeId(123)).is_empty());
     }
 
     #[test]
@@ -256,6 +256,6 @@ mod tests {
         let mut palette = GraphPalette::new();
         palette.configure(true, sample_atoms());
         palette.build(&mut tree, viewport());
-        assert!(palette.handle_click(99999).is_empty());
+        assert!(palette.handle_click(NodeId(99999)).is_empty());
     }
 }

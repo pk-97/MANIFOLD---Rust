@@ -92,10 +92,10 @@ pub struct DropdownPanel {
     /// Computed bounds of the dropdown container.
     container_bounds: Rect,
     /// Node IDs.
-    backdrop_id: i32,
-    root_id: i32,
-    item_ids: Vec<i32>,
-    separator_ids: Vec<i32>,
+    backdrop_id: Option<NodeId>,
+    root_id: Option<NodeId>,
+    item_ids: Vec<NodeId>,
+    separator_ids: Vec<NodeId>,
     /// Index of currently hovered item (-1 = none).
     hovered_index: i32,
     /// Scroll offset in pixels (0 = top, positive = scrolled down).
@@ -111,7 +111,7 @@ pub struct DropdownPanel {
     /// Colors to render as a swatch grid below the text items.
     color_grid: Vec<Color32>,
     color_grid_cols: usize,
-    color_swatch_ids: Vec<i32>,
+    color_swatch_ids: Vec<NodeId>,
     /// Action captured by `Overlay::on_event`, drained by the app-layer overlay
     /// driver. Selection lowering (`DropdownContext` → `PanelAction`) needs
     /// `UIRoot`'s cached device/resolution lists, so it stays app-side.
@@ -128,8 +128,8 @@ impl DropdownPanel {
             screen_height: 1080.0,
             min_width: MIN_WIDTH,
             container_bounds: Rect::ZERO,
-            backdrop_id: -1,
-            root_id: -1,
+            backdrop_id: None,
+            root_id: None,
             item_ids: Vec::new(),
             separator_ids: Vec::new(),
             hovered_index: -1,
@@ -299,11 +299,11 @@ impl DropdownPanel {
             return;
         }
         self.is_open = false;
-        if self.backdrop_id >= 0 {
-            tree.set_visible(self.backdrop_id as u32, false);
+        if let Some(backdrop_id) = self.backdrop_id {
+            tree.set_visible(backdrop_id, false);
         }
-        if self.root_id >= 0 {
-            tree.set_visible(self.root_id as u32, false);
+        if let Some(root_id) = self.root_id {
+            tree.set_visible(root_id, false);
         }
     }
 
@@ -327,14 +327,14 @@ impl DropdownPanel {
             bg_color: color::DROPDOWN_SCRIM, // nearly invisible
             ..UIStyle::default()
         };
-        self.backdrop_id = tree.add_node(
-            -1,
+        self.backdrop_id = Some(tree.add_node(
+            None,
             Rect::new(0.0, 0.0, self.screen_width, self.screen_height),
             UINodeType::Button,
             backdrop_style,
             None,
             UIFlags::INTERACTIVE | UIFlags::VISIBLE,
-        ) as i32;
+        ));
 
         // Root container with border + shadow bg.
         let container_style = UIStyle {
@@ -344,14 +344,14 @@ impl DropdownPanel {
             border_width: 1.0,
             ..UIStyle::default()
         };
-        self.root_id = tree.add_panel(
-            -1,
+        self.root_id = Some(tree.add_panel(
+            None,
             bounds.x,
             bounds.y,
             bounds.width,
             bounds.height,
             container_style,
-        ) as i32;
+        ));
 
         // Build items — positions offset by scroll. Items outside the
         // viewport are created but hidden to preserve stable item_ids indices.
@@ -430,7 +430,7 @@ impl DropdownPanel {
             if !visible {
                 tree.set_visible(id, false);
             }
-            self.item_ids.push(id as i32);
+            self.item_ids.push(id);
             cy += ITEM_HEIGHT;
 
             if separator_after {
@@ -451,7 +451,7 @@ impl DropdownPanel {
                 if !sep_visible {
                     tree.set_visible(sep_id, false);
                 }
-                self.separator_ids.push(sep_id as i32);
+                self.separator_ids.push(sep_id);
                 cy += SEPARATOR_HEIGHT;
             }
         }
@@ -472,7 +472,7 @@ impl DropdownPanel {
                 1.0,
                 sep_style,
             );
-            self.separator_ids.push(sep_id as i32);
+            self.separator_ids.push(sep_id);
             cy += SEPARATOR_HEIGHT;
 
             let swatch = color::COLOR_SWATCH_SIZE;
@@ -513,7 +513,7 @@ impl DropdownPanel {
                     None,
                     UIFlags::INTERACTIVE,
                 );
-                self.color_swatch_ids.push(id as i32);
+                self.color_swatch_ids.push(id);
             }
         }
 
@@ -609,14 +609,12 @@ impl DropdownPanel {
         }
     }
 
-    fn item_index_for_node(&self, node_id: u32) -> Option<usize> {
-        let nid = node_id as i32;
-        self.item_ids.iter().position(|&id| id == nid)
+    fn item_index_for_node(&self, node_id: NodeId) -> Option<usize> {
+        self.item_ids.iter().position(|&id| id == node_id)
     }
 
-    fn color_index_for_node(&self, node_id: u32) -> Option<usize> {
-        let nid = node_id as i32;
-        self.color_swatch_ids.iter().position(|&id| id == nid)
+    fn color_index_for_node(&self, node_id: NodeId) -> Option<usize> {
+        self.color_swatch_ids.iter().position(|&id| id == node_id)
     }
 
     fn move_hover(&mut self, direction: i32) {
@@ -780,7 +778,7 @@ mod tests {
         let items = make_items();
         dd.open_context(items, Vec2::new(100.0, 200.0), &mut tree);
 
-        let copy_id = dd.item_ids[1] as u32;
+        let copy_id = dd.item_ids[1];
         let event = UIEvent::Click {
             node_id: copy_id,
             pos: Vec2::new(110.0, 230.0),
@@ -802,7 +800,7 @@ mod tests {
 
         // Click on a node that isn't ours (simulate with a dummy node id).
         let event = UIEvent::Click {
-            node_id: 999,
+            node_id: NodeId(999),
             pos: Vec2::new(500.0, 500.0),
             modifiers: crate::input::Modifiers::default(),
         };
@@ -821,7 +819,7 @@ mod tests {
         dd.open_context(items, Vec2::new(100.0, 200.0), &mut tree);
 
         let event = UIEvent::KeyDown {
-            node_id: 0,
+            node_id: NodeId(0),
             key: crate::input::Key::Escape,
             modifiers: crate::input::Modifiers {
                 shift: false,
@@ -873,7 +871,7 @@ mod tests {
         ];
         dd.open_context(items, Vec2::new(100.0, 200.0), &mut tree);
 
-        let disabled_id = dd.item_ids[1] as u32;
+        let disabled_id = dd.item_ids[1];
         let event = UIEvent::Click {
             node_id: disabled_id,
             pos: Vec2::new(110.0, 240.0),
@@ -934,7 +932,7 @@ mod tests {
         let mut dd = DropdownPanel::new();
 
         let event = UIEvent::Click {
-            node_id: 0,
+            node_id: NodeId(0),
             pos: Vec2::new(10.0, 10.0),
             modifiers: crate::input::Modifiers::default(),
         };
@@ -954,7 +952,7 @@ mod tests {
         ];
         dd.open_context(items, Vec2::new(100.0, 200.0), &mut tree);
 
-        let checked_id = dd.item_ids[1] as u32;
+        let checked_id = dd.item_ids[1];
         let text = tree.get_node(checked_id).text.as_deref().unwrap();
         assert!(text.starts_with('\u{2713}'));
     }

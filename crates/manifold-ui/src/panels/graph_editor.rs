@@ -246,7 +246,7 @@ enum RowState {
     /// The auto-gain toggle under the node-output preview. Click flips
     /// normalization on the preview pane via
     /// [`PanelAction::SetNodePreviewNormalize`].
-    PreviewNormalizeToggle { button_node_id: u32 },
+    PreviewNormalizeToggle { button_node_id: NodeId },
     /// A row backed by an inner-node param. Click semantics depend on
     /// whether the param is a target of one of the effect's
     /// static-block bindings (`static_block_slot: Some(i)`) or not.
@@ -262,11 +262,11 @@ enum RowState {
     ///   (mutate the per-card graph through
     ///   `SetGraphNodeParamCommand`).
     InnerNode {
-        checkbox_node_id: u32,
+        checkbox_node_id: NodeId,
         /// Tree id of the editable value cell (rendered as a button
         /// so it receives drag events). `None` for `Other`-kind params
         /// that have no editable representation in V1.
-        value_cell_node_id: Option<u32>,
+        value_cell_node_id: Option<NodeId>,
         /// Canvas-stable id of the underlying graph node. Used as the
         /// `node_id` carried by `SetGraphNodeParam`.
         node_runtime_id: u32,
@@ -315,7 +315,7 @@ enum RowState {
     /// value and emits a single `SetGraphNodeParam` carrying the whole
     /// colour/vector. Click is a no-op (channels edit by drag only).
     VecComponent {
-        value_cell_node_id: u32,
+        value_cell_node_id: NodeId,
         node_runtime_id: u32,
         inner_param: String,
         /// Color / Vec2 / Vec3 / Vec4 — picks the emitted `SerializedParamValue`.
@@ -333,7 +333,7 @@ enum RowState {
     /// Browse button on a path-like String param. Click opens a native folder
     /// picker (host-side) and sets the param to the chosen path.
     BrowseButton {
-        button_node_id: u32,
+        button_node_id: NodeId,
         node_runtime_id: u32,
         param_name: String,
     },
@@ -342,7 +342,7 @@ enum RowState {
     /// `rect` (x, y, w, h) is captured at build so the click can anchor without
     /// re-walking the tree.
     EditTextButton {
-        button_node_id: u32,
+        button_node_id: NodeId,
         node_runtime_id: u32,
         param_name: String,
         current: String,
@@ -351,7 +351,7 @@ enum RowState {
     /// "Edit Code" button on a `wgsl_compute` node. Click opens the multiline
     /// WGSL editor seeded with the node's kernel `source`.
     WgslButton {
-        button_node_id: u32,
+        button_node_id: NodeId,
         node_runtime_id: u32,
         source: String,
     },
@@ -360,7 +360,7 @@ enum RowState {
     /// `param_name` at click time (off `selected_node`) so each cell row stays
     /// small. `rect` (x, y, w, h) is captured at build for the anchor.
     TableCell {
-        button_node_id: u32,
+        button_node_id: NodeId,
         node_runtime_id: u32,
         param_name: String,
         row: usize,
@@ -376,7 +376,7 @@ enum RowState {
 #[derive(Debug, Clone, Copy)]
 struct DragState {
     /// Tree id of the value-cell button being dragged.
-    value_cell_node_id: u32,
+    value_cell_node_id: NodeId,
     /// Canvas-stable graph node id — used to build the
     /// `SetGraphNodeParam` action.
     node_runtime_id: u32,
@@ -478,8 +478,8 @@ pub struct GraphEditorPanel {
     /// Per-row state, populated during `build`.
     rows: Vec<RowState>,
     /// Root container for everything this panel owns inside the tree.
-    /// `-1` until first build.
-    root_id: i32,
+    /// `None` until first build.
+    root_id: Option<NodeId>,
     /// In-progress drag scrub on a Float/Int value cell. `None` when
     /// no drag is active. Tree rebuilds preserve this so a drag that
     /// began before a rebuild keeps emitting `SetGraphNodeParam`
@@ -538,8 +538,8 @@ impl GraphEditorPanel {
         // Here we just rebuild from scratch each time.
         self.rows.clear();
 
-        let bg_id = tree.add_panel(
-            -1,
+        let bg_id = Some(tree.add_panel(
+            None,
             viewport.x,
             viewport.y,
             viewport.width,
@@ -548,7 +548,7 @@ impl GraphEditorPanel {
                 bg_color: color::EFFECT_CARD_INNER_BG_C32,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
         self.root_id = bg_id;
 
         let mut y = viewport.y + PADDING;
@@ -906,7 +906,7 @@ impl GraphEditorPanel {
     fn build_vec_param(
         &mut self,
         tree: &mut UITree,
-        bg_id: i32,
+        bg_id: Option<NodeId>,
         viewport: Rect,
         mut y: f32,
         node_runtime_id: u32,
@@ -1035,7 +1035,7 @@ impl GraphEditorPanel {
     fn build_string_param(
         &mut self,
         tree: &mut UITree,
-        bg_id: i32,
+        bg_id: Option<NodeId>,
         viewport: Rect,
         y: f32,
         node_runtime_id: u32,
@@ -1163,7 +1163,7 @@ impl GraphEditorPanel {
     fn build_table_param(
         &mut self,
         tree: &mut UITree,
-        bg_id: i32,
+        bg_id: Option<NodeId>,
         viewport: Rect,
         y: f32,
         node_runtime_id: u32,
@@ -1240,7 +1240,7 @@ impl GraphEditorPanel {
         let Some(insp) = self.node_inspector.as_ref() else {
             return false;
         };
-        Self::render_inspector_block(tree, -1, region, insp);
+        Self::render_inspector_block(tree, None, region, insp);
         true
     }
 
@@ -1249,7 +1249,7 @@ impl GraphEditorPanel {
     /// is the left edge of the text (already padded by the caller).
     fn render_inspector_block(
         tree: &mut UITree,
-        parent_id: i32,
+        parent_id: Option<NodeId>,
         region: Rect,
         insp: &NodeInspector,
     ) {
@@ -1395,11 +1395,11 @@ impl GraphEditorPanel {
     /// Backwards-compatible shim — pre-Phase-B callers passed click
     /// node ids directly. Tests still use this; runtime is migrated
     /// to `handle_event`.
-    pub fn handle_click(&mut self, node_id: u32) -> Vec<PanelAction> {
+    pub fn handle_click(&mut self, node_id: NodeId) -> Vec<PanelAction> {
         self.handle_click_event(node_id)
     }
 
-    fn handle_click_event(&mut self, node_id: u32) -> Vec<PanelAction> {
+    fn handle_click_event(&mut self, node_id: NodeId) -> Vec<PanelAction> {
         // No effect_index guard here on purpose: post-unification the
         // graph editor is one surface for both Effect-hosted AND
         // Generator-hosted graphs. Generators have no `effect_index`
@@ -1575,7 +1575,7 @@ impl GraphEditorPanel {
         Vec::new()
     }
 
-    fn handle_drag_begin(&mut self, node_id: u32, origin_x: f32) -> Vec<PanelAction> {
+    fn handle_drag_begin(&mut self, node_id: NodeId, origin_x: f32) -> Vec<PanelAction> {
         // Numeric-value-cell drag opens a scrub anchor. Bool / Enum
         // edits happen on click, so drag on them is a no-op. Wire-
         // driven rows are also a no-op: the wire wins each frame,
@@ -1646,7 +1646,7 @@ impl GraphEditorPanel {
         Vec::new()
     }
 
-    fn handle_drag(&mut self, node_id: u32, pos_x: f32) -> Vec<PanelAction> {
+    fn handle_drag(&mut self, node_id: NodeId, pos_x: f32) -> Vec<PanelAction> {
         let Some(drag) = self.drag else {
             return Vec::new();
         };
@@ -1736,7 +1736,7 @@ impl GraphEditorPanel {
     /// Convenience wrapper: walk a slice of clicked button ids, map
     /// each through `handle_click`. Used by the editor-window present
     /// path's compatibility shim where only click ids were captured.
-    pub fn dispatch_clicks(&mut self, clicks: &[u32]) -> Vec<PanelAction> {
+    pub fn dispatch_clicks(&mut self, clicks: &[NodeId]) -> Vec<PanelAction> {
         clicks
             .iter()
             .flat_map(|&n| self.handle_click_event(n))
@@ -1976,7 +1976,7 @@ mod tests {
         inner_param.as_str()
     }
 
-    fn checkbox_id_of(row: &RowState) -> u32 {
+    fn checkbox_id_of(row: &RowState) -> NodeId {
         let RowState::InnerNode {
             checkbox_node_id, ..
         } = row
@@ -2058,7 +2058,7 @@ mod tests {
         );
     }
 
-    fn preview_toggle_id(panel: &GraphEditorPanel) -> u32 {
+    fn preview_toggle_id(panel: &GraphEditorPanel) -> NodeId {
         panel
             .rows
             .iter()
@@ -2207,7 +2207,7 @@ mod tests {
         );
         panel.build(&mut tree, viewport());
         // Random unrelated node id.
-        assert!(panel.handle_click(99999).is_empty());
+        assert!(panel.handle_click(NodeId(99999)).is_empty());
     }
 
     /// Post-unification: the graph editor is one surface for both
@@ -2252,7 +2252,7 @@ mod tests {
 
     /// Helper: pull a row's value-cell tree id, returning None for
     /// `Other`-kind params (which have no editable representation).
-    fn value_cell_id_of(row: &RowState) -> Option<u32> {
+    fn value_cell_id_of(row: &RowState) -> Option<NodeId> {
         let RowState::InnerNode {
             value_cell_node_id, ..
         } = row

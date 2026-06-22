@@ -118,17 +118,17 @@ pub struct HeaderPanel {
     layout: HeaderLayout,
 
     // Node IDs
-    project_name_id: i32,
-    import_status_id: i32,
-    progress_bg_id: i32,
-    progress_fill_id: i32,
-    time_display_id: i32,
-    zoom_label_id: i32,
-    zoom_out_id: i32,
-    zoom_in_id: i32,
-    audio_btn_id: i32,
-    monitor_btn_id: i32,
-    perform_btn_id: i32,
+    project_name_id: Option<NodeId>,
+    import_status_id: Option<NodeId>,
+    progress_bg_id: Option<NodeId>,
+    progress_fill_id: Option<NodeId>,
+    time_display_id: Option<NodeId>,
+    zoom_label_id: Option<NodeId>,
+    zoom_out_id: Option<NodeId>,
+    zoom_in_id: Option<NodeId>,
+    audio_btn_id: Option<NodeId>,
+    monitor_btn_id: Option<NodeId>,
+    perform_btn_id: Option<NodeId>,
 
     // State
     project_name: String,
@@ -148,17 +148,17 @@ impl HeaderPanel {
     pub fn new() -> Self {
         Self {
             layout: HeaderLayout::default(),
-            project_name_id: -1,
-            import_status_id: -1,
-            progress_bg_id: -1,
-            progress_fill_id: -1,
-            time_display_id: -1,
-            zoom_label_id: -1,
-            zoom_out_id: -1,
-            zoom_in_id: -1,
-            audio_btn_id: -1,
-            monitor_btn_id: -1,
-            perform_btn_id: -1,
+            project_name_id: None,
+            import_status_id: None,
+            progress_bg_id: None,
+            progress_fill_id: None,
+            time_display_id: None,
+            zoom_label_id: None,
+            zoom_out_id: None,
+            zoom_in_id: None,
+            audio_btn_id: None,
+            monitor_btn_id: None,
+            perform_btn_id: None,
             project_name: "My Project".into(),
             import_status: String::new(),
             import_progress: 0.0,
@@ -175,8 +175,8 @@ impl HeaderPanel {
 
     pub fn set_project_name(&mut self, tree: &mut UITree, name: &str) {
         self.project_name = name.into();
-        if self.project_name_id >= 0 {
-            tree.set_text(self.project_name_id as u32, name);
+        if let Some(id) = self.project_name_id {
+            tree.set_text(id, name);
         }
     }
 
@@ -190,19 +190,19 @@ impl HeaderPanel {
         self.import_status = status.into();
         self.import_progress = progress.clamp(0.0, 1.0);
         self.import_progress_visible = show;
-        if self.import_status_id >= 0 {
-            tree.set_text(self.import_status_id as u32, status);
+        if let Some(id) = self.import_status_id {
+            tree.set_text(id, status);
         }
-        if self.progress_bg_id >= 0 {
-            tree.set_visible(self.progress_bg_id as u32, show);
+        if let Some(id) = self.progress_bg_id {
+            tree.set_visible(id, show);
         }
-        if self.progress_fill_id >= 0 {
-            tree.set_visible(self.progress_fill_id as u32, show);
+        if let Some(id) = self.progress_fill_id {
+            tree.set_visible(id, show);
             let bg = self.layout.progress_bg;
             let fill_inset = 1.0;
             let max_fill_w = bg.width - fill_inset * 2.0;
             tree.set_bounds(
-                self.progress_fill_id as u32,
+                id,
                 Rect::new(
                     bg.x + fill_inset,
                     bg.y + fill_inset,
@@ -215,22 +215,22 @@ impl HeaderPanel {
 
     pub fn set_time_display(&mut self, tree: &mut UITree, text: &str) {
         self.time_display = text.into();
-        if self.time_display_id >= 0 {
-            tree.set_text(self.time_display_id as u32, text);
+        if let Some(id) = self.time_display_id {
+            tree.set_text(id, text);
         }
     }
 
     pub fn set_zoom_label(&mut self, tree: &mut UITree, text: &str) {
         self.zoom_label = text.into();
-        if self.zoom_label_id >= 0 {
-            tree.set_text(self.zoom_label_id as u32, text);
+        if let Some(id) = self.zoom_label_id {
+            tree.set_text(id, text);
         }
     }
 
     pub fn set_monitor_active(&mut self, tree: &mut UITree, active: bool) {
         self.monitor_active = active;
-        if self.monitor_btn_id >= 0 {
-            tree.set_style(self.monitor_btn_id as u32, self.monitor_style());
+        if let Some(id) = self.monitor_btn_id {
+            tree.set_style(id, self.monitor_style());
         }
     }
 
@@ -273,8 +273,8 @@ impl HeaderPanel {
         }
     }
 
-    fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
-        let id = node_id as i32;
+    fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
+        let id = Some(node_id);
         if id == self.zoom_out_id {
             return vec![PanelAction::ZoomOut];
         }
@@ -297,9 +297,9 @@ impl HeaderPanel {
     /// `handle_click`. See `docs/NODE_INTENT_DISPATCH.md`.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         use crate::intent::Gesture::Click;
-        let mut on = |id: i32, a: PanelAction| {
-            if id >= 0 {
-                intents.on(id as u32, Click, a);
+        let mut on = |id: Option<NodeId>, a: PanelAction| {
+            if let Some(id) = id {
+                intents.on(id, Click, a);
             }
         };
         on(self.zoom_out_id, PanelAction::ZoomOut);
@@ -329,7 +329,7 @@ impl Panel for HeaderPanel {
         let zoom_label = self.zoom_label.clone();
 
         let bg = tree.add_panel(
-            -1,
+            None,
             header.x,
             header.y,
             header.width,
@@ -338,11 +338,11 @@ impl Panel for HeaderPanel {
                 bg_color: color::PANEL_BG_DARK,
                 ..UIStyle::default()
             },
-        ) as i32;
+        );
 
         // Left group
-        self.project_name_id = tree.add_label(
-            bg,
+        self.project_name_id = Some(tree.add_label(
+            Some(bg),
             self.layout.project_name.x,
             self.layout.project_name.y,
             self.layout.project_name.width,
@@ -353,10 +353,10 @@ impl Panel for HeaderPanel {
                 font_size: color::FONT_SUBHEADING,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
-        self.import_status_id = tree.add_label(
-            bg,
+        self.import_status_id = Some(tree.add_label(
+            Some(bg),
             self.layout.import_status.x,
             self.layout.import_status.y,
             self.layout.import_status.width,
@@ -367,10 +367,10 @@ impl Panel for HeaderPanel {
                 font_size: color::FONT_LABEL,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
-        self.progress_bg_id = tree.add_panel(
-            bg,
+        let progress_bg = tree.add_panel(
+            Some(bg),
             self.layout.progress_bg.x,
             self.layout.progress_bg.y,
             self.layout.progress_bg.width,
@@ -380,11 +380,12 @@ impl Panel for HeaderPanel {
                 corner_radius: PROGRESS_RADIUS,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_visible(self.progress_bg_id as u32, self.import_progress_visible);
+        );
+        self.progress_bg_id = Some(progress_bg);
+        tree.set_visible(progress_bg, self.import_progress_visible);
 
-        self.progress_fill_id = tree.add_panel(
-            bg,
+        let progress_fill = tree.add_panel(
+            Some(bg),
             self.layout.progress_fill.x,
             self.layout.progress_fill.y,
             self.layout.progress_fill.width,
@@ -394,12 +395,13 @@ impl Panel for HeaderPanel {
                 corner_radius: 1.0,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_visible(self.progress_fill_id as u32, self.import_progress_visible);
+        );
+        self.progress_fill_id = Some(progress_fill);
+        tree.set_visible(progress_fill, self.import_progress_visible);
 
         // Center group
-        self.time_display_id = tree.add_node(
-            bg,
+        self.time_display_id = Some(tree.add_node(
+            Some(bg),
             self.layout.time_display,
             UINodeType::Label,
             UIStyle {
@@ -410,11 +412,11 @@ impl Panel for HeaderPanel {
             },
             Some(&time_display),
             UIFlags::empty(),
-        ) as i32;
+        ));
 
         // Right group
-        self.zoom_out_id = tree.add_button(
-            bg,
+        self.zoom_out_id = Some(tree.add_button(
+            Some(bg),
             self.layout.zoom_out.x,
             self.layout.zoom_out.y,
             self.layout.zoom_out.width,
@@ -430,10 +432,10 @@ impl Panel for HeaderPanel {
                 ..UIStyle::default()
             },
             "\u{2212}",
-        ) as i32;
+        ));
 
-        self.zoom_label_id = tree.add_node(
-            bg,
+        self.zoom_label_id = Some(tree.add_node(
+            Some(bg),
             self.layout.zoom_label,
             UINodeType::Label,
             UIStyle {
@@ -444,10 +446,10 @@ impl Panel for HeaderPanel {
             },
             Some(&zoom_label),
             UIFlags::empty(),
-        ) as i32;
+        ));
 
-        self.zoom_in_id = tree.add_button(
-            bg,
+        self.zoom_in_id = Some(tree.add_button(
+            Some(bg),
             self.layout.zoom_in.x,
             self.layout.zoom_in.y,
             self.layout.zoom_in.width,
@@ -463,37 +465,37 @@ impl Panel for HeaderPanel {
                 ..UIStyle::default()
             },
             "+",
-        ) as i32;
+        ));
 
-        self.audio_btn_id = tree.add_button(
-            bg,
+        self.audio_btn_id = Some(tree.add_button(
+            Some(bg),
             self.layout.audio_button.x,
             self.layout.audio_button.y,
             self.layout.audio_button.width,
             self.layout.audio_button.height,
             self.perform_style(),
             "Audio",
-        ) as i32;
+        ));
 
-        self.monitor_btn_id = tree.add_button(
-            bg,
+        self.monitor_btn_id = Some(tree.add_button(
+            Some(bg),
             self.layout.monitor_button.x,
             self.layout.monitor_button.y,
             self.layout.monitor_button.width,
             self.layout.monitor_button.height,
             self.monitor_style(),
             "Monitor",
-        ) as i32;
+        ));
 
-        self.perform_btn_id = tree.add_button(
-            bg,
+        self.perform_btn_id = Some(tree.add_button(
+            Some(bg),
             self.layout.perform_button.x,
             self.layout.perform_button.y,
             self.layout.perform_button.width,
             self.layout.perform_button.height,
             self.perform_style(),
             "Perform",
-        ) as i32;
+        ));
 
         self.cache_node_count = tree.count() - self.cache_first_node;
     }
@@ -527,12 +529,12 @@ mod tests {
 
         panel.build(&mut tree, &layout);
 
-        assert!(panel.project_name_id >= 0);
-        assert!(panel.time_display_id >= 0);
-        assert!(panel.zoom_out_id >= 0);
-        assert!(panel.zoom_in_id >= 0);
-        assert!(panel.monitor_btn_id >= 0);
-        assert!(panel.audio_btn_id >= 0);
+        assert!(panel.project_name_id.is_some());
+        assert!(panel.time_display_id.is_some());
+        assert!(panel.zoom_out_id.is_some());
+        assert!(panel.zoom_in_id.is_some());
+        assert!(panel.monitor_btn_id.is_some());
+        assert!(panel.audio_btn_id.is_some());
         assert!(tree.count() >= 11); // bg + 10 elements
     }
 
@@ -543,7 +545,7 @@ mod tests {
         let mut panel = HeaderPanel::new();
         panel.build(&mut tree, &layout);
 
-        let a = panel.handle_click(panel.audio_btn_id as u32);
+        let a = panel.handle_click(panel.audio_btn_id.unwrap());
         assert!(matches!(a[0], PanelAction::OpenAudioSetup));
     }
 
@@ -554,10 +556,10 @@ mod tests {
         let mut panel = HeaderPanel::new();
         panel.build(&mut tree, &layout);
 
-        let a = panel.handle_click(panel.zoom_in_id as u32);
+        let a = panel.handle_click(panel.zoom_in_id.unwrap());
         assert!(matches!(a[0], PanelAction::ZoomIn));
 
-        let a = panel.handle_click(panel.zoom_out_id as u32);
+        let a = panel.handle_click(panel.zoom_out_id.unwrap());
         assert!(matches!(a[0], PanelAction::ZoomOut));
     }
 
@@ -572,7 +574,7 @@ mod tests {
         panel.set_time_display(&mut tree, "01:30.50 | 4.2.3");
         assert!(tree.has_dirty());
         assert_eq!(
-            tree.get_node(panel.time_display_id as u32).text.as_deref(),
+            tree.get_node(panel.time_display_id.unwrap()).text.as_deref(),
             Some("01:30.50 | 4.2.3")
         );
     }

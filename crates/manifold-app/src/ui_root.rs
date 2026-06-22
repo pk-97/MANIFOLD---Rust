@@ -316,9 +316,9 @@ pub struct UIRoot {
 
     /// Node ID for the video/timeline split handle (color feedback on hover/drag).
     /// From Unity PanelResizeHandle.cs — idle/hover/drag color states.
-    split_handle_id: i32,
+    split_handle_id: Option<NodeId>,
     /// Node ID for the inspector resize handle (vertical bar at inspector right edge).
-    inspector_handle_id: i32,
+    inspector_handle_id: Option<NodeId>,
 
     /// True when a DragBegin originated in the tracks area. While active,
     /// all Drag/DragEnd events are stashed for the InteractionOverlay
@@ -400,8 +400,8 @@ impl UIRoot {
             macro_labels: std::array::from_fn(|_| String::new()),
             macro_mapping_descs: std::array::from_fn(|_| Vec::new()),
             macro_ableton_mapped: [false; manifold_core::MACRO_COUNT],
-            split_handle_id: -1,
-            inspector_handle_id: -1,
+            split_handle_id: None,
+            inspector_handle_id: None,
             overlay_drag_active: false,
             ableton_session: None,
             ableton_picker: manifold_ui::panels::ableton_picker::AbletonPickerPopup::new(),
@@ -578,8 +578,8 @@ impl UIRoot {
         // From Unity PanelResizeHandle.cs: idle (transparent), hover, drag color states.
         {
             let r = self.layout.split_handle();
-            self.split_handle_id = self.tree.add_panel(
-                -1,
+            self.split_handle_id = Some(self.tree.add_panel(
+                None,
                 r.x,
                 r.y,
                 r.width,
@@ -588,15 +588,15 @@ impl UIRoot {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
                     ..manifold_ui::node::UIStyle::default()
                 },
-            ) as i32;
+            ));
         }
 
         // Inspector resize handle — thin vertical bar at inspector right edge.
         {
             let edge_x = self.layout.content_left() - 2.0;
             let insp = self.layout.inspector();
-            self.inspector_handle_id = self.tree.add_panel(
-                -1,
+            self.inspector_handle_id = Some(self.tree.add_panel(
+                None,
                 edge_x,
                 insp.y,
                 4.0,
@@ -605,7 +605,7 @@ impl UIRoot {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
                     ..manifold_ui::node::UIStyle::default()
                 },
-            ) as i32;
+            ));
         }
 
         // Mark boundary — everything after this is rebuilt on scroll.
@@ -748,7 +748,7 @@ impl UIRoot {
             } = ov.modality()
             {
                 tree.add_panel(
-                    -1,
+                    None,
                     0.0,
                     0.0,
                     screen.x,
@@ -764,7 +764,7 @@ impl UIRoot {
             // by default; viewport-relative overlays scale here) before centering.
             let size = ov.size_policy().resolve(screen, ov.desired_size());
             let node_rect = if let Anchor::ToNode(nid) = anchor {
-                Some(tree.get_bounds(nid as u32))
+                Some(tree.get_bounds(nid))
             } else {
                 None
             };
@@ -862,7 +862,7 @@ impl UIRoot {
     /// through to selection clearing when only the HUD is up.
     pub fn escape_overlays(&mut self) -> bool {
         let event = UIEvent::KeyDown {
-            node_id: 0,
+            node_id: NodeId(0),
             key: Key::Escape,
             modifiers: Modifiers::default(),
         };
@@ -993,12 +993,12 @@ impl UIRoot {
     fn resolve_intent(&self, event: &UIEvent) -> Option<PanelAction> {
         use manifold_ui::intent::Gesture;
         let (node_id, gesture) = match event {
-            UIEvent::Click { node_id, .. } => (*node_id, Gesture::Click),
-            UIEvent::DoubleClick { node_id, .. } => (*node_id, Gesture::DoubleClick),
+            UIEvent::Click { node_id, .. } => (Some(*node_id), Gesture::Click),
+            UIEvent::DoubleClick { node_id, .. } => (Some(*node_id), Gesture::DoubleClick),
             UIEvent::RightClick { node_id, .. } => (*node_id, Gesture::RightClick),
             _ => return None,
         };
-        self.intents.resolve(&self.tree, node_id as i32, gesture)
+        self.intents.resolve(&self.tree, node_id, gesture)
     }
 
     /// Drain events from the input system and route to panels.
@@ -1024,11 +1024,11 @@ impl UIRoot {
         // Drain continuous hover actions accumulated from cursor movement.
         actions.append(&mut self.cursor_hover_actions);
 
-        let mut last_click_node: i32 = -1;
+        let mut last_click_node: Option<NodeId> = None;
         for event in &events {
             // Track which node was clicked (for dropdown anchoring).
             if let UIEvent::Click { node_id, .. } = event {
-                last_click_node = *node_id as i32;
+                last_click_node = Some(*node_id);
             }
             if let UIEvent::RightClick { pos, .. } = event {
                 self.last_right_click_pos = *pos;
@@ -1269,7 +1269,7 @@ impl UIRoot {
     /// `open_context` arms used to forget this individually, which is exactly why
     /// right-click context menus were flaky: they drew only when some *unrelated*
     /// state change happened to trigger a rebuild that same frame.
-    fn try_open_dropdown(&mut self, action: &PanelAction, click_node: i32) -> bool {
+    fn try_open_dropdown(&mut self, action: &PanelAction, click_node: Option<NodeId>) -> bool {
         let opened = self.try_open_dropdown_inner(action, click_node);
         if opened {
             self.overlay_dirty = true;
@@ -1277,10 +1277,10 @@ impl UIRoot {
         opened
     }
 
-    fn try_open_dropdown_inner(&mut self, action: &PanelAction, click_node: i32) -> bool {
+    fn try_open_dropdown_inner(&mut self, action: &PanelAction, click_node: Option<NodeId>) -> bool {
         let right_click_pos = self.last_right_click_pos;
-        let trigger = if click_node >= 0 {
-            self.tree.get_bounds(click_node as u32)
+        let trigger = if let Some(node) = click_node {
+            self.tree.get_bounds(node)
         } else {
             Rect::new(100.0, 100.0, 80.0, 24.0)
         };
@@ -2102,9 +2102,9 @@ impl UIRoot {
 
     /// Update split handle color to hover state.
     pub fn set_split_handle_hover(&mut self) {
-        if self.split_handle_id >= 0 {
+        if let Some(id) = self.split_handle_id {
             self.tree.set_style(
-                self.split_handle_id as u32,
+                id,
                 manifold_ui::node::UIStyle {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_HOVER,
                     ..manifold_ui::node::UIStyle::default()
@@ -2115,9 +2115,9 @@ impl UIRoot {
 
     /// Update split handle color to drag state.
     pub fn set_split_handle_drag(&mut self) {
-        if self.split_handle_id >= 0 {
+        if let Some(id) = self.split_handle_id {
             self.tree.set_style(
-                self.split_handle_id as u32,
+                id,
                 manifold_ui::node::UIStyle {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_DRAG,
                     ..manifold_ui::node::UIStyle::default()
@@ -2128,9 +2128,9 @@ impl UIRoot {
 
     /// Update split handle color to idle state.
     pub fn set_split_handle_idle(&mut self) {
-        if self.split_handle_id >= 0 {
+        if let Some(id) = self.split_handle_id {
             self.tree.set_style(
-                self.split_handle_id as u32,
+                id,
                 manifold_ui::node::UIStyle {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
                     ..manifold_ui::node::UIStyle::default()
@@ -2140,9 +2140,9 @@ impl UIRoot {
     }
 
     pub fn set_inspector_handle_hover(&mut self) {
-        if self.inspector_handle_id >= 0 {
+        if let Some(id) = self.inspector_handle_id {
             self.tree.set_style(
-                self.inspector_handle_id as u32,
+                id,
                 manifold_ui::node::UIStyle {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_HOVER,
                     ..manifold_ui::node::UIStyle::default()
@@ -2152,9 +2152,9 @@ impl UIRoot {
     }
 
     pub fn set_inspector_handle_drag(&mut self) {
-        if self.inspector_handle_id >= 0 {
+        if let Some(id) = self.inspector_handle_id {
             self.tree.set_style(
-                self.inspector_handle_id as u32,
+                id,
                 manifold_ui::node::UIStyle {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_DRAG,
                     ..manifold_ui::node::UIStyle::default()
@@ -2164,9 +2164,9 @@ impl UIRoot {
     }
 
     pub fn set_inspector_handle_idle(&mut self) {
-        if self.inspector_handle_id >= 0 {
+        if let Some(id) = self.inspector_handle_id {
             self.tree.set_style(
-                self.inspector_handle_id as u32,
+                id,
                 manifold_ui::node::UIStyle {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
                     ..manifold_ui::node::UIStyle::default()
@@ -2186,7 +2186,7 @@ impl UIRoot {
     /// viewport events — these actions are generated AFTER process_events()
     /// returns, so they need a second pass through try_open_dropdown.
     pub fn intercept_overlay_actions(&mut self, actions: &mut Vec<PanelAction>) {
-        actions.retain(|action| !self.try_open_dropdown(action, -1));
+        actions.retain(|action| !self.try_open_dropdown(action, None));
     }
 
     /// Check if a UI event's position falls within the tracks area.

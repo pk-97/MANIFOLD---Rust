@@ -111,18 +111,20 @@ impl Default for TrackInfo {
 /// Structured storage for one timeline marker's nodes.
 /// Enables update-in-place by providing a 1:1 mapping between markers and their node IDs.
 struct MarkerNodeGroup {
-    flag_id: i32,
-    outline_id: i32, // -1 if not selected
-    label_id: i32,   // -1 if no name
+    flag_id: NodeId,
+    /// Always built; hidden via set_visible when not selected.
+    outline_id: NodeId,
+    /// Always built; hidden via set_visible when the marker has no name.
+    label_id: NodeId,
 }
 
 // ── Track background node group for update-in-place ────────────
 
 /// Structured storage for one track's background nodes.
 struct TrackBgGroup {
-    bg_id: i32,
-    accent_id: i32, // -1 if no accent bar
-    separator_id: i32,
+    bg_id: NodeId,
+    accent_id: Option<NodeId>, // None if no accent bar
+    separator_id: NodeId,
 }
 
 // ── Collapsed group bitmap ──────────────────────────────────────
@@ -200,12 +202,12 @@ pub struct TimelineViewportPanel {
     tracks_rect: Rect,
 
     // Node IDs — fixed elements
-    bg_panel_id: i32,
-    overview_btn_id: i32,
-    ruler_bg_id: i32,
-    viewport_clip_id: i32,
+    bg_panel_id: Option<NodeId>,
+    overview_btn_id: Option<NodeId>,
+    ruler_bg_id: Option<NodeId>,
+    viewport_clip_id: Option<NodeId>,
     // playhead: unified overlay quad in app.rs (ruler → waveform → stems → tracks)
-    insert_cursor_ruler_id: i32,
+    insert_cursor_ruler_id: Option<NodeId>,
     // insert_cursor_track_id: removed — painted into bitmap
     // selection_region_id: removed — painted into bitmap
 
@@ -215,15 +217,15 @@ pub struct TimelineViewportPanel {
     export_range_enabled: bool,
 
     // Node IDs — fixed export elements
-    export_range_id: i32,
-    export_in_marker_id: i32,
-    export_out_marker_id: i32,
+    export_range_id: Option<NodeId>,
+    export_in_marker_id: Option<NodeId>,
+    export_out_marker_id: Option<NodeId>,
 
     // Node IDs — dynamic elements (rebuilt on scroll/zoom)
-    ruler_tick_ids: Vec<i32>,
-    ruler_label_ids: Vec<i32>,
+    ruler_tick_ids: Vec<NodeId>,
+    ruler_label_ids: Vec<NodeId>,
     // grid_line_ids: removed — grid painted into bitmap
-    track_bg_ids: Vec<i32>,
+    track_bg_ids: Vec<NodeId>,
     track_bg_groups: Vec<TrackBgGroup>,
     // clip_bg_ids, clip_label_ids, clip_border_ids, clip_trim_handle_ids: removed — painted into bitmap
 
@@ -270,7 +272,7 @@ pub struct TimelineViewportPanel {
     marker_line_cache: Vec<(f32, Color32)>,
     selected_marker_ids: Vec<MarkerId>,
     marker_flag_rects: Vec<(MarkerId, Rect)>,
-    marker_node_ids: Vec<i32>,
+    marker_node_ids: Vec<NodeId>,
     marker_drag_id: Option<MarkerId>,
     marker_drag_start_beat: Beats,
 }
@@ -310,17 +312,17 @@ impl TimelineViewportPanel {
             overview_rect: Rect::ZERO,
             ruler_rect: Rect::ZERO,
             tracks_rect: Rect::ZERO,
-            bg_panel_id: -1,
-            overview_btn_id: -1,
-            ruler_bg_id: -1,
-            viewport_clip_id: -1,
-            insert_cursor_ruler_id: -1,
+            bg_panel_id: None,
+            overview_btn_id: None,
+            ruler_bg_id: None,
+            viewport_clip_id: None,
+            insert_cursor_ruler_id: None,
             export_in_beat: Beats::ZERO,
             export_out_beat: Beats::ZERO,
             export_range_enabled: false,
-            export_range_id: -1,
-            export_in_marker_id: -1,
-            export_out_marker_id: -1,
+            export_range_id: None,
+            export_in_marker_id: None,
+            export_out_marker_id: None,
             ruler_tick_ids: Vec::new(),
             ruler_label_ids: Vec::new(),
             track_bg_ids: Vec::new(),
@@ -1153,14 +1155,14 @@ impl TimelineViewportPanel {
     /// Update insert cursor ruler marker position without rebuilding.
     /// Track-area cursor is painted into bitmap.
     fn sync_insert_cursor_ruler(&self, tree: &mut UITree) {
-        if self.insert_cursor_ruler_id >= 0 {
+        if let Some(cursor_id) = self.insert_cursor_ruler_id {
             let px = self.beat_to_pixel(self.insert_cursor_beat);
             let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
-            tree.set_visible(self.insert_cursor_ruler_id as u32, in_view);
+            tree.set_visible(cursor_id, in_view);
             if in_view {
                 let marker_s = color::INSERT_CURSOR_RULER_MARKER_SIZE;
                 tree.set_bounds(
-                    self.insert_cursor_ruler_id as u32,
+                    cursor_id,
                     Rect::new(
                         px - marker_s * 0.5,
                         self.ruler_rect.y + self.ruler_rect.height - marker_s,
@@ -1219,8 +1221,8 @@ impl Panel for TimelineViewportPanel {
         );
 
         // Background
-        self.bg_panel_id = tree.add_panel(
-            -1,
+        self.bg_panel_id = Some(tree.add_panel(
+            None,
             self.viewport_rect.x,
             self.viewport_rect.y,
             self.viewport_rect.width,
@@ -1229,7 +1231,7 @@ impl Panel for TimelineViewportPanel {
                 bg_color: color::DARK_BG,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
         // Overview strip at top of viewport.
         // From Unity OverviewStripPanel.cs — mini-timeline with clip miniatures,
@@ -1239,8 +1241,8 @@ impl Panel for TimelineViewportPanel {
         // Interactive button so hit_test returns valid ID for click/drag scrubbing.
         // Clip miniatures (non-interactive panels) are added on top but fall through
         // to this button on hit_test. Same pattern as the tracks area overlay.
-        self.overview_btn_id = tree.add_button(
-            -1,
+        self.overview_btn_id = Some(tree.add_button(
+            None,
             overview_rect.x,
             overview_rect.y,
             overview_rect.width,
@@ -1250,15 +1252,15 @@ impl Panel for TimelineViewportPanel {
                 ..UIStyle::default()
             },
             "",
-        ) as i32;
+        ));
 
         // Overview strip bitmap — repainted in repaint_overview() each frame,
         // uploaded and rendered via the layer bitmap GPU path (index 1002).
         self.overview_dirty = true;
 
         // Ruler background — INTERACTIVE so clicks register for playhead scrubbing
-        self.ruler_bg_id = tree.add_button(
-            -1,
+        self.ruler_bg_id = Some(tree.add_button(
+            None,
             self.ruler_rect.x,
             self.ruler_rect.y,
             self.ruler_rect.width,
@@ -1268,26 +1270,26 @@ impl Panel for TimelineViewportPanel {
                 ..UIStyle::default()
             },
             "",
-        ) as i32;
+        ));
 
         // Clip region covering ruler + tracks — prevents ticks, labels, markers,
         // and export range elements from bleeding past the viewport bounds into
         // adjacent panels (e.g. live recording section to the right).
-        self.viewport_clip_id = tree.add_node(
-            -1,
+        self.viewport_clip_id = Some(tree.add_node(
+            None,
             self.viewport_rect,
             UINodeType::ClipRegion,
             UIStyle::default(),
             None,
             UIFlags::CLIPS_CHILDREN,
-        ) as i32;
+        ));
 
         // Interactive overlay covering entire tracks area — catches all clicks/drags
         // (matches Unity's InteractionOverlay which is a transparent MonoBehaviour
         // covering the tracks viewport). Without this, clicks on non-interactive
         // panel nodes (track backgrounds, grid lines) won't generate events.
         tree.add_button(
-            -1,
+            None,
             self.tracks_rect.x,
             self.tracks_rect.y,
             self.tracks_rect.width,
@@ -1841,22 +1843,22 @@ impl TimelineViewportPanel {
             }
 
             let bg_id = tree.add_panel(
-                -1,
+                None,
                 tr.x,
                 if visible { clamped_y } else { tr_top },
                 tr.width,
                 if visible { clamped_h } else { 0.0 },
                 style,
-            ) as i32;
+            );
             if !visible {
-                tree.set_visible(bg_id as u32, false);
+                tree.set_visible(bg_id, false);
             }
             self.track_bg_ids.push(bg_id);
 
             // Group child accent bar — always allocated
             let accent_id = if let Some(accent) = track.accent_color.filter(|_| !track.is_group) {
                 let aid = tree.add_panel(
-                    -1,
+                    None,
                     tr.x,
                     if visible { clamped_y } else { tr_top },
                     color::GROUP_ACCENT_BAR_WIDTH,
@@ -1865,13 +1867,13 @@ impl TimelineViewportPanel {
                         bg_color: accent,
                         ..UIStyle::default()
                     },
-                ) as i32;
+                );
                 if !visible || y < tr_top {
-                    tree.set_visible(aid as u32, false);
+                    tree.set_visible(aid, false);
                 }
-                aid
+                Some(aid)
             } else {
-                -1
+                None
             };
 
             // Bottom separator — always allocated
@@ -1883,7 +1885,7 @@ impl TimelineViewportPanel {
             let sep_y = y + h - sep_h;
             let sep_vis = visible && sep_y + sep_h > tr_top && sep_y < tr_bottom;
             let separator_id = tree.add_panel(
-                -1,
+                None,
                 tr.x,
                 if sep_vis { sep_y.max(tr_top) } else { tr_top },
                 tr.width,
@@ -1896,9 +1898,9 @@ impl TimelineViewportPanel {
                     bg_color: sep_color,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            );
             if !sep_vis {
-                tree.set_visible(separator_id as u32, false);
+                tree.set_visible(separator_id, false);
             }
 
             self.track_bg_groups.push(TrackBgGroup {
@@ -2005,7 +2007,7 @@ impl TimelineViewportPanel {
                         bg_color: tick_color,
                         ..UIStyle::default()
                     },
-                ) as i32;
+                );
                 self.ruler_tick_ids.push(id);
 
                 // Label (only at label_step intervals to prevent overlap)
@@ -2041,7 +2043,7 @@ impl TimelineViewportPanel {
                             text_align: TextAlign::Left,
                             ..UIStyle::default()
                         },
-                    ) as i32;
+                    );
                     self.ruler_label_ids.push(id);
                 }
 
@@ -2069,21 +2071,22 @@ impl TimelineViewportPanel {
 
         // In marker
         let in_px = self.beat_to_pixel(self.export_in_beat);
-        self.export_in_marker_id = tree.add_panel(
+        let export_in_marker_id = tree.add_panel(
             self.viewport_clip_id,
             in_px - marker_w * 0.5,
             self.ruler_rect.y,
             marker_w,
             marker_h,
             marker_style,
-        ) as i32;
+        );
+        self.export_in_marker_id = Some(export_in_marker_id);
 
         // Range highlight
         let out_px = self.beat_to_pixel(self.export_out_beat);
         let range_left = in_px.max(self.tracks_rect.x);
         let range_right = out_px.min(self.tracks_rect.x_max());
         let range_w = (range_right - range_left).max(0.0);
-        self.export_range_id = tree.add_panel(
+        let export_range_id = tree.add_panel(
             self.viewport_clip_id,
             range_left,
             self.tracks_rect.y,
@@ -2093,17 +2096,19 @@ impl TimelineViewportPanel {
                 bg_color: color::EXPORT_RANGE_HIGHLIGHT,
                 ..UIStyle::default()
             },
-        ) as i32;
+        );
+        self.export_range_id = Some(export_range_id);
 
         // Out marker
-        self.export_out_marker_id = tree.add_panel(
+        let export_out_marker_id = tree.add_panel(
             self.viewport_clip_id,
             out_px - marker_w * 0.5,
             self.ruler_rect.y,
             marker_w,
             marker_h,
             marker_style,
-        ) as i32;
+        );
+        self.export_out_marker_id = Some(export_out_marker_id);
 
         // Apply visibility
         let enabled = self.export_range_enabled;
@@ -2117,13 +2122,13 @@ impl TimelineViewportPanel {
         let range_visible = enabled && has_out && range_w > 0.0;
 
         if !in_visible {
-            tree.set_visible(self.export_in_marker_id as u32, false);
+            tree.set_visible(export_in_marker_id, false);
         }
         if !range_visible {
-            tree.set_visible(self.export_range_id as u32, false);
+            tree.set_visible(export_range_id, false);
         }
         if !out_visible {
-            tree.set_visible(self.export_out_marker_id as u32, false);
+            tree.set_visible(export_out_marker_id, false);
         }
     }
 
@@ -2134,7 +2139,7 @@ impl TimelineViewportPanel {
         let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
 
         let marker_s = color::INSERT_CURSOR_RULER_MARKER_SIZE;
-        self.insert_cursor_ruler_id = tree.add_panel(
+        let insert_cursor_ruler_id = tree.add_panel(
             self.viewport_clip_id,
             px - marker_s * 0.5,
             self.ruler_rect.y + self.ruler_rect.height - marker_s,
@@ -2144,9 +2149,10 @@ impl TimelineViewportPanel {
                 bg_color: color::INSERT_CURSOR_BLUE,
                 ..UIStyle::default()
             },
-        ) as i32;
+        );
+        self.insert_cursor_ruler_id = Some(insert_cursor_ruler_id);
         if !in_view {
-            tree.set_visible(self.insert_cursor_ruler_id as u32, false);
+            tree.set_visible(insert_cursor_ruler_id, false);
         }
     }
 
@@ -2192,9 +2198,9 @@ impl TimelineViewportPanel {
                     bg_color: flag_color,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            );
             if !in_view {
-                tree.set_visible(flag_id as u32, false);
+                tree.set_visible(flag_id, false);
             }
             self.marker_node_ids.push(flag_id);
 
@@ -2209,9 +2215,9 @@ impl TimelineViewportPanel {
                     bg_color: color::MARKER_SELECTED_OUTLINE,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            );
             if !is_selected || !in_view {
-                tree.set_visible(outline_id as u32, false);
+                tree.set_visible(outline_id, false);
             }
             self.marker_node_ids.push(outline_id);
 
@@ -2236,9 +2242,9 @@ impl TimelineViewportPanel {
                     text_align: TextAlign::Left,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            );
             if marker.name.is_empty() || !in_view {
-                tree.set_visible(label_id as u32, false);
+                tree.set_visible(label_id, false);
             }
             self.marker_node_ids.push(label_id);
 
@@ -2384,7 +2390,7 @@ impl TimelineViewportPanel {
                     color::TEXT_FAINT
                 };
 
-                let id = self.ruler_tick_ids[tick_idx] as u32;
+                let id = self.ruler_tick_ids[tick_idx];
                 tree.set_bounds(
                     id,
                     Rect::new(px, ruler_bottom - tick_h, RULER_TICK_W, tick_h),
@@ -2412,7 +2418,7 @@ impl TimelineViewportPanel {
                         format!("{}.{}", bar_num, beat_in_bar)
                     };
 
-                    let lid = self.ruler_label_ids[label_idx] as u32;
+                    let lid = self.ruler_label_ids[label_idx];
                     tree.set_bounds(
                         lid,
                         Rect::new(px + 2.0, label_y, RULER_LABEL_W, RULER_LABEL_H),
@@ -2439,7 +2445,11 @@ impl TimelineViewportPanel {
 
         // ── Update export markers in-place ──
 
-        if self.export_in_marker_id >= 0 {
+        if let (Some(export_in_marker_id), Some(export_range_id), Some(export_out_marker_id)) = (
+            self.export_in_marker_id,
+            self.export_range_id,
+            self.export_out_marker_id,
+        ) {
             let marker_w = 2.0;
             let marker_h = self.ruler_rect.height + self.tracks_rect.height;
             let enabled = self.export_range_enabled;
@@ -2448,10 +2458,10 @@ impl TimelineViewportPanel {
             let in_px = self.beat_to_pixel(self.export_in_beat);
             let in_vis =
                 enabled && in_px >= self.tracks_rect.x && in_px <= self.tracks_rect.x_max();
-            tree.set_visible(self.export_in_marker_id as u32, in_vis);
+            tree.set_visible(export_in_marker_id, in_vis);
             if in_vis {
                 tree.set_bounds(
-                    self.export_in_marker_id as u32,
+                    export_in_marker_id,
                     Rect::new(
                         in_px - marker_w * 0.5,
                         self.ruler_rect.y,
@@ -2466,10 +2476,10 @@ impl TimelineViewportPanel {
             let range_right = out_px.min(self.tracks_rect.x_max());
             let range_w = (range_right - range_left).max(0.0);
             let range_vis = enabled && has_out && range_w > 0.0;
-            tree.set_visible(self.export_range_id as u32, range_vis);
+            tree.set_visible(export_range_id, range_vis);
             if range_vis {
                 tree.set_bounds(
-                    self.export_range_id as u32,
+                    export_range_id,
                     Rect::new(
                         range_left,
                         self.tracks_rect.y,
@@ -2483,10 +2493,10 @@ impl TimelineViewportPanel {
                 && has_out
                 && out_px >= self.tracks_rect.x
                 && out_px <= self.tracks_rect.x_max();
-            tree.set_visible(self.export_out_marker_id as u32, out_vis);
+            tree.set_visible(export_out_marker_id, out_vis);
             if out_vis {
                 tree.set_bounds(
-                    self.export_out_marker_id as u32,
+                    export_out_marker_id,
                     Rect::new(
                         out_px - marker_w * 0.5,
                         self.ruler_rect.y,
@@ -2515,7 +2525,7 @@ impl TimelineViewportPanel {
             let flag_y = self.ruler_rect.y;
 
             // Flag
-            tree.set_visible(group.flag_id as u32, in_view);
+            tree.set_visible(group.flag_id, in_view);
             if in_view {
                 let flag_color = if is_selected {
                     Color32::new(
@@ -2528,11 +2538,11 @@ impl TimelineViewportPanel {
                     mc
                 };
                 tree.set_bounds(
-                    group.flag_id as u32,
+                    group.flag_id,
                     Rect::new(flag_x, flag_y, flag_w, flag_h),
                 );
                 tree.set_style(
-                    group.flag_id as u32,
+                    group.flag_id,
                     UIStyle {
                         bg_color: flag_color,
                         ..UIStyle::default()
@@ -2541,22 +2551,22 @@ impl TimelineViewportPanel {
             }
 
             // Outline
-            tree.set_visible(group.outline_id as u32, in_view && is_selected);
+            tree.set_visible(group.outline_id, in_view && is_selected);
             if in_view && is_selected {
                 tree.set_bounds(
-                    group.outline_id as u32,
+                    group.outline_id,
                     Rect::new(flag_x - 1.0, flag_y - 1.0, flag_w + 2.0, flag_h + 2.0),
                 );
             }
 
             // Label
             let has_name = !marker.name.is_empty();
-            tree.set_visible(group.label_id as u32, in_view && has_name);
+            tree.set_visible(group.label_id, in_view && has_name);
             if in_view && has_name {
                 let label_x = flag_x + flag_w + 2.0;
                 let label_y_m = flag_y + (flag_h - color::MARKER_LABEL_HEIGHT) * 0.5;
                 tree.set_bounds(
-                    group.label_id as u32,
+                    group.label_id,
                     Rect::new(
                         label_x,
                         label_y_m,
@@ -2602,21 +2612,21 @@ impl TimelineViewportPanel {
             let visible = clamped_h > 0.0 && y + h >= tr_top && y <= tr_bottom;
 
             // Background
-            tree.set_visible(group.bg_id as u32, visible);
+            tree.set_visible(group.bg_id, visible);
             if visible {
                 tree.set_bounds(
-                    group.bg_id as u32,
+                    group.bg_id,
                     Rect::new(tr_x, clamped_y, tr_w, clamped_h),
                 );
             }
 
             // Accent bar
-            if group.accent_id >= 0 {
+            if let Some(accent_id) = group.accent_id {
                 let accent_vis = visible && y >= tr_top;
-                tree.set_visible(group.accent_id as u32, accent_vis);
+                tree.set_visible(accent_id, accent_vis);
                 if accent_vis {
                     tree.set_bounds(
-                        group.accent_id as u32,
+                        accent_id,
                         Rect::new(tr_x, clamped_y, color::GROUP_ACCENT_BAR_WIDTH, clamped_h),
                     );
                 }
@@ -2630,10 +2640,10 @@ impl TimelineViewportPanel {
             };
             let sep_y = y + h - sep_h;
             let sep_vis = visible && sep_y + sep_h > tr_top && sep_y < tr_bottom;
-            tree.set_visible(group.separator_id as u32, sep_vis);
+            tree.set_visible(group.separator_id, sep_vis);
             if sep_vis {
                 tree.set_bounds(
-                    group.separator_id as u32,
+                    group.separator_id,
                     Rect::new(
                         tr_x,
                         sep_y.max(tr_top),
@@ -2724,8 +2734,8 @@ mod tests {
         let layout = test_layout();
         panel.build(&mut tree, &layout);
 
-        assert!(panel.bg_panel_id >= 0);
-        assert!(panel.ruler_bg_id >= 0);
+        assert!(panel.bg_panel_id.is_some());
+        assert!(panel.ruler_bg_id.is_some());
         assert!(panel.node_count > 0);
     }
 
@@ -2839,7 +2849,7 @@ mod tests {
         let ruler_pos = Vec2::new(panel.ruler_rect.x + 100.0, panel.ruler_rect.y + 5.0);
         let actions = panel.handle_event(
             &UIEvent::Click {
-                node_id: 0,
+                node_id: NodeId(0),
                 pos: ruler_pos,
                 modifiers: Modifiers::default(),
             },
@@ -2862,7 +2872,7 @@ mod tests {
         let tracks_pos = Vec2::new(panel.tracks_rect.x + 100.0, panel.tracks_rect.y + 50.0);
         let actions = panel.handle_event(
             &UIEvent::Click {
-                node_id: 0,
+                node_id: NodeId(0),
                 pos: tracks_pos,
                 modifiers: Modifiers::default(),
             },
@@ -2886,7 +2896,7 @@ mod tests {
         let tracks_pos = Vec2::new(panel.tracks_rect.x + 100.0, panel.tracks_rect.y + 50.0);
         let actions = panel.handle_event(
             &UIEvent::Click {
-                node_id: 0,
+                node_id: NodeId(0),
                 pos: tracks_pos,
                 modifiers: Modifiers {
                     shift: true,

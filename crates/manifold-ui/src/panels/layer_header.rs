@@ -606,38 +606,36 @@ fn compute_audio_row(
 // ── LayerRowIds ─────────────────────────────────────────────────────
 
 /// Node IDs for one layer row, keyed by `LayerControl`. Absent controls are
-/// `-1`. Replaces the old per-field struct so adding a control is one enum
+/// `None`. Replaces the old per-field struct so adding a control is one enum
 /// variant plus one build arm, not a parallel edit across four structures.
 #[derive(Clone, Copy)]
 struct LayerRowIds {
-    id: [i32; N_CONTROLS],
+    id: [Option<NodeId>; N_CONTROLS],
 }
 
 impl Default for LayerRowIds {
     fn default() -> Self {
         Self {
-            id: [-1; N_CONTROLS],
+            id: [None; N_CONTROLS],
         }
     }
 }
 
 impl LayerRowIds {
     #[inline]
-    fn id(&self, c: LayerControl) -> i32 {
+    fn id(&self, c: LayerControl) -> Option<NodeId> {
         self.id[c.idx()]
     }
 
     #[inline]
-    fn set(&mut self, c: LayerControl, v: i32) {
-        self.id[c.idx()] = v;
+    fn set(&mut self, c: LayerControl, v: NodeId) {
+        self.id[c.idx()] = Some(v);
     }
 
-    /// Iterate all valid (>= 0) node IDs in this row.
-    fn for_each_id(&self, mut f: impl FnMut(i32)) {
-        for &id in &self.id {
-            if id >= 0 {
-                f(id);
-            }
+    /// Iterate all present node IDs in this row.
+    fn for_each_id(&self, mut f: impl FnMut(NodeId)) {
+        for id in self.id.iter().flatten() {
+            f(*id);
         }
     }
 }
@@ -705,11 +703,13 @@ pub struct LayerHeaderPanel {
     layers: Vec<LayerInfo>,
     rows: Vec<LayerRowIds>,
 
-    // Drag-reorder state
+    // Drag-reorder state. drag_source/drag_target/pending_drag_layer are
+    // layer-row indices (into self.rows / self.layers), not tree node ids;
+    // they keep the -1 "none" sentinel.
     drag_source: i32,
     drag_target: i32,
-    insert_indicator_id: i32,
-    add_layer_btn: i32,
+    insert_indicator_id: Option<NodeId>,
+    add_layer_btn: Option<NodeId>,
     // Saved during PointerDown on drag handle so DragBegin can find the
     // correct layer even after a tree rebuild has invalidated node IDs.
     pending_drag_layer: i32,
@@ -728,8 +728,8 @@ pub struct LayerHeaderPanel {
     pending_active_layers: Option<Vec<bool>>,
 
     // ── Live recording controls (in spacer area above layers) ──
-    record_btn_id: i32,
-    audio_device_label_id: i32,
+    record_btn_id: Option<NodeId>,
+    audio_device_label_id: Option<NodeId>,
     recording_active: bool,
     audio_device_name: String,
 
@@ -759,8 +759,8 @@ impl LayerHeaderPanel {
             rows: Vec::new(),
             drag_source: -1,
             drag_target: -1,
-            insert_indicator_id: -1,
-            add_layer_btn: -1,
+            insert_indicator_id: None,
+            add_layer_btn: None,
             pending_drag_layer: -1,
             cached_mute: Vec::new(),
             cached_solo: Vec::new(),
@@ -770,8 +770,8 @@ impl LayerHeaderPanel {
             active_layer: None,
             cached_active_layer: None,
             pending_active_layers: None,
-            record_btn_id: -1,
-            audio_device_label_id: -1,
+            record_btn_id: None,
+            audio_device_label_id: None,
             recording_active: false,
             audio_device_name: "No audio input".into(),
             panel_origin: Vec2::ZERO,
@@ -829,21 +829,21 @@ impl LayerHeaderPanel {
             return;
         }
         self.recording_active = active;
-        if self.record_btn_id >= 0 {
-            tree.set_style(self.record_btn_id as u32, self.record_btn_style());
+        if let Some(id) = self.record_btn_id {
+            tree.set_style(id, self.record_btn_style());
             let label = if active {
                 "Stop Recording"
             } else {
                 "Record Live"
             };
-            tree.set_text(self.record_btn_id as u32, label);
+            tree.set_text(id, label);
         }
     }
 
     pub fn set_audio_device_name(&mut self, tree: &mut UITree, name: &str) {
         self.audio_device_name = name.into();
-        if self.audio_device_label_id >= 0 {
-            tree.set_text(self.audio_device_label_id as u32, name);
+        if let Some(id) = self.audio_device_label_id {
+            tree.set_text(id, name);
         }
     }
 
@@ -875,43 +875,45 @@ impl LayerHeaderPanel {
 
     // ── Accessors ───────────────────────────────────────────────────
 
-    pub fn blend_mode_node_id(&self, index: usize) -> i32 {
-        self.rows.get(index).map_or(-1, |r| r.id(LayerControl::Blend))
-    }
-
-    pub fn midi_channel_node_id(&self, index: usize) -> i32 {
+    pub fn blend_mode_node_id(&self, index: usize) -> Option<NodeId> {
         self.rows
             .get(index)
-            .map_or(-1, |r| r.id(LayerControl::ChDropdown))
+            .and_then(|r| r.id(LayerControl::Blend))
     }
 
-    pub fn midi_input_node_id(&self, index: usize) -> i32 {
+    pub fn midi_channel_node_id(&self, index: usize) -> Option<NodeId> {
         self.rows
             .get(index)
-            .map_or(-1, |r| r.id(LayerControl::MidiInput))
+            .and_then(|r| r.id(LayerControl::ChDropdown))
     }
 
-    pub fn midi_device_node_id(&self, index: usize) -> i32 {
+    pub fn midi_input_node_id(&self, index: usize) -> Option<NodeId> {
         self.rows
             .get(index)
-            .map_or(-1, |r| r.id(LayerControl::DevDropdown))
+            .and_then(|r| r.id(LayerControl::MidiInput))
     }
 
-    pub fn midi_mode_node_id(&self, index: usize) -> i32 {
+    pub fn midi_device_node_id(&self, index: usize) -> Option<NodeId> {
         self.rows
             .get(index)
-            .map_or(-1, |r| r.id(LayerControl::MidiMode))
+            .and_then(|r| r.id(LayerControl::DevDropdown))
     }
 
-    pub fn name_node_id(&self, index: usize) -> i32 {
-        self.rows.get(index).map_or(-1, |r| r.id(LayerControl::Name))
+    pub fn midi_mode_node_id(&self, index: usize) -> Option<NodeId> {
+        self.rows
+            .get(index)
+            .and_then(|r| r.id(LayerControl::MidiMode))
     }
 
-    pub fn get_node_bounds(&self, tree: &UITree, node_id: i32) -> Rect {
-        if node_id < 0 {
-            return Rect::ZERO;
+    pub fn name_node_id(&self, index: usize) -> Option<NodeId> {
+        self.rows.get(index).and_then(|r| r.id(LayerControl::Name))
+    }
+
+    pub fn get_node_bounds(&self, tree: &UITree, node_id: Option<NodeId>) -> Rect {
+        match node_id {
+            Some(id) => tree.get_bounds(id),
+            None => Rect::ZERO,
         }
-        tree.get_bounds(node_id as u32)
     }
 
     // ── Push-based setters ──────────────────────────────────────────
@@ -924,9 +926,8 @@ impl LayerHeaderPanel {
                 }
                 *cached = muted;
             }
-            let mute_id = row.id(LayerControl::Mute);
-            if mute_id >= 0 {
-                tree.set_style(mute_id as u32, mute_style(muted));
+            if let Some(mute_id) = row.id(LayerControl::Mute) {
+                tree.set_style(mute_id, mute_style(muted));
             }
         }
     }
@@ -939,9 +940,8 @@ impl LayerHeaderPanel {
                 }
                 *cached = solo;
             }
-            let solo_id = row.id(LayerControl::Solo);
-            if solo_id >= 0 {
-                tree.set_style(solo_id as u32, solo_style(solo));
+            if let Some(solo_id) = row.id(LayerControl::Solo) {
+                tree.set_style(solo_id, solo_style(solo));
             }
         }
     }
@@ -954,9 +954,8 @@ impl LayerHeaderPanel {
                 }
                 *cached = led;
             }
-            let led_id = row.id(LayerControl::Led);
-            if led_id >= 0 {
-                tree.set_style(led_id as u32, led_style(led));
+            if let Some(led_id) = row.id(LayerControl::Led) {
+                tree.set_style(led_id, led_style(led));
             }
         }
     }
@@ -969,79 +968,64 @@ impl LayerHeaderPanel {
                 }
                 *cached = selected;
             }
-            let bg_id = row.id(LayerControl::Background);
-            if bg_id >= 0 {
+            if let Some(bg_id) = row.id(LayerControl::Background) {
                 let layer_color = self
                     .cached_colors
                     .get(index)
                     .copied()
                     .unwrap_or(Color32::TRANSPARENT);
-                tree.set_style(bg_id as u32, bg_style(selected, layer_color));
+                tree.set_style(bg_id, bg_style(selected, layer_color));
             }
         }
     }
 
     pub fn set_layer_name(&mut self, tree: &mut UITree, index: usize, name: &str) {
-        if let Some(row) = self.rows.get(index) {
-            let id = row.id(LayerControl::Name);
-            if id >= 0 {
-                tree.set_text(id as u32, name);
+        if let Some(row) = self.rows.get(index)
+            && let Some(id) = row.id(LayerControl::Name) {
+                tree.set_text(id, name);
             }
-        }
     }
 
     pub fn set_blend_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index) {
-            let id = row.id(LayerControl::Blend);
-            if id >= 0 {
-                tree.set_text(id as u32, text);
+        if let Some(row) = self.rows.get(index)
+            && let Some(id) = row.id(LayerControl::Blend) {
+                tree.set_text(id, text);
             }
-        }
     }
 
     pub fn set_midi_note_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index) {
-            let id = row.id(LayerControl::MidiInput);
-            if id >= 0 {
-                tree.set_text(id as u32, text);
+        if let Some(row) = self.rows.get(index)
+            && let Some(id) = row.id(LayerControl::MidiInput) {
+                tree.set_text(id, text);
             }
-        }
     }
 
     pub fn set_midi_channel_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index) {
-            let id = row.id(LayerControl::ChDropdown);
-            if id >= 0 {
-                tree.set_text(id as u32, text);
+        if let Some(row) = self.rows.get(index)
+            && let Some(id) = row.id(LayerControl::ChDropdown) {
+                tree.set_text(id, text);
             }
-        }
     }
 
     pub fn set_midi_device_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index) {
-            let id = row.id(LayerControl::DevDropdown);
-            if id >= 0 {
-                tree.set_text(id as u32, text);
+        if let Some(row) = self.rows.get(index)
+            && let Some(id) = row.id(LayerControl::DevDropdown) {
+                tree.set_text(id, text);
             }
-        }
     }
 
     pub fn set_midi_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index) {
-            let id = row.id(LayerControl::MidiMode);
-            if id >= 0 {
-                tree.set_text(id as u32, text);
+        if let Some(row) = self.rows.get(index)
+            && let Some(id) = row.id(LayerControl::MidiMode) {
+                tree.set_text(id, text);
             }
-        }
     }
 
     pub fn set_info_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index) {
-            let id = row.id(LayerControl::Info);
-            if id >= 0 {
-                tree.set_text(id as u32, text);
+        if let Some(row) = self.rows.get(index)
+            && let Some(id) = row.id(LayerControl::Info) {
+                tree.set_text(id, text);
             }
-        }
     }
 
     // ── Drag-reorder (separate from Panel trait — needs &mut UITree) ──
@@ -1060,7 +1044,7 @@ impl LayerHeaderPanel {
 
     /// Try to begin a gain-slider drag on `node_id` at screen x `pos_x`.
     /// Returns Snapshot + Changed actions if it hit an audio layer's gain track.
-    pub fn try_begin_gain_drag(&mut self, node_id: u32, pos_x: f32) -> Vec<PanelAction> {
+    pub fn try_begin_gain_drag(&mut self, node_id: NodeId, pos_x: f32) -> Vec<PanelAction> {
         for i in 0..self.gain_sliders.len() {
             if let Some(val) = self.gain_sliders[i].try_start_drag(node_id, pos_x) {
                 self.active_gain_drag = i as i32;
@@ -1101,12 +1085,11 @@ impl LayerHeaderPanel {
 
     /// Call when a drag begins on a layer header node.
     /// Returns PanelAction if the drag starts on a drag handle.
-    pub fn handle_drag_begin(&mut self, tree: &mut UITree, node_id: u32) -> Vec<PanelAction> {
-        let id = node_id as i32;
+    pub fn handle_drag_begin(&mut self, tree: &mut UITree, node_id: NodeId) -> Vec<PanelAction> {
         // Try exact node_id match first (works when no rebuild happened since PointerDown).
         let mut matched_index: Option<usize> = None;
         for (i, row) in self.rows.iter().enumerate() {
-            if id == row.id(LayerControl::DragHandle) {
+            if row.id(LayerControl::DragHandle) == Some(node_id) {
                 matched_index = Some(i);
                 break;
             }
@@ -1124,18 +1107,16 @@ impl LayerHeaderPanel {
         if let Some(i) = matched_index {
             self.drag_source = i as i32;
             self.drag_target = i as i32;
-            if let Some(row) = self.rows.get(i) {
-                let bg_id = row.id(LayerControl::Background);
-                if bg_id >= 0 {
+            if let Some(row) = self.rows.get(i)
+                && let Some(bg_id) = row.id(LayerControl::Background) {
                     tree.set_style(
-                        bg_id as u32,
+                        bg_id,
                         UIStyle {
                             bg_color: DRAG_SOURCE_DIM,
                             ..UIStyle::default()
                         },
                     );
                 }
-            }
             return vec![PanelAction::LayerDragStarted(i)];
         }
         self.drag_source = -1;
@@ -1196,18 +1177,16 @@ impl LayerHeaderPanel {
         self.hide_insert_indicator(tree);
 
         // Restore source layer appearance
-        if let Some(row) = self.rows.get(source) {
-            let bg_id = row.id(LayerControl::Background);
-            if bg_id >= 0 {
+        if let Some(row) = self.rows.get(source)
+            && let Some(bg_id) = row.id(LayerControl::Background) {
                 let selected = self.cached_selected.get(source).copied().unwrap_or(false);
                 let layer_color = self
                     .cached_colors
                     .get(source)
                     .copied()
                     .unwrap_or(Color32::TRANSPARENT);
-                tree.set_style(bg_id as u32, bg_style(selected, layer_color));
+                tree.set_style(bg_id, bg_style(selected, layer_color));
             }
-        }
 
         if source != target {
             vec![PanelAction::LayerDragEnded(source, target)]
@@ -1219,9 +1198,9 @@ impl LayerHeaderPanel {
     // ── Drag visual helpers ─────────────────────────────────────────
 
     fn update_insert_indicator(&self, tree: &mut UITree) {
-        if self.insert_indicator_id < 0 {
+        let Some(indicator_id) = self.insert_indicator_id else {
             return;
-        }
+        };
 
         let y = if self.drag_target <= self.drag_source {
             self.layers
@@ -1235,7 +1214,7 @@ impl LayerHeaderPanel {
 
         let screen_y = self.panel_origin.y + y - INSERT_LINE_H * 0.5;
         tree.set_bounds(
-            self.insert_indicator_id as u32,
+            indicator_id,
             Rect::new(
                 self.panel_origin.x,
                 screen_y,
@@ -1244,7 +1223,7 @@ impl LayerHeaderPanel {
             ),
         );
         tree.set_style(
-            self.insert_indicator_id as u32,
+            indicator_id,
             UIStyle {
                 bg_color: INSERT_LINE_CLR,
                 ..UIStyle::default()
@@ -1253,15 +1232,12 @@ impl LayerHeaderPanel {
     }
 
     fn hide_insert_indicator(&self, tree: &mut UITree) {
-        if self.insert_indicator_id < 0 {
+        let Some(indicator_id) = self.insert_indicator_id else {
             return;
-        }
-        tree.set_bounds(
-            self.insert_indicator_id as u32,
-            Rect::new(0.0, -10.0, 0.0, 0.0),
-        );
+        };
+        tree.set_bounds(indicator_id, Rect::new(0.0, -10.0, 0.0, 0.0));
         tree.set_style(
-            self.insert_indicator_id as u32,
+            indicator_id,
             UIStyle {
                 bg_color: Color32::TRANSPARENT,
                 ..UIStyle::default()
@@ -1278,7 +1254,7 @@ impl LayerHeaderPanel {
         layer: &LayerInfo,
         row: LayerRowData,
         origin: Vec2,
-        clip_parent: i32,
+        clip_parent: Option<NodeId>,
     ) {
         use LayerControl as C;
         let s = |r: Rect| screen(r, origin);
@@ -1293,7 +1269,7 @@ impl LayerHeaderPanel {
                 continue;
             }
             let r = s(row.rect(c));
-            let node: i32 = match c {
+            let node: NodeId = match c {
                 C::Background => tree.add_button(
                     clip_parent,
                     r.x,
@@ -1302,7 +1278,7 @@ impl LayerHeaderPanel {
                     r.height,
                     bg_style(layer.is_selected, layer.color),
                     "",
-                ) as i32,
+                ),
                 C::AccentBar | C::Connector => tree.add_panel(
                     clip_parent,
                     r.x,
@@ -1313,7 +1289,7 @@ impl LayerHeaderPanel {
                         bg_color: ACCENT_COLOR,
                         ..UIStyle::default()
                     },
-                ) as i32,
+                ),
                 C::BottomBorder => tree.add_panel(
                     clip_parent,
                     r.x,
@@ -1324,7 +1300,7 @@ impl LayerHeaderPanel {
                         bg_color: BORDER_CLR,
                         ..UIStyle::default()
                     },
-                ) as i32,
+                ),
                 C::Chevron => {
                     let chev = if layer.is_collapsed {
                         "\u{25B6}"
@@ -1348,7 +1324,7 @@ impl LayerHeaderPanel {
                             ..UIStyle::default()
                         },
                         chev,
-                    ) as i32
+                    )
                 }
                 C::Name => tree.add_button(
                     clip_parent,
@@ -1366,7 +1342,7 @@ impl LayerHeaderPanel {
                         ..UIStyle::default()
                     },
                     &layer.name,
-                ) as i32,
+                ),
                 C::DragHandle => {
                     // Hamburger icon drawn as 3 horizontal bars.
                     let handle = tree.add_button(
@@ -1383,7 +1359,7 @@ impl LayerHeaderPanel {
                             ..UIStyle::default()
                         },
                         "",
-                    ) as i32;
+                    );
                     let bar_w: f32 = 10.0;
                     let bar_h: f32 = 1.5;
                     let bar_x = r.x + (r.width - bar_w) * 0.5;
@@ -1393,7 +1369,7 @@ impl LayerHeaderPanel {
                     };
                     for i in 0..3 {
                         let bar_y = r.y + 4.5 + i as f32 * 4.0;
-                        tree.add_panel(handle, bar_x, bar_y, bar_w, bar_h, bar_style);
+                        tree.add_panel(Some(handle), bar_x, bar_y, bar_w, bar_h, bar_style);
                     }
                     handle
                 }
@@ -1412,7 +1388,7 @@ impl LayerHeaderPanel {
                             text_align: TextAlign::Left,
                             ..UIStyle::default()
                         },
-                    ) as i32
+                    )
                 }
                 C::Mute => tree.add_button(
                     clip_parent,
@@ -1422,7 +1398,7 @@ impl LayerHeaderPanel {
                     r.height,
                     mute_style(layer.is_muted),
                     "M",
-                ) as i32,
+                ),
                 C::Solo => tree.add_button(
                     clip_parent,
                     r.x,
@@ -1431,7 +1407,7 @@ impl LayerHeaderPanel {
                     r.height,
                     solo_style(layer.is_solo),
                     "S",
-                ) as i32,
+                ),
                 C::Analysis => tree.add_button(
                     clip_parent,
                     r.x,
@@ -1440,7 +1416,7 @@ impl LayerHeaderPanel {
                     r.height,
                     analysis_style(layer.analysis_only),
                     "A",
-                ) as i32,
+                ),
                 C::Led => tree.add_button(
                     clip_parent,
                     r.x,
@@ -1449,7 +1425,7 @@ impl LayerHeaderPanel {
                     r.height,
                     led_style(layer.is_led),
                     "L",
-                ) as i32,
+                ),
                 C::Blend => tree.add_button(
                     clip_parent,
                     r.x,
@@ -1458,7 +1434,7 @@ impl LayerHeaderPanel {
                     r.height,
                     small_button_style(),
                     &layer.blend_mode,
-                ) as i32,
+                ),
                 C::Separator => {
                     let sep_color = if layer.is_group {
                         color::GROUP_SEPARATOR_COLOR
@@ -1475,7 +1451,7 @@ impl LayerHeaderPanel {
                             bg_color: sep_color,
                             ..UIStyle::default()
                         },
-                    ) as i32
+                    )
                 }
                 C::Info => {
                     let info = info_text(layer, &self.layers);
@@ -1492,7 +1468,7 @@ impl LayerHeaderPanel {
                             text_align: TextAlign::Left,
                             ..UIStyle::default()
                         },
-                    ) as i32
+                    )
                 }
                 C::Folder => tree.add_button(
                     clip_parent,
@@ -1502,7 +1478,7 @@ impl LayerHeaderPanel {
                     r.height,
                     small_button_style(),
                     "Folder",
-                ) as i32,
+                ),
                 C::PathLabel => {
                     let path_text =
                         folder_path_text(&layer.video_folder_path, layer.source_clip_count);
@@ -1519,7 +1495,7 @@ impl LayerHeaderPanel {
                             text_align: TextAlign::Left,
                             ..UIStyle::default()
                         },
-                    ) as i32
+                    )
                 }
                 C::NewClip => tree.add_button(
                     clip_parent,
@@ -1529,7 +1505,7 @@ impl LayerHeaderPanel {
                     r.height,
                     small_button_style(),
                     "+ new clip",
-                ) as i32,
+                ),
                 C::MidiLabel => tree.add_label(
                     clip_parent,
                     r.x,
@@ -1543,7 +1519,7 @@ impl LayerHeaderPanel {
                         text_align: TextAlign::Left,
                         ..UIStyle::default()
                     },
-                ) as i32,
+                ),
                 C::MidiInput => {
                     let midi_text = if layer.midi_all_notes {
                         "—".to_string()
@@ -1558,7 +1534,7 @@ impl LayerHeaderPanel {
                         r.height,
                         field_style(),
                         &midi_text,
-                    ) as i32
+                    )
                 }
                 C::MidiMode => {
                     let mode_text = if layer.midi_all_notes { "All" } else { "Note" };
@@ -1570,7 +1546,7 @@ impl LayerHeaderPanel {
                         r.height,
                         small_button_style(),
                         mode_text,
-                    ) as i32
+                    )
                 }
                 C::ChLabel => tree.add_label(
                     clip_parent,
@@ -1585,7 +1561,7 @@ impl LayerHeaderPanel {
                         text_align: TextAlign::Left,
                         ..UIStyle::default()
                     },
-                ) as i32,
+                ),
                 C::ChDropdown => {
                     let ch_text = if layer.midi_channel < 0 {
                         "All".to_string()
@@ -1600,7 +1576,7 @@ impl LayerHeaderPanel {
                         r.height,
                         small_button_style(),
                         &ch_text,
-                    ) as i32
+                    )
                 }
                 C::DevLabel => tree.add_label(
                     clip_parent,
@@ -1615,7 +1591,7 @@ impl LayerHeaderPanel {
                         text_align: TextAlign::Left,
                         ..UIStyle::default()
                     },
-                ) as i32,
+                ),
                 C::DevDropdown => {
                     let dev_text: &str = match layer.midi_device.as_deref() {
                         None | Some("") => "All",
@@ -1629,7 +1605,7 @@ impl LayerHeaderPanel {
                         r.height,
                         small_button_style(),
                         dev_text,
-                    ) as i32
+                    )
                 }
                 C::AddGenClip => tree.add_button(
                     clip_parent,
@@ -1639,7 +1615,7 @@ impl LayerHeaderPanel {
                     r.height,
                     small_button_style(),
                     "+ Clip",
-                ) as i32,
+                ),
                 C::Gain => {
                     // Reusable dB slider; its `track` node is the drag target we
                     // address as the Gain control. The full node set is handed to
@@ -1657,7 +1633,7 @@ impl LayerHeaderPanel {
                         SMALL_FONT,
                         0.0,
                     );
-                    let track = slider.track as i32;
+                    let track = slider.track;
                     let mut gs = crate::slider::SliderDragState::with_range(
                         GAIN_DB_MIN,
                         GAIN_DB_MAX,
@@ -1677,7 +1653,7 @@ impl LayerHeaderPanel {
                         r.height,
                         small_button_style(),
                         send_text,
-                    ) as i32
+                    )
                 }
             };
             ids.set(c, node);
@@ -1686,24 +1662,23 @@ impl LayerHeaderPanel {
         self.rows[index] = ids;
     }
 
-    fn handle_click(&self, node_id: u32, modifiers: crate::input::Modifiers) -> Vec<PanelAction> {
-        let id = node_id as i32;
+    fn handle_click(&self, node_id: NodeId, modifiers: crate::input::Modifiers) -> Vec<PanelAction> {
         // Record Live button
-        if id == self.record_btn_id && id >= 0 {
+        if self.record_btn_id == Some(node_id) {
             return vec![PanelAction::ToggleLiveRecording];
         }
         // Audio input device dropdown
-        if id == self.audio_device_label_id && id >= 0 {
+        if self.audio_device_label_id == Some(node_id) {
             return vec![PanelAction::SelectAudioInputDevice];
         }
         // Add Layer button
-        if id == self.add_layer_btn && id >= 0 {
+        if self.add_layer_btn == Some(node_id) {
             return vec![PanelAction::AddLayerClicked];
         }
         use LayerControl as C;
         for (i, row) in self.rows.iter().enumerate() {
             for &c in &C::ALL {
-                if row.id(c) != id {
+                if row.id(c) != Some(node_id) {
                     continue;
                 }
                 return match c {
@@ -1733,10 +1708,9 @@ impl LayerHeaderPanel {
         Vec::new()
     }
 
-    fn handle_double_click(&self, node_id: u32) -> Vec<PanelAction> {
-        let id = node_id as i32;
+    fn handle_double_click(&self, node_id: NodeId) -> Vec<PanelAction> {
         for (i, row) in self.rows.iter().enumerate() {
-            if id == row.id(LayerControl::Name) {
+            if row.id(LayerControl::Name) == Some(node_id) {
                 return vec![PanelAction::LayerDoubleClicked(i)];
             }
         }
@@ -1753,13 +1727,11 @@ impl LayerHeaderPanel {
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         for (i, row) in self.rows.iter().enumerate() {
             row.for_each_id(|id| {
-                if id >= 0 {
-                    intents.on(
-                        id as u32,
-                        crate::intent::Gesture::RightClick,
-                        PanelAction::LayerHeaderRightClicked(i),
-                    );
-                }
+                intents.on(
+                    id,
+                    crate::intent::Gesture::RightClick,
+                    PanelAction::LayerHeaderRightClicked(i),
+                );
             });
         }
     }
@@ -1788,15 +1760,15 @@ impl LayerHeaderPanel {
         // Update all node positions (and their children) by delta_y
         for row in &self.rows {
             row.for_each_id(|id| {
-                tree.offset_node_and_children(id as u32, delta_y);
+                tree.offset_node_and_children(id, delta_y);
             });
         }
 
         // Also shift insert indicator
-        if self.insert_indicator_id >= 0 {
-            let mut bounds = tree.get_bounds(self.insert_indicator_id as u32);
+        if let Some(indicator_id) = self.insert_indicator_id {
+            let mut bounds = tree.get_bounds(indicator_id);
             bounds.y += delta_y;
-            tree.set_bounds(self.insert_indicator_id as u32, bounds);
+            tree.set_bounds(indicator_id, bounds);
         }
 
         self.panel_origin.y = new_origin_y;
@@ -1824,7 +1796,7 @@ impl Panel for LayerHeaderPanel {
 
         // Full-area background (prevents compositor blit bleed-through)
         tree.add_panel(
-            -1,
+            None,
             lc.x,
             lc.y,
             lc.width,
@@ -1844,8 +1816,8 @@ impl Panel for LayerHeaderPanel {
             let rec_x = lc.x + rec_pad;
             let rec_w = lc.width - rec_pad * 2.0;
 
-            self.record_btn_id = tree.add_button(
-                -1,
+            self.record_btn_id = Some(tree.add_button(
+                None,
                 rec_x,
                 rec_y,
                 rec_w,
@@ -1856,17 +1828,17 @@ impl Panel for LayerHeaderPanel {
                 } else {
                     "Record Live"
                 },
-            ) as i32;
+            ));
 
-            self.audio_device_label_id = tree.add_button(
-                -1,
+            self.audio_device_label_id = Some(tree.add_button(
+                None,
                 rec_x,
                 rec_y + rec_btn_h + 4.0,
                 rec_w,
                 rec_label_h,
                 field_style(),
                 &self.audio_device_name,
-            ) as i32;
+            ));
         }
 
         // Clip region for scrollable layer rows — prevents overflow into header/footer.
@@ -1874,6 +1846,7 @@ impl Panel for LayerHeaderPanel {
         let clip_height = (lc.height - header_spacer).max(0.0);
         self.scroll
             .begin(tree, Rect::new(lc.x, clip_top, lc.width, clip_height));
+        let clip_parent: Option<NodeId> = self.scroll.clip_node_id();
 
         let layer_count = self.layers.len();
         self.rows.clear();
@@ -1930,14 +1903,7 @@ impl Panel for LayerHeaderPanel {
                 layer.is_group && !layer.is_collapsed,
             );
 
-            self.build_layer_row(
-                tree,
-                i,
-                layer,
-                row,
-                self.panel_origin,
-                self.scroll.clip_node_id(),
-            );
+            self.build_layer_row(tree, i, layer, row, self.panel_origin, clip_parent);
             self.cached_mute[i] = layer.is_muted;
             self.cached_solo[i] = layer.is_solo;
             self.cached_led[i] = layer.is_led;
@@ -1959,8 +1925,8 @@ impl Panel for LayerHeaderPanel {
         self.scroll.set_content_height(content_h);
 
         // Insert indicator (hidden off-screen)
-        self.insert_indicator_id = tree.add_panel(
-            self.scroll.clip_node_id(),
+        self.insert_indicator_id = Some(tree.add_panel(
+            clip_parent,
             lc.x,
             lc.y - 10.0,
             lc.width,
@@ -1969,10 +1935,10 @@ impl Panel for LayerHeaderPanel {
                 bg_color: Color32::TRANSPARENT,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
         // No "+ Add Layer" button — layers are added via right-click context menu
-        self.add_layer_btn = -1;
+        self.add_layer_btn = None;
 
         self.cache_node_count = tree.count() - self.cache_first_node;
     }
@@ -2028,9 +1994,8 @@ impl Panel for LayerHeaderPanel {
                 if !gain.is_empty() {
                     return gain;
                 }
-                let id = *node_id as i32;
                 for (i, row) in self.rows.iter().enumerate() {
-                    if id == row.id(LayerControl::DragHandle) {
+                    if row.id(LayerControl::DragHandle) == Some(*node_id) {
                         self.pending_drag_layer = i as i32;
                         return Vec::new();
                     }
@@ -2125,20 +2090,20 @@ mod tests {
         assert_eq!(panel.layer_count(), 3);
         // All layers should have bg, name, mute, solo, blend_mode
         for i in 0..3 {
-            assert!(panel.rows[i].id(LayerControl::Background) >= 0, "layer {} bg", i);
-            assert!(panel.rows[i].id(LayerControl::Name) >= 0, "layer {} name", i);
-            assert!(panel.rows[i].id(LayerControl::Mute) >= 0, "layer {} mute", i);
-            assert!(panel.rows[i].id(LayerControl::Solo) >= 0, "layer {} solo", i);
-            assert!(panel.rows[i].id(LayerControl::Blend) >= 0, "layer {} blend", i);
+            assert!(panel.rows[i].id(LayerControl::Background).is_some(), "layer {} bg", i);
+            assert!(panel.rows[i].id(LayerControl::Name).is_some(), "layer {} name", i);
+            assert!(panel.rows[i].id(LayerControl::Mute).is_some(), "layer {} mute", i);
+            assert!(panel.rows[i].id(LayerControl::Solo).is_some(), "layer {} solo", i);
+            assert!(panel.rows[i].id(LayerControl::Blend).is_some(), "layer {} blend", i);
         }
         // Generator layer should have gen_type and add_gen_clip
-        assert!(panel.rows[2].id(LayerControl::GenType) >= 0);
-        assert!(panel.rows[2].id(LayerControl::AddGenClip) >= 0);
+        assert!(panel.rows[2].id(LayerControl::GenType).is_some());
+        assert!(panel.rows[2].id(LayerControl::AddGenClip).is_some());
         // Video layers should have folder and new_clip
-        assert!(panel.rows[0].id(LayerControl::Folder) >= 0);
-        assert!(panel.rows[0].id(LayerControl::NewClip) >= 0);
+        assert!(panel.rows[0].id(LayerControl::Folder).is_some());
+        assert!(panel.rows[0].id(LayerControl::NewClip).is_some());
         // Insert indicator
-        assert!(panel.insert_indicator_id >= 0);
+        assert!(panel.insert_indicator_id.is_some());
     }
 
     #[test]
@@ -2150,14 +2115,14 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         let a = panel.handle_click(
-            panel.rows[0].id(LayerControl::Mute) as u32,
+            panel.rows[0].id(LayerControl::Mute).unwrap(),
             crate::input::Modifiers::NONE,
         );
         assert_eq!(a.len(), 1);
         assert!(matches!(a[0], PanelAction::ToggleMute(0)));
 
         let a = panel.handle_click(
-            panel.rows[0].id(LayerControl::Solo) as u32,
+            panel.rows[0].id(LayerControl::Solo).unwrap(),
             crate::input::Modifiers::NONE,
         );
         assert_eq!(a.len(), 1);
@@ -2186,7 +2151,7 @@ mod tests {
             let action = intents.resolve(&tree, node, Gesture::RightClick);
             assert!(
                 matches!(action, Some(PanelAction::LayerHeaderRightClicked(1))),
-                "node {node} ({ctrl:?}) should resolve to layer 1's menu, got {action:?}"
+                "node {node:?} ({ctrl:?}) should resolve to layer 1's menu, got {action:?}"
             );
         }
     }
@@ -2200,7 +2165,7 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         let a = panel.handle_click(
-            panel.rows[0].id(LayerControl::Chevron) as u32,
+            panel.rows[0].id(LayerControl::Chevron).unwrap(),
             crate::input::Modifiers::NONE,
         );
         assert!(matches!(a[0], PanelAction::ChevronClicked(0)));
@@ -2238,10 +2203,10 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         // Group has connector
-        assert!(panel.rows[0].id(LayerControl::Connector) >= 0);
+        assert!(panel.rows[0].id(LayerControl::Connector).is_some());
         // Child has accent bar and bottom border (last child)
-        assert!(panel.rows[1].id(LayerControl::AccentBar) >= 0);
-        assert!(panel.rows[1].id(LayerControl::BottomBorder) >= 0);
+        assert!(panel.rows[1].id(LayerControl::AccentBar).is_some());
+        assert!(panel.rows[1].id(LayerControl::BottomBorder).is_some());
     }
 
     #[test]
@@ -2271,14 +2236,14 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         // Collapsed layer should NOT have folder, new_clip, midi controls
-        assert_eq!(panel.rows[0].id(LayerControl::Folder), -1);
-        assert_eq!(panel.rows[0].id(LayerControl::NewClip), -1);
-        assert_eq!(panel.rows[0].id(LayerControl::MidiInput), -1);
-        assert_eq!(panel.rows[0].id(LayerControl::ChDropdown), -1);
+        assert_eq!(panel.rows[0].id(LayerControl::Folder), None);
+        assert_eq!(panel.rows[0].id(LayerControl::NewClip), None);
+        assert_eq!(panel.rows[0].id(LayerControl::MidiInput), None);
+        assert_eq!(panel.rows[0].id(LayerControl::ChDropdown), None);
         // But should still have mute/solo/blend
-        assert!(panel.rows[0].id(LayerControl::Mute) >= 0);
-        assert!(panel.rows[0].id(LayerControl::Solo) >= 0);
-        assert!(panel.rows[0].id(LayerControl::Blend) >= 0);
+        assert!(panel.rows[0].id(LayerControl::Mute).is_some());
+        assert!(panel.rows[0].id(LayerControl::Solo).is_some());
+        assert!(panel.rows[0].id(LayerControl::Blend).is_some());
     }
 
     #[test]
@@ -2290,7 +2255,7 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         let event = UIEvent::DoubleClick {
-            node_id: panel.rows[0].id(LayerControl::Name) as u32,
+            node_id: panel.rows[0].id(LayerControl::Name).unwrap(),
             pos: Vec2::ZERO,
             modifiers: crate::input::Modifiers::default(),
         };
@@ -2302,9 +2267,9 @@ mod tests {
     #[test]
     fn accessors_out_of_range() {
         let panel = LayerHeaderPanel::new();
-        assert_eq!(panel.blend_mode_node_id(0), -1);
-        assert_eq!(panel.midi_channel_node_id(99), -1);
-        assert_eq!(panel.name_node_id(0), -1);
+        assert_eq!(panel.blend_mode_node_id(0), None);
+        assert_eq!(panel.midi_channel_node_id(99), None);
+        assert_eq!(panel.name_node_id(0), None);
     }
 
     // ── Layout equivalence gate ─────────────────────────────────────
@@ -2505,19 +2470,19 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         // Audio layers expose Mute / Solo / Gain / Send …
-        assert!(panel.rows[0].id(LayerControl::Mute) >= 0);
-        assert!(panel.rows[0].id(LayerControl::Solo) >= 0);
-        assert!(panel.rows[0].id(LayerControl::Gain) >= 0);
-        assert!(panel.rows[0].id(LayerControl::Send) >= 0);
+        assert!(panel.rows[0].id(LayerControl::Mute).is_some());
+        assert!(panel.rows[0].id(LayerControl::Solo).is_some());
+        assert!(panel.rows[0].id(LayerControl::Gain).is_some());
+        assert!(panel.rows[0].id(LayerControl::Send).is_some());
         // … and none of the video/generator/LED/blend controls.
-        assert_eq!(panel.rows[0].id(LayerControl::Led), -1);
-        assert_eq!(panel.rows[0].id(LayerControl::Blend), -1);
-        assert_eq!(panel.rows[0].id(LayerControl::Folder), -1);
-        assert_eq!(panel.rows[0].id(LayerControl::MidiInput), -1);
+        assert_eq!(panel.rows[0].id(LayerControl::Led), None);
+        assert_eq!(panel.rows[0].id(LayerControl::Blend), None);
+        assert_eq!(panel.rows[0].id(LayerControl::Folder), None);
+        assert_eq!(panel.rows[0].id(LayerControl::MidiInput), None);
 
         // Send is click-routable to its picker.
         let a = panel.handle_click(
-            panel.rows[0].id(LayerControl::Send) as u32,
+            panel.rows[0].id(LayerControl::Send).unwrap(),
             crate::input::Modifiers::NONE,
         );
         assert!(matches!(a.as_slice(), [PanelAction::AudioSendClicked(0)]));

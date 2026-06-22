@@ -90,8 +90,8 @@ pub struct InspectorCompositePanel {
     clip_visible: bool,
 
     // Add Effect button node IDs
-    add_master_effect_btn: i32,
-    add_layer_effect_btn: i32,
+    add_master_effect_btn: Option<NodeId>,
+    add_layer_effect_btn: Option<NodeId>,
 
     // Scroll state — two independent columns via ScrollContainer
     master_scroll: ScrollContainer,
@@ -114,7 +114,7 @@ pub struct InspectorCompositePanel {
     last_effect_tab: InspectorTab,
 
     // Background
-    bg_panel_id: i32,
+    bg_panel_id: Option<NodeId>,
 
     // ── Effect selection state (Unity EffectSelectionManager — per tab) ──
     selected_master_ids: HashSet<EffectId>,
@@ -128,8 +128,8 @@ pub struct InspectorCompositePanel {
     card_drag_source_index: usize, // index within the tab's effect cards vec
     card_drag_effect_index: usize, // effect_index in the flat effects list
     card_drag_target_index: usize, // current drop target index
-    card_drag_ghost_id: i32,
-    card_drag_indicator_id: i32,
+    card_drag_ghost_id: Option<NodeId>,
+    card_drag_indicator_id: Option<NodeId>,
     card_drag_label: String,
 
     // Cache tracking
@@ -150,8 +150,8 @@ impl InspectorCompositePanel {
             master_visible: true,
             layer_visible: true,
             clip_visible: true,
-            add_master_effect_btn: -1,
-            add_layer_effect_btn: -1,
+            add_master_effect_btn: None,
+            add_layer_effect_btn: None,
             master_scroll: ScrollContainer::new(),
             layer_scroll: ScrollContainer::new(),
             viewport_rect: Rect::ZERO,
@@ -162,7 +162,7 @@ impl InspectorCompositePanel {
             dragging_scrollbar_master: false,
             pressed_target: None,
             last_effect_tab: InspectorTab::Layer,
-            bg_panel_id: -1,
+            bg_panel_id: None,
             selected_master_ids: HashSet::new(),
             selected_layer_ids: HashSet::new(),
             last_clicked_master: None,
@@ -172,8 +172,8 @@ impl InspectorCompositePanel {
             card_drag_source_index: 0,
             card_drag_effect_index: 0,
             card_drag_target_index: 0,
-            card_drag_ghost_id: -1,
-            card_drag_indicator_id: -1,
+            card_drag_ghost_id: None,
+            card_drag_indicator_id: None,
             card_drag_label: String::new(),
             cache_first_node: usize::MAX,
             cache_node_count: 0,
@@ -680,20 +680,18 @@ impl InspectorCompositePanel {
 
     // ── Node range ownership ─────────────────────────────────────
 
-    fn find_target_for_node(&self, node_id: u32) -> Option<PressedTarget> {
-        let idx = node_id as usize;
-        let id = node_id as i32;
-
+    fn find_target_for_node(&self, node_id: NodeId) -> Option<PressedTarget> {
+        let idx = node_id.index();
         // Macros panel (above both columns)
         if self.macros_panel.owns_node(node_id) {
             return Some(PressedTarget::Macros);
         }
 
         // Scrollbars
-        if id == self.master_scroll.track_id()
-            || id == self.master_scroll.thumb_id()
-            || id == self.layer_scroll.track_id()
-            || id == self.layer_scroll.thumb_id()
+        if Some(node_id) == self.master_scroll.track_id()
+            || Some(node_id) == self.master_scroll.thumb_id()
+            || Some(node_id) == self.layer_scroll.track_id()
+            || Some(node_id) == self.layer_scroll.thumb_id()
         {
             return Some(PressedTarget::Scrollbar);
         }
@@ -764,8 +762,8 @@ impl InspectorCompositePanel {
     /// First node ID of the drag ghost/indicator overlay (for render pass).
     /// Returns None if no drag is active.
     pub fn card_drag_first_node(&self) -> Option<usize> {
-        if self.card_drag_active && self.card_drag_ghost_id >= 0 {
-            Some(self.card_drag_ghost_id as usize)
+        if self.card_drag_active {
+            self.card_drag_ghost_id.map(|id| id.index())
         } else {
             None
         }
@@ -857,7 +855,7 @@ impl InspectorCompositePanel {
 
     /// Try to begin a card drag on a DragBegin event. Returns true if drag started.
     /// Called from ui_root.rs on DragBegin (needs &mut UITree).
-    pub fn try_begin_card_drag(&mut self, node_id: u32, tree: &mut UITree) -> bool {
+    pub fn try_begin_card_drag(&mut self, node_id: NodeId, tree: &mut UITree) -> bool {
         // Check each tab's effect cards for a drag handle match
         if let Some((tab, card_idx, fx_idx, name)) = self.find_drag_handle(node_id) {
             self.card_drag_active = true;
@@ -902,8 +900,8 @@ impl InspectorCompositePanel {
                 (self.column_split_x, half)
             };
             let ghost_w = (col_w - 24.0).min(160.0);
-            self.card_drag_ghost_id = tree.add_label(
-                -1,
+            self.card_drag_ghost_id = Some(tree.add_label(
+                None,
                 0.0,
                 -100.0,
                 ghost_w,
@@ -917,9 +915,9 @@ impl InspectorCompositePanel {
                     corner_radius: 4.0,
                     ..UIStyle::default()
                 },
-            ) as i32;
-            self.card_drag_indicator_id = tree.add_panel(
-                -1,
+            ));
+            self.card_drag_indicator_id = Some(tree.add_panel(
+                None,
                 col_x + DRAG_INDICATOR_INSET,
                 -100.0,
                 col_w - DRAG_INDICATOR_INSET * 2.0,
@@ -929,7 +927,7 @@ impl InspectorCompositePanel {
                     corner_radius: 1.0,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            ));
 
             return true;
         }
@@ -959,9 +957,9 @@ impl InspectorCompositePanel {
         );
         let ghost_y = (pos.y - DRAG_GHOST_H * 0.5).clamp(vp.y, vp.y + vp.height - DRAG_GHOST_H);
 
-        if self.card_drag_ghost_id >= 0 {
+        if let Some(ghost_id) = self.card_drag_ghost_id {
             tree.set_bounds(
-                self.card_drag_ghost_id as u32,
+                ghost_id,
                 Rect::new(ghost_x, ghost_y, ghost_w, DRAG_GHOST_H),
             );
         }
@@ -993,9 +991,9 @@ impl InspectorCompositePanel {
         };
         self.card_drag_target_index = target;
 
-        if self.card_drag_indicator_id >= 0 {
+        if let Some(indicator_id) = self.card_drag_indicator_id {
             tree.set_bounds(
-                self.card_drag_indicator_id as u32,
+                indicator_id,
                 Rect::new(
                     col_x + DRAG_INDICATOR_INSET,
                     indicator_y - DRAG_INDICATOR_H * 0.5,
@@ -1053,22 +1051,16 @@ impl InspectorCompositePanel {
         };
 
         // Hide ghost + indicator (move offscreen)
-        if self.card_drag_ghost_id >= 0 {
-            tree.set_bounds(
-                self.card_drag_ghost_id as u32,
-                Rect::new(0.0, -100.0, 0.0, 0.0),
-            );
+        if let Some(ghost_id) = self.card_drag_ghost_id {
+            tree.set_bounds(ghost_id, Rect::new(0.0, -100.0, 0.0, 0.0));
         }
-        if self.card_drag_indicator_id >= 0 {
-            tree.set_bounds(
-                self.card_drag_indicator_id as u32,
-                Rect::new(0.0, -100.0, 0.0, 0.0),
-            );
+        if let Some(indicator_id) = self.card_drag_indicator_id {
+            tree.set_bounds(indicator_id, Rect::new(0.0, -100.0, 0.0, 0.0));
         }
 
         self.card_drag_active = false;
-        self.card_drag_ghost_id = -1;
-        self.card_drag_indicator_id = -1;
+        self.card_drag_ghost_id = None;
+        self.card_drag_indicator_id = None;
 
         if is_multi {
             // Multi-select: move all selected effects as a group
@@ -1095,9 +1087,10 @@ impl InspectorCompositePanel {
 
     /// Find which card's drag handle matches the given node_id.
     /// Returns (tab, card_index_in_vec, effect_index, effect_name).
-    fn find_drag_handle(&self, node_id: u32) -> Option<(InspectorTab, usize, usize, String)> {
+    fn find_drag_handle(&self, node_id: NodeId) -> Option<(InspectorTab, usize, usize, String)> {
         if self.master_visible {
             for (i, card) in self.master_effects.iter().enumerate() {
+                // ParamCardPanel::is_drag_handle still takes raw u32 (not yet converted).
                 if card.is_drag_handle(node_id) {
                     return Some((
                         InspectorTab::Master,
@@ -1164,13 +1157,12 @@ impl InspectorCompositePanel {
         }
     }
 
-    fn route_click(&mut self, node_id: u32, modifiers: Modifiers) -> Vec<PanelAction> {
-        let id = node_id as i32;
+    fn route_click(&mut self, node_id: NodeId, modifiers: Modifiers) -> Vec<PanelAction> {
         // Add Effect buttons
-        if id == self.add_master_effect_btn && id >= 0 {
+        if self.add_master_effect_btn == Some(node_id) {
             return vec![PanelAction::AddEffectClicked(InspectorTab::Master)];
         }
-        if id == self.add_layer_effect_btn && id >= 0 {
+        if self.add_layer_effect_btn == Some(node_id) {
             return vec![PanelAction::AddEffectClicked(InspectorTab::Layer)];
         }
         if let Some(target) = self.find_target_for_node(node_id) {
@@ -1251,7 +1243,7 @@ impl InspectorCompositePanel {
 
     fn route_pointer_down(
         &mut self,
-        node_id: u32,
+        node_id: NodeId,
         pos: Vec2,
         modifiers: Modifiers,
     ) -> Vec<PanelAction> {
@@ -1293,8 +1285,12 @@ impl InspectorCompositePanel {
 
             let mut actions = match target {
                 PressedTarget::Macros => self.macros_panel.handle_press(node_id, pos.x),
-                PressedTarget::MasterChrome => self.master_chrome.handle_pointer_down(node_id, pos),
-                PressedTarget::LayerChrome => self.layer_chrome.handle_pointer_down(node_id, pos),
+                PressedTarget::MasterChrome => {
+                    self.master_chrome.handle_pointer_down(node_id, pos)
+                }
+                PressedTarget::LayerChrome => {
+                    self.layer_chrome.handle_pointer_down(node_id, pos)
+                }
                 PressedTarget::ClipChrome => self.clip_chrome.handle_pointer_down(node_id, pos),
                 PressedTarget::MasterEffect(i) => self
                     .master_effects
@@ -1313,9 +1309,8 @@ impl InspectorCompositePanel {
                     .unwrap_or_default(),
                 PressedTarget::Scrollbar => {
                     self.dragging_scrollbar = true;
-                    let id = node_id as i32;
-                    self.dragging_scrollbar_master =
-                        id == self.master_scroll.track_id() || id == self.master_scroll.thumb_id();
+                    self.dragging_scrollbar_master = Some(node_id) == self.master_scroll.track_id()
+                        || Some(node_id) == self.master_scroll.thumb_id();
                     Vec::new()
                 }
             };
@@ -1352,8 +1347,8 @@ impl Panel for InspectorCompositePanel {
         self.column_split_x = right_x;
 
         // Background panel
-        self.bg_panel_id = tree.add_panel(
-            -1,
+        self.bg_panel_id = Some(tree.add_panel(
+            None,
             rect.x,
             rect.y,
             rect.width,
@@ -1362,7 +1357,7 @@ impl Panel for InspectorCompositePanel {
                 bg_color: color::INSPECTOR_BG,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
         // Macros height for column offset — panel built AFTER columns for z-order
         let macros_h = self.macros_panel.height();
@@ -1381,7 +1376,7 @@ impl Panel for InspectorCompositePanel {
             if self.master_visible {
                 let section_h = self.master_column_height();
                 tree.add_panel(
-                    -1,
+                    None,
                     left_x,
                     cy,
                     left_content_w,
@@ -1393,7 +1388,7 @@ impl Panel for InspectorCompositePanel {
                     },
                 );
                 tree.add_panel(
-                    -1,
+                    None,
                     left_x + 1.0,
                     cy + 1.0,
                     left_content_w - 2.0,
@@ -1420,8 +1415,8 @@ impl Panel for InspectorCompositePanel {
                         card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
                         cy += card_h + SECTION_GAP;
                     }
-                    self.add_master_effect_btn = tree.add_button(
-                        -1,
+                    self.add_master_effect_btn = Some(tree.add_button(
+                        None,
                         inner_x,
                         cy,
                         inner_w,
@@ -1436,7 +1431,7 @@ impl Panel for InspectorCompositePanel {
                             ..UIStyle::default()
                         },
                         "+ Add Effect",
-                    ) as i32;
+                    ));
                 }
             }
         }
@@ -1456,7 +1451,7 @@ impl Panel for InspectorCompositePanel {
             if self.layer_visible {
                 let section_h = self.layer_column_height();
                 tree.add_panel(
-                    -1,
+                    None,
                     right_x,
                     cy,
                     right_content_w,
@@ -1468,7 +1463,7 @@ impl Panel for InspectorCompositePanel {
                     },
                 );
                 tree.add_panel(
-                    -1,
+                    None,
                     right_x + 1.0,
                     cy + 1.0,
                     right_content_w - 2.0,
@@ -1501,8 +1496,8 @@ impl Panel for InspectorCompositePanel {
                         card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
                         cy += card_h + SECTION_GAP;
                     }
-                    self.add_layer_effect_btn = tree.add_button(
-                        -1,
+                    self.add_layer_effect_btn = Some(tree.add_button(
+                        None,
                         inner_x,
                         cy,
                         inner_w,
@@ -1517,7 +1512,7 @@ impl Panel for InspectorCompositePanel {
                             ..UIStyle::default()
                         },
                         "+ Add Effect",
-                    ) as i32;
+                    ));
                 }
             }
 
@@ -1528,7 +1523,7 @@ impl Panel for InspectorCompositePanel {
                 let section_h =
                     SECTION_CARD_PAD + self.clip_chrome.compute_height() + SECTION_CARD_PAD;
                 tree.add_panel(
-                    -1,
+                    None,
                     right_x,
                     clip_top,
                     right_content_w,
@@ -1540,7 +1535,7 @@ impl Panel for InspectorCompositePanel {
                     },
                 );
                 tree.add_panel(
-                    -1,
+                    None,
                     right_x + 1.0,
                     clip_top + 1.0,
                     right_content_w - 2.0,
@@ -1688,9 +1683,9 @@ mod tests {
         let layout = inspector_layout();
         panel.build(&mut tree, &layout);
 
-        assert!(panel.bg_panel_id >= 0);
-        assert!(panel.layer_scroll.track_id() >= 0);
-        assert!(panel.layer_scroll.thumb_id() >= 0);
+        assert!(panel.bg_panel_id.is_some());
+        assert!(panel.layer_scroll.track_id().is_some());
+        assert!(panel.layer_scroll.thumb_id().is_some());
         assert!(tree.count() > 0);
     }
 
@@ -1703,7 +1698,7 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         // Nothing built when inspector is closed
-        assert_eq!(panel.bg_panel_id, -1);
+        assert_eq!(panel.bg_panel_id, None);
     }
 
     #[test]
@@ -1744,7 +1739,8 @@ mod tests {
         let layout = inspector_layout();
         panel.build(&mut tree, &layout);
 
-        let target = panel.find_target_for_node(panel.layer_scroll.track_id() as u32);
+        let target =
+            panel.find_target_for_node(panel.layer_scroll.track_id().unwrap());
         assert!(matches!(target, Some(PressedTarget::Scrollbar)));
     }
 
@@ -1758,7 +1754,8 @@ mod tests {
         // The master chrome's chevron button should route to MasterChrome
         let first = panel.master_chrome.first_node();
         if panel.master_chrome.node_count() > 0 {
-            let target = panel.find_target_for_node(first as u32);
+            // first_node() is a usize node-index range start (not yet converted).
+            let target = panel.find_target_for_node(NodeId(first as u32));
             assert!(matches!(target, Some(PressedTarget::MasterChrome)));
         }
     }
@@ -1772,8 +1769,11 @@ mod tests {
 
         // Find the master chrome's chevron button and simulate click
         // We can test via route_click
-        let actions =
-            panel.route_click(panel.master_chrome.first_node() as u32 + 1, Modifiers::NONE);
+        // first_node() is a usize node-index range start (not yet converted).
+        let actions = panel.route_click(
+            NodeId(panel.master_chrome.first_node() as u32 + 1),
+            Modifiers::NONE,
+        );
         // Node at first_node+1 is the chevron button in master chrome build order
         // This should return MasterCollapseToggle
         if !actions.is_empty() {
@@ -1790,8 +1790,8 @@ mod tests {
 
         assert!(!panel.is_dragging());
 
-        // Simulate scrollbar pointer down
-        let sb_id = panel.layer_scroll.thumb_id() as u32;
+        // Simulate scrollbar pointer down.
+        let sb_id = panel.layer_scroll.thumb_id().unwrap();
         let pos = Vec2::new(280.0, 100.0);
         panel.route_pointer_down(sb_id, pos, crate::input::Modifiers::NONE);
 

@@ -12,7 +12,7 @@ use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
-use crate::node::{Color32, Rect, TextAlign, UIStyle};
+use crate::node::{Color32, NodeId, Rect, TextAlign, UIStyle};
 use crate::tree::UITree;
 use crate::waveform_painter;
 use crate::waveform_renderer::WaveformRenderer;
@@ -42,23 +42,14 @@ const BUTTON_SPACING: f32 = 2.0;
 
 /// UITree node IDs for a single stem lane.
 #[derive(Clone, Copy)]
+#[derive(Default)]
 struct StemLaneNodeIds {
-    overlay_id: i32,
-    name_label_id: i32,
-    mute_btn_id: i32,
-    solo_btn_id: i32,
+    overlay_id: Option<NodeId>,
+    name_label_id: Option<NodeId>,
+    mute_btn_id: Option<NodeId>,
+    solo_btn_id: Option<NodeId>,
 }
 
-impl Default for StemLaneNodeIds {
-    fn default() -> Self {
-        Self {
-            overlay_id: -1,
-            name_label_id: -1,
-            mute_btn_id: -1,
-            solo_btn_id: -1,
-        }
-    }
-}
 
 /// State for a single stem lane.
 ///
@@ -98,7 +89,7 @@ pub struct StemLaneGroupPanel {
     bpm: f32,
 
     // ── UITree node IDs ──
-    first_node: usize,
+    first_node: Option<NodeId>,
     lane_nodes: [StemLaneNodeIds; STEM_COUNT],
 }
 
@@ -125,7 +116,7 @@ impl StemLaneGroupPanel {
             waveform_start_beat: 0.0,
             scroll_offset_x: 0.0,
             bpm: 120.0,
-            first_node: usize::MAX,
+            first_node: None,
             lane_nodes: [StemLaneNodeIds::default(); STEM_COUNT],
         }
     }
@@ -211,13 +202,15 @@ impl StemLaneGroupPanel {
 
     /// First node index in the tree (for overlay rendering).
     pub fn first_node(&self) -> usize {
-        self.first_node
+        // Boundary: inspector.rs builds usize index-ranges (`first != usize::MAX`)
+        // shared across all panels' first_node()/node_count(); it stays usize.
+        self.first_node.map_or(usize::MAX, |id| id.index())
     }
 
     /// Build UITree nodes for interactive elements (overlays + buttons + labels).
     /// Called from UIRoot after viewport.build() so screen_rect is available.
     pub fn build_nodes(&mut self, tree: &mut UITree, screen_rect: Rect) {
-        self.first_node = tree.count();
+        self.first_node = Some(NodeId(tree.count() as u32));
         let lane_h = color::STEM_LANE_HEIGHT;
 
         #[allow(clippy::needless_range_loop)] // index used for lane_nodes[] and positioning
@@ -225,8 +218,8 @@ impl StemLaneGroupPanel {
             let lane_y = screen_rect.y + i as f32 * lane_h;
 
             // Transparent scrub overlay covering entire stem lane.
-            self.lane_nodes[i].overlay_id = tree.add_button(
-                -1,
+            self.lane_nodes[i].overlay_id = Some(tree.add_button(
+                None,
                 screen_rect.x,
                 lane_y,
                 screen_rect.width,
@@ -236,12 +229,12 @@ impl StemLaneGroupPanel {
                     ..UIStyle::default()
                 },
                 "",
-            ) as i32;
+            ));
 
             // Stem name label (top-left header area).
             // Unity: fontSize=9, MiddleLeft, color=(0.65, 0.65, 0.65).
-            self.lane_nodes[i].name_label_id = tree.add_label(
-                -1,
+            self.lane_nodes[i].name_label_id = Some(tree.add_label(
+                None,
                 screen_rect.x + HEADER_X,
                 lane_y + 2.0,
                 52.0,
@@ -253,30 +246,30 @@ impl StemLaneGroupPanel {
                     text_align: TextAlign::Left,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            ));
 
             // Mute button ("M") — bottom half of header area.
             let btn_y = lane_y + lane_h / 2.0 + 1.0;
-            self.lane_nodes[i].mute_btn_id = tree.add_button(
-                -1,
+            self.lane_nodes[i].mute_btn_id = Some(tree.add_button(
+                None,
                 screen_rect.x + HEADER_X,
                 btn_y,
                 MUTE_SOLO_BTN_W,
                 MUTE_SOLO_BTN_H,
                 mute_btn_style(false),
                 "M",
-            ) as i32;
+            ));
 
             // Solo button ("S") — next to mute.
-            self.lane_nodes[i].solo_btn_id = tree.add_button(
-                -1,
+            self.lane_nodes[i].solo_btn_id = Some(tree.add_button(
+                None,
                 screen_rect.x + HEADER_X + MUTE_SOLO_BTN_W + BUTTON_SPACING,
                 btn_y,
                 MUTE_SOLO_BTN_W,
                 MUTE_SOLO_BTN_H,
                 solo_btn_style(false),
                 "S",
-            ) as i32;
+            ));
         }
 
         // Initially hidden (shown when expanded).
@@ -290,11 +283,11 @@ impl StemLaneGroupPanel {
         // Update mute/solo button colors based on state.
         for (i, lane) in self.lanes.iter().enumerate() {
             let ids = &self.lane_nodes[i];
-            if ids.mute_btn_id >= 0 {
-                tree.set_style(ids.mute_btn_id as u32, mute_btn_style(lane.is_muted));
+            if let Some(id) = ids.mute_btn_id {
+                tree.set_style(id, mute_btn_style(lane.is_muted));
             }
-            if ids.solo_btn_id >= 0 {
-                tree.set_style(ids.solo_btn_id as u32, solo_btn_style(lane.is_soloed));
+            if let Some(id) = ids.solo_btn_id {
+                tree.set_style(id, solo_btn_style(lane.is_soloed));
             }
         }
     }
@@ -302,28 +295,28 @@ impl StemLaneGroupPanel {
     fn apply_node_visibility(&self, tree: &mut UITree) {
         for ids in &self.lane_nodes {
             let vis = self.expanded;
-            if ids.overlay_id >= 0 {
-                tree.set_visible(ids.overlay_id as u32, vis);
+            if let Some(id) = ids.overlay_id {
+                tree.set_visible(id, vis);
             }
-            if ids.name_label_id >= 0 {
-                tree.set_visible(ids.name_label_id as u32, vis);
+            if let Some(id) = ids.name_label_id {
+                tree.set_visible(id, vis);
             }
-            if ids.mute_btn_id >= 0 {
-                tree.set_visible(ids.mute_btn_id as u32, vis);
+            if let Some(id) = ids.mute_btn_id {
+                tree.set_visible(id, vis);
             }
-            if ids.solo_btn_id >= 0 {
-                tree.set_visible(ids.solo_btn_id as u32, vis);
+            if let Some(id) = ids.solo_btn_id {
+                tree.set_visible(id, vis);
             }
         }
     }
 
     /// Returns true if the given node_id belongs to this panel.
-    pub fn owns_node(&self, node_id: i32) -> bool {
+    pub fn owns_node(&self, node_id: NodeId) -> bool {
         for ids in &self.lane_nodes {
-            if node_id == ids.overlay_id
-                || node_id == ids.name_label_id
-                || node_id == ids.mute_btn_id
-                || node_id == ids.solo_btn_id
+            if ids.overlay_id == Some(node_id)
+                || ids.name_label_id == Some(node_id)
+                || ids.mute_btn_id == Some(node_id)
+                || ids.solo_btn_id == Some(node_id)
             {
                 return true;
             }
@@ -470,14 +463,14 @@ impl Panel for StemLaneGroupPanel {
 
         match event {
             UIEvent::Click { node_id, pos, .. } => {
-                let id = *node_id as i32;
+                let id = *node_id;
                 // Check mute/solo buttons by node ID.
                 for (i, ids) in self.lane_nodes.iter().enumerate() {
-                    if id == ids.mute_btn_id {
+                    if ids.mute_btn_id == Some(id) {
                         actions.push(PanelAction::StemMuteToggled(i));
                         return actions;
                     }
-                    if id == ids.solo_btn_id {
+                    if ids.solo_btn_id == Some(id) {
                         actions.push(PanelAction::StemSoloToggled(i));
                         return actions;
                     }
@@ -486,10 +479,10 @@ impl Panel for StemLaneGroupPanel {
                 actions.push(PanelAction::WaveformScrub(pos.x, pos.y));
             }
             UIEvent::PointerDown { node_id, pos, .. } => {
-                let id = *node_id as i32;
+                let id = *node_id;
                 // Scrub only on overlay nodes (not on buttons).
                 for ids in &self.lane_nodes {
-                    if id == ids.overlay_id {
+                    if ids.overlay_id == Some(id) {
                         actions.push(PanelAction::WaveformScrub(pos.x, pos.y));
                         return actions;
                     }

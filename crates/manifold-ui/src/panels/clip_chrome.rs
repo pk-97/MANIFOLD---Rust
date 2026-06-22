@@ -69,31 +69,31 @@ pub struct DetectionView {
 
 pub struct ClipChromePanel {
     // Node IDs
-    header_label_id: i32,
-    chevron_btn_id: i32,
-    name_label_id: i32,
-    source_section_label_id: i32,
-    source_name_label_id: i32,
-    bpm_label_id: i32,
-    bpm_value_btn_id: i32,
-    warp_toggle_btn_id: i32,
-    loop_toggle_btn_id: i32,
-    detect_btn_id: i32,
-    clear_triggers_btn_id: i32,
-    detect_status_label_id: i32,
-    detect_progress_bg_id: i32,
-    detect_progress_fill_id: i32,
+    header_label_id: Option<NodeId>,
+    chevron_btn_id: Option<NodeId>,
+    name_label_id: Option<NodeId>,
+    source_section_label_id: Option<NodeId>,
+    source_name_label_id: Option<NodeId>,
+    bpm_label_id: Option<NodeId>,
+    bpm_value_btn_id: Option<NodeId>,
+    warp_toggle_btn_id: Option<NodeId>,
+    loop_toggle_btn_id: Option<NodeId>,
+    detect_btn_id: Option<NodeId>,
+    clear_triggers_btn_id: Option<NodeId>,
+    detect_status_label_id: Option<NodeId>,
+    detect_progress_bg_id: Option<NodeId>,
+    detect_progress_fill_id: Option<NodeId>,
     detect_progress_bg_rect: Rect,
-    quantize_dropdown_id: i32,
+    quantize_dropdown_id: Option<NodeId>,
     onset_slider: SliderDragState,
-    instrument_enable_btn_ids: Vec<i32>,
+    instrument_enable_btn_ids: Vec<Option<NodeId>>,
     /// Per-instrument sensitivity drag sliders (same widget as the cards).
     instrument_sens_sliders: Vec<SliderDragState>,
     /// Per-instrument target-layer dropdown triggers.
-    instrument_layer_btn_ids: Vec<i32>,
-    gen_type_label_id: i32,
-    effects_label_id: i32,
-    divider_ids: [i32; 3],
+    instrument_layer_btn_ids: Vec<Option<NodeId>>,
+    gen_type_label_id: Option<NodeId>,
+    effects_label_id: Option<NodeId>,
+    divider_ids: [Option<NodeId>; 3],
 
     // State
     is_collapsed: bool,
@@ -126,29 +126,29 @@ pub struct ClipChromePanel {
 impl ClipChromePanel {
     pub fn new() -> Self {
         Self {
-            header_label_id: -1,
-            chevron_btn_id: -1,
-            name_label_id: -1,
-            source_section_label_id: -1,
-            source_name_label_id: -1,
-            bpm_label_id: -1,
-            bpm_value_btn_id: -1,
-            warp_toggle_btn_id: -1,
-            loop_toggle_btn_id: -1,
-            detect_btn_id: -1,
-            clear_triggers_btn_id: -1,
-            detect_status_label_id: -1,
-            detect_progress_bg_id: -1,
-            detect_progress_fill_id: -1,
+            header_label_id: None,
+            chevron_btn_id: None,
+            name_label_id: None,
+            source_section_label_id: None,
+            source_name_label_id: None,
+            bpm_label_id: None,
+            bpm_value_btn_id: None,
+            warp_toggle_btn_id: None,
+            loop_toggle_btn_id: None,
+            detect_btn_id: None,
+            clear_triggers_btn_id: None,
+            detect_status_label_id: None,
+            detect_progress_fill_id: None,
+            detect_progress_bg_id: None,
             detect_progress_bg_rect: Rect::ZERO,
-            quantize_dropdown_id: -1,
+            quantize_dropdown_id: None,
             onset_slider: SliderDragState::with_range(ONSET_MIN_MS, ONSET_MAX_MS, true),
             instrument_enable_btn_ids: Vec::new(),
             instrument_sens_sliders: Vec::new(),
             instrument_layer_btn_ids: Vec::new(),
-            gen_type_label_id: -1,
-            effects_label_id: -1,
-            divider_ids: [-1; 3],
+            gen_type_label_id: None,
+            effects_label_id: None,
+            divider_ids: [None; 3],
             is_collapsed: false,
             has_clip: false,
             mode_video: false,
@@ -273,14 +273,14 @@ impl ClipChromePanel {
         let bpm_text = self.cached_bpm_text.clone();
         let gen_type = self.cached_gen_type.clone();
 
-        self.header_label_id = -1;
-        self.chevron_btn_id = -1;
+        self.header_label_id = None;
+        self.chevron_btn_id = None;
 
         let mut div_idx = 0;
 
         // Name row
-        self.name_label_id = tree.add_label(
-            -1,
+        self.name_label_id = Some(tree.add_label(
+            None,
             cx,
             cy,
             content_w,
@@ -292,13 +292,13 @@ impl ClipChromePanel {
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
         cy += NAME_ROW_H;
 
         if self.has_clip {
             // Divider
-            self.divider_ids[div_idx] = tree.add_panel(
-                -1,
+            self.divider_ids[div_idx] = Some(tree.add_panel(
+                None,
                 cx,
                 cy,
                 content_w,
@@ -307,7 +307,7 @@ impl ClipChromePanel {
                     bg_color: color::DIVIDER_C32,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            ));
             div_idx += 1;
             cy += DIVIDER_H;
 
@@ -321,8 +321,8 @@ impl ClipChromePanel {
 
             // Divider before effects label
             if div_idx < 3 {
-                self.divider_ids[div_idx] = tree.add_panel(
-                    -1,
+                self.divider_ids[div_idx] = Some(tree.add_panel(
+                    None,
                     cx,
                     cy,
                     content_w,
@@ -331,13 +331,13 @@ impl ClipChromePanel {
                         bg_color: color::DIVIDER_C32,
                         ..UIStyle::default()
                     },
-                ) as i32;
+                ));
             }
             cy += DIVIDER_H;
 
             // Effects section label
-            self.effects_label_id = tree.add_label(
-                -1,
+            self.effects_label_id = Some(tree.add_label(
+                None,
                 cx,
                 cy,
                 content_w,
@@ -349,7 +349,7 @@ impl ClipChromePanel {
                     text_align: TextAlign::Left,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            ));
         }
 
         self.node_count = tree.count() - self.first_node;
@@ -365,8 +365,8 @@ impl ClipChromePanel {
         bpm_text: &str,
     ) -> f32 {
         // "Source" section label
-        self.source_section_label_id = tree.add_label(
-            -1,
+        self.source_section_label_id = Some(tree.add_label(
+            None,
             cx,
             cy,
             w,
@@ -378,12 +378,12 @@ impl ClipChromePanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
         cy += SECTION_LABEL_H;
 
         // Source name
-        self.source_name_label_id = tree.add_label(
-            -1,
+        self.source_name_label_id = Some(tree.add_label(
+            None,
             cx + SOURCE_LABEL_W + GAP,
             cy,
             (w - SOURCE_LABEL_W - GAP).max(10.0),
@@ -395,12 +395,12 @@ impl ClipChromePanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
         cy += SMALL_ROW_H;
 
         // BPM row
-        self.bpm_label_id = tree.add_label(
-            -1,
+        self.bpm_label_id = Some(tree.add_label(
+            None,
             cx,
             cy,
             BPM_LABEL_W,
@@ -412,11 +412,11 @@ impl ClipChromePanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
         let bpm_btn_w = (w - BPM_LABEL_W - GAP).max(20.0);
-        self.bpm_value_btn_id = tree.add_button(
-            -1,
+        self.bpm_value_btn_id = Some(tree.add_button(
+            None,
             cx + BPM_LABEL_W + GAP,
             cy + (BPM_ROW_H - 18.0) * 0.5,
             bpm_btn_w,
@@ -432,7 +432,7 @@ impl ClipChromePanel {
                 ..UIStyle::default()
             },
             bpm_text,
-        ) as i32;
+        ));
         cy += BPM_ROW_H;
 
         // Loop toggle button
@@ -441,8 +441,8 @@ impl ClipChromePanel {
         } else {
             LOOP_OFF_COLOR
         };
-        self.loop_toggle_btn_id = tree.add_button(
-            -1,
+        self.loop_toggle_btn_id = Some(tree.add_button(
+            None,
             cx,
             cy,
             w,
@@ -462,7 +462,7 @@ impl ClipChromePanel {
             } else {
                 "Loop OFF"
             },
-        ) as i32;
+        ));
         cy += LOOP_BUTTON_H;
 
         cy
@@ -481,8 +481,8 @@ impl ClipChromePanel {
         bpm_text: &str,
     ) -> f32 {
         // "Source" section label
-        self.source_section_label_id = tree.add_label(
-            -1,
+        self.source_section_label_id = Some(tree.add_label(
+            None,
             cx,
             cy,
             w,
@@ -494,12 +494,12 @@ impl ClipChromePanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
         cy += SECTION_LABEL_H;
 
         // File name
-        self.source_name_label_id = tree.add_label(
-            -1,
+        self.source_name_label_id = Some(tree.add_label(
+            None,
             cx,
             cy,
             w,
@@ -511,7 +511,7 @@ impl ClipChromePanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
         cy += SMALL_ROW_H;
 
         // Warp toggle — on locks the clip's bars to the project tempo (varispeed
@@ -522,8 +522,8 @@ impl ClipChromePanel {
         } else {
             LOOP_OFF_COLOR
         };
-        self.warp_toggle_btn_id = tree.add_button(
-            -1,
+        self.warp_toggle_btn_id = Some(tree.add_button(
+            None,
             cx,
             cy,
             w,
@@ -543,12 +543,12 @@ impl ClipChromePanel {
             } else {
                 "Warp OFF"
             },
-        ) as i32;
+        ));
         cy += LOOP_BUTTON_H;
 
         // Clip-BPM row
-        self.bpm_label_id = tree.add_label(
-            -1,
+        self.bpm_label_id = Some(tree.add_label(
+            None,
             cx,
             cy,
             BPM_LABEL_W,
@@ -560,11 +560,11 @@ impl ClipChromePanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
         let bpm_btn_w = (w - BPM_LABEL_W - GAP).max(20.0);
-        self.bpm_value_btn_id = tree.add_button(
-            -1,
+        self.bpm_value_btn_id = Some(tree.add_button(
+            None,
             cx + BPM_LABEL_W + GAP,
             cy + (BPM_ROW_H - 18.0) * 0.5,
             bpm_btn_w,
@@ -580,13 +580,13 @@ impl ClipChromePanel {
                 ..UIStyle::default()
             },
             bpm_text,
-        ) as i32;
+        ));
         cy += BPM_ROW_H;
 
         // ── Detection section ──
         // "Detection" section label
         tree.add_label(
-            -1,
+            None,
             cx,
             cy,
             w,
@@ -602,8 +602,8 @@ impl ClipChromePanel {
         cy += SECTION_LABEL_H;
 
         // Status line — what the pipeline is doing right now (or last result).
-        self.detect_status_label_id = tree.add_label(
-            -1,
+        self.detect_status_label_id = Some(tree.add_label(
+            None,
             cx,
             cy,
             w,
@@ -615,13 +615,13 @@ impl ClipChromePanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
         cy += SMALL_ROW_H;
 
         // Progress bar — track + fill. Width of the fill is set in sync.
         self.detect_progress_bg_rect = Rect::new(cx, cy, w, PROGRESS_H);
-        self.detect_progress_bg_id = tree.add_panel(
-            -1,
+        let progress_bg_id = tree.add_panel(
+            None,
             cx,
             cy,
             w,
@@ -631,10 +631,11 @@ impl ClipChromePanel {
                 corner_radius: color::SMALL_RADIUS,
                 ..UIStyle::default()
             },
-        ) as i32;
+        );
+        self.detect_progress_bg_id = Some(progress_bg_id);
         let fill_w = (w * self.cached_detect_progress.clamp(0.0, 1.0)).max(0.0);
-        self.detect_progress_fill_id = tree.add_panel(
-            -1,
+        let progress_fill_id = tree.add_panel(
+            None,
             cx,
             cy,
             fill_w,
@@ -644,13 +645,10 @@ impl ClipChromePanel {
                 corner_radius: color::SMALL_RADIUS,
                 ..UIStyle::default()
             },
-        ) as i32;
-        if self.detect_progress_bg_id >= 0 {
-            tree.set_visible(self.detect_progress_bg_id as u32, self.cached_detect_show);
-        }
-        if self.detect_progress_fill_id >= 0 {
-            tree.set_visible(self.detect_progress_fill_id as u32, self.cached_detect_show);
-        }
+        );
+        self.detect_progress_fill_id = Some(progress_fill_id);
+        tree.set_visible(progress_bg_id, self.cached_detect_show);
+        tree.set_visible(progress_fill_id, self.cached_detect_show);
         cy += PROGRESS_H;
 
         // Detect and Group button — runs analysis on the clip's file, then splits
@@ -664,8 +662,8 @@ impl ClipChromePanel {
         } else {
             "Detect and Group"
         };
-        self.detect_btn_id = tree.add_button(
-            -1,
+        self.detect_btn_id = Some(tree.add_button(
+            None,
             cx,
             cy,
             w,
@@ -681,19 +679,19 @@ impl ClipChromePanel {
                 ..UIStyle::default()
             },
             detect_label,
-        ) as i32;
+        ));
         cy += LOOP_BUTTON_H;
 
         // Quantize grid + onset row: quantize dropdown (left half), onset slider
         // (right half). Both re-plan from the cache on change.
         let half = (w - GAP) * 0.5;
-        self.quantize_dropdown_id = build_dropdown_trigger(
+        self.quantize_dropdown_id = Some(build_dropdown_trigger(
             tree,
-            -1,
+            None,
             Rect::new(cx, cy + (QO_ROW_H - 18.0) * 0.5, half, 18.0),
             &format!("Grid {}", self.cached_quantize_label),
             SMALL_FONT_SIZE,
-        );
+        ));
         // Onset slider — the same widget the effect cards use, here mapping a
         // bipolar ±ms compensation.
         self.onset_slider.clear();
@@ -702,7 +700,7 @@ impl ClipChromePanel {
             BitmapSlider::value_to_normalized(self.cached_onset_ms, ONSET_MIN_MS, ONSET_MAX_MS);
         let onset_ids = BitmapSlider::build(
             tree,
-            -1,
+            None,
             onset_rect,
             Some("Onset"),
             onset_norm,
@@ -730,7 +728,7 @@ impl ClipChromePanel {
             // Enable toggle (square, filled when on).
             let en_base = if inst.enabled { LOOP_ON_COLOR } else { LOOP_OFF_COLOR };
             let en_id = tree.add_button(
-                -1,
+                None,
                 cx,
                 toggle_y,
                 TOGGLE_W,
@@ -746,15 +744,15 @@ impl ClipChromePanel {
                     ..UIStyle::default()
                 },
                 if inst.enabled { "\u{2713}" } else { "" },
-            ) as i32;
-            self.instrument_enable_btn_ids.push(en_id);
+            );
+            self.instrument_enable_btn_ids.push(Some(en_id));
 
             let after_toggle = cx + TOGGLE_W + GAP;
 
             if !inst.enabled {
                 // Collapsed line: just the dimmed name.
                 tree.add_label(
-                    -1,
+                    None,
                     after_toggle,
                     cy,
                     w - TOGGLE_W - GAP,
@@ -767,7 +765,7 @@ impl ClipChromePanel {
                         ..UIStyle::default()
                     },
                 );
-                self.instrument_layer_btn_ids.push(-1);
+                self.instrument_layer_btn_ids.push(None);
                 cy += row_h;
                 continue;
             }
@@ -780,7 +778,7 @@ impl ClipChromePanel {
             let mut x = after_toggle;
 
             tree.add_label(
-                -1,
+                None,
                 x,
                 cy,
                 name_w,
@@ -799,7 +797,7 @@ impl ClipChromePanel {
             let sens_norm = inst.sensitivity.clamp(0.0, 1.0);
             let sens_ids = BitmapSlider::build(
                 tree,
-                -1,
+                None,
                 Rect::new(x, cy, slider_w, row_h),
                 None,
                 sens_norm,
@@ -815,7 +813,7 @@ impl ClipChromePanel {
 
             // Count of placed triggers.
             tree.add_label(
-                -1,
+                None,
                 x,
                 cy,
                 count_w,
@@ -833,20 +831,20 @@ impl ClipChromePanel {
             // Target-layer dropdown.
             let layer_id = build_dropdown_trigger(
                 tree,
-                -1,
+                None,
                 Rect::new(x, cy + (row_h - 16.0) * 0.5, layer_w, 16.0),
                 &inst.layer_label,
                 color::FONT_CAPTION,
             );
-            self.instrument_layer_btn_ids.push(layer_id);
+            self.instrument_layer_btn_ids.push(Some(layer_id));
 
             cy += row_h;
         }
 
         // Clear button — removes only this clip's own triggers. Sits at the
         // bottom as a secondary action.
-        self.clear_triggers_btn_id = tree.add_button(
-            -1,
+        self.clear_triggers_btn_id = Some(tree.add_button(
+            None,
             cx,
             cy,
             w,
@@ -862,7 +860,7 @@ impl ClipChromePanel {
                 ..UIStyle::default()
             },
             "Clear Triggers",
-        ) as i32;
+        ));
         cy += LOOP_BUTTON_H;
 
         cy
@@ -877,8 +875,8 @@ impl ClipChromePanel {
         gen_type: &str,
     ) -> f32 {
         let label = format!("Type: {}", gen_type);
-        self.gen_type_label_id = tree.add_label(
-            -1,
+        self.gen_type_label_id = Some(tree.add_label(
+            None,
             cx,
             cy,
             w,
@@ -890,7 +888,7 @@ impl ClipChromePanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
         cy + SMALL_ROW_H
     }
 
@@ -898,25 +896,22 @@ impl ClipChromePanel {
 
     pub fn sync_name(&mut self, tree: &mut UITree, name: &str) {
         self.cached_name = name.into();
-        if self.name_label_id >= 0 {
-            tree.set_text(self.name_label_id as u32, name);
+        if let Some(id) = self.name_label_id {
+            tree.set_text(id, name);
         }
     }
 
     pub fn sync_collapsed(&mut self, tree: &mut UITree, collapsed: bool) {
         self.is_collapsed = collapsed;
-        if self.chevron_btn_id >= 0 {
-            tree.set_text(
-                self.chevron_btn_id as u32,
-                if collapsed { "\u{25B6}" } else { "\u{25BC}" },
-            );
+        if let Some(id) = self.chevron_btn_id {
+            tree.set_text(id, if collapsed { "\u{25B6}" } else { "\u{25BC}" });
         }
     }
 
     pub fn sync_source_name(&mut self, tree: &mut UITree, name: &str) {
         self.cached_source_name = name.into();
-        if self.source_name_label_id >= 0 {
-            tree.set_text(self.source_name_label_id as u32, name);
+        if let Some(id) = self.source_name_label_id {
+            tree.set_text(id, name);
         }
     }
 
@@ -926,21 +921,18 @@ impl ClipChromePanel {
 
     pub fn sync_bpm(&mut self, tree: &mut UITree, text: &str) {
         self.cached_bpm_text = text.into();
-        if self.bpm_value_btn_id >= 0 {
-            tree.set_text(self.bpm_value_btn_id as u32, text);
+        if let Some(id) = self.bpm_value_btn_id {
+            tree.set_text(id, text);
         }
     }
 
     pub fn sync_warp_enabled(&mut self, tree: &mut UITree, enabled: bool) {
         self.cached_warp_enabled = enabled;
-        if self.warp_toggle_btn_id >= 0 {
-            tree.set_text(
-                self.warp_toggle_btn_id as u32,
-                if enabled { "Warp ON" } else { "Warp OFF" },
-            );
+        if let Some(id) = self.warp_toggle_btn_id {
+            tree.set_text(id, if enabled { "Warp ON" } else { "Warp OFF" });
             let base = if enabled { LOOP_ON_COLOR } else { LOOP_OFF_COLOR };
             tree.set_style(
-                self.warp_toggle_btn_id as u32,
+                id,
                 UIStyle {
                     bg_color: base,
                     hover_bg_color: lighten(base, 10),
@@ -976,17 +968,17 @@ impl ClipChromePanel {
         self.cached_detect_status = status.into();
         self.cached_detect_progress = progress.clamp(0.0, 1.0);
         self.cached_detect_show = show;
-        if self.detect_status_label_id >= 0 {
-            tree.set_text(self.detect_status_label_id as u32, status);
+        if let Some(id) = self.detect_status_label_id {
+            tree.set_text(id, status);
         }
-        if self.detect_progress_bg_id >= 0 {
-            tree.set_visible(self.detect_progress_bg_id as u32, show);
+        if let Some(id) = self.detect_progress_bg_id {
+            tree.set_visible(id, show);
         }
-        if self.detect_progress_fill_id >= 0 {
-            tree.set_visible(self.detect_progress_fill_id as u32, show);
+        if let Some(id) = self.detect_progress_fill_id {
+            tree.set_visible(id, show);
             let bg = self.detect_progress_bg_rect;
             tree.set_bounds(
-                self.detect_progress_fill_id as u32,
+                id,
                 Rect::new(bg.x, bg.y, bg.width * self.cached_detect_progress, bg.height),
             );
         }
@@ -994,26 +986,23 @@ impl ClipChromePanel {
 
     pub fn sync_gen_type(&mut self, tree: &mut UITree, gen_type: &str) {
         self.cached_gen_type = gen_type.into();
-        if self.gen_type_label_id >= 0 {
+        if let Some(id) = self.gen_type_label_id {
             let label = format!("Type: {}", gen_type);
-            tree.set_text(self.gen_type_label_id as u32, &label);
+            tree.set_text(id, &label);
         }
     }
 
     pub fn sync_loop_enabled(&mut self, tree: &mut UITree, enabled: bool) {
         self.cached_loop_enabled = enabled;
-        if self.loop_toggle_btn_id >= 0 {
-            tree.set_text(
-                self.loop_toggle_btn_id as u32,
-                if enabled { "Loop ON" } else { "Loop OFF" },
-            );
+        if let Some(id) = self.loop_toggle_btn_id {
+            tree.set_text(id, if enabled { "Loop ON" } else { "Loop OFF" });
             let base = if enabled {
                 LOOP_ON_COLOR
             } else {
                 LOOP_OFF_COLOR
             };
             tree.set_style(
-                self.loop_toggle_btn_id as u32,
+                id,
                 UIStyle {
                     bg_color: base,
                     hover_bg_color: lighten(base, 10),
@@ -1030,8 +1019,8 @@ impl ClipChromePanel {
 
     // ── Event handling ───────────────────────────────────────────
 
-    pub fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
-        let id = node_id as i32;
+    pub fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
+        let id = Some(node_id);
         if id == self.chevron_btn_id {
             return vec![PanelAction::ClipChromeCollapseToggle];
         }
@@ -1074,7 +1063,7 @@ impl ClipChromePanel {
     }
 
     /// Begin a sensitivity/onset slider drag if the press hit a track.
-    pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
+    pub fn handle_pointer_down(&mut self, node_id: NodeId, pos: Vec2) -> Vec<PanelAction> {
         if !self.mode_audio {
             return Vec::new();
         }
@@ -1133,8 +1122,8 @@ impl ClipChromePanel {
     }
 
     pub fn bpm_button_rect(&self, tree: &UITree) -> Rect {
-        if self.bpm_value_btn_id >= 0 {
-            tree.get_bounds(self.bpm_value_btn_id as u32)
+        if let Some(id) = self.bpm_value_btn_id {
+            tree.get_bounds(id)
         } else {
             Rect::ZERO
         }
@@ -1205,8 +1194,8 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         // Header row removed — only name label + divider
-        assert_eq!(panel.header_label_id, -1);
-        assert_eq!(panel.chevron_btn_id, -1);
+        assert_eq!(panel.header_label_id, None);
+        assert_eq!(panel.chevron_btn_id, None);
         assert!(panel.node_count > 0);
     }
 
@@ -1217,9 +1206,9 @@ mod tests {
         panel.set_mode(true, true, false, false, false);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        assert!(panel.bpm_value_btn_id >= 0);
-        assert!(panel.loop_toggle_btn_id >= 0);
-        assert!(panel.effects_label_id >= 0);
+        assert!(panel.bpm_value_btn_id.is_some());
+        assert!(panel.loop_toggle_btn_id.is_some());
+        assert!(panel.effects_label_id.is_some());
     }
 
     #[test]
@@ -1233,38 +1222,38 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 600.0));
 
         // Audio mode exposes the clip-BPM button but no loop toggle.
-        assert!(panel.bpm_value_btn_id >= 0);
-        assert!(panel.source_name_label_id >= 0);
-        assert!(panel.effects_label_id >= 0);
+        assert!(panel.bpm_value_btn_id.is_some());
+        assert!(panel.source_name_label_id.is_some());
+        assert!(panel.effects_label_id.is_some());
         // Audio mode adds a warp toggle (but no loop toggle).
-        assert!(panel.warp_toggle_btn_id >= 0);
-        assert_eq!(panel.loop_toggle_btn_id, -1);
+        assert!(panel.warp_toggle_btn_id.is_some());
+        assert_eq!(panel.loop_toggle_btn_id, None);
         // BPM click is live in audio mode.
-        let actions = panel.handle_click(panel.bpm_value_btn_id as u32);
+        let actions = panel.handle_click(panel.bpm_value_btn_id.unwrap());
         assert!(matches!(actions.as_slice(), [PanelAction::ClipBpmClicked]));
         // Warp toggle click fires the warp action.
-        let warp = panel.handle_click(panel.warp_toggle_btn_id as u32);
+        let warp = panel.handle_click(panel.warp_toggle_btn_id.unwrap());
         assert!(matches!(warp.as_slice(), [PanelAction::ClipWarpToggled]));
         // Detection buttons exist and fire their actions.
-        assert!(panel.detect_btn_id >= 0);
-        assert!(panel.clear_triggers_btn_id >= 0);
-        let detect = panel.handle_click(panel.detect_btn_id as u32);
+        assert!(panel.detect_btn_id.is_some());
+        assert!(panel.clear_triggers_btn_id.is_some());
+        let detect = panel.handle_click(panel.detect_btn_id.unwrap());
         assert!(matches!(detect.as_slice(), [PanelAction::ClipDetectClicked]));
-        let clear = panel.handle_click(panel.clear_triggers_btn_id as u32);
+        let clear = panel.handle_click(panel.clear_triggers_btn_id.unwrap());
         assert!(matches!(clear.as_slice(), [PanelAction::ClipClearTriggersClicked]));
         // Quantize dropdown opens its picker; per-instrument rows fire indexed actions.
-        assert!(panel.quantize_dropdown_id >= 0);
-        let q = panel.handle_click(panel.quantize_dropdown_id as u32);
+        assert!(panel.quantize_dropdown_id.is_some());
+        let q = panel.handle_click(panel.quantize_dropdown_id.unwrap());
         assert!(matches!(q.as_slice(), [PanelAction::ClipDetectQuantizeClicked]));
         assert_eq!(panel.instrument_enable_btn_ids.len(), 9);
         // Default config enables 4 drums → 4 sensitivity sliders + 4 layer dropdowns
         // are built (disabled rows collapse to name + toggle only).
-        let en = panel.handle_click(panel.instrument_enable_btn_ids[2] as u32);
+        let en = panel.handle_click(panel.instrument_enable_btn_ids[2].unwrap());
         assert!(matches!(en.as_slice(), [PanelAction::ClipDetectInstrumentToggled(2)]));
         // The first enabled instrument's layer dropdown opens its picker.
         let layer_id = panel.instrument_layer_btn_ids[0];
-        assert!(layer_id >= 0, "enabled row has a layer dropdown");
-        let ld = panel.handle_click(layer_id as u32);
+        assert!(layer_id.is_some(), "enabled row has a layer dropdown");
+        let ld = panel.handle_click(layer_id.unwrap());
         assert!(matches!(ld.as_slice(), [PanelAction::ClipDetectLayerClicked(0)]));
     }
 
@@ -1276,8 +1265,8 @@ mod tests {
         panel.cached_gen_type = "Plasma".into();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        assert!(panel.gen_type_label_id >= 0);
-        assert!(panel.effects_label_id >= 0);
+        assert!(panel.gen_type_label_id.is_some());
+        assert!(panel.effects_label_id.is_some());
     }
 
     #[test]
@@ -1295,7 +1284,7 @@ mod tests {
         panel.set_mode(true, true, false, false, false);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let actions = panel.handle_click(panel.bpm_value_btn_id as u32);
+        let actions = panel.handle_click(panel.bpm_value_btn_id.unwrap());
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::ClipBpmClicked));
     }
@@ -1307,7 +1296,7 @@ mod tests {
         panel.set_mode(true, true, false, false, false);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let actions = panel.handle_click(panel.loop_toggle_btn_id as u32);
+        let actions = panel.handle_click(panel.loop_toggle_btn_id.unwrap());
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::ClipLoopToggle));
     }

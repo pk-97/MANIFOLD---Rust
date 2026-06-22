@@ -586,7 +586,7 @@ impl UIRenderer {
         tree.traverse(|event| match event {
             TraversalEvent::Node(node) => {
                 if let Some(start) = skip_from
-                    && node.id as usize >= start
+                    && node.id.index() >= start
                 {
                     return;
                 }

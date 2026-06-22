@@ -41,14 +41,14 @@ pub struct ScrollContainer {
     content_height: f32,
     /// Viewport rect (set during begin()).
     viewport: Rect,
-    /// The clip region node ID (set during begin()).
-    clip_node_id: i32,
+    /// The clip region node ID (set during begin()). None until begin() runs.
+    clip_node_id: Option<NodeId>,
     /// Index into tree.nodes where content starts (for reparenting).
     content_start: usize,
 
     // Scrollbar state
-    track_id: i32,
-    thumb_id: i32,
+    track_id: Option<NodeId>,
+    thumb_id: Option<NodeId>,
 }
 
 impl ScrollContainer {
@@ -57,10 +57,10 @@ impl ScrollContainer {
             scroll_offset: 0.0,
             content_height: 0.0,
             viewport: Rect::ZERO,
-            clip_node_id: -1,
+            clip_node_id: None,
             content_start: 0,
-            track_id: -1,
-            thumb_id: -1,
+            track_id: None,
+            thumb_id: None,
         }
     }
 
@@ -68,11 +68,11 @@ impl ScrollContainer {
     /// Returns the clip node ID. Content built after this call can be
     /// reparented via `reparent_content()`, or parented directly using
     /// `clip_node_id()` as the parent.
-    pub fn begin(&mut self, tree: &mut UITree, viewport_rect: Rect) -> i32 {
+    pub fn begin(&mut self, tree: &mut UITree, viewport_rect: Rect) -> NodeId {
         self.viewport = viewport_rect;
 
         let clip_id = tree.add_node(
-            -1,
+            None,
             viewport_rect,
             UINodeType::ClipRegion,
             UIStyle::default(),
@@ -80,9 +80,9 @@ impl ScrollContainer {
             UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
         );
 
-        self.clip_node_id = clip_id as i32;
+        self.clip_node_id = Some(clip_id);
         self.content_start = tree.count();
-        clip_id as i32
+        clip_id
     }
 
     /// Set the total content height (call after building all content).
@@ -92,12 +92,13 @@ impl ScrollContainer {
     }
 
     /// Reparent all nodes added since `begin()` under the clip region.
-    /// Call this after building content if nodes were created with parent=-1.
+    /// Call this after building content if nodes were created with parent=None.
     pub fn reparent_content(&self, tree: &mut UITree, start: usize) {
         let count = tree.count() - start;
-        if count > 0 {
-            tree.reparent_root_nodes(start, count, self.clip_node_id);
-        }
+        if count > 0
+            && let Some(clip_id) = self.clip_node_id {
+                tree.reparent_root_nodes(start, count, clip_id);
+            }
     }
 
     // ── Scrollbar ──────────────────────────────────────────────────
@@ -107,8 +108,8 @@ impl ScrollContainer {
     /// content and setting content_height.
     pub fn build_scrollbar(&mut self, tree: &mut UITree, x: f32, style: &ScrollbarStyle) {
         let vp = self.viewport;
-        self.track_id = tree.add_button(
-            -1,
+        self.track_id = Some(tree.add_button(
+            None,
             x,
             vp.y,
             SCROLLBAR_W,
@@ -118,9 +119,9 @@ impl ScrollContainer {
                 ..UIStyle::default()
             },
             "",
-        ) as i32;
-        self.thumb_id = tree.add_button(
-            -1,
+        ));
+        self.thumb_id = Some(tree.add_button(
+            None,
             x,
             vp.y,
             SCROLLBAR_W,
@@ -132,23 +133,23 @@ impl ScrollContainer {
                 ..UIStyle::default()
             },
             "",
-        ) as i32;
+        ));
         self.update_scrollbar(tree);
     }
 
     /// Update scrollbar thumb position and visibility from current scroll state.
     pub fn update_scrollbar(&self, tree: &mut UITree) {
-        if self.track_id < 0 {
+        let (Some(track_id), Some(thumb_id)) = (self.track_id, self.thumb_id) else {
             return;
-        }
+        };
         let vp_h = self.viewport.height;
         if self.content_height <= vp_h || vp_h <= 0.0 {
-            tree.set_visible(self.track_id as u32, false);
-            tree.set_visible(self.thumb_id as u32, false);
+            tree.set_visible(track_id, false);
+            tree.set_visible(thumb_id, false);
             return;
         }
-        tree.set_visible(self.track_id as u32, true);
-        tree.set_visible(self.thumb_id as u32, true);
+        tree.set_visible(track_id, true);
+        tree.set_visible(thumb_id, true);
 
         let ratio = vp_h / self.content_height;
         let thumb_h = (vp_h * ratio).max(SCROLLBAR_MIN_THUMB_H);
@@ -162,11 +163,8 @@ impl ScrollContainer {
 
         let thumb_y = self.viewport.y + scroll_frac * scroll_range;
         // Preserve thumb's X from its initial creation position.
-        let thumb_x = tree.get_bounds(self.thumb_id as u32).x;
-        tree.set_bounds(
-            self.thumb_id as u32,
-            Rect::new(thumb_x, thumb_y, SCROLLBAR_W, thumb_h),
-        );
+        let thumb_x = tree.get_bounds(thumb_id).x;
+        tree.set_bounds(thumb_id, Rect::new(thumb_x, thumb_y, SCROLLBAR_W, thumb_h));
     }
 
     /// Convert a drag Y position to a scroll offset.
@@ -182,13 +180,13 @@ impl ScrollContainer {
         }
     }
 
-    /// Scrollbar track node ID (for hit testing).
-    pub fn track_id(&self) -> i32 {
+    /// Scrollbar track node ID (for hit testing). None until built.
+    pub fn track_id(&self) -> Option<NodeId> {
         self.track_id
     }
 
-    /// Scrollbar thumb node ID (for hit testing).
-    pub fn thumb_id(&self) -> i32 {
+    /// Scrollbar thumb node ID (for hit testing). None until built.
+    pub fn thumb_id(&self) -> Option<NodeId> {
         self.thumb_id
     }
 
@@ -224,7 +222,8 @@ impl ScrollContainer {
     }
 
     /// The clip region node ID. Use as parent_id for scrolled content.
-    pub fn clip_node_id(&self) -> i32 {
+    /// None until `begin()` runs.
+    pub fn clip_node_id(&self) -> Option<NodeId> {
         self.clip_node_id
     }
 

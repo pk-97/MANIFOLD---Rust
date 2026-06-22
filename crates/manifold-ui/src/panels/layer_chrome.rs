@@ -26,10 +26,10 @@ fn fmt_opacity(v: f32) -> String {
 
 pub struct LayerChromePanel {
     // Node IDs
-    header_label_id: i32,
-    chevron_btn_id: i32,
-    name_label_id: i32,
-    divider_ids: [i32; 3],
+    header_label_id: Option<NodeId>,
+    chevron_btn_id: Option<NodeId>,
+    name_label_id: Option<NodeId>,
+    divider_ids: [Option<NodeId>; 3],
 
     // Slider — single source of truth
     opacity: SliderDragState,
@@ -49,10 +49,10 @@ pub struct LayerChromePanel {
 impl LayerChromePanel {
     pub fn new() -> Self {
         Self {
-            header_label_id: -1,
-            chevron_btn_id: -1,
-            name_label_id: -1,
-            divider_ids: [-1; 3],
+            header_label_id: None,
+            chevron_btn_id: None,
+            name_label_id: None,
+            divider_ids: [None; 3],
             opacity: SliderDragState::default(),
             is_collapsed: false,
             show_name: true,
@@ -129,8 +129,8 @@ impl LayerChromePanel {
 
         // Header row
         let label_w = content_w - CHEVRON_W - GAP;
-        self.header_label_id = tree.add_label(
-            -1,
+        self.header_label_id = Some(tree.add_label(
+            None,
             cx,
             cy,
             label_w,
@@ -142,11 +142,11 @@ impl LayerChromePanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
         let chev_x = cx + content_w - CHEVRON_W;
-        self.chevron_btn_id = tree.add_button(
-            -1,
+        self.chevron_btn_id = Some(tree.add_button(
+            None,
             chev_x,
             cy + (HEADER_ROW_H - 16.0) * 0.5,
             CHEVRON_W,
@@ -165,7 +165,7 @@ impl LayerChromePanel {
             } else {
                 "\u{25BC}"
             },
-        ) as i32;
+        ));
 
         cy += HEADER_ROW_H;
 
@@ -179,8 +179,8 @@ impl LayerChromePanel {
 
         // Name row (optional)
         if self.show_name {
-            self.divider_ids[div_idx] = tree.add_panel(
-                -1,
+            self.divider_ids[div_idx] = Some(tree.add_panel(
+                None,
                 cx,
                 cy,
                 content_w,
@@ -189,12 +189,12 @@ impl LayerChromePanel {
                     bg_color: color::DIVIDER_C32,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            ));
             div_idx += 1;
             cy += DIVIDER_H;
 
-            self.name_label_id = tree.add_label(
-                -1,
+            self.name_label_id = Some(tree.add_label(
+                None,
                 cx,
                 cy,
                 content_w,
@@ -206,16 +206,16 @@ impl LayerChromePanel {
                     text_align: TextAlign::Center,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            ));
             cy += NAME_ROW_H;
         } else {
-            self.name_label_id = -1;
+            self.name_label_id = None;
         }
 
         // Opacity slider (optional)
         if self.show_opacity {
-            self.divider_ids[div_idx] = tree.add_panel(
-                -1,
+            self.divider_ids[div_idx] = Some(tree.add_panel(
+                None,
                 cx,
                 cy,
                 content_w,
@@ -224,7 +224,7 @@ impl LayerChromePanel {
                     bg_color: color::DIVIDER_C32,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            ));
             div_idx += 1;
             cy += DIVIDER_H;
 
@@ -232,7 +232,7 @@ impl LayerChromePanel {
             let val_text = fmt_opacity(opacity);
             let ids = BitmapSlider::build(
                 tree,
-                -1,
+                None,
                 slider_rect,
                 Some("Opacity"),
                 opacity,
@@ -248,8 +248,8 @@ impl LayerChromePanel {
         }
 
         // Final divider
-        self.divider_ids[div_idx] = tree.add_panel(
-            -1,
+        self.divider_ids[div_idx] = Some(tree.add_panel(
+            None,
             cx,
             cy,
             content_w,
@@ -258,7 +258,7 @@ impl LayerChromePanel {
                 bg_color: color::DIVIDER_C32,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
         self.node_count = tree.count() - self.first_node;
     }
@@ -267,15 +267,15 @@ impl LayerChromePanel {
 
     pub fn sync_header_text(&mut self, tree: &mut UITree, text: &str) {
         self.cached_header_text = text.into();
-        if self.header_label_id >= 0 {
-            tree.set_text(self.header_label_id as u32, text);
+        if let Some(id) = self.header_label_id {
+            tree.set_text(id, text);
         }
     }
 
     pub fn sync_name(&mut self, tree: &mut UITree, name: &str) {
         self.cached_name = name.into();
-        if self.name_label_id >= 0 {
-            tree.set_text(self.name_label_id as u32, name);
+        if let Some(id) = self.name_label_id {
+            tree.set_text(id, name);
         }
     }
 
@@ -285,9 +285,9 @@ impl LayerChromePanel {
 
     pub fn sync_collapsed(&mut self, tree: &mut UITree, collapsed: bool) {
         self.is_collapsed = collapsed;
-        if self.chevron_btn_id >= 0 {
+        if let Some(id) = self.chevron_btn_id {
             tree.set_text(
-                self.chevron_btn_id as u32,
+                id,
                 if collapsed { "\u{25B6}" } else { "\u{25BC}" },
             );
         }
@@ -295,15 +295,14 @@ impl LayerChromePanel {
 
     // ── Event handling ───────────────────────────────────────────
 
-    pub fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
-        let id = node_id as i32;
-        if id == self.chevron_btn_id {
+    pub fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
+        if self.chevron_btn_id == Some(node_id) {
             return vec![PanelAction::LayerChromeCollapseToggle];
         }
         Vec::new()
     }
 
-    pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
+    pub fn handle_pointer_down(&mut self, node_id: NodeId, pos: Vec2) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.try_start_drag(node_id, pos.x) {
             return vec![
                 PanelAction::LayerOpacitySnapshot,
@@ -357,9 +356,9 @@ mod tests {
         let mut panel = LayerChromePanel::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        assert!(panel.header_label_id >= 0);
-        assert!(panel.chevron_btn_id >= 0);
-        assert!(panel.name_label_id >= 0);
+        assert!(panel.header_label_id.is_some());
+        assert!(panel.chevron_btn_id.is_some());
+        assert!(panel.name_label_id.is_some());
         assert!(panel.opacity.ids().is_some());
         assert!(panel.node_count > 0);
     }
@@ -389,7 +388,7 @@ mod tests {
         let mut panel = LayerChromePanel::new();
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let actions = panel.handle_click(panel.chevron_btn_id as u32);
+        let actions = panel.handle_click(panel.chevron_btn_id.unwrap());
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::LayerChromeCollapseToggle));
     }
@@ -404,7 +403,7 @@ mod tests {
         panel.sync_name(&mut tree, "Drums Layer");
         assert!(tree.has_dirty());
         assert_eq!(
-            tree.get_node(panel.name_label_id as u32).text.as_deref(),
+            tree.get_node(panel.name_label_id.unwrap()).text.as_deref(),
             Some("Drums Layer"),
         );
     }

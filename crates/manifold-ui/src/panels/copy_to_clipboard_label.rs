@@ -1,12 +1,12 @@
 use crate::color;
-use crate::node::{TextAlign, UIStyle};
+use crate::node::{NodeId, TextAlign, UIStyle};
 use crate::tree::UITree;
 use std::time::Instant;
 
 const FLASH_DURATION_SECS: f32 = 0.8;
 
 struct CopiedFlash {
-    label_id: u32,
+    label_id: NodeId,
     original_text: String,
     start: Instant,
     applied: bool,
@@ -22,11 +22,11 @@ impl CopyToClipboardLabelState {
         self.flash = None;
     }
 
-    pub fn label_id(&self) -> Option<u32> {
+    pub fn label_id(&self) -> Option<NodeId> {
         self.flash.as_ref().map(|flash| flash.label_id)
     }
 
-    pub fn trigger(&mut self, label_id: u32) {
+    pub fn trigger(&mut self, label_id: NodeId) {
         self.flash = Some(CopiedFlash {
             label_id,
             original_text: String::new(),

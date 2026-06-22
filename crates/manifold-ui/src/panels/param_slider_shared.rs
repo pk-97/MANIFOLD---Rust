@@ -83,37 +83,37 @@ pub(crate) const WAVEFORM_LABELS: [&str; WAVEFORM_COUNT] = ["Sin", "Tri", "Saw",
 // ── Shared node ID structs ──────────────────────────────────────
 
 pub(crate) struct DriverConfigIds {
-    pub(crate) _container_id: i32,
-    pub(crate) beat_div_btn_ids: [i32; BEAT_DIV_COUNT],
-    pub(crate) dot_btn_id: i32,
-    pub(crate) triplet_btn_id: i32,
-    pub(crate) wave_btn_ids: [i32; WAVEFORM_COUNT],
-    pub(crate) reverse_btn_id: i32,
+    pub(crate) _container_id: NodeId,
+    pub(crate) beat_div_btn_ids: [NodeId; BEAT_DIV_COUNT],
+    pub(crate) dot_btn_id: NodeId,
+    pub(crate) triplet_btn_id: NodeId,
+    pub(crate) wave_btn_ids: [NodeId; WAVEFORM_COUNT],
+    pub(crate) reverse_btn_id: NodeId,
 }
 
 /// The orange envelope target handle on a parameter's slider track — sets the
 /// depth (`target_normalized`) the envelope pulls the value toward, shown in the
 /// parameter's own range.
 pub(crate) struct EnvelopeTargetIds {
-    pub(crate) target_bar_id: i32,
+    pub(crate) target_bar_id: NodeId,
 }
 
 /// The envelope drawer — a single "Decay" slider (`decay_beats`).
 pub(crate) struct EnvelopeConfigIds {
-    pub(crate) _container_id: i32,
+    pub(crate) _container_id: NodeId,
     pub(crate) decay_slider: SliderNodeIds,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct TrimHandleIds {
-    pub(crate) fill_id: i32,
-    pub(crate) min_bar_id: i32,
-    pub(crate) max_bar_id: i32,
+    pub(crate) fill_id: NodeId,
+    pub(crate) min_bar_id: NodeId,
+    pub(crate) max_bar_id: NodeId,
 }
 
 pub(crate) struct AbletonConfigIds {
-    pub(crate) _container_id: i32,
-    pub(crate) invert_btn_id: i32,
+    pub(crate) _container_id: NodeId,
+    pub(crate) invert_btn_id: NodeId,
 }
 
 /// Display data for an Ableton-mapped parameter.
@@ -404,11 +404,11 @@ pub(crate) fn reposition_trim_bars(
     let fill_w = (new_max - new_min) * usable;
     let fill_h = track_rect.height - OVERLAY_INSET * 2.0;
     tree.set_bounds(
-        ids.fill_id as u32,
+        ids.fill_id,
         Rect::new(fill_x, track_rect.y + OVERLAY_INSET, fill_w, fill_h),
     );
     tree.set_bounds(
-        ids.min_bar_id as u32,
+        ids.min_bar_id,
         Rect::new(
             base_x + new_min * usable - TRIM_BAR_W * 0.5,
             track_rect.y,
@@ -417,7 +417,7 @@ pub(crate) fn reposition_trim_bars(
         ),
     );
     tree.set_bounds(
-        ids.max_bar_id as u32,
+        ids.max_bar_id,
         Rect::new(
             base_x + new_max * usable - TRIM_BAR_W * 0.5,
             track_rect.y,
@@ -604,11 +604,11 @@ pub(crate) fn dropdown_trigger_style(font_size: u16) -> UIStyle {
 /// One builder so every dropdown affordance in the inspector looks the same.
 pub(crate) fn build_dropdown_trigger(
     tree: &mut UITree,
-    parent: i32,
+    parent: Option<NodeId>,
     rect: Rect,
     current: &str,
     font_size: u16,
-) -> i32 {
+) -> NodeId {
     // Trailing chevron kept inside the same button so the whole cell is one
     // hit target. A leading space pads the label off the left edge. U+25BC (▼)
     // is in the atlas (the tree collapse chevron); U+25BE (▾) is not.
@@ -621,14 +621,14 @@ pub(crate) fn build_dropdown_trigger(
         rect.height,
         dropdown_trigger_style(font_size),
         &text,
-    ) as i32
+    )
 }
 
 // ── Shared builder functions ────────────────────────────────────
 
 pub(crate) fn build_driver_config(
     tree: &mut UITree,
-    parent: i32,
+    parent: Option<NodeId>,
     x: f32,
     y: f32,
     w: f32,
@@ -700,11 +700,11 @@ pub(crate) fn build_driver_config(
     // Reconstruct the typed ids from the flat button list: row 1 is indices
     // 0..BEAT_DIV_COUNT; row 2 is dot, triplet, WAVEFORM_COUNT waves, reverse.
     let ids = dids.button_ids();
-    let beat_div_btn_ids: [i32; BEAT_DIV_COUNT] = std::array::from_fn(|j| ids[j]);
+    let beat_div_btn_ids: [NodeId; BEAT_DIV_COUNT] = std::array::from_fn(|j| ids[j]);
     let dot_btn_id = ids[BEAT_DIV_COUNT];
     let triplet_btn_id = ids[BEAT_DIV_COUNT + 1];
     let wave_base = BEAT_DIV_COUNT + 2;
-    let wave_btn_ids: [i32; WAVEFORM_COUNT] = std::array::from_fn(|j| ids[wave_base + j]);
+    let wave_btn_ids: [NodeId; WAVEFORM_COUNT] = std::array::from_fn(|j| ids[wave_base + j]);
     let reverse_btn_id = ids[wave_base + WAVEFORM_COUNT];
 
     DriverConfigIds {
@@ -723,7 +723,7 @@ pub(crate) fn build_driver_config(
 /// the proximity catch-zone in the panel's pointer-down handler.
 pub(crate) fn build_envelope_target(
     tree: &mut UITree,
-    track_parent: i32,
+    track_parent: NodeId,
     track_rect: Rect,
     mod_state: &ParamModState,
     param_idx: usize,
@@ -735,7 +735,7 @@ pub(crate) fn build_envelope_target(
     let bar_y = track_rect.y - 2.0;
 
     let target_bar_id = tree.add_button(
-        track_parent,
+        Some(track_parent),
         bar_x,
         bar_y,
         TARGET_BAR_W,
@@ -747,7 +747,7 @@ pub(crate) fn build_envelope_target(
             ..UIStyle::default()
         },
         "",
-    ) as i32;
+    );
 
     EnvelopeTargetIds { target_bar_id }
 }
@@ -757,7 +757,7 @@ pub(crate) fn build_envelope_target(
 /// trigger. Depth is the orange target handle on the track above.
 pub(crate) fn build_envelope_config(
     tree: &mut UITree,
-    parent: i32,
+    parent: Option<NodeId>,
     x: f32,
     y: f32,
     w: f32,
@@ -797,7 +797,7 @@ pub(crate) fn build_envelope_config(
 
 pub(crate) fn build_trim_handles(
     tree: &mut UITree,
-    track_parent: i32,
+    track_parent: NodeId,
     track_rect: Rect,
     mod_state: &ParamModState,
     param_idx: usize,
@@ -809,7 +809,7 @@ pub(crate) fn build_trim_handles(
     let fill_x = track_rect.x + OVERLAY_INSET + tmin * usable;
     let fill_w = (tmax - tmin) * usable;
     let fill_id = tree.add_panel(
-        track_parent,
+        Some(track_parent),
         fill_x,
         track_rect.y + OVERLAY_INSET,
         fill_w,
@@ -818,11 +818,11 @@ pub(crate) fn build_trim_handles(
             bg_color: color::TRIM_FILL_C32,
             ..UIStyle::default()
         },
-    ) as i32;
+    );
 
     let min_x = fill_x - TRIM_BAR_W * 0.5;
     let min_bar_id = tree.add_button(
-        track_parent,
+        Some(track_parent),
         min_x,
         track_rect.y,
         TRIM_BAR_W,
@@ -834,11 +834,11 @@ pub(crate) fn build_trim_handles(
             ..UIStyle::default()
         },
         "",
-    ) as i32;
+    );
 
     let max_x = track_rect.x + OVERLAY_INSET + tmax * usable - TRIM_BAR_W * 0.5;
     let max_bar_id = tree.add_button(
-        track_parent,
+        Some(track_parent),
         max_x,
         track_rect.y,
         TRIM_BAR_W,
@@ -850,7 +850,7 @@ pub(crate) fn build_trim_handles(
             ..UIStyle::default()
         },
         "",
-    ) as i32;
+    );
 
     TrimHandleIds {
         fill_id,
@@ -863,7 +863,7 @@ pub(crate) fn build_trim_handles(
 /// Same visual as driver trim handles but with configurable colors.
 pub(crate) fn build_trim_handles_explicit(
     tree: &mut UITree,
-    track_parent: i32,
+    track_parent: NodeId,
     track_rect: Rect,
     min: f32,
     max: f32,
@@ -876,7 +876,7 @@ pub(crate) fn build_trim_handles_explicit(
     let fill_x = track_rect.x + OVERLAY_INSET + min * usable;
     let fill_w = (max - min) * usable;
     let fill_id = tree.add_panel(
-        track_parent,
+        Some(track_parent),
         fill_x,
         track_rect.y + OVERLAY_INSET,
         fill_w,
@@ -885,11 +885,11 @@ pub(crate) fn build_trim_handles_explicit(
             bg_color: fill_color,
             ..UIStyle::default()
         },
-    ) as i32;
+    );
 
     let min_x = fill_x - TRIM_BAR_W * 0.5;
     let min_bar_id = tree.add_button(
-        track_parent,
+        Some(track_parent),
         min_x,
         track_rect.y,
         TRIM_BAR_W,
@@ -901,11 +901,11 @@ pub(crate) fn build_trim_handles_explicit(
             ..UIStyle::default()
         },
         "",
-    ) as i32;
+    );
 
     let max_x = track_rect.x + OVERLAY_INSET + max * usable - TRIM_BAR_W * 0.5;
     let max_bar_id = tree.add_button(
-        track_parent,
+        Some(track_parent),
         max_x,
         track_rect.y,
         TRIM_BAR_W,
@@ -917,7 +917,7 @@ pub(crate) fn build_trim_handles_explicit(
             ..UIStyle::default()
         },
         "",
-    ) as i32;
+    );
 
     TrimHandleIds {
         fill_id,
@@ -940,7 +940,7 @@ pub(crate) enum DriverClickResult {
 /// Check if a click hit any button in a driver config panel.
 /// Returns `Some((param_index, result))` if matched.
 pub(crate) fn check_driver_config_click(
-    node_id: i32,
+    node_id: NodeId,
     driver_config_ids: &[Option<DriverConfigIds>],
 ) -> Option<(usize, DriverClickResult)> {
     for (pi, cfg) in driver_config_ids.iter().enumerate() {
@@ -973,7 +973,7 @@ pub(crate) fn check_driver_config_click(
 
 pub(crate) fn build_ableton_config(
     tree: &mut UITree,
-    parent: i32,
+    parent: Option<NodeId>,
     x: f32,
     y: f32,
     w: f32,
@@ -1036,7 +1036,7 @@ pub(crate) fn build_ableton_config(
 
 /// Check if a click hit an Ableton config button. Returns param index if matched.
 pub(crate) fn check_ableton_config_click(
-    node_id: i32,
+    node_id: NodeId,
     ableton_config_ids: &[Option<AbletonConfigIds>],
 ) -> Option<(usize, AbletonConfigClick)> {
     for (pi, ids) in ableton_config_ids.iter().enumerate() {
@@ -1064,7 +1064,7 @@ pub(crate) struct ParamRowIds {
     /// gaps, or anywhere on the row that isn't the track folds to the param
     /// menu — instead of each narrow widget being its own lottery target.
     /// See `docs/NODE_INTENT_DISPATCH.md`.
-    pub(crate) row_catcher: i32,
+    pub(crate) row_catcher: NodeId,
     pub(crate) slider: Option<SliderNodeIds>,
     pub(crate) trim: Option<TrimHandleIds>,
     /// Orange envelope target handle on the slider track (when armed).
@@ -1073,10 +1073,12 @@ pub(crate) struct ParamRowIds {
     /// Green audio-mod trim handles on the slider track (when an audio mod is
     /// armed) — the output sub-range the audio drives.
     pub(crate) audio_trim: Option<TrimHandleIds>,
-    pub(crate) envelope_btn: i32,
-    pub(crate) driver_btn: i32,
+    /// The "E" envelope toggle button. `None` when the row didn't build it
+    /// (effects gate it on `supports_envelopes`).
+    pub(crate) envelope_btn: Option<NodeId>,
+    pub(crate) driver_btn: NodeId,
     /// The "A" audio-modulation button (right of the driver button).
-    pub(crate) audio_btn: i32,
+    pub(crate) audio_btn: NodeId,
     /// Envelope drawer (the single "Decay" slider).
     pub(crate) envelope_config: Option<EnvelopeConfigIds>,
     pub(crate) driver_config: Option<DriverConfigIds>,
@@ -1109,7 +1111,7 @@ pub(crate) struct ParamRowIds {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_param_row(
     tree: &mut UITree,
-    parent: i32,
+    parent: Option<NodeId>,
     x: f32,
     cy: f32,
     slider_w: f32,
@@ -1126,15 +1128,17 @@ pub(crate) fn build_param_row(
     label_width: f32,
 ) -> ParamRowIds {
     let mut ids = ParamRowIds {
-        row_catcher: -1,
+        // Overwritten with the real row-catcher node below before any read.
+        row_catcher: NodeId(0),
         slider: None,
         trim: None,
         audio_trim: None,
         target: None,
         ableton_trim: None,
-        envelope_btn: -1,
-        driver_btn: -1,
-        audio_btn: -1,
+        envelope_btn: None,
+        // Overwritten with the real driver/audio buttons below.
+        driver_btn: NodeId(0),
+        audio_btn: NodeId(0),
         envelope_config: None,
         driver_config: None,
         ableton_config: None,
@@ -1163,7 +1167,7 @@ pub(crate) fn build_param_row(
         UIStyle::default(),
         None,
         UIFlags::VISIBLE | UIFlags::INTERACTIVE,
-    ) as i32;
+    );
 
     let slider = BitmapSlider::build(
         tree,
@@ -1178,15 +1182,15 @@ pub(crate) fn build_param_row(
     );
 
     // Make label interactive for click-to-copy OSC address + Ableton mapping.
-    if slider.label >= 0 {
-        tree.set_flag(slider.label as u32, UIFlags::INTERACTIVE);
+    if let Some(label_id) = slider.label {
+        tree.set_flag(label_id, UIFlags::INTERACTIVE);
     }
 
     // Trim handles (if driver expanded).
     if mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
         ids.trim = Some(build_trim_handles(
             tree,
-            slider.track as i32,
+            slider.track,
             slider.track_rect,
             mod_state,
             i,
@@ -1198,7 +1202,7 @@ pub(crate) fn build_param_row(
     if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
         ids.target = Some(build_envelope_target(
             tree,
-            slider.track as i32,
+            slider.track,
             slider.track_rect,
             mod_state,
             i,
@@ -1209,7 +1213,7 @@ pub(crate) fn build_param_row(
     if let Some((amin, amax)) = info.ableton_range {
         ids.ableton_trim = Some(build_trim_handles_explicit(
             tree,
-            slider.track as i32,
+            slider.track,
             slider.track_rect,
             amin,
             amax,
@@ -1227,7 +1231,7 @@ pub(crate) fn build_param_row(
         let amax = mod_state.audio_range_max.get(i).copied().unwrap_or(1.0);
         ids.audio_trim = Some(build_trim_handles_explicit(
             tree,
-            slider.track as i32,
+            slider.track,
             slider.track_rect,
             amin,
             amax,
@@ -1244,7 +1248,7 @@ pub(crate) fn build_param_row(
     let btn_y = cy + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
     if build_env_button {
         let env_active = mod_state.envelope_expanded.get(i).copied().unwrap_or(false);
-        ids.envelope_btn = tree.add_button(
+        ids.envelope_btn = Some(tree.add_button(
             parent,
             btn_x,
             btn_y,
@@ -1252,7 +1256,7 @@ pub(crate) fn build_param_row(
             DE_BUTTON_SIZE,
             de_btn_style(env_active, color::ENVELOPE_ACTIVE_C32),
             "E",
-        ) as i32;
+        ));
     }
     let drv_active = mod_state.driver_expanded.get(i).copied().unwrap_or(false);
     let drv_btn_x = btn_x
@@ -1269,7 +1273,7 @@ pub(crate) fn build_param_row(
         DE_BUTTON_SIZE,
         de_btn_style(drv_active, color::DRIVER_ACTIVE_C32),
         "\u{2192}", // →
-    ) as i32;
+    );
 
     // Audio-modulation button — third in the lane, right of the driver button.
     let audio_active = mod_state.audio_active.get(i).copied().unwrap_or(false);
@@ -1282,7 +1286,7 @@ pub(crate) fn build_param_row(
         DE_BUTTON_SIZE,
         de_btn_style(audio_active, AUDIO_MOD_ACTIVE_C32),
         "A",
-    ) as i32;
+    );
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
@@ -1457,12 +1461,12 @@ pub(crate) enum RowClick {
 /// skip is a no-op there — behavior is identical to the prior per-panel code.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn match_param_row_click(
-    id: i32,
-    driver_btn_ids: &[i32],
-    envelope_btn_ids: &[i32],
+    id: NodeId,
+    driver_btn_ids: &[Option<NodeId>],
+    envelope_btn_ids: &[Option<NodeId>],
     driver_config_ids: &[Option<DriverConfigIds>],
     ableton_config_ids: &[Option<AbletonConfigIds>],
-    audio_btn_ids: &[i32],
+    audio_btn_ids: &[Option<NodeId>],
     audio_configs: &[Option<(crate::panels::drawer::DrawerIds, usize)>],
     slider_ids: &[Option<SliderNodeIds>],
     osc_addresses: &[Option<String>],
@@ -1480,7 +1484,7 @@ pub(crate) fn match_param_row_click(
         if is_unmodulatable(pi) {
             continue;
         }
-        if id == btn_id {
+        if btn_id == Some(id) {
             return Some(RowClick::DriverToggle(pi));
         }
     }
@@ -1488,7 +1492,7 @@ pub(crate) fn match_param_row_click(
         if is_unmodulatable(pi) {
             continue;
         }
-        if id == btn_id {
+        if btn_id == Some(id) {
             return Some(RowClick::EnvelopeToggle(pi));
         }
     }
@@ -1517,7 +1521,7 @@ pub(crate) fn match_param_row_click(
         if is_unmodulatable(pi) {
             continue;
         }
-        if id == btn_id {
+        if btn_id == Some(id) {
             return Some(RowClick::AudioToggle(pi));
         }
     }
@@ -1547,8 +1551,7 @@ pub(crate) fn match_param_row_click(
     // Slider label → copy OSC address (only when one exists for this slot).
     for (pi, slider) in slider_ids.iter().enumerate() {
         if let Some(ids) = slider
-            && ids.label >= 0
-            && id == ids.label
+            && ids.label == Some(id)
             && osc_addresses.get(pi).and_then(|a| a.as_ref()).is_some()
         {
             return Some(RowClick::LabelCopy(pi));

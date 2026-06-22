@@ -10,6 +10,7 @@
 //!
 //! See `docs/NODE_INTENT_DISPATCH.md` for the full design + migration plan.
 
+use crate::node::NodeId;
 use crate::panels::PanelAction;
 use crate::tree::UITree;
 
@@ -74,8 +75,8 @@ impl IntentRegistry {
         self.slots.clear();
     }
 
-    fn slot_mut(&mut self, node: u32) -> &mut NodeIntent {
-        let idx = node as usize;
+    fn slot_mut(&mut self, node: NodeId) -> &mut NodeIntent {
+        let idx = node.index();
         if idx >= self.slots.len() {
             self.slots.resize_with(idx + 1, || None);
         }
@@ -83,7 +84,7 @@ impl IntentRegistry {
     }
 
     /// Map a gesture on `node` to `action`.
-    pub fn on(&mut self, node: u32, g: Gesture, action: PanelAction) {
+    pub fn on(&mut self, node: NodeId, g: Gesture, action: PanelAction) {
         let slot = self.slot_mut(node);
         match g {
             Gesture::Click => slot.click = Some(action),
@@ -93,16 +94,13 @@ impl IntentRegistry {
     }
 
     /// Mark `node` as claiming its whole area for fold-up resolution.
-    pub fn claim_area(&mut self, node: u32) {
+    pub fn claim_area(&mut self, node: NodeId) {
         self.slot_mut(node).claims_area = true;
     }
 
-    fn get(&self, node: i32) -> Option<&NodeIntent> {
-        if node < 0 {
-            return None;
-        }
+    fn get(&self, node: NodeId) -> Option<&NodeIntent> {
         self.slots
-            .get(node as usize)
+            .get(node.index())
             .and_then(|s| s.as_deref())
             .filter(|i| !i.is_empty())
     }
@@ -111,10 +109,10 @@ impl IntentRegistry {
     /// for `g`. A `claims_area` node with no matching gesture intent stops the
     /// walk and absorbs the gesture (returns `None`) — it deliberately shadows
     /// outer intents so an inner region can opt out.
-    pub fn resolve(&self, tree: &UITree, hit: i32, g: Gesture) -> Option<PanelAction> {
+    pub fn resolve(&self, tree: &UITree, hit: Option<NodeId>, g: Gesture) -> Option<PanelAction> {
         let mut cur = hit;
-        while cur >= 0 {
-            if let Some(intent) = self.get(cur) {
+        while let Some(node) = cur {
+            if let Some(intent) = self.get(node) {
                 if let Some(action) = intent.action_for(g) {
                     return Some(action.clone());
                 }
@@ -123,7 +121,7 @@ impl IntentRegistry {
                     return None;
                 }
             }
-            cur = tree.parent_of(cur as u32);
+            cur = tree.parent_of(node);
         }
         None
     }
@@ -146,17 +144,17 @@ mod tests {
         let mut tree = UITree::new();
         let mut intents = IntentRegistry::new();
 
-        let card = tree.add_panel(-1, 0.0, 0.0, 200.0, 100.0, style());
+        let card = tree.add_panel(None, 0.0, 0.0, 200.0, 100.0, style());
         intents.claim_area(card);
         intents.on(card, Gesture::RightClick, PanelAction::PlayPause);
 
-        let row = tree.add_panel(card as i32, 0.0, 0.0, 200.0, 30.0, style());
-        let fill = tree.add_panel(row as i32, 0.0, 0.0, 100.0, 30.0, style());
+        let row = tree.add_panel(Some(card), 0.0, 0.0, 200.0, 30.0, style());
+        let fill = tree.add_panel(Some(row), 0.0, 0.0, 100.0, 30.0, style());
 
         // A non-intent descendant (the slider fill) folds up to the card.
         assert!(
             intents
-                .resolve(&tree, fill as i32, Gesture::RightClick)
+                .resolve(&tree, Some(fill), Gesture::RightClick)
                 .is_some(),
             "right-click on dead fill should fold up to the card"
         );
@@ -167,15 +165,15 @@ mod tests {
         let mut tree = UITree::new();
         let mut intents = IntentRegistry::new();
 
-        let card = tree.add_panel(-1, 0.0, 0.0, 200.0, 100.0, style());
+        let card = tree.add_panel(None, 0.0, 0.0, 200.0, 100.0, style());
         intents.claim_area(card);
         intents.on(card, Gesture::RightClick, PanelAction::PlayPause);
 
-        let track = tree.add_button(card as i32, 0.0, 0.0, 200.0, 30.0, style(), "");
+        let track = tree.add_button(Some(card), 0.0, 0.0, 200.0, 30.0, style(), "");
         intents.on(track, Gesture::RightClick, PanelAction::Stop);
 
         // The track's own intent resolves before the card's.
-        let action = intents.resolve(&tree, track as i32, Gesture::RightClick);
+        let action = intents.resolve(&tree, Some(track), Gesture::RightClick);
         assert!(matches!(action, Some(PanelAction::Stop)));
     }
 
@@ -185,18 +183,18 @@ mod tests {
         let mut intents = IntentRegistry::new();
 
         // Outer carries a right-click intent.
-        let outer = tree.add_panel(-1, 0.0, 0.0, 200.0, 100.0, style());
+        let outer = tree.add_panel(None, 0.0, 0.0, 200.0, 100.0, style());
         intents.on(outer, Gesture::RightClick, PanelAction::PlayPause);
 
         // Inner claims its area but only for Click — right-click is absorbed,
         // not leaked to `outer`.
-        let inner = tree.add_panel(outer as i32, 0.0, 0.0, 50.0, 50.0, style());
+        let inner = tree.add_panel(Some(outer), 0.0, 0.0, 50.0, 50.0, style());
         intents.claim_area(inner);
         intents.on(inner, Gesture::Click, PanelAction::PlayPause);
 
         assert!(
             intents
-                .resolve(&tree, inner as i32, Gesture::RightClick)
+                .resolve(&tree, Some(inner), Gesture::RightClick)
                 .is_none(),
             "claimed region must shadow the outer right-click intent"
         );
@@ -206,6 +204,6 @@ mod tests {
     fn miss_resolves_to_nothing() {
         let tree = UITree::new();
         let intents = IntentRegistry::new();
-        assert!(intents.resolve(&tree, -1, Gesture::RightClick).is_none());
+        assert!(intents.resolve(&tree, None, Gesture::RightClick).is_none());
     }
 }

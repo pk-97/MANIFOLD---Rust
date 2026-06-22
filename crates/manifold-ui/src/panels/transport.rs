@@ -310,34 +310,34 @@ impl TransportLayout {
 pub struct TransportPanel {
     layout: TransportLayout,
 
-    // Node IDs (-1 = unset)
-    clock_authority_id: i32,
-    link_button_id: i32,
-    link_dot_id: i32,
-    link_status_id: i32,
-    clk_button_id: i32,
-    clk_device_id: i32,
-    clk_dot_id: i32,
-    clk_status_id: i32,
-    sync_button_id: i32,
-    sync_dot_id: i32,
-    sync_status_id: i32,
-    play_button_id: i32,
-    stop_button_id: i32,
-    rec_button_id: i32,
-    bpm_label_id: i32,
-    bpm_field_id: i32,
-    bpm_reset_id: i32,
-    bpm_clear_id: i32,
-    new_button_id: i32,
-    open_button_id: i32,
-    open_recent_id: i32,
-    save_button_id: i32,
-    save_as_id: i32,
-    export_button_id: i32,
-    frame_button_id: i32,
-    hdr_button_id: i32,
-    perc_button_id: i32,
+    // Node IDs (None = unset)
+    clock_authority_id: Option<NodeId>,
+    link_button_id: Option<NodeId>,
+    link_dot_id: Option<NodeId>,
+    link_status_id: Option<NodeId>,
+    clk_button_id: Option<NodeId>,
+    clk_device_id: Option<NodeId>,
+    clk_dot_id: Option<NodeId>,
+    clk_status_id: Option<NodeId>,
+    sync_button_id: Option<NodeId>,
+    sync_dot_id: Option<NodeId>,
+    sync_status_id: Option<NodeId>,
+    play_button_id: Option<NodeId>,
+    stop_button_id: Option<NodeId>,
+    rec_button_id: Option<NodeId>,
+    bpm_label_id: Option<NodeId>,
+    bpm_field_id: Option<NodeId>,
+    bpm_reset_id: Option<NodeId>,
+    bpm_clear_id: Option<NodeId>,
+    new_button_id: Option<NodeId>,
+    open_button_id: Option<NodeId>,
+    open_recent_id: Option<NodeId>,
+    save_button_id: Option<NodeId>,
+    save_as_id: Option<NodeId>,
+    export_button_id: Option<NodeId>,
+    frame_button_id: Option<NodeId>,
+    hdr_button_id: Option<NodeId>,
+    perc_button_id: Option<NodeId>,
 
     // Dynamic state
     clock_authority_text: String,
@@ -377,33 +377,33 @@ impl TransportPanel {
     pub fn new() -> Self {
         Self {
             layout: TransportLayout::default(),
-            clock_authority_id: -1,
-            link_button_id: -1,
-            link_dot_id: -1,
-            link_status_id: -1,
-            clk_button_id: -1,
-            clk_device_id: -1,
-            clk_dot_id: -1,
-            clk_status_id: -1,
-            sync_button_id: -1,
-            sync_dot_id: -1,
-            sync_status_id: -1,
-            play_button_id: -1,
-            stop_button_id: -1,
-            rec_button_id: -1,
-            bpm_label_id: -1,
-            bpm_field_id: -1,
-            bpm_reset_id: -1,
-            bpm_clear_id: -1,
-            new_button_id: -1,
-            open_button_id: -1,
-            open_recent_id: -1,
-            save_button_id: -1,
-            save_as_id: -1,
-            export_button_id: -1,
-            frame_button_id: -1,
-            hdr_button_id: -1,
-            perc_button_id: -1,
+            clock_authority_id: None,
+            link_button_id: None,
+            link_dot_id: None,
+            link_status_id: None,
+            clk_button_id: None,
+            clk_device_id: None,
+            clk_dot_id: None,
+            clk_status_id: None,
+            sync_button_id: None,
+            sync_dot_id: None,
+            sync_status_id: None,
+            play_button_id: None,
+            stop_button_id: None,
+            rec_button_id: None,
+            bpm_label_id: None,
+            bpm_field_id: None,
+            bpm_reset_id: None,
+            bpm_clear_id: None,
+            new_button_id: None,
+            open_button_id: None,
+            open_recent_id: None,
+            save_button_id: None,
+            save_as_id: None,
+            export_button_id: None,
+            frame_button_id: None,
+            hdr_button_id: None,
+            perc_button_id: None,
             clock_authority_text: "SRC:INT".into(),
             clock_authority_color: color::BUTTON_INACTIVE_C32,
             link_enabled: false,
@@ -438,22 +438,22 @@ impl TransportPanel {
 
     // ── Public accessors ───────────────────────────────────────────
 
-    pub fn bpm_field_id(&self) -> i32 {
+    pub fn bpm_field_id(&self) -> Option<NodeId> {
         self.bpm_field_id
     }
-    pub fn clock_authority_node_id(&self) -> i32 {
+    pub fn clock_authority_node_id(&self) -> Option<NodeId> {
         self.clock_authority_id
     }
-    pub fn clk_device_node_id(&self) -> i32 {
+    pub fn clk_device_node_id(&self) -> Option<NodeId> {
         self.clk_device_id
     }
 
     /// Get bounds of any node owned by this panel.
-    pub fn get_node_bounds(&self, tree: &UITree, node_id: i32) -> Rect {
-        if node_id < 0 {
-            return Rect::ZERO;
+    pub fn get_node_bounds(&self, tree: &UITree, node_id: Option<NodeId>) -> Rect {
+        match node_id {
+            Some(id) => tree.get_bounds(id),
+            None => Rect::ZERO,
         }
-        tree.get_bounds(node_id as u32)
     }
 
     // ── Push-based setters ─────────────────────────────────────────
@@ -461,8 +461,7 @@ impl TransportPanel {
     pub fn set_clock_authority(&mut self, tree: &mut UITree, text: &str, c: Color32) {
         self.clock_authority_text = text.into();
         self.clock_authority_color = c;
-        if self.clock_authority_id >= 0 {
-            let id = self.clock_authority_id as u32;
+        if let Some(id) = self.clock_authority_id {
             tree.set_text(id, text);
             tree.set_style(id, button_style(c));
         }
@@ -481,20 +480,20 @@ impl TransportPanel {
         self.link_dot_color = dot_color;
         self.link_status_text = status.into();
         self.link_status_color = status_color;
-        if self.link_button_id >= 0 {
+        if let Some(id) = self.link_button_id {
             let bg = if enabled {
                 color::LINK_ORANGE
             } else {
                 color::BUTTON_INACTIVE_C32
             };
-            tree.set_style(self.link_button_id as u32, button_style(bg));
+            tree.set_style(id, button_style(bg));
         }
-        if self.link_dot_id >= 0 {
-            tree.set_style(self.link_dot_id as u32, dot_style(dot_color));
+        if let Some(id) = self.link_dot_id {
+            tree.set_style(id, dot_style(dot_color));
         }
-        if self.link_status_id >= 0 {
-            tree.set_text(self.link_status_id as u32, status);
-            tree.set_style(self.link_status_id as u32, status_text_style(status_color));
+        if let Some(id) = self.link_status_id {
+            tree.set_text(id, status);
+            tree.set_style(id, status_text_style(status_color));
         }
     }
 
@@ -513,23 +512,23 @@ impl TransportPanel {
         self.clk_dot_color = dot_color;
         self.clk_status_text = status.into();
         self.clk_status_color = status_color;
-        if self.clk_button_id >= 0 {
+        if let Some(id) = self.clk_button_id {
             let bg = if enabled {
                 color::MIDI_PURPLE
             } else {
                 color::BUTTON_INACTIVE_C32
             };
-            tree.set_style(self.clk_button_id as u32, button_style(bg));
+            tree.set_style(id, button_style(bg));
         }
-        if self.clk_device_id >= 0 {
-            tree.set_text(self.clk_device_id as u32, device_text);
+        if let Some(id) = self.clk_device_id {
+            tree.set_text(id, device_text);
         }
-        if self.clk_dot_id >= 0 {
-            tree.set_style(self.clk_dot_id as u32, dot_style(dot_color));
+        if let Some(id) = self.clk_dot_id {
+            tree.set_style(id, dot_style(dot_color));
         }
-        if self.clk_status_id >= 0 {
-            tree.set_text(self.clk_status_id as u32, status);
-            tree.set_style(self.clk_status_id as u32, status_text_style(status_color));
+        if let Some(id) = self.clk_status_id {
+            tree.set_text(id, status);
+            tree.set_style(id, status_text_style(status_color));
         }
     }
 
@@ -546,28 +545,27 @@ impl TransportPanel {
         self.sync_dot_color = dot_color;
         self.sync_status_text = status.into();
         self.sync_status_color = status_color;
-        if self.sync_button_id >= 0 {
+        if let Some(id) = self.sync_button_id {
             let bg = if enabled {
                 color::SYNC_ACTIVE
             } else {
                 color::BUTTON_INACTIVE_C32
             };
-            tree.set_style(self.sync_button_id as u32, button_style(bg));
+            tree.set_style(id, button_style(bg));
         }
-        if self.sync_dot_id >= 0 {
-            tree.set_style(self.sync_dot_id as u32, dot_style(dot_color));
+        if let Some(id) = self.sync_dot_id {
+            tree.set_style(id, dot_style(dot_color));
         }
-        if self.sync_status_id >= 0 {
-            tree.set_text(self.sync_status_id as u32, status);
-            tree.set_style(self.sync_status_id as u32, status_text_style(status_color));
+        if let Some(id) = self.sync_status_id {
+            tree.set_text(id, status);
+            tree.set_style(id, status_text_style(status_color));
         }
     }
 
     pub fn set_play_state(&mut self, tree: &mut UITree, text: &str, c: Color32) {
         self.play_text = text.into();
         self.play_color = c;
-        if self.play_button_id >= 0 {
-            let id = self.play_button_id as u32;
+        if let Some(id) = self.play_button_id {
             tree.set_text(id, text);
             tree.set_style(id, button_style(c));
         }
@@ -576,8 +574,7 @@ impl TransportPanel {
     pub fn set_record_state(&mut self, tree: &mut UITree, active: bool, enabled: bool) {
         self.rec_active = active;
         self.rec_enabled = enabled;
-        if self.rec_button_id >= 0 {
-            let id = self.rec_button_id as u32;
+        if let Some(id) = self.rec_button_id {
             let c = if active {
                 color::RECORD_ACTIVE
             } else {
@@ -594,15 +591,14 @@ impl TransportPanel {
 
     pub fn set_bpm_text(&mut self, tree: &mut UITree, text: &str) {
         self.bpm_text = text.into();
-        if self.bpm_field_id >= 0 {
-            tree.set_text(self.bpm_field_id as u32, text);
+        if let Some(id) = self.bpm_field_id {
+            tree.set_text(id, text);
         }
     }
 
     pub fn set_bpm_reset_active(&mut self, tree: &mut UITree, active: bool) {
         self.bpm_reset_active = active;
-        if self.bpm_reset_id >= 0 {
-            let id = self.bpm_reset_id as u32;
+        if let Some(id) = self.bpm_reset_id {
             let c = if active {
                 color::BPM_RESET_ACTIVE
             } else {
@@ -619,8 +615,7 @@ impl TransportPanel {
 
     pub fn set_bpm_clear_active(&mut self, tree: &mut UITree, active: bool) {
         self.bpm_clear_active = active;
-        if self.bpm_clear_id >= 0 {
-            let id = self.bpm_clear_id as u32;
+        if let Some(id) = self.bpm_clear_id {
             let c = if active {
                 color::BPM_CLEAR_ACTIVE
             } else {
@@ -637,8 +632,7 @@ impl TransportPanel {
 
     pub fn set_save_text(&mut self, tree: &mut UITree, text: &str) {
         self.save_text = text.into();
-        if self.save_button_id >= 0 {
-            let id = self.save_button_id as u32;
+        if let Some(id) = self.save_button_id {
             tree.set_text(id, text);
             let dirty = text.contains('*');
             let c = if dirty {
@@ -656,43 +650,43 @@ impl TransportPanel {
 
     pub fn set_export_active(&mut self, tree: &mut UITree, active: bool) {
         self.export_active = active;
-        if self.export_button_id >= 0 {
+        if let Some(id) = self.export_button_id {
             let c = if active {
                 color::SYNC_ACTIVE
             } else {
                 color::BUTTON_INACTIVE_C32
             };
-            tree.set_style(self.export_button_id as u32, button_style(c));
+            tree.set_style(id, button_style(c));
         }
     }
 
     pub fn set_hdr_active(&mut self, tree: &mut UITree, active: bool) {
         self.hdr_active = active;
-        if self.hdr_button_id >= 0 {
+        if let Some(id) = self.hdr_button_id {
             let c = if active {
                 color::SYNC_ACTIVE
             } else {
                 color::BUTTON_INACTIVE_C32
             };
-            tree.set_style(self.hdr_button_id as u32, button_style(c));
+            tree.set_style(id, button_style(c));
         }
     }
 
     pub fn set_perc_active(&mut self, tree: &mut UITree, active: bool) {
         self.perc_active = active;
-        if self.perc_button_id >= 0 {
+        if let Some(id) = self.perc_button_id {
             let c = if active {
                 color::SYNC_ACTIVE
             } else {
                 color::BUTTON_INACTIVE_C32
             };
-            tree.set_style(self.perc_button_id as u32, button_style(c));
+            tree.set_style(id, button_style(c));
         }
     }
 
     // ── Build helpers ──────────────────────────────────────────────
 
-    fn build_left(&mut self, tree: &mut UITree, bg: i32) {
+    fn build_left(&mut self, tree: &mut UITree, bg: NodeId) {
         // Clone strings to avoid borrow conflicts
         let clock_text = self.clock_authority_text.clone();
         let link_status = self.link_status_text.clone();
@@ -700,170 +694,171 @@ impl TransportPanel {
         let clk_status = self.clk_status_text.clone();
         let sync_status = self.sync_status_text.clone();
 
-        self.clock_authority_id = tree.add_button(
-            bg,
+        self.clock_authority_id = Some(tree.add_button(
+            Some(bg),
             self.layout.clock_authority.x,
             self.layout.clock_authority.y,
             self.layout.clock_authority.width,
             self.layout.clock_authority.height,
             button_style(self.clock_authority_color),
             &clock_text,
-        ) as i32;
+        ));
 
         let link_bg = if self.link_enabled {
             color::LINK_ORANGE
         } else {
             color::BUTTON_INACTIVE_C32
         };
-        self.link_button_id = tree.add_button(
-            bg,
+        self.link_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.link_button.x,
             self.layout.link_button.y,
             self.layout.link_button.width,
             self.layout.link_button.height,
             button_style(link_bg),
             "LINK",
-        ) as i32;
+        ));
 
-        self.link_dot_id = tree.add_panel(
-            bg,
+        self.link_dot_id = Some(tree.add_panel(
+            Some(bg),
             self.layout.link_dot.x,
             self.layout.link_dot.y,
             self.layout.link_dot.width,
             self.layout.link_dot.height,
             dot_style(self.link_dot_color),
-        ) as i32;
+        ));
 
-        self.link_status_id = tree.add_node(
-            bg,
+        self.link_status_id = Some(tree.add_node(
+            Some(bg),
             self.layout.link_status,
             UINodeType::Label,
             status_text_style(self.link_status_color),
             Some(&link_status),
             UIFlags::empty(),
-        ) as i32;
+        ));
 
         let clk_bg = if self.clk_enabled {
             color::MIDI_PURPLE
         } else {
             color::BUTTON_INACTIVE_C32
         };
-        self.clk_button_id = tree.add_button(
-            bg,
+        self.clk_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.clk_button.x,
             self.layout.clk_button.y,
             self.layout.clk_button.width,
             self.layout.clk_button.height,
             button_style(clk_bg),
             "CLK",
-        ) as i32;
+        ));
 
-        self.clk_device_id = tree.add_button(
-            bg,
+        self.clk_device_id = Some(tree.add_button(
+            Some(bg),
             self.layout.clk_device.x,
             self.layout.clk_device.y,
             self.layout.clk_device.width,
             self.layout.clk_device.height,
             button_style(color::BUTTON_INACTIVE_C32),
             &clk_device,
-        ) as i32;
+        ));
 
-        self.clk_dot_id = tree.add_panel(
-            bg,
+        self.clk_dot_id = Some(tree.add_panel(
+            Some(bg),
             self.layout.clk_dot.x,
             self.layout.clk_dot.y,
             self.layout.clk_dot.width,
             self.layout.clk_dot.height,
             dot_style(self.clk_dot_color),
-        ) as i32;
+        ));
 
-        self.clk_status_id = tree.add_node(
-            bg,
+        self.clk_status_id = Some(tree.add_node(
+            Some(bg),
             self.layout.clk_status,
             UINodeType::Label,
             status_text_style(self.clk_status_color),
             Some(&clk_status),
             UIFlags::empty(),
-        ) as i32;
+        ));
 
         let sync_bg = if self.sync_enabled {
             color::SYNC_ACTIVE
         } else {
             color::BUTTON_INACTIVE_C32
         };
-        self.sync_button_id = tree.add_button(
-            bg,
+        self.sync_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.sync_button.x,
             self.layout.sync_button.y,
             self.layout.sync_button.width,
             self.layout.sync_button.height,
             button_style(sync_bg),
             "SYNC",
-        ) as i32;
+        ));
 
-        self.sync_dot_id = tree.add_panel(
-            bg,
+        self.sync_dot_id = Some(tree.add_panel(
+            Some(bg),
             self.layout.sync_dot.x,
             self.layout.sync_dot.y,
             self.layout.sync_dot.width,
             self.layout.sync_dot.height,
             dot_style(self.sync_dot_color),
-        ) as i32;
+        ));
 
-        self.sync_status_id = tree.add_node(
-            bg,
+        self.sync_status_id = Some(tree.add_node(
+            Some(bg),
             self.layout.sync_status,
             UINodeType::Label,
             status_text_style(self.sync_status_color),
             Some(&sync_status),
             UIFlags::empty(),
-        ) as i32;
+        ));
     }
 
-    fn build_center(&mut self, tree: &mut UITree, bg: i32) {
+    fn build_center(&mut self, tree: &mut UITree, bg: NodeId) {
         let play_text = self.play_text.clone();
         let bpm_text = self.bpm_text.clone();
 
-        self.play_button_id = tree.add_button(
-            bg,
+        self.play_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.play_button.x,
             self.layout.play_button.y,
             self.layout.play_button.width,
             self.layout.play_button.height,
             button_style(self.play_color),
             &play_text,
-        ) as i32;
+        ));
 
-        self.stop_button_id = tree.add_button(
-            bg,
+        self.stop_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.stop_button.x,
             self.layout.stop_button.y,
             self.layout.stop_button.width,
             self.layout.stop_button.height,
             button_style(self.stop_color),
             "STOP",
-        ) as i32;
+        ));
 
         let rec_c = if self.rec_active {
             color::RECORD_ACTIVE
         } else {
             color::RECORD_RED
         };
-        self.rec_button_id = tree.add_button(
-            bg,
+        let rec_button_id = tree.add_button(
+            Some(bg),
             self.layout.rec_button.x,
             self.layout.rec_button.y,
             self.layout.rec_button.width,
             self.layout.rec_button.height,
             button_style(rec_c),
             "REC",
-        ) as i32;
+        );
+        self.rec_button_id = Some(rec_button_id);
         if !self.rec_enabled {
-            tree.set_flag(self.rec_button_id as u32, UIFlags::DISABLED);
+            tree.set_flag(rec_button_id, UIFlags::DISABLED);
         }
 
-        self.bpm_label_id = tree.add_node(
-            bg,
+        self.bpm_label_id = Some(tree.add_node(
+            Some(bg),
             self.layout.bpm_label,
             UINodeType::Label,
             UIStyle {
@@ -874,10 +869,10 @@ impl TransportPanel {
             },
             Some("BPM"),
             UIFlags::empty(),
-        ) as i32;
+        ));
 
-        self.bpm_field_id = tree.add_button(
-            bg,
+        self.bpm_field_id = Some(tree.add_button(
+            Some(bg),
             self.layout.bpm_field.x,
             self.layout.bpm_field.y,
             self.layout.bpm_field.width,
@@ -893,24 +888,25 @@ impl TransportPanel {
                 ..UIStyle::default()
             },
             &bpm_text,
-        ) as i32;
+        ));
 
         let reset_c = if self.bpm_reset_active {
             color::BPM_RESET_ACTIVE
         } else {
             color::BUTTON_INACTIVE_C32
         };
-        self.bpm_reset_id = tree.add_button(
-            bg,
+        let bpm_reset_id = tree.add_button(
+            Some(bg),
             self.layout.bpm_reset.x,
             self.layout.bpm_reset.y,
             self.layout.bpm_reset.width,
             self.layout.bpm_reset.height,
             button_style(reset_c),
             "R",
-        ) as i32;
+        );
+        self.bpm_reset_id = Some(bpm_reset_id);
         if !self.bpm_reset_active {
-            tree.set_flag(self.bpm_reset_id as u32, UIFlags::DISABLED);
+            tree.set_flag(bpm_reset_id, UIFlags::DISABLED);
         }
 
         let clear_c = if self.bpm_clear_active {
@@ -918,45 +914,46 @@ impl TransportPanel {
         } else {
             color::BUTTON_INACTIVE_C32
         };
-        self.bpm_clear_id = tree.add_button(
-            bg,
+        let bpm_clear_id = tree.add_button(
+            Some(bg),
             self.layout.bpm_clear.x,
             self.layout.bpm_clear.y,
             self.layout.bpm_clear.width,
             self.layout.bpm_clear.height,
             button_style(clear_c),
             "CLR",
-        ) as i32;
+        );
+        self.bpm_clear_id = Some(bpm_clear_id);
         if !self.bpm_clear_active {
-            tree.set_flag(self.bpm_clear_id as u32, UIFlags::DISABLED);
+            tree.set_flag(bpm_clear_id, UIFlags::DISABLED);
         }
     }
 
-    fn build_right(&mut self, tree: &mut UITree, bg: i32) {
+    fn build_right(&mut self, tree: &mut UITree, bg: NodeId) {
         let save_text = self.save_text.clone();
 
-        self.new_button_id = tree.add_button(
-            bg,
+        self.new_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.new_button.x,
             self.layout.new_button.y,
             self.layout.new_button.width,
             self.layout.new_button.height,
             button_style(color::BUTTON_INACTIVE_C32),
             "NEW",
-        ) as i32;
+        ));
 
-        self.open_button_id = tree.add_button(
-            bg,
+        self.open_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.open_button.x,
             self.layout.open_button.y,
             self.layout.open_button.width,
             self.layout.open_button.height,
             button_style(color::BUTTON_INACTIVE_C32),
             "OPEN",
-        ) as i32;
+        ));
 
-        self.open_recent_id = tree.add_button(
-            bg,
+        self.open_recent_id = Some(tree.add_button(
+            Some(bg),
             self.layout.open_recent.x,
             self.layout.open_recent.y,
             self.layout.open_recent.width,
@@ -972,83 +969,83 @@ impl TransportPanel {
                 ..UIStyle::default()
             },
             "OPEN RECENT",
-        ) as i32;
+        ));
 
-        self.save_button_id = tree.add_button(
-            bg,
+        self.save_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.save_button.x,
             self.layout.save_button.y,
             self.layout.save_button.width,
             self.layout.save_button.height,
             button_style(color::BUTTON_INACTIVE_C32),
             &save_text,
-        ) as i32;
+        ));
 
-        self.save_as_id = tree.add_button(
-            bg,
+        self.save_as_id = Some(tree.add_button(
+            Some(bg),
             self.layout.save_as.x,
             self.layout.save_as.y,
             self.layout.save_as.width,
             self.layout.save_as.height,
             button_style(color::BUTTON_INACTIVE_C32),
             "SAVE AS",
-        ) as i32;
+        ));
 
         let export_bg = if self.export_active {
             color::SYNC_ACTIVE
         } else {
             color::BUTTON_INACTIVE_C32
         };
-        self.export_button_id = tree.add_button(
-            bg,
+        self.export_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.export_button.x,
             self.layout.export_button.y,
             self.layout.export_button.width,
             self.layout.export_button.height,
             button_style(export_bg),
             "EXPORT",
-        ) as i32;
+        ));
 
-        self.frame_button_id = tree.add_button(
-            bg,
+        self.frame_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.frame_button.x,
             self.layout.frame_button.y,
             self.layout.frame_button.width,
             self.layout.frame_button.height,
             button_style(color::BUTTON_INACTIVE_C32),
             "FRAME",
-        ) as i32;
+        ));
 
         let hdr_bg = if self.hdr_active {
             color::SYNC_ACTIVE
         } else {
             color::BUTTON_INACTIVE_C32
         };
-        self.hdr_button_id = tree.add_button(
-            bg,
+        self.hdr_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.hdr_button.x,
             self.layout.hdr_button.y,
             self.layout.hdr_button.width,
             self.layout.hdr_button.height,
             button_style(hdr_bg),
             "HDR",
-        ) as i32;
+        ));
 
-        self.perc_button_id = tree.add_button(
-            bg,
+        self.perc_button_id = Some(tree.add_button(
+            Some(bg),
             self.layout.perc_button.x,
             self.layout.perc_button.y,
             self.layout.perc_button.width,
             self.layout.perc_button.height,
             button_style(color::BUTTON_INACTIVE_C32),
             "PERC",
-        ) as i32;
+        ));
     }
 
     /// Drop thin vertical dividers into the section gaps the layout already
     /// leaves, so the eye groups the bar into sources / transport / tempo /
     /// file / render. Non-interactive panels — they never intercept clicks.
-    fn build_dividers(&mut self, tree: &mut UITree, bg: i32, bar: Rect) {
+    fn build_dividers(&mut self, tree: &mut UITree, bg: NodeId, bar: Rect) {
         let y = bar.y + DIVIDER_V_INSET;
         let h = (bar.height - DIVIDER_V_INSET * 2.0).max(1.0);
         let l = &self.layout;
@@ -1061,7 +1058,7 @@ impl TransportPanel {
         ];
         for mx in mids {
             tree.add_panel(
-                bg,
+                Some(bg),
                 mx - DIVIDER_W * 0.5,
                 y,
                 DIVIDER_W,
@@ -1074,8 +1071,8 @@ impl TransportPanel {
         }
     }
 
-    fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
-        let id = node_id as i32;
+    fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
+        let id = Some(node_id);
         // clock_authority_id is read-only — authority is auto-determined from enabled sources
         if id == self.link_button_id {
             return vec![PanelAction::ToggleLink];
@@ -1142,9 +1139,9 @@ impl TransportPanel {
     /// `docs/NODE_INTENT_DISPATCH.md`.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         use crate::intent::Gesture::Click;
-        let mut on = |id: i32, a: PanelAction| {
-            if id >= 0 {
-                intents.on(id as u32, Click, a);
+        let mut on = |id: Option<NodeId>, a: PanelAction| {
+            if let Some(id) = id {
+                intents.on(id, Click, a);
             }
         };
         on(self.link_button_id, PanelAction::ToggleLink);
@@ -1183,7 +1180,7 @@ impl Panel for TransportPanel {
         self.layout.compute(bar);
 
         let bg = tree.add_panel(
-            -1,
+            None,
             bar.x,
             bar.y,
             bar.width,
@@ -1192,7 +1189,7 @@ impl Panel for TransportPanel {
                 bg_color: color::PANEL_BG_DARK,
                 ..UIStyle::default()
             },
-        ) as i32;
+        );
 
         self.build_left(tree, bg);
         self.build_center(tree, bg);
@@ -1231,16 +1228,16 @@ mod tests {
 
         panel.build(&mut tree, &layout);
 
-        assert!(panel.play_button_id >= 0);
-        assert!(panel.stop_button_id >= 0);
-        assert!(panel.rec_button_id >= 0);
-        assert!(panel.bpm_field_id >= 0);
-        assert!(panel.clock_authority_id >= 0);
-        assert!(panel.link_button_id >= 0);
-        assert!(panel.new_button_id >= 0);
-        assert!(panel.save_button_id >= 0);
-        assert!(panel.export_button_id >= 0);
-        assert!(panel.frame_button_id >= 0);
+        assert!(panel.play_button_id.is_some());
+        assert!(panel.stop_button_id.is_some());
+        assert!(panel.rec_button_id.is_some());
+        assert!(panel.bpm_field_id.is_some());
+        assert!(panel.clock_authority_id.is_some());
+        assert!(panel.link_button_id.is_some());
+        assert!(panel.new_button_id.is_some());
+        assert!(panel.save_button_id.is_some());
+        assert!(panel.export_button_id.is_some());
+        assert!(panel.frame_button_id.is_some());
         assert!(tree.count() >= 28); // bg + 11 left + 7 center + 9 right = 28
     }
 
@@ -1251,7 +1248,7 @@ mod tests {
         let mut panel = TransportPanel::new();
         panel.build(&mut tree, &layout);
 
-        let actions = panel.handle_click(panel.play_button_id as u32);
+        let actions = panel.handle_click(panel.play_button_id.unwrap());
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::PlayPause));
     }
@@ -1259,7 +1256,7 @@ mod tests {
     #[test]
     fn handle_click_miss() {
         let panel = TransportPanel::new();
-        let actions = panel.handle_click(9999);
+        let actions = panel.handle_click(NodeId(9999));
         assert!(actions.is_empty());
     }
 
@@ -1294,7 +1291,7 @@ mod tests {
         assert!(tree.has_dirty());
         assert_eq!(panel.play_text, "PAUSE");
         assert_eq!(
-            tree.get_node(panel.play_button_id as u32).text.as_deref(),
+            tree.get_node(panel.play_button_id.unwrap()).text.as_deref(),
             Some("PAUSE")
         );
     }

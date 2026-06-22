@@ -191,9 +191,9 @@ pub(crate) fn uniform_rows_height(n: usize) -> f32 {
 /// (row 0's buttons first, then row 1's, …) — that flat index is what
 /// [`Self::resolve_button`] returns and what the caller maps to an action.
 pub struct DrawerIds {
-    pub container: i32,
+    pub container: NodeId,
     /// Node id per flat button index.
-    button_ids: Vec<i32>,
+    button_ids: Vec<NodeId>,
     /// Slider node ids, in row order (one per `Slider` row).
     pub sliders: Vec<SliderNodeIds>,
     /// Total height the drawer occupied.
@@ -202,7 +202,7 @@ pub struct DrawerIds {
 
 impl DrawerIds {
     /// Flat control index of the button with this node id, if any.
-    pub fn resolve_button(&self, id: i32) -> Option<usize> {
+    pub fn resolve_button(&self, id: NodeId) -> Option<usize> {
         self.button_ids.iter().position(|&b| b == id)
     }
 
@@ -214,7 +214,7 @@ impl DrawerIds {
     /// The flat button node ids, row 0 first. Callers that built a fixed-shape
     /// spec (e.g. the driver drawer) use this to recover their typed ids by
     /// position.
-    pub fn button_ids(&self) -> &[i32] {
+    pub fn button_ids(&self) -> &[NodeId] {
         &self.button_ids
     }
 }
@@ -240,7 +240,7 @@ fn uniform_widths(n: usize, content_w: f32) -> Vec<f32> {
 /// `w`. Returns the created ids + the height consumed.
 pub fn build(
     tree: &mut UITree,
-    parent: i32,
+    parent: Option<NodeId>,
     x: f32,
     y: f32,
     w: f32,
@@ -258,9 +258,9 @@ pub fn build(
             corner_radius: 2.0,
             ..UIStyle::default()
         },
-    ) as i32;
+    );
 
-    let mut button_ids: Vec<i32> = Vec::new();
+    let mut button_ids: Vec<NodeId> = Vec::new();
     let mut sliders: Vec<SliderNodeIds> = Vec::new();
     let avail_w = w - PAD_H * 2.0;
     let mut row_y = y + TOP_PAD;
@@ -272,7 +272,7 @@ pub fn build(
                 let label_w = if label.is_some() { ROW_LABEL_W } else { 0.0 };
                 if let Some(text) = label {
                     tree.add_label(
-                        container,
+                        Some(container),
                         x + PAD_H,
                         row_y + (ROW_H - ROW_LABEL_H) * 0.5,
                         label_w,
@@ -309,8 +309,8 @@ pub fn build(
                         }
                     }
                     let id = tree.add_button(
-                        container, cx, row_y, *bw, ROW_H, style, &b.label,
-                    ) as i32;
+                        Some(container), cx, row_y, *bw, ROW_H, style, &b.label,
+                    );
                     button_ids.push(id);
                     cx += bw + BTN_GAP;
                 }
@@ -326,7 +326,7 @@ pub fn build(
                 let slider_w = w - PAD_H * 2.0;
                 let ids = BitmapSlider::build(
                     tree,
-                    container,
+                    Some(container),
                     Rect::new(sx, row_y, slider_w, ROW_H),
                     Some(label.as_str()),
                     norm.clamp(0.0, 1.0),
@@ -342,7 +342,7 @@ pub fn build(
                 let dot_w = if let Some(dot) = &s.dot {
                     let dot_y = row_y + (s.height - dot.size) * 0.5;
                     tree.add_panel(
-                        container,
+                        Some(container),
                         x + STATUS_PAD,
                         dot_y,
                         dot.size,
@@ -364,14 +364,14 @@ pub fn build(
                     let bx = x + w - STATUS_PAD - tb.width;
                     let by = row_y + (s.height - tb.height) * 0.5;
                     let id = tree.add_button(
-                        container,
+                        Some(container),
                         bx,
                         by,
                         tb.width,
                         tb.height,
                         tb.style,
                         &tb.label,
-                    ) as i32;
+                    );
                     button_ids.push(id);
                     trailing_x = bx;
                 }
@@ -381,7 +381,7 @@ pub fn build(
                 let label_y = row_y + (s.height - STATUS_LABEL_H) * 0.5;
                 let label_w = (trailing_x - label_x - 4.0).max(0.0);
                 tree.add_label(
-                    container,
+                    Some(container),
                     label_x,
                     label_y,
                     label_w,
@@ -448,8 +448,8 @@ mod tests {
         };
 
         let mut tree = UITree::new();
-        let root = tree.add_panel(-1, 0.0, 0.0, 400.0, 200.0, UIStyle::default()) as i32;
-        let ids = build(&mut tree, root, 0.0, 0.0, 240.0, &spec);
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
 
         assert_eq!(ids.button_count(), 19, "11 + 8 buttons");
 
@@ -460,7 +460,7 @@ mod tests {
         let rev_node = ids.button_ids[18];
         assert_eq!(ids.resolve_button(rev_node), Some(18));
         // An unrelated id resolves to nothing.
-        assert_eq!(ids.resolve_button(999_999), None);
+        assert_eq!(ids.resolve_button(NodeId(999_999)), None);
     }
 
     #[test]
@@ -477,8 +477,8 @@ mod tests {
             slider_font_size: 11,
         };
         let mut tree = UITree::new();
-        let root = tree.add_panel(-1, 0.0, 0.0, 400.0, 200.0, UIStyle::default()) as i32;
-        let ids = build(&mut tree, root, 0.0, 0.0, 240.0, &spec);
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
 
         assert_eq!(ids.button_count(), 0);
         assert_eq!(ids.sliders.len(), 1);
@@ -508,11 +508,11 @@ mod tests {
             slider_font_size: 11,
         };
         let mut tree = UITree::new();
-        let root = tree.add_panel(-1, 0.0, 0.0, 400.0, 200.0, UIStyle::default()) as i32;
-        let ids = build(&mut tree, root, 0.0, 0.0, 240.0, &spec);
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
         assert_eq!(ids.button_count(), 8);
-        let w0 = tree.get_node(ids.button_ids[0] as u32).bounds.width;
-        let w7 = tree.get_node(ids.button_ids[7] as u32).bounds.width;
+        let w0 = tree.get_node(ids.button_ids[0]).bounds.width;
+        let w7 = tree.get_node(ids.button_ids[7]).bounds.width;
         assert!((w0 - w7).abs() < 0.001, "uniform row keeps equal widths");
     }
 
@@ -536,8 +536,8 @@ mod tests {
             slider_font_size: 11,
         };
         let mut tree = UITree::new();
-        let root = tree.add_panel(-1, 0.0, 0.0, 400.0, 200.0, UIStyle::default()) as i32;
-        let ids = build(&mut tree, root, 0.0, 0.0, 240.0, &spec);
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
+        let ids = build(&mut tree, Some(root), 0.0, 0.0, 240.0, &spec);
         // The INV button is the only addressable control.
         assert_eq!(ids.button_count(), 1);
         // Container height = TOP_PAD*2 + strip height = 8 + 16 = 24 (matches ABL).

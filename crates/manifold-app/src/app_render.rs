@@ -873,7 +873,7 @@ impl Application {
                             .editor_card_intents
                             .resolve(
                                 &ed.ui_root.tree,
-                                *node_id as i32,
+                                *node_id,
                                 manifold_ui::intent::Gesture::RightClick,
                             )
                             .into_iter()
@@ -1940,11 +1940,11 @@ impl Application {
                 }
                 PanelAction::BpmFieldClicked => {
                     let bpm = Some(&self.local_project).map_or(120.0, |p| p.settings.bpm.0);
-                    let r = self
-                        .ws
-                        .ui_root
-                        .tree
-                        .get_bounds(self.ws.ui_root.transport.bpm_field_id() as u32);
+                    let r = if let Some(id) = self.ws.ui_root.transport.bpm_field_id() {
+                        self.ws.ui_root.tree.get_bounds(id)
+                    } else {
+                        manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
+                    };
                     self.text_input.begin(
                         crate::text_input::TextInputField::Bpm,
                         &format!("{:.1}", bpm),
@@ -1955,11 +1955,11 @@ impl Application {
                 }
                 PanelAction::FpsFieldClicked => {
                     let fps = Some(&self.local_project).map_or(60.0, |p| p.settings.frame_rate);
-                    let r = self
-                        .ws
-                        .ui_root
-                        .tree
-                        .get_bounds(self.ws.ui_root.footer.fps_field_id() as u32);
+                    let r = if let Some(id) = self.ws.ui_root.footer.fps_field_id() {
+                        self.ws.ui_root.tree.get_bounds(id)
+                    } else {
+                        manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
+                    };
                     self.text_input.begin(
                         crate::text_input::TextInputField::Fps,
                         &format!("{:.0}", fps),
@@ -1973,9 +1973,8 @@ impl Application {
                     {
                         let project = &self.local_project;
                         if let Some(layer) = project.timeline.layers.get(*idx) {
-                            let nid = self.ws.ui_root.layer_headers.name_node_id(*idx);
-                            let r = if nid >= 0 {
-                                self.ws.ui_root.tree.get_bounds(nid as u32)
+                            let r = if let Some(nid) = self.ws.ui_root.layer_headers.name_node_id(*idx) {
+                                self.ws.ui_root.tree.get_bounds(nid)
                             } else {
                                 manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
                             };
@@ -3210,7 +3209,7 @@ impl Application {
         let panel_top = if card_h > 0.0 { card_h + 5.0 } else { 0.0 };
         if card_h > 0.0 {
             ws.ui_root.tree.add_panel(
-                -1,
+                None,
                 0.0,
                 card_h + 2.0,
                 palette_width,
@@ -3247,7 +3246,7 @@ impl Application {
             // Backing panel for the whole right column so the two centred monitors
             // sit on a clean, uniform surface rather than a black void.
             ws.ui_root.tree.add_panel(
-                -1,
+                None,
                 sidebar_x,
                 0.0,
                 sidebar_width,
@@ -3272,7 +3271,7 @@ impl Application {
                 .render_node_inspector(&mut ws.ui_root.tree, node_region);
             if !inspector_drawn {
                 ws.ui_root.tree.add_label(
-                    -1,
+                    None,
                     title_x,
                     node_title_y,
                     preview_w,
@@ -3283,7 +3282,7 @@ impl Application {
                 if !show_image {
                     // Nothing selected — the image body stays empty; hint it.
                     ws.ui_root.tree.add_label(
-                        -1,
+                        None,
                         title_x,
                         node_img_y + preview_h * 0.5 - 8.0,
                         preview_w,
@@ -3299,7 +3298,7 @@ impl Application {
                 }
             }
             ws.ui_root.tree.add_label(
-                -1,
+                None,
                 title_x,
                 master_title_y,
                 preview_w,

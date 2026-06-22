@@ -236,8 +236,8 @@ const CHANGE_BTN_H: f32 = 16.0;
 
 /// Generator toggle/trigger row node IDs (button + its label).
 struct ToggleParamIds {
-    label_id: i32,
-    button_id: i32,
+    label_id: Option<NodeId>,
+    button_id: NodeId,
 }
 
 /// Packed right-aligned positions for the 0–4 header modulation badges.
@@ -359,32 +359,32 @@ pub struct ParamCardPanel {
     state: ParamCardState,
 
     // ── Node IDs — card shell (shared) ──
-    border_id: i32,
-    inner_bg_id: i32,
-    header_bg_id: i32,
-    name_label_id: i32,
+    border_id: Option<NodeId>,
+    inner_bg_id: Option<NodeId>,
+    header_bg_id: Option<NodeId>,
+    name_label_id: Option<NodeId>,
     /// Transparent CLIPS_CHILDREN container sized to the name cell. The name
     /// label nests inside it so a long effect name is clipped at the cell edge
     /// instead of overflowing into the header badges. Resized live in sync when
     /// the active-badge set changes.
-    name_clip_id: i32,
-    chevron_btn_id: i32,
-    cog_btn_id: i32,
+    name_clip_id: Option<NodeId>,
+    chevron_btn_id: Option<NodeId>,
+    cog_btn_id: Option<NodeId>,
 
     // ── Node IDs — effect shell ──
-    drag_icon_id: i32,
-    toggle_btn_id: i32,
-    abl_badge_bg_id: i32,
-    abl_badge_text_id: i32,
-    env_badge_bg_id: i32,
-    env_badge_text_id: i32,
-    drv_badge_bg_id: i32,
-    drv_badge_text_id: i32,
-    mod_badge_bg_id: i32,
-    mod_badge_text_id: i32,
+    drag_icon_id: Option<NodeId>,
+    toggle_btn_id: Option<NodeId>,
+    abl_badge_bg_id: Option<NodeId>,
+    abl_badge_text_id: Option<NodeId>,
+    env_badge_bg_id: Option<NodeId>,
+    env_badge_text_id: Option<NodeId>,
+    drv_badge_bg_id: Option<NodeId>,
+    drv_badge_text_id: Option<NodeId>,
+    mod_badge_bg_id: Option<NodeId>,
+    mod_badge_text_id: Option<NodeId>,
 
     // ── Node IDs — generator shell ──
-    change_btn_id: i32,
+    change_btn_id: Option<NodeId>,
 
     // ── Dirty-check cache (effect badges + enabled) ──
     cached_enabled: bool,
@@ -397,13 +397,13 @@ pub struct ParamCardPanel {
     slider_ids: Vec<Option<SliderNodeIds>>,
     /// Per-param transparent full-row hit catcher behind the slider widgets.
     /// Carries the param's right-click menu intent so the value cell + gaps
-    /// resolve to the param menu (track stays instant-reset). -1 if unbuilt.
-    row_catcher_ids: Vec<i32>,
-    driver_btn_ids: Vec<i32>,
-    envelope_btn_ids: Vec<i32>,
+    /// resolve to the param menu (track stays instant-reset). None if unbuilt.
+    row_catcher_ids: Vec<Option<NodeId>>,
+    driver_btn_ids: Vec<Option<NodeId>>,
+    envelope_btn_ids: Vec<Option<NodeId>>,
     driver_config_ids: Vec<Option<DriverConfigIds>>,
     /// Per-param "A" audio-mod button node id.
-    audio_btn_ids: Vec<i32>,
+    audio_btn_ids: Vec<Option<NodeId>>,
     /// Per-param audio drawer ids + send count (for click resolution).
     audio_configs: Vec<Option<(crate::panels::drawer::DrawerIds, usize)>>,
     /// Per-param orange envelope target handle on the slider track (when armed).
@@ -418,11 +418,11 @@ pub struct ParamCardPanel {
 
     // ── Node IDs — per-param (generator) ──
     toggle_ids: Vec<Option<ToggleParamIds>>,
-    string_param_btn_ids: Vec<i32>,
+    string_param_btn_ids: Vec<Option<NodeId>>,
 
     /// Per-param sideways-mapping-drawer chevron (Author context, mappable rows
-    /// only). `-1` for rows without one. Indexed by param index.
-    mapping_chevron_ids: Vec<i32>,
+    /// only). `None` for rows without one. Indexed by param index.
+    mapping_chevron_ids: Vec<Option<NodeId>>,
 
     // Per-param OSC addresses (for click-to-copy). Indexed by param index.
     osc_addresses: Vec<Option<String>>,
@@ -461,24 +461,24 @@ impl ParamCardPanel {
             param_info: Vec::new(),
             string_param_info: Vec::new(),
             state: ParamCardState::new(0),
-            border_id: -1,
-            inner_bg_id: -1,
-            header_bg_id: -1,
-            name_label_id: -1,
-            name_clip_id: -1,
-            chevron_btn_id: -1,
-            cog_btn_id: -1,
-            drag_icon_id: -1,
-            toggle_btn_id: -1,
-            abl_badge_bg_id: -1,
-            abl_badge_text_id: -1,
-            env_badge_bg_id: -1,
-            env_badge_text_id: -1,
-            drv_badge_bg_id: -1,
-            drv_badge_text_id: -1,
-            mod_badge_bg_id: -1,
-            mod_badge_text_id: -1,
-            change_btn_id: -1,
+            border_id: None,
+            inner_bg_id: None,
+            header_bg_id: None,
+            name_label_id: None,
+            name_clip_id: None,
+            chevron_btn_id: None,
+            cog_btn_id: None,
+            drag_icon_id: None,
+            toggle_btn_id: None,
+            abl_badge_bg_id: None,
+            abl_badge_text_id: None,
+            env_badge_bg_id: None,
+            env_badge_text_id: None,
+            drv_badge_bg_id: None,
+            drv_badge_text_id: None,
+            mod_badge_bg_id: None,
+            mod_badge_text_id: None,
+            change_btn_id: None,
             cached_enabled: true,
             cached_has_env: false,
             cached_has_drv: false,
@@ -558,12 +558,12 @@ impl ParamCardPanel {
             .collect();
         self.copied_flash.clear();
         self.slider_ids = vec![None; n];
-        self.row_catcher_ids = vec![-1; n];
-        self.driver_btn_ids = vec![-1; n];
-        self.envelope_btn_ids = vec![-1; n];
+        self.row_catcher_ids = vec![None; n];
+        self.driver_btn_ids = vec![None; n];
+        self.envelope_btn_ids = vec![None; n];
         self.driver_config_ids = Vec::new();
         self.driver_config_ids.resize_with(n, || None);
-        self.audio_btn_ids = vec![-1; n];
+        self.audio_btn_ids = vec![None; n];
         self.audio_configs = Vec::new();
         self.audio_configs.resize_with(n, || None);
         self.target_ids = Vec::new();
@@ -580,8 +580,8 @@ impl ParamCardPanel {
         self.ableton_config_ids.resize_with(n, || None);
         self.toggle_ids = Vec::new();
         self.toggle_ids.resize_with(n, || None);
-        self.mapping_chevron_ids = vec![-1; n];
-        self.string_param_btn_ids = vec![-1; config.string_params.len()];
+        self.mapping_chevron_ids = vec![None; n];
+        self.string_param_btn_ids = vec![None; config.string_params.len()];
         self.param_cache = vec![f32::NAN; n];
         self.toggle_cache = vec![false; n];
         self.label_cache = vec![None; n];
@@ -658,9 +658,9 @@ impl ParamCardPanel {
             return;
         }
         self.is_selected = selected;
-        if self.border_id >= 0 {
+        if let Some(border_id) = self.border_id {
             tree.set_style(
-                self.border_id as u32,
+                border_id,
                 UIStyle {
                     bg_color: self.base_border_color(),
                     corner_radius: CORNER_RADIUS,
@@ -681,20 +681,20 @@ impl ParamCardPanel {
     }
 
     /// Whether `node_id` is this card's drag handle (effect kind only).
-    pub fn is_drag_handle(&self, node_id: u32) -> bool {
-        self.drag_icon_id >= 0 && node_id == self.drag_icon_id as u32
+    pub fn is_drag_handle(&self, node_id: NodeId) -> bool {
+        self.drag_icon_id == Some(node_id)
     }
 
     /// Dim/undim the card border during a reorder drag (effect kind).
     pub fn set_drag_dimmed(&self, tree: &mut UITree, dim: bool) {
-        if self.border_id >= 0 {
+        if let Some(border_id) = self.border_id {
             let bg_color = if dim {
                 Color32::new(46, 46, 49, 100) // dimmed border
             } else {
                 self.base_border_color()
             };
             tree.set_style(
-                self.border_id as u32,
+                border_id,
                 UIStyle {
                     bg_color,
                     corner_radius: CORNER_RADIUS,
@@ -710,8 +710,8 @@ impl ParamCardPanel {
     /// drawn (Perform context).
     pub fn mapping_chevron_rect(&self, tree: &UITree, param_id: &str) -> Option<Rect> {
         let pi = self.param_info.iter().position(|p| p.param_id == param_id)?;
-        let cid = *self.mapping_chevron_ids.get(pi)?;
-        (cid >= 0).then(|| tree.get_bounds(cid as u32))
+        let cid = (*self.mapping_chevron_ids.get(pi)?)?;
+        Some(tree.get_bounds(cid))
     }
 
     /// Hit-test the param NAME labels (slider + toggle/trigger rows) and return
@@ -731,17 +731,15 @@ impl ParamCardPanel {
                 .slider_ids
                 .get(i)
                 .and_then(|s| s.as_ref())
-                .map(|ids| ids.label)
-                .filter(|&l| l >= 0)
+                .and_then(|ids| ids.label)
                 .or_else(|| {
                     self.toggle_ids
                         .get(i)
                         .and_then(|t| t.as_ref())
-                        .map(|ids| ids.label_id)
-                        .filter(|&l| l >= 0)
+                        .and_then(|ids| ids.label_id)
                 });
             if let Some(lid) = label_id
-                && tree.get_bounds(lid as u32).contains(pos)
+                && tree.get_bounds(lid).contains(pos)
             {
                 return Some(info.param_id.clone());
             }
@@ -759,8 +757,9 @@ impl ParamCardPanel {
     pub fn string_param_rect(&self, tree: &UITree, index: usize) -> Option<Rect> {
         self.string_param_btn_ids
             .get(index)
-            .filter(|&&id| id >= 0)
-            .map(|&id| tree.get_bounds(id as u32))
+            .copied()
+            .flatten()
+            .map(|id| tree.get_bounds(id))
     }
 
     // ── compute_height ────────────────────────────────────────────
@@ -877,8 +876,8 @@ impl ParamCardPanel {
         } else {
             color::CARD_BORDER_C32
         };
-        self.border_id = tree.add_panel(
-            -1,
+        let border_id = tree.add_panel(
+            None,
             rect.x,
             rect.y,
             rect.width,
@@ -888,8 +887,9 @@ impl ParamCardPanel {
                 corner_radius: CORNER_RADIUS,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_flag(self.border_id as u32, UIFlags::INTERACTIVE);
+        );
+        self.border_id = Some(border_id);
+        tree.set_flag(border_id, UIFlags::INTERACTIVE);
 
         // Inner background — interactive so clicks anywhere on card body select the card
         let inner = Rect::new(
@@ -898,8 +898,8 @@ impl ParamCardPanel {
             rect.width - BORDER_W * 2.0,
             self.compute_height() - CARD_BOTTOM_MARGIN - BORDER_W * 2.0,
         );
-        self.inner_bg_id = tree.add_panel(
-            self.border_id,
+        let inner_bg_id = tree.add_panel(
+            Some(border_id),
             inner.x,
             inner.y,
             inner.width,
@@ -909,11 +909,12 @@ impl ParamCardPanel {
                 corner_radius: CORNER_RADIUS - BORDER_W,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_flag(self.inner_bg_id as u32, UIFlags::INTERACTIVE);
+        );
+        self.inner_bg_id = Some(inner_bg_id);
+        tree.set_flag(inner_bg_id, UIFlags::INTERACTIVE);
 
         let inner_w = inner.width;
-        let parent = self.inner_bg_id;
+        let parent = inner_bg_id;
 
         // Header
         self.build_effect_header(tree, parent, inner.x, inner.y, inner_w, &effect_name);
@@ -929,7 +930,7 @@ impl ParamCardPanel {
     fn build_effect_header(
         &mut self,
         tree: &mut UITree,
-        parent: i32,
+        parent: NodeId,
         x: f32,
         y: f32,
         w: f32,
@@ -942,8 +943,8 @@ impl ParamCardPanel {
         } else {
             color::DRAG_HANDLE_BG_C32
         };
-        self.header_bg_id = tree.add_panel(
-            parent,
+        let header_bg_id = tree.add_panel(
+            Some(parent),
             x,
             y,
             w,
@@ -953,8 +954,9 @@ impl ParamCardPanel {
                 corner_radius: CORNER_RADIUS - BORDER_W,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_flag(self.header_bg_id as u32, UIFlags::INTERACTIVE);
+        );
+        self.header_bg_id = Some(header_bg_id);
+        tree.set_flag(header_bg_id, UIFlags::INTERACTIVE);
 
         // Layout (right-to-left for fixed elements). Badges pack flush against
         // the toggle — only the active ones take a slot — so the name cell is
@@ -990,13 +992,13 @@ impl ParamCardPanel {
         let badge_y = y + (HEADER_HEIGHT - BADGE_H) * 0.5;
 
         // Drag handle (hamburger icon drawn as 3 horizontal bars). Perform only
-        // — leaving `drag_icon_id = -1` in Author also disables `is_drag_handle`,
+        // — leaving `drag_icon_id = None` in Author also disables `is_drag_handle`,
         // so the card can't be picked up for a reorder it has no list to join.
         if !author {
             let dh_x = x + PADDING;
             let dh_h = 16.0_f32;
-            self.drag_icon_id = tree.add_button(
-                self.header_bg_id,
+            let drag_icon_id = tree.add_button(
+                Some(header_bg_id),
                 dh_x,
                 elem_y,
                 DRAG_HANDLE_W,
@@ -1008,7 +1010,8 @@ impl ParamCardPanel {
                     ..UIStyle::default()
                 },
                 "",
-            ) as i32;
+            );
+            self.drag_icon_id = Some(drag_icon_id);
             let bar_w: f32 = 10.0;
             let bar_h: f32 = 1.5;
             let bar_x = dh_x + (DRAG_HANDLE_W - bar_w) * 0.5;
@@ -1019,14 +1022,14 @@ impl ParamCardPanel {
             };
             for i in 0..3 {
                 let bar_y = elem_y + 3.5 + i as f32 * 3.5;
-                tree.add_panel(self.drag_icon_id, bar_x, bar_y, bar_w, bar_h, bar_style);
+                tree.add_panel(Some(drag_icon_id), bar_x, bar_y, bar_w, bar_h, bar_style);
             }
         }
 
         // Name cell — a transparent clip container the label nests in, so a
         // long name is cut at the cell edge rather than drawn over the badges.
-        self.name_clip_id = tree.add_panel(
-            self.header_bg_id,
+        let name_clip_id = tree.add_panel(
+            Some(header_bg_id),
             name_x,
             elem_y,
             name_w,
@@ -1035,13 +1038,14 @@ impl ParamCardPanel {
                 bg_color: Color32::TRANSPARENT,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_flag(self.name_clip_id as u32, UIFlags::CLIPS_CHILDREN);
+        );
+        self.name_clip_id = Some(name_clip_id);
+        tree.set_flag(name_clip_id, UIFlags::CLIPS_CHILDREN);
 
         // Name label — generous width so left-aligned text never self-limits;
         // the clip container above enforces the cell edge.
-        self.name_label_id = tree.add_label(
-            self.name_clip_id,
+        self.name_label_id = Some(tree.add_label(
+            Some(name_clip_id),
             name_x,
             elem_y,
             (toggle_x - name_x).max(name_w),
@@ -1053,12 +1057,12 @@ impl ParamCardPanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
         // ABL badge — visibility synced from state.has_abl
         let show_abl = self.state.has_abl;
-        self.abl_badge_bg_id = tree.add_panel(
-            self.header_bg_id,
+        let abl_badge_bg_id = tree.add_panel(
+            Some(header_bg_id),
             abl_x,
             badge_y,
             BADGE_W,
@@ -1068,9 +1072,10 @@ impl ParamCardPanel {
                 corner_radius: BADGE_RADIUS,
                 ..UIStyle::default()
             },
-        ) as i32;
-        self.abl_badge_text_id = tree.add_label(
-            self.abl_badge_bg_id,
+        );
+        self.abl_badge_bg_id = Some(abl_badge_bg_id);
+        let abl_badge_text_id = tree.add_label(
+            Some(abl_badge_bg_id),
             abl_x,
             badge_y,
             BADGE_W,
@@ -1082,14 +1087,15 @@ impl ParamCardPanel {
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_visible(self.abl_badge_bg_id as u32, show_abl);
-        tree.set_visible(self.abl_badge_text_id as u32, show_abl);
+        );
+        self.abl_badge_text_id = Some(abl_badge_text_id);
+        tree.set_visible(abl_badge_bg_id, show_abl);
+        tree.set_visible(abl_badge_text_id, show_abl);
 
         // ENV badge — visibility synced from state.has_env
         let show_env = self.state.has_env;
-        self.env_badge_bg_id = tree.add_panel(
-            self.header_bg_id,
+        let env_badge_bg_id = tree.add_panel(
+            Some(header_bg_id),
             env_x,
             badge_y,
             BADGE_W,
@@ -1099,9 +1105,10 @@ impl ParamCardPanel {
                 corner_radius: BADGE_RADIUS,
                 ..UIStyle::default()
             },
-        ) as i32;
-        self.env_badge_text_id = tree.add_label(
-            self.env_badge_bg_id,
+        );
+        self.env_badge_bg_id = Some(env_badge_bg_id);
+        let env_badge_text_id = tree.add_label(
+            Some(env_badge_bg_id),
             env_x,
             badge_y,
             BADGE_W,
@@ -1113,14 +1120,15 @@ impl ParamCardPanel {
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_visible(self.env_badge_bg_id as u32, show_env);
-        tree.set_visible(self.env_badge_text_id as u32, show_env);
+        );
+        self.env_badge_text_id = Some(env_badge_text_id);
+        tree.set_visible(env_badge_bg_id, show_env);
+        tree.set_visible(env_badge_text_id, show_env);
 
         // DRV badge — visibility synced from state.has_drv
         let show_drv = self.state.has_drv;
-        self.drv_badge_bg_id = tree.add_panel(
-            self.header_bg_id,
+        let drv_badge_bg_id = tree.add_panel(
+            Some(header_bg_id),
             drv_x,
             badge_y,
             BADGE_W,
@@ -1130,9 +1138,10 @@ impl ParamCardPanel {
                 corner_radius: BADGE_RADIUS,
                 ..UIStyle::default()
             },
-        ) as i32;
-        self.drv_badge_text_id = tree.add_label(
-            self.drv_badge_bg_id,
+        );
+        self.drv_badge_bg_id = Some(drv_badge_bg_id);
+        let drv_badge_text_id = tree.add_label(
+            Some(drv_badge_bg_id),
             drv_x,
             badge_y,
             BADGE_W,
@@ -1144,15 +1153,16 @@ impl ParamCardPanel {
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_visible(self.drv_badge_bg_id as u32, show_drv);
-        tree.set_visible(self.drv_badge_text_id as u32, show_drv);
+        );
+        self.drv_badge_text_id = Some(drv_badge_text_id);
+        tree.set_visible(drv_badge_bg_id, show_drv);
+        tree.set_visible(drv_badge_text_id, show_drv);
 
         // MOD badge — pink chip indicating the card's graph topology
         // diverges from the catalog default.
         let show_mod = self.state.has_graph_mod;
-        self.mod_badge_bg_id = tree.add_panel(
-            self.header_bg_id,
+        let mod_badge_bg_id = tree.add_panel(
+            Some(header_bg_id),
             mod_x,
             badge_y,
             BADGE_W,
@@ -1162,9 +1172,10 @@ impl ParamCardPanel {
                 corner_radius: BADGE_RADIUS,
                 ..UIStyle::default()
             },
-        ) as i32;
-        self.mod_badge_text_id = tree.add_label(
-            self.mod_badge_bg_id,
+        );
+        self.mod_badge_bg_id = Some(mod_badge_bg_id);
+        let mod_badge_text_id = tree.add_label(
+            Some(mod_badge_bg_id),
             mod_x,
             badge_y,
             BADGE_W,
@@ -1176,9 +1187,10 @@ impl ParamCardPanel {
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_visible(self.mod_badge_bg_id as u32, show_mod);
-        tree.set_visible(self.mod_badge_text_id as u32, show_mod);
+        );
+        self.mod_badge_text_id = Some(mod_badge_text_id);
+        tree.set_visible(mod_badge_bg_id, show_mod);
+        tree.set_visible(mod_badge_text_id, show_mod);
 
         self.cached_has_env = show_env;
         self.cached_has_drv = show_drv;
@@ -1188,19 +1200,19 @@ impl ParamCardPanel {
 
         // Toggle button (ON/OFF)
         let toggle_style = toggle_btn_style(self.enabled);
-        self.toggle_btn_id = tree.add_button(
-            self.header_bg_id,
+        self.toggle_btn_id = Some(tree.add_button(
+            Some(header_bg_id),
             toggle_x,
             elem_y,
             TOGGLE_W,
             16.0,
             toggle_style,
             if self.enabled { "ON" } else { "OFF" },
-        ) as i32;
+        ));
 
         // Chevron
-        self.chevron_btn_id = tree.add_button(
-            self.header_bg_id,
+        self.chevron_btn_id = Some(tree.add_button(
+            Some(header_bg_id),
             chevron_x,
             elem_y,
             CHEVRON_W,
@@ -1219,14 +1231,14 @@ impl ParamCardPanel {
             } else {
                 "\u{25BC}"
             },
-        ) as i32;
+        ));
 
         // "Open in graph editor" affordance — three small dots in a triangle.
         // Perform only: in Author you're already in the editor, so the cog is
-        // suppressed (and `cog_btn_id` stays -1, so its click arm never fires).
+        // suppressed (and `cog_btn_id` stays None, so its click arm never fires).
         if !author {
-            self.cog_btn_id = tree.add_button(
-                self.header_bg_id,
+            let cog_btn_id = tree.add_button(
+                Some(header_bg_id),
                 cog_x,
                 elem_y,
                 COG_W,
@@ -1238,7 +1250,8 @@ impl ParamCardPanel {
                     ..UIStyle::default()
                 },
                 "",
-            ) as i32;
+            );
+            self.cog_btn_id = Some(cog_btn_id);
             let dot: f32 = 3.0;
             let dot_color = color::TEXT_DIMMED_C32;
             let dot_style = UIStyle {
@@ -1256,7 +1269,7 @@ impl ParamCardPanel {
                 (cx + h_offset - dot * 0.5, cy + v_offset - dot * 0.5),
             ];
             for (px, py) in positions {
-                tree.add_panel(self.cog_btn_id, px, py, dot, dot, dot_style);
+                tree.add_panel(Some(cog_btn_id), px, py, dot, dot, dot_style);
             }
         }
     }
@@ -1264,7 +1277,7 @@ impl ParamCardPanel {
     fn build_effect_sliders(
         &mut self,
         tree: &mut UITree,
-        parent: i32,
+        parent: NodeId,
         x: f32,
         start_y: f32,
         w: f32,
@@ -1301,7 +1314,7 @@ impl ParamCardPanel {
             // gate the `E` button on `supports_envelopes`.
             let row = build_param_row(
                 tree,
-                parent,
+                Some(parent),
                 x + PADDING,
                 cy,
                 slider_w,
@@ -1315,17 +1328,17 @@ impl ParamCardPanel {
                 label_width,
             );
             self.slider_ids[i] = row.slider;
-            self.row_catcher_ids[i] = row.row_catcher;
+            self.row_catcher_ids[i] = Some(row.row_catcher);
             self.trim_ids[i] = row.trim;
             self.target_ids[i] = row.target;
             self.envelope_config_ids[i] = row.envelope_config;
             self.ableton_trim_ids[i] = row.ableton_trim;
             self.audio_trim_ids[i] = row.audio_trim;
             self.envelope_btn_ids[i] = row.envelope_btn;
-            self.driver_btn_ids[i] = row.driver_btn;
+            self.driver_btn_ids[i] = Some(row.driver_btn);
             self.driver_config_ids[i] = row.driver_config;
             self.ableton_config_ids[i] = row.ableton_config;
-            self.audio_btn_ids[i] = row.audio_btn;
+            self.audio_btn_ids[i] = Some(row.audio_btn);
             self.audio_configs[i] = row.audio_config;
             // Mapping-drawer chevron at the row's right edge (Author + mappable).
             // A subtle ">" that opens the sideways range/scale/offset/invert/
@@ -1334,8 +1347,8 @@ impl ParamCardPanel {
             if author && info.mappable {
                 let ch_x = x + PADDING + (w - PADDING * 2.0) - MAP_CHEVRON_W;
                 let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
-                self.mapping_chevron_ids[i] = tree.add_button(
-                    parent,
+                self.mapping_chevron_ids[i] = Some(tree.add_button(
+                    Some(parent),
                     ch_x,
                     ch_y,
                     MAP_CHEVRON_W,
@@ -1351,7 +1364,7 @@ impl ParamCardPanel {
                         ..UIStyle::default()
                     },
                     "\u{203A}", // ›
-                ) as i32;
+                ));
             }
             cy = row.new_cy;
         }
@@ -1372,8 +1385,8 @@ impl ParamCardPanel {
         } else {
             color::GEN_CARD_BORDER_C32
         };
-        self.border_id = tree.add_panel(
-            -1,
+        let border_id = tree.add_panel(
+            None,
             rect.x,
             rect.y,
             rect.width,
@@ -1383,15 +1396,16 @@ impl ParamCardPanel {
                 corner_radius: CORNER_RADIUS,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_flag(self.border_id as u32, UIFlags::INTERACTIVE);
+        );
+        self.border_id = Some(border_id);
+        tree.set_flag(border_id, UIFlags::INTERACTIVE);
 
         let inner_x = rect.x + BORDER_W;
         let inner_y = rect.y + BORDER_W;
         let inner_w = rect.width - BORDER_W * 2.0;
         let inner_h = total_h - BORDER_W * 2.0;
-        self.inner_bg_id = tree.add_panel(
-            -1,
+        self.inner_bg_id = Some(tree.add_panel(
+            None,
             inner_x,
             inner_y,
             inner_w,
@@ -1401,11 +1415,11 @@ impl ParamCardPanel {
                 corner_radius: CORNER_RADIUS - BORDER_W,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
         // ── Header ──
-        self.header_bg_id = tree.add_panel(
-            -1,
+        let header_bg_id = tree.add_panel(
+            None,
             inner_x,
             inner_y,
             inner_w,
@@ -1415,8 +1429,9 @@ impl ParamCardPanel {
                 corner_radius: CORNER_RADIUS - BORDER_W,
                 ..UIStyle::default()
             },
-        ) as i32;
-        tree.set_flag(self.header_bg_id as u32, UIFlags::INTERACTIVE);
+        );
+        self.header_bg_id = Some(header_bg_id);
+        tree.set_flag(header_bg_id, UIFlags::INTERACTIVE);
 
         let gen_name = self.name.clone();
 
@@ -1427,8 +1442,8 @@ impl ParamCardPanel {
         let name_x = inner_x + PADDING;
         let name_w = change_x - name_x - GAP;
 
-        self.name_label_id = tree.add_label(
-            -1,
+        self.name_label_id = Some(tree.add_label(
+            None,
             name_x,
             inner_y,
             name_w,
@@ -1440,10 +1455,10 @@ impl ParamCardPanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
-        self.change_btn_id = tree.add_button(
-            -1,
+        self.change_btn_id = Some(tree.add_button(
+            None,
             change_x,
             inner_y + (HEADER_HEIGHT - CHANGE_BTN_H) * 0.5,
             CHANGE_BTN_W,
@@ -1459,15 +1474,15 @@ impl ParamCardPanel {
                 ..UIStyle::default()
             },
             "Change",
-        ) as i32;
+        ));
 
         let chevron_text = if self.is_collapsed {
             "\u{25B6}"
         } else {
             "\u{25BC}"
         };
-        self.chevron_btn_id = tree.add_button(
-            -1,
+        self.chevron_btn_id = Some(tree.add_button(
+            None,
             chevron_x,
             inner_y,
             CHEVRON_W,
@@ -1479,14 +1494,14 @@ impl ParamCardPanel {
                 ..UIStyle::default()
             },
             chevron_text,
-        ) as i32;
+        ));
 
         // "Open in graph editor" affordance — three small dots in a triangle.
         // Perform only: in Author (editor) you're already in the editor.
         let elem_y = inner_y;
         if self.context == CardContext::Perform {
-            self.cog_btn_id = tree.add_button(
-                -1,
+            let cog_btn_id = tree.add_button(
+                None,
                 cog_x,
                 elem_y,
                 COG_W,
@@ -1498,7 +1513,8 @@ impl ParamCardPanel {
                     ..UIStyle::default()
                 },
                 "",
-            ) as i32;
+            );
+            self.cog_btn_id = Some(cog_btn_id);
             let dot: f32 = 3.0;
             let dot_style = UIStyle {
                 bg_color: color::TEXT_DIMMED_C32,
@@ -1515,7 +1531,7 @@ impl ParamCardPanel {
                 (cx + h_offset - dot * 0.5, cy + v_offset - dot * 0.5),
             ];
             for (px, py) in positions {
-                tree.add_panel(self.cog_btn_id, px, py, dot, dot, dot_style);
+                tree.add_panel(Some(cog_btn_id), px, py, dot, dot, dot_style);
             }
         }
 
@@ -1549,7 +1565,7 @@ impl ParamCardPanel {
                     // triggers. Click handler dispatches differently (toggle vs
                     // fire) based on the is_trigger flag.
                     let label_id = tree.add_label(
-                        -1,
+                        None,
                         cx,
                         cy,
                         content_w - TOGGLE_BTN_W - GAP,
@@ -1561,7 +1577,7 @@ impl ParamCardPanel {
                             text_align: TextAlign::Left,
                             ..UIStyle::default()
                         },
-                    ) as i32;
+                    );
 
                     let on = info.default > 0.5;
                     let (button_text, button_style) = if info.is_trigger {
@@ -1571,36 +1587,35 @@ impl ParamCardPanel {
                         (if on { "ON" } else { "OFF" }, toggle_btn_style(on))
                     };
                     let button_id = tree.add_button(
-                        -1,
+                        None,
                         cx + content_w - TOGGLE_BTN_W,
                         cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5,
                         TOGGLE_BTN_W,
                         TOGGLE_BTN_H,
                         button_style,
                         button_text,
-                    ) as i32;
+                    );
 
                     // Make toggle label interactive for click-to-copy OSC address
-                    if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some() && label_id >= 0
-                    {
-                        tree.set_flag(label_id as u32, UIFlags::INTERACTIVE);
+                    if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some() {
+                        tree.set_flag(label_id, UIFlags::INTERACTIVE);
                     }
 
                     self.toggle_ids[i] = Some(ToggleParamIds {
-                        label_id,
+                        label_id: Some(label_id),
                         button_id,
                     });
                     self.toggle_cache[i] = on;
                     cy += ROW_HEIGHT + ROW_SPACING;
                 } else {
                     // Slider row — shared per-param core. Generators parent rows
-                    // flat to `-1`, use the gen-param slider palette, the
-                    // body-size driver-config font, and always show the `E`
+                    // flat to the root (`None`), use the gen-param slider palette,
+                    // the body-size driver-config font, and always show the `E`
                     // button (generators always support envelopes).
                     let row_y = cy;
                     let row = build_param_row(
                         tree,
-                        -1,
+                        None,
                         cx,
                         cy,
                         slider_w,
@@ -1614,17 +1629,17 @@ impl ParamCardPanel {
                         label_width,
                     );
                     self.slider_ids[i] = row.slider;
-                    self.row_catcher_ids[i] = row.row_catcher;
+                    self.row_catcher_ids[i] = Some(row.row_catcher);
                     self.trim_ids[i] = row.trim;
                     self.target_ids[i] = row.target;
                     self.envelope_config_ids[i] = row.envelope_config;
                     self.ableton_trim_ids[i] = row.ableton_trim;
                     self.audio_trim_ids[i] = row.audio_trim;
                     self.envelope_btn_ids[i] = row.envelope_btn;
-                    self.driver_btn_ids[i] = row.driver_btn;
+                    self.driver_btn_ids[i] = Some(row.driver_btn);
                     self.driver_config_ids[i] = row.driver_config;
                     self.ableton_config_ids[i] = row.ableton_config;
-                    self.audio_btn_ids[i] = row.audio_btn;
+                    self.audio_btn_ids[i] = Some(row.audio_btn);
                     self.audio_configs[i] = row.audio_config;
                     // Mapping-drawer chevron at the row's right edge (Author +
                     // mappable) — identical to the effect card. Opens the same
@@ -1633,8 +1648,8 @@ impl ParamCardPanel {
                     if author && info.mappable {
                         let ch_x = cx + content_w - MAP_CHEVRON_W;
                         let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
-                        self.mapping_chevron_ids[i] = tree.add_button(
-                            -1,
+                        self.mapping_chevron_ids[i] = Some(tree.add_button(
+                            None,
                             ch_x,
                             ch_y,
                             MAP_CHEVRON_W,
@@ -1650,7 +1665,7 @@ impl ParamCardPanel {
                                 ..UIStyle::default()
                             },
                             "\u{203A}", // ›
-                        ) as i32;
+                        ));
                     }
                     cy = row.new_cy;
                 }
@@ -1663,8 +1678,8 @@ impl ParamCardPanel {
                 } else {
                     format!("{}: {}", sp.name, sp.value)
                 };
-                self.string_param_btn_ids[si] = tree.add_button(
-                    -1,
+                self.string_param_btn_ids[si] = Some(tree.add_button(
+                    None,
                     cx,
                     cy,
                     content_w,
@@ -1678,7 +1693,7 @@ impl ParamCardPanel {
                         ..UIStyle::default()
                     },
                     &display,
-                ) as i32;
+                ));
                 cy += ROW_HEIGHT + ROW_SPACING;
             }
         } // end if !self.is_collapsed
@@ -1700,11 +1715,13 @@ impl ParamCardPanel {
     /// `build_effect_header` computes, so a toggled badge lands flush-right and
     /// the name reclaims the freed width without a card rebuild.
     fn reposition_effect_badges(&self, tree: &mut UITree) {
-        if self.toggle_btn_id < 0 || self.name_clip_id < 0 || self.mod_badge_bg_id < 0 {
+        let (Some(toggle_btn_id), Some(name_clip_id), Some(mod_badge_bg_id)) =
+            (self.toggle_btn_id, self.name_clip_id, self.mod_badge_bg_id)
+        else {
             return;
-        }
-        let toggle_x = tree.get_bounds(self.toggle_btn_id as u32).x;
-        let badge_y = tree.get_bounds(self.mod_badge_bg_id as u32).y;
+        };
+        let toggle_x = tree.get_bounds(toggle_btn_id).x;
+        let badge_y = tree.get_bounds(mod_badge_bg_id).y;
         let badges = effect_badge_layout(
             toggle_x,
             self.state.has_graph_mod,
@@ -1720,17 +1737,17 @@ impl ParamCardPanel {
             (self.drv_badge_bg_id, self.drv_badge_text_id, badges.drv_x),
         ] {
             let r = Rect::new(x.unwrap_or(park), badge_y, BADGE_W, BADGE_H);
-            if bg >= 0 {
-                tree.set_bounds(bg as u32, r);
+            if let Some(bg) = bg {
+                tree.set_bounds(bg, r);
             }
-            if txt >= 0 {
-                tree.set_bounds(txt as u32, r);
+            if let Some(txt) = txt {
+                tree.set_bounds(txt, r);
             }
         }
-        let name_b = tree.get_bounds(self.name_clip_id as u32);
+        let name_b = tree.get_bounds(name_clip_id);
         let name_w = (badges.name_right - name_b.x).max(10.0);
         tree.set_bounds(
-            self.name_clip_id as u32,
+            name_clip_id,
             Rect::new(name_b.x, name_b.y, name_w, name_b.height),
         );
     }
@@ -1749,7 +1766,7 @@ impl ParamCardPanel {
                     .enumerate()
                     .find_map(|(pi, s)| {
                         s.as_ref()
-                            .filter(|ids| ids.label >= 0 && ids.label as u32 == label_id)
+                            .filter(|ids| ids.label == Some(label_id))
                             .and_then(|_| self.param_info.get(pi).map(|p| p.name.clone()))
                     })
                     .unwrap_or_default()
@@ -1760,11 +1777,10 @@ impl ParamCardPanel {
         // Toggle state dirty-check
         if self.enabled != self.cached_enabled {
             self.cached_enabled = self.enabled;
-            tree.set_style(self.toggle_btn_id as u32, toggle_btn_style(self.enabled));
-            tree.set_text(
-                self.toggle_btn_id as u32,
-                if self.enabled { "ON" } else { "OFF" },
-            );
+            if let Some(toggle_btn_id) = self.toggle_btn_id {
+                tree.set_style(toggle_btn_id, toggle_btn_style(self.enabled));
+                tree.set_text(toggle_btn_id, if self.enabled { "ON" } else { "OFF" });
+            }
         }
 
         // Badge visibility dirty-check
@@ -1777,14 +1793,20 @@ impl ParamCardPanel {
             self.cached_has_drv = self.state.has_drv;
             self.cached_has_abl = self.state.has_abl;
             self.cached_has_graph_mod = self.state.has_graph_mod;
-            tree.set_visible(self.abl_badge_bg_id as u32, self.cached_has_abl);
-            tree.set_visible(self.abl_badge_text_id as u32, self.cached_has_abl);
-            tree.set_visible(self.env_badge_bg_id as u32, self.cached_has_env);
-            tree.set_visible(self.env_badge_text_id as u32, self.cached_has_env);
-            tree.set_visible(self.drv_badge_bg_id as u32, self.cached_has_drv);
-            tree.set_visible(self.drv_badge_text_id as u32, self.cached_has_drv);
-            tree.set_visible(self.mod_badge_bg_id as u32, self.cached_has_graph_mod);
-            tree.set_visible(self.mod_badge_text_id as u32, self.cached_has_graph_mod);
+            for (id, visible) in [
+                (self.abl_badge_bg_id, self.cached_has_abl),
+                (self.abl_badge_text_id, self.cached_has_abl),
+                (self.env_badge_bg_id, self.cached_has_env),
+                (self.env_badge_text_id, self.cached_has_env),
+                (self.drv_badge_bg_id, self.cached_has_drv),
+                (self.drv_badge_text_id, self.cached_has_drv),
+                (self.mod_badge_bg_id, self.cached_has_graph_mod),
+                (self.mod_badge_text_id, self.cached_has_graph_mod),
+            ] {
+                if let Some(id) = id {
+                    tree.set_visible(id, visible);
+                }
+            }
             // Re-pack the badges + resize the name cell now the active set changed.
             self.reposition_effect_badges(tree);
             // Re-tint the header background when the modified-state flips.
@@ -1793,14 +1815,16 @@ impl ParamCardPanel {
             } else {
                 color::DRAG_HANDLE_BG_C32
             };
-            tree.set_style(
-                self.header_bg_id as u32,
-                UIStyle {
-                    bg_color: header_bg,
-                    corner_radius: CORNER_RADIUS - BORDER_W,
-                    ..UIStyle::default()
-                },
-            );
+            if let Some(header_bg_id) = self.header_bg_id {
+                tree.set_style(
+                    header_bg_id,
+                    UIStyle {
+                        bg_color: header_bg,
+                        corner_radius: CORNER_RADIUS - BORDER_W,
+                        ..UIStyle::default()
+                    },
+                );
+            }
         }
 
         // Skip slider sync if collapsed
@@ -1818,9 +1842,9 @@ impl ParamCardPanel {
             if self.label_cache[i] != new_label {
                 self.label_cache[i] = new_label;
                 if let Some(ref ids) = self.slider_ids[i]
-                    && ids.label >= 0
+                    && let Some(label) = ids.label
                 {
-                    tree.set_text(ids.label as u32, &info.name);
+                    tree.set_text(label, &info.name);
                 }
             }
 
@@ -1865,9 +1889,9 @@ impl ParamCardPanel {
                 if self.label_cache[i] != new_label {
                     self.label_cache[i] = new_label;
                     if let Some(ref ids) = self.slider_ids[i]
-                        && ids.label >= 0
+                        && let Some(label) = ids.label
                     {
-                        tree.set_text(ids.label as u32, &info.name);
+                        tree.set_text(label, &info.name);
                     }
                 }
             }
@@ -1877,8 +1901,8 @@ impl ParamCardPanel {
                 if on != self.toggle_cache[i] {
                     self.toggle_cache[i] = on;
                     if let Some(ref ids) = self.toggle_ids[i] {
-                        tree.set_style(ids.button_id as u32, toggle_btn_style(on));
-                        tree.set_text(ids.button_id as u32, if on { "ON" } else { "OFF" });
+                        tree.set_style(ids.button_id, toggle_btn_style(on));
+                        tree.set_text(ids.button_id, if on { "ON" } else { "OFF" });
                     }
                 }
             } else if info.is_trigger {
@@ -1902,11 +1926,10 @@ impl ParamCardPanel {
     }
 
     /// Find the original param name for a label node ID (slider or toggle).
-    fn find_label_name(&self, label_id: u32) -> String {
+    fn find_label_name(&self, label_id: NodeId) -> String {
         for (pi, s) in self.slider_ids.iter().enumerate() {
             if let Some(ids) = s
-                && ids.label >= 0
-                && ids.label as u32 == label_id
+                && ids.label == Some(label_id)
             {
                 return self
                     .param_info
@@ -1917,8 +1940,7 @@ impl ParamCardPanel {
         }
         for (pi, t) in self.toggle_ids.iter().enumerate() {
             if let Some(ids) = t
-                && ids.label_id >= 0
-                && ids.label_id as u32 == label_id
+                && ids.label_id == Some(label_id)
             {
                 return self
                     .param_info
@@ -1932,8 +1954,8 @@ impl ParamCardPanel {
 
     pub fn sync_effect_name(&mut self, tree: &mut UITree, name: &str) {
         self.name = name.into();
-        if self.name_label_id >= 0 {
-            tree.set_text(self.name_label_id as u32, name);
+        if let Some(name_label_id) = self.name_label_id {
+            tree.set_text(name_label_id, name);
         }
     }
 
@@ -1944,8 +1966,8 @@ impl ParamCardPanel {
 
     pub fn sync_gen_type_name(&mut self, tree: &mut UITree, name: &str) {
         self.name = name.into();
-        if self.name_label_id >= 0 {
-            tree.set_text(self.name_label_id as u32, name);
+        if let Some(name_label_id) = self.name_label_id {
+            tree.set_text(name_label_id, name);
         }
     }
 
@@ -1953,15 +1975,13 @@ impl ParamCardPanel {
     pub fn sync_string_param(&mut self, tree: &mut UITree, index: usize, value: &str) {
         if let Some(sp) = self.string_param_info.get_mut(index) {
             sp.value = value.to_string();
-            if let Some(&btn_id) = self.string_param_btn_ids.get(index)
-                && btn_id >= 0
-            {
+            if let Some(Some(btn_id)) = self.string_param_btn_ids.get(index).copied() {
                 let display = if value.is_empty() {
                     format!("{}: (empty)", sp.name)
                 } else {
                     format!("{}: {}", sp.name, value)
                 };
-                tree.set_text(btn_id as u32, &display);
+                tree.set_text(btn_id, &display);
             }
         }
     }
@@ -2034,25 +2054,25 @@ impl ParamCardPanel {
         vec![PanelAction::AudioModSetSource(target, self.pid_at(pi), send_id, feature)]
     }
 
-    pub fn handle_click(&mut self, node_id: u32) -> Vec<PanelAction> {
+    pub fn handle_click(&mut self, node_id: NodeId) -> Vec<PanelAction> {
         match self.kind {
             ParamCardKind::Effect => self.handle_click_effect(node_id),
             ParamCardKind::Generator => self.handle_click_generator(node_id),
         }
     }
 
-    fn handle_click_effect(&mut self, node_id: u32) -> Vec<PanelAction> {
-        let id = node_id as i32;
+    fn handle_click_effect(&mut self, node_id: NodeId) -> Vec<PanelAction> {
+        let id = node_id;
         let ei = self.effect_index;
 
         // Header buttons
-        if id == self.toggle_btn_id {
+        if self.toggle_btn_id == Some(id) {
             return vec![PanelAction::EffectToggle(ei)];
         }
-        if id == self.chevron_btn_id {
+        if self.chevron_btn_id == Some(id) {
             return vec![PanelAction::EffectCollapseToggle(ei)];
         }
-        if id == self.cog_btn_id {
+        if self.cog_btn_id == Some(id) {
             return vec![PanelAction::OpenGraphEditor(ei)];
         }
 
@@ -2061,7 +2081,7 @@ impl ParamCardPanel {
         if let Some(pi) = self
             .mapping_chevron_ids
             .iter()
-            .position(|&cid| cid >= 0 && cid == id)
+            .position(|&cid| cid == Some(id))
         {
             return vec![PanelAction::OpenCardMapping(self.pid_at(pi))];
         }
@@ -2115,8 +2135,10 @@ impl ParamCardPanel {
                     )]
                 }
                 RowClick::LabelCopy(pi) => {
-                    if let Some(ids) = &self.slider_ids[pi] {
-                        self.copied_flash.trigger(ids.label as u32);
+                    if let Some(ids) = &self.slider_ids[pi]
+                        && let Some(label) = ids.label
+                    {
+                        self.copied_flash.trigger(label);
                     }
                     let addr = self.osc_addresses[pi].clone().unwrap_or_default();
                     vec![PanelAction::CopyOscAddress(addr)]
@@ -2125,11 +2147,11 @@ impl ParamCardPanel {
         }
 
         // Card selection — any click on card background, border, or header
-        if id == self.border_id
-            || id == self.header_bg_id
-            || id == self.inner_bg_id
-            || id == self.drag_icon_id
-            || id == self.name_label_id
+        if self.border_id == Some(id)
+            || self.header_bg_id == Some(id)
+            || self.inner_bg_id == Some(id)
+            || self.drag_icon_id == Some(id)
+            || self.name_label_id == Some(id)
         {
             return vec![PanelAction::EffectCardClicked(ei)];
         }
@@ -2137,21 +2159,21 @@ impl ParamCardPanel {
         Vec::new()
     }
 
-    fn handle_click_generator(&mut self, node_id: u32) -> Vec<PanelAction> {
-        let id = node_id as i32;
+    fn handle_click_generator(&mut self, node_id: NodeId) -> Vec<PanelAction> {
+        let id = node_id;
 
         // Chevron → collapse/expand
-        if id == self.chevron_btn_id {
+        if self.chevron_btn_id == Some(id) {
             return vec![PanelAction::GenCollapseToggle];
         }
 
         // Change button → open type picker
-        if id == self.change_btn_id {
+        if self.change_btn_id == Some(id) {
             return vec![PanelAction::GenTypeClicked(self.layer_id.clone())];
         }
 
         // Cog → open graph editor for this generator
-        if id == self.cog_btn_id {
+        if self.cog_btn_id == Some(id) {
             return vec![PanelAction::OpenGeneratorGraphEditor];
         }
 
@@ -2162,13 +2184,16 @@ impl ParamCardPanel {
         if let Some(pi) = self
             .mapping_chevron_ids
             .iter()
-            .position(|&cid| cid >= 0 && cid == id)
+            .position(|&cid| cid == Some(id))
         {
             return vec![PanelAction::OpenCardMapping(self.pid_at(pi))];
         }
 
         // Card click (header bg, name, border) → select the card
-        if id == self.header_bg_id || id == self.name_label_id || id == self.border_id {
+        if self.header_bg_id == Some(id)
+            || self.name_label_id == Some(id)
+            || self.border_id == Some(id)
+        {
             return vec![PanelAction::GenCardClicked];
         }
 
@@ -2177,7 +2202,7 @@ impl ParamCardPanel {
         // GenParamToggle (0↔1 flip).
         for (pi, toggle) in self.toggle_ids.iter().enumerate() {
             if let Some(t) = toggle
-                && id == t.button_id
+                && t.button_id == id
             {
                 let is_trigger = self
                     .param_info
@@ -2241,8 +2266,10 @@ impl ParamCardPanel {
                     )]
                 }
                 RowClick::LabelCopy(pi) => {
-                    if let Some(ids) = &self.slider_ids[pi] {
-                        self.copied_flash.trigger(ids.label as u32);
+                    if let Some(ids) = &self.slider_ids[pi]
+                        && let Some(label) = ids.label
+                    {
+                        self.copied_flash.trigger(label);
                     }
                     let addr = self.osc_addresses[pi].clone().unwrap_or_default();
                     vec![PanelAction::CopyOscAddress(addr)]
@@ -2254,18 +2281,17 @@ impl ParamCardPanel {
         // shared matcher above).
         for (pi, toggle) in self.toggle_ids.iter().enumerate() {
             if let Some(t) = toggle
-                && t.label_id >= 0
-                && id == t.label_id
+                && t.label_id == Some(id)
                 && let Some(addr) = self.osc_addresses.get(pi).and_then(|a| a.clone())
             {
-                self.copied_flash.trigger(t.label_id as u32);
+                self.copied_flash.trigger(id);
                 return vec![PanelAction::CopyOscAddress(addr)];
             }
         }
 
         // String param buttons → open text input or dropdown
         for (si, &btn_id) in self.string_param_btn_ids.iter().enumerate() {
-            if id == btn_id {
+            if btn_id == Some(id) {
                 if self
                     .string_param_info
                     .get(si)
@@ -2354,13 +2380,13 @@ impl ParamCardPanel {
     /// emitted target comes from `param_target()`, so effect and generator share
     /// one path; toggle/trigger rows (generator-only, no slider widget) are
     /// skipped in step 5.
-    pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
+    pub fn handle_pointer_down(&mut self, node_id: NodeId, pos: Vec2) -> Vec<PanelAction> {
         let target = self.param_target();
 
         // 1. Envelope target handle (the orange grab bar on the slider track).
         for (pi, etarget) in self.target_ids.iter().enumerate() {
             if let Some(t) = etarget
-                && node_id as i32 == t.target_bar_id
+                && node_id == t.target_bar_id
             {
                 self.drag.dragging_target_param = pi as i32;
                 return vec![PanelAction::TargetSnapshot(target, self.pid_at(pi))];
@@ -2414,11 +2440,11 @@ impl ParamCardPanel {
         'trim: for kind in [TrimKind::Driver, TrimKind::Ableton, TrimKind::Audio] {
             for (pi, trim) in self.trim_ids_for(kind).iter().enumerate() {
                 if let Some(t) = trim {
-                    if node_id as i32 == t.min_bar_id {
+                    if node_id == t.min_bar_id {
                         trim_hit = Some((kind, pi, true));
                         break 'trim;
                     }
-                    if node_id as i32 == t.max_bar_id {
+                    if node_id == t.max_bar_id {
                         trim_hit = Some((kind, pi, false));
                         break 'trim;
                     }
@@ -2451,15 +2477,15 @@ impl ParamCardPanel {
                         .get(pi)
                         .and_then(|t| t.as_ref())
                         .is_some_and(|t| {
-                            node_id as i32 == t.fill_id
-                                || node_id as i32 == t.min_bar_id
-                                || node_id as i32 == t.max_bar_id
+                            node_id == t.fill_id
+                                || node_id == t.min_bar_id
+                                || node_id == t.max_bar_id
                         })
                         || self
                             .target_ids
                             .get(pi)
                             .and_then(|t| t.as_ref())
-                            .is_some_and(|t| node_id as i32 == t.target_bar_id)
+                            .is_some_and(|t| node_id == t.target_bar_id)
                 })
             {
                 // If driver is expanded, check proximity to trim handles before falling through to param drag
@@ -2570,7 +2596,7 @@ impl ParamCardPanel {
                     let bar_h = slider.track_rect.height + 4.0;
                     let bar_y = slider.track_rect.y - 2.0;
                     tree.set_bounds(
-                        t.target_bar_id as u32,
+                        t.target_bar_id,
                         Rect::new(bar_x, bar_y, TARGET_BAR_W, bar_h),
                     );
                 }
@@ -2795,9 +2821,9 @@ impl ParamCardPanel {
 
         // Card root: claim the whole area + the context-menu action. Any
         // descendant without a more specific intent folds here.
-        if self.border_id >= 0 {
-            intents.claim_area(self.border_id as u32);
-            intents.on(self.border_id as u32, RightClick, PanelAction::CardRightClicked(target));
+        if let Some(border_id) = self.border_id {
+            intents.claim_area(border_id);
+            intents.on(border_id, RightClick, PanelAction::CardRightClicked(target));
         }
 
         // Per-param specific intents.
@@ -2826,14 +2852,12 @@ impl ParamCardPanel {
             // the track reliably opens the param menu — no narrow-target lottery.
             if self.context == CardContext::Perform {
                 let menu = PanelAction::ParamLabelRightClick(target, self.pid_at(pi));
-                if ids.label >= 0 {
-                    intents.on(ids.label as u32, RightClick, menu.clone());
+                if let Some(label) = ids.label {
+                    intents.on(label, RightClick, menu.clone());
                 }
-                if let Some(catcher) = self.row_catcher_ids.get(pi).copied()
-                    && catcher >= 0
-                {
-                    intents.claim_area(catcher as u32);
-                    intents.on(catcher as u32, RightClick, menu);
+                if let Some(Some(catcher)) = self.row_catcher_ids.get(pi).copied() {
+                    intents.claim_area(catcher);
+                    intents.on(catcher, RightClick, menu);
                 }
             }
         }
@@ -2927,13 +2951,13 @@ mod tests {
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        assert!(panel.border_id >= 0);
-        assert!(panel.inner_bg_id >= 0);
-        assert!(panel.header_bg_id >= 0);
-        assert!(panel.drag_icon_id >= 0);
-        assert!(panel.name_label_id >= 0);
-        assert!(panel.toggle_btn_id >= 0);
-        assert!(panel.chevron_btn_id >= 0);
+        assert!(panel.border_id.is_some());
+        assert!(panel.inner_bg_id.is_some());
+        assert!(panel.header_bg_id.is_some());
+        assert!(panel.drag_icon_id.is_some());
+        assert!(panel.name_label_id.is_some());
+        assert!(panel.toggle_btn_id.is_some());
+        assert!(panel.chevron_btn_id.is_some());
         assert_eq!(panel.slider_ids.len(), 2);
         assert!(panel.slider_ids[0].is_some());
         assert!(panel.slider_ids[1].is_some());
@@ -2956,11 +2980,17 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
 
         // Cog ("open graph editor") and the drag-reorder handle are gone.
-        assert!(panel.cog_btn_id < 0, "cog suppressed in Author");
-        assert!(panel.drag_icon_id < 0, "drag handle suppressed in Author");
+        assert!(panel.cog_btn_id.is_none(), "cog suppressed in Author");
+        assert!(
+            panel.drag_icon_id.is_none(),
+            "drag handle suppressed in Author"
+        );
         // Mapping chevron only on the mappable row.
-        assert!(panel.mapping_chevron_ids[0] < 0, "row 0 not mappable");
-        assert!(panel.mapping_chevron_ids[1] >= 0, "row 1 mappable → chevron");
+        assert!(panel.mapping_chevron_ids[0].is_none(), "row 0 not mappable");
+        assert!(
+            panel.mapping_chevron_ids[1].is_some(),
+            "row 1 mappable → chevron"
+        );
     }
 
     #[test]
@@ -2971,8 +3001,8 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
 
         // Perform keeps the cog and never draws the mapping chevron.
-        assert!(panel.cog_btn_id >= 0, "cog present in Perform");
-        assert!(panel.mapping_chevron_ids.iter().all(|&id| id < 0));
+        assert!(panel.cog_btn_id.is_some(), "cog present in Perform");
+        assert!(panel.mapping_chevron_ids.iter().all(|id| id.is_none()));
     }
 
     #[test]
@@ -2983,9 +3013,8 @@ mod tests {
         panel.configure(&effect_config_with_mappable());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
 
-        let chevron = panel.mapping_chevron_ids[1];
-        assert!(chevron >= 0);
-        let actions = panel.handle_click(chevron as u32);
+        let chevron = panel.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
+        let actions = panel.handle_click(chevron);
         assert!(
             matches!(&actions[..], [PanelAction::OpenCardMapping(pid)] if pid == "strength"),
             "got {actions:?}"
@@ -3015,10 +3044,9 @@ mod tests {
 
         // Same as the effect card: chevron only on the mappable row, click opens
         // the card mapping drawer, and the anchor rect resolves by binding id.
-        assert!(panel.mapping_chevron_ids[0] < 0, "row 0 not mappable");
-        let chevron = panel.mapping_chevron_ids[1];
-        assert!(chevron >= 0, "generator mappable row → chevron");
-        let actions = panel.handle_click(chevron as u32);
+        assert!(panel.mapping_chevron_ids[0].is_none(), "row 0 not mappable");
+        let chevron = panel.mapping_chevron_ids[1].expect("generator mappable row → chevron");
+        let actions = panel.handle_click(chevron);
         assert!(
             matches!(&actions[..], [PanelAction::OpenCardMapping(pid)] if pid == "strength"),
             "got {actions:?}"
@@ -3032,7 +3060,7 @@ mod tests {
         let mut panel = ParamCardPanel::new(); // default Perform
         panel.configure(&generator_config_with_mappable());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
-        assert!(panel.mapping_chevron_ids.iter().all(|&id| id < 0));
+        assert!(panel.mapping_chevron_ids.iter().all(|id| id.is_none()));
     }
 
     #[test]
@@ -3042,7 +3070,7 @@ mod tests {
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let actions = panel.handle_click(panel.toggle_btn_id as u32);
+        let actions = panel.handle_click(panel.toggle_btn_id.unwrap());
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::EffectToggle(0)));
     }
@@ -3054,7 +3082,7 @@ mod tests {
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let actions = panel.handle_click(panel.chevron_btn_id as u32);
+        let actions = panel.handle_click(panel.chevron_btn_id.unwrap());
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::EffectCollapseToggle(0)));
     }
@@ -3066,7 +3094,7 @@ mod tests {
         panel.configure(&effect_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
-        let actions = panel.handle_click(panel.driver_btn_ids[0] as u32);
+        let actions = panel.handle_click(panel.driver_btn_ids[0].unwrap());
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::DriverToggle(GraphParamTarget::Effect(ei), param_id) => {
@@ -3221,9 +3249,9 @@ mod tests {
         panel.configure(&gen_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        assert!(panel.border_id >= 0);
-        assert!(panel.name_label_id >= 0);
-        assert!(panel.chevron_btn_id >= 0);
+        assert!(panel.border_id.is_some());
+        assert!(panel.name_label_id.is_some());
+        assert!(panel.chevron_btn_id.is_some());
         assert!(panel.slider_ids[0].is_some()); // Speed = slider
         assert!(panel.toggle_ids[1].is_some()); // Invert = toggle
         assert!(panel.slider_ids[2].is_some()); // Scale = slider
@@ -3238,12 +3266,12 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         // Clicking the Change button opens the type picker
-        let actions = panel.handle_click(panel.change_btn_id as u32);
+        let actions = panel.handle_click(panel.change_btn_id.unwrap());
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::GenTypeClicked(_)));
 
         // Clicking the name label selects the card
-        let actions = panel.handle_click(panel.name_label_id as u32);
+        let actions = panel.handle_click(panel.name_label_id.unwrap());
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::GenCardClicked));
     }
@@ -3255,8 +3283,8 @@ mod tests {
         panel.configure(&gen_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let toggle = panel.toggle_ids[1].as_ref().unwrap();
-        let actions = panel.handle_click(toggle.button_id as u32);
+        let button_id = panel.toggle_ids[1].as_ref().unwrap().button_id;
+        let actions = panel.handle_click(button_id);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             PanelAction::GenParamToggle(param_id) => {

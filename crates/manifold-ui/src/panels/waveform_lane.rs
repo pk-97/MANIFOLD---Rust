@@ -13,7 +13,7 @@ use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
-use crate::node::{Color32, Rect, TextAlign, UIStyle};
+use crate::node::{Color32, NodeId, Rect, TextAlign, UIStyle};
 use crate::tree::UITree;
 use crate::waveform_painter;
 use crate::waveform_renderer::WaveformRenderer;
@@ -60,11 +60,11 @@ pub struct WaveformLanePanel {
     is_scrubbing: bool,
 
     // ── UITree node IDs (interactive overlay + buttons) ──
-    first_node: usize,
-    overlay_id: i32,
-    remove_btn_id: i32,
-    expand_btn_id: i32,
-    reanalyze_ids: [i32; 5],
+    first_node: Option<NodeId>,
+    overlay_id: Option<NodeId>,
+    remove_btn_id: Option<NodeId>,
+    expand_btn_id: Option<NodeId>,
+    reanalyze_ids: [Option<NodeId>; 5],
 
     // ── Cached values for dirty checking ──
     cached_waveform_x: f32,
@@ -144,11 +144,11 @@ impl WaveformLanePanel {
             drag_start_beat: None,
             waveform_drag_clip_snapshots: Vec::new(),
             is_scrubbing: false,
-            first_node: usize::MAX,
-            overlay_id: -1,
-            remove_btn_id: -1,
-            expand_btn_id: -1,
-            reanalyze_ids: [-1; 5],
+            first_node: None,
+            overlay_id: None,
+            remove_btn_id: None,
+            expand_btn_id: None,
+            reanalyze_ids: [None; 5],
             cached_waveform_x: f32::NAN,
             cached_waveform_width: -1.0,
             cached_scroll_offset: f32::NAN,
@@ -213,19 +213,21 @@ impl WaveformLanePanel {
     /// First node index in the tree (for overlay rendering — skip in Pass 1,
     /// render after bitmap textures so buttons are visible on top).
     pub fn first_node(&self) -> usize {
-        self.first_node
+        // Boundary: app_render.rs builds usize index-ranges for the overlay
+        // render pass (`first != usize::MAX`); it stays usize.
+        self.first_node.map_or(usize::MAX, |id| id.index())
     }
 
     /// Build UITree nodes for interactive elements (overlay + buttons).
     /// Called from UIRoot after viewport.build() so wf_rect is available.
     pub fn build_nodes(&mut self, tree: &mut UITree, screen_rect: Rect) {
-        self.first_node = tree.count();
+        self.first_node = Some(NodeId(tree.count() as u32));
 
         // Transparent scrub/drag overlay covering entire waveform area.
         // This is the hit-test target that makes the input system generate events.
         // Unity: DragOverlay (transparent Image, raycastTarget=true).
-        self.overlay_id = tree.add_button(
-            -1,
+        self.overlay_id = Some(tree.add_button(
+            None,
             screen_rect.x,
             screen_rect.y,
             screen_rect.width,
@@ -235,13 +237,13 @@ impl WaveformLanePanel {
                 ..UIStyle::default()
             },
             "",
-        ) as i32;
+        ));
 
         // Remove button (top-right). Unity: anchoredPosition(-4, -2), 20×16.
         let remove_x = screen_rect.x + screen_rect.width - REMOVE_BTN_MARGIN_RIGHT - REMOVE_BTN_W;
         let remove_y = screen_rect.y + REMOVE_BTN_MARGIN_TOP;
-        self.remove_btn_id = tree.add_button(
-            -1,
+        self.remove_btn_id = Some(tree.add_button(
+            None,
             remove_x,
             remove_y,
             REMOVE_BTN_W,
@@ -257,13 +259,13 @@ impl WaveformLanePanel {
                 ..UIStyle::default()
             },
             "X",
-        ) as i32;
+        ));
 
         // Expand stems button (next to remove). Unity: anchoredPosition(-28, -2).
         let expand_x = screen_rect.x + screen_rect.width - EXPAND_BTN_MARGIN_RIGHT - EXPAND_BTN_W;
         let expand_y = screen_rect.y + EXPAND_BTN_MARGIN_TOP;
-        self.expand_btn_id = tree.add_button(
-            -1,
+        self.expand_btn_id = Some(tree.add_button(
+            None,
             expand_x,
             expand_y,
             EXPAND_BTN_W,
@@ -279,21 +281,21 @@ impl WaveformLanePanel {
                 ..UIStyle::default()
             },
             "\u{25B6}", // ▶ right-pointing triangle (collapsed)
-        ) as i32;
+        ));
 
         // Re-analyze buttons (top-left). Unity: HorizontalLayoutGroup, spacing=3.
         let style = reanalyze_btn_style();
         let mut btn_x = screen_rect.x + REANALYZE_BTN_MARGIN_LEFT;
         for (i, &(label, width)) in REANALYZE_BUTTONS.iter().enumerate() {
-            self.reanalyze_ids[i] = tree.add_button(
-                -1,
+            self.reanalyze_ids[i] = Some(tree.add_button(
+                None,
                 btn_x,
                 screen_rect.y + REANALYZE_BTN_MARGIN_TOP,
                 width,
                 REANALYZE_BTN_H,
                 style,
                 label,
-            ) as i32;
+            ));
             btn_x += width + REANALYZE_BTN_SPACING;
         }
 
@@ -306,30 +308,25 @@ impl WaveformLanePanel {
         self.apply_button_visibility(tree);
 
         // Update expand chevron direction.
-        if self.expand_btn_id >= 0 {
+        if let Some(expand_id) = self.expand_btn_id {
             let chevron = if self.stems_expanded {
                 "\u{25BC}"
             } else {
                 "\u{25B6}"
             };
-            tree.set_text(self.expand_btn_id as u32, chevron);
+            tree.set_text(expand_id, chevron);
         }
     }
 
     fn apply_button_visibility(&self, tree: &mut UITree) {
-        if self.remove_btn_id >= 0 {
-            tree.set_visible(self.remove_btn_id as u32, self.has_audio);
+        if let Some(remove_id) = self.remove_btn_id {
+            tree.set_visible(remove_id, self.has_audio);
         }
-        if self.expand_btn_id >= 0 {
-            tree.set_visible(
-                self.expand_btn_id as u32,
-                self.has_audio && self.stems_available,
-            );
+        if let Some(expand_id) = self.expand_btn_id {
+            tree.set_visible(expand_id, self.has_audio && self.stems_available);
         }
-        for &id in &self.reanalyze_ids {
-            if id >= 0 {
-                tree.set_visible(id as u32, self.has_audio);
-            }
+        for id in self.reanalyze_ids.into_iter().flatten() {
+            tree.set_visible(id, self.has_audio);
         }
     }
 
@@ -456,7 +453,7 @@ impl Panel for WaveformLanePanel {
 
         match event {
             UIEvent::Click { node_id, pos, .. } => {
-                let id = *node_id as i32;
+                let id = Some(*node_id);
 
                 // Button clicks (matched by node ID).
                 if id == self.remove_btn_id {
@@ -482,18 +479,16 @@ impl Panel for WaveformLanePanel {
                 }
             }
             UIEvent::PointerDown { node_id, pos, .. } => {
-                let id = *node_id as i32;
                 // Start scrub only on the overlay (not on buttons).
-                if id == self.overlay_id && self.has_audio {
+                if self.overlay_id == Some(*node_id) && self.has_audio {
                     self.is_scrubbing = true;
                     actions.push(PanelAction::WaveformScrub(pos.x, pos.y));
                 }
             }
             UIEvent::DragBegin { node_id, .. } => {
-                let id = *node_id as i32;
                 // Start waveform drag only on the overlay.
                 // Drag takes priority over scrub — stop scrubbing.
-                if id == self.overlay_id && self.has_audio {
+                if self.overlay_id == Some(*node_id) && self.has_audio {
                     self.is_dragging = true;
                     self.is_scrubbing = false;
                     self.accumulated_beats = 0.0;
@@ -548,11 +543,12 @@ impl WaveformLanePanel {
     }
 
     /// Returns true if the given node_id belongs to this panel.
-    pub fn owns_node(&self, node_id: i32) -> bool {
-        node_id == self.overlay_id
-            || node_id == self.remove_btn_id
-            || node_id == self.expand_btn_id
-            || self.reanalyze_ids.contains(&node_id)
+    pub fn owns_node(&self, node_id: NodeId) -> bool {
+        let id = Some(node_id);
+        id == self.overlay_id
+            || id == self.remove_btn_id
+            || id == self.expand_btn_id
+            || self.reanalyze_ids.contains(&id)
     }
 
     /// Whether drag_start_beat has been captured (first delta already happened).

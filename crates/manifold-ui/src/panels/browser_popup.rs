@@ -157,12 +157,12 @@ pub struct BrowserPopupPanel {
     scroll: ScrollContainer,
 
     // Node IDs
-    backdrop_id: i32,
-    search_bar_id: i32,
-    chip_all_id: i32,
-    chip_ids: Vec<i32>,
-    cell_ids: Vec<(i32, usize)>, // (node_id, source_index)
-    paste_id: i32,
+    backdrop_id: Option<NodeId>,
+    search_bar_id: Option<NodeId>,
+    chip_all_id: Option<NodeId>,
+    chip_ids: Vec<NodeId>,
+    cell_ids: Vec<(NodeId, usize)>, // (node_id, source_index)
+    paste_id: Option<NodeId>,
     first_node: usize,
     node_count: usize,
 
@@ -200,12 +200,12 @@ impl BrowserPopupPanel {
             popup_x: 100.0,
             popup_y: 100.0,
             scroll: ScrollContainer::new(),
-            backdrop_id: -1,
-            search_bar_id: -1,
-            chip_all_id: -1,
+            backdrop_id: None,
+            search_bar_id: None,
+            chip_all_id: None,
             chip_ids: Vec::new(),
             cell_ids: Vec::new(),
-            paste_id: -1,
+            paste_id: None,
             first_node: 0,
             node_count: 0,
             screen_w: 1920.0,
@@ -391,8 +391,8 @@ impl BrowserPopupPanel {
         let ph = self.total_height;
 
         // Fullscreen backdrop (dismiss on click outside)
-        self.backdrop_id = tree.add_button(
-            -1,
+        self.backdrop_id = Some(tree.add_button(
+            None,
             0.0,
             0.0,
             self.screen_w,
@@ -402,11 +402,11 @@ impl BrowserPopupPanel {
                 ..UIStyle::default()
             },
             "",
-        ) as i32;
+        ));
 
         // Outer border
         tree.add_panel(
-            -1,
+            None,
             px,
             py,
             pw,
@@ -420,7 +420,7 @@ impl BrowserPopupPanel {
 
         // Inner background
         tree.add_panel(
-            -1,
+            None,
             px + BORDER,
             py + BORDER,
             pw - BORDER * 2.0,
@@ -437,8 +437,8 @@ impl BrowserPopupPanel {
         let mut cy = py + BORDER + PADDING;
 
         // Search bar
-        self.search_bar_id = tree.add_button(
-            -1,
+        self.search_bar_id = Some(tree.add_button(
+            None,
             cx,
             cy,
             content_w,
@@ -456,7 +456,7 @@ impl BrowserPopupPanel {
             } else {
                 format!("  {}", self.current_filter)
             },
-        ) as i32;
+        ));
         cy += SEARCH_BAR_HEIGHT + SECTION_SPACING;
 
         // Category chips
@@ -467,8 +467,8 @@ impl BrowserPopupPanel {
             // "All" chip
             let all_active = self.active_category.is_none();
             let all_w = estimate_chip_width("All");
-            self.chip_all_id = tree.add_button(
-                -1,
+            self.chip_all_id = Some(tree.add_button(
+                None,
                 chip_x,
                 cy,
                 all_w,
@@ -490,7 +490,7 @@ impl BrowserPopupPanel {
                     ..UIStyle::default()
                 },
                 "All",
-            ) as i32;
+            ));
             chip_x += all_w + CHIP_SPACING;
 
             // Category chips
@@ -501,7 +501,7 @@ impl BrowserPopupPanel {
                 let is_active = self.active_category.as_deref() == Some(cat.as_str());
                 let w = estimate_chip_width(cat);
                 let id = tree.add_button(
-                    -1,
+                    None,
                     chip_x,
                     cy,
                     w,
@@ -523,7 +523,7 @@ impl BrowserPopupPanel {
                         ..UIStyle::default()
                     },
                     &format!(" {} ", cat),
-                ) as i32;
+                );
                 self.chip_ids.push(id);
                 chip_x += w + CHIP_SPACING;
             }
@@ -534,9 +534,7 @@ impl BrowserPopupPanel {
         let vp_top = cy;
         let vp_h = self.grid_viewport_height;
 
-        let clip_id = self
-            .scroll
-            .begin(tree, Rect::new(cx, vp_top, content_w, vp_h));
+        let clip_parent = Some(self.scroll.begin(tree, Rect::new(cx, vp_top, content_w, vp_h)));
 
         for (fi, &src_idx) in self.filtered_indices.iter().enumerate() {
             let col = fi % self.columns;
@@ -557,7 +555,7 @@ impl BrowserPopupPanel {
             if src_idx < self.item_categories.len() && !self.item_categories[src_idx].is_empty() {
                 let accent_color = category_color(&self.item_categories[src_idx]);
                 tree.add_panel(
-                    clip_id,
+                    clip_parent,
                     cell_x,
                     cell_y,
                     ACCENT_BAR_W,
@@ -578,7 +576,7 @@ impl BrowserPopupPanel {
             };
             let label = format!("{}{}", prefix, &self.item_names[src_idx]);
             let id = tree.add_button(
-                clip_id,
+                clip_parent,
                 cell_x,
                 cell_y,
                 CELL_WIDTH,
@@ -593,7 +591,7 @@ impl BrowserPopupPanel {
                     ..UIStyle::default()
                 },
                 &label,
-            ) as i32;
+            );
             self.cell_ids.push((id, src_idx));
         }
 
@@ -607,8 +605,8 @@ impl BrowserPopupPanel {
             } else {
                 format!("Paste {} Effects", self.paste_count)
             };
-            self.paste_id = tree.add_button(
-                -1,
+            self.paste_id = Some(tree.add_button(
+                None,
                 cx,
                 cy,
                 content_w,
@@ -622,9 +620,9 @@ impl BrowserPopupPanel {
                     ..UIStyle::default()
                 },
                 &paste_label,
-            ) as i32;
+            ));
         } else {
-            self.paste_id = -1;
+            self.paste_id = None;
         }
 
         self.node_count = tree.count() - self.first_node;
@@ -632,26 +630,24 @@ impl BrowserPopupPanel {
 
     // ── Event handling ──
 
-    pub fn handle_click(&mut self, node_id: u32) -> Option<BrowserPopupAction> {
+    pub fn handle_click(&mut self, node_id: NodeId) -> Option<BrowserPopupAction> {
         if !self.is_open {
             return None;
         }
 
-        let id = node_id as i32;
-
         // Backdrop → dismiss
-        if id == self.backdrop_id {
+        if self.backdrop_id == Some(node_id) {
             self.close();
             return Some(BrowserPopupAction::Dismissed);
         }
 
         // Search bar → signal to open text input
-        if id == self.search_bar_id {
+        if self.search_bar_id == Some(node_id) {
             return None; // Caller checks search_bar_clicked()
         }
 
         // "All" chip
-        if id == self.chip_all_id {
+        if self.chip_all_id == Some(node_id) {
             self.set_category(None);
             return None; // Needs rebuild, no action
         }
@@ -664,7 +660,7 @@ impl BrowserPopupPanel {
             .cloned()
             .collect();
         for (i, &chip_id) in self.chip_ids.iter().enumerate() {
-            if id == chip_id && i < cat_names.len() {
+            if node_id == chip_id && i < cat_names.len() {
                 self.set_category(Some(cat_names[i].clone()));
                 return None; // Needs rebuild
             }
@@ -672,7 +668,7 @@ impl BrowserPopupPanel {
 
         // Grid cells
         for &(cell_id, src_idx) in &self.cell_ids {
-            if id == cell_id {
+            if node_id == cell_id {
                 // Capture context BEFORE close() clears it. Node mode returns
                 // the type_id + stashed spawn position; the effect/generator
                 // path is unchanged.
@@ -695,7 +691,7 @@ impl BrowserPopupPanel {
         }
 
         // Paste button
-        if id == self.paste_id && self.paste_id >= 0 {
+        if self.paste_id == Some(node_id) {
             self.close();
             return Some(BrowserPopupAction::Paste);
         }
@@ -704,8 +700,8 @@ impl BrowserPopupPanel {
     }
 
     /// Returns true if the search bar was the clicked node.
-    pub fn is_search_bar(&self, node_id: u32) -> bool {
-        self.search_bar_id >= 0 && node_id as i32 == self.search_bar_id
+    pub fn is_search_bar(&self, node_id: NodeId) -> bool {
+        self.search_bar_id == Some(node_id)
     }
 
     /// Handle escape key.
@@ -730,15 +726,15 @@ impl BrowserPopupPanel {
     }
 
     /// Check if a node belongs to this popup.
-    pub fn contains_node(&self, node_id: u32) -> bool {
-        let id = node_id as usize;
+    pub fn contains_node(&self, node_id: NodeId) -> bool {
+        let id = node_id.index();
         id >= self.first_node && id < self.first_node + self.node_count
     }
 
     /// Get search bar rect for text input anchoring.
     pub fn search_bar_rect(&self, tree: &UITree) -> Rect {
-        if self.search_bar_id >= 0 {
-            tree.get_bounds(self.search_bar_id as u32)
+        if let Some(id) = self.search_bar_id {
+            tree.get_bounds(id)
         } else {
             Rect::ZERO
         }

@@ -14,7 +14,7 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 0 resolved by decision (2026-06-22).** Next action: **Phase 1 (substrate)**.
+> **Status: Phase 1.1 COMPLETE (2026-06-22).** Next action: **Phase 1.2 (generic drag controller)**.
 >
 > **Phase 0 decision:** production stays `panic = "abort"` ([`Cargo.toml`](../Cargo.toml)
 > `[profile.release]`). In-process recovery (catch_unwind / respawn / watchdog) is
@@ -29,7 +29,14 @@ and how we get there."
 > progress lives in commits + ticked boxes, never only in chat context. At the end
 > of every chat, update this CURRENT POSITION block: what's done, what's next.
 >
-> **Last committable step done:** _(none yet)_
+> **Last committable step done:** 1.1 — `NodeId(u32)` + `Option<NodeId>` replaced every
+> `i32`/`-1`, `u32::MAX`, and `usize::MAX` node-id sentinel across `manifold-ui` (foundation
+> + all ~22 panels), `manifold-app` (`ui_root`, `app_render`), and `manifold-renderer`
+> (`ui_renderer`). The scope was ~20× the doc's "tree/input/intent" line because the tree
+> API is the universal panel boundary, and it reached into `manifold-app` (the app drives the
+> tree directly). Workspace compiles, clippy clean, 293 `manifold-ui` + 103 `manifold-app`
+> tests green. Method: foundation by hand → 22-agent edit-only fan-out for the panels →
+> hand-reconciled the cross-file/cross-crate seams.
 
 ---
 
@@ -466,9 +473,10 @@ not a recovery system.
   Revisit only if "keep abort for now" changes.
 
 ### Phase 1 — Substrate
-- [ ] **1.1** `NodeId` newtype + `Option<NodeId>`; remove `-1`/`u32::MAX` sentinels
+- [x] **1.1** `NodeId` newtype + `Option<NodeId>`; remove `-1`/`u32::MAX` sentinels
   from `tree`/`input`/`intent`. _Done when:_ no raw sentinel node ids in the
-  foundation; tests green.
+  foundation; tests green. **DONE 2026-06-22** — see §0 (shipped crate-wide + into
+  `manifold-app`, not just the foundation; `Anchor::ToNode` also lifted to `NodeId`).
 
   **Change-site inventory (audited 2026-06-22 — read before starting).** This is
   not "delete `-1`." It is collapsing **three** representations of one concept into

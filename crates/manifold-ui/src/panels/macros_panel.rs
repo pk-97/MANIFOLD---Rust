@@ -41,7 +41,7 @@ fn fmt_macro(v: f32) -> String {
 
 pub struct MacrosPanel {
     sliders: [SliderDragState; MACRO_COUNT],
-    first_node: usize,
+    first_node: Option<NodeId>,
     node_count: usize,
     copied_flash: CopyToClipboardLabelState,
     /// Ableton trim handle node IDs per macro slot.
@@ -57,8 +57,8 @@ pub struct MacrosPanel {
     dragging_ableton_trim_is_min: bool,
     // Collapse state
     is_collapsed: bool,
-    header_label_id: i32,
-    chevron_btn_id: i32,
+    header_label_id: Option<NodeId>,
+    chevron_btn_id: Option<NodeId>,
 }
 
 impl Default for MacrosPanel {
@@ -79,7 +79,7 @@ impl MacrosPanel {
     pub fn new() -> Self {
         Self {
             sliders: std::array::from_fn(|_| SliderDragState::with_range(0.0, 1.0, false)),
-            first_node: usize::MAX,
+            first_node: None,
             node_count: 0,
             copied_flash: CopyToClipboardLabelState::default(),
             ableton_trim_ids: std::array::from_fn(|_| None),
@@ -90,8 +90,8 @@ impl MacrosPanel {
             dragging_ableton_trim_is_min: false,
             // Default closed; project load overrides via set_collapsed().
             is_collapsed: true,
-            header_label_id: -1,
-            chevron_btn_id: -1,
+            header_label_id: None,
+            chevron_btn_id: None,
         }
     }
 
@@ -127,7 +127,9 @@ impl MacrosPanel {
     }
 
     pub fn first_node(&self) -> usize {
-        self.first_node
+        // Boundary: inspector.rs builds usize index-ranges (`first != usize::MAX`)
+        // shared across all panels' first_node()/node_count(); it stays usize.
+        self.first_node.map_or(usize::MAX, |id| id.index())
     }
 
     /// Set Ableton display data per macro slot (call before build).
@@ -162,7 +164,7 @@ impl MacrosPanel {
                     .enumerate()
                     .find_map(|(i, s)| {
                         s.ids()
-                            .filter(|ids| ids.label >= 0 && ids.label as u32 == label_id)
+                            .filter(|ids| ids.label == Some(label_id))
                             .map(|_| Self::display_label(labels, i))
                     })
                     .unwrap_or_default()
@@ -172,10 +174,10 @@ impl MacrosPanel {
 
         for (i, s) in self.sliders.iter_mut().enumerate() {
             if let Some(ids) = s.ids()
-                && ids.label >= 0
-                && Some(ids.label as u32) != self.copied_flash.label_id()
+                && let Some(label) = ids.label
+                && Some(label) != self.copied_flash.label_id()
             {
-                tree.set_text(ids.label as u32, &Self::display_label(labels, i));
+                tree.set_text(label, &Self::display_label(labels, i));
             }
             if let Some(&v) = values.get(i) {
                 s.sync(tree, v, &fmt_macro);
@@ -185,13 +187,14 @@ impl MacrosPanel {
 
     /// Build the macros panel into the tree at the given rect.
     pub fn build(&mut self, tree: &mut UITree, rect: Rect) {
-        self.first_node = tree.count();
+        let first_idx = tree.count();
+        self.first_node = Some(NodeId(first_idx as u32));
 
         let colors = SliderColors::default_slider();
 
         // Section card (border + inner bg)
         tree.add_panel(
-            -1,
+            None,
             rect.x,
             rect.y,
             rect.width,
@@ -203,7 +206,7 @@ impl MacrosPanel {
             },
         );
         tree.add_panel(
-            -1,
+            None,
             rect.x + 1.0,
             rect.y + 1.0,
             rect.width - 2.0,
@@ -221,8 +224,8 @@ impl MacrosPanel {
 
         // Header row: "Macros" label + chevron
         let label_w = inner_w - CHEVRON_W - GAP;
-        self.header_label_id = tree.add_label(
-            -1,
+        self.header_label_id = Some(tree.add_label(
+            None,
             inner_x,
             cy,
             label_w,
@@ -234,11 +237,11 @@ impl MacrosPanel {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
-        ) as i32;
+        ));
 
         let chev_x = inner_x + inner_w - CHEVRON_W;
-        self.chevron_btn_id = tree.add_button(
-            -1,
+        self.chevron_btn_id = Some(tree.add_button(
+            None,
             chev_x,
             cy + (HEADER_ROW_H - 16.0) * 0.5,
             CHEVRON_W,
@@ -257,7 +260,7 @@ impl MacrosPanel {
             } else {
                 "\u{25BC}"
             },
-        ) as i32;
+        ));
 
         cy += HEADER_ROW_H;
 
@@ -266,7 +269,7 @@ impl MacrosPanel {
             for s in &mut self.sliders {
                 s.clear();
             }
-            self.node_count = tree.count() - self.first_node;
+            self.node_count = tree.count() - first_idx;
             return;
         }
 
@@ -277,7 +280,7 @@ impl MacrosPanel {
 
             let ids = BitmapSlider::build(
                 tree,
-                -1,
+                None,
                 Rect::new(inner_x, cy, inner_w, ROW_HEIGHT),
                 Some(&label),
                 v,
@@ -293,7 +296,7 @@ impl MacrosPanel {
             if let Some((amin, amax)) = self.ableton_ranges[i] {
                 self.ableton_trim_ids[i] = Some(build_trim_handles_explicit(
                     tree,
-                    ids.track as i32,
+                    ids.track,
                     ids.track_rect,
                     amin,
                     amax,
@@ -310,7 +313,7 @@ impl MacrosPanel {
             // Ableton config drawer (status dot + macro name + INV button)
             if let Some(ref display) = self.ableton_displays[i] {
                 self.ableton_config_ids[i] = Some(build_ableton_config(
-                    tree, -1, inner_x, cy, inner_w, display,
+                    tree, None, inner_x, cy, inner_w, display,
                 ));
                 cy += ABL_CONFIG_HEIGHT;
             } else {
@@ -322,20 +325,20 @@ impl MacrosPanel {
             }
         }
 
-        self.node_count = tree.count() - self.first_node;
+        self.node_count = tree.count() - first_idx;
     }
 
     /// Handle press on a slider track or trim bar.
-    pub fn handle_press(&mut self, node_id: u32, pos_x: f32) -> Vec<PanelAction> {
+    pub fn handle_press(&mut self, node_id: NodeId, pos_x: f32) -> Vec<PanelAction> {
         // Check Ableton trim bars first (higher z-order)
         for (i, trim) in self.ableton_trim_ids.iter().enumerate() {
             if let Some(t) = trim {
-                if node_id as i32 == t.min_bar_id {
+                if node_id == t.min_bar_id {
                     self.dragging_ableton_trim = i as i32;
                     self.dragging_ableton_trim_is_min = true;
                     return vec![PanelAction::AbletonMacroTrimSnapshot(i)];
                 }
-                if node_id as i32 == t.max_bar_id {
+                if node_id == t.max_bar_id {
                     self.dragging_ableton_trim = i as i32;
                     self.dragging_ableton_trim_is_min = false;
                     return vec![PanelAction::AbletonMacroTrimSnapshot(i)];
@@ -377,11 +380,11 @@ impl MacrosPanel {
                     let fill_w = (new_max - new_min) * usable;
                     let fill_h = ids.track_rect.height - OVERLAY_INSET * 2.0;
                     tree.set_bounds(
-                        t.fill_id as u32,
+                        t.fill_id,
                         Rect::new(fill_x, ids.track_rect.y + OVERLAY_INSET, fill_w, fill_h),
                     );
                     tree.set_bounds(
-                        t.min_bar_id as u32,
+                        t.min_bar_id,
                         Rect::new(
                             base_x + new_min * usable - TRIM_BAR_W * 0.5,
                             ids.track_rect.y,
@@ -390,7 +393,7 @@ impl MacrosPanel {
                         ),
                     );
                     tree.set_bounds(
-                        t.max_bar_id as u32,
+                        t.max_bar_id,
                         Rect::new(
                             base_x + new_max * usable - TRIM_BAR_W * 0.5,
                             ids.track_rect.y,
@@ -429,25 +432,24 @@ impl MacrosPanel {
 
     /// Handle click — chevron toggles collapse, label click copies OSC address,
     /// INV button toggles invert.
-    pub fn handle_click(&mut self, node_id: u32) -> Vec<PanelAction> {
+    pub fn handle_click(&mut self, node_id: NodeId) -> Vec<PanelAction> {
         // Chevron collapse toggle
-        if node_id as i32 == self.chevron_btn_id {
+        if self.chevron_btn_id == Some(node_id) {
             return vec![PanelAction::MacrosCollapseToggle];
         }
 
         // Ableton config INV button
         if let Some((slot_idx, AbletonConfigClick::Invert)) =
-            check_ableton_config_click(node_id as i32, &self.ableton_config_ids)
+            check_ableton_config_click(node_id, &self.ableton_config_ids)
         {
             return vec![PanelAction::AbletonMacroInvertToggle(slot_idx)];
         }
 
         for (i, s) in self.sliders.iter().enumerate() {
             if let Some(ids) = s.ids()
-                && ids.label >= 0
-                && node_id == ids.label as u32
+                && ids.label == Some(node_id)
             {
-                self.copied_flash.trigger(ids.label as u32);
+                self.copied_flash.trigger(node_id);
                 let addr = format!("/macro/{}", i + 1);
                 return vec![PanelAction::CopyOscAddress(addr)];
             }
@@ -469,27 +471,27 @@ impl MacrosPanel {
                 intents.on(track, RightClick, PanelAction::MacroRightClick(i));
             }
             if let Some(ids) = s.ids()
-                && ids.label >= 0
+                && let Some(label) = ids.label
             {
-                intents.on(ids.label as u32, RightClick, PanelAction::MacroLabelRightClick(i));
+                intents.on(label, RightClick, PanelAction::MacroLabelRightClick(i));
             }
         }
     }
 
     /// Check if a node belongs to this panel.
-    pub fn owns_node(&self, node_id: u32) -> bool {
-        if self.first_node == usize::MAX {
+    pub fn owns_node(&self, node_id: NodeId) -> bool {
+        let Some(first) = self.first_node else {
             return false;
-        }
-        let id = node_id as usize;
-        id >= self.first_node && id < self.first_node + self.node_count
+        };
+        let id = node_id.index();
+        id >= first.index() && id < first.index() + self.node_count
     }
 
     pub fn label_rect(&self, tree: &UITree, index: usize) -> Option<Rect> {
         self.sliders
             .get(index)
             .and_then(|slider| slider.ids())
-            .filter(|ids| ids.label >= 0)
-            .map(|ids| tree.get_bounds(ids.label as u32))
+            .and_then(|ids| ids.label)
+            .map(|label| tree.get_bounds(label))
     }
 }

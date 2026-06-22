@@ -189,20 +189,25 @@ const TRIG_BANDS: [(AudioBand, &str); 4] = [
 ];
 
 /// Per-trigger-row interactive node ids (one row per band).
-#[derive(Default, Clone)]
+///
+/// Every id is assigned from an `add_*` call in `build_trigger_section` before
+/// the row is pushed, so the fields always hold real nodes; the `Default` impl's
+/// `NodeId(0)` placeholders (matching `slider.rs`) only ever exist transiently
+/// inside the builder.
+#[derive(Clone)]
 struct TriggerRowIds {
-    enable: i32,
-    sens_minus: i32,
-    sens_plus: i32,
-    len_minus: i32,
-    len_plus: i32,
-    layer: i32,
+    enable: NodeId,
+    sens_minus: NodeId,
+    sens_plus: NodeId,
+    len_minus: NodeId,
+    len_plus: NodeId,
+    layer: NodeId,
     // Live level meter (resized in place each frame by `update_trigger_levels`):
     // a track + a band-coloured fill = the transient level, with a threshold
     // tick marking the fire line. `flash` is the swatch styled bright on a fire.
-    meter_track: i32,
-    meter_fill: i32,
-    thresh_tick: i32,
+    meter_track: NodeId,
+    meter_fill: NodeId,
+    thresh_tick: NodeId,
     meter_x: f32,
     meter_y: f32,
     meter_w: f32,
@@ -214,30 +219,77 @@ struct TriggerRowIds {
     enabled: bool,
 }
 
+impl Default for TriggerRowIds {
+    fn default() -> Self {
+        Self {
+            enable: NodeId(0),
+            sens_minus: NodeId(0),
+            sens_plus: NodeId(0),
+            len_minus: NodeId(0),
+            len_plus: NodeId(0),
+            layer: NodeId(0),
+            meter_track: NodeId(0),
+            meter_fill: NodeId(0),
+            thresh_tick: NodeId(0),
+            meter_x: 0.0,
+            meter_y: 0.0,
+            meter_w: 0.0,
+            meter_h: 0.0,
+            band: 0,
+            threshold: 0.0,
+            enabled: false,
+        }
+    }
+}
+
 /// Per-send interactive node ids.
-#[derive(Default, Clone)]
+///
+/// Every id is assigned from an `add_*` call in `build_nodes` before the row is
+/// stored, so the fields always hold real nodes; the `Default` impl's `NodeId(0)`
+/// placeholders (matching `slider.rs`) only exist transiently while the row is
+/// being filled in.
+#[derive(Clone)]
 struct SendRowIds {
     /// Identity-colour swatch — clicking it selects the send for the scope.
-    swatch: i32,
-    label: i32,
+    swatch: NodeId,
+    label: NodeId,
     /// Signal-source cycle button: capture channels ↔ an audio layer.
-    source: i32,
-    ch_dropdown: i32,
-    gain_minus: i32,
-    gain_plus: i32,
-    stereo: i32,
-    delete: i32,
+    source: NodeId,
+    ch_dropdown: NodeId,
+    gain_minus: NodeId,
+    gain_plus: NodeId,
+    stereo: NodeId,
+    delete: NodeId,
     /// Level-meter fill node + its full-scale geometry, resized in place each
     /// frame by [`AudioSetupPanel::update_meters`] (no rebuild).
-    meter_fill: i32,
+    meter_fill: NodeId,
     meter_x: f32,
     meter_y: f32,
     meter_w: f32,
     meter_h: f32,
 }
 
+impl Default for SendRowIds {
+    fn default() -> Self {
+        Self {
+            swatch: NodeId(0),
+            label: NodeId(0),
+            source: NodeId(0),
+            ch_dropdown: NodeId(0),
+            gain_minus: NodeId(0),
+            gain_plus: NodeId(0),
+            stereo: NodeId(0),
+            delete: NodeId(0),
+            meter_fill: NodeId(0),
+            meter_x: 0.0,
+            meter_y: 0.0,
+            meter_w: 0.0,
+            meter_h: 0.0,
+        }
+    }
+}
+
 /// The Audio Setup modal panel.
-#[derive(Default)]
 pub struct AudioSetupPanel {
     open: bool,
     // Configured data.
@@ -264,20 +316,20 @@ pub struct AudioSetupPanel {
     panel_w: f32,
     scope_h: f32,
     // Node ids (set by `build`).
-    bg_id: i32,
-    close_id: i32,
-    device_dropdown_id: i32,
-    add_send_id: i32,
+    bg_id: NodeId,
+    close_id: NodeId,
+    device_dropdown_id: NodeId,
+    add_send_id: NodeId,
     send_ids: Vec<SendRowIds>,
     /// Right-aligned label in the scope title row showing the freq + dB under
     /// the cursor. Lives in the title strip (not over the waterfall, which the
     /// present pass blits on top), updated in place each frame by
-    /// [`AudioSetupPanel::update_scope_readout`]. `-1` when not built.
-    scope_readout_label: i32,
+    /// [`AudioSetupPanel::update_scope_readout`]. `None` when not built.
+    scope_readout_label: Option<NodeId>,
     /// Pre-analysis floor stepper [−]/[＋] in the scope title row (the spectrogram
-    /// squelch). `-1` when not built.
-    floor_minus_id: i32,
-    floor_plus_id: i32,
+    /// squelch). `None` when not built.
+    floor_minus_id: Option<NodeId>,
+    floor_plus_id: Option<NodeId>,
     /// Current Low/Mid/High crossovers (Hz) and the scope's analysed frequency
     /// range, pushed every frame by [`AudioSetupPanel::set_scope_bands`]. The
     /// divider lines are drawn shader-side; the panel keeps these only to
@@ -292,11 +344,44 @@ pub struct AudioSetupPanel {
     /// Per-band (Low/Mid/High) level-meter nodes `(track, fill, label)` in the
     /// scope's right margin. Created by `build`, repositioned + resized every
     /// frame by [`AudioSetupPanel::update_band_meters`] so they track the moving
-    /// crossovers. `-1` when not built.
-    band_meter_ids: [(i32, i32, i32); 3],
+    /// crossovers. `None` when not built.
+    band_meter_ids: [(Option<NodeId>, Option<NodeId>, Option<NodeId>); 3],
     /// Per-band trigger-row node ids for the selected send (Whole/Low/Mid/High
     /// order). Rebuilt with the panel; clicks map back via [`TRIG_BANDS`].
     trigger_row_ids: Vec<TriggerRowIds>,
+}
+
+impl Default for AudioSetupPanel {
+    fn default() -> Self {
+        Self {
+            open: false,
+            current_device: None,
+            sends: Vec::new(),
+            status_warning: None,
+            delete_armed: None,
+            selected_send: None,
+            scope_rect: None,
+            panel_w: 0.0,
+            scope_h: 0.0,
+            // Set by `build`; `NodeId(0)` is a pre-build placeholder, never a hit
+            // target before the panel is built (matches `slider.rs`).
+            bg_id: NodeId(0),
+            close_id: NodeId(0),
+            device_dropdown_id: NodeId(0),
+            add_send_id: NodeId(0),
+            send_ids: Vec::new(),
+            scope_readout_label: None,
+            floor_minus_id: None,
+            floor_plus_id: None,
+            scope_low_hz: 0.0,
+            scope_mid_hz: 0.0,
+            scope_fmin: 0.0,
+            scope_fmax: 0.0,
+            dragging_band: None,
+            band_meter_ids: [(None, None, None); 3],
+            trigger_row_ids: Vec::new(),
+        }
+    }
 }
 
 impl AudioSetupPanel {
@@ -429,7 +514,7 @@ impl AudioSetupPanel {
         let rows = self.sends.len();
         let body_h = self.body_height();
         self.bg_id = tree.add_panel(
-            -1,
+            None,
             x,
             y,
             self.panel_w,
@@ -441,7 +526,7 @@ impl AudioSetupPanel {
                 corner_radius: 6.0,
                 ..UIStyle::default()
             },
-        ) as i32;
+        );
         // The modal background must be hit-testable so a press anywhere on it
         // emits a PointerDown — `hit_test` only returns INTERACTIVE nodes, and
         // `process_pointer` only fires PointerDown when something is hit. Without
@@ -450,7 +535,7 @@ impl AudioSetupPanel {
         // behind the modal happens to sit under the cursor — the source of the
         // "sometimes draggable" band lines. `bg_id` is already in `owns_node`,
         // so this also makes the modal reliably swallow stray clicks.
-        tree.set_flag(self.bg_id as u32, UIFlags::INTERACTIVE);
+        tree.set_flag(self.bg_id, UIFlags::INTERACTIVE);
 
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
@@ -458,7 +543,7 @@ impl AudioSetupPanel {
 
         // Title + close.
         tree.add_label(
-            self.bg_id,
+            Some(self.bg_id),
             inner_x,
             cy,
             inner_w - STEP_W,
@@ -472,33 +557,33 @@ impl AudioSetupPanel {
             },
         );
         self.close_id = tree.add_button(
-            self.bg_id,
+            Some(self.bg_id),
             inner_x + inner_w - STEP_W,
             cy,
             STEP_W,
             TITLE_H,
             btn_style(false),
             "\u{00D7}", // × close
-        ) as i32;
+        );
         cy += TITLE_H;
 
         // Device row: [Device]  [ current device            ▼ ]
-        tree.add_label(self.bg_id, inner_x, cy, 70.0, ROW_H, "Device", label_style());
+        tree.add_label(Some(self.bg_id), inner_x, cy, 70.0, ROW_H, "Device", label_style());
         self.device_dropdown_id = tree.add_button(
-            self.bg_id,
+            Some(self.bg_id),
             inner_x + 74.0,
             cy,
             inner_w - 74.0,
             ROW_H,
             dropdown_trigger_style(),
             &format!("{}   \u{25BC}", self.device_label()), // value … ▼
-        ) as i32;
+        );
         cy += ROW_H + ROW_GAP;
 
         // Notice line: delete-confirm prompt or reliability warning, if any.
         if let Some(warning) = &self.active_notice() {
             tree.add_label(
-                self.bg_id,
+                Some(self.bg_id),
                 inner_x,
                 cy,
                 inner_w,
@@ -534,7 +619,7 @@ impl AudioSetupPanel {
                 (12.0, cy + (ROW_H - 12.0) * 0.5)
             };
             self.send_ids[i].swatch = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 inner_x,
                 swatch_y,
                 SWATCH_W,
@@ -546,7 +631,7 @@ impl AudioSetupPanel {
                     ..UIStyle::default()
                 },
                 "",
-            ) as i32;
+            );
 
             // Label is a button — clicking it opens the inline rename editor. A
             // send with active trigger routes reads in an amber accent, so which
@@ -558,14 +643,14 @@ impl AudioSetupPanel {
                 lbl_style.text_color = Color32::new(240, 196, 110, 255); // amber
             }
             self.send_ids[i].label = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 label_x,
                 cy,
                 LABEL_W,
                 ROW_H,
                 lbl_style,
                 &send.label,
-            ) as i32;
+            );
 
             // Delete (right-aligned). Armed (awaiting confirm) shows a warning
             // glyph; an in-use send tints amber as a "this drives params" cue.
@@ -578,42 +663,42 @@ impl AudioSetupPanel {
                 del_style.text_color = Color32::new(232, 168, 92, 255); // amber
             }
             self.send_ids[i].delete = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 inner_x + inner_w - STEP_W,
                 cy,
                 STEP_W,
                 ROW_H,
                 del_style,
                 delete_label,
-            ) as i32;
+            );
 
             let stereo_on = send.channels.len() >= 2;
             const STEREO_W: f32 = 30.0;
             let stereo_x = inner_x + inner_w - STEP_W - 4.0 - STEREO_W;
             self.send_ids[i].stereo = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 stereo_x,
                 cy,
                 STEREO_W,
                 ROW_H,
                 btn_style(stereo_on),
                 if stereo_on { "St" } else { "Mo" },
-            ) as i32;
+            );
 
             // Gain stepper [−] value [＋], left of the stereo toggle. Discrete
             // 1 dB steps; the value is read-only display (0 dB = unity).
             let gain_x = stereo_x - 4.0 - GAIN_W;
             self.send_ids[i].gain_minus = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 gain_x,
                 cy,
                 GAIN_BTN_W,
                 ROW_H,
                 btn_style(false),
                 "\u{2212}", // −
-            ) as i32;
+            );
             tree.add_label(
-                self.bg_id,
+                Some(self.bg_id),
                 gain_x + GAIN_BTN_W,
                 cy,
                 GAIN_VAL_W,
@@ -627,14 +712,14 @@ impl AudioSetupPanel {
                 },
             );
             self.send_ids[i].gain_plus = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 gain_x + GAIN_BTN_W + GAIN_VAL_W,
                 cy,
                 GAIN_BTN_W,
                 ROW_H,
                 btn_style(false),
                 "\u{002B}", // +
-            ) as i32;
+            );
 
             // Source indicator (read-only): "Cap" for a capture send, or the
             // feeding audio layer's name (accented). A send doesn't pick its
@@ -643,27 +728,27 @@ impl AudioSetupPanel {
             const SRC_W: f32 = 48.0;
             let src_x = label_x + LABEL_W + 4.0;
             self.send_ids[i].source = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 src_x,
                 cy,
                 SRC_W,
                 ROW_H,
                 btn_style(send.layer_fed),
                 &send.source_label,
-            ) as i32;
+            );
 
             // Channel dropdown fills the gap, showing the resolved name(s).
             let ch_x = src_x + SRC_W + 4.0;
             let ch_w = (gain_x - 4.0 - ch_x).max(40.0);
             self.send_ids[i].ch_dropdown = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 ch_x,
                 cy,
                 ch_w,
                 ROW_H,
                 dropdown_trigger_style(),
                 &format!("{}   \u{25BC}", send.channel_label),
-            ) as i32;
+            );
 
             // Level meter: a thin track under the channel dropdown with a fill
             // node resized each frame from the live send level. Identity-colored.
@@ -672,7 +757,7 @@ impl AudioSetupPanel {
             let meter_y = cy + ROW_H - meter_h;
             let meter_w = ch_w;
             tree.add_panel(
-                self.bg_id,
+                Some(self.bg_id),
                 meter_x,
                 meter_y,
                 meter_w,
@@ -680,13 +765,13 @@ impl AudioSetupPanel {
                 UIStyle { bg_color: Color32::new(40, 40, 46, 255), ..UIStyle::default() },
             );
             let fill = tree.add_panel(
-                self.bg_id,
+                Some(self.bg_id),
                 meter_x,
                 meter_y,
                 0.0, // width set per frame by update_meters
                 meter_h,
                 UIStyle { bg_color: super::audio_send_color(&send.id), ..UIStyle::default() },
-            ) as i32;
+            );
             self.send_ids[i].meter_fill = fill;
             self.send_ids[i].meter_x = meter_x;
             self.send_ids[i].meter_y = meter_y;
@@ -698,20 +783,20 @@ impl AudioSetupPanel {
 
         // Add-send button.
         self.add_send_id = tree.add_button(
-            self.bg_id,
+            Some(self.bg_id),
             inner_x,
             cy,
             inner_w,
             ROW_H,
             btn_style(false),
             "+ Add Send",
-        ) as i32;
+        );
         cy += ROW_H;
 
         // ── Spectrogram scope (selected send) ──
         self.scope_rect = None;
-        self.scope_readout_label = -1;
-        self.band_meter_ids = [(-1, -1, -1); 3];
+        self.scope_readout_label = None;
+        self.band_meter_ids = [(None, None, None); 3];
         if !self.sends.is_empty() {
             cy += ROW_GAP;
             let sel_label = self
@@ -721,7 +806,7 @@ impl AudioSetupPanel {
                 .map(|s| s.label.as_str())
                 .unwrap_or("—");
             tree.add_label(
-                self.bg_id,
+                Some(self.bg_id),
                 inner_x,
                 cy,
                 inner_w,
@@ -738,8 +823,8 @@ impl AudioSetupPanel {
             // squelch. Bins below it are gated before display + detection, so the
             // wash blacks out as it's raised. Sits in the title row, left of the
             // hover readout. "Off" = no gate.
-            self.floor_minus_id = -1;
-            self.floor_plus_id = -1;
+            self.floor_minus_id = None;
+            self.floor_plus_id = None;
             let floor_db = self
                 .selected_send
                 .as_ref()
@@ -756,7 +841,7 @@ impl AudioSetupPanel {
             let fl_val = 52.0;
             let mut fx = inner_x + inner_w * 0.40;
             tree.add_label(
-                self.bg_id,
+                Some(self.bg_id),
                 fx,
                 cy,
                 fl_label_w,
@@ -770,17 +855,17 @@ impl AudioSetupPanel {
                 },
             );
             fx += fl_label_w;
-            self.floor_minus_id = tree.add_button(
-                self.bg_id,
+            self.floor_minus_id = Some(tree.add_button(
+                Some(self.bg_id),
                 fx,
                 cy,
                 fl_btn,
                 SCOPE_TITLE_H,
                 btn_style(false),
                 "\u{2212}",
-            ) as i32;
+            ));
             tree.add_label(
-                self.bg_id,
+                Some(self.bg_id),
                 fx + fl_btn,
                 cy,
                 fl_val,
@@ -793,21 +878,21 @@ impl AudioSetupPanel {
                     ..UIStyle::default()
                 },
             );
-            self.floor_plus_id = tree.add_button(
-                self.bg_id,
+            self.floor_plus_id = Some(tree.add_button(
+                Some(self.bg_id),
                 fx + fl_btn + fl_val,
                 cy,
                 fl_btn,
                 SCOPE_TITLE_H,
                 btn_style(false),
                 "\u{002B}",
-            ) as i32;
+            ));
 
             // Hover readout (freq + dB at the cursor), right-aligned in the same
             // title row — outside the waterfall rect, so the present pass's blit
             // doesn't cover it. Empty until the app feeds a value on hover.
-            self.scope_readout_label = tree.add_label(
-                self.bg_id,
+            self.scope_readout_label = Some(tree.add_label(
+                Some(self.bg_id),
                 inner_x + inner_w * 0.62,
                 cy,
                 inner_w * 0.38,
@@ -819,12 +904,12 @@ impl AudioSetupPanel {
                     text_align: TextAlign::Right,
                     ..UIStyle::default()
                 },
-            ) as i32;
+            ));
             cy += SCOPE_TITLE_H;
 
             // Backing panel behind the whole scope (axis margin + waterfall).
             tree.add_panel(
-                self.bg_id,
+                Some(self.bg_id),
                 inner_x,
                 cy,
                 inner_w,
@@ -864,7 +949,7 @@ impl AudioSetupPanel {
                 let yn = (hz / fmin).log2() / (fmax / fmin).log2();
                 let ly = wf_y + wf_h * (1.0 - yn) - 6.0;
                 tree.add_label(
-                    self.bg_id,
+                    Some(self.bg_id),
                     inner_x + 2.0,
                     ly,
                     SCOPE_AXIS_W - 4.0,
@@ -898,7 +983,7 @@ impl AudioSetupPanel {
             // across the meters and the spectrogram's transient ticks.
             for (band, slot) in self.band_meter_ids.iter_mut().enumerate() {
                 let label = tree.add_label(
-                    self.bg_id,
+                    Some(self.bg_id),
                     0.0,
                     0.0,
                     0.0,
@@ -910,9 +995,9 @@ impl AudioSetupPanel {
                         text_align: TextAlign::Center,
                         ..UIStyle::default()
                     },
-                ) as i32;
+                );
                 let track = tree.add_panel(
-                    self.bg_id,
+                    Some(self.bg_id),
                     0.0,
                     0.0,
                     0.0,
@@ -926,14 +1011,14 @@ impl AudioSetupPanel {
                     },
                 );
                 let fill = tree.add_panel(
-                    self.bg_id,
+                    Some(self.bg_id),
                     0.0,
                     0.0,
                     0.0,
                     0.0,
                     UIStyle { bg_color: band_color(band), corner_radius: 1.0, ..UIStyle::default() },
                 );
-                *slot = (track as i32, fill as i32, label);
+                *slot = (Some(track), Some(fill), Some(label));
             }
 
             // ── Live triggers (selected send) — laid out below the scope ──
@@ -957,7 +1042,7 @@ impl AudioSetupPanel {
             .map(|s| s.label.as_str())
             .unwrap_or("—");
         tree.add_label(
-            self.bg_id,
+            Some(self.bg_id),
             inner_x,
             cy,
             inner_w,
@@ -988,19 +1073,19 @@ impl AudioSetupPanel {
 
             // Enable swatch — band-coloured (Whole = neutral), dim when disabled.
             ids.enable = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 x,
                 cy,
                 TRIG_ENABLE_W,
                 TRIG_ROW_H,
                 trigger_swatch_style(i, row.enabled),
                 "",
-            ) as i32;
+            );
             x += TRIG_ENABLE_W + 4.0;
 
             // Band label — brighter when the route is active.
             tree.add_label(
-                self.bg_id,
+                Some(self.bg_id),
                 x,
                 cy,
                 TRIG_LABEL_W,
@@ -1022,16 +1107,16 @@ impl AudioSetupPanel {
             // Sensitivity stepper [−] value [＋] (percent), matching the gain
             // stepper's glyphs and discrete-step behaviour.
             ids.sens_minus = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 x,
                 cy,
                 TRIG_SENS_BTN_W,
                 TRIG_ROW_H,
                 btn_style(false),
                 "\u{2212}",
-            ) as i32;
+            );
             tree.add_label(
-                self.bg_id,
+                Some(self.bg_id),
                 x + TRIG_SENS_BTN_W,
                 cy,
                 TRIG_SENS_VAL_W,
@@ -1045,29 +1130,29 @@ impl AudioSetupPanel {
                 },
             );
             ids.sens_plus = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 x + TRIG_SENS_BTN_W + TRIG_SENS_VAL_W,
                 cy,
                 TRIG_SENS_BTN_W,
                 TRIG_ROW_H,
                 btn_style(false),
                 "\u{002B}",
-            ) as i32;
+            );
             x += TRIG_SENS_BTN_W * 2.0 + TRIG_SENS_VAL_W + 4.0;
 
             // One-shot length stepper [−] Nb [＋] — how long a fired clip holds.
             // Multiplicative steps (halve/double) keep it on musical divisions.
             ids.len_minus = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 x,
                 cy,
                 TRIG_SENS_BTN_W,
                 TRIG_ROW_H,
                 btn_style(false),
                 "\u{2212}",
-            ) as i32;
+            );
             tree.add_label(
-                self.bg_id,
+                Some(self.bg_id),
                 x + TRIG_SENS_BTN_W,
                 cy,
                 TRIG_LEN_VAL_W,
@@ -1081,28 +1166,28 @@ impl AudioSetupPanel {
                 },
             );
             ids.len_plus = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 x + TRIG_SENS_BTN_W + TRIG_LEN_VAL_W,
                 cy,
                 TRIG_SENS_BTN_W,
                 TRIG_ROW_H,
                 btn_style(false),
                 "\u{002B}",
-            ) as i32;
+            );
             x += TRIG_SENS_BTN_W * 2.0 + TRIG_LEN_VAL_W + 4.0;
 
             // Target-layer dropdown trigger (Auto or a layer name).
             let layer_w = (inner_x + inner_w - x).max(40.0);
             let layer_left = x;
             ids.layer = tree.add_button(
-                self.bg_id,
+                Some(self.bg_id),
                 x,
                 cy,
                 layer_w,
                 TRIG_ROW_H,
                 dropdown_trigger_style(),
                 &format!("{}   \u{25BC}", row.layer_label),
-            ) as i32;
+            );
 
             // Live level meter — a thin underline across the tuning zone (band
             // label → layer dropdown). Fill = the band's transient level; the
@@ -1115,30 +1200,30 @@ impl AudioSetupPanel {
             let meter_y = cy + TRIG_ROW_H - meter_h;
             let bandc = trigger_band_color(i);
             ids.meter_track = tree.add_panel(
-                self.bg_id,
+                Some(self.bg_id),
                 meter_x,
                 meter_y,
                 meter_w,
                 meter_h,
                 UIStyle { bg_color: Color32::new(40, 40, 46, 255), ..UIStyle::default() },
-            ) as i32;
+            );
             ids.meter_fill = tree.add_panel(
-                self.bg_id,
+                Some(self.bg_id),
                 meter_x,
                 meter_y,
                 0.0, // width set per frame
                 meter_h,
                 UIStyle { bg_color: dim_color(bandc, 0.55), ..UIStyle::default() },
-            ) as i32;
+            );
             let tick_x = meter_x + row.threshold.clamp(0.0, 1.0) * meter_w;
             ids.thresh_tick = tree.add_panel(
-                self.bg_id,
+                Some(self.bg_id),
                 tick_x,
                 meter_y - 2.0,
                 1.5,
                 meter_h + 4.0,
                 UIStyle { bg_color: Color32::new(225, 225, 235, 255), ..UIStyle::default() },
-            ) as i32;
+            );
             ids.meter_x = meter_x;
             ids.meter_y = meter_y;
             ids.meter_w = meter_w;
@@ -1152,7 +1237,7 @@ impl AudioSetupPanel {
             // rule in the row gap signals that without reflowing the layout.
             if i == 0 {
                 tree.add_panel(
-                    self.bg_id,
+                    Some(self.bg_id),
                     inner_x,
                     cy + TRIG_ROW_H + (ROW_GAP * 0.5),
                     inner_w,
@@ -1283,13 +1368,13 @@ impl AudioSetupPanel {
     /// Whether `id` is any node this panel owns (background or an interactive
     /// control) — the caller swallows such clicks so they don't fall through to
     /// the canvas behind the modal.
-    pub fn owns_node(&self, id: i32) -> bool {
+    pub fn owns_node(&self, id: NodeId) -> bool {
         if id == self.bg_id
             || id == self.close_id
             || id == self.device_dropdown_id
             || id == self.add_send_id
-            || (self.floor_minus_id >= 0
-                && (id == self.floor_minus_id || id == self.floor_plus_id))
+            || self.floor_minus_id == Some(id)
+            || self.floor_plus_id == Some(id)
         {
             return true;
         }
@@ -1320,14 +1405,11 @@ impl AudioSetupPanel {
     /// indexed by send order. A small visual gain makes quiet signals legible.
     pub fn update_meters(&self, tree: &mut UITree, levels: &[f32]) {
         for (i, ids) in self.send_ids.iter().enumerate() {
-            if ids.meter_fill < 0 {
-                continue;
-            }
             let level = levels.get(i).copied().unwrap_or(0.0);
             let shown = (level * 2.5).clamp(0.0, 1.0); // ~ -8 dB reaches full scale
             let w = ids.meter_w * shown;
             tree.set_bounds(
-                ids.meter_fill as u32,
+                ids.meter_fill,
                 Rect::new(ids.meter_x, ids.meter_y, w, ids.meter_h),
             );
         }
@@ -1352,9 +1434,9 @@ impl AudioSetupPanel {
             (self.scope_mid_hz, self.scope_fmax),
         ];
         for (i, &(track, fill, label)) in self.band_meter_ids.iter().enumerate() {
-            if track < 0 || fill < 0 || label < 0 {
+            let (Some(track), Some(fill), Some(label)) = (track, fill, label) else {
                 continue;
-            }
+            };
             let (lo, hi) = edges[i];
             let center_y = amps
                 .filter(|_| lo > 0.0 && hi > lo)
@@ -1364,20 +1446,20 @@ impl AudioSetupPanel {
                     let amp = a[i].clamp(0.0, 1.0);
                     let top = y - BAND_METER_HALF_H;
                     let h = BAND_METER_HALF_H * 2.0;
-                    tree.set_bounds(track as u32, Rect::new(bar_x, top, bar_w, h));
-                    tree.set_bounds(fill as u32, Rect::new(bar_x, top, bar_w * amp, h));
+                    tree.set_bounds(track, Rect::new(bar_x, top, bar_w, h));
+                    tree.set_bounds(fill, Rect::new(bar_x, top, bar_w * amp, h));
                     tree.set_bounds(
-                        label as u32,
+                        label,
                         Rect::new(label_x, y - label_h * 0.5, BAND_METER_LABEL_W, label_h),
                     );
-                    tree.set_visible(track as u32, true);
-                    tree.set_visible(fill as u32, true);
-                    tree.set_visible(label as u32, true);
+                    tree.set_visible(track, true);
+                    tree.set_visible(fill, true);
+                    tree.set_visible(label, true);
                 }
                 _ => {
-                    tree.set_visible(track as u32, false);
-                    tree.set_visible(fill as u32, false);
-                    tree.set_visible(label as u32, false);
+                    tree.set_visible(track, false);
+                    tree.set_visible(fill, false);
+                    tree.set_visible(label, false);
                 }
             }
         }
@@ -1391,13 +1473,10 @@ impl AudioSetupPanel {
     /// no extra timer. `None` / a dark scope rests every meter. No rebuild.
     pub fn update_trigger_levels(&self, tree: &mut UITree, levels: Option<[f32; 4]>) {
         for ids in &self.trigger_row_ids {
-            if ids.meter_fill < 0 {
-                continue;
-            }
             let level = levels.map_or(0.0, |l| l[ids.band].clamp(0.0, 1.0));
             let w = ids.meter_w * level;
             tree.set_bounds(
-                ids.meter_fill as u32,
+                ids.meter_fill,
                 Rect::new(ids.meter_x, ids.meter_y, w, ids.meter_h),
             );
             // Flash: enabled row whose level has crossed its fire line.
@@ -1405,7 +1484,7 @@ impl AudioSetupPanel {
             let firing = ids.enabled && level >= ids.threshold && ids.threshold > 0.0;
             let fill_color = if firing { bandc } else { dim_color(bandc, 0.55) };
             tree.set_style(
-                ids.meter_fill as u32,
+                ids.meter_fill,
                 UIStyle { bg_color: fill_color, ..UIStyle::default() },
             );
         }
@@ -1415,10 +1494,9 @@ impl AudioSetupPanel {
     /// shows it (freq + dB under the cursor); `None` hides it. Called every frame
     /// while open, mirroring [`update_meters`](Self::update_meters).
     pub fn update_scope_readout(&self, tree: &mut UITree, text: Option<&str>) {
-        if self.scope_readout_label < 0 {
+        let Some(id) = self.scope_readout_label else {
             return;
-        }
-        let id = self.scope_readout_label as u32;
+        };
         match text {
             Some(t) => {
                 tree.set_text(id, t);
@@ -1441,13 +1519,13 @@ impl AudioSetupPanel {
     pub fn send_label_rect(&self, tree: &UITree, id: &AudioSendId) -> Option<Rect> {
         let i = self.sends.iter().position(|s| &s.id == id)?;
         let node = self.send_ids.get(i)?;
-        (node.label >= 0).then(|| tree.get_bounds(node.label as u32))
+        Some(tree.get_bounds(node.label))
     }
 
     /// Resolve a clicked node id to a [`PanelAction`], or `None` if it hit
     /// nothing interactive. Closing the panel is handled here (returns `None`
     /// after toggling closed) so the caller just dispatches the action.
-    pub fn handle_click(&mut self, id: i32) -> Option<PanelAction> {
+    pub fn handle_click(&mut self, id: NodeId) -> Option<PanelAction> {
         if id == self.close_id {
             self.open = false;
             return None;
@@ -1455,7 +1533,7 @@ impl AudioSetupPanel {
         self.handle_click_inner(id)
     }
 
-    fn handle_click_inner(&mut self, id: i32) -> Option<PanelAction> {
+    fn handle_click_inner(&mut self, id: NodeId) -> Option<PanelAction> {
         if id == self.device_dropdown_id {
             self.delete_armed = None;
             // App opens the device dropdown anchored to this trigger.
@@ -1466,10 +1544,10 @@ impl AudioSetupPanel {
             return Some(PanelAction::AudioAddSend);
         }
         // Pre-analysis floor stepper (the spectrogram squelch) for the selected send.
-        if self.floor_minus_id >= 0 && (id == self.floor_minus_id || id == self.floor_plus_id) {
+        if self.floor_minus_id == Some(id) || self.floor_plus_id == Some(id) {
             self.delete_armed = None;
             let send = self.selected_send.clone()?;
-            let delta = if id == self.floor_plus_id { 6.0 } else { -6.0 };
+            let delta = if self.floor_plus_id == Some(id) { 6.0 } else { -6.0 };
             return Some(PanelAction::AudioSendFloorStep(send, delta));
         }
         // Find which send row + control was hit (clone out so we don't hold a
@@ -1662,7 +1740,7 @@ impl Overlay for AudioSetupPanel {
                 OverlayResponse::Consumed(Vec::new())
             }
             UIEvent::Click { node_id, pos, .. } => {
-                let id = *node_id as i32;
+                let id = *node_id;
                 if id == self.close_id {
                     self.open = false;
                     OverlayResponse::Consumed(Vec::new())
@@ -2002,7 +2080,7 @@ mod tests {
         let mut tree = UITree::new();
         let resp = p.on_event(
             &UIEvent::KeyDown {
-                node_id: 0,
+                node_id: NodeId(0),
                 key: Key::Escape,
                 modifiers: crate::input::Modifiers::default(),
             },

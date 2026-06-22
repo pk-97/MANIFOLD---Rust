@@ -13,7 +13,7 @@
 //! `tree.count()`, so overlays never self-track `first_node`/`node_count`.
 
 use crate::input::UIEvent;
-use crate::node::{Rect, Vec2};
+use crate::node::{NodeId, Rect, Vec2};
 use crate::tree::UITree;
 
 use super::PanelAction;
@@ -53,7 +53,7 @@ pub enum Anchor {
     /// Top-left pinned to a screen point (click-anchored popups).
     At(Vec2),
     /// Just below a tree node (the driver supplies the node's rect).
-    ToNode(i32),
+    ToNode(NodeId),
     /// An explicit rect, used verbatim (no clamping).
     Fixed(Rect),
     /// The overlay positions itself in `build_at` from `OverlayPlacement.screen`
@@ -304,7 +304,7 @@ mod tests {
     fn to_node_anchors_below_node() {
         let node = Rect::new(100.0, 200.0, 50.0, 20.0);
         let r = compute_overlay_rect(
-            &Anchor::ToNode(7),
+            &Anchor::ToNode(NodeId(7)),
             Vec2::new(40.0, 30.0),
             screen(),
             Some(node),
