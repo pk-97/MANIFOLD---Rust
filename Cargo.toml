@@ -61,6 +61,37 @@ opt-level = 2
 [profile.dev.package.symphonia-codec-aac]
 opt-level = 2
 
+# Optimise image decode + resize even in debug builds. The pure-Rust `image`
+# stack (decode codecs + imageops resize) runs 50-100x slower without
+# optimisation — a large still took multiple seconds to fit in debug, stalling
+# image-clip first paint. Same rationale as the symphonia block above.
+[profile.dev.package.image]
+opt-level = 2
+[profile.dev.package.png]
+opt-level = 2
+[profile.dev.package.fdeflate]
+opt-level = 2
+[profile.dev.package.miniz_oxide]
+opt-level = 2
+[profile.dev.package.flate2]
+opt-level = 2
+[profile.dev.package.jpeg-decoder]
+opt-level = 2
+[profile.dev.package.zune-jpeg]
+opt-level = 2
+[profile.dev.package.zune-core]
+opt-level = 2
+[profile.dev.package.image-webp]
+opt-level = 2
+[profile.dev.package.gif]
+opt-level = 2
+[profile.dev.package.weezl]
+opt-level = 2
+[profile.dev.package.color_quant]
+opt-level = 2
+[profile.dev.package.tiff]
+opt-level = 2
+
 # Dev profile — tuned for fast edit-rebuild-relink iteration.
 # manifold-app links every crate, so link time dominates incremental builds.
 [profile.dev]
