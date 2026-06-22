@@ -210,19 +210,10 @@ fn build_generator_kind_map(json_presets: &[PresetMetadata]) -> PresetMap {
     // layout drift class structurally.
     for preset in json_presets {
         let gen_id = PresetTypeId::from_string(preset.id.as_str().to_string());
-        let mut def = preset_metadata_to_def(preset, PresetKind::Generator);
-        // The v2 JSON schema can't fully express generator string params (no
-        // `use_dropdown` flag, no key→inner-node routing), so the inventory
-        // submission remains their source of truth. Carry its `string_param_defs`
-        // forward through the JSON override — otherwise text generators (Text,
-        // NumberStation, …) lose their editable Text/Font card rows entirely.
-        if def.string_param_defs.is_empty()
-            && let Some(existing) = m.get(&gen_id)
-            && !existing.string_param_defs.is_empty()
-        {
-            def.string_param_defs = existing.string_param_defs.clone();
-        }
-        m.insert(gen_id, Arc::new(def));
+        m.insert(
+            gen_id,
+            Arc::new(preset_metadata_to_def(preset, PresetKind::Generator)),
+        );
     }
     m
 }
@@ -577,11 +568,20 @@ pub fn preset_metadata_to_def(meta: &PresetMetadata, kind: PresetKind) -> Preset
         display_name: meta.display_name.clone(),
         param_count,
         param_defs,
-        // String params live outside the v2 PresetMetadata schema for now.
-        // Generators that need them (Text, NumberStation, …) keep their
-        // inventory submission; the §11 path applies to graph-backed
-        // presets without a string-param surface.
-        string_param_defs: Vec::new(),
+        // Outer-card string params (Text/Font on text generators, folder
+        // paths on MRI Volume) come straight from the JSON's `stringParams`.
+        // Strings are leaked to `'static` once at registry build / hot-reload,
+        // matching the alias-table pattern below.
+        string_param_defs: meta
+            .string_params
+            .iter()
+            .map(|sp| StringParamDef {
+                name: leak_str(&sp.name),
+                key: leak_str(&sp.id),
+                default_value: leak_str(&sp.default_value),
+                use_dropdown: sp.use_dropdown,
+            })
+            .collect(),
         osc_prefix: Some(meta.osc_prefix.clone()),
         is_line_based,
         id_to_index,

@@ -40,7 +40,6 @@ mod tests {
                 ParamSpec::continuous("cam_velocity", "Cam Velocity", 0.0, 0.99, 0.0, "F2", "camVelocity"),
                 ParamSpec::continuous("freefall", "Freefall", 0.0, 1.0, 0.0, "F0", "freefall"),
             ],
-            string_params: &[],
         }
     }
 

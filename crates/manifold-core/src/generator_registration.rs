@@ -4,7 +4,6 @@
 //! The definition and type registries collect these at startup.
 
 use crate::effects::ParamDef;
-use crate::preset_definition_registry::StringParamDef;
 use crate::preset_type_id::PresetTypeId;
 use crate::preset_type_registry::PresetTypeRegistration;
 use crate::preset_def::{PresetDef, PresetKind};
@@ -198,8 +197,6 @@ pub struct GeneratorMetadata {
     pub osc_prefix: &'static str,
     pub legacy_discriminant: Option<i32>,
     pub params: &'static [ParamSpec],
-    /// String params: (name, key, default_value, use_dropdown).
-    pub string_params: &'static [(&'static str, &'static str, &'static str, bool)],
 }
 
 inventory::collect!(GeneratorMetadata);
@@ -218,16 +215,6 @@ impl GeneratorMetadata {
     pub fn to_generator_def(&self) -> PresetDef {
         let param_defs: Vec<ParamDef> = self.params.iter().map(|p| p.to_param_def()).collect();
         let param_count = param_defs.len();
-        let string_param_defs: Vec<StringParamDef> = self
-            .string_params
-            .iter()
-            .map(|(name, key, default, dropdown)| StringParamDef {
-                name,
-                key,
-                default_value: default,
-                use_dropdown: *dropdown,
-            })
-            .collect();
         let id_to_index = self
             .params
             .iter()
@@ -242,7 +229,10 @@ impl GeneratorMetadata {
             is_line_based: self.is_line_based,
             param_count,
             param_defs,
-            string_param_defs,
+            // Outer-card string params are owned by the disk JSON preset
+            // (`stringParams`), which overrides this inventory def in the
+            // registry. The inventory path carries none.
+            string_param_defs: Vec::new(),
             osc_prefix: Some(self.osc_prefix.to_string()),
             id_to_index,
             param_ids,

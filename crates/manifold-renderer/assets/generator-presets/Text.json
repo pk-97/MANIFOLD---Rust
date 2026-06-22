@@ -262,7 +262,8 @@
         "id": "fontFamily",
         "name": "Font",
         "defaultValue": "",
-        "isFilePicker": false
+        "isFilePicker": false,
+        "useDropdown": true
       }
     ],
     "stringBindings": [

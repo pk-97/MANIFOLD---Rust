@@ -54,9 +54,7 @@ inventory::submit! {
             ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
             ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 1.0, "clipTrigger"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 inventory::submit! {
     GeneratorMetadata {
@@ -78,9 +76,7 @@ inventory::submit! {
             ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
             ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.1, "F2", "window"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 fn fixture_path(name: &str) -> std::path::PathBuf {

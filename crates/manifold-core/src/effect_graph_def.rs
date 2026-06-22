@@ -517,6 +517,12 @@ pub struct StringParamSpecDef {
     /// always editable; the button is sugar.
     #[serde(default)]
     pub is_file_picker: bool,
+    /// Hint to the editor: render a dropdown selector instead of a free
+    /// text input (e.g. the Text generator's Font picker, populated from
+    /// the installed font families). Mutually exclusive with
+    /// `is_file_picker` in practice.
+    #[serde(default)]
+    pub use_dropdown: bool,
 }
 
 /// Routing from one outer-card string config to one inner-graph node

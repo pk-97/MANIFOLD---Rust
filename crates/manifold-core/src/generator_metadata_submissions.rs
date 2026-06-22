@@ -24,9 +24,7 @@ inventory::submit! {
             ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
             ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Basic Shapes ───────────────────────────────────────────────────────
@@ -67,9 +65,7 @@ inventory::submit! {
             ParamSpec::continuous("ring_spacing", "Ring Spacing", 0.05, 0.3, 0.12, "F2", "ringSpacing"),
             ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
             ParamSpec::whole_labels("trigger_mode", "Trigger Mode", 0.0, 2.0, 2.0, &["Shape","Spawn","Both"], "triggerMode"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Tesseract ──────────────────────────────────────────────────────────
@@ -105,9 +101,7 @@ inventory::submit! {
             ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
             ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.1, "F2", "window"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Duocylinder ────────────────────────────────────────────────────────
@@ -137,9 +131,7 @@ inventory::submit! {
             ParamSpec::continuous("speed", "Speed", 0.1, 5.0, 1.0, "F1", "speed"),
             ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.1, "F2", "window"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Lissajous ──────────────────────────────────────────────────────────
@@ -164,9 +156,7 @@ inventory::submit! {
             ParamSpec::continuous("window", "Window", 0.01, 1.0, 0.5, "F2", "window"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
             ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Wireframe ──────────────────────────────────────────────────────────
@@ -189,9 +179,7 @@ inventory::submit! {
             ParamSpec::continuous("vert_size", "Vertex Size", 0.1, 4.0, 1.0, "F1", "vertSize"),
             ParamSpec::continuous("scale", "Scale", 0.25, 3.0, 1.0, "F2", "scale"),
             ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Fluid Simulation ──────────────────────────────────────────────────
@@ -219,9 +207,7 @@ inventory::submit! {
             ParamSpec::continuous("anti_clump", "Anti-Clump", 0.0, 60.0, 20.0, "F0", "antiClump"),
             ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),
             ParamSpec::continuous("fill", "Fill", 0.0, 1.0, 1.0, "F2", "fill"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Fluid Simulation 3D ───────────────────────────────────────────────
@@ -255,9 +241,7 @@ inventory::submit! {
             ParamSpec::continuous("rotate_y", "Rotate Y", -1.0, 1.0, 0.0, "F2", "rotY"),
             ParamSpec::continuous("rotate_z", "Rotate Z", -1.0, 1.0, 0.0, "F2", "rotZ"),
             ParamSpec::continuous("flatten", "Flatten", 0.0, 1.0, 0.0, "F2", "flatten"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Nested Cubes ───────────────────────────────────────────────────────
@@ -280,9 +264,7 @@ inventory::submit! {
                 &["Envelope", "Pose"],
                 "clipTriggerMode",
             ),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Black Hole ─────────────────────────────────────────────────────────
@@ -311,9 +293,7 @@ inventory::submit! {
             ParamSpec::continuous("turbulence", "Turbulence", 0.0, 5.0, 0.5, "F2", "turbulence"),
             ParamSpec::continuous("cam_velocity", "Camera Velocity", 0.0, 0.99, 0.0, "F2", "camVelocity"),
             ParamSpec::continuous("freefall", "Freefall", 0.0, 1.0, 0.0, "F2", "freefall"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Metallic Glass ─────────────────────────────────────────────────────
@@ -340,9 +320,7 @@ inventory::submit! {
             ParamSpec::continuous("cam_tilt", "Camera Tilt", -90.0, 90.0, -10.0, "F0", "camTilt"),
             ParamSpec::continuous("cam_fov", "Camera FOV", 20.0, 120.0, 54.0, "F0", "camFov"),
             ParamSpec::continuous("look_y", "Look Y", -2.0, 2.0, 0.0, "F2", "lookY"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Oily Fluid ─────────────────────────────────────────────────────────
@@ -370,9 +348,7 @@ inventory::submit! {
             ParamSpec::continuous("vel_disp", "Velocity Displace", 0.1, 10.0, 1.0, "F2", "velDisp"),
             ParamSpec::continuous("col_disp", "Color Displace", 0.1, 10.0, 1.0, "F2", "colDisp"),
             ParamSpec::whole_labels("mode", "Mode", 0.0, 4.0, 0.0, &["Oil Slick", "Flow Field", "Height Map", "PBR", "Lines"], "mode"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── MRI Volume ─────────────────────────────────────────────────────────
@@ -408,11 +384,6 @@ inventory::submit! {
             ParamSpec::whole_labels("scan", "Scan", 0.0, 2.0, 0.0, &["250µm 7T", "300µm HiRes", "Edlow 100µm"], "scan"),
             ParamSpec::toggle("clip_trigger", "Clip Trigger", 0.0, 1.0, 0.0, "clipTrigger"),
         ],
-        string_params: &[
-            ("Axial Folder", "axial_folder", "assets/mri-data/volumes/edlow_100um_synthesized/axial", false),
-            ("Sagittal Folder", "sagittal_folder", "assets/mri-data/volumes/edlow_100um_synthesized/sagittal", false),
-            ("Coronal Folder", "coronal_folder", "assets/mri-data/volumes/edlow_100um_synthesized/coronal", false),
-        ],
     }
 }
 
@@ -436,9 +407,7 @@ inventory::submit! {
             ParamSpec::continuous("twinkle", "Twinkle", 0.0, 1.0, 0.3, "F2", "twinkle"),
             ParamSpec::continuous("warmth", "Warmth", -1.0, 1.0, 0.0, "F2", "warmth"),
             ParamSpec::continuous("glow", "Glow", 0.0, 1.0, 0.3, "F2", "glow"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Text ───────────────────────────────────────────────────────────────
@@ -462,9 +431,7 @@ inventory::submit! {
             ParamSpec::whole_labels("v_align", "V Align", 0.0, 2.0, 1.0, &["Top", "Center", "Bottom"], "vAlign"),
             ParamSpec::continuous("letter_spacing", "Letter Spacing", -0.5, 2.0, 0.0, "F2", "letterSpacing"),
             ParamSpec::continuous("line_spacing", "Line Spacing", 0.5, 3.0, 1.2, "F1", "lineSpacing"),
-        ],
-        string_params: &[("Text", "text", "HELLO", false), ("Font", "fontFamily", "", true)],
-    }
+        ],    }
 }
 
 // ── Particle Text ───────────────────────────────────────────────────
@@ -493,9 +460,7 @@ inventory::submit! {
             ParamSpec::continuous("force", "Force", 0.0, 0.1, 0.005, "F3", "force"),
             ParamSpec::continuous("text_size", "Text Size", 0.05, 1.0, 0.25, "F2", "textSize"),
             ParamSpec::continuous("text_strength", "Text Strength", 0.0, 20.0, 4.0, "F1", "textStrength"),
-        ],
-        string_params: &[("Text", "text", "HELLO", false), ("Font", "fontFamily", "", true)],
-    }
+        ],    }
 }
 
 // ── Digital Plants ────────────────────────────────────────────────────
@@ -523,9 +488,7 @@ inventory::submit! {
             ParamSpec::continuous("cam_orbit", "Camera Orbit", -180.0, 180.0, 0.0, "F0", "camOrbit"),
             ParamSpec::continuous("cam_tilt", "Camera Tilt", -90.0, 90.0, 15.0, "F0", "camTilt"),
             ParamSpec::continuous("cam_fov", "Camera FOV", 20.0, 120.0, 50.0, "F0", "camFov"),
-        ],
-        string_params: &[],
-    }
+        ],    }
 }
 
 // ── Param aliases ─────────────────────────────────────────────────────
