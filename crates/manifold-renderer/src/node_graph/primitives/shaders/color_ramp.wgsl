@@ -21,8 +21,17 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
     let src = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
-    // BT.709 luma as the ramp index.
-    let luma = clamp(dot(src.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
-    let result = mix(uniforms.color_a, uniforms.color_b, luma);
-    textureStore(output_tex, vec2<i32>(id.xy), result);
+    // Input is premultiplied alpha — unpremultiply to read the true colour
+    // for the ramp index. A transparent pixel has no defined colour, so it
+    // maps to luma 0 (and is masked back out below).
+    let straight_rgb = select(vec3<f32>(0.0), src.rgb / max(src.a, 1e-4), src.a > 1e-4);
+    let luma = clamp(dot(straight_rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+    let ramp = mix(uniforms.color_a, uniforms.color_b, luma);
+    // Preserve input coverage: a transparent input pixel stays transparent so
+    // the gradient map keys over the layer below instead of painting color_a
+    // as an opaque box. Output premultiplied (rgb * a). For an opaque input
+    // with opaque stops this reduces to the old `mix(color_a, color_b, luma)`,
+    // and for data fields (which carry alpha = 1) it is a no-op.
+    let out_a = src.a * ramp.a;
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(ramp.rgb * out_a, out_a));
 }

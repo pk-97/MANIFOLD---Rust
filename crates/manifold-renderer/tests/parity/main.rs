@@ -24,6 +24,7 @@
 mod harness;
 
 mod affine_transform;
+mod alpha_contract;
 mod edge_detect;
 mod invert;
 mod sanity;

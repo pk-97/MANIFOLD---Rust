@@ -46,7 +46,7 @@ use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::preset_context::{MAX_GEN_PARAMS, PresetContext};
 use manifold_renderer::node_graph::{
     Backend, EffectNode, ExecutionPlan, Executor, FinalOutput, FrameTime, Graph, MetalBackend,
-    NodeInstanceId, ResourceId, Slot, Source, compile,
+    NodeInstanceId, PortType, ResourceId, Slot, Source, compile,
 };
 use manifold_renderer::render_target::RenderTarget;
 
@@ -422,6 +422,99 @@ impl ParityHarness {
         self.readback(prim_tex)
     }
 
+    /// Feed a fully-transparent (all-zero, premultiplied) fixture into
+    /// EVERY `Texture2D` input of `prim` and read back its first
+    /// `Texture2D` output as raw `Rgba16Float` bytes.
+    ///
+    /// Returns `None` when `prim` isn't a texture→texture effect (no
+    /// texture input or no texture output) or the graph fails to
+    /// compile/bind — the alpha-contract sweep reports those as
+    /// "skipped", never as passes.
+    ///
+    /// The contract under test: an effect handed nothing (alpha 0
+    /// everywhere) must output nothing (alpha stays 0). Any shader that
+    /// hardcodes the output alpha to 1.0 manufactures opacity from a
+    /// transparent layer — that's the bug class this probe detects.
+    pub fn run_transparent_probe(&self, prim: Box<dyn EffectNode>) -> Option<Vec<u8>> {
+        let tex_inputs: Vec<String> = prim
+            .inputs()
+            .iter()
+            .filter(|p| port_is_texture(&p.ty))
+            .map(|p| p.name.to_string())
+            .collect();
+        if tex_inputs.is_empty() {
+            return None;
+        }
+        let out_port: String = prim
+            .outputs()
+            .iter()
+            .find(|p| port_is_texture(&p.ty))
+            .map(|p| p.name.to_string())?;
+
+        let mut graph = Graph::new();
+        let prim_id = graph.add_node(prim);
+        let final_out = graph.add_node(Box::new(FinalOutput::new()));
+
+        // One Source per texture input — every one fed the transparent
+        // fixture below, so the effect sees "nothing" on all texture ports.
+        let mut sources: Vec<NodeInstanceId> = Vec::with_capacity(tex_inputs.len());
+        for port in &tex_inputs {
+            let src = graph.add_node(Box::new(Source::new()));
+            let port_leak: &'static str = leak_static_str(port.clone());
+            graph.connect((src, "out"), (prim_id, port_leak)).ok()?;
+            sources.push(src);
+        }
+        let out_leak: &'static str = leak_static_str(out_port);
+        graph.connect((prim_id, out_leak), (final_out, "in")).ok()?;
+
+        let plan = compile(&graph).ok()?;
+
+        // All-zero fixture = transparent black, premultiplied. Copy it into
+        // a private RT per source so the executor samples it through the
+        // same memory mode production graphs use.
+        let zeros = vec![f16::from_f32(0.0); (self.width * self.height * 4) as usize];
+        let transparent = self.upload_f16_rgba("alpha-probe-transparent", &zeros);
+
+        let mut backend = MetalBackend::new(&self.device, self.width, self.height, self.format);
+        let mut copy_enc = self.device.create_encoder("alpha-probe-copy-in");
+        let mut rts: Vec<RenderTarget> = Vec::with_capacity(sources.len());
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut copy_enc, &self.device);
+            for _ in &sources {
+                let rt = self.make_target("alpha-probe-source");
+                gpu.copy_texture_to_texture(&transparent, &rt.texture, self.width, self.height);
+                rts.push(rt);
+            }
+        }
+        copy_enc.commit_and_wait_completed();
+
+        let mut rts_iter = rts.into_iter();
+        for src in &sources {
+            let res = resource_for_output(&plan, *src, "out");
+            let rt = rts_iter.next()?;
+            backend.pre_bind_texture_2d(res, rt);
+        }
+        let prim_output_slot = Slot(backend.slot_count());
+
+        let frame_time = FrameTime {
+            beats: Beats(0.0),
+            seconds: Seconds(0.0),
+            delta: Seconds(1.0 / 60.0),
+            frame_count: 0,
+        };
+
+        let mut native_enc = self.device.create_encoder("alpha-probe-render");
+        let mut exec = Executor::new(Box::new(backend));
+        {
+            let mut gpu = RendererGpuEncoder::new(&mut native_enc, &self.device);
+            exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+        }
+        native_enc.commit_and_wait_completed();
+
+        let prim_tex = exec.backend().texture_2d(prim_output_slot)?;
+        Some(self.readback(prim_tex))
+    }
+
     /// Read a texture's contents back to host memory as raw bytes.
     /// Allocates a shared (CPU-visible) Metal buffer, issues a
     /// texture→buffer copy, commits, waits, and snapshots the bytes.
@@ -695,6 +788,12 @@ fn resource_for_output(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -
 /// of parity tests that run per process.
 fn leak_static_str(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
+}
+
+/// True for the texture port kinds the alpha-contract sweep treats as
+/// image data — plain `Texture2D` and typed-channel `Texture2DTyped`.
+pub fn port_is_texture(ty: &PortType) -> bool {
+    matches!(ty, PortType::Texture2D | PortType::Texture2DTyped(_))
 }
 
 // Suppress dead-code warnings until at least one parity test file
