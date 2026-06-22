@@ -33,6 +33,9 @@ const KEY_NAME: u64 = 90_004;
 const KEY_CHEVRON: u64 = 90_005;
 const KEY_COG: u64 = 90_006;
 const KEY_CHANGE: u64 = 90_007;
+const KEY_DRAG: u64 = 90_008;
+const KEY_NAME_CLIP: u64 = 90_009;
+const KEY_TOGGLE: u64 = 90_010;
 
 /// Map a 0..1 slider position to an [`AudioModShape`] scalar's value, using the
 /// per-control full-scale constants. The single conversion shared by the audio
@@ -1025,17 +1028,92 @@ impl ParamCardPanel {
                     .interactive()
                     .inert()
                     .key(KEY_INNER)
+                    .child(self.effect_header_row(header_bg)),
+            )
+    }
+
+    /// The effect header structure as a `View`: `[drag? | name-clip | toggle |
+    /// chevron | cog?]` right-to-left. The badges, drag bars, and cog dots are
+    /// added imperatively afterwards (see `build_effect_header`); the name-clip
+    /// is laid `Fill` here and shrunk to leave room for active badges by the
+    /// in-place re-pack, so badge behaviour is unchanged.
+    fn effect_header_row(&self, header_bg: Color32) -> View {
+        let author = self.context == CardContext::Author;
+        let transparent_btn = |hover: Color32, pressed: Color32| UIStyle {
+            bg_color: Color32::TRANSPARENT,
+            hover_bg_color: hover,
+            pressed_bg_color: pressed,
+            ..UIStyle::default()
+        };
+        let mut row = View::row(GAP)
+            .fill_w()
+            .h(Sizing::Fixed(HEADER_HEIGHT))
+            .bg(header_bg)
+            .radius(CORNER_RADIUS - BORDER_W)
+            .interactive()
+            .inert()
+            .pad(Pad { l: PADDING, t: 0.0, r: PADDING, b: 0.0 })
+            .cross_align(Align::Center)
+            .key(KEY_HEADER_BG);
+        if !author {
+            row = row.child(
+                View::button("")
+                    .fixed(DRAG_HANDLE_W, 16.0)
+                    .style(transparent_btn(
+                        color::DRAG_HANDLE_HOVER_BG_C32,
+                        color::DRAG_HANDLE_BG_C32,
+                    ))
+                    .inert()
+                    .key(KEY_DRAG),
+            );
+        }
+        row = row
+            .child(
+                View::panel()
+                    .clip()
+                    .fill_w()
+                    .h(Sizing::Fixed(16.0))
+                    .key(KEY_NAME_CLIP)
                     .child(
-                        View::panel()
+                        View::label(self.name.as_str())
                             .fill_w()
-                            .h(Sizing::Fixed(HEADER_HEIGHT))
-                            .bg(header_bg)
-                            .radius(CORNER_RADIUS - BORDER_W)
-                            .interactive()
-                            .inert()
-                            .key(KEY_HEADER_BG),
+                            .fill_h()
+                            .font(FONT_SIZE)
+                            .text_color(color::EFFECT_HEADER_NAME)
+                            .align_text(TextAlign::Left)
+                            .key(KEY_NAME),
                     ),
             )
+            .child(
+                View::button(if self.enabled { "ON" } else { "OFF" })
+                    .fixed(TOGGLE_W, 16.0)
+                    .style(toggle_btn_style(self.enabled))
+                    .inert()
+                    .key(KEY_TOGGLE),
+            )
+            .child(
+                View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
+                    .fixed(CHEVRON_W, 16.0)
+                    .style(UIStyle {
+                        text_color: color::CHEVRON_COLOR,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Center,
+                        ..transparent_btn(color::HOVER_OVERLAY, color::PRESS_OVERLAY)
+                    })
+                    .inert()
+                    .key(KEY_CHEVRON),
+            );
+        if !author {
+            row.child(
+                View::button("")
+                    .fixed(COG_W, 16.0)
+                    .style(transparent_btn(color::HOVER_OVERLAY, color::PRESS_OVERLAY))
+                    .inert()
+                    .key(KEY_COG),
+            )
+        } else {
+            row.child(View::panel().w(Sizing::Fixed(COG_W)).fill_h())
+        }
     }
 
 
@@ -1044,8 +1122,6 @@ impl ParamCardPanel {
         self.card_y = rect.y;
         self.param_cache.iter_mut().for_each(|v| *v = f32::NAN);
         self.label_cache.iter_mut().for_each(|v| *v = None);
-
-        let effect_name = self.name.clone();
 
         // Card frame (border + inner bg) on the host — interactive so clicks on
         // the edge / body select the card (resolved by id in `handle_click`).
@@ -1066,8 +1142,8 @@ impl ParamCardPanel {
         let inner_w = inner.width;
         let parent = self.inner_bg_id.expect("frame built inner bg");
 
-        // Header contents (built into the host-owned header bg).
-        self.build_effect_header(tree, inner.x, inner.y, inner_w, &effect_name);
+        // Header contents (badges + decorations into the host-owned header).
+        self.build_effect_header(tree, inner.x, inner.y, inner_w);
 
         // Param sliders
         if !self.is_collapsed && !self.param_info.is_empty() {
@@ -1077,7 +1153,7 @@ impl ParamCardPanel {
         self.node_count = tree.count() - self.first_node;
     }
 
-    fn build_effect_header(&mut self, tree: &mut UITree, x: f32, y: f32, w: f32, name: &str) {
+    fn build_effect_header(&mut self, tree: &mut UITree, x: f32, y: f32, w: f32) {
         // Header background is host-owned (see `effect_frame_view`, tinted there
         // by `has_graph_mod`); the contents below nest under it.
         let header_bg_id = self.header_bg_id.expect("header bg built by host");
@@ -1095,18 +1171,6 @@ impl ParamCardPanel {
             self.state.has_env,
             self.state.has_drv,
         );
-        // Author mode drops the drag-reorder handle (one card, nothing to
-        // reorder against), so the name reclaims its indent.
-        let author = self.context == CardContext::Author;
-        let name_x = if author {
-            x + PADDING
-        } else {
-            x + PADDING + DRAG_HANDLE_W + GAP
-        };
-        let name_w = (badges.name_right - name_x).max(10.0);
-        // Placeholder x for a hidden badge — invisible, repositioned by sync
-        // when it later turns on. Parking it at the block's right edge keeps it
-        // off the name even in the brief frame before sync runs.
         let badge_park = toggle_x - GAP - BADGE_W;
         let mod_x = badges.mod_x.unwrap_or(badge_park);
         let abl_x = badges.abl_x.unwrap_or(badge_park);
@@ -1115,33 +1179,25 @@ impl ParamCardPanel {
         let elem_y = y + (HEADER_HEIGHT - 16.0) * 0.5;
         let badge_y = y + (HEADER_HEIGHT - BADGE_H) * 0.5;
 
-        // Drag handle (hamburger icon drawn as 3 horizontal bars). Perform only
-        // — leaving `drag_icon_id = None` in Author also disables `is_drag_handle`,
-        // so the card can't be picked up for a reorder it has no list to join.
-        if !author {
+        // The header structure (drag handle, name-clip + label, toggle, chevron,
+        // cog) is host-built (see `effect_header_row`); resolve its ids by key.
+        // The badges, the drag bars, and the cog dots below are the imperative
+        // decorations layered on top.
+        self.drag_icon_id = self.host.node_id_for_key(KEY_DRAG);
+        self.name_clip_id = self.host.node_id_for_key(KEY_NAME_CLIP);
+        self.name_label_id = self.host.node_id_for_key(KEY_NAME);
+        self.toggle_btn_id = self.host.node_id_for_key(KEY_TOGGLE);
+        self.chevron_btn_id = self.host.node_id_for_key(KEY_CHEVRON);
+        self.cog_btn_id = self.host.node_id_for_key(KEY_COG);
+
+        // Drag-handle bars (3 horizontal lines) into the host drag button.
+        if let Some(drag_icon_id) = self.drag_icon_id {
             let dh_x = x + PADDING;
-            let dh_h = 16.0_f32;
-            let drag_icon_id = tree.add_button(
-                Some(header_bg_id),
-                dh_x,
-                elem_y,
-                DRAG_HANDLE_W,
-                dh_h,
-                UIStyle {
-                    bg_color: Color32::TRANSPARENT,
-                    hover_bg_color: color::DRAG_HANDLE_HOVER_BG_C32,
-                    pressed_bg_color: color::DRAG_HANDLE_BG_C32,
-                    ..UIStyle::default()
-                },
-                "",
-            );
-            self.drag_icon_id = Some(drag_icon_id);
             let bar_w: f32 = 10.0;
             let bar_h: f32 = 1.5;
             let bar_x = dh_x + (DRAG_HANDLE_W - bar_w) * 0.5;
-            let bar_color = color::TEXT_DIMMED_C32;
             let bar_style = UIStyle {
-                bg_color: bar_color,
+                bg_color: color::TEXT_DIMMED_C32,
                 ..UIStyle::default()
             };
             for i in 0..3 {
@@ -1149,39 +1205,6 @@ impl ParamCardPanel {
                 tree.add_panel(Some(drag_icon_id), bar_x, bar_y, bar_w, bar_h, bar_style);
             }
         }
-
-        // Name cell — a transparent clip container the label nests in, so a
-        // long name is cut at the cell edge rather than drawn over the badges.
-        let name_clip_id = tree.add_panel(
-            Some(header_bg_id),
-            name_x,
-            elem_y,
-            name_w,
-            16.0,
-            UIStyle {
-                bg_color: Color32::TRANSPARENT,
-                ..UIStyle::default()
-            },
-        );
-        self.name_clip_id = Some(name_clip_id);
-        tree.set_flag(name_clip_id, UIFlags::CLIPS_CHILDREN);
-
-        // Name label — generous width so left-aligned text never self-limits;
-        // the clip container above enforces the cell edge.
-        self.name_label_id = Some(tree.add_label(
-            Some(name_clip_id),
-            name_x,
-            elem_y,
-            (toggle_x - name_x).max(name_w),
-            16.0,
-            name,
-            UIStyle {
-                text_color: color::EFFECT_HEADER_NAME,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        ));
 
         // ABL badge — visibility synced from state.has_abl
         let show_abl = self.state.has_abl;
@@ -1322,64 +1345,11 @@ impl ParamCardPanel {
         self.cached_has_graph_mod = show_mod;
         self.cached_enabled = self.enabled;
 
-        // Toggle button (ON/OFF)
-        let toggle_style = toggle_btn_style(self.enabled);
-        self.toggle_btn_id = Some(tree.add_button(
-            Some(header_bg_id),
-            toggle_x,
-            elem_y,
-            TOGGLE_W,
-            16.0,
-            toggle_style,
-            if self.enabled { "ON" } else { "OFF" },
-        ));
-
-        // Chevron
-        self.chevron_btn_id = Some(tree.add_button(
-            Some(header_bg_id),
-            chevron_x,
-            elem_y,
-            CHEVRON_W,
-            16.0,
-            UIStyle {
-                bg_color: Color32::TRANSPARENT,
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
-                text_color: color::CHEVRON_COLOR,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            if self.is_collapsed {
-                "\u{25B6}"
-            } else {
-                "\u{25BC}"
-            },
-        ));
-
-        // "Open in graph editor" affordance — three small dots in a triangle.
-        // Perform only: in Author you're already in the editor, so the cog is
-        // suppressed (and `cog_btn_id` stays None, so its click arm never fires).
-        if !author {
-            let cog_btn_id = tree.add_button(
-                Some(header_bg_id),
-                cog_x,
-                elem_y,
-                COG_W,
-                16.0,
-                UIStyle {
-                    bg_color: Color32::TRANSPARENT,
-                    hover_bg_color: color::HOVER_OVERLAY,
-                    pressed_bg_color: color::PRESS_OVERLAY,
-                    ..UIStyle::default()
-                },
-                "",
-            );
-            self.cog_btn_id = Some(cog_btn_id);
+        // Cog dots (three in a triangle) into the host cog button.
+        if let Some(cog_btn_id) = self.cog_btn_id {
             let dot: f32 = 3.0;
-            let dot_color = color::TEXT_DIMMED_C32;
             let dot_style = UIStyle {
-                bg_color: dot_color,
+                bg_color: color::TEXT_DIMMED_C32,
                 corner_radius: dot * 0.5,
                 ..UIStyle::default()
             };
@@ -1396,6 +1366,11 @@ impl ParamCardPanel {
                 tree.add_panel(Some(cog_btn_id), px, py, dot, dot, dot_style);
             }
         }
+
+        // Shrink the host name-clip to leave room for the active badges and
+        // settle the badge positions — the same in-place re-pack `sync` runs, so
+        // badge behaviour is unchanged.
+        self.reposition_effect_badges(tree);
     }
 
     fn build_effect_sliders(
@@ -3147,6 +3122,38 @@ mod tests {
 
         // Arming the envelope adds the orange target handle on the slider track.
         assert!(panel.target_ids[0].is_some());
+    }
+
+    #[test]
+    fn effect_header_layout_matches_golden() {
+        // The host-built effect header lands toggle / chevron / cog at the same
+        // right-to-left rects the old imperative layout used.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new(); // Perform context
+        panel.configure(&effect_config());
+        let rect = Rect::new(0.0, 0.0, 280.0, 300.0);
+        panel.build(&mut tree, rect);
+
+        let inner_x = rect.x + BORDER_W;
+        let inner_y = rect.y + BORDER_W;
+        let inner_w = rect.width - BORDER_W * 2.0;
+        let cog_x = inner_x + inner_w - PADDING - COG_W;
+        let chevron_x = cog_x - GAP - CHEVRON_W;
+        let toggle_x = chevron_x - GAP - TOGGLE_W;
+        let elem_y = inner_y + (HEADER_HEIGHT - 16.0) * 0.5;
+
+        let close = |a: Rect, b: Rect| {
+            (a.x - b.x).abs() < 0.01
+                && (a.y - b.y).abs() < 0.01
+                && (a.width - b.width).abs() < 0.01
+                && (a.height - b.height).abs() < 0.01
+        };
+        let toggle = tree.get_bounds(panel.host.node_id_for_key(KEY_TOGGLE).unwrap());
+        assert!(close(toggle, Rect::new(toggle_x, elem_y, TOGGLE_W, 16.0)), "toggle {toggle:?}");
+        let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
+        assert!(close(chevron, Rect::new(chevron_x, elem_y, CHEVRON_W, 16.0)), "chevron {chevron:?}");
+        let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
+        assert!(close(cog, Rect::new(cog_x, elem_y, COG_W, 16.0)), "cog {cog:?}");
     }
 
     // ── Generator-card fixtures + tests ───────────────────────────
