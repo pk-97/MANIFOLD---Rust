@@ -2,6 +2,7 @@
 
 pub mod bitmap_painter;
 pub mod bitmap_renderer;
+pub mod chrome;
 pub mod clip_hit_tester;
 pub mod color;
 pub mod coordinate_mapper;

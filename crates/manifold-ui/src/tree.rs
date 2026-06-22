@@ -83,6 +83,13 @@ impl UITree {
         self.text_measure.measure_text(text, font_size, weight).x
     }
 
+    /// The installed measurer, for callers that drive a layout pass before
+    /// mutating the tree (the Chrome API solves with this, then applies the
+    /// result through `&mut self`). Borrows end before any mutation begins.
+    pub fn measurer(&self) -> &dyn TextMeasure {
+        &*self.text_measure
+    }
+
     pub fn has_dirty(&self) -> bool {
         self.has_dirty
     }
