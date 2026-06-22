@@ -692,20 +692,32 @@ pass (see §0).
   keyed slots. 4 tests cover the modes + key routing + slider materialisation. The
   **runtime pass is still owed** — the build golden can't cover the live
   drag/dynamic-row behaviour.
-- [~] **2b.0** `param_card` — **stage 1 DONE 2026-06-22, pushed.** The card frame
-  (interactive border + inner bg, both effect + generator kinds) is host-built via
-  a declarative `frame_view`, byte-identical; the header + rows are still built
-  imperatively into the host-laid inner bg. **The key result: the beast stages
-  into committable steps — it is NOT one all-or-nothing rewrite.** Remaining
-  stages: (2) header → host — note the absolute-positioned decorations (cog's
-  3 dots, drag handle's bars) and the effect header's dynamic flush-right badge
-  packing + live-resized name-clip don't map to flow layout, so the header is a
-  buttons-declarative / decorations-as-keyed-children job, plus the dual
-  effect/generator sync + handle_click move to key resolution; (3) rows stay
-  imperative *by design* (`build_param_row` is a dragged, trim-handled stateful
-  widget — the slider/trim/drawer surface, not declarative chrome). Best with a
-  running build. The same frame-first staging applies to layer_header / audio_setup
-  / inspector.
+- [~] **2b.0** `param_card` — **stages 1 + 2 DONE 2026-06-22, pushed.** The beast
+  is migrating *incrementally* — committable, tested stages, not one all-or-nothing
+  rewrite:
+  - **Stage 1 (frame):** the card frame (interactive border + inner bg, both kinds)
+    is host-built via a declarative `frame_view`, byte-identical.
+  - **Stage 2 (generator header):** the generator header (name | Change | cog |
+    chevron, the header_bg, right-to-left layout) is host-built via
+    `generator_card_view`; the cog's three dots are imperative children of the
+    keyed cog button (absolute decoration — doesn't map to flow). Header ids
+    resolve by key into the existing fields, so sync + `handle_click_generator`
+    are untouched. **Golden** asserts Change/cog/chevron land at the old rects.
+  - **Stage 3 (effect header) — a real fork, not mechanical.** The effect header
+    adds the dynamic flush-right badge block (`effect_badge_layout`: active badges
+    only, name-clip resized to suit). The badges are updated **in-place** by
+    `sync_values_effect` (a dirty-checked path that runs when the active set flips
+    *without* a rebuild). A declarative flow wants active-only badges =
+    structural = rebuild-on-change. Those two conflict: going declarative means
+    dropping the in-place badge sync and guaranteeing every badge-aggregate flip
+    forces a rebuild — a behaviour change to verify against a running build, not a
+    transcription. **Decide with Peter:** rebuild-on-badge-change vs. keep the
+    effect header imperative (it's the dynamic-chip surface, like a slider is the
+    dragged surface).
+  - **Stage 4 (rows):** stay imperative *by design* — `build_param_row` is a
+    dragged, trim-handled stateful widget (the slider/trim/drawer surface).
+  The same frame-first staging applies to `layer_header` / `audio_setup` /
+  `inspector`.
 - [ ] **2b.5** `layer_header` — per-layer rows (variable count), audio-gain slider,
   MIDI fields. Runtime pass.
 - [ ] **2b.9** `inspector` (composite) — the 2588-line orchestrator. Migrate after
