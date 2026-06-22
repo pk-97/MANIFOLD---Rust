@@ -95,16 +95,11 @@ pub(crate) fn build_picker_session(
 /// What the currently-open dropdown is selecting for.
 #[derive(Debug, Clone)]
 pub enum DropdownContext {
-    BlendMode(usize),
-    MidiNote(usize),
-    MidiChannel(usize),
-    MidiDevice(usize),
-    Resolution,
-    // ClipContext / TrackContext retired (2b.11): their right-click menus now use
-    // typed DropdownItem::with_action, so no context/index→action map is needed.
+    // Retired (2b.11) — these menus now use typed DropdownItem::with_action, so no
+    // context / index→action map is needed: BlendMode, MidiNote, MidiChannel,
+    // MidiDevice, Resolution, ClkDevice, ClipContext, TrackContext.
     LayerContext(usize),      // right-click on layer header: layer_index
     MasterExitPath,           // LED exit path dropdown
-    ClkDevice,                // MIDI clock device selection
     CardContext(GraphParamTarget), // right-click on a preset card header (effect or generator)
     ParamContext(GraphParamTarget, manifold_core::effects::ParamId, f32), // gpt, param_id, default_val
     MacroSlotContext(usize),  // macro_index (right-click on macro slider)
@@ -943,6 +938,16 @@ impl UIRoot {
         self.overlay_dirty = true;
     }
 
+    /// Open a dropdown whose items carry their own actions (2b.11). No
+    /// `DropdownContext` is stored — each item returns
+    /// `DropdownAction::SelectedAction`, which the drain fires directly, so there
+    /// is no positional index→meaning map to keep in sync.
+    pub(crate) fn open_dropdown_typed(&mut self, items: Vec<DropdownItem>, trigger: Rect) {
+        self.dropdown_context = None;
+        self.dropdown.open(items, trigger, 120.0, &mut self.tree);
+        self.overlay_dirty = true;
+    }
+
     /// Cache the candidate target layers for the audio-clip detection layer
     /// dropdowns. Set by `state_sync` when an audio clip is selected; read when
     /// an instrument's layer dropdown opens.
@@ -1307,7 +1312,7 @@ impl UIRoot {
                             .with_action(PanelAction::SetBlendMode(*idx, format!("{:?}", m)))
                     })
                     .collect();
-                self.open_dropdown_at(DropdownContext::BlendMode(*idx), items, trigger);
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::ClipDetectQuantizeClicked => {
@@ -1583,7 +1588,7 @@ impl UIRoot {
                             .with_action(PanelAction::SetMidiClockDevice(i as i32))
                     })
                     .collect();
-                self.open_dropdown_at(DropdownContext::ClkDevice, items, trigger);
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::MidiInputClicked(idx) => {
@@ -1594,7 +1599,7 @@ impl UIRoot {
                             .with_action(PanelAction::SetMidiNote(*idx, n))
                     })
                     .collect();
-                self.open_dropdown_at(DropdownContext::MidiNote(*idx), items, trigger);
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::MidiChannelClicked(idx) => {
@@ -1605,7 +1610,7 @@ impl UIRoot {
                     DropdownItem::new(&format!("Ch {}", ch))
                         .with_action(PanelAction::SetMidiChannel(*idx, ch - 1))
                 }));
-                self.open_dropdown_at(DropdownContext::MidiChannel(*idx), items, trigger);
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::MidiDeviceClicked(idx) => {
@@ -1618,7 +1623,7 @@ impl UIRoot {
                     DropdownItem::new(name)
                         .with_action(PanelAction::SetMidiDevice(*idx, Some(name.clone())))
                 }));
-                self.open_dropdown_at(DropdownContext::MidiDevice(*idx), items, trigger);
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::ResolutionClicked => {
@@ -1648,7 +1653,7 @@ impl UIRoot {
                     }
                 }
 
-                self.open_dropdown_at(DropdownContext::Resolution, items, trigger);
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::MasterExitPathClicked => {
@@ -1874,42 +1879,8 @@ impl UIRoot {
     /// Convert a dropdown selection into the appropriate PanelAction based on context.
     fn dropdown_to_action(&self, ctx: DropdownContext, index: usize) -> Option<PanelAction> {
         match ctx {
-            DropdownContext::BlendMode(layer_idx) => {
-                use manifold_core::types::BlendMode;
-                let mode = BlendMode::from_index(index);
-                Some(PanelAction::SetBlendMode(layer_idx, format!("{:?}", mode)))
-            }
-            DropdownContext::MidiNote(layer_idx) => {
-                Some(PanelAction::SetMidiNote(layer_idx, index as i32))
-            }
-            DropdownContext::MidiChannel(layer_idx) => {
-                // Item 0 = "All" (-1 sentinel); 1..=16 map to channels 0..15.
-                let ch = if index == 0 { -1 } else { index as i32 - 1 };
-                Some(PanelAction::SetMidiChannel(layer_idx, ch))
-            }
-            DropdownContext::MidiDevice(layer_idx) => {
-                // Item 0 = "All Devices" (None); subsequent items map into midi_device_names.
-                let device = if index == 0 {
-                    None
-                } else {
-                    self.midi_device_names.get(index - 1).cloned()
-                };
-                Some(PanelAction::SetMidiDevice(layer_idx, device))
-            }
-            DropdownContext::Resolution => {
-                use manifold_core::types::ResolutionPreset;
-                let preset_count = ResolutionPreset::ALL.len();
-                if index < preset_count {
-                    // Preset selection (undoable)
-                    Some(PanelAction::SetResolution(index))
-                } else {
-                    // Skip separator (preset_count = separator index)
-                    let display_idx = index.checked_sub(preset_count + 1)?;
-                    let (w, h, _) = self.display_resolutions.get(display_idx)?;
-                    Some(PanelAction::SetDisplayResolution(*w as i32, *h as i32))
-                }
-            }
-            // ClipContext / TrackContext retired — typed items (2b.11).
+            // BlendMode / MidiNote / MidiChannel / MidiDevice / Resolution /
+            // ClkDevice / ClipContext / TrackContext retired — typed items (2b.11).
             DropdownContext::LayerContext(layer_idx) => match self.dropdown.item_label(index) {
                 Some("Paste") => Some(PanelAction::ContextPasteAtLayer(layer_idx)),
                 Some("Import MIDI File") => Some(PanelAction::ContextImportMidi(layer_idx)),
@@ -1924,7 +1895,6 @@ impl UIRoot {
                 Some("Delete Layer") => Some(PanelAction::ContextDeleteLayer(layer_idx)),
                 _ => None,
             },
-            DropdownContext::ClkDevice => Some(PanelAction::SetMidiClockDevice(index as i32)),
             DropdownContext::AudioInputDevice => {
                 if index == 0 {
                     // "None (video only)"
