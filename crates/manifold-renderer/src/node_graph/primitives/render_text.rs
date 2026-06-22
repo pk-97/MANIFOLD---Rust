@@ -6,8 +6,9 @@
 //! [`TextRasterizer`] that turns those into an R8Unorm grayscale glyph
 //! bitmap, dirty-cached so re-rasterization only happens when the text,
 //! size, font, or styling actually change. A compute kernel then samples
-//! that bitmap and writes white-on-black into the output with the usual
-//! position / scale / aspect / alignment math.
+//! that bitmap and writes premultiplied white glyphs on a transparent
+//! background into the output with the usual position / scale / aspect /
+//! alignment math, so the text keys over the layer below.
 //!
 //! Single-primitive wrap of the legacy `Text` generator — the rasterizer
 //! and shader are lifted verbatim. The decomposition gain is that the
@@ -42,7 +43,7 @@ struct RenderTextUniforms {
 crate::primitive! {
     name: RenderText,
     type_id: "node.render_text",
-    purpose: "Render a text string to the output texture. The host wires `text` and `fontFamily` through preset stringBindings; size/position/scale/alignment/spacing are port-shadows-param scalars. CPU-rasterizes the glyphs via CoreText into an internal R8Unorm bitmap (dirty-cached — only re-rasterized when text/font/size/style change), then composites white-on-black into the output with aspect correction. Single-node text generator: drop it between `system.generator_input` and `system.final_output`.",
+    purpose: "Render a text string to the output texture. The host wires `text` and `fontFamily` through preset stringBindings; size/position/scale/alignment/spacing are port-shadows-param scalars. CPU-rasterizes the glyphs via CoreText into an internal R8Unorm bitmap (dirty-cached — only re-rasterized when text/font/size/style change), then composites premultiplied white glyphs on a transparent background into the output with aspect correction, so the text keys cleanly over the layer below. Single-node text generator: drop it between `system.generator_input` and `system.final_output`.",
     inputs: {
         size: ScalarF32 optional,
         pos_x: ScalarF32 optional,
@@ -139,7 +140,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Text + fontFamily come via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text fields into this primitive's String params. Scalar inputs are port-shadows-param: wire upstream LFOs / envelopes into `size`, `pos_x`, `pos_y`, `scale`, `h_align`, `v_align`, `letter_spacing`, `line_spacing` to animate them. The R8Unorm glyph bitmap is dirty-cached internally — re-rasterization only happens when text, font, font size (= size × output_height), or styling actually change, so per-frame cost is just the composite dispatch. Output is white text on black; pair with downstream `node.color_grade` or `node.invert` to tint or invert.",
+    composition_notes: "Text + fontFamily come via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text fields into this primitive's String params. Scalar inputs are port-shadows-param: wire upstream LFOs / envelopes into `size`, `pos_x`, `pos_y`, `scale`, `h_align`, `v_align`, `letter_spacing`, `line_spacing` to animate them. The R8Unorm glyph bitmap is dirty-cached internally — re-rasterization only happens when text, font, font size (= size × output_height), or styling actually change, so per-frame cost is just the composite dispatch. Output is premultiplied white glyphs on a transparent background, so it keys over the layer below instead of painting a black box; pair with downstream `node.color_grade` to tint.",
     examples: ["assets/generator-presets/Text.json"],
     picker: { label: "Render Text", category: Atom },
     summary: "Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live.",
@@ -254,9 +255,10 @@ impl Primitive for RenderText {
         };
 
         // No glyph bitmap (empty text, whitespace, or rasterize failed)
-        // → clear to black and bail.
+        // → clear to fully transparent and bail (premultiplied alpha contract:
+        // nothing to draw means the layer below shows through, not a black box).
         let Some(text_tex) = self.text_texture.as_ref() else {
-            ctx.gpu_encoder().clear_texture(out, 0.0, 0.0, 0.0, 1.0);
+            ctx.gpu_encoder().clear_texture(out, 0.0, 0.0, 0.0, 0.0);
             return;
         };
 
@@ -477,13 +479,32 @@ mod gpu_tests {
             lit_pixels > min_lit,
             "expected glyphs to light at least {min_lit} pixels, got {lit_pixels}",
         );
+
+        // Keying guard: text must composite as a real masked layer, not an
+        // opaque black box. The background must be fully transparent (alpha 0)
+        // and the glyphs must carry alpha (premultiplied: alpha = coverage).
+        let transparent_bg = (0..(w * h) as usize)
+            .filter(|&i| f16::from_bits(halves[i * 4 + 3]).to_f32() < 0.01)
+            .count();
+        let glyph_alpha = (0..(w * h) as usize)
+            .filter(|&i| f16::from_bits(halves[i * 4 + 3]).to_f32() > 0.5)
+            .count();
+        assert!(
+            transparent_bg > 0,
+            "expected a transparent background so text keys over the layer below",
+        );
+        assert!(
+            glyph_alpha > 0,
+            "expected glyph pixels to carry alpha (premultiplied coverage)",
+        );
     }
 
-    /// Empty text → output cleared to black (rasterize returns None and
-    /// the primitive bails after clearing). Guards the rasterize-returned-None
-    /// branch against a regression where it leaves a stale bitmap on screen.
+    /// Empty text → output cleared to fully transparent (rasterize returns
+    /// None and the primitive bails after clearing). Guards the
+    /// rasterize-returned-None branch against a regression where it leaves a
+    /// stale bitmap — or an opaque black box — on screen.
     #[test]
-    fn empty_text_clears_to_black() {
+    fn empty_text_clears_to_transparent() {
         let device = crate::test_device();
         let (w, h) = (32u32, 32u32);
         let format = GpuTextureFormat::Rgba16Float;
@@ -520,7 +541,12 @@ mod gpu_tests {
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
         for i in 0..(w * h) as usize {
             let r = f16::from_bits(halves[i * 4]).to_f32();
-            assert!(r < 0.01, "expected black for empty text, got {r} at {i}");
+            let a = f16::from_bits(halves[i * 4 + 3]).to_f32();
+            assert!(r < 0.01, "expected black rgb for empty text, got {r} at {i}");
+            assert!(
+                a < 0.01,
+                "expected transparent alpha for empty text, got {a} at {i}",
+            );
         }
     }
 }

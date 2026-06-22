@@ -55,18 +55,21 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let tex_uv = (p + half + vec2<f32>(0.0, v_shift)) / (half * 2.0);
 
-    // Bounds check
+    // Bounds check — outside the glyph bitmap is fully transparent so the
+    // text keys over the layer below (premultiplied alpha contract).
     if tex_uv.x < 0.0 || tex_uv.x > 1.0 || tex_uv.y < 0.0 || tex_uv.y > 1.0 {
-        textureStore(output, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
+        textureStore(output, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 0.0));
         return;
     }
 
     // No Y-flip needed: CG bitmap context row ordering matches GPU texture
     // layout for this upload path (Metal replace_region preserves row order).
     let texel = vec2<i32>(vec2<f32>(u.tex_width, u.tex_height) * tex_uv);
-    let alpha = textureLoad(text_tex, texel, 0).r;
+    let coverage = textureLoad(text_tex, texel, 0).r;
 
-    // White text on black background
-    let color = vec3<f32>(alpha);
-    textureStore(output, vec2<i32>(id.xy), vec4<f32>(color, 1.0));
+    // White glyphs, premultiplied alpha: rgb = white * coverage, a = coverage.
+    // Where coverage is 0 the pixel is fully transparent, so the glyph edges
+    // anti-alias against whatever is below and the background no longer paints
+    // an opaque black box over the layer beneath.
+    textureStore(output, vec2<i32>(id.xy), vec4<f32>(vec3<f32>(coverage), coverage));
 }
