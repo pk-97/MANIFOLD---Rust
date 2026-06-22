@@ -22,6 +22,7 @@ pub mod snap;
 pub mod text;
 pub mod timeline_editing_host;
 pub mod timeline_input_host;
+pub mod transform;
 pub mod tree;
 pub mod trim;
 pub mod ui_state;

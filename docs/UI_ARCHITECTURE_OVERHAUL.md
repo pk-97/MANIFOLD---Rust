@@ -14,7 +14,7 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 1.2 COMPLETE (2026-06-22).** Next action: **Phase 1.3 (shared coordinate-transform pattern)**.
+> **Status: Phase 1.3 COMPLETE (2026-06-22).** Next action: **Phase 1.4 (plumb `TextMeasure` into the build path)**.
 >
 > **Phase 0 decision:** production stays `panic = "abort"` ([`Cargo.toml`](../Cargo.toml)
 > `[profile.release]`). In-process recovery (catch_unwind / respawn / watchdog) is
@@ -514,8 +514,13 @@ not a recovery system.
   when:_ `SliderDragState` reimplemented on it as proof. → `DragController<T>` in
   [`drag.rs`](../crates/manifold-ui/src/drag.rs); `SliderDragState.dragging` is now a
   `DragController<()>`. Public API unchanged; consumers untouched.
-- [ ] **1.3** Shared coordinate-transform pattern (beat↔px + graph↔screen). _Done
-  when:_ `CoordinateMapper` and the canvas transforms both express it.
+- [x] **1.3** Shared coordinate-transform pattern (beat↔px + graph↔screen). _Done
+  when:_ `CoordinateMapper` and the canvas transforms both express it. → `Axis`
+  (1D affine `screen = logical·scale + offset`) in
+  [`transform.rs`](../crates/manifold-ui/src/transform.rs). `CoordinateMapper`'s X
+  conversions delegate to `Axis::new(ppb, -scroll)`; the canvas `to_screen`/`to_graph`
+  delegate to `Axis::from_pan(zoom, pan, origin)` per dimension. Both refactors are
+  value-identical (existing tests green).
 - [ ] **1.4** Plumb `TextMeasure` into the build path. _Done when:_ a panel can
   size a cell to its text at build time.
 - [ ] **1.5** Extract shared hit-test primitives. _Done when:_ chrome + timeline

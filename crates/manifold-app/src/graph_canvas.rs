@@ -22,6 +22,7 @@ use manifold_renderer::node_graph::{
 };
 use manifold_renderer::ui_renderer::{Depth, UIRenderer};
 use manifold_ui::PanelAction;
+use manifold_ui::transform::Axis;
 
 use manifold_core::effect_graph_def::{GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID};
 
@@ -1973,22 +1974,31 @@ impl GraphCanvas {
     }
 
     // ── Coordinate transforms ───────────────────────────────────────
+    //
+    // graph↔screen is the same 1D affine map as the timeline's beat↔pixel,
+    // expressed via the shared `Axis`. X and Y share the zoom scale and differ
+    // only in their screen origin; pan is a logical-space shift, so each axis is
+    // `Axis::from_pan(zoom, pan, origin)`.
+
+    fn x_axis(&self, viewport: Rect) -> Axis {
+        Axis::from_pan(self.zoom, self.pan.0, viewport.x)
+    }
+
+    fn y_axis(&self, viewport: Rect) -> Axis {
+        Axis::from_pan(self.zoom, self.pan.1, viewport.y + HEADER_HEIGHT)
+    }
 
     fn to_screen(&self, viewport: Rect, gx: f32, gy: f32) -> (f32, f32) {
-        let canvas_x = viewport.x;
-        let canvas_y = viewport.y + HEADER_HEIGHT;
         (
-            canvas_x + (gx + self.pan.0) * self.zoom,
-            canvas_y + (gy + self.pan.1) * self.zoom,
+            self.x_axis(viewport).to_screen(gx),
+            self.y_axis(viewport).to_screen(gy),
         )
     }
 
     fn to_graph(&self, viewport: Rect, sx: f32, sy: f32) -> (f32, f32) {
-        let canvas_x = viewport.x;
-        let canvas_y = viewport.y + HEADER_HEIGHT;
         (
-            (sx - canvas_x) / self.zoom - self.pan.0,
-            (sy - canvas_y) / self.zoom - self.pan.1,
+            self.x_axis(viewport).to_logical(sx),
+            self.y_axis(viewport).to_logical(sy),
         )
     }
 

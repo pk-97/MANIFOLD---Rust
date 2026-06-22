@@ -7,6 +7,7 @@
 
 use crate::color;
 use crate::snap;
+use crate::transform::Axis;
 use manifold_core::Beats;
 use manifold_core::layer::Layer;
 use manifold_core::types::LayerType;
@@ -58,35 +59,44 @@ impl CoordinateMapper {
 
     // ── Beat-based conversions (primary) ────────────────────────────
 
+    /// The beat↔pixel mapping as a shared affine [`Axis`]: scale is
+    /// pixels-per-beat, the offset is the negated scroll (`screen = beat·ppb −
+    /// scroll`). Every X conversion below expresses this one axis.
+    #[inline]
+    fn x_axis(&self) -> Axis {
+        Axis::new(self.pixels_per_beat, -self.scroll_offset_x)
+    }
+
     /// Convert beat position to scroll-adjusted pixel X.
     /// Unity line 48-50.
     pub fn beat_to_pixel(&self, beat: Beats) -> f32 {
-        beat.as_f32() * self.pixels_per_beat - self.scroll_offset_x
+        self.x_axis().to_screen(beat.as_f32())
     }
 
     /// Convert pixel X position to beat.
     /// Unity line 56-58.
     pub fn pixel_to_beat(&self, pixel_x: f32) -> Beats {
-        Beats::from_f32((pixel_x + self.scroll_offset_x) / self.pixels_per_beat)
+        Beats::from_f32(self.x_axis().to_logical(pixel_x))
     }
 
     /// Convert beat to pixel X in content space (not scroll-adjusted).
     /// Use for positioning elements that are children of scrollable content.
     /// Unity line 65-67.
     pub fn beat_to_pixel_absolute(&self, beat: Beats) -> f32 {
-        beat.as_f32() * self.pixels_per_beat
+        // Same axis with no scroll offset.
+        Axis::new(self.pixels_per_beat, 0.0).to_screen(beat.as_f32())
     }
 
     /// Convert beat duration to pixel width.
     /// Unity line 73-75.
     pub fn beat_duration_to_width(&self, beats: Beats) -> f32 {
-        beats.as_f32() * self.pixels_per_beat
+        self.x_axis().span_to_screen(beats.as_f32())
     }
 
     /// Convert pixel width to beat duration.
     /// Unity line 81-83.
     pub fn width_to_beat_duration(&self, width: f32) -> Beats {
-        Beats::from_f32(width / self.pixels_per_beat)
+        Beats::from_f32(self.x_axis().span_to_logical(width))
     }
 
     // ── Zoom management ─────────────────────────────────────────────
