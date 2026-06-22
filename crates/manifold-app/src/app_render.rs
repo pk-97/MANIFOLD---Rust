@@ -2072,12 +2072,14 @@ impl Application {
                     {
                         let key = sp.key.clone();
                         if let Some(r) = gp.string_param_rect(&self.ws.ui_root.tree, *sp_idx) {
+                            // Typed (2b.11): each font carries its GenStringParamSelected.
                             let items: Vec<manifold_ui::panels::dropdown::DropdownItem> = if key
                                 == "fontFamily"
                             {
                                 manifold_renderer::text_rasterizer::TextRasterizer::available_font_families()
                                         .into_iter()
-                                        .map(|name| manifold_ui::panels::dropdown::DropdownItem::new(&name))
+                                        .map(|name| manifold_ui::panels::dropdown::DropdownItem::new(&name)
+                                            .with_action(PanelAction::GenStringParamSelected(*sp_idx, name.clone())))
                                         .collect()
                             } else {
                                 vec![]
@@ -2085,13 +2087,7 @@ impl Application {
                             if !items.is_empty() {
                                 let trigger =
                                     manifold_ui::node::Rect::new(r.x, r.y, r.width, r.height);
-                                self.ws.ui_root.open_dropdown_at(
-                                    crate::ui_root::DropdownContext::GenStringParamDropdown(
-                                        *sp_idx,
-                                    ),
-                                    items,
-                                    trigger,
-                                );
+                                self.ws.ui_root.open_dropdown_typed(items, trigger);
                             }
                         }
                     }

@@ -95,19 +95,15 @@ pub(crate) fn build_picker_session(
 /// What the currently-open dropdown is selecting for.
 #[derive(Debug, Clone)]
 pub enum DropdownContext {
-    // Retired (2b.11) — these menus now use typed DropdownItem::with_action, so no
-    // context / index→action map is needed: BlendMode, MidiNote, MidiChannel,
-    // MidiDevice, Resolution, ClkDevice, ClipContext, TrackContext.
-    LayerContext(usize),      // right-click on layer header: layer_index
-    MasterExitPath,           // LED exit path dropdown
-    CardContext(GraphParamTarget), // right-click on a preset card header (effect or generator)
-    ParamContext(GraphParamTarget, manifold_core::effects::ParamId, f32), // gpt, param_id, default_val
-    MacroSlotContext(usize),  // macro_index (right-click on macro slider)
-    GenStringParamDropdown(usize), // string_param_index (dropdown selector)
-    AudioSendRoutings,        // Audio Setup: read-only list of a send's routings (device + layers)
+    // Most menus now use typed DropdownItem::with_action, needing no context /
+    // index→action map (2b.11). Retired: BlendMode, MidiNote, MidiChannel,
+    // MidiDevice, Resolution, ClkDevice, ClipContext, TrackContext, AudioInputDevice,
+    // LayerAudioSend, ClipDetectQuantize, ClipDetectLayer, AudioTriggerLayer,
+    // AudioSetupDevice, MasterExitPath, CardContext, ParamContext, MacroSlotContext,
+    // GenStringParamDropdown.
+    LayerContext(usize), // survives only for its color swatches (text items are typed)
+    AudioSendRoutings,   // Audio Setup: read-only list of a send's routings (device + layers)
     AudioSendChannel(manifold_core::AudioSendId), // Audio Setup: a send's input channel
-    // AudioInputDevice / LayerAudioSend / ClipDetectQuantize / ClipDetectLayer /
-    // AudioTriggerLayer retired — typed items (2b.11).
 }
 
 /// Fine-grained tracking of what scroll-related state changed.
@@ -1651,15 +1647,20 @@ impl UIRoot {
                 true
             }
             PanelAction::MasterExitPathClicked => {
-                // Build dropdown: "After All FX" (default), "Before FX", then each effect
+                // Typed (2b.11): "After All FX" → exit -1, "Before FX" → 0, then each
+                // effect → its 1-based exit index.
                 let mut items = vec![
-                    DropdownItem::new("After All FX"),
-                    DropdownItem::new("Before FX"),
+                    DropdownItem::new("After All FX")
+                        .with_action(PanelAction::SetLedExitIndex(-1)),
+                    DropdownItem::new("Before FX").with_action(PanelAction::SetLedExitIndex(0)),
                 ];
-                for name in &self.master_effect_names {
-                    items.push(DropdownItem::new(&format!("After {}", name)));
+                for (e, name) in self.master_effect_names.iter().enumerate() {
+                    items.push(
+                        DropdownItem::new(&format!("After {}", name))
+                            .with_action(PanelAction::SetLedExitIndex(e as i32 + 1)),
+                    );
                 }
-                self.open_dropdown_at(DropdownContext::MasterExitPath, items, trigger);
+                self.open_dropdown_typed(items, trigger);
                 true
             }
             PanelAction::ClipRightClicked(clip_id) => {
@@ -1698,25 +1699,53 @@ impl UIRoot {
                 let layer_info = self.layer_headers.layer_info(*layer_idx);
                 let is_group = layer_info.is_some_and(|l| l.is_group);
 
-                let mut items = vec![DropdownItem::new("Paste")];
+                // Typed (2b.11): each text item carries its layer action. The
+                // context is still set so the color swatches below (ColorSelected →
+                // dropdown_color_to_action) can recover the layer.
+                let li = *layer_idx;
+                let mut items =
+                    vec![DropdownItem::new("Paste").with_action(PanelAction::ContextPasteAtLayer(li))];
                 if !is_group {
-                    items.push(DropdownItem::new("Import MIDI File"));
+                    items.push(
+                        DropdownItem::new("Import MIDI File")
+                            .with_action(PanelAction::ContextImportMidi(li)),
+                    );
                 }
-                items.push(DropdownItem::new("Insert Video Layer"));
-                items.push(DropdownItem::new("Insert Generator Layer"));
-                items.push(DropdownItem::new("Insert Audio Layer"));
-                items.push(DropdownItem::new("Duplicate Layer"));
+                items.push(
+                    DropdownItem::new("Insert Video Layer")
+                        .with_action(PanelAction::ContextAddVideoLayer(li)),
+                );
+                items.push(
+                    DropdownItem::new("Insert Generator Layer")
+                        .with_action(PanelAction::ContextAddGeneratorLayer(li)),
+                );
+                items.push(
+                    DropdownItem::new("Insert Audio Layer")
+                        .with_action(PanelAction::ContextAddAudioLayer(li)),
+                );
+                items.push(
+                    DropdownItem::new("Duplicate Layer")
+                        .with_action(PanelAction::ContextDuplicateLayer(li)),
+                );
                 // "Group" only when 2+ non-group, non-nested layers are selected
                 let can_group = self.layer_headers.layer_count() >= 2 && !is_group;
                 if can_group {
-                    items.push(DropdownItem::new("Group Selected Layers"));
+                    items.push(
+                        DropdownItem::new("Group Selected Layers")
+                            .with_action(PanelAction::ContextGroupSelectedLayers),
+                    );
                 }
                 if is_group {
-                    items.push(DropdownItem::new("Ungroup"));
+                    items.push(
+                        DropdownItem::new("Ungroup").with_action(PanelAction::ContextUngroup(li)),
+                    );
                 }
                 // Only allow delete if more than 1 layer exists
                 if self.layer_headers.layer_count() > 1 {
-                    items.push(DropdownItem::new("Delete Layer"));
+                    items.push(
+                        DropdownItem::new("Delete Layer")
+                            .with_action(PanelAction::ContextDeleteLayer(li)),
+                    );
                 }
                 // Last text item gets a separator before the color grid
                 if let Some(last) = items.last_mut() {
@@ -1743,7 +1772,10 @@ impl UIRoot {
                             format!("Map to Macro {} ({})", i + 1, slot)
                         }
                     };
-                    items.push(DropdownItem::new(&label));
+                    // Typed (2b.11): item i maps the param to macro i.
+                    items.push(DropdownItem::new(&label).with_action(
+                        PanelAction::MapParamToMacro(*gpt, param_id.clone(), i),
+                    ));
                 }
                 // Ableton picker entry
                 if let Some(last) = items.last_mut() {
@@ -1751,7 +1783,9 @@ impl UIRoot {
                 }
                 let ableton_connected = self.ableton_session.as_ref().is_some_and(|s| s.connected);
                 if ableton_connected {
-                    items.push(DropdownItem::new("Map to Ableton Macro…"));
+                    items.push(DropdownItem::new("Map to Ableton Macro…").with_action(
+                        PanelAction::OpenAbletonPickerForParam(*gpt, param_id.clone()),
+                    ));
                 } else {
                     items.push(DropdownItem::disabled("Ableton not connected"));
                 }
@@ -1768,32 +1802,41 @@ impl UIRoot {
                     }
                 };
                 if is_ableton_mapped {
-                    items.push(DropdownItem::new("Remove Ableton Mapping"));
+                    items.push(DropdownItem::new("Remove Ableton Mapping").with_action(
+                        PanelAction::UnmapParamAbleton(*gpt, param_id.clone()),
+                    ));
                 }
-                self.dropdown_context =
-                    Some(DropdownContext::ParamContext(*gpt, param_id.clone(), 0.0));
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
             }
             PanelAction::MacroLabelRightClick(macro_idx) => {
+                // Typed (2b.11): rename, each mapping (unmap), Clear All, and the
+                // Ableton entries each carry their own action.
                 let descs = &self.macro_mapping_descs[*macro_idx];
-                let mut rename = DropdownItem::new("Rename");
-                rename.separator_after = true;
+                let rename = DropdownItem::new("Rename")
+                    .with_action(PanelAction::MacroLabelRename(*macro_idx))
+                    .with_separator();
                 let mut items = vec![rename];
                 if descs.is_empty() {
                     let mut item = DropdownItem::new("No mappings");
                     item.enabled = false;
                     items.push(item);
                 } else {
-                    for desc in descs {
-                        items.push(DropdownItem::new(desc));
+                    for (i, desc) in descs.iter().enumerate() {
+                        items.push(
+                            DropdownItem::new(desc)
+                                .with_action(PanelAction::UnmapMacro(*macro_idx, i)),
+                        );
                     }
                     if descs.len() > 1 {
                         if let Some(last) = items.last_mut() {
                             last.separator_after = true;
                         }
-                        items.push(DropdownItem::new("Clear All"));
+                        items.push(
+                            DropdownItem::new("Clear All")
+                                .with_action(PanelAction::ClearMacroMappings(*macro_idx)),
+                        );
                     }
                 }
                 // Ableton section — same pattern as effect/gen param dropdowns
@@ -1801,7 +1844,9 @@ impl UIRoot {
                     last.separator_after = true;
                 }
                 if self.ableton_session.is_some() {
-                    items.push(DropdownItem::new("Map to Ableton Macro\u{2026}"));
+                    items.push(DropdownItem::new("Map to Ableton Macro\u{2026}").with_action(
+                        PanelAction::OpenAbletonPickerForMacro(*macro_idx),
+                    ));
                 } else {
                     let mut item = DropdownItem::new("Ableton not connected");
                     item.enabled = false;
@@ -1809,9 +1854,10 @@ impl UIRoot {
                 }
                 // "Remove Ableton Mapping" if this macro is mapped
                 if self.macro_ableton_mapped[*macro_idx] {
-                    items.push(DropdownItem::new("Remove Ableton Mapping"));
+                    items.push(DropdownItem::new("Remove Ableton Mapping").with_action(
+                        PanelAction::UnmapMacroAbleton(*macro_idx),
+                    ));
                 }
-                self.dropdown_context = Some(DropdownContext::MacroSlotContext(*macro_idx));
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
@@ -1821,17 +1867,31 @@ impl UIRoot {
                 // share Make Unique / Export / Import. The menu CONTENTS differ
                 // per kind by design (the legitimately-divergent shell); the
                 // fork actions + their dispatch are one path keyed by `gpt`.
+                // Typed (2b.11): each item carries its action keyed by the card's
+                // target, so the dispatch runs one path for effects + generators.
                 let mut items = Vec::new();
                 if matches!(gpt, GraphParamTarget::Generator) {
-                    items.push(DropdownItem::new("Copy Generator"));
+                    items.push(
+                        DropdownItem::new("Copy Generator")
+                            .with_action(PanelAction::CopyGenerator),
+                    );
                     if self.gen_clipboard.has_content() {
-                        items.push(DropdownItem::new("Paste Generator"));
+                        items.push(
+                            DropdownItem::new("Paste Generator")
+                                .with_action(PanelAction::PasteGenerator),
+                        );
                     }
                 }
-                items.push(DropdownItem::new("Make Unique"));
-                items.push(DropdownItem::new("Export Preset…"));
-                items.push(DropdownItem::new("Import Preset…"));
-                self.dropdown_context = Some(DropdownContext::CardContext(*gpt));
+                items.push(
+                    DropdownItem::new("Make Unique")
+                        .with_action(PanelAction::MakePresetUnique(*gpt)),
+                );
+                items.push(
+                    DropdownItem::new("Export Preset…").with_action(PanelAction::ExportPreset(*gpt)),
+                );
+                items.push(
+                    DropdownItem::new("Import Preset…").with_action(PanelAction::ImportPreset(*gpt)),
+                );
                 self.dropdown
                     .open_context(items, right_click_pos, &mut self.tree);
                 true
@@ -1875,20 +1935,10 @@ impl UIRoot {
         match ctx {
             // BlendMode / MidiNote / MidiChannel / MidiDevice / Resolution /
             // ClkDevice / ClipContext / TrackContext retired — typed items (2b.11).
-            DropdownContext::LayerContext(layer_idx) => match self.dropdown.item_label(index) {
-                Some("Paste") => Some(PanelAction::ContextPasteAtLayer(layer_idx)),
-                Some("Import MIDI File") => Some(PanelAction::ContextImportMidi(layer_idx)),
-                Some("Insert Video Layer") => Some(PanelAction::ContextAddVideoLayer(layer_idx)),
-                Some("Insert Generator Layer") => {
-                    Some(PanelAction::ContextAddGeneratorLayer(layer_idx))
-                }
-                Some("Insert Audio Layer") => Some(PanelAction::ContextAddAudioLayer(layer_idx)),
-                Some("Duplicate Layer") => Some(PanelAction::ContextDuplicateLayer(layer_idx)),
-                Some("Group Selected Layers") => Some(PanelAction::ContextGroupSelectedLayers),
-                Some("Ungroup") => Some(PanelAction::ContextUngroup(layer_idx)),
-                Some("Delete Layer") => Some(PanelAction::ContextDeleteLayer(layer_idx)),
-                _ => None,
-            },
+            // LayerContext text items are typed (2b.11); the variant survives only
+            // so its color swatches resolve via dropdown_color_to_action, so a text
+            // Selected(index) never reaches here.
+            DropdownContext::LayerContext(_) => None,
             // AudioInputDevice retired — typed items (2b.11).
             DropdownContext::AudioSendRoutings => None, // read-only: nothing to select
             // AudioSetupDevice retired — typed items (2b.11).
@@ -1908,71 +1958,8 @@ impl UIRoot {
                     })
             }
             // LayerAudioSend / ClipDetectQuantize / ClipDetectLayer /
-            // AudioTriggerLayer retired — typed items (2b.11).
-            DropdownContext::CardContext(gpt) => {
-                // Label-matched: Copy/Paste are generator-only + conditional, so
-                // item indices shift — match the label, not a fixed position.
-                // Make Unique / Export / Import carry the card's target so the
-                // dispatch runs one path for effects and generators.
-                match self.dropdown.item_label(index) {
-                    Some("Copy Generator") => Some(PanelAction::CopyGenerator),
-                    Some("Paste Generator") => Some(PanelAction::PasteGenerator),
-                    Some("Make Unique") => Some(PanelAction::MakePresetUnique(gpt)),
-                    Some("Export Preset\u{2026}") => Some(PanelAction::ExportPreset(gpt)),
-                    Some("Import Preset\u{2026}") => Some(PanelAction::ImportPreset(gpt)),
-                    _ => None,
-                }
-            }
-            DropdownContext::ParamContext(gpt, param_id, _default_val) => {
-                if index < manifold_core::MACRO_COUNT {
-                    Some(PanelAction::MapParamToMacro(gpt, param_id, index))
-                } else if index == manifold_core::MACRO_COUNT {
-                    // "Map to Ableton Macro…" (only reached if Ableton connected — item is
-                    // disabled otherwise and won't fire Selected).
-                    Some(PanelAction::OpenAbletonPickerForParam(gpt, param_id))
-                } else if index == manifold_core::MACRO_COUNT + 1 {
-                    // "Remove Ableton Mapping" (only present when param is mapped)
-                    Some(PanelAction::UnmapParamAbleton(gpt, param_id))
-                } else {
-                    None
-                }
-            }
-            DropdownContext::MacroSlotContext(macro_idx) => {
-                let mapping_count = self.macro_mapping_descs[macro_idx].len();
-                // Match by label to avoid brittle index math with variable Ableton items
-                let label = self.dropdown.item_label(index);
-                if index == 0 {
-                    Some(PanelAction::MacroLabelRename(macro_idx))
-                } else if label == Some("Map to Ableton Macro\u{2026}") {
-                    Some(PanelAction::OpenAbletonPickerForMacro(macro_idx))
-                } else if label == Some("Remove Ableton Mapping") {
-                    Some(PanelAction::UnmapMacroAbleton(macro_idx))
-                } else if label == Some("Clear All") {
-                    Some(PanelAction::ClearMacroMappings(macro_idx))
-                } else if index > 0 && index <= mapping_count {
-                    Some(PanelAction::UnmapMacro(macro_idx, index - 1))
-                } else {
-                    None
-                }
-            }
-            DropdownContext::GenStringParamDropdown(sp_idx) => {
-                let label = self.dropdown.item_label(index)?;
-                Some(PanelAction::GenStringParamSelected(
-                    sp_idx,
-                    label.to_string(),
-                ))
-            }
-            DropdownContext::MasterExitPath => {
-                // 0 = "After All FX" → led_exit_index -1
-                // 1 = "Before FX"    → led_exit_index 0
-                // 2+ = "After {N}"   → led_exit_index N (1-based in Unity convention)
-                let exit_index: i32 = match index {
-                    0 => -1,
-                    1 => 0,
-                    n => n as i32 - 1,
-                };
-                Some(PanelAction::SetLedExitIndex(exit_index))
-            }
+            // AudioTriggerLayer / CardContext / ParamContext / MacroSlotContext /
+            // GenStringParamDropdown / MasterExitPath retired — typed items (2b.11).
         }
     }
 
