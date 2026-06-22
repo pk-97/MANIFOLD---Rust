@@ -1,4 +1,5 @@
 use crate::color;
+use crate::drag::DragController;
 use crate::node::*;
 use crate::tree::UITree;
 
@@ -303,11 +304,18 @@ impl BitmapSlider {
 // See docs/KNOWN_DIVERGENCES.md.
 
 /// Owns the drag state machine, value cache, and visual sync for one slider.
+///
+/// The grab→track→release lifecycle is delegated to the generic
+/// [`DragController`]; this type adds the slider-specific interpretation
+/// (absolute pos_x → value via the track rect) plus the value cache and visual
+/// sync. The slider is the degenerate consumer — no per-drag payload (`()`),
+/// absolute-position tracking — so it proves the controller's skeleton; the
+/// timeline/canvas wrappers exercise the typed payload and delta.
 #[derive(Debug, Clone)]
 pub struct SliderDragState {
     ids: Option<SliderNodeIds>,
     cached_value: f32,
-    dragging: bool,
+    drag: DragController<()>,
     pub min: f32,
     pub max: f32,
     pub whole_numbers: bool,
@@ -318,7 +326,7 @@ impl Default for SliderDragState {
         Self {
             ids: None,
             cached_value: f32::NAN,
-            dragging: false,
+            drag: DragController::new(),
             min: 0.0,
             max: 1.0,
             whole_numbers: false,
@@ -345,7 +353,7 @@ impl SliderDragState {
     /// Clear node IDs (panel teardown / rebuild).
     pub fn clear(&mut self) {
         self.ids = None;
-        self.dragging = false;
+        self.drag.cancel();
         self.cached_value = f32::NAN;
     }
 
@@ -367,7 +375,7 @@ impl SliderDragState {
     }
 
     pub fn is_dragging(&self) -> bool {
-        self.dragging
+        self.drag.is_active()
     }
     pub fn cached_value(&self) -> f32 {
         self.cached_value
@@ -383,7 +391,7 @@ impl SliderDragState {
         if node_id != ids.track {
             return None;
         }
-        self.dragging = true;
+        self.drag.start((), Vec2::new(pos_x, 0.0));
         let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
         let val = BitmapSlider::normalized_to_value(norm, self.min, self.max);
         let val = if self.whole_numbers { val.round() } else { val };
@@ -400,9 +408,10 @@ impl SliderDragState {
         tree: &mut UITree,
         fmt: &dyn Fn(f32) -> String,
     ) -> Option<f32> {
-        if !self.dragging {
+        if !self.drag.is_active() {
             return None;
         }
+        self.drag.track(Vec2::new(pos_x, 0.0));
         let ids = self.ids.as_ref()?;
         let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
         let val = BitmapSlider::normalized_to_value(norm, self.min, self.max);
@@ -422,7 +431,7 @@ impl SliderDragState {
         tree: &mut UITree,
         text: &str,
     ) -> bool {
-        if !self.dragging {
+        if !self.drag.is_active() {
             return false;
         }
         if let Some(ref ids) = self.ids {
@@ -446,12 +455,7 @@ impl SliderDragState {
     /// End drag. Returns `true` if this slider was dragging (caller should
     /// emit Commit). Returns `false` if not dragging (no-op).
     pub fn end_drag(&mut self) -> bool {
-        if self.dragging {
-            self.dragging = false;
-            true
-        } else {
-            false
-        }
+        self.drag.release().is_some()
     }
 
     // ── Sync ────────────────────────────────────────────────────

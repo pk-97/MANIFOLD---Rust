@@ -14,7 +14,7 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 1.1 COMPLETE (2026-06-22).** Next action: **Phase 1.2 (generic drag controller)**.
+> **Status: Phase 1.2 COMPLETE (2026-06-22).** Next action: **Phase 1.3 (shared coordinate-transform pattern)**.
 >
 > **Phase 0 decision:** production stays `panic = "abort"` ([`Cargo.toml`](../Cargo.toml)
 > `[profile.release]`). In-process recovery (catch_unwind / respawn / watchdog) is
@@ -29,13 +29,22 @@ and how we get there."
 > progress lives in commits + ticked boxes, never only in chat context. At the end
 > of every chat, update this CURRENT POSITION block: what's done, what's next.
 >
-> **Last committable step done:** 1.1 — `NodeId(u32)` + `Option<NodeId>` replaced every
-> `i32`/`-1`, `u32::MAX`, and `usize::MAX` node-id sentinel across `manifold-ui` (foundation
-> + all ~22 panels), `manifold-app` (`ui_root`, `app_render`), and `manifold-renderer`
-> (`ui_renderer`). The scope was ~20× the doc's "tree/input/intent" line because the tree
-> API is the universal panel boundary, and it reached into `manifold-app` (the app drives the
-> tree directly). Workspace compiles, clippy clean, 293 `manifold-ui` + 103 `manifold-app`
-> tests green. Method: foundation by hand → 22-agent edit-only fan-out for the panels →
+> **Last committable step done:** 1.2 — generic `DragController<T>` ([`drag.rs`](../crates/manifold-ui/src/drag.rs)):
+> one grab→track→release lifecycle with a typed payload + start/current positions, owning the
+> lifecycle only (the delta→meaning mapping stays with the caller, because it differs per surface).
+> `SliderDragState`'s `dragging: bool` was replaced by a `DragController<()>` as the proof — the
+> slider is the degenerate consumer (no payload, absolute-position tracking), so it exercises the
+> skeleton; the timeline/canvas wrappers will exercise the typed payload + delta. `SliderDragState`'s
+> public API is unchanged, so the ~8 panel consumers are untouched. 298 `manifold-ui` lib tests green
+> (+5 controller tests), clippy clean. The other four drag machines (per-panel bools, `UIState`
+> timeline, `InteractionOverlay::DragMode`, canvas `DragMode`) still stand — folding them in is later
+> work, not gated on this.
+>
+> **Prior:** 1.1 — `NodeId(u32)` + `Option<NodeId>` replaced every `i32`/`-1`, `u32::MAX`, and
+> `usize::MAX` node-id sentinel across `manifold-ui` (foundation + all ~22 panels), `manifold-app`
+> (`ui_root`, `app_render`), and `manifold-renderer` (`ui_renderer`). Scope ~20× the doc's
+> "tree/input/intent" line because the tree API is the universal panel boundary, and it reached into
+> `manifold-app`. Method: foundation by hand → 22-agent edit-only fan-out for the panels →
 > hand-reconciled the cross-file/cross-crate seams.
 
 ---
@@ -501,8 +510,10 @@ not a recovery system.
     `snap`. The raw per-file `-1` counts are dominated by these false positives.
   - **Target:** `NodeId(u32)` + `Option<NodeId>` as the single type across all three
     layers; the `as u32` cast and all three sentinels gone; tests green.
-- [ ] **1.2** Generic drag controller (grab→track→release, typed payload). _Done
-  when:_ `SliderDragState` reimplemented on it as proof.
+- [x] **1.2** Generic drag controller (grab→track→release, typed payload). _Done
+  when:_ `SliderDragState` reimplemented on it as proof. → `DragController<T>` in
+  [`drag.rs`](../crates/manifold-ui/src/drag.rs); `SliderDragState.dragging` is now a
+  `DragController<()>`. Public API unchanged; consumers untouched.
 - [ ] **1.3** Shared coordinate-transform pattern (beat↔px + graph↔screen). _Done
   when:_ `CoordinateMapper` and the canvas transforms both express it.
 - [ ] **1.4** Plumb `TextMeasure` into the build path. _Done when:_ a panel can
