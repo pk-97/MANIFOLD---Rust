@@ -15,12 +15,17 @@
 use manifold_core::audio_mod::AudioBand;
 use manifold_core::{AudioDeviceRef, AudioSendId};
 
+use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::input::{Key, UIEvent};
 use crate::node::*;
 use crate::tree::UITree;
 
 use super::{BandDivider, PanelAction};
+
+// Stable keys for the host-owned modal chrome (background + title strip).
+const KEY_BG: u64 = 70_001;
+const KEY_CLOSE: u64 = 70_002;
 use super::overlay::{
     Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse, SizePolicy, compute_overlay_rect,
 };
@@ -315,6 +320,9 @@ pub struct AudioSetupPanel {
     /// fixed-height, so the scope absorbs the extra vertical space.
     panel_w: f32,
     scope_h: f32,
+    /// Host for the declarative modal chrome (background + title strip). The
+    /// device / send / scope rows are still built imperatively into `bg_id`.
+    host: ChromeHost,
     // Node ids (set by `build`).
     bg_id: NodeId,
     close_id: NodeId,
@@ -363,6 +371,7 @@ impl Default for AudioSetupPanel {
             scope_rect: None,
             panel_w: 0.0,
             scope_h: 0.0,
+            host: ChromeHost::new(),
             // Set by `build`; `NodeId(0)` is a pre-build placeholder, never a hit
             // target before the panel is built (matches `slider.rs`).
             bg_id: NodeId(0),
@@ -509,63 +518,66 @@ impl AudioSetupPanel {
         self.build_at(tree, OverlayPlacement { rect, screen });
     }
 
-    /// Build the modal's nodes with the panel's top-left at `(x, y)`.
-    fn build_nodes(&mut self, tree: &mut UITree, x: f32, y: f32) {
-        let rows = self.sends.len();
-        let body_h = self.body_height();
-        self.bg_id = tree.add_panel(
-            None,
-            x,
-            y,
-            self.panel_w,
-            body_h,
-            UIStyle {
+    /// The modal chrome as a host `View`: the hit-testable background (it must
+    /// swallow stray clicks — see below) and the title strip with its close
+    /// button. The device / send / scope rows are built imperatively into
+    /// `bg_id` afterwards.
+    fn chrome_view(&self) -> View {
+        View::panel()
+            .fill()
+            .style(UIStyle {
                 bg_color: Color32::new(19, 19, 22, 250),
                 border_color: Color32::new(48, 48, 52, 255),
                 border_width: 1.0,
                 corner_radius: 6.0,
                 ..UIStyle::default()
-            },
-        );
-        // The modal background must be hit-testable so a press anywhere on it
-        // emits a PointerDown — `hit_test` only returns INTERACTIVE nodes, and
-        // `process_pointer` only fires PointerDown when something is hit. Without
-        // this, pressing on the spectrogram (a non-interactive backing panel)
-        // only arms the band-divider drag when an interactive node from the UI
-        // behind the modal happens to sit under the cursor — the source of the
-        // "sometimes draggable" band lines. `bg_id` is already in `owns_node`,
-        // so this also makes the modal reliably swallow stray clicks.
-        tree.set_flag(self.bg_id, UIFlags::INTERACTIVE);
+            })
+            .interactive()
+            .inert()
+            .key(KEY_BG)
+            .pad(Pad::all(PAD))
+            .child(
+                View::row(0.0)
+                    .fill_w()
+                    .h(Sizing::Fixed(TITLE_H))
+                    .child(
+                        View::label("Audio Setup")
+                            .fill_w()
+                            .fill_h()
+                            .font(color::FONT_BODY)
+                            .text_color(Color32::new(224, 224, 228, 255))
+                            .align_text(TextAlign::Left),
+                    )
+                    .child(
+                        View::button("\u{00D7}")
+                            .w(Sizing::Fixed(STEP_W))
+                            .fill_h()
+                            .style(btn_style(false))
+                            .inert()
+                            .key(KEY_CLOSE),
+                    ),
+            )
+    }
+
+    /// Build the modal's nodes with the panel's top-left at `(x, y)`.
+    fn build_nodes(&mut self, tree: &mut UITree, x: f32, y: f32) {
+        let rows = self.sends.len();
+        let body_h = self.body_height();
+
+        // ── Modal chrome (background + title strip) on the host. The background
+        // is interactive so a press anywhere on it emits a PointerDown and the
+        // modal swallows stray clicks (without it, pressing the spectrogram only
+        // armed the band drag when an interactive node behind the modal happened
+        // to sit under the cursor). The device / send / scope rows below are
+        // built imperatively into `bg_id`.
+        let chrome = self.chrome_view();
+        self.host.build(tree, &chrome, Rect::new(x, y, self.panel_w, body_h));
+        self.bg_id = self.host.node_id_for_key(KEY_BG).unwrap_or(NodeId(0));
+        self.close_id = self.host.node_id_for_key(KEY_CLOSE).unwrap_or(NodeId(0));
 
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
-        let mut cy = y + PAD;
-
-        // Title + close.
-        tree.add_label(
-            Some(self.bg_id),
-            inner_x,
-            cy,
-            inner_w - STEP_W,
-            TITLE_H,
-            "Audio Setup",
-            UIStyle {
-                text_color: Color32::new(224, 224, 228, 255),
-                font_size: color::FONT_BODY,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        );
-        self.close_id = tree.add_button(
-            Some(self.bg_id),
-            inner_x + inner_w - STEP_W,
-            cy,
-            STEP_W,
-            TITLE_H,
-            btn_style(false),
-            "\u{00D7}", // × close
-        );
-        cy += TITLE_H;
+        let mut cy = y + PAD + TITLE_H;
 
         // Device row: [Device]  [ current device            ▼ ]
         tree.add_label(Some(self.bg_id), inner_x, cy, 70.0, ROW_H, "Device", label_style());
