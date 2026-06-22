@@ -14,7 +14,14 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: NOT STARTED.** Next action: **Phase 0 (resilience triage)**.
+> **Status: Phase 0 resolved by decision (2026-06-22).** Next action: **Phase 1 (substrate)**.
+>
+> **Phase 0 decision:** production stays `panic = "abort"` ([`Cargo.toml`](../Cargo.toml)
+> `[profile.release]`). In-process recovery (catch_unwind / respawn / watchdog) is
+> therefore **off the table** — under abort any thread panic aborts the whole process
+> and there is nothing to catch. Resilience is handled by **prevention**: the content
+> tick must be tested to not panic. The unwind + catch_unwind recovery path (§7, old
+> 0.2) is kept below as the deferred alternative if "keep abort for now" is revisited.
 >
 > **Workflow:** one chat per phase (Phase 2 splits into 2a + 2b). The chat is the
 > worker; **the checklist in §13 is the memory.** Work design → build → test →
@@ -439,16 +446,53 @@ The source of truth for progress. One chat per phase (2 splits into 2a + 2b). Ti
 each box when its committable step is done **and the old code it replaces is
 deleted and tests are green**. Update §0 CURRENT POSITION at the end of every chat.
 
-### Phase 0 — Resilience triage
-- [ ] **0.1** Determine what a content-thread panic does mid-run (surface / recover
-  / brick). _Done when:_ the behavior is reproduced and written down.
-- [ ] **0.2** If it bricks: add surfacing + recovery (watchdog / restart / visible
-  fail-safe). _Done when:_ a content-thread panic no longer silently bricks the UI.
+### Phase 0 — Resilience (RESOLVED by decision 2026-06-22: keep `panic = "abort"`)
+Recovery is out of scope by decision — under abort there is nothing to recover; a
+panic on any thread aborts the whole process cleanly. What remains is **prevention**,
+not a recovery system.
+- [x] **0.1** Behavior determined (by code reading; runtime repro skipped as moot
+  once abort was chosen). Release (`panic=abort`) hard-crashes the whole process on
+  any thread panic — total black, output window gone. Dev (default `unwind`) instead
+  leaves a silent UI zombie: content thread dies, output freezes on the last
+  IOSurface frame, chrome stays interactive, both channel directions swallow the
+  disconnect (`state_rx` drain treats `Disconnected` like `Empty`;
+  `ContentCommand::send` logs and continues). **Decision: accept the clean hard-crash
+  in production.**
+- [ ] **0.2** (Prevention, ongoing — NOT a Phase 1 blocker) Audit the content tick
+  for panic sites (`unwrap`/`expect`/indexing/slicing on the engine-tick + render
+  path) so production doesn't crash hard. Runs as a hardening pass.
+- _Deferred alternative:_ unwind + `catch_unwind` recovery (skip-frame on a
+  recoverable transient, controlled fail-safe on real corruption — never limp on).
+  Revisit only if "keep abort for now" changes.
 
 ### Phase 1 — Substrate
 - [ ] **1.1** `NodeId` newtype + `Option<NodeId>`; remove `-1`/`u32::MAX` sentinels
   from `tree`/`input`/`intent`. _Done when:_ no raw sentinel node ids in the
   foundation; tests green.
+
+  **Change-site inventory (audited 2026-06-22 — read before starting).** This is
+  not "delete `-1`." It is collapsing **three** representations of one concept into
+  one `NodeId`:
+
+  | Where | Type today | "none" sentinel |
+  |---|---|---|
+  | Tree internals (`tree.rs`/`node.rs`) — `parent_index`, `first_child`, `next_sibling`, `last_child`, `node.parent_id` | `i32` | `-1` |
+  | Input + dispatch (`input.rs`, every panel `handle_*`, `hovered/pressed/focused_id`) | `u32` | `u32::MAX` |
+  | Panel "first node" tracking (`panels/mod.rs`, `inspector`, `macros_panel`) | `usize` | `usize::MAX` |
+
+  - **The seam where the two sentinel worlds collide:** `input.rs:527` —
+    `node_id: if hit_id >= 0 { hit_id as u32 } else { u32::MAX }`. Hit-test returns
+    `i32`/`-1`; it's cast to `u32`/`u32::MAX` for dispatch. Unifying to one `NodeId`
+    deletes this cast (the literal bug-class site).
+  - **In scope (real id sentinels):** `tree.rs`, `node.rs`, `input.rs`
+    (`hovered_id`/`pressed_id`/`focused_id`), and stored `*_id: i32 = -1` fields —
+    `viewport` ~12 (e.g. `outline_id: i32, // -1 if not selected`), `layer_header`,
+    `macros_panel`, others.
+  - **Out of scope (geometry math, NOT ids — do not touch):** `coordinate_mapper`
+    (28 `< 0` hits, zero id-sentinels — confirmed), `waveform_renderer`, `layout`,
+    `snap`. The raw per-file `-1` counts are dominated by these false positives.
+  - **Target:** `NodeId(u32)` + `Option<NodeId>` as the single type across all three
+    layers; the `as u32` cast and all three sentinels gone; tests green.
 - [ ] **1.2** Generic drag controller (grab→track→release, typed payload). _Done
   when:_ `SliderDragState` reimplemented on it as proof.
 - [ ] **1.3** Shared coordinate-transform pattern (beat↔px + graph↔screen). _Done

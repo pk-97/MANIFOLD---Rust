@@ -207,6 +207,25 @@ impl Default for Color32 {
     }
 }
 
+// ── Node identity ────────────────────────────────────────────────────
+
+/// Stable identity of a node in [`crate::tree::UITree`].
+///
+/// Invariant: `NodeId(i)` indexes `UITree.nodes[i]` — the id equals the array
+/// position (see [`UINode`]). `Option<NodeId>` is the one "no node" type; it
+/// replaces the former `-1` (`i32`), `u32::MAX`, and `usize::MAX` sentinels that
+/// used to stand in for "none" across the tree, input, and dispatch layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NodeId(pub u32);
+
+impl NodeId {
+    /// Array index of this node in the tree's SoA storage.
+    #[inline]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 // ── Node types ──────────────────────────────────────────────────────
 
 /// Node type — determines default rendering behavior.
@@ -305,8 +324,9 @@ pub type TextureHandle = u64;
 ///
 /// Invariant: `id` == array index in `UITree.nodes`.
 pub struct UINode {
-    pub id: u32,
-    pub parent_id: i32,
+    pub id: NodeId,
+    /// Parent node, or `None` for a root-level node (formerly `parent_id == -1`).
+    pub parent_id: Option<NodeId>,
     pub bounds: Rect,
     pub node_type: UINodeType,
     pub flags: UIFlags,

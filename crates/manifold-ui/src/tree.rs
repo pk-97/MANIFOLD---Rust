@@ -11,16 +11,16 @@ use crate::node::*;
 ///
 /// STORAGE LAYOUT (SoA):
 ///   nodes[]        — node data (style, bounds, flags, text)
-///   parent_index[] — parent's array index (-1 for roots)
-///   first_child[]  — first child's index (-1 if leaf)
-///   next_sibling[] — next sibling's index (-1 if last)
-///   last_child[]   — last child's index (-1 if leaf), for O(1) appending
+///   parent_index[] — parent node (`None` for roots)
+///   first_child[]  — first child (`None` if leaf)
+///   next_sibling[] — next sibling (`None` if last)
+///   last_child[]   — last child (`None` if leaf), for O(1) appending
 pub struct UITree {
     nodes: Vec<UINode>,
-    parent_index: Vec<i32>,
-    first_child: Vec<i32>,
-    next_sibling: Vec<i32>,
-    last_child: Vec<i32>,
+    parent_index: Vec<Option<NodeId>>,
+    first_child: Vec<Option<NodeId>>,
+    next_sibling: Vec<Option<NodeId>>,
+    last_child: Vec<Option<NodeId>>,
     count: usize,
     has_dirty: bool,
     /// Monotonic counter bumped on every *structural* change (add_node, clear,
@@ -65,14 +65,14 @@ impl UITree {
 
     pub fn add_node(
         &mut self,
-        parent_id: i32,
+        parent_id: Option<NodeId>,
         bounds: Rect,
         node_type: UINodeType,
         style: UIStyle,
         text: Option<&str>,
         extra_flags: UIFlags,
-    ) -> u32 {
-        let id = self.count as u32;
+    ) -> NodeId {
+        let id = NodeId(self.count as u32);
 
         let node = UINode {
             id,
@@ -88,41 +88,41 @@ impl UITree {
 
         self.nodes.push(node);
         self.parent_index.push(parent_id);
-        self.first_child.push(-1);
-        self.next_sibling.push(-1);
-        self.last_child.push(-1);
+        self.first_child.push(None);
+        self.next_sibling.push(None);
+        self.last_child.push(None);
 
-        self.link_child(id as i32, parent_id);
+        self.link_child(id, parent_id);
         self.count += 1;
         self.has_dirty = true;
         self.structure_version = self.structure_version.wrapping_add(1);
         id
     }
 
-    fn link_child(&mut self, child_id: i32, parent_id: i32) {
-        if parent_id < 0 {
+    fn link_child(&mut self, child_id: NodeId, parent_id: Option<NodeId>) {
+        let Some(parent) = parent_id else {
             return;
-        }
-        let pid = parent_id as usize;
-        if self.first_child[pid] == -1 {
-            self.first_child[pid] = child_id;
+        };
+        let pid = parent.index();
+        if self.first_child[pid].is_none() {
+            self.first_child[pid] = Some(child_id);
         } else {
-            let last = self.last_child[pid] as usize;
-            self.next_sibling[last] = child_id;
+            let last = self.last_child[pid].expect("last_child set when first_child set").index();
+            self.next_sibling[last] = Some(child_id);
         }
-        self.last_child[pid] = child_id;
+        self.last_child[pid] = Some(child_id);
     }
 
     /// Add a panel node (non-interactive rect).
     pub fn add_panel(
         &mut self,
-        parent_id: i32,
+        parent_id: Option<NodeId>,
         x: f32,
         y: f32,
         w: f32,
         h: f32,
         style: UIStyle,
-    ) -> u32 {
+    ) -> NodeId {
         self.add_node(
             parent_id,
             Rect::new(x, y, w, h),
@@ -137,14 +137,14 @@ impl UITree {
     #[allow(clippy::too_many_arguments)]
     pub fn add_button(
         &mut self,
-        parent_id: i32,
+        parent_id: Option<NodeId>,
         x: f32,
         y: f32,
         w: f32,
         h: f32,
         style: UIStyle,
         text: &str,
-    ) -> u32 {
+    ) -> NodeId {
         self.add_node(
             parent_id,
             Rect::new(x, y, w, h),
@@ -159,14 +159,14 @@ impl UITree {
     #[allow(clippy::too_many_arguments)]
     pub fn add_label(
         &mut self,
-        parent_id: i32,
+        parent_id: Option<NodeId>,
         x: f32,
         y: f32,
         w: f32,
         h: f32,
         text: &str,
         style: UIStyle,
-    ) -> u32 {
+    ) -> NodeId {
         self.add_node(
             parent_id,
             Rect::new(x, y, w, h),
@@ -180,13 +180,13 @@ impl UITree {
     /// Add an interactive slider node.
     pub fn add_slider(
         &mut self,
-        parent_id: i32,
+        parent_id: Option<NodeId>,
         x: f32,
         y: f32,
         w: f32,
         h: f32,
         style: UIStyle,
-    ) -> u32 {
+    ) -> NodeId {
         self.add_node(
             parent_id,
             Rect::new(x, y, w, h),
@@ -199,19 +199,19 @@ impl UITree {
 
     // ── Node access (O(1)) ──────────────────────────────────────────
 
-    pub fn get_node(&self, id: u32) -> &UINode {
-        &self.nodes[id as usize]
+    pub fn get_node(&self, id: NodeId) -> &UINode {
+        &self.nodes[id.index()]
     }
 
-    pub fn get_node_mut(&mut self, id: u32) -> &mut UINode {
-        &mut self.nodes[id as usize]
+    pub fn get_node_mut(&mut self, id: NodeId) -> &mut UINode {
+        &mut self.nodes[id.index()]
     }
 
-    pub fn get_bounds(&self, id: u32) -> Rect {
-        if (id as usize) >= self.count {
+    pub fn get_bounds(&self, id: NodeId) -> Rect {
+        if id.index() >= self.count {
             return Rect::ZERO;
         }
-        self.nodes[id as usize].bounds
+        self.nodes[id.index()].bounds
     }
 
     // ── Batch offset (composite panel build) ────────────────────────
@@ -228,12 +228,12 @@ impl UITree {
     /// Reparent all root-level nodes (parent_id == -1) in the index range
     /// [from_index..from_index+count) under the given parent.
     /// Used by the inspector to wrap built sub-panel nodes under a ClipRegion.
-    pub fn reparent_root_nodes(&mut self, from_index: usize, count: usize, new_parent: i32) {
+    pub fn reparent_root_nodes(&mut self, from_index: usize, count: usize, new_parent: NodeId) {
         let end = (from_index + count).min(self.count);
         for i in from_index..end {
-            if self.parent_index[i] == -1 {
-                self.parent_index[i] = new_parent;
-                self.link_child(i as i32, new_parent);
+            if self.parent_index[i].is_none() {
+                self.parent_index[i] = Some(new_parent);
+                self.link_child(NodeId(i as u32), Some(new_parent));
             }
         }
     }
@@ -241,8 +241,8 @@ impl UITree {
     /// Offset the Y position of node `id` and all its descendants by `dy`.
     /// Uses the existing first_child / next_sibling linked list — no allocation.
     /// Nesting depth is bounded by tree depth (max ~2 in practice).
-    pub fn offset_node_and_children(&mut self, id: u32, dy: f32) {
-        let idx = id as usize;
+    pub fn offset_node_and_children(&mut self, id: NodeId, dy: f32) {
+        let idx = id.index();
         if idx >= self.count {
             return;
         }
@@ -251,16 +251,16 @@ impl UITree {
         self.has_dirty = true;
 
         let mut child = self.first_child[idx];
-        while child >= 0 {
-            self.offset_node_and_children(child as u32, dy);
-            child = self.next_sibling[child as usize];
+        while let Some(c) = child {
+            self.offset_node_and_children(c, dy);
+            child = self.next_sibling[c.index()];
         }
     }
 
     // ── Mutation (O(1), marks dirty) ────────────────────────────────
 
-    pub fn set_bounds(&mut self, id: u32, bounds: Rect) {
-        let idx = id as usize;
+    pub fn set_bounds(&mut self, id: NodeId, bounds: Rect) {
+        let idx = id.index();
         if idx >= self.count {
             return;
         }
@@ -272,8 +272,8 @@ impl UITree {
         self.has_dirty = true;
     }
 
-    pub fn set_style(&mut self, id: u32, style: UIStyle) {
-        let idx = id as usize;
+    pub fn set_style(&mut self, id: NodeId, style: UIStyle) {
+        let idx = id.index();
         if idx >= self.count {
             return;
         }
@@ -285,8 +285,8 @@ impl UITree {
         self.has_dirty = true;
     }
 
-    pub fn set_text(&mut self, id: u32, text: &str) {
-        let idx = id as usize;
+    pub fn set_text(&mut self, id: NodeId, text: &str) {
+        let idx = id.index();
         if idx >= self.count {
             return;
         }
@@ -298,8 +298,8 @@ impl UITree {
         self.has_dirty = true;
     }
 
-    pub fn set_flag(&mut self, id: u32, flag: UIFlags) {
-        let idx = id as usize;
+    pub fn set_flag(&mut self, id: NodeId, flag: UIFlags) {
+        let idx = id.index();
         if idx >= self.count {
             return;
         }
@@ -310,8 +310,8 @@ impl UITree {
         self.has_dirty = true;
     }
 
-    pub fn clear_flag(&mut self, id: u32, flag: UIFlags) {
-        let idx = id as usize;
+    pub fn clear_flag(&mut self, id: NodeId, flag: UIFlags) {
+        let idx = id.index();
         if idx >= self.count {
             return;
         }
@@ -323,15 +323,15 @@ impl UITree {
         self.has_dirty = true;
     }
 
-    pub fn has_flag(&self, id: u32, flag: UIFlags) -> bool {
-        let idx = id as usize;
+    pub fn has_flag(&self, id: NodeId, flag: UIFlags) -> bool {
+        let idx = id.index();
         if idx >= self.count {
             return false;
         }
         self.nodes[idx].flags.contains(flag)
     }
 
-    pub fn set_visible(&mut self, id: u32, visible: bool) {
+    pub fn set_visible(&mut self, id: NodeId, visible: bool) {
         if visible {
             self.set_flag(id, UIFlags::VISIBLE);
         } else {
@@ -342,8 +342,8 @@ impl UITree {
     // ── Hit testing (O(n × depth)) ─────────────────────────────────
 
     /// Find the topmost interactive, visible, non-disabled node at `pos`.
-    /// Returns -1 if nothing hit. Walk reverse insertion order.
-    pub fn hit_test(&self, pos: Vec2) -> i32 {
+    /// Returns `None` if nothing hit. Walk reverse insertion order.
+    pub fn hit_test(&self, pos: Vec2) -> Option<NodeId> {
         for i in (0..self.count).rev() {
             let n = &self.nodes[i];
             let required = UIFlags::VISIBLE | UIFlags::INTERACTIVE;
@@ -359,17 +359,17 @@ impl UITree {
             if !self.is_inside_clip_ancestors(i, pos) {
                 continue;
             }
-            return n.id as i32;
+            return Some(n.id);
         }
-        -1
+        None
     }
 
     /// Walk up the parent chain to verify the point is inside all
     /// ClipsChildren ancestor bounds.
     fn is_inside_clip_ancestors(&self, index: usize, pos: Vec2) -> bool {
         let mut pid = self.parent_index[index];
-        while pid >= 0 {
-            let p = pid as usize;
+        while let Some(p) = pid {
+            let p = p.index();
             if self.nodes[p].flags.contains(UIFlags::CLIPS_CHILDREN)
                 && !self.nodes[p].bounds.contains(pos)
             {
@@ -425,7 +425,7 @@ impl UITree {
         F: FnMut(TraversalEvent),
     {
         for i in 0..self.count {
-            if self.parent_index[i] == -1 {
+            if self.parent_index[i].is_none() {
                 self.traverse_subtree(i, &mut visitor);
             }
         }
@@ -440,7 +440,7 @@ impl UITree {
     {
         let end = end.min(self.count);
         for i in start..end {
-            if self.parent_index[i] == -1 {
+            if self.parent_index[i].is_none() {
                 self.traverse_subtree(i, &mut visitor);
             }
         }
@@ -471,12 +471,12 @@ impl UITree {
         if start < self.count {
             let mut ancestors: Vec<(usize, Rect)> = Vec::new();
             let mut idx = self.parent_index[start];
-            while idx >= 0 {
-                let node = &self.nodes[idx as usize];
+            while let Some(node_id) = idx {
+                let node = &self.nodes[node_id.index()];
                 if node.flags.contains(UIFlags::CLIPS_CHILDREN) {
-                    ancestors.push((idx as usize, node.bounds));
+                    ancestors.push((node_id.index(), node.bounds));
                 }
-                idx = self.parent_index[idx as usize];
+                idx = self.parent_index[node_id.index()];
             }
             // Push outermost first (reverse order of discovery).
             for &(ci, bounds) in ancestors.iter().rev() {
@@ -525,11 +525,11 @@ impl UITree {
     /// Returns false if `ancestor == descendant`.
     fn is_ancestor_of(&self, ancestor: usize, descendant: usize) -> bool {
         let mut current = self.parent_index[descendant];
-        while current >= 0 {
-            if current as usize == ancestor {
+        while let Some(c) = current {
+            if c.index() == ancestor {
                 return true;
             }
-            current = self.parent_index[current as usize];
+            current = self.parent_index[c.index()];
         }
         false
     }
@@ -554,9 +554,9 @@ impl UITree {
         }
 
         let mut child = self.first_child[index];
-        while child >= 0 {
-            self.traverse_subtree(child as usize, visitor);
-            child = self.next_sibling[child as usize];
+        while let Some(c) = child {
+            self.traverse_subtree(c.index(), visitor);
+            child = self.next_sibling[c.index()];
         }
 
         if clipping {
@@ -564,11 +564,11 @@ impl UITree {
         }
     }
 
-    /// Get the parent id of a node.
-    pub fn parent_of(&self, id: u32) -> i32 {
-        let idx = id as usize;
+    /// Get the parent of a node, or `None` for a root / out-of-range id.
+    pub fn parent_of(&self, id: NodeId) -> Option<NodeId> {
+        let idx = id.index();
         if idx >= self.count {
-            return -1;
+            return None;
         }
         self.parent_index[idx]
     }
@@ -635,44 +635,44 @@ mod tests {
         let mut tree = UITree::new();
         assert_eq!(tree.count(), 0);
 
-        let root = tree.add_panel(-1, 0.0, 0.0, 800.0, 600.0, default_style());
-        assert_eq!(root, 0);
+        let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
+        assert_eq!(root, NodeId(0));
         assert_eq!(tree.count(), 1);
 
-        let child = tree.add_button(root as i32, 10.0, 10.0, 100.0, 30.0, default_style(), "OK");
-        assert_eq!(child, 1);
+        let child = tree.add_button(Some(root), 10.0, 10.0, 100.0, 30.0, default_style(), "OK");
+        assert_eq!(child, NodeId(1));
         assert_eq!(tree.count(), 2);
     }
 
     #[test]
     fn parent_child_relationships() {
         let mut tree = UITree::new();
-        let root = tree.add_panel(-1, 0.0, 0.0, 800.0, 600.0, default_style());
-        let a = tree.add_panel(root as i32, 0.0, 0.0, 400.0, 300.0, default_style());
-        let b = tree.add_panel(root as i32, 400.0, 0.0, 400.0, 300.0, default_style());
+        let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
+        let a = tree.add_panel(Some(root), 0.0, 0.0, 400.0, 300.0, default_style());
+        let b = tree.add_panel(Some(root), 400.0, 0.0, 400.0, 300.0, default_style());
 
-        assert_eq!(tree.parent_of(root), -1);
-        assert_eq!(tree.parent_of(a), root as i32);
-        assert_eq!(tree.parent_of(b), root as i32);
+        assert_eq!(tree.parent_of(root), None);
+        assert_eq!(tree.parent_of(a), Some(root));
+        assert_eq!(tree.parent_of(b), Some(root));
     }
 
     #[test]
     fn hit_test_topmost() {
         let mut tree = UITree::new();
-        let _root = tree.add_panel(-1, 0.0, 0.0, 800.0, 600.0, default_style());
+        let _root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
         // Two overlapping buttons — second (id=2) is on top
-        let _btn1 = tree.add_button(0, 50.0, 50.0, 100.0, 30.0, default_style(), "A");
-        let btn2 = tree.add_button(0, 50.0, 50.0, 100.0, 30.0, default_style(), "B");
+        let _btn1 = tree.add_button(Some(NodeId(0)), 50.0, 50.0, 100.0, 30.0, default_style(), "A");
+        let btn2 = tree.add_button(Some(NodeId(0)), 50.0, 50.0, 100.0, 30.0, default_style(), "B");
 
         let hit = tree.hit_test(Vec2::new(60.0, 60.0));
-        assert_eq!(hit, btn2 as i32);
+        assert_eq!(hit, Some(btn2));
     }
 
     #[test]
     fn structure_version_bumps_on_structural_ops_only() {
         let mut tree = UITree::new();
         let v0 = tree.structure_version();
-        let btn = tree.add_button(-1, 0.0, 0.0, 100.0, 30.0, default_style(), "A");
+        let btn = tree.add_button(None, 0.0, 0.0, 100.0, 30.0, default_style(), "A");
         let v1 = tree.structure_version();
         assert!(v1 > v0, "add_node must bump structure_version");
 
@@ -696,22 +696,22 @@ mod tests {
     #[test]
     fn hit_test_miss() {
         let mut tree = UITree::new();
-        let _root = tree.add_panel(-1, 0.0, 0.0, 800.0, 600.0, default_style());
-        let _btn = tree.add_button(0, 50.0, 50.0, 100.0, 30.0, default_style(), "A");
+        let _root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
+        let _btn = tree.add_button(Some(NodeId(0)), 50.0, 50.0, 100.0, 30.0, default_style(), "A");
 
         let hit = tree.hit_test(Vec2::new(200.0, 200.0));
-        assert_eq!(hit, -1);
+        assert_eq!(hit, None);
     }
 
     #[test]
     fn hit_test_respects_disabled() {
         let mut tree = UITree::new();
-        let _root = tree.add_panel(-1, 0.0, 0.0, 800.0, 600.0, default_style());
-        let btn = tree.add_button(0, 50.0, 50.0, 100.0, 30.0, default_style(), "A");
+        let _root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
+        let btn = tree.add_button(Some(NodeId(0)), 50.0, 50.0, 100.0, 30.0, default_style(), "A");
         tree.set_flag(btn, UIFlags::DISABLED);
 
         let hit = tree.hit_test(Vec2::new(60.0, 60.0));
-        assert_eq!(hit, -1);
+        assert_eq!(hit, None);
     }
 
     #[test]
@@ -719,7 +719,7 @@ mod tests {
         let mut tree = UITree::new();
         // Clip region that only covers (0,0)-(50,50)
         let clip = tree.add_node(
-            -1,
+            None,
             Rect::new(0.0, 0.0, 50.0, 50.0),
             UINodeType::ClipRegion,
             default_style(),
@@ -727,18 +727,18 @@ mod tests {
             UIFlags::CLIPS_CHILDREN,
         );
         // Button extends past clip
-        let _btn = tree.add_button(clip as i32, 0.0, 0.0, 200.0, 200.0, default_style(), "X");
+        let _btn = tree.add_button(Some(clip), 0.0, 0.0, 200.0, 200.0, default_style(), "X");
 
         // Inside clip → hit
-        assert!(tree.hit_test(Vec2::new(25.0, 25.0)) >= 0);
+        assert!(tree.hit_test(Vec2::new(25.0, 25.0)).is_some());
         // Outside clip → miss
-        assert_eq!(tree.hit_test(Vec2::new(100.0, 100.0)), -1);
+        assert_eq!(tree.hit_test(Vec2::new(100.0, 100.0)), None);
     }
 
     #[test]
     fn set_text_dedup() {
         let mut tree = UITree::new();
-        let id = tree.add_label(-1, 0.0, 0.0, 100.0, 20.0, "Hello", default_style());
+        let id = tree.add_label(None, 0.0, 0.0, 100.0, 20.0, "Hello", default_style());
         tree.clear_dirty();
 
         // Same text → no dirty
@@ -754,9 +754,9 @@ mod tests {
     #[test]
     fn traversal_order() {
         let mut tree = UITree::new();
-        let root = tree.add_panel(-1, 0.0, 0.0, 800.0, 600.0, default_style());
-        let _a = tree.add_label(root as i32, 0.0, 0.0, 100.0, 20.0, "A", default_style());
-        let _b = tree.add_label(root as i32, 0.0, 20.0, 100.0, 20.0, "B", default_style());
+        let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
+        let _a = tree.add_label(Some(root), 0.0, 0.0, 100.0, 20.0, "A", default_style());
+        let _b = tree.add_label(Some(root), 0.0, 20.0, 100.0, 20.0, "B", default_style());
 
         let mut order = Vec::new();
         tree.traverse(|event| {
@@ -765,14 +765,14 @@ mod tests {
             }
         });
 
-        assert_eq!(order, vec![0, 1, 2]); // DFS pre-order
+        assert_eq!(order, vec![NodeId(0), NodeId(1), NodeId(2)]); // DFS pre-order
     }
 
     #[test]
     fn clear_resets() {
         let mut tree = UITree::new();
-        tree.add_panel(-1, 0.0, 0.0, 100.0, 100.0, default_style());
-        tree.add_panel(-1, 0.0, 0.0, 100.0, 100.0, default_style());
+        tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
+        tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
         assert_eq!(tree.count(), 2);
 
         tree.clear();
@@ -780,35 +780,35 @@ mod tests {
         assert!(!tree.has_dirty());
 
         // Can re-add after clear
-        let id = tree.add_panel(-1, 0.0, 0.0, 100.0, 100.0, default_style());
-        assert_eq!(id, 0); // IDs restart from 0
+        let id = tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
+        assert_eq!(id, NodeId(0)); // IDs restart from 0
     }
 
     #[test]
     fn offset_nodes() {
         let mut tree = UITree::new();
-        tree.add_panel(-1, 0.0, 0.0, 100.0, 20.0, default_style());
-        tree.add_panel(-1, 0.0, 20.0, 100.0, 20.0, default_style());
-        tree.add_panel(-1, 0.0, 40.0, 100.0, 20.0, default_style());
+        tree.add_panel(None, 0.0, 0.0, 100.0, 20.0, default_style());
+        tree.add_panel(None, 0.0, 20.0, 100.0, 20.0, default_style());
+        tree.add_panel(None, 0.0, 40.0, 100.0, 20.0, default_style());
 
         tree.offset_nodes(1, 2, 100.0);
 
-        assert_eq!(tree.get_bounds(0).y, 0.0);
-        assert_eq!(tree.get_bounds(1).y, 120.0);
-        assert_eq!(tree.get_bounds(2).y, 140.0);
+        assert_eq!(tree.get_bounds(NodeId(0)).y, 0.0);
+        assert_eq!(tree.get_bounds(NodeId(1)).y, 120.0);
+        assert_eq!(tree.get_bounds(NodeId(2)).y, 140.0);
     }
 
     #[test]
     fn truncate_from_preserves_earlier_nodes() {
         let mut tree = UITree::new();
         // Panel A: root + child
-        let a_root = tree.add_panel(-1, 0.0, 0.0, 100.0, 50.0, default_style());
-        let _a_child = tree.add_label(a_root as i32, 10.0, 10.0, 80.0, 20.0, "A", default_style());
+        let a_root = tree.add_panel(None, 0.0, 0.0, 100.0, 50.0, default_style());
+        let _a_child = tree.add_label(Some(a_root), 10.0, 10.0, 80.0, 20.0, "A", default_style());
         let boundary = tree.count(); // = 2
 
         // Panel B: root + child
-        let _b_root = tree.add_panel(-1, 0.0, 50.0, 100.0, 50.0, default_style());
-        let _b_child = tree.add_label(2, 10.0, 60.0, 80.0, 20.0, "B", default_style());
+        let _b_root = tree.add_panel(None, 0.0, 50.0, 100.0, 50.0, default_style());
+        let _b_child = tree.add_label(Some(NodeId(2)), 10.0, 60.0, 80.0, 20.0, "B", default_style());
         assert_eq!(tree.count(), 4);
 
         // Truncate at panel B boundary
@@ -817,19 +817,19 @@ mod tests {
         assert!(tree.has_dirty());
 
         // Panel A nodes intact
-        assert_eq!(tree.get_bounds(0).y, 0.0);
-        assert_eq!(tree.get_node(1).text.as_deref(), Some("A"));
+        assert_eq!(tree.get_bounds(NodeId(0)).y, 0.0);
+        assert_eq!(tree.get_node(NodeId(1)).text.as_deref(), Some("A"));
 
         // Can re-add after truncation — IDs continue from truncation point
-        let new_id = tree.add_panel(-1, 0.0, 100.0, 100.0, 50.0, default_style());
-        assert_eq!(new_id, 2);
+        let new_id = tree.add_panel(None, 0.0, 100.0, 100.0, 50.0, default_style());
+        assert_eq!(new_id, NodeId(2));
         assert_eq!(tree.count(), 3);
     }
 
     #[test]
     fn truncate_from_beyond_count_is_noop() {
         let mut tree = UITree::new();
-        tree.add_panel(-1, 0.0, 0.0, 100.0, 100.0, default_style());
+        tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
         tree.clear_dirty();
 
         tree.truncate_from(5);
@@ -840,10 +840,10 @@ mod tests {
     #[test]
     fn offset_node_and_children_shifts_subtree() {
         let mut tree = UITree::new();
-        let parent = tree.add_panel(-1, 10.0, 20.0, 100.0, 30.0, default_style());
-        let c1 = tree.add_panel(parent as i32, 15.0, 25.0, 10.0, 2.0, default_style());
-        let c2 = tree.add_panel(parent as i32, 15.0, 29.0, 10.0, 2.0, default_style());
-        let c3 = tree.add_panel(parent as i32, 15.0, 33.0, 10.0, 2.0, default_style());
+        let parent = tree.add_panel(None, 10.0, 20.0, 100.0, 30.0, default_style());
+        let c1 = tree.add_panel(Some(parent), 15.0, 25.0, 10.0, 2.0, default_style());
+        let c2 = tree.add_panel(Some(parent), 15.0, 29.0, 10.0, 2.0, default_style());
+        let c3 = tree.add_panel(Some(parent), 15.0, 33.0, 10.0, 2.0, default_style());
         tree.clear_dirty();
 
         tree.offset_node_and_children(parent, 50.0);
@@ -858,7 +858,7 @@ mod tests {
     #[test]
     fn offset_node_and_children_leaf_only() {
         let mut tree = UITree::new();
-        let leaf = tree.add_panel(-1, 0.0, 10.0, 50.0, 20.0, default_style());
+        let leaf = tree.add_panel(None, 0.0, 10.0, 50.0, 20.0, default_style());
         tree.clear_dirty();
 
         tree.offset_node_and_children(leaf, -5.0);
@@ -870,8 +870,8 @@ mod tests {
     #[test]
     fn offset_node_and_children_does_not_affect_siblings() {
         let mut tree = UITree::new();
-        let a = tree.add_panel(-1, 0.0, 10.0, 50.0, 20.0, default_style());
-        let b = tree.add_panel(-1, 0.0, 40.0, 50.0, 20.0, default_style());
+        let a = tree.add_panel(None, 0.0, 10.0, 50.0, 20.0, default_style());
+        let b = tree.add_panel(None, 0.0, 40.0, 50.0, 20.0, default_style());
 
         tree.offset_node_and_children(a, 100.0);
 
