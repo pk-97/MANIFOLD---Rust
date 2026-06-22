@@ -26,16 +26,24 @@ python segment.py --image /path/to/photo.jpg \
   --prompts "audio recorder" "dried flower"
 ```
 
-Writes to `./masks/`: per-object `*_soft.png` + `*_binary.png`, `index_map.png`,
-`overlay.png` (QA), and `objects.json`. Prints a one-line object summary.
-The original image is never modified.
+Writes to `./masks/`:
+- per-object `*_soft.png` + `*_binary.png` masks
+- `cutouts/` — each object as a tight-cropped full-color **RGBA cutout**
+  (transparent background); plus a merged cutout per class region
+- `cutout.png` — the whole subject set with the background knocked out
+- `background_binary.png` / `subject_soft.png` — the table mask and removal matte
+- `index_map.png`, `overlay.png` (QA), `objects.json`
 
-Per-pixel ownership is resolved by argmax over SAM mask probability (instance
-IoU as tiebreak), so no pixel belongs to two objects. Everything unowned is the
-`background`.
+The original image is never modified. Per-pixel ownership is resolved by argmax
+over SAM mask probability (instance IoU as tiebreak), so no pixel belongs to two
+objects. Everything unowned is the `background`.
+
+Hard objects text can't name: add `--point "x,y:label"` (pixel coords) to point
+SAM directly at them. A point labelled `table` or `background` instead **carves**
+that surface out of every object — useful when table color overlaps an object.
 
 Useful flags: `--box-threshold 0.30`, `--text-threshold 0.25`,
-`--matte guided|pymatting`, `--band 12`.
+`--matte guided|pymatting`, `--band 12`, `--table-sat 60`.
 
 ## Stage 2 — effects
 

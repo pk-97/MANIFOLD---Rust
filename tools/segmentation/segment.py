@@ -174,6 +174,20 @@ def suppress_table_leak(index_map, image_rgb, protect, sat_keep=60):
     return out
 
 
+def write_cutout(image_rgb, alpha_u8, path, pad=8):
+    """Save a tight-cropped full-color RGBA cutout (transparent background)."""
+    ys, xs = np.where(alpha_u8 > 0)
+    if len(xs) == 0:
+        return None
+    h, w = alpha_u8.shape
+    x0, x1 = max(0, int(xs.min()) - pad), min(w, int(xs.max()) + 1 + pad)
+    y0, y1 = max(0, int(ys.min()) - pad), min(h, int(ys.max()) + 1 + pad)
+    bgra = cv2.cvtColor(image_rgb[y0:y1, x0:x1], cv2.COLOR_RGB2BGRA)
+    bgra[:, :, 3] = alpha_u8[y0:y1, x0:x1]
+    cv2.imwrite(path, bgra)
+    return os.path.join(os.path.basename(os.path.dirname(path)), os.path.basename(path))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Stage 1: prompt-driven segmentation")
     ap.add_argument("--image", required=True)
@@ -260,6 +274,8 @@ def main():
                 "objects": []}
     counts = {}
     subject_soft = np.zeros((h, w), np.float32)   # feathered union of all objects
+    cut_dir = os.path.join(args.out, "cutouts")   # per-object full-color RGBA
+    os.makedirs(cut_dir, exist_ok=True)
     for i in range(len(items)):
         raw = labels[i] if i < len(labels) and labels[i] else "object"
         slug = "".join(c if c.isalnum() else "_" for c in raw.strip()).strip("_") or "object"
@@ -279,12 +295,14 @@ def main():
         s_path = os.path.join(args.out, f"obj{i}_{slug}_soft.png")
         cv2.imwrite(b_path, binary)
         cv2.imwrite(s_path, soft_u8)
+        cut = write_cutout(image_np, soft_u8, os.path.join(cut_dir, f"obj{i}_{slug}.png"))
         manifest["objects"].append({
             "index": i, "label": raw, "slug": slug,
             "score": round(float(scores[i]), 3),
             "iou": round(float(ious[i]), 3),
             "binary": os.path.basename(b_path),
             "soft": os.path.basename(s_path),
+            "cutout": cut,
             "pixels": int((binary > 0).sum()),
         })
 
@@ -307,10 +325,14 @@ def main():
         rb = os.path.join(args.out, f"region_{slug}_binary.png")
         rs = os.path.join(args.out, f"region_{slug}_soft.png")
         cv2.imwrite(rb, region_bin)
-        cv2.imwrite(rs, (region_soft * 255).astype(np.uint8))
+        region_soft_u8 = (region_soft * 255).astype(np.uint8)
+        cv2.imwrite(rs, region_soft_u8)
+        rcut = write_cutout(image_np, region_soft_u8,
+                            os.path.join(cut_dir, f"region_{slug}.png"))
         manifest["regions"].append({
             "label": label, "slug": slug, "instances": idxs,
             "binary": os.path.basename(rb), "soft": os.path.basename(rs),
+            "cutout": rcut,
             "pixels": int((region_bin > 0).sum()),
         })
 
