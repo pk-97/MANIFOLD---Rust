@@ -22,4 +22,4 @@ pub mod view;
 
 pub use diff::{ChromeHost, Reconcile};
 pub use layout::{solve, solve_into, LaidNode};
-pub use view::{validate, Align, Layout, Pad, Sizing, View, ViewIntent};
+pub use view::{validate, Align, Layout, Pad, Sizing, SliderSpec, View, ViewIntent};

@@ -6,10 +6,10 @@
 //! so the inspector composite is untouched.
 
 use super::PanelAction;
-use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
+use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
 use crate::node::*;
-use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
+use crate::slider::{SliderColors, SliderDragState};
 use crate::tree::UITree;
 
 // ── Layout constants (from LayerChromeBitmapPanel.cs) ─────────────
@@ -171,8 +171,18 @@ impl LayerChromePanel {
             );
         }
         if self.show_opacity {
+            let v = self.opacity.cached_value();
+            let v = if v.is_nan() { 1.0 } else { v };
+            let spec = SliderSpec {
+                label: Some("Opacity".to_string()),
+                value: v,
+                value_text: fmt_opacity(v),
+                colors: SliderColors::default_slider(),
+                font_size: FONT_SIZE,
+                label_width: OPACITY_LABEL_W,
+            };
             root = root.child(Self::divider()).child(
-                View::panel()
+                View::slider_row(spec)
                     .fill_w()
                     .h(Sizing::Fixed(SLIDER_ROW_H))
                     .key(KEY_OPACITY_SLOT),
@@ -189,27 +199,10 @@ impl LayerChromePanel {
         self.host.build(tree, &view, rect);
         self.first_node = self.host.first_node();
 
-        if let Some(slot) = self
-            .host
-            .node_id_for_key(KEY_OPACITY_SLOT)
-            .map(|id| tree.get_bounds(id))
-        {
-            let opacity_val = self.opacity.cached_value();
-            let opacity = if opacity_val.is_nan() { 1.0 } else { opacity_val };
-            let ids = BitmapSlider::build(
-                tree,
-                None,
-                slot,
-                Some("Opacity"),
-                opacity,
-                &fmt_opacity(opacity),
-                &SliderColors::default_slider(),
-                FONT_SIZE,
-                OPACITY_LABEL_W,
-            );
-            self.opacity.set_ids(ids);
-        } else {
-            self.opacity.clear();
+        // The host materialised the opacity slider (when shown); wire its ids.
+        match self.host.slider_ids(KEY_OPACITY_SLOT) {
+            Some(ids) => self.opacity.set_ids(ids),
+            None => self.opacity.clear(),
         }
 
         self.node_count = tree.count() - self.first_node;

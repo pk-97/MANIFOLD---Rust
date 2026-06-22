@@ -12,10 +12,10 @@
 //! composite that drives this card is untouched. See `docs/CHROME_API_DESIGN.md`.
 
 use super::PanelAction;
-use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
+use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
 use crate::color;
 use crate::node::*;
-use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
+use crate::slider::{SliderColors, SliderDragState};
 use crate::tree::UITree;
 
 // ── Layout constants (from MasterChromeBitmapPanel.cs) ───────────
@@ -156,6 +156,21 @@ impl MasterChromePanel {
             .bg(color::DIVIDER_C32)
     }
 
+    /// A 0–1 slider spec at the drag state's current cached value (defaulting a
+    /// never-synced NaN to 1.0, as the old build did).
+    fn slider_spec(slider: &SliderDragState, label: Option<&str>, label_width: f32) -> SliderSpec {
+        let v = slider.cached_value();
+        let v = if v.is_nan() { 1.0 } else { v };
+        SliderSpec {
+            label: label.map(str::to_string),
+            value: v,
+            value_text: fmt_opacity(v),
+            colors: SliderColors::default_slider(),
+            font_size: FONT_SIZE,
+            label_width,
+        }
+    }
+
     fn header_row(&self) -> View {
         let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
             .fixed(CHEVRON_W, CHEVRON_H)
@@ -210,8 +225,8 @@ impl MasterChromePanel {
             .inert()
             .key(KEY_LED_TOGGLE);
 
-        // Transparent placeholder the brightness slider is built into.
-        let brightness_slot = View::panel()
+        // Brightness slider (no label) — the host materialises it into this slot.
+        let brightness_slot = View::slider_row(Self::slider_spec(&self.led_brightness, None, 0.0))
             .fixed(LED_SLIDER_W, SLIDER_ROW_H)
             .key(KEY_BRIGHTNESS_SLOT);
 
@@ -244,7 +259,7 @@ impl MasterChromePanel {
             .child(self.led_row())
             .child(Self::divider())
             .child(
-                View::panel()
+                View::slider_row(Self::slider_spec(&self.opacity, Some("Opacity"), OPACITY_LABEL_W))
                     .fill_w()
                     .h(Sizing::Fixed(SLIDER_ROW_H))
                     .key(KEY_OPACITY_SLOT),
@@ -260,55 +275,15 @@ impl MasterChromePanel {
         self.host.build(tree, &view, rect);
         self.first_node = self.host.first_node();
 
-        if self.is_collapsed {
-            self.opacity.clear();
-            self.led_brightness.clear();
-            self.node_count = tree.count() - self.first_node;
-            return;
+        // The host materialised the slider slots; wire their ids to the drag
+        // state (or clear when collapsed, where the slots aren't emitted).
+        match self.host.slider_ids(KEY_BRIGHTNESS_SLOT) {
+            Some(ids) => self.led_brightness.set_ids(ids),
+            None => self.led_brightness.clear(),
         }
-
-        // Drop the sliders into the host-laid slots (byte-identical to before).
-        let bright_slot = self
-            .host
-            .node_id_for_key(KEY_BRIGHTNESS_SLOT)
-            .map(|id| tree.get_bounds(id));
-        let opacity_slot = self
-            .host
-            .node_id_for_key(KEY_OPACITY_SLOT)
-            .map(|id| tree.get_bounds(id));
-
-        if let Some(slot) = bright_slot {
-            let led_val = self.led_brightness.cached_value();
-            let led_brightness = if led_val.is_nan() { 1.0 } else { led_val };
-            let ids = BitmapSlider::build(
-                tree,
-                None,
-                slot,
-                None,
-                led_brightness,
-                &fmt_opacity(led_brightness),
-                &SliderColors::default_slider(),
-                FONT_SIZE,
-                0.0,
-            );
-            self.led_brightness.set_ids(ids);
-        }
-
-        if let Some(slot) = opacity_slot {
-            let opacity_val = self.opacity.cached_value();
-            let opacity = if opacity_val.is_nan() { 1.0 } else { opacity_val };
-            let ids = BitmapSlider::build(
-                tree,
-                None,
-                slot,
-                Some("Opacity"),
-                opacity,
-                &fmt_opacity(opacity),
-                &SliderColors::default_slider(),
-                FONT_SIZE,
-                OPACITY_LABEL_W,
-            );
-            self.opacity.set_ids(ids);
+        match self.host.slider_ids(KEY_OPACITY_SLOT) {
+            Some(ids) => self.opacity.set_ids(ids),
+            None => self.opacity.clear(),
         }
 
         self.node_count = tree.count() - self.first_node;

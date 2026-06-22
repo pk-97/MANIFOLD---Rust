@@ -15,7 +15,7 @@
 //! child on the cross axis at its own size. `Stack`/`Leaf` place every child in
 //! the padded box (horizontal by `main_align`, vertical by `cross_align`).
 
-use crate::chrome::view::{Align, Layout, Sizing, View, ViewIntent};
+use crate::chrome::view::{Align, Layout, SliderSpec, Sizing, View, ViewIntent};
 use crate::node::{Rect, UINodeType, UIStyle, Vec2};
 use crate::text::TextMeasure;
 
@@ -33,6 +33,9 @@ pub struct LaidNode {
     pub visible: bool,
     pub disabled: bool,
     pub intent: ViewIntent,
+    /// Slider spec copied from [`View::slider_row`] — the host materialises a
+    /// `BitmapSlider` into this node's `rect` when present.
+    pub slider: Option<Box<SliderSpec>>,
     /// Stable-identity hint copied from [`View::key`]. The reconciler keys on
     /// structure, not this; it exists so a panel can resolve a specific node id
     /// for overlay anchoring (the "stable semantic addressing" the Chrome API
@@ -145,6 +148,7 @@ fn place(view: &View, rect: Rect, parent: Option<usize>, measure: &dyn TextMeasu
         visible: view.visible,
         disabled: view.disabled,
         intent: view.intent.clone(),
+        slider: view.slider.clone(),
         key: view.key,
     });
 

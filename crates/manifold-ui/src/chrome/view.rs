@@ -10,6 +10,29 @@
 
 use crate::node::{Color32, FontWeight, TextAlign, UINodeType, UIStyle};
 use crate::panels::PanelAction;
+use crate::slider::SliderColors;
+
+/// A declarative slider — a typed Chrome building block. A panel puts a
+/// [`View::slider_row`] carrying this in its description; the
+/// [`ChromeHost`](crate::chrome::ChromeHost) *materialises* the multi-node
+/// [`BitmapSlider`](crate::slider::BitmapSlider) into the laid row (byte-identical
+/// geometry) and hands back its node ids, so the panel never hand-rolls the
+/// slot + build itself. The live value/drag stays with the panel's
+/// `SliderDragState` (the host owns the slider's *structure*, the panel its
+/// *value*), which is why the spec only needs the build-time appearance.
+#[derive(Clone)]
+pub struct SliderSpec {
+    /// Optional leading label (right-aligned); `None` for a bare inline slider.
+    pub label: Option<String>,
+    /// Normalised position 0–1 the slider is first drawn at.
+    pub value: f32,
+    /// Value-cell text (already formatted).
+    pub value_text: String,
+    pub colors: SliderColors,
+    pub font_size: u16,
+    /// Leading-label column width (0 when there is no label).
+    pub label_width: f32,
+}
 
 /// How a [`View`] sizes along one axis. Resolved independently per axis.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -122,6 +145,10 @@ pub struct View {
     /// Optional stable-identity hint (currently advisory — the diff keys on
     /// structural shape; a future keyed reconciler reads this).
     pub(crate) key: Option<u64>,
+    /// When set, this node is a slider *slot*: the host materialises a
+    /// [`BitmapSlider`](crate::slider::BitmapSlider) into its laid rect and
+    /// records the resulting ids under [`View::key`].
+    pub(crate) slider: Option<Box<SliderSpec>>,
 }
 
 impl View {
@@ -145,6 +172,7 @@ impl View {
             disabled: false,
             visible: true,
             key: None,
+            slider: None,
         }
     }
 
@@ -199,6 +227,17 @@ impl View {
     pub fn slider() -> Self {
         let mut v = Self::bare(UINodeType::Slider);
         v.interactive = true;
+        v
+    }
+
+    /// A slider row — a typed building block. The host materialises a
+    /// [`BitmapSlider`](crate::slider::BitmapSlider) into this node's laid rect
+    /// at build, recording its ids under the node's [`key`](View::key) (so set
+    /// one). Size it like any node (`.fill_w().h(Fixed(row_h))`); the spec is the
+    /// build-time appearance, the live value rides on the panel's drag state.
+    pub fn slider_row(spec: SliderSpec) -> Self {
+        let mut v = Self::bare(UINodeType::Panel);
+        v.slider = Some(Box::new(spec));
         v
     }
 

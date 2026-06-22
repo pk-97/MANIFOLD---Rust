@@ -22,6 +22,7 @@ use crate::chrome::layout::{self, LaidNode};
 use crate::chrome::view::{validate, View};
 use crate::intent::{Gesture, IntentRegistry};
 use crate::node::{NodeId, Rect, UIFlags};
+use crate::slider::{BitmapSlider, SliderNodeIds};
 use crate::tree::UITree;
 
 /// Outcome of an [`ChromeHost::update`] reconcile.
@@ -48,6 +49,10 @@ pub struct ChromeHost {
     first_node: usize,
     signature: u64,
     built: bool,
+    /// Sliders materialised at build, by their slot's [`View::key`]. The panel
+    /// resolves these to drive the slider's value + drag through its
+    /// `SliderDragState`; the host owns the slider's structure, not its value.
+    slider_ids: Vec<(u64, SliderNodeIds)>,
 }
 
 impl ChromeHost {
@@ -93,6 +98,32 @@ impl ChromeHost {
                 tree.set_visible(id, false);
             }
             self.ids.push(id);
+        }
+
+        // Materialise any declarative sliders into their laid slot rects. The
+        // slot node above is a transparent placeholder; the BitmapSlider's
+        // (interactive) sub-nodes are appended on top and tracked by key.
+        self.slider_ids.clear();
+        for i in 0..self.scratch.len() {
+            let Some(spec) = self.scratch[i].slider.clone() else {
+                continue;
+            };
+            let rect = self.scratch[i].rect;
+            let key = self.scratch[i].key;
+            let ids = BitmapSlider::build(
+                tree,
+                None,
+                rect,
+                spec.label.as_deref(),
+                spec.value,
+                &spec.value_text,
+                &spec.colors,
+                spec.font_size,
+                spec.label_width,
+            );
+            if let Some(k) = key {
+                self.slider_ids.push((k, ids));
+            }
         }
 
         self.signature = signature(&self.scratch);
@@ -182,6 +213,16 @@ impl ChromeHost {
             .iter()
             .position(|n| n.key == Some(key))
             .and_then(|i| self.ids.get(i).copied())
+    }
+
+    /// The materialised [`BitmapSlider`] ids for the slot built under `key`
+    /// (set on the [`View::slider_row`]). A panel hands these to its
+    /// `SliderDragState` to drive the value + drag.
+    pub fn slider_ids(&self, key: u64) -> Option<SliderNodeIds> {
+        self.slider_ids
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, ids)| *ids)
     }
 }
 

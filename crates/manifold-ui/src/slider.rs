@@ -46,6 +46,7 @@ pub struct SliderNodeIds {
 pub struct BitmapSlider;
 
 /// Colors for a slider instance.
+#[derive(Clone)]
 pub struct SliderColors {
     pub track: Color32,
     pub track_hover: Color32,
