@@ -14,15 +14,17 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 panels fully migrated; the
-> `param_card` frame + generator header staged; the `layer_header` top chrome
-> staged. All verified + pushed (~18 commits), plus the `slider_row` +
-> `dropdown_trigger` building blocks. **Key result, proven on two beasts now: the
-> heavyweights stage into committable, tested steps (frame/chrome → header → rows)
-> — not all-or-nothing.** What remains is the dynamic *bodies* — param_card rows +
-> effect-header badges, the layer_header scroll rows, and `audio_setup` /
-> `inspector` — all dragged/real-time surfaces that want the app running to verify.
-> Branch `ui-chrome-phase2b`.
+> **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 panels fully migrated; **3 of
+> the 4 heavyweights chrome-staged** (`param_card` frame + generator header,
+> `layer_header` top chrome, `audio_setup` modal chrome); the `inspector`'s
+> sub-panels are all migrated (it's the orchestrator). All verified + pushed (~20
+> commits), plus the `slider_row` + `dropdown_trigger` building blocks. **Key
+> result, proven on three beasts: the heavyweights stage into committable, tested
+> steps (frame/chrome → header → body) — not all-or-nothing.** What remains is each
+> beast's dynamic *body* — param_card's dragged rows + the effect-header badge fork,
+> layer_header's scroll rows, audio_setup's meters/spectrogram, the inspector's
+> interleaved section bgs + add buttons. All dragged/real-time surfaces that want
+> the app running to verify. Branch `ui-chrome-phase2b`.
 >
 > **Typed building blocks (the direction Peter steered to 2026-06-22):** the
 > repeated interactive widgets become *typed Chrome components the host
@@ -725,10 +727,18 @@ pass (see §0).
   the recording sync + click are untouched. The per-layer scroll rows (variable
   count, gain sliders, MIDI fields, drag-reorder) are the next stage — dragged
   per-layer widgets, runtime pass.
-- [ ] **2b.9** `inspector` (composite) — the 2588-line orchestrator. Migrate after
-  its cards; runtime pass.
-- [ ] **2b.10** `audio_setup_panel` — large modal: spectrogram, live meters,
-  band dividers, dynamic send rows. Heavily imperative/real-time; runtime pass.
+- [~] **2b.9** `inspector` (composite) — the orchestrator. **Its sub-panels are
+  all migrated** (master/layer/clip chrome, macros, param cards), so the inspector
+  is mostly done *through* them. Its own remaining chrome is the per-section card
+  backgrounds + the add-effect buttons, which are *interleaved* with the delegated
+  `card.build(...)` calls (not a single frame) — a scattered host-ification, best
+  with a build open. No single clean frame to stage.
+- [~] **2b.10** `audio_setup_panel` — **stage 1 DONE 2026-06-22, pushed.** The
+  hit-testable modal background + the title strip (title + close) are host-built
+  via `chrome_view`; `bg_id`/`close_id` resolve by key, so `owns_node`, click
+  routing, and the imperative rows (parented into `bg_id`) are untouched. The
+  real-time body (spectrogram, live meters, band dividers, dynamic send rows)
+  stays imperative — the next stage, with a build open.
 - [ ] **2b.11** Typed dropdown items (carry their own action); delete the parallel
   index→meaning maps. Slider-free — can land independently of the cards.
 
