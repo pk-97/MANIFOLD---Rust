@@ -1607,9 +1607,14 @@ impl UIRoot {
                 use manifold_core::types::ResolutionPreset;
                 let has_displays = !self.display_resolutions.is_empty();
 
+                // Typed dropdown (2b.11): each item carries its own action.
                 let mut items: Vec<DropdownItem> = ResolutionPreset::ALL
                     .iter()
-                    .map(|r| DropdownItem::new(&r.dropdown_label()))
+                    .enumerate()
+                    .map(|(i, r)| {
+                        DropdownItem::new(&r.dropdown_label())
+                            .with_action(PanelAction::SetResolution(i))
+                    })
                     .collect();
 
                 // Add display resolutions below presets (Unity: Footer.CollectDisplayResolutions)
@@ -1617,7 +1622,11 @@ impl UIRoot {
                     // Separator label (disabled, non-selectable) — matches Unity format
                     items.push(DropdownItem::disabled("---  Displays  ---"));
                     for (w, h, label) in &self.display_resolutions {
-                        items.push(DropdownItem::new(&format!("{}  ({}x{})", label, w, h)));
+                        items.push(
+                            DropdownItem::new(&format!("{}  ({}x{})", label, w, h)).with_action(
+                                PanelAction::SetDisplayResolution(*w as i32, *h as i32),
+                            ),
+                        );
                     }
                 }
 
