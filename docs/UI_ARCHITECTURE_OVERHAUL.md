@@ -14,9 +14,13 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 2b IN PROGRESS (2026-06-22)** — the static chrome panels are
-> migrated and pushed; the slider/drawer inspector cards are the remaining work
-> and hit a verification boundary (below). Branch `ui-chrome-phase2b`.
+> **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 of 11 panels migrated +
+> verified + pushed (the static bars + master/layer/macros/clip chrome cards), plus
+> the typed `slider_row` building block. The four heavyweights (`param_card`,
+> `layer_header`, `audio_setup_panel`, `inspector`) + 2b.11 dropdowns remain —
+> ~9.7k lines of the densest perform UI that want a running build (see the
+> cumulative note below). Next action: build the drawer + trim blocks, then
+> `param_card`. Branch `ui-chrome-phase2b`.
 >
 > **Typed building blocks (the direction Peter steered to 2026-06-22):** the
 > repeated interactive widgets become *typed Chrome components the host
@@ -677,12 +681,13 @@ pass (see §0).
   Host owns the section card + header + 8 `slider_row` slots + conditional
   Ableton-config-drawer slots; trim handles + config drawers stay imperative in
   their keyed slots (the next blocks to typify).
-- [ ] **2b.4** `clip_chrome` — **NEXT, but a runtime pass.** Video/gen/audio mode
-  sections, a variable count of audio-detection instrument rows (per-row toggle +
-  sensitivity `slider_row` + count + layer dropdown), an onset slider, a progress
-  bar, a ~140-line click router. The slider block covers the sliders; the dropdown
-  triggers + progress bar drop into keyed slots like macros' config drawers. The
-  dynamic rows + 3 modes are exactly what a build golden can't fully cover.
+- [x] **2b.4** `clip_chrome` — **DONE 2026-06-22**, pushed. Video/gen/audio mode
+  sections, dynamic audio-detection instrument rows (per-row toggle + sensitivity
+  `slider_row` + count + layer dropdown), onset slider, progress bar, key-routed
+  click handler. Sliders host-materialised; dropdown triggers + progress bar in
+  keyed slots. 4 tests cover the modes + key routing + slider materialisation. The
+  **runtime pass is still owed** — the build golden can't cover the live
+  drag/dynamic-row behaviour.
 - [ ] **2b.0** `param_card` — the beast: drivers / envelope / audio-mod drawers,
   trim handles, the densest interaction surface. Composes `slider_row` + the
   drawer/trim blocks once those exist. Runtime visual pass.
@@ -695,16 +700,25 @@ pass (see §0).
 - [ ] **2b.11** Typed dropdown items (carry their own action); delete the parallel
   index→meaning maps. Slider-free — can land independently of the cards.
 
-> **Cumulative this chat (2026-06-22):** 6 panels migrated + golden-proven + pushed
-> (footer, header, transport, master_chrome, layer_chrome, macros_panel), Chrome
-> API extended with `key`, `disabled`, and the **typed `slider_row` building
-> block** (host-materialised) per Peter's steer. Remaining: clip_chrome (next),
-> param_card, layer_header, inspector composite, audio_setup, 2b.11 dropdowns —
-> all large/dynamic central-perform surfaces. They compose the slider block; the
-> dropdown-trigger / progress-bar / drawer / trim blocks are the next components
-> to add. Resume with a running build to verify each card's drag/drawer/dynamic
-> rows as it lands — the build golden covers the static tree, the runtime pass
-> covers what it can't.
+> **Cumulative this chat (2026-06-22):** **7 panels migrated + verified + pushed**
+> (footer, header, transport, master_chrome, layer_chrome, macros_panel,
+> clip_chrome), Chrome API extended with `key`, `disabled`, and the **typed
+> `slider_row` building block** (host-materialised) per Peter's steer.
+>
+> **Remaining = the four heavyweights + dropdowns**, deliberately not done blind in
+> one session because of their size and density:
+> - `param_card` **3344 lines** (+ `param_slider_shared` 1562) — drivers / envelope
+>   / audio-mod drawers + trim handles, the densest surface. Needs the drawer +
+>   trim blocks built first.
+> - `layer_header` **2504**, `audio_setup_panel` **2092**, `inspector` **1801**.
+> - 2b.11 typed dropdowns (independent, slider-free).
+>
+> These ~9.7k lines are the most interaction- and real-time-dense perform UI; the
+> build golden proves the static tree but not the live drawer/drag/meter behaviour,
+> so they want a **running build**. The path is mechanical from here: add the
+> dropdown-trigger / progress-bar / drawer / trim blocks (same shape as
+> `slider_row`), then each card composes them. Pick up at `param_card` with a build
+> to watch.
 
 ### Phase 3 — Timeline API
 - [ ] **3.1** Sub-design-doc: lane/clip/marker model + one interaction owner +
