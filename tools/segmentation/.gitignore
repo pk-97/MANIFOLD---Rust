@@ -1,0 +1,7 @@
+# Never commit the venv or downloaded model weights to the Rust repo.
+.venv/
+weights/
+masks/
+out/
+__pycache__/
+*.pyc

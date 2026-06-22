@@ -1,0 +1,19 @@
+# Core ML
+torch>=2.3
+torchvision
+transformers>=4.44
+huggingface_hub
+safetensors
+
+# Imaging / numerics
+numpy
+pillow
+opencv-python
+scipy
+scikit-image
+pymatting
+tqdm
+
+# SAM 2 (installed from source — no PyPI release).
+# SAM 3 has no public weights yet; this is the real backend.
+git+https://github.com/facebookresearch/sam2.git
