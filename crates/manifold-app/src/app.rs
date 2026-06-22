@@ -1869,6 +1869,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 )),
                 #[cfg(not(target_os = "macos"))]
                 Box::new(StubRenderer::new_video()),
+                // Static-image clips. Claims clips with an `image_path`;
+                // GeneratorRenderer explicitly excludes those so dispatch
+                // is order-independent, but image stays ahead of it anyway.
+                #[cfg(target_os = "macos")]
+                Box::new(manifold_media::image_renderer::ImageRenderer::new(
+                    &native_device,
+                    output_w,
+                    output_h,
+                )),
                 Box::new(GeneratorRenderer::new(
                     &native_device,
                     output_w,
@@ -3628,6 +3637,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         spb,
                     );
                     self.apply_project_io_action(action);
+                } else if crate::project_io::is_supported_image_extension(&path) {
+                    // Still images → an image clip, Video layers only. Resolve
+                    // the drop beat from the cursor x and the target layer from
+                    // the cursor y (winit's file-drop carries no coordinates).
+                    let pos = self.cursor_pos;
+                    let (drop_beat, layer_under_cursor) = {
+                        let vp = &self.ws.ui_root.viewport;
+                        let in_tracks = vp.get_tracks_rect().contains(pos);
+                        let beat = if in_tracks {
+                            vp.pixel_to_beat(pos.x).as_f32().max(0.0)
+                        } else {
+                            self.content_state.current_beat.as_f32()
+                        };
+                        let under = if in_tracks { vp.layer_at_y(pos.y) } else { None };
+                        (beat, under)
+                    };
+                    self.import_image_file(&path, drop_beat, layer_under_cursor);
                 } else if ext == "json" || ext == "manifold" {
                     // Project files → load project
                     self.open_project_from_path(path.clone());

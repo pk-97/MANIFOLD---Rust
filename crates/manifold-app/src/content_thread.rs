@@ -294,6 +294,13 @@ impl ContentThread {
                 ) {
                     vid_renderer.set_device(native_device_ref);
                 }
+                #[cfg(target_os = "macos")]
+                if let Some(img_renderer) = renderer
+                    .as_any_mut()
+                    .downcast_mut::<manifold_media::image_renderer::ImageRenderer>(
+                ) {
+                    img_renderer.set_device(native_device_ref);
+                }
             }
         }
 

@@ -19,6 +19,17 @@ pub struct TimelineClip {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub audio_file_path: String,
 
+    /// Absolute path to a still image for an image clip. Empty for
+    /// video / generator / audio clips; non-empty marks this as a static
+    /// image clip (discriminated the same way `video_clip_id` marks a
+    /// video clip and `audio_file_path` marks an audio clip). The owning
+    /// layer is `LayerType::Video`; the clip simply displays the image,
+    /// aspect-fit into the canvas, for its timeline duration. The decoded
+    /// texture is runtime-only (cached by `ClipId` in `ImageRenderer`),
+    /// never serialized.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub image_path: String,
+
     /// Per-clip percussion detection state (settings + cached analysis), present
     /// only on audio clips that have a detection config. See
     /// `docs/AUDIO_CLIP_DETECTION_DESIGN.md`.
@@ -275,6 +286,23 @@ impl TimelineClip {
         !self.audio_file_path.is_empty()
     }
 
+    /// Create a new image clip that displays a still image for its timeline
+    /// duration. `image_path` is the absolute path to the source file; the
+    /// owning layer must be `LayerType::Video`.
+    pub fn new_image(image_path: String, start_beat: Beats, duration_beats: Beats) -> Self {
+        Self {
+            image_path,
+            start_beat,
+            duration_beats: duration_beats.max(Beats::ZERO),
+            ..Default::default()
+        }
+    }
+
+    /// Whether this clip is a still-image clip (has a backing image path).
+    pub fn is_image(&self) -> bool {
+        !self.image_path.is_empty()
+    }
+
     /// Set scale with clamp. Unity TimelineClip.cs line 179.
     pub fn set_scale(&mut self, v: f32) {
         self.scale = v.max(0.01);
@@ -292,6 +320,7 @@ impl Default for TimelineClip {
             id: ClipId::new(crate::short_id()),
             video_clip_id: String::new(),
             audio_file_path: String::new(),
+            image_path: String::new(),
             audio_detection: None,
             detection_source: None,
             layer_id: crate::id::LayerId::default(),
@@ -487,6 +516,27 @@ mod tests {
         // A non-audio clip must not emit the key (byte-identical legacy fixtures).
         let video = TimelineClip::new_video("v1".into(), Beats(0.0), Beats(1.0), Seconds(0.0));
         assert!(!serde_json::to_string(&video).unwrap().contains("audioFilePath"));
+    }
+
+    #[test]
+    fn test_new_image_clip_discriminates_and_round_trips() {
+        let clip = TimelineClip::new_image("/tmp/logo.png".into(), Beats(2.0), Beats(4.0));
+        assert!(clip.is_image());
+        assert!(!clip.is_audio());
+        assert!(clip.video_clip_id.is_empty());
+        assert_eq!(clip.duration_beats, Beats(4.0));
+
+        let json = serde_json::to_string(&clip).unwrap();
+        assert!(json.contains("imagePath"));
+        let back: TimelineClip = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.image_path, "/tmp/logo.png");
+        assert!(back.is_image());
+
+        // Non-image clips must not emit the key (legacy fixtures stay byte-identical).
+        let video = TimelineClip::new_video("v1".into(), Beats(0.0), Beats(1.0), Seconds(0.0));
+        assert!(!serde_json::to_string(&video).unwrap().contains("imagePath"));
+        let generator = TimelineClip::new_generator(Beats(0.0), Beats(1.0));
+        assert!(!generator.is_image());
     }
 
     #[test]

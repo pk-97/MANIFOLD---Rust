@@ -13,6 +13,8 @@ pub mod decoder;
 mod decoder_ffi;
 pub mod export_config;
 pub mod export_session;
+#[cfg(target_os = "macos")]
+pub mod image_renderer;
 pub mod metadata;
 #[cfg(target_os = "macos")]
 pub mod metal_encoder;

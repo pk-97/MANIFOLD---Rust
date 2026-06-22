@@ -329,6 +329,80 @@ impl Application {
         });
     }
 
+    /// Drop a still image onto the timeline as an image clip. Image clips are
+    /// allowed on Video layers only: if the cursor is over a non-video layer
+    /// the drop is rejected. When dropped outside the tracks area, the clip
+    /// goes to the active layer (if it is a video layer) or the first video
+    /// layer in the project. The image displays, aspect-fit, for the clip's
+    /// duration — no decode happens here; `ImageRenderer` loads it on demand.
+    pub(crate) fn import_image_file(
+        &mut self,
+        path: &std::path::Path,
+        drop_beat: f32,
+        layer_under_cursor: Option<usize>,
+    ) {
+        // Default image-clip length when dropped (one 4/4 bar). Trim/extend
+        // afterwards like any other clip.
+        const DEFAULT_IMAGE_DURATION_BEATS: f32 = 4.0;
+
+        let Some(ref content_tx) = self.content_tx else {
+            return;
+        };
+        let content_tx = content_tx.clone();
+
+        let layers = &self.local_project.timeline.layers;
+        let target_layer_id = if let Some(i) = layer_under_cursor {
+            match layers.get(i) {
+                Some(l) if l.is_video() => l.layer_id.clone(),
+                Some(_) => {
+                    log::info!("[Import] Image clips can only be dropped on Video layers");
+                    return;
+                }
+                None => return,
+            }
+        } else {
+            // Outside the tracks area → active layer if it is a video layer,
+            // otherwise the first video layer in the project.
+            let active_video = self
+                .active_layer_id
+                .as_ref()
+                .and_then(|id| self.local_project.timeline.layer_index_for_id(id))
+                .and_then(|i| layers.get(i))
+                .filter(|l| l.is_video())
+                .map(|l| l.layer_id.clone());
+            match active_video.or_else(|| {
+                layers
+                    .iter()
+                    .find(|l| l.is_video())
+                    .map(|l| l.layer_id.clone())
+            }) {
+                Some(id) => id,
+                None => {
+                    log::info!("[Import] No Video layer to drop image onto");
+                    return;
+                }
+            }
+        };
+
+        let spb = 60.0 / self.local_project.settings.bpm.0;
+        let path_str = path.to_string_lossy().to_string();
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let clip = manifold_core::clip::TimelineClip::new_image(
+            path_str,
+            manifold_core::Beats::from_f32(drop_beat.max(0.0)),
+            manifold_core::Beats::from_f32(DEFAULT_IMAGE_DURATION_BEATS),
+        );
+        log::warn!("[Import] Added image '{file_name}' at beat {drop_beat:.1}");
+
+        let cmd = ContentCommand::Execute(Box::new(
+            manifold_editing::commands::clip::AddClipCommand::new(clip, target_layer_id, spb),
+        ));
+        let _ = content_tx.send(cmd);
+    }
+
     /// Open. Delegates to ProjectIOService.open_project.
     pub(crate) fn open_project(&mut self) {
         self.send_content_cmd(ContentCommand::PauseRendering);

@@ -277,6 +277,12 @@ impl Layer {
         self.layer_type == LayerType::Audio
     }
 
+    /// Whether this is a video layer. Image clips may only be dropped here.
+    #[inline]
+    pub fn is_video(&self) -> bool {
+        self.layer_type == LayerType::Video
+    }
+
     /// The audio clip active on this layer at `beat`, if any. Layers enforce
     /// non-overlap, so there is at most one. Shared by the modulation-curve path
     /// and the playback path so they agree on "which clip is playing."

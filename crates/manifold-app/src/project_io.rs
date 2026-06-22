@@ -777,6 +777,19 @@ pub fn is_supported_video_extension(path: &Path) -> bool {
     )
 }
 
+/// Whether `path` is a still image we can drop onto a Video layer as an
+/// image clip. Must stay in sync with the format features enabled on the
+/// `image` crate in `manifold-media` (ImageRenderer decodes these).
+pub fn is_supported_image_extension(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif" | "tif" | "tiff")
+    )
+}
+
 /// Unity ProjectIOService.IsSupportedMidiExtension (lines 479-484).
 pub fn is_supported_midi_extension(path: &Path) -> bool {
     matches!(

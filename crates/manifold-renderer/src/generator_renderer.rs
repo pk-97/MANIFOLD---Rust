@@ -837,7 +837,10 @@ impl GeneratorRenderer {
 
 impl ClipRenderer for GeneratorRenderer {
     fn can_handle(&self, clip: &TimelineClip) -> bool {
-        clip.video_clip_id.is_empty()
+        // A generator clip carries neither a video source nor an image
+        // source. Image clips also have an empty `video_clip_id`, so they
+        // must be excluded explicitly — `ImageRenderer` claims them.
+        clip.video_clip_id.is_empty() && clip.image_path.is_empty()
     }
 
     fn start_clip(

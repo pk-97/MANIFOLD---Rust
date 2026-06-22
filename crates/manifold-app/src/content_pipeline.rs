@@ -1240,6 +1240,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 {
                     return Some(t);
                 }
+                #[cfg(target_os = "macos")]
+                if let Some(img_r) = r
+                    .as_any()
+                    .downcast_ref::<manifold_media::image_renderer::ImageRenderer>()
+                    && let Some(t) = img_r.get_clip_texture(&entry.clip_id)
+                {
+                    return Some(t);
+                }
                 None
             });
             if let Some(texture) = clip_texture {
