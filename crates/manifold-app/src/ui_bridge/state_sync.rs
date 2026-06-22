@@ -193,7 +193,7 @@ pub fn push_state(
         manifold_core::types::PlaybackState::Paused => ("PLAY", PAUSED_YELLOW),
         manifold_core::types::PlaybackState::Stopped => ("PLAY", PLAY_GREEN),
     };
-    ui.transport.set_play_state(tree, play_text, play_color);
+    ui.transport.set_play_state(play_text, play_color);
 
     // Time display + BPM
     let beat = content_state.current_beat.as_f32();
@@ -227,7 +227,7 @@ pub fn push_state(
         let display = transport_cache.time_display(mins, secs, tenths, bar, beat_in_bar, sixteenth);
         ui.header.set_time_display(display);
         let bpm_str = transport_cache.bpm_display(bpm);
-        ui.transport.set_bpm_text(tree, bpm_str);
+        ui.transport.set_bpm_text(bpm_str);
 
         // Clock authority display — "SRC:INT"/"SRC:LNK"/"SRC:CLK"/"SRC:OSC"
         // Use content_state (authoritative, auto-determined each content frame)
@@ -239,7 +239,7 @@ pub fn push_state(
             manifold_core::types::ClockAuthority::Osc => color::ABLETON_LINK_BLUE,
         };
         ui.transport
-            .set_clock_authority(tree, auth.transport_label(), auth_color);
+            .set_clock_authority(auth.transport_label(), auth_color);
 
         // Cache MIDI device names for dropdown
         if ui.midi_device_names[..] != content_state.midi_device_names[..] {
@@ -263,7 +263,6 @@ pub fn push_state(
         // Link
         if !content_state.link_enabled {
             ui.transport.set_link_state(
-                tree,
                 false,
                 color::STATUS_DOT_INACTIVE,
                 "Off",
@@ -272,7 +271,6 @@ pub fn push_state(
         } else if content_state.link_peers > 0 {
             let status = transport_cache.link_peers_display(content_state.link_peers as u32);
             ui.transport.set_link_state(
-                tree,
                 true,
                 color::STATUS_DOT_GREEN,
                 status,
@@ -280,7 +278,6 @@ pub fn push_state(
             );
         } else {
             ui.transport.set_link_state(
-                tree,
                 true,
                 color::STATUS_DOT_YELLOW,
                 "Listening",
@@ -296,7 +293,6 @@ pub fn push_state(
                 &content_state.midi_clock_device_name
             };
             ui.transport.set_clk_state(
-                tree,
                 false,
                 device_text,
                 color::STATUS_DOT_INACTIVE,
@@ -315,7 +311,6 @@ pub fn push_state(
                 &content_state.midi_clock_position_display
             };
             ui.transport.set_clk_state(
-                tree,
                 true,
                 device_text,
                 color::STATUS_DOT_GREEN,
@@ -329,7 +324,6 @@ pub fn push_state(
                 &content_state.midi_clock_device_name
             };
             ui.transport.set_clk_state(
-                tree,
                 true,
                 device_text,
                 color::STATUS_DOT_YELLOW,
@@ -347,7 +341,6 @@ pub fn push_state(
             };
             if !sync_enabled {
                 ui.transport.set_sync_state(
-                    tree,
                     false,
                     color::STATUS_DOT_INACTIVE,
                     "Off",
@@ -359,7 +352,6 @@ pub fn push_state(
                     OscSyncMode::M4L => "M4L",
                 };
                 ui.transport.set_sync_state(
-                    tree,
                     true,
                     color::STATUS_DOT_GREEN,
                     status,
@@ -371,45 +363,29 @@ pub fn push_state(
         // Record state — disabled when OSC is clock authority (Unity invariant)
         let rec_allowed = auth != manifold_core::types::ClockAuthority::Osc;
         ui.transport
-            .set_record_state(tree, content_state.is_recording && rec_allowed, rec_allowed);
+            .set_record_state(content_state.is_recording && rec_allowed, rec_allowed);
 
         // BPM reset: enabled only when a recorded tempo lane exists (tempo
         // automation from a recording session). Audio-import-detected BPM is
         // not a "recorded" value — importing audio just sets the project BPM.
         let can_reset = !project.recording_provenance.recorded_tempo_lane.is_empty();
-        ui.transport.set_bpm_reset_active(tree, can_reset);
+        ui.transport.set_bpm_reset_active(can_reset);
 
         // BPM clear: enabled when tempo map has >1 point
         let can_clear = project.tempo_map.point_count() > 1;
-        ui.transport.set_bpm_clear_active(tree, can_clear);
+        ui.transport.set_bpm_clear_active(can_clear);
 
         // Save button — "SAVE" clean, "SAVE *" dirty with warm brown tint
         ui.transport
-            .set_save_text(tree, if is_dirty { "SAVE *" } else { "SAVE" });
+            .set_save_text(if is_dirty { "SAVE *" } else { "SAVE" });
 
-        // Export state — matches Unity ExportSection.UpdateUI():
-        // HasExportRange = exportRangeEnabled (any marker set)
-        // HasExportOut = exportRangeEnabled && exportOutBeat > exportInBeat
+        // Export state — the EXPORT button just reflects whether a range exists;
+        // the IN/OUT label is drawn by the viewport markers, not the button.
         let has_range = project.timeline.export_range_enabled;
-        let has_out =
-            has_range && project.timeline.export_out_beat > project.timeline.export_in_beat;
-        if has_range {
-            let in_b = project.timeline.export_in_beat;
-            let out_b = project.timeline.export_out_beat;
-            let export_label = if has_out {
-                format!("IN: {:.1}  OUT: {:.1}", in_b, out_b)
-            } else {
-                format!("IN: {:.1}", in_b)
-            };
-            ui.transport.set_export_label(tree, &export_label);
-        } else {
-            ui.transport.set_export_label(tree, "");
-        }
-        ui.transport.set_export_active(tree, has_range);
-        ui.transport
-            .set_hdr_active(tree, project.settings.export_hdr);
+        ui.transport.set_export_active(has_range);
+        ui.transport.set_hdr_active(project.settings.export_hdr);
         let perc_active = project.percussion_import.is_some();
-        ui.transport.set_perc_active(tree, perc_active);
+        ui.transport.set_perc_active(perc_active);
 
         // Export range markers on viewport
         ui.viewport.set_export_range(

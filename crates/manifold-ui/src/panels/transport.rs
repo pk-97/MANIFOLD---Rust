@@ -1,4 +1,12 @@
+//! Transport bar on the declarative Chrome API.
+//!
+//! Three positioning regimes (sources on the left, transport+tempo centred,
+//! file+render right) as a `Stack` of three `Fill` rows, plus the thin group
+//! dividers folded into the section gaps as cross-centred fixed cells. See the
+//! footer/header for the integration pattern and `docs/CHROME_API_DESIGN.md`.
+
 use super::{Panel, PanelAction};
+use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View};
 use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
@@ -14,9 +22,6 @@ const SECTION_SPACER: f32 = 8.0;
 const RIGHT_SPACING: f32 = 4.0;
 const CENTER_SPACER: f32 = 12.0;
 
-// Thin separators dropped into the existing section gaps so the bar reads as
-// clustered groups (sources | transport | tempo | file | render) instead of one
-// undifferentiated run of buttons.
 const DIVIDER_W: f32 = 1.0;
 const DIVIDER_V_INSET: f32 = 7.0;
 
@@ -55,6 +60,11 @@ const BPM_FIELD_HOVER: Color32 = color::TRANSPORT_BPM_FIELD_HOVER;
 
 const BUTTON_FONT: u16 = color::FONT_SUBHEADING;
 const STATUS_FONT: u16 = color::FONT_BODY;
+
+/// Stable key for the BPM field — the app anchors a numeric text-input session
+/// to this node ([`TransportPanel::bpm_field_id`]).
+const KEY_BPM_FIELD: u64 = 1;
+
 // ── Style helpers ──────────────────────────────────────────────────
 
 fn lighten(c: Color32, amount: u8) -> Color32 {
@@ -116,230 +126,13 @@ fn status_text_style(c: Color32) -> UIStyle {
     }
 }
 
-// ── TransportLayout ────────────────────────────────────────────────
-
-#[derive(Default)]
-struct TransportLayout {
-    clock_authority: Rect,
-    link_button: Rect,
-    link_dot: Rect,
-    link_status: Rect,
-    clk_button: Rect,
-    clk_device: Rect,
-    clk_dot: Rect,
-    clk_status: Rect,
-    sync_button: Rect,
-    sync_dot: Rect,
-    sync_status: Rect,
-    play_button: Rect,
-    stop_button: Rect,
-    rec_button: Rect,
-    bpm_label: Rect,
-    bpm_field: Rect,
-    bpm_reset: Rect,
-    bpm_clear: Rect,
-    new_button: Rect,
-    open_button: Rect,
-    open_recent: Rect,
-    save_button: Rect,
-    save_as: Rect,
-    export_button: Rect,
-    frame_button: Rect,
-    hdr_button: Rect,
-    perc_button: Rect,
-}
-
-impl TransportLayout {
-    fn compute(&mut self, bounds: Rect) {
-        let elem_h = bounds.height - GROUP_Y_PAD * 2.0;
-        let elem_y = bounds.y + GROUP_Y_PAD;
-        self.compute_left(bounds, elem_y, elem_h);
-        self.compute_center(bounds, elem_y, elem_h);
-        self.compute_right(bounds, elem_y, elem_h);
-    }
-
-    fn compute_left(&mut self, bounds: Rect, ey: f32, eh: f32) {
-        let mut x = bounds.x + INSET;
-        let dot_y = ey + (eh - STATUS_DOT_SIZE) * 0.5;
-
-        self.clock_authority = Rect::new(x, ey, CLOCK_AUTHORITY_W, eh);
-        x += CLOCK_AUTHORITY_W + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING;
-
-        self.link_button = Rect::new(x, ey, LINK_BUTTON_W, eh);
-        x += LINK_BUTTON_W + ITEM_SPACING;
-        self.link_dot = Rect::new(x, dot_y, STATUS_DOT_SIZE, STATUS_DOT_SIZE);
-        x += STATUS_DOT_SIZE + ITEM_SPACING;
-        self.link_status = Rect::new(x, ey, STATUS_TEXT_W, eh);
-        x += STATUS_TEXT_W + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING;
-
-        self.clk_button = Rect::new(x, ey, CLK_BUTTON_W, eh);
-        x += CLK_BUTTON_W + ITEM_SPACING;
-        self.clk_device = Rect::new(x, ey, CLK_DEVICE_W, eh);
-        x += CLK_DEVICE_W + ITEM_SPACING;
-        self.clk_dot = Rect::new(x, dot_y, STATUS_DOT_SIZE, STATUS_DOT_SIZE);
-        x += STATUS_DOT_SIZE + ITEM_SPACING;
-        self.clk_status = Rect::new(x, ey, STATUS_TEXT_W, eh);
-        x += STATUS_TEXT_W + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING;
-
-        self.sync_button = Rect::new(x, ey, SYNC_BUTTON_W, eh);
-        x += SYNC_BUTTON_W + ITEM_SPACING;
-        self.sync_dot = Rect::new(x, dot_y, STATUS_DOT_SIZE, STATUS_DOT_SIZE);
-        x += STATUS_DOT_SIZE + ITEM_SPACING;
-        self.sync_status = Rect::new(x, ey, STATUS_TEXT_W, eh);
-    }
-
-    fn compute_center(&mut self, bounds: Rect, ey: f32, eh: f32) {
-        let total_w = Self::center_width();
-        let centered_x = bounds.x + (bounds.width - total_w) * 0.5;
-        // Clamp so center group doesn't overlap left or right groups
-        let left_end = bounds.x + INSET + Self::left_width() + SECTION_SPACER;
-        let right_start = bounds.x_max() - INSET - Self::right_width() - SECTION_SPACER;
-        let max_center_x = (right_start - total_w).max(left_end);
-        let mut x = centered_x.max(left_end).min(max_center_x);
-
-        self.play_button = Rect::new(x, ey, PLAY_BUTTON_W, eh);
-        x += PLAY_BUTTON_W + ITEM_SPACING;
-        self.stop_button = Rect::new(x, ey, STOP_BUTTON_W, eh);
-        x += STOP_BUTTON_W + ITEM_SPACING;
-        self.rec_button = Rect::new(x, ey, REC_BUTTON_W, eh);
-        x += REC_BUTTON_W + ITEM_SPACING + CENTER_SPACER + ITEM_SPACING;
-
-        self.bpm_label = Rect::new(x, ey, BPM_LABEL_W, eh);
-        x += BPM_LABEL_W + ITEM_SPACING;
-        self.bpm_field = Rect::new(x, ey, BPM_FIELD_W, eh);
-        x += BPM_FIELD_W + ITEM_SPACING;
-        self.bpm_reset = Rect::new(x, ey, BPM_RESET_W, eh);
-        x += BPM_RESET_W + ITEM_SPACING;
-        self.bpm_clear = Rect::new(x, ey, BPM_CLEAR_W, eh);
-    }
-
-    fn compute_right(&mut self, bounds: Rect, ey: f32, eh: f32) {
-        let mut x = bounds.x_max() - INSET - Self::right_width();
-
-        self.new_button = Rect::new(x, ey, NEW_BUTTON_W, eh);
-        x += NEW_BUTTON_W + RIGHT_SPACING;
-        self.open_button = Rect::new(x, ey, OPEN_BUTTON_W, eh);
-        x += OPEN_BUTTON_W + RIGHT_SPACING;
-        self.open_recent = Rect::new(x, ey, OPEN_RECENT_W, eh);
-        x += OPEN_RECENT_W + RIGHT_SPACING;
-        self.save_button = Rect::new(x, ey, SAVE_BUTTON_W, eh);
-        x += SAVE_BUTTON_W + RIGHT_SPACING;
-        self.save_as = Rect::new(x, ey, SAVE_AS_W, eh);
-        x += SAVE_AS_W + RIGHT_SPACING + SECTION_SPACER;
-        self.export_button = Rect::new(x, ey, EXPORT_BUTTON_W, eh);
-        x += EXPORT_BUTTON_W + RIGHT_SPACING;
-        self.frame_button = Rect::new(x, ey, FRAME_BUTTON_W, eh);
-        x += FRAME_BUTTON_W + RIGHT_SPACING;
-        self.hdr_button = Rect::new(x, ey, HDR_BUTTON_W, eh);
-        x += HDR_BUTTON_W + RIGHT_SPACING;
-        self.perc_button = Rect::new(x, ey, PERC_BUTTON_W, eh);
-    }
-
-    fn left_width() -> f32 {
-        CLOCK_AUTHORITY_W
-            + ITEM_SPACING
-            + SECTION_SPACER
-            + ITEM_SPACING
-            + LINK_BUTTON_W
-            + ITEM_SPACING
-            + STATUS_DOT_SIZE
-            + ITEM_SPACING
-            + STATUS_TEXT_W
-            + ITEM_SPACING
-            + SECTION_SPACER
-            + ITEM_SPACING
-            + CLK_BUTTON_W
-            + ITEM_SPACING
-            + CLK_DEVICE_W
-            + ITEM_SPACING
-            + STATUS_DOT_SIZE
-            + ITEM_SPACING
-            + STATUS_TEXT_W
-            + ITEM_SPACING
-            + SECTION_SPACER
-            + ITEM_SPACING
-            + SYNC_BUTTON_W
-            + ITEM_SPACING
-            + STATUS_DOT_SIZE
-            + ITEM_SPACING
-            + STATUS_TEXT_W
-    }
-
-    fn center_width() -> f32 {
-        PLAY_BUTTON_W
-            + ITEM_SPACING
-            + STOP_BUTTON_W
-            + ITEM_SPACING
-            + REC_BUTTON_W
-            + ITEM_SPACING
-            + CENTER_SPACER
-            + ITEM_SPACING
-            + BPM_LABEL_W
-            + ITEM_SPACING
-            + BPM_FIELD_W
-            + ITEM_SPACING
-            + BPM_RESET_W
-            + ITEM_SPACING
-            + BPM_CLEAR_W
-    }
-
-    fn right_width() -> f32 {
-        NEW_BUTTON_W
-            + RIGHT_SPACING
-            + OPEN_BUTTON_W
-            + RIGHT_SPACING
-            + OPEN_RECENT_W
-            + RIGHT_SPACING
-            + SAVE_BUTTON_W
-            + RIGHT_SPACING
-            + SAVE_AS_W
-            + RIGHT_SPACING
-            + SECTION_SPACER
-            + EXPORT_BUTTON_W
-            + RIGHT_SPACING
-            + FRAME_BUTTON_W
-            + RIGHT_SPACING
-            + HDR_BUTTON_W
-            + RIGHT_SPACING
-            + PERC_BUTTON_W
-    }
-}
-
 // ── TransportPanel ─────────────────────────────────────────────────
 
 pub struct TransportPanel {
-    layout: TransportLayout,
+    host: ChromeHost,
+    rect: Rect,
 
-    // Node IDs (None = unset)
-    clock_authority_id: Option<NodeId>,
-    link_button_id: Option<NodeId>,
-    link_dot_id: Option<NodeId>,
-    link_status_id: Option<NodeId>,
-    clk_button_id: Option<NodeId>,
-    clk_device_id: Option<NodeId>,
-    clk_dot_id: Option<NodeId>,
-    clk_status_id: Option<NodeId>,
-    sync_button_id: Option<NodeId>,
-    sync_dot_id: Option<NodeId>,
-    sync_status_id: Option<NodeId>,
-    play_button_id: Option<NodeId>,
-    stop_button_id: Option<NodeId>,
-    rec_button_id: Option<NodeId>,
-    bpm_label_id: Option<NodeId>,
-    bpm_field_id: Option<NodeId>,
-    bpm_reset_id: Option<NodeId>,
-    bpm_clear_id: Option<NodeId>,
-    new_button_id: Option<NodeId>,
-    open_button_id: Option<NodeId>,
-    open_recent_id: Option<NodeId>,
-    save_button_id: Option<NodeId>,
-    save_as_id: Option<NodeId>,
-    export_button_id: Option<NodeId>,
-    frame_button_id: Option<NodeId>,
-    hdr_button_id: Option<NodeId>,
-    perc_button_id: Option<NodeId>,
-
-    // Dynamic state
+    // Dynamic state — the single source the `view()` reads.
     clock_authority_text: String,
     clock_authority_color: Color32,
     link_enabled: bool,
@@ -367,43 +160,13 @@ pub struct TransportPanel {
     export_active: bool,
     hdr_active: bool,
     perc_active: bool,
-
-    // Cache tracking
-    cache_first_node: usize,
-    cache_node_count: usize,
 }
 
 impl TransportPanel {
     pub fn new() -> Self {
         Self {
-            layout: TransportLayout::default(),
-            clock_authority_id: None,
-            link_button_id: None,
-            link_dot_id: None,
-            link_status_id: None,
-            clk_button_id: None,
-            clk_device_id: None,
-            clk_dot_id: None,
-            clk_status_id: None,
-            sync_button_id: None,
-            sync_dot_id: None,
-            sync_status_id: None,
-            play_button_id: None,
-            stop_button_id: None,
-            rec_button_id: None,
-            bpm_label_id: None,
-            bpm_field_id: None,
-            bpm_reset_id: None,
-            bpm_clear_id: None,
-            new_button_id: None,
-            open_button_id: None,
-            open_recent_id: None,
-            save_button_id: None,
-            save_as_id: None,
-            export_button_id: None,
-            frame_button_id: None,
-            hdr_button_id: None,
-            perc_button_id: None,
+            host: ChromeHost::new(),
+            rect: Rect::ZERO,
             clock_authority_text: "SRC:INT".into(),
             clock_authority_color: color::BUTTON_INACTIVE_C32,
             link_enabled: false,
@@ -431,46 +194,25 @@ impl TransportPanel {
             export_active: false,
             hdr_active: false,
             perc_active: false,
-            cache_first_node: usize::MAX,
-            cache_node_count: 0,
         }
     }
 
     // ── Public accessors ───────────────────────────────────────────
 
+    /// Tree node id of the BPM field, for anchoring its numeric text-input.
     pub fn bpm_field_id(&self) -> Option<NodeId> {
-        self.bpm_field_id
-    }
-    pub fn clock_authority_node_id(&self) -> Option<NodeId> {
-        self.clock_authority_id
-    }
-    pub fn clk_device_node_id(&self) -> Option<NodeId> {
-        self.clk_device_id
+        self.host.node_id_for_key(KEY_BPM_FIELD)
     }
 
-    /// Get bounds of any node owned by this panel.
-    pub fn get_node_bounds(&self, tree: &UITree, node_id: Option<NodeId>) -> Rect {
-        match node_id {
-            Some(id) => tree.get_bounds(id),
-            None => Rect::ZERO,
-        }
-    }
+    // ── State setters (store only; the reconcile applies them) ──────
 
-    // ── Push-based setters ─────────────────────────────────────────
-
-    pub fn set_clock_authority(&mut self, tree: &mut UITree, text: &str, c: Color32) {
+    pub fn set_clock_authority(&mut self, text: &str, c: Color32) {
         self.clock_authority_text = text.into();
         self.clock_authority_color = c;
-        if let Some(id) = self.clock_authority_id {
-            tree.set_text(id, text);
-            tree.set_style(id, button_style(c));
-        }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn set_link_state(
         &mut self,
-        tree: &mut UITree,
         enabled: bool,
         dot_color: Color32,
         status: &str,
@@ -480,27 +222,10 @@ impl TransportPanel {
         self.link_dot_color = dot_color;
         self.link_status_text = status.into();
         self.link_status_color = status_color;
-        if let Some(id) = self.link_button_id {
-            let bg = if enabled {
-                color::LINK_ORANGE
-            } else {
-                color::BUTTON_INACTIVE_C32
-            };
-            tree.set_style(id, button_style(bg));
-        }
-        if let Some(id) = self.link_dot_id {
-            tree.set_style(id, dot_style(dot_color));
-        }
-        if let Some(id) = self.link_status_id {
-            tree.set_text(id, status);
-            tree.set_style(id, status_text_style(status_color));
-        }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn set_clk_state(
         &mut self,
-        tree: &mut UITree,
         enabled: bool,
         device_text: &str,
         dot_color: Color32,
@@ -512,30 +237,10 @@ impl TransportPanel {
         self.clk_dot_color = dot_color;
         self.clk_status_text = status.into();
         self.clk_status_color = status_color;
-        if let Some(id) = self.clk_button_id {
-            let bg = if enabled {
-                color::MIDI_PURPLE
-            } else {
-                color::BUTTON_INACTIVE_C32
-            };
-            tree.set_style(id, button_style(bg));
-        }
-        if let Some(id) = self.clk_device_id {
-            tree.set_text(id, device_text);
-        }
-        if let Some(id) = self.clk_dot_id {
-            tree.set_style(id, dot_style(dot_color));
-        }
-        if let Some(id) = self.clk_status_id {
-            tree.set_text(id, status);
-            tree.set_style(id, status_text_style(status_color));
-        }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn set_sync_state(
         &mut self,
-        tree: &mut UITree,
         enabled: bool,
         dot_color: Color32,
         status: &str,
@@ -545,562 +250,217 @@ impl TransportPanel {
         self.sync_dot_color = dot_color;
         self.sync_status_text = status.into();
         self.sync_status_color = status_color;
-        if let Some(id) = self.sync_button_id {
-            let bg = if enabled {
-                color::SYNC_ACTIVE
-            } else {
-                color::BUTTON_INACTIVE_C32
-            };
-            tree.set_style(id, button_style(bg));
-        }
-        if let Some(id) = self.sync_dot_id {
-            tree.set_style(id, dot_style(dot_color));
-        }
-        if let Some(id) = self.sync_status_id {
-            tree.set_text(id, status);
-            tree.set_style(id, status_text_style(status_color));
-        }
     }
 
-    pub fn set_play_state(&mut self, tree: &mut UITree, text: &str, c: Color32) {
+    pub fn set_play_state(&mut self, text: &str, c: Color32) {
         self.play_text = text.into();
         self.play_color = c;
-        if let Some(id) = self.play_button_id {
-            tree.set_text(id, text);
-            tree.set_style(id, button_style(c));
-        }
     }
 
-    pub fn set_record_state(&mut self, tree: &mut UITree, active: bool, enabled: bool) {
+    pub fn set_record_state(&mut self, active: bool, enabled: bool) {
         self.rec_active = active;
         self.rec_enabled = enabled;
-        if let Some(id) = self.rec_button_id {
-            let c = if active {
-                color::RECORD_ACTIVE
-            } else {
-                color::RECORD_RED
-            };
-            tree.set_style(id, button_style(c));
-            if enabled {
-                tree.clear_flag(id, UIFlags::DISABLED);
-            } else {
-                tree.set_flag(id, UIFlags::DISABLED);
-            }
-        }
     }
 
-    pub fn set_bpm_text(&mut self, tree: &mut UITree, text: &str) {
+    pub fn set_bpm_text(&mut self, text: &str) {
         self.bpm_text = text.into();
-        if let Some(id) = self.bpm_field_id {
-            tree.set_text(id, text);
-        }
     }
 
-    pub fn set_bpm_reset_active(&mut self, tree: &mut UITree, active: bool) {
+    pub fn set_bpm_reset_active(&mut self, active: bool) {
         self.bpm_reset_active = active;
-        if let Some(id) = self.bpm_reset_id {
-            let c = if active {
-                color::BPM_RESET_ACTIVE
-            } else {
-                color::BUTTON_INACTIVE_C32
-            };
-            tree.set_style(id, button_style(c));
-            if active {
-                tree.clear_flag(id, UIFlags::DISABLED);
-            } else {
-                tree.set_flag(id, UIFlags::DISABLED);
-            }
-        }
     }
 
-    pub fn set_bpm_clear_active(&mut self, tree: &mut UITree, active: bool) {
+    pub fn set_bpm_clear_active(&mut self, active: bool) {
         self.bpm_clear_active = active;
-        if let Some(id) = self.bpm_clear_id {
-            let c = if active {
-                color::BPM_CLEAR_ACTIVE
-            } else {
-                color::BUTTON_INACTIVE_C32
-            };
-            tree.set_style(id, button_style(c));
-            if active {
-                tree.clear_flag(id, UIFlags::DISABLED);
-            } else {
-                tree.set_flag(id, UIFlags::DISABLED);
-            }
-        }
     }
 
-    pub fn set_save_text(&mut self, tree: &mut UITree, text: &str) {
+    pub fn set_save_text(&mut self, text: &str) {
         self.save_text = text.into();
-        if let Some(id) = self.save_button_id {
-            tree.set_text(id, text);
-            let dirty = text.contains('*');
-            let c = if dirty {
-                SAVE_DIRTY_BG
-            } else {
-                color::BUTTON_INACTIVE_C32
-            };
-            tree.set_style(id, button_style(c));
-        }
     }
 
-    pub fn set_export_label(&mut self, _tree: &mut UITree, _text: &str) {
-        // Label display handled by viewport markers, not transport button text.
-    }
-
-    pub fn set_export_active(&mut self, tree: &mut UITree, active: bool) {
+    pub fn set_export_active(&mut self, active: bool) {
         self.export_active = active;
-        if let Some(id) = self.export_button_id {
-            let c = if active {
-                color::SYNC_ACTIVE
-            } else {
-                color::BUTTON_INACTIVE_C32
-            };
-            tree.set_style(id, button_style(c));
-        }
     }
 
-    pub fn set_hdr_active(&mut self, tree: &mut UITree, active: bool) {
+    pub fn set_hdr_active(&mut self, active: bool) {
         self.hdr_active = active;
-        if let Some(id) = self.hdr_button_id {
-            let c = if active {
-                color::SYNC_ACTIVE
-            } else {
-                color::BUTTON_INACTIVE_C32
-            };
-            tree.set_style(id, button_style(c));
-        }
     }
 
-    pub fn set_perc_active(&mut self, tree: &mut UITree, active: bool) {
+    pub fn set_perc_active(&mut self, active: bool) {
         self.perc_active = active;
-        if let Some(id) = self.perc_button_id {
-            let c = if active {
-                color::SYNC_ACTIVE
-            } else {
-                color::BUTTON_INACTIVE_C32
-            };
-            tree.set_style(id, button_style(c));
-        }
     }
 
-    // ── Build helpers ──────────────────────────────────────────────
+    // ── View description ────────────────────────────────────────────
 
-    fn build_left(&mut self, tree: &mut UITree, bg: NodeId) {
-        // Clone strings to avoid borrow conflicts
-        let clock_text = self.clock_authority_text.clone();
-        let link_status = self.link_status_text.clone();
-        let clk_device = self.clk_device_text.clone();
-        let clk_status = self.clk_status_text.clone();
-        let sync_status = self.sync_status_text.clone();
-
-        self.clock_authority_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.clock_authority.x,
-            self.layout.clock_authority.y,
-            self.layout.clock_authority.width,
-            self.layout.clock_authority.height,
-            button_style(self.clock_authority_color),
-            &clock_text,
-        ));
-
-        let link_bg = if self.link_enabled {
-            color::LINK_ORANGE
-        } else {
-            color::BUTTON_INACTIVE_C32
-        };
-        self.link_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.link_button.x,
-            self.layout.link_button.y,
-            self.layout.link_button.width,
-            self.layout.link_button.height,
-            button_style(link_bg),
-            "LINK",
-        ));
-
-        self.link_dot_id = Some(tree.add_panel(
-            Some(bg),
-            self.layout.link_dot.x,
-            self.layout.link_dot.y,
-            self.layout.link_dot.width,
-            self.layout.link_dot.height,
-            dot_style(self.link_dot_color),
-        ));
-
-        self.link_status_id = Some(tree.add_node(
-            Some(bg),
-            self.layout.link_status,
-            UINodeType::Label,
-            status_text_style(self.link_status_color),
-            Some(&link_status),
-            UIFlags::empty(),
-        ));
-
-        let clk_bg = if self.clk_enabled {
-            color::MIDI_PURPLE
-        } else {
-            color::BUTTON_INACTIVE_C32
-        };
-        self.clk_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.clk_button.x,
-            self.layout.clk_button.y,
-            self.layout.clk_button.width,
-            self.layout.clk_button.height,
-            button_style(clk_bg),
-            "CLK",
-        ));
-
-        self.clk_device_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.clk_device.x,
-            self.layout.clk_device.y,
-            self.layout.clk_device.width,
-            self.layout.clk_device.height,
-            button_style(color::BUTTON_INACTIVE_C32),
-            &clk_device,
-        ));
-
-        self.clk_dot_id = Some(tree.add_panel(
-            Some(bg),
-            self.layout.clk_dot.x,
-            self.layout.clk_dot.y,
-            self.layout.clk_dot.width,
-            self.layout.clk_dot.height,
-            dot_style(self.clk_dot_color),
-        ));
-
-        self.clk_status_id = Some(tree.add_node(
-            Some(bg),
-            self.layout.clk_status,
-            UINodeType::Label,
-            status_text_style(self.clk_status_color),
-            Some(&clk_status),
-            UIFlags::empty(),
-        ));
-
-        let sync_bg = if self.sync_enabled {
-            color::SYNC_ACTIVE
-        } else {
-            color::BUTTON_INACTIVE_C32
-        };
-        self.sync_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.sync_button.x,
-            self.layout.sync_button.y,
-            self.layout.sync_button.width,
-            self.layout.sync_button.height,
-            button_style(sync_bg),
-            "SYNC",
-        ));
-
-        self.sync_dot_id = Some(tree.add_panel(
-            Some(bg),
-            self.layout.sync_dot.x,
-            self.layout.sync_dot.y,
-            self.layout.sync_dot.width,
-            self.layout.sync_dot.height,
-            dot_style(self.sync_dot_color),
-        ));
-
-        self.sync_status_id = Some(tree.add_node(
-            Some(bg),
-            self.layout.sync_status,
-            UINodeType::Label,
-            status_text_style(self.sync_status_color),
-            Some(&sync_status),
-            UIFlags::empty(),
-        ));
+    fn btn(text: impl Into<String>, w: f32, style: UIStyle, action: PanelAction) -> View {
+        View::button(text)
+            .w(Sizing::Fixed(w))
+            .fill_h()
+            .style(style)
+            .on_click(action)
     }
 
-    fn build_center(&mut self, tree: &mut UITree, bg: NodeId) {
-        let play_text = self.play_text.clone();
-        let bpm_text = self.bpm_text.clone();
-
-        self.play_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.play_button.x,
-            self.layout.play_button.y,
-            self.layout.play_button.width,
-            self.layout.play_button.height,
-            button_style(self.play_color),
-            &play_text,
-        ));
-
-        self.stop_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.stop_button.x,
-            self.layout.stop_button.y,
-            self.layout.stop_button.width,
-            self.layout.stop_button.height,
-            button_style(self.stop_color),
-            "STOP",
-        ));
-
-        let rec_c = if self.rec_active {
-            color::RECORD_ACTIVE
-        } else {
-            color::RECORD_RED
-        };
-        let rec_button_id = tree.add_button(
-            Some(bg),
-            self.layout.rec_button.x,
-            self.layout.rec_button.y,
-            self.layout.rec_button.width,
-            self.layout.rec_button.height,
-            button_style(rec_c),
-            "REC",
-        );
-        self.rec_button_id = Some(rec_button_id);
-        if !self.rec_enabled {
-            tree.set_flag(rec_button_id, UIFlags::DISABLED);
-        }
-
-        self.bpm_label_id = Some(tree.add_node(
-            Some(bg),
-            self.layout.bpm_label,
-            UINodeType::Label,
-            UIStyle {
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: STATUS_FONT,
-                text_align: TextAlign::Right,
-                ..UIStyle::default()
-            },
-            Some("BPM"),
-            UIFlags::empty(),
-        ));
-
-        self.bpm_field_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.bpm_field.x,
-            self.layout.bpm_field.y,
-            self.layout.bpm_field.width,
-            self.layout.bpm_field.height,
-            UIStyle {
-                bg_color: color::SLIDER_TRACK_C32,
-                hover_bg_color: BPM_FIELD_HOVER,
-                pressed_bg_color: color::BUTTON_PRESSED,
-                text_color: color::TEXT_WHITE_C32,
-                font_size: BUTTON_FONT,
-                corner_radius: color::SMALL_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            &bpm_text,
-        ));
-
-        let reset_c = if self.bpm_reset_active {
-            color::BPM_RESET_ACTIVE
-        } else {
-            color::BUTTON_INACTIVE_C32
-        };
-        let bpm_reset_id = tree.add_button(
-            Some(bg),
-            self.layout.bpm_reset.x,
-            self.layout.bpm_reset.y,
-            self.layout.bpm_reset.width,
-            self.layout.bpm_reset.height,
-            button_style(reset_c),
-            "R",
-        );
-        self.bpm_reset_id = Some(bpm_reset_id);
-        if !self.bpm_reset_active {
-            tree.set_flag(bpm_reset_id, UIFlags::DISABLED);
-        }
-
-        let clear_c = if self.bpm_clear_active {
-            color::BPM_CLEAR_ACTIVE
-        } else {
-            color::BUTTON_INACTIVE_C32
-        };
-        let bpm_clear_id = tree.add_button(
-            Some(bg),
-            self.layout.bpm_clear.x,
-            self.layout.bpm_clear.y,
-            self.layout.bpm_clear.width,
-            self.layout.bpm_clear.height,
-            button_style(clear_c),
-            "CLR",
-        );
-        self.bpm_clear_id = Some(bpm_clear_id);
-        if !self.bpm_clear_active {
-            tree.set_flag(bpm_clear_id, UIFlags::DISABLED);
-        }
+    fn dot(color: Color32) -> View {
+        View::panel()
+            .fixed(STATUS_DOT_SIZE, STATUS_DOT_SIZE)
+            .style(dot_style(color))
     }
 
-    fn build_right(&mut self, tree: &mut UITree, bg: NodeId) {
-        let save_text = self.save_text.clone();
-
-        self.new_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.new_button.x,
-            self.layout.new_button.y,
-            self.layout.new_button.width,
-            self.layout.new_button.height,
-            button_style(color::BUTTON_INACTIVE_C32),
-            "NEW",
-        ));
-
-        self.open_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.open_button.x,
-            self.layout.open_button.y,
-            self.layout.open_button.width,
-            self.layout.open_button.height,
-            button_style(color::BUTTON_INACTIVE_C32),
-            "OPEN",
-        ));
-
-        self.open_recent_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.open_recent.x,
-            self.layout.open_recent.y,
-            self.layout.open_recent.width,
-            self.layout.open_recent.height,
-            UIStyle {
-                bg_color: color::BUTTON_INACTIVE_C32,
-                hover_bg_color: BUTTON_HOVER_C,
-                pressed_bg_color: color::BUTTON_PRESSED,
-                text_color: color::TEXT_WHITE_C32,
-                font_size: color::FONT_LABEL,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            "OPEN RECENT",
-        ));
-
-        self.save_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.save_button.x,
-            self.layout.save_button.y,
-            self.layout.save_button.width,
-            self.layout.save_button.height,
-            button_style(color::BUTTON_INACTIVE_C32),
-            &save_text,
-        ));
-
-        self.save_as_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.save_as.x,
-            self.layout.save_as.y,
-            self.layout.save_as.width,
-            self.layout.save_as.height,
-            button_style(color::BUTTON_INACTIVE_C32),
-            "SAVE AS",
-        ));
-
-        let export_bg = if self.export_active {
-            color::SYNC_ACTIVE
-        } else {
-            color::BUTTON_INACTIVE_C32
-        };
-        self.export_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.export_button.x,
-            self.layout.export_button.y,
-            self.layout.export_button.width,
-            self.layout.export_button.height,
-            button_style(export_bg),
-            "EXPORT",
-        ));
-
-        self.frame_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.frame_button.x,
-            self.layout.frame_button.y,
-            self.layout.frame_button.width,
-            self.layout.frame_button.height,
-            button_style(color::BUTTON_INACTIVE_C32),
-            "FRAME",
-        ));
-
-        let hdr_bg = if self.hdr_active {
-            color::SYNC_ACTIVE
-        } else {
-            color::BUTTON_INACTIVE_C32
-        };
-        self.hdr_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.hdr_button.x,
-            self.layout.hdr_button.y,
-            self.layout.hdr_button.width,
-            self.layout.hdr_button.height,
-            button_style(hdr_bg),
-            "HDR",
-        ));
-
-        self.perc_button_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.perc_button.x,
-            self.layout.perc_button.y,
-            self.layout.perc_button.width,
-            self.layout.perc_button.height,
-            button_style(color::BUTTON_INACTIVE_C32),
-            "PERC",
-        ));
+    fn status(text: &str, color: Color32) -> View {
+        View::label(text)
+            .w(Sizing::Fixed(STATUS_TEXT_W))
+            .fill_h()
+            .style(status_text_style(color))
     }
 
-    /// Drop thin vertical dividers into the section gaps the layout already
-    /// leaves, so the eye groups the bar into sources / transport / tempo /
-    /// file / render. Non-interactive panels — they never intercept clicks.
-    fn build_dividers(&mut self, tree: &mut UITree, bg: NodeId, bar: Rect) {
-        let y = bar.y + DIVIDER_V_INSET;
-        let h = (bar.height - DIVIDER_V_INSET * 2.0).max(1.0);
-        let l = &self.layout;
-        let mids = [
-            (l.clock_authority.x_max() + l.link_button.x) * 0.5, // source | link
-            (l.link_status.x_max() + l.clk_button.x) * 0.5,      // link | clk
-            (l.clk_status.x_max() + l.sync_button.x) * 0.5,      // clk | sync
-            (l.rec_button.x_max() + l.bpm_label.x) * 0.5,        // transport | tempo
-            (l.save_as.x_max() + l.export_button.x) * 0.5,       // file | render
-        ];
-        for mx in mids {
-            tree.add_panel(
-                Some(bg),
-                mx - DIVIDER_W * 0.5,
-                y,
-                DIVIDER_W,
-                h,
-                UIStyle {
-                    bg_color: color::DIVIDER_COLOR,
-                    ..UIStyle::default()
-                },
-            );
-        }
+    /// A group separator: a fixed-width transparent cell with a 1px vertical
+    /// divider centred in it (and inset from the bar top/bottom). Dropped into a
+    /// section gap, it lands the divider at the gap's midpoint — matching the
+    /// old post-layout divider placement.
+    fn section_break(&self, cell_w: f32) -> View {
+        let divider_h = (self.rect.height - DIVIDER_V_INSET * 2.0).max(1.0);
+        View::panel()
+            .w(Sizing::Fixed(cell_w))
+            .fill_h()
+            .main_align(Align::Center)
+            .cross_align(Align::Center)
+            .child(View::panel().fixed(DIVIDER_W, divider_h).bg(color::DIVIDER_COLOR))
     }
 
-    /// Node-intent dispatch for the transport buttons' clicks. Each button id
-    /// maps to its click action; the central resolver folds a hit up to it. This
-    /// is the sole click path — there is no `handle_click` twin.
-    /// See `docs/NODE_INTENT_DISPATCH.md`.
-    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        use crate::intent::Gesture::Click;
-        let mut on = |id: Option<NodeId>, a: PanelAction| {
-            if let Some(id) = id {
-                intents.on(id, Click, a);
-            }
+    fn left_group(&self) -> View {
+        let link_bg = if self.link_enabled { color::LINK_ORANGE } else { color::BUTTON_INACTIVE_C32 };
+        let clk_bg = if self.clk_enabled { color::MIDI_PURPLE } else { color::BUTTON_INACTIVE_C32 };
+        let sync_bg = if self.sync_enabled { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+
+        View::row(ITEM_SPACING)
+            .fill()
+            .main_align(Align::Start)
+            .cross_align(Align::Center)
+            // Clock authority is display-only now (auto-determined) — interactive
+            // chrome with no action, so it is deliberately inert.
+            .child(
+                View::button(self.clock_authority_text.as_str())
+                    .w(Sizing::Fixed(CLOCK_AUTHORITY_W))
+                    .fill_h()
+                    .style(button_style(self.clock_authority_color))
+                    .inert(),
+            )
+            .child(self.section_break(SECTION_SPACER))
+            .child(Self::btn("LINK", LINK_BUTTON_W, button_style(link_bg), PanelAction::ToggleLink))
+            .child(Self::dot(self.link_dot_color))
+            .child(Self::status(self.link_status_text.as_str(), self.link_status_color))
+            .child(self.section_break(SECTION_SPACER))
+            .child(Self::btn("CLK", CLK_BUTTON_W, button_style(clk_bg), PanelAction::ToggleMidiClock))
+            .child(Self::btn(
+                self.clk_device_text.as_str(),
+                CLK_DEVICE_W,
+                button_style(color::BUTTON_INACTIVE_C32),
+                PanelAction::SelectClkDevice,
+            ))
+            .child(Self::dot(self.clk_dot_color))
+            .child(Self::status(self.clk_status_text.as_str(), self.clk_status_color))
+            .child(self.section_break(SECTION_SPACER))
+            .child(Self::btn("SYNC", SYNC_BUTTON_W, button_style(sync_bg), PanelAction::ToggleSyncOutput))
+            .child(Self::dot(self.sync_dot_color))
+            .child(Self::status(self.sync_status_text.as_str(), self.sync_status_color))
+    }
+
+    fn center_group(&self) -> View {
+        let rec_c = if self.rec_active { color::RECORD_ACTIVE } else { color::RECORD_RED };
+        let reset_c = if self.bpm_reset_active { color::BPM_RESET_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let clear_c = if self.bpm_clear_active { color::BPM_CLEAR_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+
+        let bpm_field_style = UIStyle {
+            bg_color: color::SLIDER_TRACK_C32,
+            hover_bg_color: BPM_FIELD_HOVER,
+            pressed_bg_color: color::BUTTON_PRESSED,
+            text_color: color::TEXT_WHITE_C32,
+            font_size: BUTTON_FONT,
+            corner_radius: color::SMALL_RADIUS,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
         };
-        on(self.link_button_id, PanelAction::ToggleLink);
-        on(self.clk_button_id, PanelAction::ToggleMidiClock);
-        on(self.clk_device_id, PanelAction::SelectClkDevice);
-        on(self.sync_button_id, PanelAction::ToggleSyncOutput);
-        on(self.play_button_id, PanelAction::PlayPause);
-        on(self.stop_button_id, PanelAction::Stop);
-        on(self.rec_button_id, PanelAction::Record);
-        on(self.bpm_field_id, PanelAction::BpmFieldClicked);
-        on(self.bpm_reset_id, PanelAction::ResetBpm);
-        on(self.bpm_clear_id, PanelAction::ClearBpm);
-        on(self.new_button_id, PanelAction::NewProject);
-        on(self.open_button_id, PanelAction::OpenProject);
-        on(self.open_recent_id, PanelAction::OpenRecent);
-        on(self.save_button_id, PanelAction::SaveProject);
-        on(self.save_as_id, PanelAction::SaveProjectAs);
-        on(self.export_button_id, PanelAction::ExportVideo);
-        on(self.frame_button_id, PanelAction::ExportFrame);
-        on(self.hdr_button_id, PanelAction::ToggleHdr);
-        on(self.perc_button_id, PanelAction::TogglePercussion);
+
+        View::row(ITEM_SPACING)
+            .fill()
+            .main_align(Align::Center)
+            .cross_align(Align::Center)
+            .child(Self::btn(self.play_text.as_str(), PLAY_BUTTON_W, button_style(self.play_color), PanelAction::PlayPause))
+            .child(Self::btn("STOP", STOP_BUTTON_W, button_style(self.stop_color), PanelAction::Stop))
+            .child(
+                Self::btn("REC", REC_BUTTON_W, button_style(rec_c), PanelAction::Record)
+                    .disabled(!self.rec_enabled),
+            )
+            .child(self.section_break(CENTER_SPACER))
+            .child(
+                View::label("BPM")
+                    .w(Sizing::Fixed(BPM_LABEL_W))
+                    .fill_h()
+                    .font(STATUS_FONT)
+                    .text_color(color::TEXT_DIMMED_C32)
+                    .align_text(TextAlign::Right),
+            )
+            .child(
+                View::button(self.bpm_text.as_str())
+                    .w(Sizing::Fixed(BPM_FIELD_W))
+                    .fill_h()
+                    .style(bpm_field_style)
+                    .on_click(PanelAction::BpmFieldClicked)
+                    .key(KEY_BPM_FIELD),
+            )
+            .child(
+                Self::btn("R", BPM_RESET_W, button_style(reset_c), PanelAction::ResetBpm)
+                    .disabled(!self.bpm_reset_active),
+            )
+            .child(
+                Self::btn("CLR", BPM_CLEAR_W, button_style(clear_c), PanelAction::ClearBpm)
+                    .disabled(!self.bpm_clear_active),
+            )
+    }
+
+    fn right_group(&self) -> View {
+        let open_recent_style = UIStyle {
+            bg_color: color::BUTTON_INACTIVE_C32,
+            hover_bg_color: BUTTON_HOVER_C,
+            pressed_bg_color: color::BUTTON_PRESSED,
+            text_color: color::TEXT_WHITE_C32,
+            font_size: color::FONT_LABEL,
+            corner_radius: color::BUTTON_RADIUS,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        };
+        let save_bg = if self.save_text.contains('*') { SAVE_DIRTY_BG } else { color::BUTTON_INACTIVE_C32 };
+        let export_bg = if self.export_active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let hdr_bg = if self.hdr_active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let perc_bg = if self.perc_active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+        let inactive = || button_style(color::BUTTON_INACTIVE_C32);
+
+        View::row(RIGHT_SPACING)
+            .fill()
+            .main_align(Align::End)
+            .cross_align(Align::Center)
+            .child(Self::btn("NEW", NEW_BUTTON_W, inactive(), PanelAction::NewProject))
+            .child(Self::btn("OPEN", OPEN_BUTTON_W, inactive(), PanelAction::OpenProject))
+            .child(Self::btn("OPEN RECENT", OPEN_RECENT_W, open_recent_style, PanelAction::OpenRecent))
+            .child(Self::btn(self.save_text.as_str(), SAVE_BUTTON_W, button_style(save_bg), PanelAction::SaveProject))
+            .child(Self::btn("SAVE AS", SAVE_AS_W, inactive(), PanelAction::SaveProjectAs))
+            // The file|render section gap is RIGHT_SPACING + SECTION_SPACER; the
+            // row already contributes RIGHT_SPACING on each side of the cell.
+            .child(self.section_break(SECTION_SPACER - RIGHT_SPACING))
+            .child(Self::btn("EXPORT", EXPORT_BUTTON_W, button_style(export_bg), PanelAction::ExportVideo))
+            .child(Self::btn("FRAME", FRAME_BUTTON_W, inactive(), PanelAction::ExportFrame))
+            .child(Self::btn("HDR", HDR_BUTTON_W, button_style(hdr_bg), PanelAction::ToggleHdr))
+            .child(Self::btn("PERC", PERC_BUTTON_W, button_style(perc_bg), PanelAction::TogglePercussion))
+    }
+
+    fn view(&self) -> View {
+        View::stack()
+            .fill()
+            .bg(color::PANEL_BG_DARK)
+            .pad(Pad { l: INSET, t: GROUP_Y_PAD, r: INSET, b: GROUP_Y_PAD })
+            .child(self.left_group())
+            .child(self.center_group())
+            .child(self.right_group())
     }
 }
 
@@ -1112,76 +472,153 @@ impl Default for TransportPanel {
 
 impl Panel for TransportPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
-        self.cache_first_node = tree.count();
-
-        let bar = layout.transport_bar();
-        self.layout.compute(bar);
-
-        let bg = tree.add_panel(
-            None,
-            bar.x,
-            bar.y,
-            bar.width,
-            bar.height,
-            UIStyle {
-                bg_color: color::PANEL_BG_DARK,
-                ..UIStyle::default()
-            },
-        );
-
-        self.build_left(tree, bg);
-        self.build_center(tree, bg);
-        self.build_right(tree, bg);
-        self.build_dividers(tree, bg, bar);
-
-        self.cache_node_count = tree.count() - self.cache_first_node;
+        self.rect = layout.transport_bar();
+        let view = self.view();
+        self.host.build(tree, &view, self.rect);
     }
 
-    fn update(&mut self, _tree: &mut UITree) {}
+    fn update(&mut self, tree: &mut UITree) {
+        if !self.host.is_built() {
+            return;
+        }
+        let view = self.view();
+        let reconcile = self.host.update(tree, &view, self.rect);
+        debug_assert_eq!(
+            reconcile,
+            Reconcile::Updated,
+            "transport structure is invariant per frame — value/disabled changes update in place"
+        );
+    }
 
-    /// Transport is fully intent-dispatched (see `register_intents`); clicks
-    /// resolve centrally and never reach a panel handler. Kept as the trait's
-    /// required no-op — there are no non-gesture events to route.
+    /// Transport is fully intent-dispatched (see `register_intents`). Required no-op.
     fn handle_event(&mut self, _event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         Vec::new()
     }
 
+    fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        self.host.register_intents(intents);
+    }
+
     fn first_node(&self) -> usize {
-        self.cache_first_node
+        self.host.first_node()
     }
     fn node_count(&self) -> usize {
-        self.cache_node_count
+        self.host.node_count()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intent::{Gesture, IntentRegistry};
+    use std::collections::HashMap;
 
-    #[test]
-    fn build_transport() {
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = TransportPanel::new();
+    // Golden oracle: the original three-regime pixel layout. The Chrome `view()`
+    // must land every interactive button at the same rect.
+    #[derive(Default)]
+    struct TransportGolden {
+        rects: HashMap<&'static str, Rect>,
+    }
 
-        panel.build(&mut tree, &layout);
+    impl TransportGolden {
+        fn compute(&mut self, bounds: Rect) {
+            let eh = bounds.height - GROUP_Y_PAD * 2.0;
+            let ey = bounds.y + GROUP_Y_PAD;
+            let mut put = |k, x, w| {
+                self.rects.insert(k, Rect::new(x, ey, w, eh));
+            };
 
-        assert!(panel.play_button_id.is_some());
-        assert!(panel.stop_button_id.is_some());
-        assert!(panel.rec_button_id.is_some());
-        assert!(panel.bpm_field_id.is_some());
-        assert!(panel.clock_authority_id.is_some());
-        assert!(panel.link_button_id.is_some());
-        assert!(panel.new_button_id.is_some());
-        assert!(panel.save_button_id.is_some());
-        assert!(panel.export_button_id.is_some());
-        assert!(panel.frame_button_id.is_some());
-        assert!(tree.count() >= 28); // bg + 11 left + 7 center + 9 right = 28
+            // Left
+            let mut x = bounds.x + INSET;
+            put("SRC:INT", x, CLOCK_AUTHORITY_W);
+            x += CLOCK_AUTHORITY_W + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING;
+            put("LINK", x, LINK_BUTTON_W);
+            x += LINK_BUTTON_W + ITEM_SPACING + STATUS_DOT_SIZE + ITEM_SPACING + STATUS_TEXT_W
+                + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING;
+            put("CLK", x, CLK_BUTTON_W);
+            x += CLK_BUTTON_W + ITEM_SPACING;
+            put("Select...", x, CLK_DEVICE_W);
+            x += CLK_DEVICE_W + ITEM_SPACING + STATUS_DOT_SIZE + ITEM_SPACING + STATUS_TEXT_W
+                + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING;
+            put("SYNC", x, SYNC_BUTTON_W);
+
+            // Center
+            let center_w = PLAY_BUTTON_W + ITEM_SPACING + STOP_BUTTON_W + ITEM_SPACING + REC_BUTTON_W
+                + ITEM_SPACING + CENTER_SPACER + ITEM_SPACING + BPM_LABEL_W + ITEM_SPACING
+                + BPM_FIELD_W + ITEM_SPACING + BPM_RESET_W + ITEM_SPACING + BPM_CLEAR_W;
+            let mut cx = bounds.x + (bounds.width - center_w) * 0.5;
+            put("PLAY", cx, PLAY_BUTTON_W);
+            cx += PLAY_BUTTON_W + ITEM_SPACING;
+            put("STOP", cx, STOP_BUTTON_W);
+            cx += STOP_BUTTON_W + ITEM_SPACING;
+            put("REC", cx, REC_BUTTON_W);
+            cx += REC_BUTTON_W + ITEM_SPACING + CENTER_SPACER + ITEM_SPACING + BPM_LABEL_W + ITEM_SPACING;
+            put("120.0", cx, BPM_FIELD_W);
+            cx += BPM_FIELD_W + ITEM_SPACING;
+            put("R", cx, BPM_RESET_W);
+            cx += BPM_RESET_W + ITEM_SPACING;
+            put("CLR", cx, BPM_CLEAR_W);
+
+            // Right
+            let right_w = NEW_BUTTON_W + RIGHT_SPACING + OPEN_BUTTON_W + RIGHT_SPACING + OPEN_RECENT_W
+                + RIGHT_SPACING + SAVE_BUTTON_W + RIGHT_SPACING + SAVE_AS_W + RIGHT_SPACING
+                + SECTION_SPACER + EXPORT_BUTTON_W + RIGHT_SPACING + FRAME_BUTTON_W + RIGHT_SPACING
+                + HDR_BUTTON_W + RIGHT_SPACING + PERC_BUTTON_W;
+            let mut rx = bounds.x_max() - INSET - right_w;
+            put("NEW", rx, NEW_BUTTON_W);
+            rx += NEW_BUTTON_W + RIGHT_SPACING;
+            put("OPEN", rx, OPEN_BUTTON_W);
+            rx += OPEN_BUTTON_W + RIGHT_SPACING;
+            put("OPEN RECENT", rx, OPEN_RECENT_W);
+            rx += OPEN_RECENT_W + RIGHT_SPACING;
+            put("SAVE", rx, SAVE_BUTTON_W);
+            rx += SAVE_BUTTON_W + RIGHT_SPACING;
+            put("SAVE AS", rx, SAVE_AS_W);
+            rx += SAVE_AS_W + RIGHT_SPACING + SECTION_SPACER;
+            put("EXPORT", rx, EXPORT_BUTTON_W);
+            rx += EXPORT_BUTTON_W + RIGHT_SPACING;
+            put("FRAME", rx, FRAME_BUTTON_W);
+            rx += FRAME_BUTTON_W + RIGHT_SPACING;
+            put("HDR", rx, HDR_BUTTON_W);
+            rx += HDR_BUTTON_W + RIGHT_SPACING;
+            put("PERC", rx, PERC_BUTTON_W);
+        }
+    }
+
+    fn buttons(tree: &UITree) -> Vec<(String, Rect)> {
+        (0..tree.count())
+            .map(|i| tree.get_node(NodeId(i as u32)))
+            .filter(|n| n.node_type == UINodeType::Button)
+            .map(|n| (n.text.clone().unwrap_or_default(), n.bounds))
+            .collect()
     }
 
     #[test]
-    fn intent_resolves_button_clicks() {
-        use crate::intent::{Gesture, IntentRegistry};
+    fn chrome_layout_matches_golden() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = TransportPanel::new();
+        panel.build(&mut tree, &layout);
+
+        let mut g = TransportGolden::default();
+        g.compute(layout.transport_bar());
+
+        let got = buttons(&tree);
+        assert_eq!(got.len(), 20, "20 transport buttons");
+        for (text, rect) in &got {
+            let want = g.rects.get(text.as_str()).unwrap_or_else(|| panic!("unexpected button {text:?}"));
+            assert!(
+                (rect.x - want.x).abs() < 0.01
+                    && (rect.y - want.y).abs() < 0.01
+                    && (rect.width - want.width).abs() < 0.01
+                    && (rect.height - want.height).abs() < 0.01,
+                "button '{text}' at {rect:?} != golden {want:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn intents_resolve_through_registry() {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = TransportPanel::new();
@@ -1190,33 +627,86 @@ mod tests {
         let mut intents = IntentRegistry::new();
         panel.register_intents(&mut intents);
 
-        // The sole click path: resolve through the registry (the deleted
-        // handle_click twin's coverage moves here).
-        let action = intents.resolve(&tree, panel.play_button_id, Gesture::Click);
-        assert!(matches!(action, Some(PanelAction::PlayPause)));
-        let stop = intents.resolve(&tree, panel.stop_button_id, Gesture::Click);
-        assert!(matches!(stop, Some(PanelAction::Stop)));
-        let export = intents.resolve(&tree, panel.export_button_id, Gesture::Click);
-        assert!(matches!(export, Some(PanelAction::ExportVideo)));
-        // Miss: a click that hits nothing resolves to no action.
-        assert!(intents.resolve(&tree, None, Gesture::Click).is_none());
+        let id_of = |t: &str| {
+            (0..tree.count())
+                .map(|i| tree.get_node(NodeId(i as u32)))
+                .find(|n| n.text.as_deref() == Some(t))
+                .map(|n| n.id)
+        };
+        assert!(matches!(
+            intents.resolve(&tree, id_of("PLAY"), Gesture::Click),
+            Some(PanelAction::PlayPause)
+        ));
+        assert!(matches!(
+            intents.resolve(&tree, id_of("EXPORT"), Gesture::Click),
+            Some(PanelAction::ExportVideo)
+        ));
+        assert!(matches!(
+            intents.resolve(&tree, panel.bpm_field_id(), Gesture::Click),
+            Some(PanelAction::BpmFieldClicked)
+        ));
+        // Clock authority is display-only: interactive, but no resolved action.
+        assert!(intents.resolve(&tree, id_of("SRC:INT"), Gesture::Click).is_none());
     }
 
     #[test]
-    fn set_play_state_updates_tree() {
+    fn disabled_buttons_are_flagged() {
+        // REC (enabled by default) is hittable; bpm reset/clear (inactive) are
+        // disabled and excluded from hit-testing.
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = TransportPanel::new();
         panel.build(&mut tree, &layout);
 
-        tree.clear_dirty();
-        panel.set_play_state(&mut tree, "PAUSE", color::PAUSED_YELLOW);
+        let node = |t: &str| {
+            (0..tree.count())
+                .map(|i| tree.get_node(NodeId(i as u32)))
+                .find(|n| n.text.as_deref() == Some(t))
+                .unwrap()
+                .id
+        };
+        assert!(!tree.has_flag(node("REC"), UIFlags::DISABLED));
+        assert!(tree.has_flag(node("R"), UIFlags::DISABLED));
+        assert!(tree.has_flag(node("CLR"), UIFlags::DISABLED));
+    }
 
-        assert!(tree.has_dirty());
-        assert_eq!(panel.play_text, "PAUSE");
-        assert_eq!(
-            tree.get_node(panel.play_button_id.unwrap()).text.as_deref(),
-            Some("PAUSE")
-        );
+    #[test]
+    fn disable_toggle_is_in_place() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = TransportPanel::new();
+        panel.build(&mut tree, &layout);
+        let sv = tree.structure_version();
+
+        // Recorded-tempo lane appears → BPM reset enables. In-place, no rebuild.
+        panel.set_bpm_reset_active(true);
+        panel.update(&mut tree);
+
+        let r = (0..tree.count())
+            .map(|i| tree.get_node(NodeId(i as u32)))
+            .find(|n| n.text.as_deref() == Some("R"))
+            .unwrap()
+            .id;
+        assert_eq!(tree.structure_version(), sv, "disable toggle must not rebuild");
+        assert!(!tree.has_flag(r, UIFlags::DISABLED));
+    }
+
+    #[test]
+    fn play_state_updates_in_place() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = TransportPanel::new();
+        panel.build(&mut tree, &layout);
+        let sv = tree.structure_version();
+
+        panel.set_play_state("PAUSE", color::PAUSED_YELLOW);
+        panel.update(&mut tree);
+
+        let play = (0..tree.count())
+            .map(|i| tree.get_node(NodeId(i as u32)))
+            .find(|n| n.text.as_deref() == Some("PAUSE"))
+            .expect("PLAY became PAUSE in place");
+        assert_eq!(tree.structure_version(), sv);
+        assert_eq!(play.text.as_deref(), Some("PAUSE"));
     }
 }

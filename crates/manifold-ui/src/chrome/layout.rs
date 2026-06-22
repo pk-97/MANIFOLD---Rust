@@ -31,6 +31,7 @@ pub struct LaidNode {
     pub interactive: bool,
     pub clips: bool,
     pub visible: bool,
+    pub disabled: bool,
     pub intent: ViewIntent,
     /// Stable-identity hint copied from [`View::key`]. The reconciler keys on
     /// structure, not this; it exists so a panel can resolve a specific node id
@@ -142,6 +143,7 @@ fn place(view: &View, rect: Rect, parent: Option<usize>, measure: &dyn TextMeasu
         interactive: view.interactive,
         clips: view.clips,
         visible: view.visible,
+        disabled: view.disabled,
         intent: view.intent.clone(),
         key: view.key,
     });

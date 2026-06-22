@@ -117,6 +117,7 @@ pub struct View {
     pub(crate) clips: bool,
     pub(crate) interactive: bool,
     pub(crate) inert: bool,
+    pub(crate) disabled: bool,
     pub(crate) visible: bool,
     /// Optional stable-identity hint (currently advisory — the diff keys on
     /// structural shape; a future keyed reconciler reads this).
@@ -141,6 +142,7 @@ impl View {
             clips: false,
             interactive: false,
             inert: false,
+            disabled: false,
             visible: true,
             key: None,
         }
@@ -356,6 +358,14 @@ impl View {
     /// handled in `handle_event`). Opts the node out of [`validate`].
     pub fn inert(mut self) -> Self {
         self.inert = true;
+        self
+    }
+
+    /// Disable the node (`UIFlags::DISABLED`) — greyed, not hit-tested. A
+    /// per-frame state, applied in place (toggling it is not a structural
+    /// change), so a control can grey out without forcing a rebuild.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
         self
     }
 

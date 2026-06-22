@@ -84,6 +84,9 @@ impl ChromeHost {
                 if n.clips {
                     extra |= UIFlags::CLIPS_CHILDREN;
                 }
+                if n.disabled {
+                    extra |= UIFlags::DISABLED;
+                }
                 tree.add_node(parent_id, n.rect, n.kind, n.style, n.text.as_deref(), extra)
             };
             if !self.scratch[i].visible {
@@ -118,6 +121,11 @@ impl ChromeHost {
             }
             tree.set_style(id, n.style);
             tree.set_visible(id, n.visible);
+            if n.disabled {
+                tree.set_flag(id, UIFlags::DISABLED);
+            } else {
+                tree.clear_flag(id, UIFlags::DISABLED);
+            }
         }
 
         std::mem::swap(&mut self.laid, &mut self.scratch);
