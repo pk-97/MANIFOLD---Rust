@@ -11,6 +11,7 @@
 //! 4. The dropdown auto-dismisses on selection or click-outside.
 
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
+use super::PanelAction;
 use crate::color;
 use crate::input::UIEvent;
 use crate::node::*;
@@ -35,6 +36,11 @@ pub struct DropdownItem {
     pub separator_after: bool,
     /// Optional checkmark or other indicator.
     pub checked: bool,
+    /// The [`PanelAction`] this item fires when chosen. When set, selecting the
+    /// item returns [`DropdownAction::SelectedAction`] carrying it, so the app
+    /// acts on it directly instead of mapping a positional index back to meaning
+    /// through a parallel `Vec<Option<…>>` (the typed-dropdown direction, 2b.11).
+    pub action: Option<PanelAction>,
 }
 
 impl DropdownItem {
@@ -44,6 +50,7 @@ impl DropdownItem {
             enabled: true,
             separator_after: false,
             checked: false,
+            action: None,
         }
     }
 
@@ -53,6 +60,7 @@ impl DropdownItem {
             enabled: false,
             separator_after: false,
             checked: false,
+            action: None,
         }
     }
 
@@ -65,13 +73,26 @@ impl DropdownItem {
         self.checked = checked;
         self
     }
+
+    /// Attach the action this item fires when chosen (typed dropdown — see the
+    /// `action` field).
+    pub fn with_action(mut self, action: PanelAction) -> Self {
+        self.action = Some(action);
+        self
+    }
 }
 
 /// Actions returned by the dropdown panel.
-#[derive(Debug, Clone, PartialEq)]
+/// (No `PartialEq` — `SelectedAction` carries a `PanelAction`, which isn't
+/// comparable; callers `match` on the variant.)
+#[derive(Debug, Clone)]
 pub enum DropdownAction {
-    /// User selected item at this index.
+    /// User selected item at this index. (Untyped items — the app maps the index
+    /// to meaning through its dropdown context.)
     Selected(usize),
+    /// User selected a *typed* item — it carried its own [`PanelAction`], so the
+    /// app fires it directly with no index→meaning map (2b.11).
+    SelectedAction(PanelAction),
     /// User selected a color swatch at this index into the color grid.
     ColorSelected(usize),
     /// User dismissed the dropdown (clicked outside or pressed Escape).
@@ -520,6 +541,16 @@ impl DropdownPanel {
         self.node_count = tree.count() - self.first_node;
     }
 
+    /// The result of choosing item `index`: a typed [`DropdownAction::SelectedAction`]
+    /// when the item carries its own action, else a positional `Selected(index)`
+    /// for the app to map.
+    fn select_result(&self, index: usize) -> DropdownAction {
+        match self.items.get(index).and_then(|it| it.action.clone()) {
+            Some(action) => DropdownAction::SelectedAction(action),
+            None => DropdownAction::Selected(index),
+        }
+    }
+
     /// Handle a UI event. Returns an action if the event was consumed.
     /// The app layer should call this BEFORE routing events to other panels.
     /// If it returns Some(...), the event was consumed and should not propagate.
@@ -533,8 +564,9 @@ impl DropdownPanel {
                 // Check if clicked on one of our text items.
                 if let Some(index) = self.item_index_for_node(*node_id) {
                     if self.items[index].enabled {
+                        let result = self.select_result(index);
                         self.close(tree);
-                        return Some(DropdownAction::Selected(index));
+                        return Some(result);
                     }
                     // Clicked disabled item — consume but don't dismiss.
                     return Some(DropdownAction::Dismissed);
@@ -571,8 +603,9 @@ impl DropdownPanel {
                     if self.hovered_index >= 0 {
                         let idx = self.hovered_index as usize;
                         if idx < self.items.len() && self.items[idx].enabled {
+                            let result = self.select_result(idx);
                             self.close(tree);
-                            return Some(DropdownAction::Selected(idx));
+                            return Some(result);
                         }
                     }
                     None
@@ -785,7 +818,7 @@ mod tests {
             modifiers: crate::input::Modifiers::default(),
         };
         let result = dd.handle_event(&event, &mut tree);
-        assert_eq!(result, Some(DropdownAction::Selected(1)));
+        assert!(matches!(result, Some(DropdownAction::Selected(1))));
         assert!(!dd.is_open());
     }
 
@@ -805,7 +838,7 @@ mod tests {
             modifiers: crate::input::Modifiers::default(),
         };
         let result = dd.handle_event(&event, &mut tree);
-        assert_eq!(result, Some(DropdownAction::Dismissed));
+        assert!(matches!(result, Some(DropdownAction::Dismissed)));
         assert!(!dd.is_open());
     }
 
@@ -829,7 +862,7 @@ mod tests {
             },
         };
         let result = dd.handle_event(&event, &mut tree);
-        assert_eq!(result, Some(DropdownAction::Dismissed));
+        assert!(matches!(result, Some(DropdownAction::Dismissed)));
         assert!(!dd.is_open());
     }
 
@@ -879,7 +912,7 @@ mod tests {
         };
         let result = dd.handle_event(&event, &mut tree);
         // Clicking disabled item dismisses but doesn't select.
-        assert_eq!(result, Some(DropdownAction::Dismissed));
+        assert!(matches!(result, Some(DropdownAction::Dismissed)));
     }
 
     #[test]
@@ -937,7 +970,7 @@ mod tests {
             modifiers: crate::input::Modifiers::default(),
         };
         let result = dd.handle_event(&event, &mut tree);
-        assert_eq!(result, None);
+        assert!(result.is_none());
     }
 
     #[test]

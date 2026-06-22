@@ -826,6 +826,11 @@ impl UIRoot {
     fn drain_overlay_selections(&mut self, actions: &mut Vec<PanelAction>) {
         if let Some(dd_action) = self.dropdown.take_pending_action() {
             match dd_action {
+                // Typed item — carries its own action, no index→meaning map (2b.11).
+                DropdownAction::SelectedAction(action) => {
+                    self.dropdown_context = None;
+                    actions.push(action);
+                }
                 DropdownAction::Selected(index) => {
                     if let Some(ctx) = self.dropdown_context.take()
                         && let Some(action) = self.dropdown_to_action(ctx, index)
@@ -1289,9 +1294,17 @@ impl UIRoot {
         match action {
             PanelAction::BlendModeClicked(idx) => {
                 use manifold_core::types::BlendMode;
+                // Typed dropdown (2b.11): each item carries its own SetBlendMode
+                // action, so selection fires it directly — no DropdownContext /
+                // index→meaning map for blend modes.
                 let items: Vec<DropdownItem> = BlendMode::ALL
                     .iter()
-                    .map(|m| DropdownItem::new(m.display_name()))
+                    .map(|m| {
+                        DropdownItem::new(m.display_name()).with_action(PanelAction::SetBlendMode(
+                            *idx,
+                            m.display_name().to_string(),
+                        ))
+                    })
                     .collect();
                 self.open_dropdown_at(DropdownContext::BlendMode(*idx), items, trigger);
                 true
