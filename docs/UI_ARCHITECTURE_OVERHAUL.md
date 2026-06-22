@@ -25,14 +25,17 @@ and how we get there."
 > **Typed building blocks (the direction Peter steered to 2026-06-22):** the
 > repeated interactive widgets become *typed Chrome components the host
 > materialises*, so panels compose them declaratively instead of hand-rolling
-> imperative slots. **Slider shipped:** `View::slider_row(SliderSpec).key(K)` — the
+> imperative slots. **Shipped:** (1) `View::slider_row(SliderSpec).key(K)` — the
 > `ChromeHost` builds the `BitmapSlider` into the laid slot (byte-identical) and
 > exposes its ids via `ChromeHost::slider_ids(K)`; the panel's `SliderDragState`
-> drives value+drag from those ids (host owns structure, panel owns value).
-> master/layer/macros all compose it. **Next blocks (same shape):**
-> dropdown-trigger, progress-bar, Ableton/driver/envelope/audio drawers, trim
-> handles — each currently built imperatively into a keyed slot; promoting them to
-> `View::*` components is what makes clip/param/audio-setup clean compositions.
+> drives value+drag (host owns structure, panel owns value); master/layer/macros/
+> clip compose it. (2) `dropdown_trigger_view(current, font)` (in
+> `param_slider_shared`) — a typed `View` button, the declarative twin of the
+> now-deleted `build_dropdown_trigger`; clip composes it (`.key().inert()`,
+> resolved on click). **Next blocks (same shape):** progress-bar, Ableton /
+> driver / envelope / audio drawers, trim handles — each still built imperatively
+> into a keyed slot; promoting them is what makes param/audio-setup clean
+> compositions.
 >
 > **Done + verified + pushed (6 panels + the slider block):**
 > - **2b.8 footer**, **2b.7 header**, **2b.6 transport** — the static bars, each
