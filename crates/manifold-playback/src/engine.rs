@@ -986,6 +986,20 @@ impl PlaybackEngine {
         self.compositor_dirty_deadline = realtime_now.0 + COMPOSITOR_DIRTY_TIME as f64;
     }
 
+    /// Mark the compositor dirty using the most recent tick's realtime clock.
+    ///
+    /// Use this from command handlers that change visible project state
+    /// (mute/solo/blend/opacity/effect edits) outside the playing tick. While
+    /// paused, the compositor only re-renders while this deadline is in the
+    /// future (or an active clip renderer keeps it busy), so a mutation that
+    /// isn't accompanied by this mark won't show until playback advances time.
+    /// `mark_compositor_dirty(Seconds::ZERO)` does NOT work for this: the
+    /// realtime clock is seconds-since-start, so a `0.05` deadline is always in
+    /// the past. This anchors off `last_realtime_now`, matching the seek path.
+    pub fn mark_compositor_dirty_now(&mut self) {
+        self.compositor_dirty_deadline = self.last_realtime_now + COMPOSITOR_DIRTY_TIME as f64;
+    }
+
     // ─── Prewarm ───
 
     /// Invalidate the prewarm cache so the next tick rebuilds it.

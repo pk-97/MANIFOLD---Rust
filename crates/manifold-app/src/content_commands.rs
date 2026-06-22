@@ -186,6 +186,10 @@ impl ContentThread {
                 }
                 // Editing commands may add/remove clips — sync on next tick.
                 self.engine.mark_sync_dirty();
+                // Refresh the compositor even while paused: a blend-mode change,
+                // effect edit, or reorder that doesn't alter clip membership
+                // won't be picked up by the sync path alone.
+                self.engine.mark_compositor_dirty_now();
                 // Rebuild OSC routes — command may have added/removed layers or effects.
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
@@ -200,6 +204,7 @@ impl ContentThread {
                     self.editing_service.execute_batch(cmds, desc, p);
                 }
                 self.engine.mark_sync_dirty();
+                self.engine.mark_compositor_dirty_now();
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
                 }
@@ -220,7 +225,7 @@ impl ContentThread {
                 if let Some(p) = self.engine.project_mut() {
                     let _ = self.editing_service.undo(p);
                 }
-                self.engine.mark_compositor_dirty(Seconds::ZERO);
+                self.engine.mark_compositor_dirty_now();
                 self.engine.mark_sync_dirty();
                 // Apply resolution/FPS changes if the undo altered project settings.
                 let post = self.engine.project().map(|p| {
@@ -267,7 +272,7 @@ impl ContentThread {
                 if let Some(p) = self.engine.project_mut() {
                     let _ = self.editing_service.redo(p);
                 }
-                self.engine.mark_compositor_dirty(Seconds::ZERO);
+                self.engine.mark_compositor_dirty_now();
                 self.engine.mark_sync_dirty();
                 // Apply resolution/FPS changes if the redo altered project settings.
                 let post = self.engine.project().map(|p| {
@@ -537,6 +542,10 @@ impl ContentThread {
                 // The mapping-drawer live preview forks/recalibrates through a
                 // MutateProject closure, so refresh the overlay here too.
                 self.refresh_preset_overlay_if_changed();
+                // Force at least one fresh composite so the change shows even
+                // while paused — mute/solo/blend toggles land here and would
+                // otherwise wait for playback to advance time.
+                self.engine.mark_compositor_dirty_now();
             }
 
             // ── Live value write (no structural maintenance) ───────
@@ -551,6 +560,10 @@ impl ContentThread {
                 if let Some(p) = self.engine.project_mut() {
                     f(p);
                 }
+                // Same paused-refresh guarantee as the structural arm: opacity /
+                // macro / card-slider drags must update the preview while paused.
+                // A single deadline write — never the project-scale work above.
+                self.engine.mark_compositor_dirty_now();
             }
 
             // ── Clipboard ─────────────────────────────────────────
@@ -756,7 +769,7 @@ impl ContentThread {
 
             // ── Compositor ─────────────────────────────────────────
             ContentCommand::MarkCompositorDirty => {
-                self.engine.mark_compositor_dirty(Seconds::ZERO);
+                self.engine.mark_compositor_dirty_now();
             }
 
             // ── Display ───────────────────────────────────────────
@@ -771,7 +784,7 @@ impl ContentThread {
                     },
                 );
                 self.content_pipeline.edr_headroom = headroom;
-                self.engine.mark_compositor_dirty(Seconds::ZERO);
+                self.engine.mark_compositor_dirty_now();
             }
 
             // ── Output surface (direct present) ────────────────────
@@ -805,7 +818,7 @@ impl ContentThread {
                         break;
                     }
                 }
-                self.engine.mark_compositor_dirty(Seconds::ZERO);
+                self.engine.mark_compositor_dirty_now();
             }
 
             // ── LED output ─────────────────────────────────────────────
