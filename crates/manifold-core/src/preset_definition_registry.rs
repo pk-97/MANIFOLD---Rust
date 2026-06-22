@@ -210,10 +210,19 @@ fn build_generator_kind_map(json_presets: &[PresetMetadata]) -> PresetMap {
     // layout drift class structurally.
     for preset in json_presets {
         let gen_id = PresetTypeId::from_string(preset.id.as_str().to_string());
-        m.insert(
-            gen_id,
-            Arc::new(preset_metadata_to_def(preset, PresetKind::Generator)),
-        );
+        let mut def = preset_metadata_to_def(preset, PresetKind::Generator);
+        // The v2 JSON schema can't fully express generator string params (no
+        // `use_dropdown` flag, no key→inner-node routing), so the inventory
+        // submission remains their source of truth. Carry its `string_param_defs`
+        // forward through the JSON override — otherwise text generators (Text,
+        // NumberStation, …) lose their editable Text/Font card rows entirely.
+        if def.string_param_defs.is_empty()
+            && let Some(existing) = m.get(&gen_id)
+            && !existing.string_param_defs.is_empty()
+        {
+            def.string_param_defs = existing.string_param_defs.clone();
+        }
+        m.insert(gen_id, Arc::new(def));
     }
     m
 }
