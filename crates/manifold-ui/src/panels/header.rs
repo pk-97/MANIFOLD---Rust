@@ -1,4 +1,13 @@
+//! Header bar on the declarative Chrome API.
+//!
+//! Three positioning regimes — a left-flowing group, an absolutely-centered
+//! time display, and a right-to-left button group — expressed as a `Stack` of
+//! three `Fill` rows (left/center/right aligned) inset by a symmetric padding,
+//! so the centered group lands at true screen-centre. See the footer for the
+//! integration pattern and `docs/CHROME_API_DESIGN.md`.
+
 use super::{Panel, PanelAction};
+use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View};
 use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
@@ -31,210 +40,62 @@ const TIME_DISPLAY_W: f32 = 260.0;
 const BUTTON_DIM: Color32 = color::HEADER_BUTTON_DIM;
 const BUTTON_HOVER_H: Color32 = color::HEADER_BUTTON_HOVER;
 const BUTTON_PRESSED_H: Color32 = color::HEADER_BUTTON_PRESSED;
-const BUTTON_ACTIVE: Color32 = color::HEADER_BUTTON_ACTIVE;
-const BUTTON_ACTIVE_HOVER: Color32 = color::HEADER_BUTTON_ACTIVE_HOVER;
-const BUTTON_ACTIVE_PRESSED: Color32 = color::HEADER_BUTTON_ACTIVE_PRESSED;
 const PROGRESS_FILL: Color32 = color::HEADER_PROGRESS_FILL;
 
 const PROGRESS_RADIUS: f32 = 2.0;
 
-// ── HeaderLayout ───────────────────────────────────────────────────
-
-#[derive(Default)]
-struct HeaderLayout {
-    project_name: Rect,
-    import_status: Rect,
-    progress_bg: Rect,
-    progress_fill: Rect,
-    time_display: Rect,
-    zoom_out: Rect,
-    zoom_label: Rect,
-    zoom_in: Rect,
-    audio_button: Rect,
-    monitor_button: Rect,
-    perform_button: Rect,
-}
-
-impl HeaderLayout {
-    fn compute(&mut self, bounds: Rect, import_progress: f32) {
-        let elem_h = bounds.height - GROUP_Y_PAD * 2.0;
-        let elem_y = bounds.y + GROUP_Y_PAD;
-
-        // Left group
-        let mut lx = bounds.x + INSET;
-
-        self.project_name = Rect::new(lx, elem_y, PROJECT_NAME_W, elem_h);
-        lx += PROJECT_NAME_W + SPACER;
-
-        self.import_status = Rect::new(lx, elem_y, IMPORT_STATUS_W, elem_h);
-        lx += IMPORT_STATUS_W;
-
-        let prog_x = lx + PROGRESS_BAR_INSET;
-        let prog_y = elem_y + (elem_h - PROGRESS_BAR_H) * 0.5;
-        self.progress_bg = Rect::new(prog_x, prog_y, PROGRESS_BAR_W, PROGRESS_BAR_H);
-
-        let fill_inset = 1.0;
-        let max_fill_w = PROGRESS_BAR_W - fill_inset * 2.0;
-        self.progress_fill = Rect::new(
-            prog_x + fill_inset,
-            prog_y + fill_inset,
-            max_fill_w * import_progress.clamp(0.0, 1.0),
-            PROGRESS_BAR_H - fill_inset * 2.0,
-        );
-
-        // Center group
-        let cx = bounds.x + (bounds.width - TIME_DISPLAY_W) * 0.5;
-        self.time_display = Rect::new(cx, elem_y, TIME_DISPLAY_W, elem_h);
-
-        // Right group (right-to-left)
-        let mut rx = bounds.x_max() - INSET;
-
-        rx -= MONITOR_BUTTON_W;
-        self.monitor_button = Rect::new(rx, elem_y, MONITOR_BUTTON_W, elem_h);
-        rx -= GROUP_SPACING;
-
-        rx -= PERFORM_BUTTON_W;
-        self.perform_button = Rect::new(rx, elem_y, PERFORM_BUTTON_W, elem_h);
-        rx -= GROUP_SPACING;
-
-        rx -= AUDIO_BUTTON_W;
-        self.audio_button = Rect::new(rx, elem_y, AUDIO_BUTTON_W, elem_h);
-        rx -= GROUP_SPACING;
-
-        rx -= ZOOM_BUTTON_W;
-        self.zoom_in = Rect::new(rx, elem_y, ZOOM_BUTTON_W, elem_h);
-
-        rx -= ZOOM_LABEL_W;
-        self.zoom_label = Rect::new(rx, elem_y, ZOOM_LABEL_W, elem_h);
-
-        rx -= ZOOM_BUTTON_W;
-        self.zoom_out = Rect::new(rx, elem_y, ZOOM_BUTTON_W, elem_h);
-    }
-}
-
 // ── HeaderPanel ────────────────────────────────────────────────────
 
 pub struct HeaderPanel {
-    layout: HeaderLayout,
+    host: ChromeHost,
+    rect: Rect,
 
-    // Node IDs
-    project_name_id: Option<NodeId>,
-    import_status_id: Option<NodeId>,
-    progress_bg_id: Option<NodeId>,
-    progress_fill_id: Option<NodeId>,
-    time_display_id: Option<NodeId>,
-    zoom_label_id: Option<NodeId>,
-    zoom_out_id: Option<NodeId>,
-    zoom_in_id: Option<NodeId>,
-    audio_btn_id: Option<NodeId>,
-    monitor_btn_id: Option<NodeId>,
-    perform_btn_id: Option<NodeId>,
-
-    // State
+    // Display state.
     project_name: String,
     import_status: String,
     import_progress: f32,
     import_progress_visible: bool,
     time_display: String,
     zoom_label: String,
-    monitor_active: bool,
-
-    // Cache tracking
-    cache_first_node: usize,
-    cache_node_count: usize,
 }
 
 impl HeaderPanel {
     pub fn new() -> Self {
         Self {
-            layout: HeaderLayout::default(),
-            project_name_id: None,
-            import_status_id: None,
-            progress_bg_id: None,
-            progress_fill_id: None,
-            time_display_id: None,
-            zoom_label_id: None,
-            zoom_out_id: None,
-            zoom_in_id: None,
-            audio_btn_id: None,
-            monitor_btn_id: None,
-            perform_btn_id: None,
+            host: ChromeHost::new(),
+            rect: Rect::ZERO,
             project_name: "My Project".into(),
             import_status: String::new(),
             import_progress: 0.0,
             import_progress_visible: false,
             time_display: "00:00.00 / 00:00.00  |  1.1.1".into(),
             zoom_label: "120 px/beat".into(),
-            monitor_active: false,
-            cache_first_node: usize::MAX,
-            cache_node_count: 0,
         }
     }
 
-    // ── Push-based setters ─────────────────────────────────────────
+    // ── State setters (store only; the reconcile applies them) ──────
 
-    pub fn set_project_name(&mut self, tree: &mut UITree, name: &str) {
+    pub fn set_project_name(&mut self, name: &str) {
         self.project_name = name.into();
-        if let Some(id) = self.project_name_id {
-            tree.set_text(id, name);
-        }
     }
 
-    pub fn set_import_status(
-        &mut self,
-        tree: &mut UITree,
-        status: &str,
-        progress: f32,
-        show: bool,
-    ) {
+    pub fn set_import_status(&mut self, status: &str, progress: f32, show: bool) {
         self.import_status = status.into();
         self.import_progress = progress.clamp(0.0, 1.0);
         self.import_progress_visible = show;
-        if let Some(id) = self.import_status_id {
-            tree.set_text(id, status);
-        }
-        if let Some(id) = self.progress_bg_id {
-            tree.set_visible(id, show);
-        }
-        if let Some(id) = self.progress_fill_id {
-            tree.set_visible(id, show);
-            let bg = self.layout.progress_bg;
-            let fill_inset = 1.0;
-            let max_fill_w = bg.width - fill_inset * 2.0;
-            tree.set_bounds(
-                id,
-                Rect::new(
-                    bg.x + fill_inset,
-                    bg.y + fill_inset,
-                    max_fill_w * self.import_progress,
-                    bg.height - fill_inset * 2.0,
-                ),
-            );
-        }
     }
 
-    pub fn set_time_display(&mut self, tree: &mut UITree, text: &str) {
+    pub fn set_time_display(&mut self, text: &str) {
         self.time_display = text.into();
-        if let Some(id) = self.time_display_id {
-            tree.set_text(id, text);
-        }
     }
 
-    pub fn set_zoom_label(&mut self, tree: &mut UITree, text: &str) {
+    pub fn set_zoom_label(&mut self, text: &str) {
         self.zoom_label = text.into();
-        if let Some(id) = self.zoom_label_id {
-            tree.set_text(id, text);
-        }
     }
 
-    pub fn set_monitor_active(&mut self, tree: &mut UITree, active: bool) {
-        self.monitor_active = active;
-        if let Some(id) = self.monitor_btn_id {
-            tree.set_style(id, self.monitor_style());
-        }
-    }
+    // ── Styles ──────────────────────────────────────────────────────
 
-    fn perform_style(&self) -> UIStyle {
+    fn action_button_style() -> UIStyle {
         UIStyle {
             bg_color: color::BUTTON_INACTIVE_C32,
             hover_bg_color: BUTTON_HOVER_H,
@@ -247,46 +108,132 @@ impl HeaderPanel {
         }
     }
 
-    fn monitor_style(&self) -> UIStyle {
-        if self.monitor_active {
-            UIStyle {
-                bg_color: BUTTON_ACTIVE,
-                hover_bg_color: BUTTON_ACTIVE_HOVER,
-                pressed_bg_color: BUTTON_ACTIVE_PRESSED,
-                text_color: color::TEXT_WHITE_C32,
-                font_size: color::FONT_HEADING,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            }
-        } else {
-            UIStyle {
-                bg_color: color::BUTTON_INACTIVE_C32,
-                hover_bg_color: BUTTON_HOVER_H,
-                pressed_bg_color: BUTTON_PRESSED_H,
-                text_color: color::TEXT_WHITE_C32,
-                font_size: color::FONT_HEADING,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            }
+    fn zoom_button_style() -> UIStyle {
+        UIStyle {
+            bg_color: BUTTON_DIM,
+            hover_bg_color: BUTTON_HOVER_H,
+            pressed_bg_color: BUTTON_PRESSED_H,
+            text_color: color::TEXT_WHITE_C32,
+            font_size: color::FONT_TITLE,
+            corner_radius: color::BUTTON_RADIUS,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
         }
     }
 
-    /// Node-intent dispatch for the header buttons' clicks. The sole click path
-    /// — there is no `handle_click` twin. See `docs/NODE_INTENT_DISPATCH.md`.
-    pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        use crate::intent::Gesture::Click;
-        let mut on = |id: Option<NodeId>, a: PanelAction| {
-            if let Some(id) = id {
-                intents.on(id, Click, a);
-            }
+    // ── View description ────────────────────────────────────────────
+
+    fn spacer_fixed(w: f32) -> View {
+        View::panel().w(Sizing::Fixed(w)).fill_h()
+    }
+
+    fn left_group(&self) -> View {
+        // Progress bar: fixed track with an inset fill scaled by progress, both
+        // hidden until an import is running.
+        let visible = self.import_progress_visible;
+        let fill_w = (PROGRESS_BAR_W - 2.0) * self.import_progress;
+        let progress = View::panel()
+            .fixed(PROGRESS_BAR_W, PROGRESS_BAR_H)
+            .bg(color::SLIDER_TRACK_PRESSED_C32)
+            .radius(PROGRESS_RADIUS)
+            .visible(visible)
+            .pad(Pad::all(1.0))
+            .child(
+                View::panel()
+                    .w(Sizing::Fixed(fill_w))
+                    .fill_h()
+                    .bg(PROGRESS_FILL)
+                    .radius(1.0)
+                    .visible(visible),
+            );
+
+        View::row(0.0)
+            .fill()
+            .main_align(Align::Start)
+            .cross_align(Align::Center)
+            .child(
+                View::label(self.project_name.as_str())
+                    .w(Sizing::Fixed(PROJECT_NAME_W))
+                    .fill_h()
+                    .font(color::FONT_SUBHEADING)
+                    .text_color(color::TEXT_DIMMED_C32),
+            )
+            .child(Self::spacer_fixed(SPACER))
+            .child(
+                View::label(self.import_status.as_str())
+                    .w(Sizing::Fixed(IMPORT_STATUS_W))
+                    .fill_h()
+                    .font(color::FONT_LABEL)
+                    .text_color(color::TEXT_DIMMED_C32),
+            )
+            .child(Self::spacer_fixed(PROGRESS_BAR_INSET))
+            .child(progress)
+    }
+
+    fn center_group(&self) -> View {
+        View::row(0.0).fill().main_align(Align::Center).child(
+            View::label(self.time_display.as_str())
+                .w(Sizing::Fixed(TIME_DISPLAY_W))
+                .fill_h()
+                .font(color::FONT_HEADING)
+                .text_color(color::TEXT_PRIMARY_C32)
+                .align_text(TextAlign::Center),
+        )
+    }
+
+    fn right_group(&self) -> View {
+        // Tight zoom cluster [−][label][+] with no inter-gaps, then the spaced
+        // Audio / Perform / Monitor buttons. End-aligned to the inset right edge.
+        let zoom_cluster = View::row(0.0)
+            .fill_h()
+            .child(
+                View::button("\u{2212}")
+                    .w(Sizing::Fixed(ZOOM_BUTTON_W))
+                    .fill_h()
+                    .style(Self::zoom_button_style())
+                    .on_click(PanelAction::ZoomOut),
+            )
+            .child(
+                View::label(self.zoom_label.as_str())
+                    .w(Sizing::Fixed(ZOOM_LABEL_W))
+                    .fill_h()
+                    .font(color::FONT_SUBHEADING)
+                    .text_color(color::TEXT_PRIMARY_C32)
+                    .align_text(TextAlign::Center),
+            )
+            .child(
+                View::button("+")
+                    .w(Sizing::Fixed(ZOOM_BUTTON_W))
+                    .fill_h()
+                    .style(Self::zoom_button_style())
+                    .on_click(PanelAction::ZoomIn),
+            );
+
+        let action = |label: &str, w: f32, act: PanelAction| {
+            View::button(label)
+                .w(Sizing::Fixed(w))
+                .fill_h()
+                .style(Self::action_button_style())
+                .on_click(act)
         };
-        on(self.zoom_out_id, PanelAction::ZoomOut);
-        on(self.zoom_in_id, PanelAction::ZoomIn);
-        on(self.audio_btn_id, PanelAction::OpenAudioSetup);
-        on(self.monitor_btn_id, PanelAction::ToggleMonitor);
-        on(self.perform_btn_id, PanelAction::EnterPerformMode);
+
+        View::row(GROUP_SPACING)
+            .fill()
+            .main_align(Align::End)
+            .child(zoom_cluster)
+            .child(action("Audio", AUDIO_BUTTON_W, PanelAction::OpenAudioSetup))
+            .child(action("Perform", PERFORM_BUTTON_W, PanelAction::EnterPerformMode))
+            .child(action("Monitor", MONITOR_BUTTON_W, PanelAction::ToggleMonitor))
+    }
+
+    fn view(&self) -> View {
+        View::stack()
+            .fill()
+            .bg(color::PANEL_BG_DARK)
+            .pad(Pad { l: INSET, t: GROUP_Y_PAD, r: INSET, b: GROUP_Y_PAD })
+            .child(self.left_group())
+            .child(self.center_group())
+            .child(self.right_group())
     }
 }
 
@@ -298,228 +245,126 @@ impl Default for HeaderPanel {
 
 impl Panel for HeaderPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
-        self.cache_first_node = tree.count();
-
-        let header = layout.header();
-        self.layout.compute(header, self.import_progress);
-
-        let project_name = self.project_name.clone();
-        let import_status = self.import_status.clone();
-        let time_display = self.time_display.clone();
-        let zoom_label = self.zoom_label.clone();
-
-        let bg = tree.add_panel(
-            None,
-            header.x,
-            header.y,
-            header.width,
-            header.height,
-            UIStyle {
-                bg_color: color::PANEL_BG_DARK,
-                ..UIStyle::default()
-            },
-        );
-
-        // Left group
-        self.project_name_id = Some(tree.add_label(
-            Some(bg),
-            self.layout.project_name.x,
-            self.layout.project_name.y,
-            self.layout.project_name.width,
-            self.layout.project_name.height,
-            &project_name,
-            UIStyle {
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: color::FONT_SUBHEADING,
-                ..UIStyle::default()
-            },
-        ));
-
-        self.import_status_id = Some(tree.add_label(
-            Some(bg),
-            self.layout.import_status.x,
-            self.layout.import_status.y,
-            self.layout.import_status.width,
-            self.layout.import_status.height,
-            &import_status,
-            UIStyle {
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: color::FONT_LABEL,
-                ..UIStyle::default()
-            },
-        ));
-
-        let progress_bg = tree.add_panel(
-            Some(bg),
-            self.layout.progress_bg.x,
-            self.layout.progress_bg.y,
-            self.layout.progress_bg.width,
-            self.layout.progress_bg.height,
-            UIStyle {
-                bg_color: color::SLIDER_TRACK_PRESSED_C32,
-                corner_radius: PROGRESS_RADIUS,
-                ..UIStyle::default()
-            },
-        );
-        self.progress_bg_id = Some(progress_bg);
-        tree.set_visible(progress_bg, self.import_progress_visible);
-
-        let progress_fill = tree.add_panel(
-            Some(bg),
-            self.layout.progress_fill.x,
-            self.layout.progress_fill.y,
-            self.layout.progress_fill.width,
-            self.layout.progress_fill.height,
-            UIStyle {
-                bg_color: PROGRESS_FILL,
-                corner_radius: 1.0,
-                ..UIStyle::default()
-            },
-        );
-        self.progress_fill_id = Some(progress_fill);
-        tree.set_visible(progress_fill, self.import_progress_visible);
-
-        // Center group
-        self.time_display_id = Some(tree.add_node(
-            Some(bg),
-            self.layout.time_display,
-            UINodeType::Label,
-            UIStyle {
-                text_color: color::TEXT_PRIMARY_C32,
-                font_size: color::FONT_HEADING,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            Some(&time_display),
-            UIFlags::empty(),
-        ));
-
-        // Right group
-        self.zoom_out_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.zoom_out.x,
-            self.layout.zoom_out.y,
-            self.layout.zoom_out.width,
-            self.layout.zoom_out.height,
-            UIStyle {
-                bg_color: BUTTON_DIM,
-                hover_bg_color: BUTTON_HOVER_H,
-                pressed_bg_color: BUTTON_PRESSED_H,
-                text_color: color::TEXT_WHITE_C32,
-                font_size: color::FONT_TITLE,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            "\u{2212}",
-        ));
-
-        self.zoom_label_id = Some(tree.add_node(
-            Some(bg),
-            self.layout.zoom_label,
-            UINodeType::Label,
-            UIStyle {
-                text_color: color::TEXT_PRIMARY_C32,
-                font_size: color::FONT_SUBHEADING,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            Some(&zoom_label),
-            UIFlags::empty(),
-        ));
-
-        self.zoom_in_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.zoom_in.x,
-            self.layout.zoom_in.y,
-            self.layout.zoom_in.width,
-            self.layout.zoom_in.height,
-            UIStyle {
-                bg_color: BUTTON_DIM,
-                hover_bg_color: BUTTON_HOVER_H,
-                pressed_bg_color: BUTTON_PRESSED_H,
-                text_color: color::TEXT_WHITE_C32,
-                font_size: color::FONT_TITLE,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            "+",
-        ));
-
-        self.audio_btn_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.audio_button.x,
-            self.layout.audio_button.y,
-            self.layout.audio_button.width,
-            self.layout.audio_button.height,
-            self.perform_style(),
-            "Audio",
-        ));
-
-        self.monitor_btn_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.monitor_button.x,
-            self.layout.monitor_button.y,
-            self.layout.monitor_button.width,
-            self.layout.monitor_button.height,
-            self.monitor_style(),
-            "Monitor",
-        ));
-
-        self.perform_btn_id = Some(tree.add_button(
-            Some(bg),
-            self.layout.perform_button.x,
-            self.layout.perform_button.y,
-            self.layout.perform_button.width,
-            self.layout.perform_button.height,
-            self.perform_style(),
-            "Perform",
-        ));
-
-        self.cache_node_count = tree.count() - self.cache_first_node;
+        self.rect = layout.header();
+        let view = self.view();
+        self.host.build(tree, &view, self.rect);
     }
 
-    fn update(&mut self, _tree: &mut UITree) {}
+    fn update(&mut self, tree: &mut UITree) {
+        if !self.host.is_built() {
+            return;
+        }
+        let view = self.view();
+        let reconcile = self.host.update(tree, &view, self.rect);
+        debug_assert_eq!(
+            reconcile,
+            Reconcile::Updated,
+            "header structure is invariant per frame — value/visibility changes update in place"
+        );
+    }
 
-    /// Header is fully intent-dispatched (see `register_intents`); clicks resolve
-    /// centrally and never reach a panel handler. Required trait no-op.
+    /// Header is fully intent-dispatched (see `register_intents`). Required no-op.
     fn handle_event(&mut self, _event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         Vec::new()
     }
 
+    fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        self.host.register_intents(intents);
+    }
+
     fn first_node(&self) -> usize {
-        self.cache_first_node
+        self.host.first_node()
     }
     fn node_count(&self) -> usize {
-        self.cache_node_count
+        self.host.node_count()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intent::{Gesture, IntentRegistry};
 
-    #[test]
-    fn build_header() {
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = HeaderPanel::new();
+    // Golden oracle: the original right-to-left button positions. The Chrome
+    // `view()` must reproduce every interactive cell at the same rect.
+    #[derive(Default)]
+    struct HeaderGolden {
+        time_display: Rect,
+        zoom_out: Rect,
+        zoom_in: Rect,
+        audio: Rect,
+        perform: Rect,
+        monitor: Rect,
+    }
 
-        panel.build(&mut tree, &layout);
+    impl HeaderGolden {
+        fn compute(&mut self, bounds: Rect) {
+            let elem_h = bounds.height - GROUP_Y_PAD * 2.0;
+            let elem_y = bounds.y + GROUP_Y_PAD;
 
-        assert!(panel.project_name_id.is_some());
-        assert!(panel.time_display_id.is_some());
-        assert!(panel.zoom_out_id.is_some());
-        assert!(panel.zoom_in_id.is_some());
-        assert!(panel.monitor_btn_id.is_some());
-        assert!(panel.audio_btn_id.is_some());
-        assert!(tree.count() >= 11); // bg + 10 elements
+            let cx = bounds.x + (bounds.width - TIME_DISPLAY_W) * 0.5;
+            self.time_display = Rect::new(cx, elem_y, TIME_DISPLAY_W, elem_h);
+
+            let mut rx = bounds.x_max() - INSET;
+            rx -= MONITOR_BUTTON_W;
+            self.monitor = Rect::new(rx, elem_y, MONITOR_BUTTON_W, elem_h);
+            rx -= GROUP_SPACING;
+            rx -= PERFORM_BUTTON_W;
+            self.perform = Rect::new(rx, elem_y, PERFORM_BUTTON_W, elem_h);
+            rx -= GROUP_SPACING;
+            rx -= AUDIO_BUTTON_W;
+            self.audio = Rect::new(rx, elem_y, AUDIO_BUTTON_W, elem_h);
+            rx -= GROUP_SPACING;
+            rx -= ZOOM_BUTTON_W;
+            self.zoom_in = Rect::new(rx, elem_y, ZOOM_BUTTON_W, elem_h);
+            rx -= ZOOM_LABEL_W;
+            rx -= ZOOM_BUTTON_W;
+            self.zoom_out = Rect::new(rx, elem_y, ZOOM_BUTTON_W, elem_h);
+        }
+    }
+
+    fn node_with_text<'a>(tree: &'a UITree, text: &str) -> &'a crate::node::UINode {
+        (0..tree.count())
+            .map(|i| tree.get_node(NodeId(i as u32)))
+            .find(|n| n.text.as_deref() == Some(text))
+            .unwrap_or_else(|| panic!("no node with text {text:?}"))
+    }
+
+    fn assert_rect(a: Rect, b: Rect, what: &str) {
+        assert!(
+            (a.x - b.x).abs() < 0.01
+                && (a.y - b.y).abs() < 0.01
+                && (a.width - b.width).abs() < 0.01
+                && (a.height - b.height).abs() < 0.01,
+            "{what}: {a:?} != golden {b:?}"
+        );
     }
 
     #[test]
-    fn intent_resolves_button_clicks() {
-        use crate::intent::{Gesture, IntentRegistry};
+    fn chrome_layout_matches_golden() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = HeaderPanel::new();
+        panel.build(&mut tree, &layout);
+
+        let mut g = HeaderGolden::default();
+        g.compute(layout.header());
+
+        assert_rect(node_with_text(&tree, "\u{2212}").bounds, g.zoom_out, "zoom_out");
+        assert_rect(node_with_text(&tree, "+").bounds, g.zoom_in, "zoom_in");
+        assert_rect(node_with_text(&tree, "Audio").bounds, g.audio, "audio");
+        assert_rect(node_with_text(&tree, "Perform").bounds, g.perform, "perform");
+        assert_rect(node_with_text(&tree, "Monitor").bounds, g.monitor, "monitor");
+        // Centered time display lands at true screen centre despite the inset.
+        assert_rect(
+            node_with_text(&tree, "00:00.00 / 00:00.00  |  1.1.1").bounds,
+            g.time_display,
+            "time_display",
+        );
+    }
+
+    #[test]
+    fn intents_resolve_through_registry() {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = HeaderPanel::new();
@@ -528,30 +373,52 @@ mod tests {
         let mut intents = IntentRegistry::new();
         panel.register_intents(&mut intents);
 
-        // The sole click path: resolve through the registry (replaces the
-        // deleted handle_click twin).
-        let audio = intents.resolve(&tree, panel.audio_btn_id, Gesture::Click);
-        assert!(matches!(audio, Some(PanelAction::OpenAudioSetup)));
-        let zin = intents.resolve(&tree, panel.zoom_in_id, Gesture::Click);
-        assert!(matches!(zin, Some(PanelAction::ZoomIn)));
-        let zout = intents.resolve(&tree, panel.zoom_out_id, Gesture::Click);
-        assert!(matches!(zout, Some(PanelAction::ZoomOut)));
-        assert!(intents.resolve(&tree, None, Gesture::Click).is_none());
+        let audio_id = node_with_text(&tree, "Audio").id;
+        assert!(matches!(
+            intents.resolve(&tree, Some(audio_id), Gesture::Click),
+            Some(PanelAction::OpenAudioSetup)
+        ));
+        let zin = node_with_text(&tree, "+").id;
+        assert!(matches!(
+            intents.resolve(&tree, Some(zin), Gesture::Click),
+            Some(PanelAction::ZoomIn)
+        ));
     }
 
     #[test]
-    fn set_time_display_updates() {
+    fn value_change_updates_in_place() {
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = HeaderPanel::new();
         panel.build(&mut tree, &layout);
+        let count = tree.count();
+        let sv = tree.structure_version();
 
-        tree.clear_dirty();
-        panel.set_time_display(&mut tree, "01:30.50 | 4.2.3");
-        assert!(tree.has_dirty());
+        panel.set_time_display("01:30.50  |  4.2.3");
+        panel.set_project_name("Live Set");
+        panel.update(&mut tree);
+
+        assert_eq!(tree.count(), count, "no nodes added");
+        assert_eq!(tree.structure_version(), sv, "no structure bump");
         assert_eq!(
-            tree.get_node(panel.time_display_id.unwrap()).text.as_deref(),
-            Some("01:30.50 | 4.2.3")
+            node_with_text(&tree, "01:30.50  |  4.2.3").text.as_deref(),
+            Some("01:30.50  |  4.2.3")
         );
+    }
+
+    #[test]
+    fn progress_toggle_is_in_place() {
+        // Showing/hiding the import progress bar is a visibility change, not a
+        // structural one (the nodes are always emitted).
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = HeaderPanel::new();
+        panel.build(&mut tree, &layout);
+        let sv = tree.structure_version();
+
+        panel.set_import_status("Decoding…", 0.5, true);
+        panel.update(&mut tree);
+
+        assert_eq!(tree.structure_version(), sv, "progress toggle must not rebuild");
     }
 }

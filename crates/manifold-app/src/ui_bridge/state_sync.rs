@@ -225,7 +225,7 @@ pub fn push_state(
         let sixteenth = ((beat % 1.0) * 4.0).floor() as i32 + 1;
 
         let display = transport_cache.time_display(mins, secs, tenths, bar, beat_in_bar, sixteenth);
-        ui.header.set_time_display(tree, display);
+        ui.header.set_time_display(display);
         let bpm_str = transport_cache.bpm_display(bpm);
         ui.transport.set_bpm_text(tree, bpm_str);
 
@@ -428,10 +428,9 @@ pub fn push_state(
         } else {
             project_name.to_string()
         };
-        ui.header.set_project_name(tree, &header_name);
+        ui.header.set_project_name(&header_name);
         let ppb = ui.viewport.pixels_per_beat();
-        ui.header
-            .set_zoom_label(tree, &format!("{:.0} px/beat", ppb));
+        ui.header.set_zoom_label(&format!("{:.0} px/beat", ppb));
 
         // Footer — quantize mode, resolution, FPS
         ui.footer

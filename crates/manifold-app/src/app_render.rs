@@ -694,7 +694,6 @@ impl Application {
             let progress = self.content_state.percussion_progress;
             let show = self.content_state.percussion_show_progress && !msg.is_empty();
             self.ws.ui_root.header.set_import_status(
-                &mut self.ws.ui_root.tree,
                 &msg,
                 if progress < 0.0 {
                     0.0
