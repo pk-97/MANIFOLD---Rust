@@ -73,7 +73,11 @@ impl Rect {
     }
 
     pub fn contains(&self, pos: Vec2) -> bool {
-        pos.x >= self.x && pos.x < self.x_max() && pos.y >= self.y && pos.y < self.y_max()
+        // Two half-open spans — the shared hit-test primitive. A point on the
+        // right/bottom edge belongs to the abutting rect, not this one.
+        use crate::hit::Span;
+        Span::new(self.x, self.x_max()).contains(pos.x)
+            && Span::new(self.y, self.y_max()).contains(pos.y)
     }
 
     /// Offset the rect's Y position.

@@ -14,7 +14,7 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 1.4 COMPLETE (2026-06-22).** Next action: **Phase 1.5 (extract shared hit-test primitives)**.
+> **Status: Phase 1.5 COMPLETE (2026-06-22).** Next action: **Phase 1.6 (delete transport/header/footer `handle_click` twins → `IntentRegistry::resolve`)**.
 >
 > **Phase 0 decision:** production stays `panic = "abort"` ([`Cargo.toml`](../Cargo.toml)
 > `[profile.release]`). In-process recovery (catch_unwind / respawn / watchdog) is
@@ -530,8 +530,14 @@ not a recovery system.
   text at build, right-anchored so the glyphs render unchanged (test
   `quantize_label_sized_to_text`). Signature-free: no panel `build()` arg changed —
   the measurer rides on the tree every `build()` already holds.
-- [ ] **1.5** Extract shared hit-test primitives. _Done when:_ chrome + timeline
-  share the primitive.
+- [x] **1.5** Extract shared hit-test primitives. _Done when:_ chrome + timeline
+  share the primitive. → `Span` (1D interval, half-open `contains` /
+  `contains_inclusive` / `overlaps`) in [`hit.rs`](../crates/manifold-ui/src/hit.rs).
+  Chrome's `Rect::contains` is now two half-open spans; the timeline's
+  `ClipHitTester` expresses its beat interval (`contains`), Y band
+  (`contains_inclusive`), and box-select (`overlaps`) through it. Value-identical
+  (tree hit-test + clip hit-test tests green). The canvas's closed point-in-rect
+  is a Phase-4 consumer, left untouched (different boundary convention).
 - [ ] **1.6** (Group A) Delete the transport/header/footer `handle_click` twins;
   rewrite their tests to `IntentRegistry::resolve`. _Done when:_ no click twin
   remains.

@@ -5,6 +5,7 @@
 //! The struct is stateless — CoordinateMapper and clip data are passed as parameters.
 
 use crate::coordinate_mapper::CoordinateMapper;
+use crate::hit::Span;
 use crate::panels::viewport::ViewportClip;
 use manifold_core::ClipId;
 
@@ -77,7 +78,8 @@ impl ClipHitTester {
         let track_height = mapper.get_layer_height(layer_index);
         let clip_top = track_top + clip_vertical_padding;
         let clip_bottom = track_top + track_height - clip_vertical_padding;
-        if y_in_track_content < clip_top || y_in_track_content > clip_bottom {
+        // Closed Y band — the clip area includes both padding edges.
+        if !Span::new(clip_top, clip_bottom).contains_inclusive(y_in_track_content) {
             return None;
         }
 
@@ -88,8 +90,8 @@ impl ClipHitTester {
         for clip in clips_for_layer(layer_index).iter().rev() {
             let clip_start_f32 = clip.start_beat.as_f32();
             let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
-            // Unity line 76: beat range check
-            if beat_at_pointer < clip_start_f32 || beat_at_pointer >= clip_end {
+            // Unity line 76: beat range check — half-open [start, end).
+            if !Span::new(clip_start_f32, clip_end).contains(beat_at_pointer) {
                 continue;
             }
 
@@ -158,7 +160,8 @@ impl ClipHitTester {
             for clip in clips_for_layer(layer_idx) {
                 let clip_start_f32 = clip.start_beat.as_f32();
                 let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
-                if clip_end > min_beat && clip_start_f32 < max_beat {
+                // Interval overlap with the selection's beat span.
+                if Span::new(clip_start_f32, clip_end).overlaps(Span::new(min_beat, max_beat)) {
                     results.push(clip.clip_id.clone());
                 }
             }

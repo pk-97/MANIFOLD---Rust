@@ -9,6 +9,7 @@ pub mod cursor_nav;
 pub mod cursors;
 pub mod drag;
 pub mod driver_waveform_icons;
+pub mod hit;
 pub mod input;
 pub mod inspector_layout;
 pub mod intent;
