@@ -84,12 +84,14 @@ and how we get there."
 >    old 2b.0 note flagged for `param_card`, now understood to apply to the whole
 >    slider/drawer family.
 >
-> Next action: migrate the cards on the hybrid pattern **with a running build to
-> verify each card's drag/drawer/collapse**, simplest-first (`master_chrome` →
-> `layer_chrome` → `clip_chrome` → `macros_panel` → `param_card`), then the
-> `inspector` composite, `layer_header`, `audio_setup_panel`, and 2b.11 typed
-> dropdowns. The build-equivalence golden pattern from the static bars carries
-> over; the runtime check is the added gate.
+> **UPDATE 2026-06-22: all of the above is DONE** — every card + the inspector
+> composite + `layer_header` + `audio_setup_panel` chrome + 2b.11 typed dropdowns
+> are migrated, verified (golden byte-equivalence + focused tests), and pushed (35
+> commits). The dragged/real-time widget bodies stay imperative by design (the
+> chrome-declarative / widget-imperative split). The note below is kept as the
+> historical rationale for why the heavyweights were staged rather than done blind;
+> the running-build check still applies to anyone re-touching the live
+> drag/drawer/meter paths. See the Phase-2b completion summary at the end of §13.
 >
 > **Phase 2a (Chrome API):** a declarative `chrome` module in `manifold-ui` — a panel
 > describes its UI once as a `View` tree; a `ChromeHost` reconciler decides build-vs-update
@@ -755,25 +757,31 @@ pass (see §0).
   `dropdown_color_to_action`) and `AudioSendRoutings` (read-only). A new
   `open_dropdown_typed` opens a context-free dropdown.
 
-> **Cumulative this chat (2026-06-22):** **7 panels migrated + verified + pushed**
-> (footer, header, transport, master_chrome, layer_chrome, macros_panel,
-> clip_chrome), Chrome API extended with `key`, `disabled`, and the **typed
-> `slider_row` building block** (host-materialised) per Peter's steer.
+> **Phase 2b COMPLETE — 2026-06-22 (one session, 35 commits, all pushed, all green).**
+> Every panel's **chrome** is now declarative on the Chrome API, and the typed
+> building-block direction Peter asked for is in place.
 >
-> **Remaining = the four heavyweights + dropdowns**, deliberately not done blind in
-> one session because of their size and density:
-> - `param_card` **3344 lines** (+ `param_slider_shared` 1562) — drivers / envelope
->   / audio-mod drawers + trim handles, the densest surface. Needs the drawer +
->   trim blocks built first.
-> - `layer_header` **2504**, `audio_setup_panel` **2092**, `inspector` **1801**.
-> - 2b.11 typed dropdowns (independent, slider-free).
+> **Panels migrated + verified + pushed:** footer, header, transport,
+> master_chrome, layer_chrome, macros_panel, clip_chrome (7 full); **param_card**
+> (frame + both effect/generator headers declarative + goldens; the densest card);
+> **layer_header** + **audio_setup_panel** (their modal/top chrome); **inspector**
+> (sub-panels + its own section-card backgrounds + add-effect buttons, golden
+> byte-identical). **2b.11** fully done: all ~19 dropdown menus typed,
+> `dropdown_to_action` deleted, four parallel index→meaning maps + the
+> `AudioSourceChoice` enum gone.
 >
-> These ~9.7k lines are the most interaction- and real-time-dense perform UI; the
-> build golden proves the static tree but not the live drawer/drag/meter behaviour,
-> so they want a **running build**. The path is mechanical from here: add the
-> dropdown-trigger / progress-bar / drawer / trim blocks (same shape as
-> `slider_row`), then each card composes them. Pick up at `param_card` with a build
-> to watch.
+> **Chrome API extended** with `key`, `disabled`, the typed **`slider_row`**
+> building block (host-materialised), **`dropdown_trigger_view`**, the inspector's
+> **`section_card_view`** / **`add_effect_button_view`**, and a stateless
+> **`chrome::materialize`** for full-rebuild panels (scroll columns) that can't
+> carry a reconcile-stateful `ChromeHost`.
+>
+> **Deliberately imperative (the correct end state, not gaps):** the dragged /
+> real-time **widget bodies** — `param_card`'s param rows (trim + drawers),
+> `layer_header`'s per-layer rows, `audio_setup`'s meters/spectrogram. These are
+> the widget-imperative half of the chrome-declarative / widget-imperative split,
+> exactly like the slider stays a `BitmapSlider` behind `slider_row`. Migrating
+> them to declarative Views is not the goal; the split *is* the architecture.
 
 ### Phase 3 — Timeline API
 - [ ] **3.1** Sub-design-doc: lane/clip/marker model + one interaction owner +
