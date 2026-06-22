@@ -115,6 +115,18 @@
         "isTrigger": false,
         "formatString": "F1",
         "oscSuffix": "lineSpacing"
+      },
+      {
+        "id": "stroke_width",
+        "name": "Stroke Width",
+        "min": 0.0,
+        "max": 0.5,
+        "defaultValue": 0.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "isTrigger": false,
+        "formatString": "F2",
+        "oscSuffix": "strokeWidth"
       }
     ],
     "bindings": [
@@ -221,6 +233,19 @@
         "convert": {
           "type": "Float"
         }
+      },
+      {
+        "id": "stroke_width",
+        "label": "Stroke Width",
+        "defaultValue": 0.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "render_text",
+          "param": "stroke_width"
+        },
+        "convert": {
+          "type": "Float"
+        }
       }
     ],
     "skipMode": {
@@ -275,7 +300,27 @@
       "nodeId": "render_text",
       "typeId": "node.render_text",
       "handle": "render_text",
-      "title": "Render Text"
+      "title": "Render Text",
+      "params": {
+        "fill_color": {
+          "type": "Color",
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "stroke_color": {
+          "type": "Color",
+          "value": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        }
+      }
     },
     {
       "id": 2,

@@ -1,5 +1,7 @@
 // node.render_text — composite a CPU-rasterized R8Unorm glyph bitmap
 // into the output with position / scale / aspect / vertical alignment.
+// Two coverage masks: `fill_tex` (glyph interior) and `stroke_tex` (outline,
+// only sampled when has_stroke > 0). Output is premultiplied alpha.
 
 struct Uniforms {
     pos_x: f32,
@@ -13,15 +15,20 @@ struct Uniforms {
     output_height: f32,
     // -- 16-byte boundary --
     v_align: f32, // 0=Top, 1=Center, 2=Bottom
+    has_stroke: f32, // 0 = ignore stroke_tex, 1 = blend stroke under fill
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
+    // -- 16-byte boundary --
+    fill_color: vec4<f32>,
+    // -- 16-byte boundary --
+    stroke_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 // R8Unorm bound as texture_2d (NOT storage — R8Unorm can't be storage on Metal).
-@group(0) @binding(1) var text_tex: texture_2d<f32>;
-@group(0) @binding(2) var output: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(1) var fill_tex: texture_2d<f32>;
+@group(0) @binding(2) var stroke_tex: texture_2d<f32>;
+@group(0) @binding(3) var output: texture_storage_2d<rgba16float, write>;
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -65,11 +72,20 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     // No Y-flip needed: CG bitmap context row ordering matches GPU texture
     // layout for this upload path (Metal replace_region preserves row order).
     let texel = vec2<i32>(vec2<f32>(u.tex_width, u.tex_height) * tex_uv);
-    let coverage = textureLoad(text_tex, texel, 0).r;
+    let fill_cov = textureLoad(fill_tex, texel, 0).r;
+    var stroke_cov = 0.0;
+    if u.has_stroke > 0.5 {
+        stroke_cov = textureLoad(stroke_tex, texel, 0).r;
+    }
 
-    // White glyphs, premultiplied alpha: rgb = white * coverage, a = coverage.
-    // Where coverage is 0 the pixel is fully transparent, so the glyph edges
-    // anti-alias against whatever is below and the background no longer paints
-    // an opaque black box over the layer beneath.
-    textureStore(output, vec2<i32>(id.xy), vec4<f32>(vec3<f32>(coverage), coverage));
+    // Premultiplied-alpha "over": fill on top of stroke on top of transparent.
+    // The outline keys under the fill so glyph interiors keep the fill colour
+    // and the stroke shows as a ring; everything anti-aliases over the layer
+    // below instead of painting a black box. With fill=white and no stroke
+    // this reduces to (white * coverage, coverage) — the original behaviour.
+    let fa = fill_cov * u.fill_color.a;
+    let sa = stroke_cov * u.stroke_color.a;
+    let rgb = u.fill_color.rgb * fa + u.stroke_color.rgb * sa * (1.0 - fa);
+    let a = fa + sa * (1.0 - fa);
+    textureStore(output, vec2<i32>(id.xy), vec4<f32>(rgb, a));
 }

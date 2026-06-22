@@ -172,6 +172,9 @@ crate::param_tooltips!("node.render_text", {
     "v_align" => "How the block anchors vertically, Top, Center, or Bottom.",
     "letter_spacing" => "Extra gap between letters. 0 is the font's normal spacing, higher spreads them apart and negative packs them tighter.",
     "line_spacing" => "The gap between lines, default 1.2. Lower tightens the lines, higher opens them up.",
+    "stroke_width" => "Outline thickness around the letters, as a fraction of the text size. 0 is no outline, higher draws a thicker border.",
+    "fill_color" => "The colour of the letters themselves.",
+    "stroke_color" => "The colour of the outline drawn around the letters when stroke width is above 0.",
     "text" => "The words to draw. Wire this through the card so you can change the message live during a show.",
     "fontFamily" => "The font to use by name. Leave it blank to fall back to the built-in default.",
 });

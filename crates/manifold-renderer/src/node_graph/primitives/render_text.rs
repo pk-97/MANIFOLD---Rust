@@ -36,14 +36,20 @@ struct RenderTextUniforms {
     output_width: f32,
     output_height: f32,
     // -- 16-byte boundary --
-    v_align: f32, // 0=Top, 1=Center, 2=Bottom
-    _pad: [f32; 3],
+    v_align: f32,    // 0=Top, 1=Center, 2=Bottom
+    has_stroke: f32, // 0 = no outline, 1 = blend stroke_color under the fill
+    _pad0: f32,
+    _pad1: f32,
+    // -- 16-byte boundary --
+    fill_color: [f32; 4],
+    // -- 16-byte boundary --
+    stroke_color: [f32; 4],
 }
 
 crate::primitive! {
     name: RenderText,
     type_id: "node.render_text",
-    purpose: "Render a text string to the output texture. The host wires `text` and `fontFamily` through preset stringBindings; size/position/scale/alignment/spacing are port-shadows-param scalars. CPU-rasterizes the glyphs via CoreText into an internal R8Unorm bitmap (dirty-cached — only re-rasterized when text/font/size/style change), then composites premultiplied white glyphs on a transparent background into the output with aspect correction, so the text keys cleanly over the layer below. Single-node text generator: drop it between `system.generator_input` and `system.final_output`.",
+    purpose: "Render a text string to the output texture. The host wires `text` and `fontFamily` through preset stringBindings; size/position/scale/alignment/spacing/stroke_width are port-shadows-param scalars; fill_color and stroke_color are editor-set Color params. CPU-rasterizes the glyphs via CoreText into internal R8Unorm coverage bitmaps — a fill mask always, plus an outline mask when stroke_width > 0 (both dirty-cached — only re-rasterized when text/font/size/style change). A compute kernel composites them as premultiplied alpha (fill over stroke over transparent) with aspect correction, so the text keys cleanly over the layer below. Single-node text generator: drop it between `system.generator_input` and `system.final_output`.",
     inputs: {
         size: ScalarF32 optional,
         pos_x: ScalarF32 optional,
@@ -53,6 +59,7 @@ crate::primitive! {
         v_align: ScalarF32 optional,
         letter_spacing: ScalarF32 optional,
         line_spacing: ScalarF32 optional,
+        stroke_width: ScalarF32 optional,
     },
     outputs: {
         out: Texture2D,
@@ -123,6 +130,30 @@ crate::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: "stroke_width",
+            label: "Stroke Width",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 0.5)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "fill_color",
+            label: "Fill Color",
+            ty: ParamType::Color,
+            default: ParamValue::Color([1.0, 1.0, 1.0, 1.0]),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: "stroke_color",
+            label: "Stroke Color",
+            ty: ParamType::Color,
+            default: ParamValue::Color([0.0, 0.0, 0.0, 1.0]),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
             name: "text",
             label: "Text",
             ty: ParamType::String,
@@ -140,7 +171,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Text + fontFamily come via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text fields into this primitive's String params. Scalar inputs are port-shadows-param: wire upstream LFOs / envelopes into `size`, `pos_x`, `pos_y`, `scale`, `h_align`, `v_align`, `letter_spacing`, `line_spacing` to animate them. The R8Unorm glyph bitmap is dirty-cached internally — re-rasterization only happens when text, font, font size (= size × output_height), or styling actually change, so per-frame cost is just the composite dispatch. Output is premultiplied white glyphs on a transparent background, so it keys over the layer below instead of painting a black box; pair with downstream `node.color_grade` to tint.",
+    composition_notes: "Text + fontFamily come via presetMetadata.stringBindings — wire the JSON-graph generator's outer-card text fields into this primitive's String params. Scalar inputs are port-shadows-param: wire upstream LFOs / envelopes into `size`, `pos_x`, `pos_y`, `scale`, `h_align`, `v_align`, `letter_spacing`, `line_spacing`, `stroke_width` to animate them. `stroke_width` is a fraction of font size; > 0 rasterizes a second outline coverage mask (so width changes re-raster, but the per-frame cost stays the composite dispatch). `fill_color` / `stroke_color` are editor-set Color params blended in the shader — free to change, never re-rasterize, but not modulatable (the binding system is scalar-only). The coverage bitmaps are dirty-cached internally — re-rasterization only happens when text, font, font size, or styling actually change. Output is premultiplied alpha on a transparent background (fill over stroke), so it keys over the layer below instead of painting a black box; with fill=white and no stroke it matches the original white-glyph behaviour.",
     examples: ["assets/generator-presets/Text.json"],
     picker: { label: "Render Text", category: Atom },
     summary: "Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live.",
@@ -150,6 +181,7 @@ crate::primitive! {
     extra_fields: {
         rasterizer: TextRasterizer = TextRasterizer::new(),
         text_texture: Option<manifold_gpu::GpuTexture> = None,
+        stroke_texture: Option<manifold_gpu::GpuTexture> = None,
         text_tex_dims: (u32, u32) = (0, 0),
         cached_text: String = String::new(),
         cached_font_family: String = String::new(),
@@ -157,6 +189,7 @@ crate::primitive! {
         cached_h_align: f32 = -1.0,
         cached_letter_spacing: f32 = f32::NAN,
         cached_line_spacing: f32 = f32::NAN,
+        cached_stroke_width: f32 = f32::NAN,
     },
 }
 
@@ -194,6 +227,20 @@ impl Primitive for RenderText {
         let v_align = ctx.scalar_or_param("v_align", 1.0);
         let letter_spacing = ctx.scalar_or_param("letter_spacing", 0.0);
         let line_spacing = ctx.scalar_or_param("line_spacing", 1.2);
+        let stroke_width = ctx.scalar_or_param("stroke_width", 0.0).max(0.0);
+
+        // Colours are editor-set params (the binding/modulation system is
+        // scalar-only, like every other colour in the app). They feed the
+        // composite shader directly — changing them costs nothing extra and
+        // never invalidates the glyph bitmap cache.
+        let fill_color = match ctx.params.get("fill_color") {
+            Some(ParamValue::Color(c)) => *c,
+            _ => [1.0, 1.0, 1.0, 1.0],
+        };
+        let stroke_color = match ctx.params.get("stroke_color") {
+            Some(ParamValue::Color(c)) => *c,
+            _ => [0.0, 0.0, 0.0, 1.0],
+        };
 
         // Dirty-check the rasterizer cache — only rebuild the glyph bitmap
         // when something it depends on actually changed. NaN sentinels on
@@ -204,7 +251,8 @@ impl Primitive for RenderText {
         let size_changed = (font_size - self.cached_pixel_size).abs() > 0.5;
         let style_changed = (h_align - self.cached_h_align).abs() > 0.01
             || (letter_spacing - self.cached_letter_spacing).abs() > 0.001
-            || (line_spacing - self.cached_line_spacing).abs() > 0.01;
+            || (line_spacing - self.cached_line_spacing).abs() > 0.01
+            || (stroke_width - self.cached_stroke_width).abs() > 0.0005;
 
         if text_changed || font_changed || size_changed || style_changed {
             // Pre-warm font cache on family change so the first rasterize
@@ -221,22 +269,35 @@ impl Primitive for RenderText {
                 h_align: HAlign::from_param(h_align),
                 letter_spacing,
                 line_spacing,
+                stroke_width,
             };
             match self.rasterizer.rasterize(&text, font_size, &opts) {
                 Some(result) => {
-                    self.ensure_texture(ctx, result.width, result.height);
+                    self.ensure_textures(ctx, result.width, result.height, result.stroke.is_some());
                     if let Some(ref texture) = self.text_texture {
                         ctx.gpu_encoder().native_enc.upload_texture(
                             texture,
                             result.width,
                             result.height,
                             1,
-                            &result.pixels,
+                            &result.fill,
+                        );
+                    }
+                    if let (Some(texture), Some(pixels)) =
+                        (self.stroke_texture.as_ref(), result.stroke.as_ref())
+                    {
+                        ctx.gpu_encoder().native_enc.upload_texture(
+                            texture,
+                            result.width,
+                            result.height,
+                            1,
+                            pixels,
                         );
                     }
                 }
                 None => {
                     self.text_texture = None;
+                    self.stroke_texture = None;
                     self.text_tex_dims = (0, 0);
                 }
             }
@@ -246,6 +307,7 @@ impl Primitive for RenderText {
             self.cached_h_align = h_align;
             self.cached_letter_spacing = letter_spacing;
             self.cached_line_spacing = line_spacing;
+            self.cached_stroke_width = stroke_width;
         }
 
         // Reborrow output here — `ensure_texture` and `upload_texture`
@@ -262,6 +324,16 @@ impl Primitive for RenderText {
             return;
         };
 
+        // When there is no outline the stroke slot still needs a valid
+        // binding — point it at the fill texture and gate the sample with
+        // has_stroke = 0 so the shader never reads it.
+        let stroke_tex = self.stroke_texture.as_ref().unwrap_or(text_tex);
+        let has_stroke = if self.stroke_texture.is_some() {
+            1.0
+        } else {
+            0.0
+        };
+
         let aspect = w as f32 / h as f32;
         let uniforms = RenderTextUniforms {
             pos_x,
@@ -273,7 +345,11 @@ impl Primitive for RenderText {
             output_width: w as f32,
             output_height: h as f32,
             v_align,
-            _pad: [0.0; 3],
+            has_stroke,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            fill_color,
+            stroke_color,
         };
 
         let gpu = ctx.gpu_encoder();
@@ -298,6 +374,10 @@ impl Primitive for RenderText {
                 },
                 GpuBinding::Texture {
                     binding: 2,
+                    texture: stroke_tex,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
                     texture: out,
                 },
             ],
@@ -308,23 +388,42 @@ impl Primitive for RenderText {
 }
 
 impl RenderText {
-    fn ensure_texture(&mut self, ctx: &mut EffectNodeContext<'_, '_>, w: u32, h: u32) {
-        if self.text_tex_dims == (w, h) && self.text_texture.is_some() {
-            return;
-        }
+    /// Ensure the fill texture (always) and the stroke texture (only when
+    /// `want_stroke`) exist at `w × h`. Both glyph masks share dimensions, so
+    /// a size change re-creates whichever are needed; when the stroke is off,
+    /// its texture is dropped so we don't hold a stale outline.
+    fn ensure_textures(
+        &mut self,
+        ctx: &mut EffectNodeContext<'_, '_>,
+        w: u32,
+        h: u32,
+        want_stroke: bool,
+    ) {
+        let dims_changed = self.text_tex_dims != (w, h);
         let device = ctx.gpu_encoder().device;
-        let texture = device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width: w,
-            height: h,
-            depth: 1,
-            format: manifold_gpu::GpuTextureFormat::R8Unorm,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::SHADER_READ
-                | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
-            label: "node.render_text glyphs",
-            mip_levels: 1,
-        });
-        self.text_texture = Some(texture);
+        let make = || {
+            device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: w,
+                height: h,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::R8Unorm,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
+                label: "node.render_text glyphs",
+                mip_levels: 1,
+            })
+        };
+        if dims_changed || self.text_texture.is_none() {
+            self.text_texture = Some(make());
+        }
+        if want_stroke {
+            if dims_changed || self.stroke_texture.is_none() {
+                self.stroke_texture = Some(make());
+            }
+        } else {
+            self.stroke_texture = None;
+        }
         self.text_tex_dims = (w, h);
     }
 }
@@ -339,7 +438,7 @@ mod tests {
     #[test]
     fn render_text_ports_and_params() {
         assert_eq!(RenderText::TYPE_ID, "node.render_text");
-        assert_eq!(RenderText::INPUTS.len(), 8);
+        assert_eq!(RenderText::INPUTS.len(), 9);
         for input in RenderText::INPUTS {
             assert!(!input.required, "{} should be optional", input.name);
             assert_eq!(input.ty, PortType::Scalar(ScalarType::F32));
@@ -359,18 +458,28 @@ mod tests {
                 "v_align",
                 "letter_spacing",
                 "line_spacing",
+                "stroke_width",
+                "fill_color",
+                "stroke_color",
                 "text",
                 "fontFamily",
             ]
         );
 
-        // Two String-typed params; the other eight are Float.
+        // Two String-typed params; two Color; the rest Float.
         let string_params: Vec<&str> = RenderText::PARAMS
             .iter()
             .filter(|p| matches!(p.ty, ParamType::String))
             .map(|p| p.name)
             .collect();
         assert_eq!(string_params, vec!["text", "fontFamily"]);
+
+        let color_params: Vec<&str> = RenderText::PARAMS
+            .iter()
+            .filter(|p| matches!(p.ty, ParamType::Color))
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(color_params, vec!["fill_color", "stroke_color"]);
     }
 
     #[test]

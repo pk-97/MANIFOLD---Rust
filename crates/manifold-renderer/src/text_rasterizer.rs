@@ -11,7 +11,10 @@ use core_foundation::{
     string::CFString,
 };
 use core_graphics::{
-    color_space::CGColorSpace, context::CGContext, data_provider::CGDataProvider, font::CGFont,
+    color_space::CGColorSpace,
+    context::{CGContext, CGLineCap, CGLineJoin, CGTextDrawingMode},
+    data_provider::CGDataProvider,
+    font::CGFont,
     geometry::CGPoint,
 };
 use core_text::{font::CTFont, string_attributes::kCTFontAttributeName};
@@ -48,6 +51,10 @@ pub struct RasterizeOptions<'a> {
     pub letter_spacing: f32,
     /// Line height multiplier. 1.0 = tight (ascent+descent only), 1.2 = default.
     pub line_spacing: f32,
+    /// Outline stroke width as a fraction of font_size. 0.0 = no stroke.
+    /// When > 0, a second coverage mask is rendered from the stroked glyph
+    /// outlines so the compositor can colour the outline separately.
+    pub stroke_width: f32,
 }
 
 impl<'a> Default for RasterizeOptions<'a> {
@@ -57,14 +64,19 @@ impl<'a> Default for RasterizeOptions<'a> {
             h_align: HAlign::Center,
             letter_spacing: 0.0,
             line_spacing: 1.2,
+            stroke_width: 0.0,
         }
     }
 }
 
-/// Result of rasterizing a text string.
+/// Result of rasterizing a text string. `fill` is the glyph interior
+/// coverage; `stroke` is the outline coverage, present only when
+/// `RasterizeOptions::stroke_width > 0`. Both are R8 grayscale, same dims.
 pub struct RasterizedText {
-    /// R8 grayscale pixel data (width * height bytes).
-    pub pixels: Vec<u8>,
+    /// R8 grayscale fill (interior) coverage (width * height bytes).
+    pub fill: Vec<u8>,
+    /// R8 grayscale outline coverage, or `None` when no stroke was requested.
+    pub stroke: Option<Vec<u8>>,
     pub width: u32,
     pub height: u32,
 }
@@ -212,8 +224,21 @@ impl TextRasterizer {
         // Total height: first line = base_line_height, each additional line adds
         // line_height. This way single-line text isn't padded by line_spacing.
         let content_h = base_line_height + (num_lines.saturating_sub(1)) as f32 * line_height;
-        let bitmap_w = (max_width.ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
-        let bitmap_h = (content_h.ceil() as u32 + PADDING * 2).min(MAX_BITMAP_DIM);
+
+        // A stroke straddles the glyph edge — half its width spills outward.
+        // Pad the bitmap so the outline isn't clipped. When there is no
+        // stroke, padding stays at PADDING so output is byte-identical to the
+        // fill-only path.
+        let stroke_px = (opts.stroke_width * font_size).max(0.0);
+        let want_stroke = stroke_px > 0.5;
+        let pad = if want_stroke {
+            PADDING + (stroke_px * 0.5).ceil() as u32
+        } else {
+            PADDING
+        };
+
+        let bitmap_w = (max_width.ceil() as u32 + pad * 2).min(MAX_BITMAP_DIM);
+        let bitmap_h = (content_h.ceil() as u32 + pad * 2).min(MAX_BITMAP_DIM);
 
         if bitmap_w == 0 || bitmap_h == 0 {
             return None;
@@ -221,54 +246,81 @@ impl TextRasterizer {
 
         let w = bitmap_w as usize;
         let h = bitmap_h as usize;
-        let mut pixels = vec![0u8; w * h];
 
-        let color_space = CGColorSpace::create_device_gray();
-        let ctx = CGContext::create_bitmap_context(
-            Some(pixels.as_mut_ptr() as *mut std::ffi::c_void),
-            w,
-            h,
-            8,
-            w,
-            &color_space,
-            0u32,
-        );
-
-        ctx.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0);
-        ctx.set_allows_font_smoothing(false);
-        ctx.set_should_smooth_fonts(false);
-
-        // CG is y-up: line 0 (top visually) has the highest CG y.
-        for (line_idx, measure) in line_measures.iter().enumerate() {
-            if measure.glyphs.is_empty() {
-                continue;
+        // Render one coverage pass into a fresh R8 buffer. `stroke = None`
+        // draws filled glyphs (interior coverage); `Some(width_px)` strokes
+        // the glyph outlines at that line width. Geometry is identical across
+        // passes, so the fill and stroke masks register exactly.
+        let render_pass = |stroke: Option<f32>| -> Vec<u8> {
+            let mut buf = vec![0u8; w * h];
+            let color_space = CGColorSpace::create_device_gray();
+            let ctx = CGContext::create_bitmap_context(
+                Some(buf.as_mut_ptr() as *mut std::ffi::c_void),
+                w,
+                h,
+                8,
+                w,
+                &color_space,
+                0u32,
+            );
+            ctx.set_allows_font_smoothing(false);
+            ctx.set_should_smooth_fonts(false);
+            match stroke {
+                None => {
+                    ctx.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0);
+                    ctx.set_text_drawing_mode(CGTextDrawingMode::CGTextFill);
+                }
+                Some(width_px) => {
+                    ctx.set_rgb_stroke_color(1.0, 1.0, 1.0, 1.0);
+                    ctx.set_line_width(width_px as f64);
+                    ctx.set_line_join(CGLineJoin::CGLineJoinRound);
+                    ctx.set_line_cap(CGLineCap::CGLineCapRound);
+                    ctx.set_text_drawing_mode(CGTextDrawingMode::CGTextStroke);
+                }
             }
 
-            // Horizontal alignment offset
-            let align_offset = match opts.h_align {
-                HAlign::Left => 0.0,
-                HAlign::Center => ((max_width - measure.width) * 0.5).max(0.0),
-                HAlign::Right => (max_width - measure.width).max(0.0),
-            };
-            let origin_x = PADDING as f64 + align_offset as f64;
+            // CG is y-up: line 0 (top visually) has the highest CG y.
+            for (line_idx, measure) in line_measures.iter().enumerate() {
+                if measure.glyphs.is_empty() {
+                    continue;
+                }
 
-            // Lines from top: line 0 is at top of bitmap.
-            // In CG coords, line 0 baseline = bitmap_h - PADDING - ascent
-            // Each subsequent line shifts down by line_height.
-            let baseline_y =
-                (bitmap_h as f32 - PADDING as f32 - ascent - line_idx as f32 * line_height) as f64;
+                // Horizontal alignment offset
+                let align_offset = match opts.h_align {
+                    HAlign::Left => 0.0,
+                    HAlign::Center => ((max_width - measure.width) * 0.5).max(0.0),
+                    HAlign::Right => (max_width - measure.width).max(0.0),
+                };
+                let origin_x = pad as f64 + align_offset as f64;
 
-            let draw_positions: Vec<CGPoint> = measure
-                .positions
-                .iter()
-                .map(|p| CGPoint::new(p.x + origin_x, p.y + baseline_y))
-                .collect();
+                // Lines from top: line 0 is at top of bitmap.
+                // In CG coords, line 0 baseline = bitmap_h - pad - ascent
+                // Each subsequent line shifts down by line_height.
+                let baseline_y =
+                    (bitmap_h as f32 - pad as f32 - ascent - line_idx as f32 * line_height) as f64;
 
-            ct_font.draw_glyphs(&measure.glyphs, &draw_positions, ctx.clone());
-        }
+                let draw_positions: Vec<CGPoint> = measure
+                    .positions
+                    .iter()
+                    .map(|p| CGPoint::new(p.x + origin_x, p.y + baseline_y))
+                    .collect();
+
+                ct_font.draw_glyphs(&measure.glyphs, &draw_positions, ctx.clone());
+            }
+
+            buf
+        };
+
+        let fill = render_pass(None);
+        let stroke = if want_stroke {
+            Some(render_pass(Some(stroke_px)))
+        } else {
+            None
+        };
 
         Some(RasterizedText {
-            pixels,
+            fill,
+            stroke,
             width: bitmap_w,
             height: bitmap_h,
         })
@@ -351,8 +403,22 @@ mod tests {
         let rt = result.unwrap();
         assert!(rt.width > 0);
         assert!(rt.height > 0);
-        assert_eq!(rt.pixels.len(), (rt.width * rt.height) as usize);
-        assert!(rt.pixels.iter().any(|&p| p > 0));
+        assert_eq!(rt.fill.len(), (rt.width * rt.height) as usize);
+        assert!(rt.fill.iter().any(|&p| p > 0));
+        assert!(rt.stroke.is_none());
+    }
+
+    #[test]
+    fn test_rasterize_stroke_produces_outline_mask() {
+        let mut rasterizer = TextRasterizer::new();
+        let opts = RasterizeOptions {
+            stroke_width: 0.08,
+            ..Default::default()
+        };
+        let rt = rasterizer.rasterize("O", 64.0, &opts).unwrap();
+        let stroke = rt.stroke.expect("stroke mask present when stroke_width > 0");
+        assert_eq!(stroke.len(), (rt.width * rt.height) as usize);
+        assert!(stroke.iter().any(|&p| p > 0), "stroke mask should be lit");
     }
 
     #[test]
@@ -465,6 +531,6 @@ mod tests {
         // Bitmaps should be the same size (max_width determines width)
         assert_eq!(left.width, right.width);
         // But the pixel content should differ (B is in different position)
-        assert_ne!(left.pixels, right.pixels);
+        assert_ne!(left.fill, right.fill);
     }
 }
