@@ -211,27 +211,29 @@ def main():
     if not args.prompts and not args.point:
         sys.exit("give at least one --prompts or --point")
 
-    items = []
+    BG_LABELS = ("background", "table")
+    items, bg_items = [], []
     if args.prompts:
         print(">> detecting (Grounding DINO)…")
         boxes, labels, scores = detect(image_pil, args.prompts, device,
                                        args.box_threshold, args.text_threshold)
         for b, l, s in zip(boxes, labels, scores):
             items.append({"box": b, "label": l, "score": s})
-    for pstr in args.point:                       # manual points for hard objects
+    for pstr in args.point:                       # manual points (objects or bg)
         coord, _, lab = pstr.partition(":")
         try:
             x, y = (float(v) for v in coord.split(","))
         except ValueError:
             sys.exit(f"bad --point '{pstr}', expected 'x,y:label'")
-        items.append({"point": (x, y), "label": lab.strip().lower() or "object",
-                      "score": 1.0})
+        lab = lab.strip().lower() or "object"
+        rec = {"point": (x, y), "label": lab, "score": 1.0}
+        (bg_items if lab in BG_LABELS else items).append(rec)   # bg point = carve out
     if not items:
-        sys.exit("no detections — loosen --box-threshold or add a --point")
+        sys.exit("no detections — loosen --box-threshold or add an object --point")
 
     labels = [it["label"] for it in items]
     scores = [it["score"] for it in items]
-    print(f">> {len(items)} prompts -> SAM 2 masks…")
+    print(f">> {len(items)} object prompts -> SAM 2 masks…")
     probs, ious = segment_prompts(image_np, items, device)
     priority = [5.0 if "point" in it else 1.0 for it in items]  # manual marks win
     index_map = resolve_ownership(probs, ious, priority)
@@ -245,6 +247,13 @@ def main():
                    if "point" in it or any(k in it["label"] for k in gadget_kw)}
         index_map = suppress_table_leak(index_map, image_np, protect,
                                         sat_keep=args.table_sat)
+    if bg_items:
+        # Background points: SAM-segment the surface and force it out of every
+        # object. Handles table that leaked in but can't be told apart by color.
+        print(f">> {len(bg_items)} background points -> carving out table…")
+        bg_probs, _ = segment_prompts(image_np, bg_items, device)
+        carve = bg_probs.max(axis=0) >= 0.5
+        index_map[carve] = 0
 
     # Build per-instance outputs from the resolved ownership (no double-claimed px).
     manifest = {"image": os.path.abspath(args.image), "width": w, "height": h,
