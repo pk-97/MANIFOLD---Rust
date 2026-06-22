@@ -788,11 +788,16 @@ impl GpuEncoder {
             color.setTexture(Some(&target.raw));
             color.setLoadAction(convert_load_action(load_action));
             color.setStoreAction(MTLStoreAction::Store);
+            // Transparent-black clear: this renders generator geometry to an
+            // offscreen target that is then composited (premultiplied alpha).
+            // An opaque clear would paint a solid box over the layer below where
+            // no geometry is drawn; the opaque geometry fragments write alpha=1
+            // themselves, so the background must clear to alpha=0 to key.
             color.setClearColor(objc2_metal::MTLClearColor {
                 red: 0.0,
                 green: 0.0,
                 blue: 0.0,
-                alpha: 1.0,
+                alpha: 0.0,
             });
         }
 
