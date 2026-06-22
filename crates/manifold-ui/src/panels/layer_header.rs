@@ -1837,8 +1837,9 @@ impl Panel for LayerHeaderPanel {
 
         let lc = layout.layer_controls();
         // Offset layer rows down by the header stack (overview strip + ruler + waveform lanes)
-        // so they align vertically with the track content area.
-        // INVARIANT: this MUST match viewport.rs header_h computation exactly.
+        // so they align vertically with the track content area. `track_header_height()`
+        // is the single source for this offset — the viewport reads the same value, so
+        // the two cannot diverge.
         let header_spacer = layout.track_header_height();
         self.panel_origin = Vec2::new(lc.x, lc.y + header_spacer - self.scroll.scroll_offset());
         self.panel_width = lc.width;

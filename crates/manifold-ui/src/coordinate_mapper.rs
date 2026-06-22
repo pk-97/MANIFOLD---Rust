@@ -147,42 +147,61 @@ impl CoordinateMapper {
 
         let mut y = 0.0f32;
         for i in 0..count {
-            let layer = &layers[i];
-            let height;
-
-            if layer.parent_layer_id.is_some() {
-                // Child layer — check parent collapsed state
-                let parent = find_parent_in_list(layers, layer.parent_layer_id.as_deref());
-                height = if parent.is_some_and(|p| p.is_collapsed) {
-                    0.0 // Hidden: parent is collapsed
-                } else if layer.is_collapsed {
-                    if layer.layer_type == LayerType::Generator {
-                        color::COLLAPSED_GEN_TRACK_HEIGHT
-                    } else {
-                        color::COLLAPSED_TRACK_HEIGHT
-                    }
-                } else {
-                    color::TRACK_HEIGHT
-                };
-            } else if layer.is_group() && layer.is_collapsed {
-                height = color::COLLAPSED_GROUP_TRACK_HEIGHT;
-            } else if layer.is_group() {
-                height = color::EXPANDED_GROUP_TRACK_HEIGHT;
-            } else if !layer.is_group() && layer.is_collapsed {
-                height = if layer.layer_type == LayerType::Generator {
-                    color::COLLAPSED_GEN_TRACK_HEIGHT
-                } else {
-                    color::COLLAPSED_TRACK_HEIGHT
-                };
-            } else {
-                height = color::TRACK_HEIGHT;
-            }
-
+            let height = Self::layer_height(layers, i);
             self.layer_y_offsets[i] = y;
             self.layer_heights[i] = height;
             y += height;
         }
         self.total_content_height = y;
+    }
+
+    /// The single source of truth for one layer's track height.
+    ///
+    /// This is THE height rule — the viewport's bitmap sizing, the layer
+    /// headers' row heights, and this mapper's Y-layout all flow from here, so
+    /// they cannot disagree. (Previously copied verbatim in three places; see
+    /// `docs/TIMELINE_API_DESIGN.md` §3.4.)
+    ///
+    /// Height rules:
+    /// - Child of collapsed parent → 0 (hidden)
+    /// - Collapsed group → CollapsedGroupTrackHeight (70)
+    /// - Expanded group → ExpandedGroupTrackHeight (slim header)
+    /// - Collapsed generator → CollapsedGeneratorTrackHeight (62)
+    /// - Collapsed regular → CollapsedTrackHeight (48)
+    /// - Expanded (all other types) → TrackHeight (140)
+    pub fn layer_height(layers: &[Layer], index: usize) -> f32 {
+        let layer = match layers.get(index) {
+            Some(l) => l,
+            None => return color::TRACK_HEIGHT,
+        };
+
+        if layer.parent_layer_id.is_some() {
+            // Child layer — check parent collapsed state
+            let parent = find_parent_in_list(layers, layer.parent_layer_id.as_deref());
+            if parent.is_some_and(|p| p.is_collapsed) {
+                0.0 // Hidden: parent is collapsed
+            } else if layer.is_collapsed {
+                if layer.layer_type == LayerType::Generator {
+                    color::COLLAPSED_GEN_TRACK_HEIGHT
+                } else {
+                    color::COLLAPSED_TRACK_HEIGHT
+                }
+            } else {
+                color::TRACK_HEIGHT
+            }
+        } else if layer.is_group() && layer.is_collapsed {
+            color::COLLAPSED_GROUP_TRACK_HEIGHT
+        } else if layer.is_group() {
+            color::EXPANDED_GROUP_TRACK_HEIGHT
+        } else if layer.is_collapsed {
+            if layer.layer_type == LayerType::Generator {
+                color::COLLAPSED_GEN_TRACK_HEIGHT
+            } else {
+                color::COLLAPSED_TRACK_HEIGHT
+            }
+        } else {
+            color::TRACK_HEIGHT
+        }
     }
 
     /// Get the cumulative Y offset for a layer (top of that layer's track row).
@@ -438,6 +457,37 @@ mod tests {
         assert!((mapper.get_layer_height(0) - 70.0).abs() < 0.001);
         assert!((mapper.get_layer_height(1) - 0.0).abs() < 0.001);
         assert!((mapper.total_content_height() - 70.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn layer_height_is_the_single_rule() {
+        // The extracted rule must produce exactly what rebuild_y_layout stores,
+        // for every layer — proving there is one height computation, not two.
+        let mut video = make_layer("V", LayerType::Video, 0);
+        video.is_collapsed = true;
+        let gen_expanded = make_layer("G", LayerType::Generator, 1);
+        let mut group = make_layer("Grp", LayerType::Group, 2);
+        group.is_collapsed = true;
+        let group_id = group.layer_id.clone();
+        let mut hidden_child = make_layer("Child", LayerType::Video, 3);
+        hidden_child.parent_layer_id = Some(group_id);
+
+        let layers = vec![video, gen_expanded, group, hidden_child];
+        let mut mapper = CoordinateMapper::new();
+        mapper.rebuild_y_layout(&layers);
+
+        for i in 0..layers.len() {
+            assert_eq!(
+                CoordinateMapper::layer_height(&layers, i),
+                mapper.get_layer_height(i),
+                "layer_height({i}) must equal the stored Y-layout height",
+            );
+        }
+        // Spot-check the actual values the rule yields.
+        assert_eq!(CoordinateMapper::layer_height(&layers, 0), 48.0); // collapsed video
+        assert_eq!(CoordinateMapper::layer_height(&layers, 1), 140.0); // expanded generator
+        assert_eq!(CoordinateMapper::layer_height(&layers, 2), 70.0); // collapsed group
+        assert_eq!(CoordinateMapper::layer_height(&layers, 3), 0.0); // hidden child
     }
 
     #[test]

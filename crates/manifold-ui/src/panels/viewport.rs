@@ -81,9 +81,13 @@ pub struct SelectionRegion {
 }
 
 /// Per-layer track info for the viewport.
-#[derive(Debug, Clone)]
+///
+/// Track *height* is intentionally NOT a field here — it is owned solely by the
+/// [`CoordinateMapper`] (`mapper.get_layer_height(i)`), the single Y-layout
+/// authority. `TrackInfo` carries only the per-track *style/state* the renderer
+/// needs. See `docs/TIMELINE_API_DESIGN.md` §3.4.
+#[derive(Debug, Clone, Default)]
 pub struct TrackInfo {
-    pub height: f32,
     pub is_muted: bool,
     pub is_group: bool,
     pub is_collapsed: bool,
@@ -91,19 +95,6 @@ pub struct TrackInfo {
     /// For group layers: indices of child layers (used for collapsed group preview).
     /// From Unity ViewportManager.GenerateCollapsedGroupTexture.
     pub child_layer_indices: Vec<usize>,
-}
-
-impl Default for TrackInfo {
-    fn default() -> Self {
-        Self {
-            height: color::TRACK_HEIGHT,
-            is_muted: false,
-            is_group: false,
-            is_collapsed: false,
-            accent_color: None,
-            child_layer_indices: Vec::new(),
-        }
-    }
 }
 
 // ── Marker node group for update-in-place ──────────────────────
@@ -173,10 +164,8 @@ pub struct TimelineViewportPanel {
     // Layer IDs (kept in sync with project layers)
     pub layer_ids: Vec<LayerId>,
 
-    // Track layout (kept in sync with mapper via set_tracks)
+    // Per-track style/state (heights + Y come from `mapper`, the sole authority)
     tracks: Vec<TrackInfo>,
-    track_y_offsets: Vec<f32>, // cumulative Y offsets from tracks
-    total_tracks_height: f32,
 
     // Clip data — single storage, bucketed by layer index.
     // Access all clips via clips_by_layer.iter().flatten().
@@ -296,8 +285,6 @@ impl TimelineViewportPanel {
             beats_per_bar: 4,
             layer_ids: Vec::new(),
             tracks: Vec::new(),
-            track_y_offsets: Vec::new(),
-            total_tracks_height: 0.0,
             clips_by_layer: Vec::new(),
             bitmap_renderers: Vec::new(),
             render_scale: 2.0, // default HiDPI (macOS Retina)
@@ -427,26 +414,22 @@ impl TimelineViewportPanel {
         self.tracks = tracks;
         // Track layout changed — overview clip layer needs full repaint
         self.overview_clips_dirty = true;
-        // Recompute cumulative Y offsets from track heights
-        self.track_y_offsets.clear();
-        let mut y = 0.0;
-        for track in &self.tracks {
-            self.track_y_offsets.push(y);
-            y += track.height;
-        }
-        self.total_tracks_height = y;
 
-        // Create/resize bitmap renderers (one per visible layer, including groups)
+        // Create/resize bitmap renderers (one per visible layer, including groups).
+        // Heights come from the CoordinateMapper — the sole Y-layout authority.
+        // `rebuild_mapper_layout` runs before `set_tracks` (state_sync), so the
+        // mapper is current here; a zero height means a hidden child layer.
         self.bitmap_renderers.clear();
-        for (i, track) in self.tracks.iter().enumerate() {
-            if track.height <= 0.0 {
+        for i in 0..self.tracks.len() {
+            let height = self.mapper.get_layer_height(i);
+            if height <= 0.0 {
                 self.bitmap_renderers.push(None);
             } else {
                 self.bitmap_renderers
                     .push(Some(crate::bitmap_renderer::LayerBitmapRenderer::new(
                         i,
                         self.render_scale,
-                        track.height,
+                        height,
                         CLIP_VERTICAL_PAD,
                     )));
             }
@@ -646,7 +629,7 @@ impl TimelineViewportPanel {
         let new_x = scroll_x_beats.max(0.0);
         // Clamp vertical scroll: never scroll past the last track
         let viewport_h = self.tracks_rect.height;
-        let max_scroll_y = (self.total_tracks_height - viewport_h).max(0.0);
+        let max_scroll_y = (self.mapper.total_content_height() - viewport_h).max(0.0);
         let new_y = scroll_y_px.clamp(0.0, max_scroll_y);
 
         let changed = (new_x - self.scroll_x_beats.as_f32()).abs() > 0.001
@@ -881,20 +864,12 @@ impl TimelineViewportPanel {
 
     /// Get Y position of a track (relative to tracks_rect top, before scroll).
     pub fn track_y(&self, layer_index: usize) -> f32 {
-        self.track_y_offsets
-            .get(layer_index)
-            .copied()
-            .unwrap_or(0.0)
-            + self.tracks_rect.y
-            - self.scroll_y_px
+        self.mapper.get_layer_y_offset(layer_index) + self.tracks_rect.y - self.scroll_y_px
     }
 
-    /// Get height of a track.
+    /// Get height of a track — from the mapper, the sole Y-layout authority.
     pub fn track_height(&self, layer_index: usize) -> f32 {
-        self.tracks
-            .get(layer_index)
-            .map(|t| t.height)
-            .unwrap_or(color::TRACK_HEIGHT)
+        self.mapper.get_layer_height(layer_index)
     }
 
     /// Visible beat range (with buffer).
@@ -987,16 +962,16 @@ impl TimelineViewportPanel {
         if y < self.tracks_rect.y || y > self.tracks_rect.y_max() {
             return None;
         }
-
-        for (i, &offset) in self.track_y_offsets.iter().enumerate() {
-            let track_y = offset + self.tracks_rect.y - self.scroll_y_px;
-            let track_h = self.tracks.get(i).map(|t| t.height).unwrap_or(0.0);
-            if y >= track_y && y < track_y + track_h {
-                return Some(i);
-            }
-        }
-
-        None
+        // Delegate to the mapper (the sole Y authority), then re-impose the
+        // strict upper bound it omits: `get_layer_at_y` returns the topmost
+        // layer whose top is at/above `y`, but does NOT reject the dead space
+        // *below* the last track. Without this check, a click under the final
+        // clip would wrongly resolve to that track.
+        let y_in_tracks = y - self.tracks_rect.y + self.scroll_y_px;
+        let i = self.mapper.get_layer_at_y(y_in_tracks)?;
+        let top = self.mapper.get_layer_y_offset(i);
+        let height = self.mapper.get_layer_height(i);
+        (y_in_tracks < top + height).then_some(i)
     }
 
     /// Snap a beat position to the snap grid (matches prominently visible grid lines).
@@ -1202,9 +1177,9 @@ impl Panel for TimelineViewportPanel {
         }
 
         // Header stack: overview strip + ruler + optional waveform/stem lanes.
-        // INVARIANT: MUST use layout.track_header_height() — same source as
-        // layer_header.rs uses for panel_origin. If these diverge, layer controls
-        // will be vertically misaligned with their tracks.
+        // `track_header_height()` is the single source for this offset — both the
+        // viewport and `layer_header` read it, so the layer controls cannot drift
+        // out of vertical alignment with their tracks (nothing recomputes it).
         let header_h = layout.track_header_height();
         self.viewport_rect = Rect::new(body.x, body.y, tracks_w, body.height);
         self.ruler_rect = Rect::new(
@@ -1679,7 +1654,7 @@ impl TimelineViewportPanel {
                 continue;
             }
 
-            let track_h = track.height;
+            let track_h = self.mapper.get_layer_height(i);
             if track_h <= 0.0 || viewport_w <= 0.0 {
                 continue;
             }
@@ -1795,13 +1770,13 @@ impl TimelineViewportPanel {
             if bmp_opt.is_none() {
                 continue;
             }
-            let track = &self.tracks[i];
-            if track.height <= 0.0 {
+            let h = self.track_height(i);
+            if h <= 0.0 {
                 continue;
             }
             let y = self.track_y(i);
             let clamped_y = y.max(tr_top);
-            let clamped_h = (y + track.height).min(tr_bottom) - clamped_y;
+            let clamped_h = (y + h).min(tr_bottom) - clamped_y;
             if clamped_h <= 0.0 {
                 continue;
             }
@@ -1820,9 +1795,10 @@ impl TimelineViewportPanel {
 
         // Pre-allocate ALL tracks (including off-screen) for update-in-place.
         // Off-screen tracks get set_visible(false).
-        for (i, track) in self.tracks.iter().enumerate() {
+        for i in 0..self.tracks.len() {
+            let track = &self.tracks[i];
             let y = self.track_y(i);
-            let h = track.height;
+            let h = self.mapper.get_layer_height(i);
 
             let clamped_y = y.max(tr_top);
             let clamped_h = (y + h).min(tr_bottom) - clamped_y;
@@ -2605,7 +2581,7 @@ impl TimelineViewportPanel {
         for (i, track) in self.tracks.iter().enumerate() {
             let group = &self.track_bg_groups[i];
             let y = self.track_y(i);
-            let h = track.height;
+            let h = self.mapper.get_layer_height(i);
 
             let clamped_y = y.max(tr_top);
             let clamped_h = (y + h).min(tr_bottom) - clamped_y;
@@ -2680,16 +2656,9 @@ mod tests {
     }
 
     fn test_tracks() -> Vec<TrackInfo> {
-        vec![
-            TrackInfo {
-                height: 140.0,
-                ..Default::default()
-            },
-            TrackInfo {
-                height: 140.0,
-                ..Default::default()
-            },
-        ]
+        // Heights live on the mapper now; an unconfigured mapper defaults every
+        // layer to TRACK_HEIGHT (140), which is what these two tracks expect.
+        vec![TrackInfo::default(), TrackInfo::default()]
     }
 
     fn test_clips() -> Vec<ViewportClip> {

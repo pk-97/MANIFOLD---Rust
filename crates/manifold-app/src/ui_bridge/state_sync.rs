@@ -888,41 +888,8 @@ pub fn sync_project_data(
                 });
                 let is_muted = layer.is_muted || parent_muted;
 
-                // Variable track heights matching Unity CoordinateMapper.RebuildYLayout
-                let height = if layer.parent_layer_id.is_some() {
-                    // Child of group: check parent collapsed
-                    let parent_collapsed = layer.parent_layer_id.as_ref().is_some_and(|pid| {
-                        project
-                            .timeline
-                            .layers
-                            .iter()
-                            .any(|l| l.layer_id == *pid && l.is_collapsed)
-                    });
-                    if parent_collapsed {
-                        0.0
-                    } else if layer.is_collapsed {
-                        if layer.layer_type == manifold_core::types::LayerType::Generator {
-                            color::COLLAPSED_GEN_TRACK_HEIGHT
-                        } else {
-                            color::COLLAPSED_TRACK_HEIGHT
-                        }
-                    } else {
-                        color::TRACK_HEIGHT
-                    }
-                } else if layer.is_group() && layer.is_collapsed {
-                    color::COLLAPSED_GROUP_TRACK_HEIGHT
-                } else if layer.is_group() {
-                    // Expanded group: slim header, children take the space
-                    color::EXPANDED_GROUP_TRACK_HEIGHT
-                } else if !layer.is_group() && layer.is_collapsed {
-                    if layer.layer_type == manifold_core::types::LayerType::Generator {
-                        color::COLLAPSED_GEN_TRACK_HEIGHT
-                    } else {
-                        color::COLLAPSED_TRACK_HEIGHT
-                    }
-                } else {
-                    color::TRACK_HEIGHT
-                };
+                // Track height is owned solely by the CoordinateMapper
+                // (rebuilt above, read back by the viewport). No copy here.
 
                 // Accent color for child layers (group visual)
                 let accent_color = if layer.parent_layer_id.is_some() {
@@ -947,7 +914,6 @@ pub fn sync_project_data(
                 };
 
                 TrackInfo {
-                    height,
                     is_muted,
                     is_group: layer.is_group(),
                     is_collapsed: layer.is_collapsed,
