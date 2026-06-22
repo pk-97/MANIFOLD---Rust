@@ -14,7 +14,23 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 1 COMPLETE (2026-06-22)** — all of 1.1–1.6 landed. Next action: **Phase 2a (Chrome API design + proof)**.
+> **Status: Phase 2a COMPLETE (2026-06-22)** — Chrome API built + proven. Next action: **Phase 2b.1 — live `param_card` cutover** (rewrite-and-delete on the Chrome API, with a runtime visual pass), then the remaining 2b panels.
+>
+> **Phase 2a (Chrome API):** a declarative `chrome` module in `manifold-ui` — a panel
+> describes its UI once as a `View` tree; a `ChromeHost` reconciler decides build-vs-update
+> and emits minimal `UITree` mutations, removing the `build()`/`sync_*()` dual write.
+> Three pure layers: `view` (builders + per-axis `Sizing` + intent-at-build + `validate`
+> loud-fail), `layout` (pure mini-flexbox `solve`, headless-tested), `diff` (`ChromeHost`:
+> in-place update when the structural signature matches → ids/intents survive; `NeedsRebuild`
+> otherwise → app re-runs `build()`, mirroring the existing `truncate_from` model). 22 unit
+> tests + a 6-case golden `param_card`-shape proof (`tests/chrome_param_card_proof.rs`):
+> value change in-place, badge toggle in-place, drawer-open → NeedsRebuild → rebuild grows,
+> intents fold up, validation catches an unwired control. Design + 2b contract:
+> [`CHROME_API_DESIGN.md`](CHROME_API_DESIGN.md). **The live `param_card` rewrite-and-delete
+> is deliberately 2b.1, not 2a.5** — it is the most interaction-dense panel and needs a
+> runtime visual pass; 2a proved the API on its shape first.
+>
+> **Status: Phase 1 COMPLETE (2026-06-22)** — all of 1.1–1.6 landed.
 >
 > **Phase 0 decision:** production stays `panic = "abort"` ([`Cargo.toml`](../Cargo.toml)
 > `[profile.release]`). In-process recovery (catch_unwind / respawn / watchdog) is
@@ -548,22 +564,36 @@ not a recovery system.
   identical target set `handle_click` did (transport 19, header 5, footer 10).
 
 ### Phase 2a — Chrome API design + proof
-- [ ] **2a.1** Sub-design-doc: declarative widget/layout API (types, builder,
-  layout model, intent-at-build, reactive diff). _Done when:_ committed.
-- [ ] **2a.2** Layout engine (row/col/stack/inset, size-to-content). _Done when:_
-  unit-tested headlessly.
-- [ ] **2a.3** Reactive diff (describe-once → tree mutations; collapses
-  build+update). _Done when:_ a panel description diffs correctly.
-- [ ] **2a.4** Builder ergonomics + intent-at-build + **loud-fail validation**.
-  _Done when:_ an unwired control warns at build.
-- [ ] **2a.5** Prove on `param_card`: rewrite it on the new API; delete the old
-  imperative `param_card` + its `handle_*`; headless asserts pass. _Done when:_
-  `param_card` runs on the new API and the old code is gone.
+- [x] **2a.1** Sub-design-doc: declarative widget/layout API (types, builder,
+  layout model, intent-at-build, reactive diff). → [`CHROME_API_DESIGN.md`](CHROME_API_DESIGN.md).
+- [x] **2a.2** Layout engine (row/col/stack/inset, size-to-content). → pure
+  mini-flexbox in [`chrome/layout.rs`](../crates/manifold-ui/src/chrome/layout.rs):
+  per-axis `Sizing` (Fixed/Hug/Fill), `solve(&View, rect, &dyn TextMeasure)` → laid
+  nodes in DFS pre-order; no `UITree` dep, 11 headless tests.
+- [x] **2a.3** Reactive diff (describe-once → tree mutations; collapses
+  build+update). → `ChromeHost` in [`chrome/diff.rs`](../crates/manifold-ui/src/chrome/diff.rs):
+  structural-signature compare → in-place `set_*` (ids/intents survive, no
+  `structure_version` bump) or `NeedsRebuild` (tree untouched, app re-runs build).
+- [x] **2a.4** Builder ergonomics + intent-at-build + **loud-fail validation**. →
+  fluent `View` builders + `on_click`/`on_right_click`/`claims_area` +
+  `validate()` (`debug_assert` in debug, `eprintln` in release) in
+  [`chrome/view.rs`](../crates/manifold-ui/src/chrome/view.rs); host populates the
+  `IntentRegistry` from the description.
+- [x] **2a.5** Prove on `param_card`. → **golden structural proof** in
+  [`tests/chrome_param_card_proof.rs`](../crates/manifold-ui/tests/chrome_param_card_proof.rs):
+  a faithful param-card shape (header + slider rows + driver drawer) on the API,
+  asserting value-only update in-place (ids stable), drawer-open → NeedsRebuild →
+  rebuild grows, intent fold-up (slider right-click → param menu; handle → card),
+  validation catches an unwired button. **Live `param_card` rewrite-and-delete is
+  2b.1** (most interaction-dense panel; needs a runtime visual pass — proving on
+  its shape first is the safe order, not a blind first-consumer cutover).
 
 ### Phase 2b — Chrome panel migrations (batchable / parallel)
 One box per panel: rewrite on the Chrome API, move click + right-click into
 intent-at-build, delete `handle_event`/`handle_click` + stored ids, headless
 asserts pass, old code deleted. (Absorbs intent-dispatch groups B/C/D.)
+- [ ] **2b.0** `param_card` — the live cutover deferred from 2a.5. Do **first**,
+  with a runtime visual pass, now that the API is proven on its shape.
 - [ ] **2b.1** `macros_panel`
 - [ ] **2b.2** `master_chrome`
 - [ ] **2b.3** `layer_chrome`
