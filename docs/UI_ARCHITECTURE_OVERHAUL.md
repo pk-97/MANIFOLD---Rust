@@ -783,19 +783,27 @@ pass (see §0).
 > exactly like the slider stays a `BitmapSlider` behind `slider_row`. Migrating
 > them to declarative Views is not the goal; the split *is* the architecture.
 
-### Phase 3 — Timeline API
-- [ ] **3.1** Sub-design-doc: lane/clip/marker model + one interaction owner +
+### Phase 3 — Timeline API — **COMPLETE (2026-06-22)**
+> Sub-design `docs/TIMELINE_API_DESIGN.md`. Behaviour-preserving throughout;
+> manifold-ui 333 + manifold-app 103 + manifold-editing 59 tests green, clippy
+> clean, one commit per task.
+- [x] **3.1** Sub-design-doc: lane/clip/marker model + one interaction owner +
   coordinate authority. _Done when:_ committed.
-- [ ] **3.2** Lane/clip/marker model — addressable items driving **both** paint and
-  hit-test from one source.
-- [ ] **3.3** Fold `UIState` drag/trim/scrub + `InteractionOverlay` into one
-  interaction owner. _Done when:_ the two-owner split is gone.
-- [ ] **3.4** `CoordinateMapper` as sole authority; delete the comment-enforced Y
-  invariant (make it a computed value).
-- [ ] **3.5** Markers first-class (absorbs intent-dispatch group E); delete the
-  positional flag-scan.
-- [ ] **3.6** Split the `viewport` god-panel into model / coordinate / render /
-  interaction.
+- [x] **3.2** Lane/clip/marker model — addressable items driving **both** paint and
+  hit-test from one source. (Clips already did; markers joined via §3.5; the
+  `model.rs` module now names the items.)
+- [x] **3.3** Fold `UIState` drag/trim/scrub + `InteractionOverlay` into one
+  interaction owner. Twelve transient fields → five moved onto the overlay, seven
+  write-only mirrors deleted; the two-owner split is gone. (Kept the overlay's
+  host-delegating trim math — `trim.rs` would have regressed audio/warped clips.)
+- [x] **3.4** `CoordinateMapper` as sole authority. The per-layer height rule was
+  computed three times; now `CoordinateMapper::layer_height` is THE rule.
+  `TrackInfo.height` and the viewport's `track_y_offsets` deleted; the
+  comment-enforced Y invariant is a computed value.
+- [x] **3.5** Markers first-class. One `marker_flag_rect` geometry drives flag
+  paint + hit-test; the parallel `marker_flag_rects` scan is deleted.
+- [x] **3.6** Split the `viewport` god-panel (2,973 → 1,182-line parent) into
+  `model` / `coordinate` / `render` / `interaction` submodules.
 
 ### Phase 4 — Canvas API
 - [ ] **4.1** Sub-design-doc: graph-view framework + own command type + sidebar
