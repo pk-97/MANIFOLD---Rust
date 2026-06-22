@@ -21,6 +21,7 @@
 //! re-decode hitch mirrors `VideoRenderer`'s resize behaviour.
 
 use std::any::Any;
+use std::sync::Arc;
 
 use ahash::AHashMap;
 use crossbeam_channel::{Receiver, Sender};
@@ -32,6 +33,16 @@ use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 use manifold_playback::renderer::ClipRenderer;
+
+/// The full-resolution decoded source, RGBA8. Decoded from disk exactly
+/// once per clip and cached so a canvas resize re-fits from memory instead
+/// of re-opening and re-decoding the file (disk decode dominates cost).
+#[cfg_attr(test, derive(Debug))]
+struct NativeImage {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
 
 /// A decoded + canvas-fit image ready for GPU upload. `width`/`height`
 /// equal the canvas dimensions the decode was issued for; `rgba` is
@@ -50,20 +61,26 @@ struct DecodeResult {
     /// result that a resize has already made stale.
     target_w: u32,
     target_h: u32,
+    /// The freshly decoded source, present only on a from-disk decode so the
+    /// content thread can cache it. `None` on a re-fit from cached pixels.
+    native: Option<Arc<NativeImage>>,
     result: Result<FittedImage, String>,
 }
 
 /// Per-clip active state.
 struct ActiveImageClip {
-    /// Absolute path to the source image. Retained so a resize can re-issue
-    /// the decode at the new canvas size.
+    /// Absolute path to the source image. Retained so a resize can re-fit
+    /// (or, if the first decode hasn't landed yet, re-decode) the clip.
     path: String,
+    /// Cached full-resolution decode, shared with the re-fit worker. `None`
+    /// until the first from-disk decode lands.
+    native: Option<Arc<NativeImage>>,
     /// Canvas-sized texture holding the fit image. `None` until the first
     /// decode lands.
     texture: Option<GpuTexture>,
     /// True once a decode has been uploaded into `texture`.
     has_frame: bool,
-    /// True while a background decode is in flight for this clip.
+    /// True while a background decode/re-fit is in flight for this clip.
     decode_pending: bool,
 }
 
@@ -114,18 +131,51 @@ impl ImageRenderer {
         })
     }
 
-    /// Spawn a background decode for `clip_id` at the current canvas size.
-    fn spawn_decode(&self, clip_id: ClipId, path: String) {
+    /// Spawn a from-disk decode for `clip_id`, fitting to the current canvas.
+    /// Decodes the full-resolution source and returns it for caching so later
+    /// resizes never touch the disk again.
+    fn spawn_decode_from_disk(&self, clip_id: ClipId, path: String) {
         let tx = self.result_tx.clone();
         let (w, h) = (self.width, self.height);
         std::thread::spawn(move || {
-            let result = decode_and_fit(&path, w, h);
+            let msg = match decode_native(&path) {
+                Ok(native) => {
+                    let native = Arc::new(native);
+                    let result = fit_native(&native, w, h);
+                    DecodeResult {
+                        clip_id,
+                        target_w: w,
+                        target_h: h,
+                        native: Some(native),
+                        result,
+                    }
+                }
+                Err(e) => DecodeResult {
+                    clip_id,
+                    target_w: w,
+                    target_h: h,
+                    native: None,
+                    result: Err(e),
+                },
+            };
             // Receiver lives as long as the renderer; a send error only
             // happens at shutdown, where dropping the result is correct.
+            let _ = tx.send(msg);
+        });
+    }
+
+    /// Spawn a re-fit for `clip_id` from already-decoded source pixels — used
+    /// on resize. No disk access, no image decode; just a scale + letterbox.
+    fn spawn_refit(&self, clip_id: ClipId, native: Arc<NativeImage>) {
+        let tx = self.result_tx.clone();
+        let (w, h) = (self.width, self.height);
+        std::thread::spawn(move || {
+            let result = fit_native(&native, w, h);
             let _ = tx.send(DecodeResult {
                 clip_id,
                 target_w: w,
                 target_h: h,
+                native: None,
                 result,
             });
         });
@@ -168,6 +218,11 @@ impl ImageRenderer {
             return; // clip stopped while decoding
         };
         clip.decode_pending = false;
+        // Cache the full-resolution decode so future resizes re-fit from
+        // memory (a from-disk decode carries it; a re-fit does not).
+        if res.native.is_some() {
+            clip.native = res.native;
+        }
         match res.result {
             Ok(img) => {
                 Self::ensure_texture(clip, device, img.width, img.height);
@@ -205,12 +260,13 @@ impl ClipRenderer for ImageRenderer {
             clip.id.clone(),
             ActiveImageClip {
                 path: clip.image_path.clone(),
+                native: None,
                 texture: None,
                 has_frame: false,
                 decode_pending: true,
             },
         );
-        self.spawn_decode(clip.id.clone(), clip.image_path.clone());
+        self.spawn_decode_from_disk(clip.id.clone(), clip.image_path.clone());
         true
     }
 
@@ -277,19 +333,24 @@ impl ClipRenderer for ImageRenderer {
         }
         self.width = w;
         self.height = h;
-        // Re-decode every active clip at the new canvas size. The old
-        // texture stays on screen until the new one lands (has_frame stays
-        // true), so resize doesn't flash black.
-        let pending: Vec<(ClipId, String)> = self
+        // Re-fit every active clip to the new canvas. Re-fit from the cached
+        // full-res decode when we have it (no disk, no image decode); fall
+        // back to a from-disk decode only when the first decode is still in
+        // flight. The old texture stays on screen until the new one lands
+        // (has_frame stays true), so resize doesn't flash black.
+        let work: Vec<(ClipId, Option<Arc<NativeImage>>, String)> = self
             .active_clips
             .iter_mut()
             .map(|(id, clip)| {
                 clip.decode_pending = true;
-                (id.clone(), clip.path.clone())
+                (id.clone(), clip.native.clone(), clip.path.clone())
             })
             .collect();
-        for (id, path) in pending {
-            self.spawn_decode(id, path);
+        for (id, native, path) in work {
+            match native {
+                Some(native) => self.spawn_refit(id, native),
+                None => self.spawn_decode_from_disk(id, path),
+            }
         }
     }
 
@@ -316,34 +377,52 @@ impl ClipRenderer for ImageRenderer {
     }
 }
 
-/// Decode an image file and aspect-fit it, letterboxed, into a transparent
-/// `target_w × target_h` RGBA8 canvas. Runs on a background thread.
-fn decode_and_fit(path: &str, target_w: u32, target_h: u32) -> Result<FittedImage, String> {
+/// Decode an image file from disk to full-resolution RGBA8. The expensive,
+/// once-per-clip step — `fit_native` then scales from this cached buffer on
+/// every resize without re-touching the disk.
+fn decode_native(path: &str) -> Result<NativeImage, String> {
+    let t0 = std::time::Instant::now();
+    let img = image::open(path).map_err(|e| format!("open {path}: {e}"))?;
+    let rgba = img.to_rgba8();
+    let (width, height) = (rgba.width(), rgba.height());
+    log::info!(
+        "[ImageRenderer] decode '{path}': {width}x{height} in {:.0}ms",
+        t0.elapsed().as_secs_f32() * 1000.0,
+    );
+    Ok(NativeImage {
+        width,
+        height,
+        rgba: rgba.into_raw(),
+    })
+}
+
+/// Aspect-fit `native`, letterboxed, into a transparent `target_w × target_h`
+/// RGBA8 canvas. Pure CPU scale from cached pixels — no disk, no decode.
+fn fit_native(native: &NativeImage, target_w: u32, target_h: u32) -> Result<FittedImage, String> {
     if target_w == 0 || target_h == 0 {
         return Err("zero canvas size".into());
     }
+    let (nw, nh) = (native.width, native.height);
+    let src_buf: image::RgbaImage = image::ImageBuffer::from_raw(nw, nh, native.rgba.clone())
+        .ok_or_else(|| "native buffer size mismatch".to_string())?;
+
+    // Fit within the canvas preserving aspect ratio (scales up or down so the
+    // longest edge meets the canvas, matching DynamicImage::resize). Triangle
+    // (bilinear) over Lanczos3: a large source takes multiple seconds to
+    // downscale with Lanczos3's wide kernel; Triangle is ~3x fewer samples and
+    // visually indistinguishable for a still shown at output resolution.
     let t0 = std::time::Instant::now();
-    let img = image::open(path).map_err(|e| format!("open {path}: {e}"))?;
-    let decode_ms = t0.elapsed().as_secs_f32() * 1000.0;
-    let (nw, nh) = (img.width(), img.height());
-    // Fit within the canvas preserving aspect ratio (never upscales past
-    // the canvas; smaller images are centered at native size). Triangle
-    // (bilinear) over Lanczos3: a large source (e.g. a 24MP photo) takes
-    // multiple seconds to downscale with Lanczos3's wide kernel, stalling
-    // the clip's first paint. Triangle is ~3x fewer samples and visually
-    // indistinguishable for a still shown at output resolution.
-    let fitted = img.resize(target_w, target_h, image::imageops::FilterType::Triangle);
-    let fw = fitted.width();
-    let fh = fitted.height();
-    let total_ms = t0.elapsed().as_secs_f32() * 1000.0;
+    let scale = (target_w as f32 / nw.max(1) as f32).min(target_h as f32 / nh.max(1) as f32);
+    let fw = ((nw as f32 * scale).round() as u32).clamp(1, target_w);
+    let fh = ((nh as f32 * scale).round() as u32).clamp(1, target_h);
+    let fitted = image::imageops::resize(&src_buf, fw, fh, image::imageops::FilterType::Triangle);
     log::info!(
-        "[ImageRenderer] fit '{path}': native {nw}x{nh} (aspect {:.3}) -> fitted {fw}x{fh} centered in canvas {target_w}x{target_h} (aspect {:.3}); decode {decode_ms:.0}ms, +resize {:.0}ms",
+        "[ImageRenderer] fit: native {nw}x{nh} (aspect {:.3}) -> fitted {fw}x{fh} in canvas {target_w}x{target_h} (aspect {:.3}); resize {:.0}ms",
         nw as f32 / nh.max(1) as f32,
         target_w as f32 / target_h.max(1) as f32,
-        total_ms - decode_ms,
+        t0.elapsed().as_secs_f32() * 1000.0,
     );
-    let src = fitted.to_rgba8();
-    let src = src.as_raw();
+    let src = fitted.as_raw();
 
     let cw = target_w as usize;
     let ch = target_h as usize;
@@ -368,38 +447,59 @@ fn decode_and_fit(path: &str, target_w: u32, target_h: u32) -> Result<FittedImag
 mod tests {
     use super::*;
 
-    #[test]
-    fn decode_and_fit_rejects_zero_canvas() {
-        assert!(decode_and_fit("/nonexistent.png", 0, 100).is_err());
-        assert!(decode_and_fit("/nonexistent.png", 100, 0).is_err());
+    fn solid_native(w: u32, h: u32) -> NativeImage {
+        NativeImage {
+            width: w,
+            height: h,
+            rgba: vec![255u8; (w * h * 4) as usize],
+        }
     }
 
     #[test]
-    fn decode_and_fit_reports_missing_file() {
-        let err = decode_and_fit("/definitely/not/here.png", 64, 64).unwrap_err();
+    fn fit_native_rejects_zero_canvas() {
+        let n = solid_native(2, 2);
+        assert!(fit_native(&n, 0, 100).is_err());
+        assert!(fit_native(&n, 100, 0).is_err());
+    }
+
+    #[test]
+    fn decode_native_reports_missing_file() {
+        let err = decode_native("/definitely/not/here.png").unwrap_err();
         assert!(err.contains("open"));
     }
 
     #[test]
     fn fit_letterboxes_into_exact_canvas() {
-        // Encode a 2x1 red PNG in memory, write to a temp file, fit to 4x4.
+        // A 2x1 source fit into 4x4 → 4x2 centered vertically, transparent
+        // top/bottom rows.
+        let native = solid_native(2, 1);
+        let fit = fit_native(&native, 4, 4).unwrap();
+        assert_eq!(fit.width, 4);
+        assert_eq!(fit.height, 4);
+        assert_eq!(fit.rgba.len(), 4 * 4 * 4);
+        let top_left_alpha = fit.rgba[3];
+        assert_eq!(top_left_alpha, 0, "top row should be transparent letterbox");
+    }
+
+    #[test]
+    fn decode_then_fit_round_trips_through_a_png() {
+        // Decode-once / fit-from-cache: decode a 2x1 PNG, then fit twice at
+        // different canvases from the same cached native — no second decode.
         use image::{ImageBuffer, Rgba};
         let mut buf: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(2, 1);
         for p in buf.pixels_mut() {
             *p = Rgba([255, 0, 0, 255]);
         }
-        let dir = std::env::temp_dir();
-        let path = dir.join("manifold_image_renderer_test_2x1.png");
+        let path = std::env::temp_dir().join("manifold_image_renderer_test_2x1.png");
         buf.save(&path).unwrap();
 
-        let fit = decode_and_fit(path.to_str().unwrap(), 4, 4).unwrap();
-        assert_eq!(fit.width, 4);
-        assert_eq!(fit.height, 4);
-        assert_eq!(fit.rgba.len(), 4 * 4 * 4);
-        // A 2:1 source fit into 4x4 → 4x2 image centered vertically, so the
-        // top and bottom rows are transparent (alpha 0).
-        let top_left_alpha = fit.rgba[3];
-        assert_eq!(top_left_alpha, 0, "top row should be transparent letterbox");
+        let native = decode_native(path.to_str().unwrap()).unwrap();
+        assert_eq!((native.width, native.height), (2, 1));
+
+        let a = fit_native(&native, 4, 4).unwrap();
+        assert_eq!((a.width, a.height), (4, 4));
+        let b = fit_native(&native, 8, 2).unwrap();
+        assert_eq!((b.width, b.height), (8, 2));
 
         std::fs::remove_file(&path).ok();
     }
