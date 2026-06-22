@@ -14,7 +14,54 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 2a COMPLETE (2026-06-22)** — Chrome API built + proven. Next action: **Phase 2b.1 — live `param_card` cutover** (rewrite-and-delete on the Chrome API, with a runtime visual pass), then the remaining 2b panels.
+> **Status: Phase 2b IN PROGRESS (2026-06-22)** — the static chrome panels are
+> migrated and pushed; the slider/drawer inspector cards are the remaining work
+> and hit a verification boundary (below). Branch `ui-chrome-phase2b`.
+>
+> **Done + verified + pushed (the structurally-invariant chrome):**
+> - **2b.8 footer**, **2b.7 header**, **2b.6 transport** — each rewritten on the
+>   Chrome API: `Panel::build` → `host.build(view, rect)`, `Panel::update` →
+>   `host.update` (in-place reconcile, free when unchanged since the tree setters
+>   dirty-check), `register_intents` → `host.register_intents`. Value setters drop
+>   their `&mut UITree` arg and just store the field. No more `self.*_id` hoarding,
+>   no `build()`/`sync_*()` dual write. Each carries a `#[cfg(test)]` golden that
+>   reproduces the original pixel math and asserts every interactive cell lands at
+>   the same rect — so the blind migration is provably non-regressing at build.
+> - **Chrome API extensions landed for the migration:** `View::key` →
+>   `LaidNode.key` → `ChromeHost::node_id_for_key` (stable semantic addressing —
+>   a panel resolves a specific element's tree id for overlay anchoring instead of
+>   storing it); `View::disabled(bool)` (host applies/toggles `UIFlags::DISABLED`
+>   in place, excluded from the structural signature).
+>
+> **Remaining 2b (the slider/drawer cards) — verification boundary:**
+> `param_card`, `macros_panel`, `master_chrome`, `layer_chrome`, `clip_chrome`,
+> `layer_header`, `inspector` (composite), `audio_setup_panel`. These are **not
+> "largely mechanical"** the way the static bars were. Two reasons:
+> 1. **Sliders aren't `View` nodes.** `BitmapSlider` is a 5-node widget whose
+>    fill/thumb rects are computed *after* layout (from the resolved track width ×
+>    value) and mutated *imperatively* during drag by `SliderDragState`. A `View`
+>    is described *before* layout, so a slider can't be a pure View node. The
+>    faithful path is a **hybrid**: the host builds the card's declarative chrome
+>    (header, dividers, toggles, labels) and lays out a `Fill` "slider slot"; the
+>    panel recovers the slot rect by key and builds the `BitmapSlider` into it
+>    (byte-identical, zero slider risk). Reconcile-vs-drag must be gated so the
+>    per-frame `host.update` never overwrites a live drag. (The alternative —
+>    teaching the renderer to draw a single `Slider` node as a composite — is the
+>    cleaner end-state but a live-render-path change.)
+> 2. **What headless can't prove.** A build-time tree-equivalence golden proves the
+>    *built* tree matches the old one. It cannot prove the *dynamic* paths these
+>    cards live or die on — drag tracking while the card reconciles, drawer-open
+>    timing, collapse rebuild ordering. Those need a **running build**, on the
+>    central perform-mode inspector. This is the same "runtime visual pass" the
+>    old 2b.0 note flagged for `param_card`, now understood to apply to the whole
+>    slider/drawer family.
+>
+> Next action: migrate the cards on the hybrid pattern **with a running build to
+> verify each card's drag/drawer/collapse**, simplest-first (`master_chrome` →
+> `layer_chrome` → `clip_chrome` → `macros_panel` → `param_card`), then the
+> `inspector` composite, `layer_header`, `audio_setup_panel`, and 2b.11 typed
+> dropdowns. The build-equivalence golden pattern from the static bars carries
+> over; the runtime check is the added gate.
 >
 > **Phase 2a (Chrome API):** a declarative `chrome` module in `manifold-ui` — a panel
 > describes its UI once as a `View` tree; a `ChromeHost` reconciler decides build-vs-update
@@ -592,20 +639,29 @@ not a recovery system.
 One box per panel: rewrite on the Chrome API, move click + right-click into
 intent-at-build, delete `handle_event`/`handle_click` + stored ids, headless
 asserts pass, old code deleted. (Absorbs intent-dispatch groups B/C/D.)
-- [ ] **2b.0** `param_card` — the live cutover deferred from 2a.5. Do **first**,
-  with a runtime visual pass, now that the API is proven on its shape.
-- [ ] **2b.1** `macros_panel`
-- [ ] **2b.2** `master_chrome`
+Order note: done **static-bars-first** (the structurally-invariant chrome, where
+a build-equivalence golden fully proves the migration), not checklist-number
+order. The slider/drawer cards follow on the hybrid pattern, gated by a runtime
+pass (see §0).
+
+- [x] **2b.8** `footer` — **DONE 2026-06-22**, golden-proven, pushed. First card;
+  established the integration pattern + `View::key`/`node_id_for_key`.
+- [x] **2b.7** `header` — **DONE 2026-06-22**, golden-proven, pushed. Three
+  positioning regimes as a `Stack` of `Fill` aligned rows.
+- [x] **2b.6** `transport` — **DONE 2026-06-22**, golden-proven, pushed. Added
+  `View::disabled`; group dividers folded into the section gaps as cross-centred
+  cells.
+- [ ] **2b.2** `master_chrome` — hybrid (host chrome + `BitmapSlider` slot). Next.
 - [ ] **2b.3** `layer_chrome`
 - [ ] **2b.4** `clip_chrome`
+- [ ] **2b.1** `macros_panel`
+- [ ] **2b.0** `param_card` — the beast: drivers / envelope / audio-mod drawers,
+  trim handles. Hybrid + runtime visual pass.
 - [ ] **2b.5** `layer_header`
-- [ ] **2b.6** `transport`
-- [ ] **2b.7** `header`
-- [ ] **2b.8** `footer`
 - [ ] **2b.9** `inspector` (composite)
 - [ ] **2b.10** `audio_setup_panel`
 - [ ] **2b.11** Typed dropdown items (carry their own action); delete the parallel
-  index→meaning maps.
+  index→meaning maps. Slider-free — can land independently of the cards.
 
 ### Phase 3 — Timeline API
 - [ ] **3.1** Sub-design-doc: lane/clip/marker model + one interaction owner +
