@@ -145,10 +145,17 @@ click/drag/double-click/right-click still route the same `PanelAction`s
 - `UIState` keeps only persistent state it is *read* for: selection sets,
   `selection_version`, cursor, insert cursor, zoom index, marker selection. The
   `begin_drag`/`end_drag`/`begin_trim_*`/`end_trim` methods and their backing
-  fields move onto `TimelineInteraction`.
-- Replace the open-coded trim math in `handle_trim_left_drag` /
-  `handle_trim_right_drag` (`interaction_overlay.rs:680-764`) with the existing
-  `trim::compute_left_trim` / `compute_right_trim` — reuse, not a second copy.
+  fields move onto the overlay. Of the twelve transient fields, only five are
+  ever read (`drag_start_beat`, `drag_offset_beats`, `trim_original_*`) — they
+  move; the other seven (`is_dragging`, `is_trimming`, `is_scrubbing`,
+  `drag_clip_id`, `drag_start_layer_id`, `trim_from_left`, and a *duplicate*
+  `trim_clip_id`) are write-only mirrors of `drag_mode` and are deleted outright.
+- **Not** reusing `trim.rs` here. The overlay's right-trim delegates the
+  source-length clamp to `host.get_max_duration_beats`, which knows about audio
+  warp ratio and the video library; `trim::compute_right_trim` reimplements a
+  naive `(len − in_point)/spb` that would regress audio/warped clips. (`trim.rs`
+  is also currently unused; left in place, not wired in.) The fold preserves the
+  overlay's correct, host-delegating math verbatim — only its backing fields move.
 - The `TimelineEditingHost` trait is unchanged; only who-holds-the-fields moves.
 
 *Done when:* no drag/trim/scrub field is written in two structs; the overlay's

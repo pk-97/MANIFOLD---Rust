@@ -14,7 +14,7 @@ use crate::clip_hit_tester::{ClipHitResult, ClipHitTester, HitRegion};
 use crate::input::Modifiers;
 use crate::node::Vec2;
 use crate::panels::viewport::TimelineViewportPanel;
-use crate::timeline_editing_host::{TimelineCursor, TimelineEditingHost};
+use crate::timeline_editing_host::{ClipRef, TimelineCursor, TimelineEditingHost};
 use crate::ui_state::UIState;
 
 // ── Constants ───────────────────────────────────────────────────
@@ -128,6 +128,16 @@ pub struct InteractionOverlay {
     region_drag_start_beat: Beats,
     region_drag_start_layer: usize,
 
+    // Move-drag anchor geometry, captured at grab time. (Formerly mirrored on
+    // UIState — folded here so transient gesture state has one owner.)
+    drag_start_beat: Beats,
+    drag_offset_beats: Beats, // offset from the anchor clip's start to the mouse beat
+
+    // Trim originals, captured at grab time — preserved for the undo command.
+    trim_original_start_beat: Beats,
+    trim_original_duration_beats: Beats,
+    trim_original_in_point: Seconds, // video source offset
+
     // Current modifier state — set by app before each event.
     // Unity reads Keyboard.current inline; Rust stores latest modifiers here.
     modifiers: Modifiers,
@@ -149,6 +159,11 @@ impl InteractionOverlay {
             drag_layer_blocked: false,
             region_drag_start_beat: Beats::ZERO,
             region_drag_start_layer: 0,
+            drag_start_beat: Beats::ZERO,
+            drag_offset_beats: Beats::ZERO,
+            trim_original_start_beat: Beats::ZERO,
+            trim_original_duration_beats: Beats::ZERO,
+            trim_original_in_point: Seconds::ZERO,
             modifiers: Modifiers::NONE,
         }
     }
@@ -167,6 +182,22 @@ impl InteractionOverlay {
     /// Unity reads Keyboard.current inline; Rust stores the latest state here.
     pub fn set_modifiers(&mut self, modifiers: Modifiers) {
         self.modifiers = modifiers;
+    }
+
+    /// Capture the anchor clip's start beat and the grab offset for a move drag.
+    /// The single place move-drag geometry is recorded (formerly `UIState::begin_drag`).
+    fn begin_move(&mut self, anchor_start_beat: Beats, mouse_beat: Beats) {
+        self.drag_start_beat = anchor_start_beat;
+        self.drag_offset_beats = mouse_beat - anchor_start_beat;
+    }
+
+    /// Capture a clip's pre-trim geometry for the undo command (formerly
+    /// `UIState::begin_trim_left` / `begin_trim_right` — the left/right flag was
+    /// unused; the drag mode already distinguishes the edge).
+    fn begin_trim(&mut self, clip: &ClipRef) {
+        self.trim_original_start_beat = clip.start_beat;
+        self.trim_original_duration_beats = clip.duration_beats;
+        self.trim_original_in_point = clip.in_point;
     }
 
     // ────────────────────────────────────────────────────────────
@@ -408,12 +439,7 @@ impl InteractionOverlay {
                 self.drag_mode = DragMode::TrimLeft;
                 self.trim_clip_id = Some(hit.clip_id.clone());
                 if let Some(clip) = host.find_clip_by_id(&hit.clip_id) {
-                    ui_state.begin_trim_left(
-                        &clip.clip_id,
-                        clip.start_beat,
-                        clip.duration_beats,
-                        clip.in_point,
-                    );
+                    self.begin_trim(&clip);
                 }
             }
             // Unity lines 311-320: trim right
@@ -425,12 +451,7 @@ impl InteractionOverlay {
                 self.drag_mode = DragMode::TrimRight;
                 self.trim_clip_id = Some(hit.clip_id.clone());
                 if let Some(clip) = host.find_clip_by_id(&hit.clip_id) {
-                    ui_state.begin_trim_right(
-                        &clip.clip_id,
-                        clip.start_beat,
-                        clip.duration_beats,
-                        clip.in_point,
-                    );
+                    self.begin_trim(&clip);
                 }
             }
             // Unity lines 322-324: body → move drag
@@ -472,11 +493,11 @@ impl InteractionOverlay {
             }
             DragMode::TrimLeft => {
                 let beat = viewport.pixel_to_beat(pos.x);
-                self.handle_trim_left_drag(beat, host, ui_state, viewport);
+                self.handle_trim_left_drag(beat, host, viewport);
             }
             DragMode::TrimRight => {
                 let beat = viewport.pixel_to_beat(pos.x);
-                self.handle_trim_right_drag(beat, host, ui_state, viewport);
+                self.handle_trim_right_drag(beat, host, viewport);
             }
             DragMode::RegionSelect => {
                 self.update_region_drag(pos, ui_state, viewport, host);
@@ -486,10 +507,12 @@ impl InteractionOverlay {
     }
 
     /// Port of Unity InteractionOverlay.OnEndDrag (lines 356-446).
+    ///
+    /// Takes no `UIState`: end-of-drag commits the engine batch and clears the
+    /// overlay's own transient state — selection is untouched here.
     pub fn on_end_drag(
         &mut self,
         host: &mut dyn TimelineEditingHost,
-        ui_state: &mut UIState,
         viewport: &TimelineViewportPanel,
     ) {
         // Unity lines 358-363: region select → finalize
@@ -523,8 +546,6 @@ impl InteractionOverlay {
                 }
             }
 
-            ui_state.end_drag();
-
             // Unity lines 407-416: enforce non-overlap on all dragged clips
             for snapshot in &self.drag_snapshots {
                 host.enforce_non_overlap(&snapshot.clip_id, &self.drag_snapshot_clip_ids);
@@ -536,16 +557,14 @@ impl InteractionOverlay {
             {
                 host.record_trim(
                     trim_id,
-                    ui_state.trim_original_start_beat,
+                    self.trim_original_start_beat,
                     clip.start_beat,
-                    ui_state.trim_original_duration_beats,
+                    self.trim_original_duration_beats,
                     clip.duration_beats,
-                    ui_state.trim_original_in_point,
+                    self.trim_original_in_point,
                     clip.in_point,
                 );
             }
-
-            ui_state.end_trim();
 
             // Unity lines 417-421: enforce non-overlap on trimmed clip
             if let Some(ref trim_id) = self.trim_clip_id {
@@ -652,7 +671,7 @@ impl InteractionOverlay {
         }
 
         // Unity lines 522-534: magnetic snap + beat delta
-        let anchor_start_beat = mouse_beat - ui_state.drag_offset_beats;
+        let anchor_start_beat = mouse_beat - self.drag_offset_beats;
         let snapped = viewport.magnetic_snap(
             anchor_start_beat,
             self.drag_start_layer_index,
@@ -662,7 +681,7 @@ impl InteractionOverlay {
                 .cloned()
                 .collect::<Vec<_>>(),
         );
-        let mut beat_delta = snapped - ui_state.drag_start_beat;
+        let mut beat_delta = snapped - self.drag_start_beat;
         // Clamp: don't let the leftmost clip go below beat 0
         beat_delta = beat_delta.max(-self.drag_selection_min_start_beat);
 
@@ -681,7 +700,6 @@ impl InteractionOverlay {
         &mut self,
         mouse_beat: Beats,
         host: &mut dyn TimelineEditingHost,
-        ui_state: &UIState,
         viewport: &TimelineViewportPanel,
     ) {
         let trim_id = match &self.trim_clip_id {
@@ -689,8 +707,7 @@ impl InteractionOverlay {
             None => return,
         };
 
-        let original_end =
-            ui_state.trim_original_start_beat + ui_state.trim_original_duration_beats;
+        let original_end = self.trim_original_start_beat + self.trim_original_duration_beats;
         let min_duration = Beats(0.25); // 1/16 note minimum (Unity line 544)
 
         // Get the clip's actual layer for snap context
@@ -704,13 +721,13 @@ impl InteractionOverlay {
         let new_start = if is_generator {
             snapped
         } else {
-            snapped.max(ui_state.trim_original_start_beat)
+            snapped.max(self.trim_original_start_beat)
         };
         let new_start = new_start.min(original_end - min_duration);
 
-        let beat_delta = new_start - ui_state.trim_original_start_beat;
+        let beat_delta = new_start - self.trim_original_start_beat;
         let new_duration = original_end - new_start;
-        let new_in_point = (ui_state.trim_original_in_point
+        let new_in_point = (self.trim_original_in_point
             + Seconds(beat_delta.0 * host.get_seconds_per_beat() as f64))
         .max(Seconds::ZERO);
 
@@ -724,7 +741,6 @@ impl InteractionOverlay {
         &mut self,
         mouse_beat: Beats,
         host: &mut dyn TimelineEditingHost,
-        _ui_state: &UIState,
         viewport: &TimelineViewportPanel,
     ) {
         let trim_id = match &self.trim_clip_id {
@@ -826,8 +842,7 @@ impl InteractionOverlay {
                     {
                         self.drag_anchor_clip_id = Some(anchor.clone());
                         self.drag_start_layer_index = ac.layer_index;
-                        let ac_lid = ac.layer_id.clone();
-                        ui_state.begin_drag(&anchor, ac.start_beat, ac_lid, mouse_beat);
+                        self.begin_move(ac.start_beat, mouse_beat);
                         self.capture_drag_selection_from_ids(&split_result.interior_clip_ids, host);
                         return;
                     }
@@ -845,8 +860,7 @@ impl InteractionOverlay {
         self.drag_anchor_clip_id = Some(ClipId::new(clip_id));
         self.drag_start_layer_index = layer_index;
         if let Some(clip) = host.find_clip_by_id(clip_id) {
-            let clip_lid = clip.layer_id.clone();
-            ui_state.begin_drag(&ClipId::new(clip_id), clip.start_beat, clip_lid, mouse_beat);
+            self.begin_move(clip.start_beat, mouse_beat);
         }
         self.capture_drag_selection(ui_state, host);
     }

@@ -5,7 +5,7 @@
 // Replaces the former app::SelectionState + app::ClipDragState.
 
 use manifold_core::selection::SelectionRegion;
-use manifold_core::{Beats, ClipId, LayerId, MarkerId, Seconds};
+use manifold_core::{Beats, ClipId, LayerId, MarkerId};
 use std::collections::HashSet;
 
 pub struct UIState {
@@ -42,23 +42,10 @@ pub struct UIState {
     // ── Hover ──
     pub hovered_clip_id: Option<ClipId>,
 
-    // ── Drag state ──
-    pub is_dragging: bool,
-    pub drag_clip_id: Option<ClipId>,
-    pub drag_start_beat: Beats,
-    pub drag_start_layer_id: Option<LayerId>,
-    pub drag_offset_beats: Beats, // offset from clip StartBeat to mouse beat
-
-    // ── Trim state (originals preserved for undo) ──
-    pub is_trimming: bool,
-    pub trim_from_left: bool, // true = left edge, false = right edge
-    pub trim_clip_id: Option<ClipId>,
-    pub trim_original_start_beat: Beats,
-    pub trim_original_duration_beats: Beats,
-    pub trim_original_in_point: Seconds, // video source offset
-
-    // ── Scrubbing ──
-    pub is_scrubbing: bool,
+    // Transient drag/trim/scrub state is NOT here — it has a single owner,
+    // `InteractionOverlay` (the timeline interaction component). UIState holds
+    // only the persistent selection/cursor/zoom the renderer reads. See
+    // `docs/TIMELINE_API_DESIGN.md` §3.3.
 
     // ── Zoom ──
     pub current_zoom_index: usize,
@@ -88,18 +75,6 @@ impl UIState {
             insert_cursor_beat: None,
             insert_cursor_layer_id: None,
             hovered_clip_id: None,
-            is_dragging: false,
-            drag_clip_id: None,
-            drag_start_beat: Beats::ZERO,
-            drag_start_layer_id: None,
-            drag_offset_beats: Beats::ZERO,
-            is_trimming: false,
-            trim_from_left: false,
-            trim_clip_id: None,
-            trim_original_start_beat: Beats::ZERO,
-            trim_original_duration_beats: Beats::ZERO,
-            trim_original_in_point: Seconds::ZERO,
-            is_scrubbing: false,
             current_zoom_index: crate::color::DEFAULT_ZOOM_INDEX,
             selected_marker_ids: HashSet::new(),
         }
@@ -432,73 +407,8 @@ impl UIState {
         self.selected_layer_ids.len()
     }
 
-    // ── Drag ────────────────────────────────────────────────────────
-
-    /// Begin a clip move drag.
-    /// Unity UIState.cs BeginDrag (lines 374-381).
-    pub fn begin_drag(
-        &mut self,
-        clip_id: &ClipId,
-        start_beat: Beats,
-        layer_id: LayerId,
-        mouse_beat: Beats,
-    ) {
-        self.is_dragging = true;
-        self.drag_clip_id = Some(clip_id.clone());
-        self.drag_start_beat = start_beat;
-        self.drag_start_layer_id = Some(layer_id);
-        self.drag_offset_beats = mouse_beat - start_beat;
-    }
-
-    /// End a clip move drag.
-    /// Unity UIState.cs EndDrag (lines 383-387).
-    pub fn end_drag(&mut self) {
-        self.is_dragging = false;
-        self.drag_clip_id = None;
-    }
-
-    // ── Trim ────────────────────────────────────────────────────────
-
-    /// Begin a left-edge trim.
-    /// Unity UIState.cs BeginTrimLeft (lines 389-397).
-    pub fn begin_trim_left(
-        &mut self,
-        clip_id: &ClipId,
-        start_beat: Beats,
-        duration_beats: Beats,
-        in_point: Seconds,
-    ) {
-        self.is_trimming = true;
-        self.trim_from_left = true;
-        self.trim_clip_id = Some(clip_id.clone());
-        self.trim_original_start_beat = start_beat;
-        self.trim_original_duration_beats = duration_beats;
-        self.trim_original_in_point = in_point;
-    }
-
-    /// Begin a right-edge trim.
-    /// Unity UIState.cs BeginTrimRight (lines 399-407).
-    pub fn begin_trim_right(
-        &mut self,
-        clip_id: &ClipId,
-        start_beat: Beats,
-        duration_beats: Beats,
-        in_point: Seconds,
-    ) {
-        self.is_trimming = true;
-        self.trim_from_left = false;
-        self.trim_clip_id = Some(clip_id.clone());
-        self.trim_original_start_beat = start_beat;
-        self.trim_original_duration_beats = duration_beats;
-        self.trim_original_in_point = in_point;
-    }
-
-    /// End a trim operation.
-    /// Unity UIState.cs EndTrim (lines 409-413).
-    pub fn end_trim(&mut self) {
-        self.is_trimming = false;
-        self.trim_clip_id = None;
-    }
+    // Drag/trim lifecycle (begin/end) lives on InteractionOverlay — the single
+    // owner of transient gesture state. UIState used to mirror it here.
 
     // ── Selection Validation ───────────────────────────────────────
 
