@@ -18,7 +18,19 @@ and how we get there."
 > migrated and pushed; the slider/drawer inspector cards are the remaining work
 > and hit a verification boundary (below). Branch `ui-chrome-phase2b`.
 >
-> **Done + verified + pushed (5 panels):**
+> **Typed building blocks (the direction Peter steered to 2026-06-22):** the
+> repeated interactive widgets become *typed Chrome components the host
+> materialises*, so panels compose them declaratively instead of hand-rolling
+> imperative slots. **Slider shipped:** `View::slider_row(SliderSpec).key(K)` — the
+> `ChromeHost` builds the `BitmapSlider` into the laid slot (byte-identical) and
+> exposes its ids via `ChromeHost::slider_ids(K)`; the panel's `SliderDragState`
+> drives value+drag from those ids (host owns structure, panel owns value).
+> master/layer/macros all compose it. **Next blocks (same shape):**
+> dropdown-trigger, progress-bar, Ableton/driver/envelope/audio drawers, trim
+> handles — each currently built imperatively into a keyed slot; promoting them to
+> `View::*` components is what makes clip/param/audio-setup clean compositions.
+>
+> **Done + verified + pushed (6 panels + the slider block):**
 > - **2b.8 footer**, **2b.7 header**, **2b.6 transport** — the static bars, each
 >   rewritten on the Chrome API: `Panel::build` → `host.build(view, rect)`,
 >   `Panel::update` → `host.update` (in-place reconcile, free when unchanged since
@@ -657,27 +669,23 @@ pass (see §0).
   `View::disabled`; group dividers folded into the section gaps as cross-centred
   cells.
 - [x] **2b.2** `master_chrome` — **DONE 2026-06-22**, slot-golden-proven, pushed.
-  Established the hybrid: host owns the card chrome + `Fill` slider slots; the
-  `BitmapSlider` drops into the recovered slot byte-identical; the host never owns
-  the slider nodes, so reconcile and drag can't fight; public interface unchanged
-  so the inspector composite is untouched.
+  Established the hybrid, then refit to compose `View::slider_row`. Public
+  interface unchanged so the inspector composite is untouched.
 - [x] **2b.3** `layer_chrome` — **DONE 2026-06-22**, slot-golden-proven, pushed.
-  Same hybrid; `show_name`/`show_opacity` structural flags drive conditional View
-  children.
-- [ ] **2b.4** `clip_chrome` — intricate: video/gen/audio modes, a variable count
-  of audio-detection instrument rows, an onset slider + per-instrument sensitivity
-  sliders. Hybrid applies but the dynamic rows want a runtime pass.
-- [ ] **2b.1** `macros_panel` — **mostly-imperative; low chrome value.** 8 slider
-  rows + per-slot Ableton trim handles (built into the track) + conditional
-  Ableton config drawers (which shift every later slot's slot position) + the
-  copy-flash. Only the section card + header + chevron are declarative chrome.
-  Like the timeline, a slider/trim/drawer bank is a stateful-widget surface the
-  declarative model barely improves — a full host migration here is high-effort,
-  low-value, and risky on perform UI. **Recommend: migrate only the header chrome
-  (or leave as-is) — decide with Peter; do not force the whole slot layout into
-  the host blind.**
+  Same; `show_name`/`show_opacity` structural flags drive conditional children.
+- [x] **2b.1** `macros_panel` — **DONE 2026-06-22**, 8-slider golden-proven, pushed.
+  Host owns the section card + header + 8 `slider_row` slots + conditional
+  Ableton-config-drawer slots; trim handles + config drawers stay imperative in
+  their keyed slots (the next blocks to typify).
+- [ ] **2b.4** `clip_chrome` — **NEXT, but a runtime pass.** Video/gen/audio mode
+  sections, a variable count of audio-detection instrument rows (per-row toggle +
+  sensitivity `slider_row` + count + layer dropdown), an onset slider, a progress
+  bar, a ~140-line click router. The slider block covers the sliders; the dropdown
+  triggers + progress bar drop into keyed slots like macros' config drawers. The
+  dynamic rows + 3 modes are exactly what a build golden can't fully cover.
 - [ ] **2b.0** `param_card` — the beast: drivers / envelope / audio-mod drawers,
-  trim handles, the densest interaction surface. Hybrid + runtime visual pass.
+  trim handles, the densest interaction surface. Composes `slider_row` + the
+  drawer/trim blocks once those exist. Runtime visual pass.
 - [ ] **2b.5** `layer_header` — per-layer rows (variable count), audio-gain slider,
   MIDI fields. Runtime pass.
 - [ ] **2b.9** `inspector` (composite) — the 2588-line orchestrator. Migrate after
@@ -687,13 +695,16 @@ pass (see §0).
 - [ ] **2b.11** Typed dropdown items (carry their own action); delete the parallel
   index→meaning maps. Slider-free — can land independently of the cards.
 
-> **Cumulative this chat (2026-06-22):** 5 panels migrated + golden-proven + pushed
-> (footer, header, transport, master_chrome, layer_chrome), Chrome API extended
-> with `key` + `disabled`, the hybrid slider-card pattern proven on two cards. The
-> remaining items split into *runtime-pass-needed* (clip_chrome, param_card,
-> layer_header, inspector, audio_setup — dynamic/real-time surfaces a build-time
-> golden can't fully cover) and *low-chrome-value* (macros_panel) and *independent*
-> (2b.11 typed dropdowns). Resume with a running build for the dynamic cards.
+> **Cumulative this chat (2026-06-22):** 6 panels migrated + golden-proven + pushed
+> (footer, header, transport, master_chrome, layer_chrome, macros_panel), Chrome
+> API extended with `key`, `disabled`, and the **typed `slider_row` building
+> block** (host-materialised) per Peter's steer. Remaining: clip_chrome (next),
+> param_card, layer_header, inspector composite, audio_setup, 2b.11 dropdowns —
+> all large/dynamic central-perform surfaces. They compose the slider block; the
+> dropdown-trigger / progress-bar / drawer / trim blocks are the next components
+> to add. Resume with a running build to verify each card's drag/drawer/dynamic
+> rows as it lands — the build golden covers the static tree, the runtime pass
+> covers what it can't.
 
 ### Phase 3 — Timeline API
 - [ ] **3.1** Sub-design-doc: lane/clip/marker model + one interaction owner +
