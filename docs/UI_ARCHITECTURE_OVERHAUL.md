@@ -14,13 +14,14 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 of 11 panels migrated +
-> verified + pushed (the static bars + master/layer/macros/clip chrome cards), plus
-> the typed `slider_row` building block. The four heavyweights (`param_card`,
-> `layer_header`, `audio_setup_panel`, `inspector`) + 2b.11 dropdowns remain —
-> ~9.7k lines of the densest perform UI that want a running build (see the
-> cumulative note below). Next action: build the drawer + trim blocks, then
-> `param_card`. Branch `ui-chrome-phase2b`.
+> **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 panels fully migrated + the
+> `param_card` **frame** staged, all verified + pushed, plus the `slider_row` +
+> `dropdown_trigger` building blocks. **Key result: the heavyweights stage into
+> committable steps (frame → header → rows) — they are not all-or-nothing.**
+> `param_card` rows + the other three beasts (`layer_header`, `audio_setup`,
+> `inspector`) remain; deepen each stage with the app running (the header
+> declarativisation + the dynamic effect badges + per-row dragged widgets are what
+> a headless golden can't cover). Branch `ui-chrome-phase2b`.
 >
 > **Typed building blocks (the direction Peter steered to 2026-06-22):** the
 > repeated interactive widgets become *typed Chrome components the host
@@ -691,9 +692,20 @@ pass (see §0).
   keyed slots. 4 tests cover the modes + key routing + slider materialisation. The
   **runtime pass is still owed** — the build golden can't cover the live
   drag/dynamic-row behaviour.
-- [ ] **2b.0** `param_card` — the beast: drivers / envelope / audio-mod drawers,
-  trim handles, the densest interaction surface. Composes `slider_row` + the
-  drawer/trim blocks once those exist. Runtime visual pass.
+- [~] **2b.0** `param_card` — **stage 1 DONE 2026-06-22, pushed.** The card frame
+  (interactive border + inner bg, both effect + generator kinds) is host-built via
+  a declarative `frame_view`, byte-identical; the header + rows are still built
+  imperatively into the host-laid inner bg. **The key result: the beast stages
+  into committable steps — it is NOT one all-or-nothing rewrite.** Remaining
+  stages: (2) header → host — note the absolute-positioned decorations (cog's
+  3 dots, drag handle's bars) and the effect header's dynamic flush-right badge
+  packing + live-resized name-clip don't map to flow layout, so the header is a
+  buttons-declarative / decorations-as-keyed-children job, plus the dual
+  effect/generator sync + handle_click move to key resolution; (3) rows stay
+  imperative *by design* (`build_param_row` is a dragged, trim-handled stateful
+  widget — the slider/trim/drawer surface, not declarative chrome). Best with a
+  running build. The same frame-first staging applies to layer_header / audio_setup
+  / inspector.
 - [ ] **2b.5** `layer_header` — per-layer rows (variable count), audio-gain slider,
   MIDI fields. Runtime pass.
 - [ ] **2b.9** `inspector` (composite) — the 2588-line orchestrator. Migrate after
