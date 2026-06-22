@@ -51,6 +51,27 @@ pub fn truncate_with_ellipsis(
     ellipsis.to_string()
 }
 
+/// Always-on default measurer carried by every [`UITree`](crate::tree::UITree):
+/// a weight-aware character-width heuristic, identical to `NativeTextRenderer`'s
+/// `TextMeasure` impl. It needs no GPU and no font state, so a tree can always
+/// answer `measure_text` at build time. The app upgrades the tree to a
+/// CoreText-accurate measurer where precise size-to-content matters; this is the
+/// baseline that keeps the build path measurement-capable even in tests and
+/// before that upgrade lands.
+pub struct HeuristicTextMeasure;
+
+impl TextMeasure for HeuristicTextMeasure {
+    fn measure_text(&self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
+        let em = font_size as f32;
+        let avg_char_width = match font_weight {
+            FontWeight::Bold => em * 0.56,
+            FontWeight::Medium => em * 0.54,
+            FontWeight::Regular => em * 0.52,
+        };
+        Vec2::new(text.chars().count() as f32 * avg_char_width, em)
+    }
+}
+
 /// Stub implementation for tests — assumes monospaced 8px-wide characters.
 pub struct MonoTextMeasure;
 

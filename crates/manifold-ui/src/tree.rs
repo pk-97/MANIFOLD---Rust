@@ -1,4 +1,5 @@
 use crate::node::*;
+use crate::text::{HeuristicTextMeasure, TextMeasure};
 
 /// Flat indexed node storage for the bitmap UI system.
 ///
@@ -30,6 +31,13 @@ pub struct UITree {
     /// per-frame cost. Cannot go stale: it lives at the mutation layer, so no
     /// structural change can bypass it.
     structure_version: u64,
+    /// Text measurement available to the *build* path, so a panel can size a
+    /// cell to its text while building (not just guess a fixed width). Defaults
+    /// to the GPU-free [`HeuristicTextMeasure`] so the tree can always answer;
+    /// the app installs a CoreText-accurate measurer via [`set_text_measure`].
+    ///
+    /// [`set_text_measure`]: UITree::set_text_measure
+    text_measure: Box<dyn TextMeasure>,
 }
 
 const INITIAL_CAPACITY: usize = 512;
@@ -45,11 +53,34 @@ impl UITree {
             count: 0,
             has_dirty: false,
             structure_version: 0,
+            text_measure: Box::new(HeuristicTextMeasure),
         }
     }
 
     pub fn count(&self) -> usize {
         self.count
+    }
+
+    // ── Text measurement (build path) ───────────────────────────────
+
+    /// Install the measurer the build path uses for size-to-content. The app
+    /// calls this once with a CoreText-accurate measurer; until then (and in
+    /// tests) the tree falls back to the always-on [`HeuristicTextMeasure`].
+    pub fn set_text_measure(&mut self, measure: Box<dyn TextMeasure>) {
+        self.text_measure = measure;
+    }
+
+    /// Measure `text` at build time. Available wherever a `&UITree` is, so a
+    /// panel's `build()` can size a cell to its content.
+    pub fn measure_text(&self, text: &str, font_size: u16, weight: FontWeight) -> Vec2 {
+        self.text_measure.measure_text(text, font_size, weight)
+    }
+
+    /// Measured pixel width of `text` — the common case of [`measure_text`].
+    ///
+    /// [`measure_text`]: UITree::measure_text
+    pub fn text_width(&self, text: &str, font_size: u16, weight: FontWeight) -> f32 {
+        self.text_measure.measure_text(text, font_size, weight).x
     }
 
     pub fn has_dirty(&self) -> bool {

@@ -32,6 +32,7 @@ use manifold_ui::{
     node::{FontWeight, Vec2},
     text::TextMeasure,
 };
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::ui_renderer::Depth;
@@ -1298,6 +1299,38 @@ impl TextMeasure for NativeTextRenderer {
             FontWeight::Regular => em * 0.52,
         };
         Vec2::new(text.chars().count() as f32 * avg_char_width, em)
+    }
+}
+
+/// Accurate, GPU-free text measurer for the UI build path.
+///
+/// Wraps only the CoreText [`FontManager`] — no atlas, no GPU device — so the
+/// app can construct one and install it on a [`UITree`](manifold_ui::tree::UITree)
+/// via `set_text_measure`, giving panels real glyph-width measurement at build
+/// time instead of the [`HeuristicTextMeasure`](manifold_ui::text::HeuristicTextMeasure)
+/// fallback. Font lookup caches, the only mutation, lives behind a `RefCell` so
+/// measurement satisfies `TextMeasure`'s `&self` contract.
+pub struct CoreTextMeasure {
+    fonts: RefCell<FontManager>,
+}
+
+impl CoreTextMeasure {
+    pub fn new() -> Self {
+        Self {
+            fonts: RefCell::new(FontManager::new()),
+        }
+    }
+}
+
+impl Default for CoreTextMeasure {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TextMeasure for CoreTextMeasure {
+    fn measure_text(&self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
+        measure_text_ct(&mut self.fonts.borrow_mut(), text, font_size as f32, font_weight)
     }
 }
 

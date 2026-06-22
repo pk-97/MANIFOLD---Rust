@@ -14,7 +14,7 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 1.3 COMPLETE (2026-06-22).** Next action: **Phase 1.4 (plumb `TextMeasure` into the build path)**.
+> **Status: Phase 1.4 COMPLETE (2026-06-22).** Next action: **Phase 1.5 (extract shared hit-test primitives)**.
 >
 > **Phase 0 decision:** production stays `panic = "abort"` ([`Cargo.toml`](../Cargo.toml)
 > `[profile.release]`). In-process recovery (catch_unwind / respawn / watchdog) is
@@ -521,8 +521,15 @@ not a recovery system.
   conversions delegate to `Axis::new(ppb, -scroll)`; the canvas `to_screen`/`to_graph`
   delegate to `Axis::from_pan(zoom, pan, origin)` per dimension. Both refactors are
   value-identical (existing tests green).
-- [ ] **1.4** Plumb `TextMeasure` into the build path. _Done when:_ a panel can
-  size a cell to its text at build time.
+- [x] **1.4** Plumb `TextMeasure` into the build path. _Done when:_ a panel can
+  size a cell to its text at build time. → `UITree` now owns a `Box<dyn TextMeasure>`
+  (`tree.measure_text` / `text_width`), defaulting to an always-on GPU-free
+  `HeuristicTextMeasure`; the app installs a CoreText-accurate `CoreTextMeasure`
+  (manifold-renderer, `RefCell<FontManager>`, no GPU) in `UIRoot::new()` so both
+  windows get it. Proof: the footer's static "Q:" label is sized to its measured
+  text at build, right-anchored so the glyphs render unchanged (test
+  `quantize_label_sized_to_text`). Signature-free: no panel `build()` arg changed —
+  the measurer rides on the tree every `build()` already holds.
 - [ ] **1.5** Extract shared hit-test primitives. _Done when:_ chrome + timeline
   share the primitive.
 - [ ] **1.6** (Group A) Delete the transport/header/footer `handle_click` twins;

@@ -349,7 +349,16 @@ pub struct UIRoot {
 impl UIRoot {
     pub fn new() -> Self {
         Self {
-            tree: UITree::new(),
+            // Give the build path real glyph-width measurement (size-to-content)
+            // instead of the heuristic fallback. CoreTextMeasure is GPU-free, so
+            // it installs here at construction; both windows' UIRoots get it.
+            tree: {
+                let mut tree = UITree::new();
+                tree.set_text_measure(Box::new(
+                    manifold_renderer::native_text::CoreTextMeasure::new(),
+                ));
+                tree
+            },
             input: UIInputSystem::new(),
             layout: ScreenLayout::new(1280.0, 720.0),
             intents: manifold_ui::intent::IntentRegistry::new(),

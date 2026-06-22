@@ -389,6 +389,15 @@ impl Default for FooterPanel {
     }
 }
 
+/// Shrink a right-aligned label cell to its measured text width, keeping the
+/// right edge fixed so the glyphs render unchanged. The Phase 1.4 build-time
+/// size-to-content path: the width comes from `tree.measure_text`, not a guess.
+/// Clamped to the reserved cell width so a long string can't overflow its slot.
+fn fit_label_right(tree: &UITree, cell: Rect, text: &str, font: u16, weight: FontWeight) -> Rect {
+    let w = tree.text_width(text, font, weight).min(cell.width);
+    Rect::new(cell.x_max() - w, cell.y, w, cell.height)
+}
+
 impl Panel for FooterPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
         self.cache_first_node = tree.count();
@@ -428,10 +437,14 @@ impl Panel for FooterPanel {
             UIFlags::empty(),
         ));
 
-        // Quantize
+        // Quantize. The "Q:" label cell is sized to its measured text at build
+        // time (Phase 1.4 size-to-content) rather than the old magic width, then
+        // right-anchored so the right-aligned glyphs land in the exact same spot.
+        let quantize_label_rect =
+            fit_label_right(tree, self.layout.quantize_label, "Q:", FOOTER_FONT, FontWeight::Regular);
         self.quantize_label_id = Some(tree.add_node(
             Some(bg),
-            self.layout.quantize_label,
+            quantize_label_rect,
             UINodeType::Label,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
@@ -629,6 +642,23 @@ mod tests {
         assert!(panel.scale_50_id.is_some());
         assert!(panel.fps_field_id.is_some());
         assert!(tree.count() >= 12); // bg + 11 elements
+    }
+
+    #[test]
+    fn quantize_label_sized_to_text() {
+        // Phase 1.4: the label cell width comes from build-time text measurement,
+        // right-anchored. Its width tracks the measured glyphs and its right edge
+        // stays put (so the right-aligned text doesn't move).
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = FooterPanel::new();
+        panel.build(&mut tree, &layout);
+
+        let measured = tree.text_width("Q:", FOOTER_FONT, FontWeight::Regular);
+        let node = tree.get_node(panel.quantize_label_id.unwrap());
+        assert!((node.bounds.width - measured).abs() < 0.01);
+        // Right edge unchanged vs the reserved cell — glyphs render in place.
+        assert!((node.bounds.x_max() - panel.layout.quantize_label.x_max()).abs() < 0.01);
     }
 
     #[test]
