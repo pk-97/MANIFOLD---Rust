@@ -18,16 +18,21 @@
 use super::copy_to_clipboard_label::CopyToClipboardLabelState;
 use super::param_slider_shared::*;
 use super::{AudioShapeParam, GraphParamTarget, PanelAction, TrimKind};
-use crate::chrome::{ChromeHost, Pad, View};
+use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
 use manifold_core::{EffectId, LayerId};
 
-// Stable keys for the host-owned card frame (shared by both kinds).
+// Stable keys for the host-owned card frame + header.
 const KEY_BORDER: u64 = 90_001;
 const KEY_INNER: u64 = 90_002;
+const KEY_HEADER_BG: u64 = 90_003;
+const KEY_NAME: u64 = 90_004;
+const KEY_CHEVRON: u64 = 90_005;
+const KEY_COG: u64 = 90_006;
+const KEY_CHANGE: u64 = 90_007;
 
 /// Map a 0..1 slider position to an [`AudioModShape`] scalar's value, using the
 /// per-control full-scale constants. The single conversion shared by the audio
@@ -896,6 +901,127 @@ impl ParamCardPanel {
             )
     }
 
+    /// The generator card as a host `View`: frame + a declarative header
+    /// (`[name | Change | cog | chevron]`, right-to-left). The cog's three dots
+    /// are added imperatively into the keyed cog button after build (absolute
+    /// decoration that doesn't map to flow layout); in Author the cog button is a
+    /// reserved transparent slot so the rest stays put.
+    fn generator_card_view(&self, border_color: Color32) -> View {
+        let change_style = UIStyle {
+            bg_color: color::CONFIG_BG_C32,
+            hover_bg_color: color::GEN_CARD_HEADER_HOVER_C32,
+            pressed_bg_color: color::SLIDER_TRACK_PRESSED_C32,
+            text_color: color::TEXT_DIMMED_C32,
+            font_size: FONT_SIZE,
+            corner_radius: 2.0,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        };
+        let gap = || View::panel().w(Sizing::Fixed(GAP)).fill_h();
+        let cog = if self.context == CardContext::Perform {
+            View::button("")
+                .w(Sizing::Fixed(COG_W))
+                .fill_h()
+                .style(UIStyle {
+                    bg_color: Color32::TRANSPARENT,
+                    hover_bg_color: color::HOVER_OVERLAY,
+                    pressed_bg_color: color::PRESS_OVERLAY,
+                    ..UIStyle::default()
+                })
+                .inert()
+                .key(KEY_COG)
+        } else {
+            View::panel().w(Sizing::Fixed(COG_W)).fill_h()
+        };
+        let header = View::row(0.0)
+            .fill_w()
+            .h(Sizing::Fixed(HEADER_HEIGHT))
+            .bg(color::GEN_CARD_HEADER_BG_C32)
+            .radius(CORNER_RADIUS - BORDER_W)
+            .interactive()
+            .inert()
+            .pad(Pad { l: PADDING, t: 0.0, r: 0.0, b: 0.0 })
+            .cross_align(Align::Center)
+            .key(KEY_HEADER_BG)
+            .child(
+                View::label(self.name.as_str())
+                    .fill_w()
+                    .fill_h()
+                    .font(FONT_SIZE)
+                    .text_color(color::GEN_CARD_HEADER_NAME_C32)
+                    .align_text(TextAlign::Left)
+                    .interactive()
+                    .inert()
+                    .key(KEY_NAME),
+            )
+            .child(gap())
+            .child(
+                View::button("Change")
+                    .w(Sizing::Fixed(CHANGE_BTN_W))
+                    .h(Sizing::Fixed(CHANGE_BTN_H))
+                    .style(change_style)
+                    .inert()
+                    .key(KEY_CHANGE),
+            )
+            .child(gap())
+            .child(cog)
+            .child(
+                View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
+                    .w(Sizing::Fixed(CHEVRON_W))
+                    .fill_h()
+                    .style(UIStyle {
+                        text_color: color::TEXT_DIMMED_C32,
+                        font_size: FONT_SIZE,
+                        text_align: TextAlign::Center,
+                        ..UIStyle::default()
+                    })
+                    .inert()
+                    .key(KEY_CHEVRON),
+            );
+
+        View::panel()
+            .fill()
+            .bg(border_color)
+            .radius(CORNER_RADIUS)
+            .interactive()
+            .inert()
+            .key(KEY_BORDER)
+            .pad(Pad::all(BORDER_W))
+            .child(
+                View::panel()
+                    .fill()
+                    .bg(color::GEN_CARD_INNER_BG_C32)
+                    .radius(CORNER_RADIUS - BORDER_W)
+                    .interactive()
+                    .inert()
+                    .key(KEY_INNER)
+                    .child(header),
+            )
+    }
+
+    /// Add the cog's three triangle dots as children of the keyed cog button.
+    fn add_cog_dots(&self, tree: &mut UITree, cog_btn_id: NodeId) {
+        let b = tree.get_bounds(cog_btn_id);
+        let dot: f32 = 3.0;
+        let dot_style = UIStyle {
+            bg_color: color::TEXT_DIMMED_C32,
+            corner_radius: dot * 0.5,
+            ..UIStyle::default()
+        };
+        let cx = b.x + COG_W * 0.5;
+        let cy = b.y + HEADER_HEIGHT * 0.5;
+        let v_offset = 3.5;
+        let h_offset = 4.0;
+        let positions = [
+            (cx - dot * 0.5, cy - v_offset - dot * 0.5),
+            (cx - h_offset - dot * 0.5, cy + v_offset - dot * 0.5),
+            (cx + h_offset - dot * 0.5, cy + v_offset - dot * 0.5),
+        ];
+        for (px, py) in positions {
+            tree.add_panel(Some(cog_btn_id), px, py, dot, dot, dot_style);
+        }
+    }
+
     /// Build the card frame on the host, record `first_node` + the border/inner
     /// ids (resolved by key), and return the inner-bg rect the header + rows are
     /// built into.
@@ -1395,135 +1521,31 @@ impl ParamCardPanel {
         self.toggle_cache.iter_mut().for_each(|v| *v = false);
         self.label_cache.iter_mut().for_each(|v| *v = None);
 
-        // ── Card frame (host) ──
+        // ── Card frame + header (host) ──
         let border_color = if self.is_selected {
             color::SELECTED_BORDER
         } else {
             color::GEN_CARD_BORDER_C32
         };
-        self.build_frame(tree, rect, border_color, color::GEN_CARD_INNER_BG_C32);
+        let view = self.generator_card_view(border_color);
+        let h = self.compute_height() - CARD_BOTTOM_MARGIN;
+        self.host
+            .build(tree, &view, Rect::new(rect.x, rect.y, rect.width, h));
+        self.first_node = self.host.first_node();
+        self.border_id = self.host.node_id_for_key(KEY_BORDER);
+        self.inner_bg_id = self.host.node_id_for_key(KEY_INNER);
+        self.header_bg_id = self.host.node_id_for_key(KEY_HEADER_BG);
+        self.name_label_id = self.host.node_id_for_key(KEY_NAME);
+        self.change_btn_id = self.host.node_id_for_key(KEY_CHANGE);
+        self.chevron_btn_id = self.host.node_id_for_key(KEY_CHEVRON);
+        self.cog_btn_id = self.host.node_id_for_key(KEY_COG);
+        if let Some(cog) = self.cog_btn_id {
+            self.add_cog_dots(tree, cog);
+        }
 
         let inner_x = rect.x + BORDER_W;
         let inner_y = rect.y + BORDER_W;
         let inner_w = rect.width - BORDER_W * 2.0;
-
-        // ── Header ──
-        let header_bg_id = tree.add_panel(
-            None,
-            inner_x,
-            inner_y,
-            inner_w,
-            HEADER_HEIGHT,
-            UIStyle {
-                bg_color: color::GEN_CARD_HEADER_BG_C32,
-                corner_radius: CORNER_RADIUS - BORDER_W,
-                ..UIStyle::default()
-            },
-        );
-        self.header_bg_id = Some(header_bg_id);
-        tree.set_flag(header_bg_id, UIFlags::INTERACTIVE);
-
-        let gen_name = self.name.clone();
-
-        // Header layout (right-to-left): [Name] ... [Change] [Cog] [Chevron]
-        let chevron_x = inner_x + inner_w - CHEVRON_W;
-        let cog_x = chevron_x - COG_W;
-        let change_x = cog_x - CHANGE_BTN_W - GAP;
-        let name_x = inner_x + PADDING;
-        let name_w = change_x - name_x - GAP;
-
-        self.name_label_id = Some(tree.add_label(
-            None,
-            name_x,
-            inner_y,
-            name_w,
-            HEADER_HEIGHT,
-            &gen_name,
-            UIStyle {
-                text_color: color::GEN_CARD_HEADER_NAME_C32,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        ));
-
-        self.change_btn_id = Some(tree.add_button(
-            None,
-            change_x,
-            inner_y + (HEADER_HEIGHT - CHANGE_BTN_H) * 0.5,
-            CHANGE_BTN_W,
-            CHANGE_BTN_H,
-            UIStyle {
-                bg_color: color::CONFIG_BG_C32,
-                hover_bg_color: color::GEN_CARD_HEADER_HOVER_C32,
-                pressed_bg_color: color::SLIDER_TRACK_PRESSED_C32,
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: FONT_SIZE,
-                corner_radius: 2.0,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            "Change",
-        ));
-
-        let chevron_text = if self.is_collapsed {
-            "\u{25B6}"
-        } else {
-            "\u{25BC}"
-        };
-        self.chevron_btn_id = Some(tree.add_button(
-            None,
-            chevron_x,
-            inner_y,
-            CHEVRON_W,
-            HEADER_HEIGHT,
-            UIStyle {
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            chevron_text,
-        ));
-
-        // "Open in graph editor" affordance — three small dots in a triangle.
-        // Perform only: in Author (editor) you're already in the editor.
-        let elem_y = inner_y;
-        if self.context == CardContext::Perform {
-            let cog_btn_id = tree.add_button(
-                None,
-                cog_x,
-                elem_y,
-                COG_W,
-                HEADER_HEIGHT,
-                UIStyle {
-                    bg_color: Color32::TRANSPARENT,
-                    hover_bg_color: color::HOVER_OVERLAY,
-                    pressed_bg_color: color::PRESS_OVERLAY,
-                    ..UIStyle::default()
-                },
-                "",
-            );
-            self.cog_btn_id = Some(cog_btn_id);
-            let dot: f32 = 3.0;
-            let dot_style = UIStyle {
-                bg_color: color::TEXT_DIMMED_C32,
-                corner_radius: dot * 0.5,
-                ..UIStyle::default()
-            };
-            let cx = cog_x + COG_W * 0.5;
-            let cy = elem_y + HEADER_HEIGHT * 0.5;
-            let v_offset = 3.5;
-            let h_offset = 4.0;
-            let positions = [
-                (cx - dot * 0.5, cy - v_offset - dot * 0.5),
-                (cx - h_offset - dot * 0.5, cy + v_offset - dot * 0.5),
-                (cx + h_offset - dot * 0.5, cy + v_offset - dot * 0.5),
-            ];
-            for (px, py) in positions {
-                tree.add_panel(Some(cog_btn_id), px, py, dot, dot, dot_style);
-            }
-        }
 
         // ── Params (if not collapsed) ──
         if !self.is_collapsed && !self.param_info.is_empty() {
@@ -3148,6 +3170,51 @@ mod tests {
     }
 
     // ── Generator-card fixtures + tests ───────────────────────────
+
+    #[test]
+    fn generator_header_layout_matches_golden() {
+        // The host-built generator header must land Change / cog / chevron at the
+        // same right-to-left rects the old imperative layout used.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new(); // Perform context by default
+        panel.configure(&gen_config());
+        let rect = Rect::new(0.0, 0.0, 280.0, 300.0);
+        panel.build(&mut tree, rect);
+
+        let inner_x = rect.x + BORDER_W;
+        let inner_y = rect.y + BORDER_W;
+        let inner_w = rect.width - BORDER_W * 2.0;
+        let chevron_x = inner_x + inner_w - CHEVRON_W;
+        let cog_x = chevron_x - COG_W;
+        let change_x = cog_x - CHANGE_BTN_W - GAP;
+
+        let close = |a: Rect, b: Rect| {
+            (a.x - b.x).abs() < 0.01
+                && (a.y - b.y).abs() < 0.01
+                && (a.width - b.width).abs() < 0.01
+                && (a.height - b.height).abs() < 0.01
+        };
+        let chevron = tree.get_bounds(panel.host.node_id_for_key(KEY_CHEVRON).unwrap());
+        assert!(
+            close(chevron, Rect::new(chevron_x, inner_y, CHEVRON_W, HEADER_HEIGHT)),
+            "chevron {chevron:?}"
+        );
+        let cog = tree.get_bounds(panel.host.node_id_for_key(KEY_COG).unwrap());
+        assert!(close(cog, Rect::new(cog_x, inner_y, COG_W, HEADER_HEIGHT)), "cog {cog:?}");
+        let change = tree.get_bounds(panel.host.node_id_for_key(KEY_CHANGE).unwrap());
+        assert!(
+            close(
+                change,
+                Rect::new(
+                    change_x,
+                    inner_y + (HEADER_HEIGHT - CHANGE_BTN_H) * 0.5,
+                    CHANGE_BTN_W,
+                    CHANGE_BTN_H
+                )
+            ),
+            "change {change:?}"
+        );
+    }
 
     fn gen_config() -> ParamCardConfig {
         ParamCardConfig {
