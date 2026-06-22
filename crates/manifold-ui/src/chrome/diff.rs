@@ -162,6 +162,19 @@ impl ChromeHost {
     pub fn node_id(&self, i: usize) -> Option<NodeId> {
         self.ids.get(i).copied()
     }
+
+    /// Resolve the tree node id of the first node carrying `key` (set via
+    /// [`View::key`](crate::chrome::view::View::key)). The stable way for a
+    /// panel to hand a specific element to overlay anchoring without hoarding a
+    /// `self.*_id` field — the id survives in-place updates and is re-resolved
+    /// after a rebuild. O(n) over this panel's nodes; called on interaction, not
+    /// per frame.
+    pub fn node_id_for_key(&self, key: u64) -> Option<NodeId> {
+        self.laid
+            .iter()
+            .position(|n| n.key == Some(key))
+            .and_then(|i| self.ids.get(i).copied())
+    }
 }
 
 /// FNV-1a step.

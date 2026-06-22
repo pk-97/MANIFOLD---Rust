@@ -435,7 +435,7 @@ pub fn push_state(
 
         // Footer — quantize mode, resolution, FPS
         ui.footer
-            .set_quantize_text(tree, project.settings.quantize_mode.display_name());
+            .set_quantize_text(project.settings.quantize_mode.display_name());
         // Show preset label if dimensions match, otherwise show "WxH" (Unity: UpdateFooterResolutionText)
         let (preset_w, preset_h) = project.settings.resolution_preset.dimensions();
         let res_label = if preset_w == project.settings.output_width
@@ -452,13 +452,11 @@ pub fn push_state(
                 project.settings.output_width, project.settings.output_height
             )
         };
-        ui.footer.set_resolution_text(tree, &res_label);
+        ui.footer.set_resolution_text(&res_label);
         ui.footer
-            .set_fps_text(tree, &format!("{:.0} FPS", project.settings.frame_rate));
-        ui.footer
-            .set_render_scale(tree, project.settings.render_scale);
-        ui.footer
-            .set_tonemap_curve(tree, project.settings.tonemap_curve);
+            .set_fps_text(&format!("{:.0} FPS", project.settings.frame_rate));
+        ui.footer.set_render_scale(project.settings.render_scale);
+        ui.footer.set_tonemap_curve(project.settings.tonemap_curve);
     }
 
     // Footer stats
@@ -466,7 +464,7 @@ pub fn push_state(
         let layers = project.timeline.layers.len();
         let clips: usize = project.timeline.layers.iter().map(|l| l.clips.len()).sum();
         let info = format!("Layers: {} | Clips: {}", layers, clips);
-        ui.footer.set_selection_info(tree, &info);
+        ui.footer.set_selection_info(&info);
     }
 
     // Playhead + playing state

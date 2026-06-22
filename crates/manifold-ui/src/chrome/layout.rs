@@ -32,6 +32,11 @@ pub struct LaidNode {
     pub clips: bool,
     pub visible: bool,
     pub intent: ViewIntent,
+    /// Stable-identity hint copied from [`View::key`]. The reconciler keys on
+    /// structure, not this; it exists so a panel can resolve a specific node id
+    /// for overlay anchoring (the "stable semantic addressing" the Chrome API
+    /// gives panels in place of hand-stored `self.*_id` fields).
+    pub key: Option<u64>,
 }
 
 /// Resolve `root` within `rect`, returning every node laid out in DFS pre-order.
@@ -138,6 +143,7 @@ fn place(view: &View, rect: Rect, parent: Option<usize>, measure: &dyn TextMeasu
         clips: view.clips,
         visible: view.visible,
         intent: view.intent.clone(),
+        key: view.key,
     });
 
     if view.children.is_empty() {
