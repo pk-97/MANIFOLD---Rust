@@ -324,45 +324,8 @@ impl FooterPanel {
         }
     }
 
-    fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
-        let id = Some(node_id);
-        if id == self.quantize_button_id {
-            return vec![PanelAction::CycleQuantize];
-        }
-        if id == self.resolution_button_id {
-            return vec![PanelAction::ResolutionClicked];
-        }
-        if id == self.fps_field_id {
-            return vec![PanelAction::FpsFieldClicked];
-        }
-        if id == self.scale_100_id {
-            return vec![PanelAction::SetRenderScale(1.0)];
-        }
-        if id == self.scale_75_id {
-            return vec![PanelAction::SetRenderScale(0.75)];
-        }
-        if id == self.scale_50_id {
-            return vec![PanelAction::SetRenderScale(0.5)];
-        }
-        if id == self.tonemap_aces_id {
-            return vec![PanelAction::SetTonemapCurve(TonemapCurve::AcesNarkowicz)];
-        }
-        if id == self.tonemap_hill_id {
-            return vec![PanelAction::SetTonemapCurve(TonemapCurve::AcesHill)];
-        }
-        if id == self.tonemap_agx_id {
-            return vec![PanelAction::SetTonemapCurve(TonemapCurve::Agx)];
-        }
-        if id == self.tonemap_khr_id {
-            return vec![PanelAction::SetTonemapCurve(
-                TonemapCurve::KhronosPbrNeutral,
-            )];
-        }
-        Vec::new()
-    }
-
-    /// Node-intent dispatch for the footer buttons' clicks. Mirrors
-    /// `handle_click`. See `docs/NODE_INTENT_DISPATCH.md`.
+    /// Node-intent dispatch for the footer buttons' clicks. The sole click path
+    /// — there is no `handle_click` twin. See `docs/NODE_INTENT_DISPATCH.md`.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         use crate::intent::Gesture::Click;
         let mut on = |id: Option<NodeId>, a: PanelAction| {
@@ -607,11 +570,10 @@ impl Panel for FooterPanel {
 
     fn update(&mut self, _tree: &mut UITree) {}
 
-    fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
-        match event {
-            UIEvent::Click { node_id, .. } => self.handle_click(*node_id),
-            _ => Vec::new(),
-        }
+    /// Footer is fully intent-dispatched (see `register_intents`); clicks resolve
+    /// centrally and never reach a panel handler. Required trait no-op.
+    fn handle_event(&mut self, _event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
+        Vec::new()
     }
 
     fn first_node(&self) -> usize {
@@ -662,30 +624,27 @@ mod tests {
     }
 
     #[test]
-    fn handle_click_quantize() {
+    fn intent_resolves_button_clicks() {
+        use crate::intent::{Gesture, IntentRegistry};
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = FooterPanel::new();
         panel.build(&mut tree, &layout);
 
-        let a = panel.handle_click(panel.quantize_button_id.unwrap());
-        assert_eq!(a.len(), 1);
-        assert!(matches!(a[0], PanelAction::CycleQuantize));
-    }
+        let mut intents = IntentRegistry::new();
+        panel.register_intents(&mut intents);
 
-    #[test]
-    fn handle_click_scale_buttons() {
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = FooterPanel::new();
-        panel.build(&mut tree, &layout);
-
-        let a = panel.handle_click(panel.scale_100_id.unwrap());
-        assert!(matches!(a[0], PanelAction::SetRenderScale(s) if (s - 1.0).abs() < 0.01));
-        let b = panel.handle_click(panel.scale_75_id.unwrap());
-        assert!(matches!(b[0], PanelAction::SetRenderScale(s) if (s - 0.75).abs() < 0.01));
-        let c = panel.handle_click(panel.scale_50_id.unwrap());
-        assert!(matches!(c[0], PanelAction::SetRenderScale(s) if (s - 0.5).abs() < 0.01));
+        // The sole click path: resolve through the registry (replaces the
+        // deleted handle_click twin).
+        let q = intents.resolve(&tree, panel.quantize_button_id, Gesture::Click);
+        assert!(matches!(q, Some(PanelAction::CycleQuantize)));
+        let s100 = intents.resolve(&tree, panel.scale_100_id, Gesture::Click);
+        assert!(matches!(s100, Some(PanelAction::SetRenderScale(s)) if (s - 1.0).abs() < 0.01));
+        let s75 = intents.resolve(&tree, panel.scale_75_id, Gesture::Click);
+        assert!(matches!(s75, Some(PanelAction::SetRenderScale(s)) if (s - 0.75).abs() < 0.01));
+        let s50 = intents.resolve(&tree, panel.scale_50_id, Gesture::Click);
+        assert!(matches!(s50, Some(PanelAction::SetRenderScale(s)) if (s - 0.5).abs() < 0.01));
+        assert!(intents.resolve(&tree, None, Gesture::Click).is_none());
     }
 
     #[test]

@@ -14,7 +14,7 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phase 1.5 COMPLETE (2026-06-22).** Next action: **Phase 1.6 (delete transport/header/footer `handle_click` twins → `IntentRegistry::resolve`)**.
+> **Status: Phase 1 COMPLETE (2026-06-22)** — all of 1.1–1.6 landed. Next action: **Phase 2a (Chrome API design + proof)**.
 >
 > **Phase 0 decision:** production stays `panic = "abort"` ([`Cargo.toml`](../Cargo.toml)
 > `[profile.release]`). In-process recovery (catch_unwind / respawn / watchdog) is
@@ -538,9 +538,14 @@ not a recovery system.
   (`contains_inclusive`), and box-select (`overlaps`) through it. Value-identical
   (tree hit-test + clip hit-test tests green). The canvas's closed point-in-rect
   is a Phase-4 consumer, left untouched (different boundary convention).
-- [ ] **1.6** (Group A) Delete the transport/header/footer `handle_click` twins;
+- [x] **1.6** (Group A) Delete the transport/header/footer `handle_click` twins;
   rewrite their tests to `IntentRegistry::resolve`. _Done when:_ no click twin
-  remains.
+  remains. → All three `handle_click` methods deleted; each `handle_event` is now
+  a required-trait no-op (clicks resolve via `resolve_intent` and `continue`
+  before reaching panels). The three dead dispatch calls in `ui_root::process_events`
+  removed. Tests rewritten to build → `register_intents` → `IntentRegistry::resolve`,
+  with a `None`-hit miss assertion each. Verified: `register_intents` covered the
+  identical target set `handle_click` did (transport 19, header 5, footer 10).
 
 ### Phase 2a — Chrome API design + proof
 - [ ] **2a.1** Sub-design-doc: declarative widget/layout API (types, builder,

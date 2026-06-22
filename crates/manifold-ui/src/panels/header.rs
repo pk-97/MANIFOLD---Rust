@@ -273,28 +273,8 @@ impl HeaderPanel {
         }
     }
 
-    fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
-        let id = Some(node_id);
-        if id == self.zoom_out_id {
-            return vec![PanelAction::ZoomOut];
-        }
-        if id == self.zoom_in_id {
-            return vec![PanelAction::ZoomIn];
-        }
-        if id == self.audio_btn_id {
-            return vec![PanelAction::OpenAudioSetup];
-        }
-        if id == self.monitor_btn_id {
-            return vec![PanelAction::ToggleMonitor];
-        }
-        if id == self.perform_btn_id {
-            return vec![PanelAction::EnterPerformMode];
-        }
-        Vec::new()
-    }
-
-    /// Node-intent dispatch for the header buttons' clicks. Mirrors
-    /// `handle_click`. See `docs/NODE_INTENT_DISPATCH.md`.
+    /// Node-intent dispatch for the header buttons' clicks. The sole click path
+    /// — there is no `handle_click` twin. See `docs/NODE_INTENT_DISPATCH.md`.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         use crate::intent::Gesture::Click;
         let mut on = |id: Option<NodeId>, a: PanelAction| {
@@ -502,11 +482,10 @@ impl Panel for HeaderPanel {
 
     fn update(&mut self, _tree: &mut UITree) {}
 
-    fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
-        match event {
-            UIEvent::Click { node_id, .. } => self.handle_click(*node_id),
-            _ => Vec::new(),
-        }
+    /// Header is fully intent-dispatched (see `register_intents`); clicks resolve
+    /// centrally and never reach a panel handler. Required trait no-op.
+    fn handle_event(&mut self, _event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
+        Vec::new()
     }
 
     fn first_node(&self) -> usize {
@@ -539,28 +518,25 @@ mod tests {
     }
 
     #[test]
-    fn handle_click_audio_opens_setup() {
+    fn intent_resolves_button_clicks() {
+        use crate::intent::{Gesture, IntentRegistry};
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let mut panel = HeaderPanel::new();
         panel.build(&mut tree, &layout);
 
-        let a = panel.handle_click(panel.audio_btn_id.unwrap());
-        assert!(matches!(a[0], PanelAction::OpenAudioSetup));
-    }
+        let mut intents = IntentRegistry::new();
+        panel.register_intents(&mut intents);
 
-    #[test]
-    fn handle_click_zoom() {
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = HeaderPanel::new();
-        panel.build(&mut tree, &layout);
-
-        let a = panel.handle_click(panel.zoom_in_id.unwrap());
-        assert!(matches!(a[0], PanelAction::ZoomIn));
-
-        let a = panel.handle_click(panel.zoom_out_id.unwrap());
-        assert!(matches!(a[0], PanelAction::ZoomOut));
+        // The sole click path: resolve through the registry (replaces the
+        // deleted handle_click twin).
+        let audio = intents.resolve(&tree, panel.audio_btn_id, Gesture::Click);
+        assert!(matches!(audio, Some(PanelAction::OpenAudioSetup)));
+        let zin = intents.resolve(&tree, panel.zoom_in_id, Gesture::Click);
+        assert!(matches!(zin, Some(PanelAction::ZoomIn)));
+        let zout = intents.resolve(&tree, panel.zoom_out_id, Gesture::Click);
+        assert!(matches!(zout, Some(PanelAction::ZoomOut)));
+        assert!(intents.resolve(&tree, None, Gesture::Click).is_none());
     }
 
     #[test]

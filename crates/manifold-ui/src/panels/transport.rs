@@ -1071,72 +1071,10 @@ impl TransportPanel {
         }
     }
 
-    fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
-        let id = Some(node_id);
-        // clock_authority_id is read-only — authority is auto-determined from enabled sources
-        if id == self.link_button_id {
-            return vec![PanelAction::ToggleLink];
-        }
-        if id == self.clk_button_id {
-            return vec![PanelAction::ToggleMidiClock];
-        }
-        if id == self.clk_device_id {
-            return vec![PanelAction::SelectClkDevice];
-        }
-        if id == self.sync_button_id {
-            return vec![PanelAction::ToggleSyncOutput];
-        }
-        if id == self.play_button_id {
-            return vec![PanelAction::PlayPause];
-        }
-        if id == self.stop_button_id {
-            return vec![PanelAction::Stop];
-        }
-        if id == self.rec_button_id {
-            return vec![PanelAction::Record];
-        }
-        if id == self.bpm_field_id {
-            return vec![PanelAction::BpmFieldClicked];
-        }
-        if id == self.bpm_reset_id {
-            return vec![PanelAction::ResetBpm];
-        }
-        if id == self.bpm_clear_id {
-            return vec![PanelAction::ClearBpm];
-        }
-        if id == self.new_button_id {
-            return vec![PanelAction::NewProject];
-        }
-        if id == self.open_button_id {
-            return vec![PanelAction::OpenProject];
-        }
-        if id == self.open_recent_id {
-            return vec![PanelAction::OpenRecent];
-        }
-        if id == self.save_button_id {
-            return vec![PanelAction::SaveProject];
-        }
-        if id == self.save_as_id {
-            return vec![PanelAction::SaveProjectAs];
-        }
-        if id == self.export_button_id {
-            return vec![PanelAction::ExportVideo];
-        }
-        if id == self.frame_button_id {
-            return vec![PanelAction::ExportFrame];
-        }
-        if id == self.hdr_button_id {
-            return vec![PanelAction::ToggleHdr];
-        }
-        if id == self.perc_button_id {
-            return vec![PanelAction::TogglePercussion];
-        }
-        Vec::new()
-    }
-
-    /// Node-intent dispatch for the transport buttons' clicks. Mirrors
-    /// `handle_click` — each button id maps to its action. See
-    /// `docs/NODE_INTENT_DISPATCH.md`.
+    /// Node-intent dispatch for the transport buttons' clicks. Each button id
+    /// maps to its click action; the central resolver folds a hit up to it. This
+    /// is the sole click path — there is no `handle_click` twin.
+    /// See `docs/NODE_INTENT_DISPATCH.md`.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         use crate::intent::Gesture::Click;
         let mut on = |id: Option<NodeId>, a: PanelAction| {
@@ -1201,11 +1139,11 @@ impl Panel for TransportPanel {
 
     fn update(&mut self, _tree: &mut UITree) {}
 
-    fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
-        match event {
-            UIEvent::Click { node_id, .. } => self.handle_click(*node_id),
-            _ => Vec::new(),
-        }
+    /// Transport is fully intent-dispatched (see `register_intents`); clicks
+    /// resolve centrally and never reach a panel handler. Kept as the trait's
+    /// required no-op — there are no non-gesture events to route.
+    fn handle_event(&mut self, _event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
+        Vec::new()
     }
 
     fn first_node(&self) -> usize {
@@ -1242,26 +1180,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_click_play() {
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = TransportPanel::new();
-        panel.build(&mut tree, &layout);
-
-        let actions = panel.handle_click(panel.play_button_id.unwrap());
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::PlayPause));
-    }
-
-    #[test]
-    fn handle_click_miss() {
-        let panel = TransportPanel::new();
-        let actions = panel.handle_click(NodeId(9999));
-        assert!(actions.is_empty());
-    }
-
-    #[test]
-    fn intent_resolves_play_button_click() {
+    fn intent_resolves_button_clicks() {
         use crate::intent::{Gesture, IntentRegistry};
         let mut tree = UITree::new();
         let layout = ScreenLayout::new(1920.0, 1080.0);
@@ -1271,11 +1190,16 @@ mod tests {
         let mut intents = IntentRegistry::new();
         panel.register_intents(&mut intents);
 
-        // The live path resolves the play button's click through the registry.
+        // The sole click path: resolve through the registry (the deleted
+        // handle_click twin's coverage moves here).
         let action = intents.resolve(&tree, panel.play_button_id, Gesture::Click);
         assert!(matches!(action, Some(PanelAction::PlayPause)));
         let stop = intents.resolve(&tree, panel.stop_button_id, Gesture::Click);
         assert!(matches!(stop, Some(PanelAction::Stop)));
+        let export = intents.resolve(&tree, panel.export_button_id, Gesture::Click);
+        assert!(matches!(export, Some(PanelAction::ExportVideo)));
+        // Miss: a click that hits nothing resolves to no action.
+        assert!(intents.resolve(&tree, None, Gesture::Click).is_none());
     }
 
     #[test]

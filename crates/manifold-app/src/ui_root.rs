@@ -1077,19 +1077,11 @@ impl UIRoot {
                 continue;
             }
 
-            // Route to panels.
-            let mut panel_actions;
-
-            panel_actions = self.transport.handle_event(event, &self.tree);
-            actions.append(&mut panel_actions);
-
-            panel_actions = self.header.handle_event(event, &self.tree);
-            actions.append(&mut panel_actions);
-
-            panel_actions = self.footer.handle_event(event, &self.tree);
-            actions.append(&mut panel_actions);
-
-            panel_actions = self.layer_headers.handle_event(event, &self.tree);
+            // Route to panels. Transport, header, and footer are fully
+            // intent-dispatched (see `resolve_intent` above) — their clicks
+            // resolve and `continue` before reaching here, so they have no
+            // panel-side click handler to call.
+            let mut panel_actions = self.layer_headers.handle_event(event, &self.tree);
             actions.append(&mut panel_actions);
 
             panel_actions = self.inspector.handle_event(event, &self.tree);
