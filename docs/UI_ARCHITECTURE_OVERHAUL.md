@@ -740,15 +740,20 @@ pass (see §0).
   routing, and the imperative rows (parented into `bg_id`) are untouched. The
   real-time body (spectrogram, live meters, band dividers, dynamic send rows)
   stays imperative — the next stage, with a build open.
-- [~] **2b.11** Typed dropdown items — **foundation DONE 2026-06-22, pushed.**
+- [x] **2b.11** Typed dropdown items — **COMPLETE 2026-06-22, pushed.**
   `DropdownItem::with_action(PanelAction)` + `DropdownAction::SelectedAction`; the
-  app fires the carried action directly in `drain_overlay_selections` with no
-  `DropdownContext` / index→meaning map. Proven on the blend-mode dropdown (each
-  item carries its `SetBlendMode`). Remaining: convert the other contexts the same
-  way and retire their parallel `Vec<Option<…>>` maps (audio sources, channels,
-  layer sends, MIDI note/channel/device, resolution, clip-detect layers, …) — each
-  a mechanical `.with_action(...)` on the item build + deletion of its
-  `dropdown_to_action` arm + cached map.
+  app fires the carried action directly in `drain_overlay_selections`. All ~19
+  menus converted (blend-mode, resolution, MIDI note/channel/device, MIDI-clock,
+  clip/track right-click, audio-input / setup-source / send-channel, layer-send,
+  clip-detect quantize/layer, audio-trigger layer, card / param / macro-slot /
+  gen-string right-clicks, master-exit, layer-header). `dropdown_to_action` is
+  **deleted** — every selectable item is typed — and all four parallel
+  `Vec<Option<…>>` index→meaning maps (`layer_send_map`,
+  `audio_input_device_names`, `audio_setup_source_map`, `audio_channel_item_map`)
+  plus the `AudioSourceChoice` helper enum are gone. Only two `DropdownContext`
+  variants survive: `LayerContext` (its color swatches resolve via
+  `dropdown_color_to_action`) and `AudioSendRoutings` (read-only). A new
+  `open_dropdown_typed` opens a context-free dropdown.
 
 > **Cumulative this chat (2026-06-22):** **7 panels migrated + verified + pushed**
 > (footer, header, transport, master_chrome, layer_chrome, macros_panel,
