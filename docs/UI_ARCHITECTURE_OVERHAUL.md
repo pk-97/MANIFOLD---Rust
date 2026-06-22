@@ -740,8 +740,15 @@ pass (see §0).
   routing, and the imperative rows (parented into `bg_id`) are untouched. The
   real-time body (spectrogram, live meters, band dividers, dynamic send rows)
   stays imperative — the next stage, with a build open.
-- [ ] **2b.11** Typed dropdown items (carry their own action); delete the parallel
-  index→meaning maps. Slider-free — can land independently of the cards.
+- [~] **2b.11** Typed dropdown items — **foundation DONE 2026-06-22, pushed.**
+  `DropdownItem::with_action(PanelAction)` + `DropdownAction::SelectedAction`; the
+  app fires the carried action directly in `drain_overlay_selections` with no
+  `DropdownContext` / index→meaning map. Proven on the blend-mode dropdown (each
+  item carries its `SetBlendMode`). Remaining: convert the other contexts the same
+  way and retire their parallel `Vec<Option<…>>` maps (audio sources, channels,
+  layer sends, MIDI note/channel/device, resolution, clip-detect layers, …) — each
+  a mechanical `.with_action(...)` on the item build + deletion of its
+  `dropdown_to_action` arm + cached map.
 
 > **Cumulative this chat (2026-06-22):** **7 panels migrated + verified + pushed**
 > (footer, header, transport, master_chrome, layer_chrome, macros_panel,
