@@ -706,19 +706,20 @@ pass (see §0).
     keyed cog button (absolute decoration — doesn't map to flow). Header ids
     resolve by key into the existing fields, so sync + `handle_click_generator`
     are untouched. **Golden** asserts Change/cog/chevron land at the old rects.
-  - **Stage 3 (effect header) — a real fork, not mechanical.** The effect header
-    adds the dynamic flush-right badge block (`effect_badge_layout`: active badges
-    only, name-clip resized to suit). The badges are updated **in-place** by
-    `sync_values_effect` (a dirty-checked path that runs when the active set flips
-    *without* a rebuild). A declarative flow wants active-only badges =
-    structural = rebuild-on-change. Those two conflict: going declarative means
-    dropping the in-place badge sync and guaranteeing every badge-aggregate flip
-    forces a rebuild — a behaviour change to verify against a running build, not a
-    transcription. **Decide with Peter:** rebuild-on-badge-change vs. keep the
-    effect header imperative (it's the dynamic-chip surface, like a slider is the
-    dragged surface).
+  - **Stage 3 (effect header) — DONE 2026-06-22, pushed.** The effect header
+    structure (drag handle, name-clip + label, toggle, chevron, cog) is host-built
+    via `effect_header_row`; `build_effect_header` resolves the ids by key and lays
+    only the imperative decorations on top — the badges, drag-handle bars, cog
+    dots. **The badge fork was resolved by *keeping* the in-place re-pack**: the
+    name-clip is laid `Fill` and shrunk to leave room for active badges by
+    `reposition_effect_badges` (the same path `sync_values_effect` runs), so badge
+    timing is unchanged — no rebuild-on-change, no behaviour change. Golden asserts
+    toggle/chevron/cog rects. **param_card's header is now fully declarative for
+    both kinds.**
   - **Stage 4 (rows):** stay imperative *by design* — `build_param_row` is a
-    dragged, trim-handled stateful widget (the slider/trim/drawer surface).
+    dragged, trim-handled stateful widget (the slider/trim/drawer surface), the
+    same way the slider stays a `BitmapSlider` behind `slider_row`. This is the
+    correct end state, not a gap.
   The same frame-first staging applies to `layer_header` / `audio_setup` /
   `inspector`.
 - [~] **2b.5** `layer_header` — **stage 1 DONE 2026-06-22, pushed.** The top chrome
