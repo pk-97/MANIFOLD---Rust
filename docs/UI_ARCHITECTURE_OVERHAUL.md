@@ -18,15 +18,20 @@ and how we get there."
 > migrated and pushed; the slider/drawer inspector cards are the remaining work
 > and hit a verification boundary (below). Branch `ui-chrome-phase2b`.
 >
-> **Done + verified + pushed (the structurally-invariant chrome):**
-> - **2b.8 footer**, **2b.7 header**, **2b.6 transport** — each rewritten on the
->   Chrome API: `Panel::build` → `host.build(view, rect)`, `Panel::update` →
->   `host.update` (in-place reconcile, free when unchanged since the tree setters
->   dirty-check), `register_intents` → `host.register_intents`. Value setters drop
->   their `&mut UITree` arg and just store the field. No more `self.*_id` hoarding,
->   no `build()`/`sync_*()` dual write. Each carries a `#[cfg(test)]` golden that
->   reproduces the original pixel math and asserts every interactive cell lands at
->   the same rect — so the blind migration is provably non-regressing at build.
+> **Done + verified + pushed (5 panels):**
+> - **2b.8 footer**, **2b.7 header**, **2b.6 transport** — the static bars, each
+>   rewritten on the Chrome API: `Panel::build` → `host.build(view, rect)`,
+>   `Panel::update` → `host.update` (in-place reconcile, free when unchanged since
+>   the tree setters dirty-check), `register_intents` → `host.register_intents`.
+>   Value setters drop their `&mut UITree` arg and just store the field. No more
+>   `self.*_id` hoarding, no `build()`/`sync_*()` dual write. Each carries a
+>   `#[cfg(test)]` golden that reproduces the original pixel math and asserts every
+>   interactive cell lands at the same rect — provably non-regressing at build.
+> - **2b.2 master_chrome**, **2b.3 layer_chrome** — the first slider-bearing
+>   inspector cards, on the **hybrid** pattern (below): host owns the card's
+>   declarative chrome + `Fill` slider slots, the `BitmapSlider` drops into the
+>   recovered slot byte-identical. Slot-golden asserts the slider lands at the old
+>   rect. Public interface unchanged → the inspector composite is untouched.
 > - **Chrome API extensions landed for the migration:** `View::key` →
 >   `LaidNode.key` → `ChromeHost::node_id_for_key` (stable semantic addressing —
 >   a panel resolves a specific element's tree id for overlay anchoring instead of
@@ -651,17 +656,44 @@ pass (see §0).
 - [x] **2b.6** `transport` — **DONE 2026-06-22**, golden-proven, pushed. Added
   `View::disabled`; group dividers folded into the section gaps as cross-centred
   cells.
-- [ ] **2b.2** `master_chrome` — hybrid (host chrome + `BitmapSlider` slot). Next.
-- [ ] **2b.3** `layer_chrome`
-- [ ] **2b.4** `clip_chrome`
-- [ ] **2b.1** `macros_panel`
+- [x] **2b.2** `master_chrome` — **DONE 2026-06-22**, slot-golden-proven, pushed.
+  Established the hybrid: host owns the card chrome + `Fill` slider slots; the
+  `BitmapSlider` drops into the recovered slot byte-identical; the host never owns
+  the slider nodes, so reconcile and drag can't fight; public interface unchanged
+  so the inspector composite is untouched.
+- [x] **2b.3** `layer_chrome` — **DONE 2026-06-22**, slot-golden-proven, pushed.
+  Same hybrid; `show_name`/`show_opacity` structural flags drive conditional View
+  children.
+- [ ] **2b.4** `clip_chrome` — intricate: video/gen/audio modes, a variable count
+  of audio-detection instrument rows, an onset slider + per-instrument sensitivity
+  sliders. Hybrid applies but the dynamic rows want a runtime pass.
+- [ ] **2b.1** `macros_panel` — **mostly-imperative; low chrome value.** 8 slider
+  rows + per-slot Ableton trim handles (built into the track) + conditional
+  Ableton config drawers (which shift every later slot's slot position) + the
+  copy-flash. Only the section card + header + chevron are declarative chrome.
+  Like the timeline, a slider/trim/drawer bank is a stateful-widget surface the
+  declarative model barely improves — a full host migration here is high-effort,
+  low-value, and risky on perform UI. **Recommend: migrate only the header chrome
+  (or leave as-is) — decide with Peter; do not force the whole slot layout into
+  the host blind.**
 - [ ] **2b.0** `param_card` — the beast: drivers / envelope / audio-mod drawers,
-  trim handles. Hybrid + runtime visual pass.
-- [ ] **2b.5** `layer_header`
-- [ ] **2b.9** `inspector` (composite)
-- [ ] **2b.10** `audio_setup_panel`
+  trim handles, the densest interaction surface. Hybrid + runtime visual pass.
+- [ ] **2b.5** `layer_header` — per-layer rows (variable count), audio-gain slider,
+  MIDI fields. Runtime pass.
+- [ ] **2b.9** `inspector` (composite) — the 2588-line orchestrator. Migrate after
+  its cards; runtime pass.
+- [ ] **2b.10** `audio_setup_panel` — large modal: spectrogram, live meters,
+  band dividers, dynamic send rows. Heavily imperative/real-time; runtime pass.
 - [ ] **2b.11** Typed dropdown items (carry their own action); delete the parallel
   index→meaning maps. Slider-free — can land independently of the cards.
+
+> **Cumulative this chat (2026-06-22):** 5 panels migrated + golden-proven + pushed
+> (footer, header, transport, master_chrome, layer_chrome), Chrome API extended
+> with `key` + `disabled`, the hybrid slider-card pattern proven on two cards. The
+> remaining items split into *runtime-pass-needed* (clip_chrome, param_card,
+> layer_header, inspector, audio_setup — dynamic/real-time surfaces a build-time
+> golden can't fully cover) and *low-chrome-value* (macros_panel) and *independent*
+> (2b.11 typed dropdowns). Resume with a running build for the dynamic cards.
 
 ### Phase 3 — Timeline API
 - [ ] **3.1** Sub-design-doc: lane/clip/marker model + one interaction owner +
