@@ -1300,10 +1300,11 @@ impl UIRoot {
                 let items: Vec<DropdownItem> = BlendMode::ALL
                     .iter()
                     .map(|m| {
-                        DropdownItem::new(m.display_name()).with_action(PanelAction::SetBlendMode(
-                            *idx,
-                            m.display_name().to_string(),
-                        ))
+                        // The label is the display name; the action carries the
+                        // Debug form, exactly as the old index→action map did
+                        // (`format!("{:?}", BlendMode::from_index(i))`).
+                        DropdownItem::new(m.display_name())
+                            .with_action(PanelAction::SetBlendMode(*idx, format!("{:?}", m)))
                     })
                     .collect();
                 self.open_dropdown_at(DropdownContext::BlendMode(*idx), items, trigger);
@@ -1581,25 +1582,37 @@ impl UIRoot {
                 true
             }
             PanelAction::MidiInputClicked(idx) => {
+                // Typed dropdown (2b.11): item n carries SetMidiNote(idx, n).
                 let items: Vec<DropdownItem> = (0..128)
-                    .map(|n| DropdownItem::new(&manifold_core::midi::note_number_to_name(n)))
+                    .map(|n| {
+                        DropdownItem::new(&manifold_core::midi::note_number_to_name(n))
+                            .with_action(PanelAction::SetMidiNote(*idx, n as i32))
+                    })
                     .collect();
                 self.open_dropdown_at(DropdownContext::MidiNote(*idx), items, trigger);
                 true
             }
             PanelAction::MidiChannelClicked(idx) => {
-                let mut items: Vec<DropdownItem> = vec![DropdownItem::new("All")];
-                items.extend((1..=16).map(|ch| DropdownItem::new(&format!("Ch {}", ch))));
+                // "All" (-1) then channels 0..15 (displayed 1..16).
+                let mut items: Vec<DropdownItem> =
+                    vec![DropdownItem::new("All").with_action(PanelAction::SetMidiChannel(*idx, -1))];
+                items.extend((1..=16).map(|ch| {
+                    DropdownItem::new(&format!("Ch {}", ch))
+                        .with_action(PanelAction::SetMidiChannel(*idx, ch - 1))
+                }));
                 self.open_dropdown_at(DropdownContext::MidiChannel(*idx), items, trigger);
                 true
             }
             PanelAction::MidiDeviceClicked(idx) => {
-                let mut items: Vec<DropdownItem> = vec![DropdownItem::new("All Devices")];
-                items.extend(
-                    self.midi_device_names
-                        .iter()
-                        .map(|name| DropdownItem::new(name)),
-                );
+                // "All Devices" (None) then each named device.
+                let mut items: Vec<DropdownItem> = vec![
+                    DropdownItem::new("All Devices")
+                        .with_action(PanelAction::SetMidiDevice(*idx, None)),
+                ];
+                items.extend(self.midi_device_names.iter().map(|name| {
+                    DropdownItem::new(name)
+                        .with_action(PanelAction::SetMidiDevice(*idx, Some(name.clone())))
+                }));
                 self.open_dropdown_at(DropdownContext::MidiDevice(*idx), items, trigger);
                 true
             }
