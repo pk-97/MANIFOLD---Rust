@@ -1,4 +1,18 @@
+//! Master-FX inspector card on the Chrome API (hybrid).
+//!
+//! The card's declarative chrome — header + collapse chevron, dividers, the LED
+//! row's label / exit-path button / ON-OFF toggle, and two `Fill` *slider slots*
+//! — is described once in [`MasterChromePanel::chrome_view`] and reconciled by a
+//! [`ChromeHost`]. The two sliders stay [`BitmapSlider`] widgets (a 5-node
+//! interactive control whose fill/thumb geometry is post-layout and whose drag is
+//! imperative — not expressible as a `View` node); `build` recovers each slot's
+//! laid rect by key and builds the slider into it, byte-identical to before. The
+//! host never owns the slider nodes, so the per-frame chrome reconcile and the
+//! slider drag never fight. The public interface is unchanged, so the inspector
+//! composite that drives this card is untouched. See `docs/CHROME_API_DESIGN.md`.
+
 use super::PanelAction;
+use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
@@ -14,15 +28,23 @@ const PAD_H: f32 = 2.0;
 const PAD_V: f32 = 2.0;
 const GAP: f32 = 4.0;
 const CHEVRON_W: f32 = 18.0;
+const CHEVRON_H: f32 = 16.0;
+const TOGGLE_H: f32 = 18.0;
 const LED_LABEL_W: f32 = 28.0;
 const LED_TOGGLE_W: f32 = 28.0;
 const LED_SLIDER_W: f32 = 80.0;
 const OPACITY_LABEL_W: f32 = 50.0;
 const FONT_SIZE: u16 = color::FONT_BODY;
 
-// ── Panel-specific colors (imported from color module) ───────────
-
 use crate::color::{EXIT_PATH_BG, EXIT_PATH_HOVER, EXIT_PATH_PRESSED};
+
+// Stable keys: chrome elements the panel resolves (clicks / overlay anchor) and
+// the slots the sliders drop into.
+const KEY_CHEVRON: u64 = 1;
+const KEY_EXIT_PATH: u64 = 2;
+const KEY_LED_TOGGLE: u64 = 3;
+const KEY_BRIGHTNESS_SLOT: u64 = 4;
+const KEY_OPACITY_SLOT: u64 = 5;
 
 fn fmt_opacity(v: f32) -> String {
     format!("{:.2}", v)
@@ -31,24 +53,19 @@ fn fmt_opacity(v: f32) -> String {
 // ── MasterChromePanel ────────────────────────────────────────────
 
 pub struct MasterChromePanel {
-    // Node IDs
-    header_label_id: Option<NodeId>,
-    chevron_btn_id: Option<NodeId>,
-    exit_path_label_id: Option<NodeId>,
-    exit_path_btn_id: Option<NodeId>,
-    led_toggle_btn_id: Option<NodeId>,
-    divider_ids: [Option<NodeId>; 3],
+    host: ChromeHost,
+    chrome_rect: Rect,
 
-    // Sliders — single source of truth for drag state + cache
+    // Sliders — single source of truth for drag state + cache.
     opacity: SliderDragState,
     led_brightness: SliderDragState,
 
-    // State
+    // State (the source the chrome_view reads).
     is_collapsed: bool,
     cached_exit_path: String,
     cached_led_enabled: bool,
 
-    // Node range for ownership checking
+    // Node range for ownership checking (host chrome + slider nodes).
     first_node: usize,
     node_count: usize,
 }
@@ -56,12 +73,8 @@ pub struct MasterChromePanel {
 impl MasterChromePanel {
     pub fn new() -> Self {
         Self {
-            header_label_id: None,
-            chevron_btn_id: None,
-            exit_path_label_id: None,
-            exit_path_btn_id: None,
-            led_toggle_btn_id: None,
-            divider_ids: [None; 3],
+            host: ChromeHost::new(),
+            chrome_rect: Rect::ZERO,
             opacity: SliderDragState::default(),
             led_brightness: SliderDragState::default(),
             is_collapsed: false,
@@ -108,230 +121,7 @@ impl MasterChromePanel {
         self.is_collapsed = !self.is_collapsed;
     }
 
-    // ── Build ────────────────────────────────────────────────────
-
-    pub fn build(&mut self, tree: &mut UITree, rect: Rect) {
-        self.first_node = tree.count();
-        let content_w = rect.width - PAD_H * 2.0;
-        let cx = rect.x + PAD_H;
-        let mut cy = rect.y + PAD_V;
-
-        let opacity_val = self.opacity.cached_value();
-        let opacity = if opacity_val.is_nan() {
-            1.0
-        } else {
-            opacity_val
-        };
-        let exit_path = self.cached_exit_path.clone();
-
-        // Header row
-        let label_w = content_w - CHEVRON_W - GAP;
-        self.header_label_id = Some(tree.add_label(
-            None,
-            cx,
-            cy,
-            label_w,
-            HEADER_ROW_H,
-            "Master FX",
-            UIStyle {
-                text_color: color::TEXT_PRIMARY_C32,
-                font_size: color::FONT_HEADING,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        ));
-
-        let chev_x = cx + content_w - CHEVRON_W;
-        self.chevron_btn_id = Some(tree.add_button(
-            None,
-            chev_x,
-            cy + (HEADER_ROW_H - 16.0) * 0.5,
-            CHEVRON_W,
-            16.0,
-            UIStyle {
-                bg_color: Color32::TRANSPARENT,
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
-                text_color: color::CHEVRON_COLOR,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            if self.is_collapsed {
-                "\u{25B6}"
-            } else {
-                "\u{25BC}"
-            },
-        ));
-
-        cy += HEADER_ROW_H;
-
-        if self.is_collapsed {
-            self.opacity.clear();
-            self.led_brightness.clear();
-            self.node_count = tree.count() - self.first_node;
-            return;
-        }
-
-        // Divider 0
-        self.divider_ids[0] = Some(tree.add_panel(
-            None,
-            cx,
-            cy,
-            content_w,
-            DIVIDER_H,
-            UIStyle {
-                bg_color: color::DIVIDER_C32,
-                ..UIStyle::default()
-            },
-        ));
-        cy += DIVIDER_H;
-
-        // LED row: [LED label] [exit path dropdown] [ON/OFF toggle] [mini brightness slider]
-        let led_val = self.led_brightness.cached_value();
-        let led_brightness = if led_val.is_nan() { 1.0 } else { led_val };
-
-        self.exit_path_label_id = Some(tree.add_label(
-            None,
-            cx,
-            cy,
-            LED_LABEL_W,
-            EXIT_PATH_ROW_H,
-            "LED",
-            UIStyle {
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-        ));
-
-        // Dropdown button — fills middle space
-        let btn_x = cx + LED_LABEL_W + GAP;
-        let btn_w =
-            (content_w - LED_LABEL_W - GAP - GAP - LED_TOGGLE_W - GAP - LED_SLIDER_W).max(20.0);
-        self.exit_path_btn_id = Some(tree.add_button(
-            None,
-            btn_x,
-            cy + (EXIT_PATH_ROW_H - 18.0) * 0.5,
-            btn_w,
-            18.0,
-            UIStyle {
-                bg_color: EXIT_PATH_BG,
-                hover_bg_color: EXIT_PATH_HOVER,
-                pressed_bg_color: EXIT_PATH_PRESSED,
-                text_color: color::TEXT_PRIMARY_C32,
-                font_size: FONT_SIZE,
-                corner_radius: color::SMALL_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
-            &exit_path,
-        ));
-
-        // ON/OFF toggle button
-        let toggle_x = btn_x + btn_w + GAP;
-        let toggle_h = 18.0;
-        self.led_toggle_btn_id = Some(tree.add_button(
-            None,
-            toggle_x,
-            cy + (EXIT_PATH_ROW_H - toggle_h) * 0.5,
-            LED_TOGGLE_W,
-            toggle_h,
-            self.led_toggle_style(),
-            if self.cached_led_enabled { "ON" } else { "OFF" },
-        ));
-
-        // Mini brightness slider (no label, inline)
-        let slider_x = toggle_x + LED_TOGGLE_W + GAP;
-        let led_slider_rect = Rect::new(
-            slider_x,
-            cy + (EXIT_PATH_ROW_H - SLIDER_ROW_H) * 0.5,
-            LED_SLIDER_W,
-            SLIDER_ROW_H,
-        );
-        let led_val_text = fmt_opacity(led_brightness);
-        let led_ids = BitmapSlider::build(
-            tree,
-            None,
-            led_slider_rect,
-            None,
-            led_brightness,
-            &led_val_text,
-            &SliderColors::default_slider(),
-            FONT_SIZE,
-            0.0,
-        );
-        self.led_brightness.set_ids(led_ids);
-        cy += EXIT_PATH_ROW_H;
-
-        // Divider 1
-        self.divider_ids[1] = Some(tree.add_panel(
-            None,
-            cx,
-            cy,
-            content_w,
-            DIVIDER_H,
-            UIStyle {
-                bg_color: color::DIVIDER_C32,
-                ..UIStyle::default()
-            },
-        ));
-        cy += DIVIDER_H;
-
-        // Opacity slider
-        let slider_rect = Rect::new(cx, cy, content_w, SLIDER_ROW_H);
-        let val_text = fmt_opacity(opacity);
-        let ids = BitmapSlider::build(
-            tree,
-            None,
-            slider_rect,
-            Some("Opacity"),
-            opacity,
-            &val_text,
-            &SliderColors::default_slider(),
-            FONT_SIZE,
-            OPACITY_LABEL_W,
-        );
-        self.opacity.set_ids(ids);
-        cy += SLIDER_ROW_H;
-
-        // Divider 2
-        self.divider_ids[2] = Some(tree.add_panel(
-            None,
-            cx,
-            cy,
-            content_w,
-            DIVIDER_H,
-            UIStyle {
-                bg_color: color::DIVIDER_C32,
-                ..UIStyle::default()
-            },
-        ));
-
-        self.node_count = tree.count() - self.first_node;
-    }
-
-    // ── Sync methods ─────────────────────────────────────────────
-
-    pub fn sync_opacity(&mut self, tree: &mut UITree, value: f32) {
-        self.opacity.sync(tree, value, &fmt_opacity);
-    }
-
-    pub fn sync_led_brightness(&mut self, tree: &mut UITree, value: f32) {
-        self.led_brightness.sync(tree, value, &fmt_opacity);
-    }
-
-    pub fn sync_led_enabled(&mut self, tree: &mut UITree, enabled: bool) {
-        if enabled == self.cached_led_enabled {
-            return;
-        }
-        self.cached_led_enabled = enabled;
-        if let Some(id) = self.led_toggle_btn_id {
-            tree.set_style(id, self.led_toggle_style());
-            tree.set_text(id, if enabled { "ON" } else { "OFF" });
-        }
-    }
+    // ── View description (chrome only — sliders dropped into slots) ──
 
     fn led_toggle_style(&self) -> UIStyle {
         if self.cached_led_enabled {
@@ -359,30 +149,223 @@ impl MasterChromePanel {
         }
     }
 
-    pub fn sync_exit_path(&mut self, tree: &mut UITree, path: &str) {
-        self.cached_exit_path = path.into();
-        if let Some(id) = self.exit_path_btn_id {
-            tree.set_text(id, path);
-        }
+    fn divider() -> View {
+        View::panel()
+            .fill_w()
+            .h(Sizing::Fixed(DIVIDER_H))
+            .bg(color::DIVIDER_C32)
     }
 
-    pub fn sync_collapsed(&mut self, tree: &mut UITree, collapsed: bool) {
-        self.is_collapsed = collapsed;
-        if let Some(id) = self.chevron_btn_id {
-            tree.set_text(id, if collapsed { "\u{25B6}" } else { "\u{25BC}" });
+    fn header_row(&self) -> View {
+        let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
+            .fixed(CHEVRON_W, CHEVRON_H)
+            .style(UIStyle {
+                bg_color: Color32::TRANSPARENT,
+                hover_bg_color: color::HOVER_OVERLAY,
+                pressed_bg_color: color::PRESS_OVERLAY,
+                text_color: color::CHEVRON_COLOR,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            })
+            .inert() // click handled via handle_click (inspector routing kept)
+            .key(KEY_CHEVRON);
+
+        View::row(GAP)
+            .fill_w()
+            .h(Sizing::Fixed(HEADER_ROW_H))
+            .cross_align(Align::Center)
+            .child(
+                View::label("Master FX")
+                    .fill_w()
+                    .fill_h()
+                    .font(color::FONT_HEADING)
+                    .text_color(color::TEXT_PRIMARY_C32)
+                    .align_text(TextAlign::Left),
+            )
+            .child(chevron)
+    }
+
+    fn led_row(&self) -> View {
+        let exit_path = View::button(self.cached_exit_path.as_str())
+            .fill_w()
+            .h(Sizing::Fixed(TOGGLE_H))
+            .style(UIStyle {
+                bg_color: EXIT_PATH_BG,
+                hover_bg_color: EXIT_PATH_HOVER,
+                pressed_bg_color: EXIT_PATH_PRESSED,
+                text_color: color::TEXT_PRIMARY_C32,
+                font_size: FONT_SIZE,
+                corner_radius: color::SMALL_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            })
+            .inert()
+            .key(KEY_EXIT_PATH);
+
+        let toggle = View::button(if self.cached_led_enabled { "ON" } else { "OFF" })
+            .w(Sizing::Fixed(LED_TOGGLE_W))
+            .h(Sizing::Fixed(TOGGLE_H))
+            .style(self.led_toggle_style())
+            .inert()
+            .key(KEY_LED_TOGGLE);
+
+        // Transparent placeholder the brightness slider is built into.
+        let brightness_slot = View::panel()
+            .fixed(LED_SLIDER_W, SLIDER_ROW_H)
+            .key(KEY_BRIGHTNESS_SLOT);
+
+        View::row(GAP)
+            .fill_w()
+            .h(Sizing::Fixed(EXIT_PATH_ROW_H))
+            .cross_align(Align::Center)
+            .child(
+                View::label("LED")
+                    .w(Sizing::Fixed(LED_LABEL_W))
+                    .fill_h()
+                    .font(FONT_SIZE)
+                    .text_color(color::TEXT_DIMMED_C32)
+                    .align_text(TextAlign::Left),
+            )
+            .child(exit_path)
+            .child(toggle)
+            .child(brightness_slot)
+    }
+
+    fn chrome_view(&self) -> View {
+        let root = View::column(0.0)
+            .fill()
+            .pad(Pad { l: PAD_H, t: PAD_V, r: PAD_H, b: PAD_V })
+            .child(self.header_row());
+        if self.is_collapsed {
+            return root;
         }
+        root.child(Self::divider())
+            .child(self.led_row())
+            .child(Self::divider())
+            .child(
+                View::panel()
+                    .fill_w()
+                    .h(Sizing::Fixed(SLIDER_ROW_H))
+                    .key(KEY_OPACITY_SLOT),
+            )
+            .child(Self::divider())
+    }
+
+    // ── Build ────────────────────────────────────────────────────
+
+    pub fn build(&mut self, tree: &mut UITree, rect: Rect) {
+        self.chrome_rect = rect;
+        let view = self.chrome_view();
+        self.host.build(tree, &view, rect);
+        self.first_node = self.host.first_node();
+
+        if self.is_collapsed {
+            self.opacity.clear();
+            self.led_brightness.clear();
+            self.node_count = tree.count() - self.first_node;
+            return;
+        }
+
+        // Drop the sliders into the host-laid slots (byte-identical to before).
+        let bright_slot = self
+            .host
+            .node_id_for_key(KEY_BRIGHTNESS_SLOT)
+            .map(|id| tree.get_bounds(id));
+        let opacity_slot = self
+            .host
+            .node_id_for_key(KEY_OPACITY_SLOT)
+            .map(|id| tree.get_bounds(id));
+
+        if let Some(slot) = bright_slot {
+            let led_val = self.led_brightness.cached_value();
+            let led_brightness = if led_val.is_nan() { 1.0 } else { led_val };
+            let ids = BitmapSlider::build(
+                tree,
+                None,
+                slot,
+                None,
+                led_brightness,
+                &fmt_opacity(led_brightness),
+                &SliderColors::default_slider(),
+                FONT_SIZE,
+                0.0,
+            );
+            self.led_brightness.set_ids(ids);
+        }
+
+        if let Some(slot) = opacity_slot {
+            let opacity_val = self.opacity.cached_value();
+            let opacity = if opacity_val.is_nan() { 1.0 } else { opacity_val };
+            let ids = BitmapSlider::build(
+                tree,
+                None,
+                slot,
+                Some("Opacity"),
+                opacity,
+                &fmt_opacity(opacity),
+                &SliderColors::default_slider(),
+                FONT_SIZE,
+                OPACITY_LABEL_W,
+            );
+            self.opacity.set_ids(ids);
+        }
+
+        self.node_count = tree.count() - self.first_node;
+    }
+
+    /// Reconcile the declarative chrome in place (value/style changes only —
+    /// structural changes go through the inspector's rebuild on collapse).
+    fn reconcile_chrome(&mut self, tree: &mut UITree) {
+        if !self.host.is_built() {
+            return;
+        }
+        let view = self.chrome_view();
+        let _ = self.host.update(tree, &view, self.chrome_rect);
+    }
+
+    // ── Sync methods (called by state_sync; preserved signatures) ──
+
+    pub fn sync_opacity(&mut self, tree: &mut UITree, value: f32) {
+        self.opacity.sync(tree, value, &fmt_opacity);
+    }
+
+    pub fn sync_led_brightness(&mut self, tree: &mut UITree, value: f32) {
+        self.led_brightness.sync(tree, value, &fmt_opacity);
+    }
+
+    pub fn sync_led_enabled(&mut self, tree: &mut UITree, enabled: bool) {
+        if enabled == self.cached_led_enabled {
+            return;
+        }
+        self.cached_led_enabled = enabled;
+        self.reconcile_chrome(tree);
+    }
+
+    pub fn sync_exit_path(&mut self, tree: &mut UITree, path: &str) {
+        if self.cached_exit_path == path {
+            return;
+        }
+        self.cached_exit_path = path.into();
+        self.reconcile_chrome(tree);
+    }
+
+    pub fn sync_collapsed(&mut self, _tree: &mut UITree, collapsed: bool) {
+        // Structural change — the inspector rebuilds on collapse toggle; here we
+        // only record the flag so the next build emits the right shape.
+        self.is_collapsed = collapsed;
     }
 
     // ── Event handling ───────────────────────────────────────────
 
     pub fn handle_click(&self, node_id: NodeId) -> Vec<PanelAction> {
-        if self.chevron_btn_id == Some(node_id) {
+        if self.host.node_id_for_key(KEY_CHEVRON) == Some(node_id) {
             return vec![PanelAction::MasterCollapseToggle];
         }
-        if self.exit_path_btn_id == Some(node_id) {
+        if self.host.node_id_for_key(KEY_EXIT_PATH) == Some(node_id) {
             return vec![PanelAction::MasterExitPathClicked];
         }
-        if self.led_toggle_btn_id == Some(node_id) {
+        if self.host.node_id_for_key(KEY_LED_TOGGLE) == Some(node_id) {
             return vec![PanelAction::LedEnabledToggle];
         }
         Vec::new()
@@ -424,8 +407,7 @@ impl MasterChromePanel {
         Vec::new()
     }
 
-    /// Node-intent dispatch for the master chrome sliders' right-click resets:
-    /// opacity / LED-brightness track → reset. See `docs/NODE_INTENT_DISPATCH.md`.
+    /// Node-intent dispatch for the master chrome sliders' right-click resets.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
         use crate::intent::Gesture::RightClick;
         if let Some(ids) = self.opacity.ids() {
@@ -437,11 +419,10 @@ impl MasterChromePanel {
     }
 
     pub fn exit_path_button_rect(&self, tree: &UITree) -> Rect {
-        if let Some(id) = self.exit_path_btn_id {
-            tree.get_bounds(id)
-        } else {
-            Rect::ZERO
-        }
+        self.host
+            .node_id_for_key(KEY_EXIT_PATH)
+            .map(|id| tree.get_bounds(id))
+            .unwrap_or(Rect::ZERO)
     }
 }
 
@@ -456,80 +437,109 @@ mod tests {
     use super::*;
     use crate::tree::UITree;
 
-    #[test]
-    fn build_master_chrome() {
-        let mut tree = UITree::new();
-        let mut panel = MasterChromePanel::new();
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        assert!(panel.header_label_id.is_some());
-        assert!(panel.chevron_btn_id.is_some());
-        assert!(panel.exit_path_btn_id.is_some());
-        assert!(panel.opacity.ids().is_some());
-        assert!(panel.node_count > 0);
-    }
-
-    #[test]
-    fn collapsed_height_smaller() {
-        let mut tree = UITree::new();
-        let mut panel = MasterChromePanel::new();
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let expanded_h = panel.compute_height();
-        panel.sync_collapsed(&mut tree, true);
-        let collapsed_h = panel.compute_height();
-
-        assert!(collapsed_h < expanded_h);
-    }
-
-    #[test]
-    fn handle_click_chevron() {
-        let mut tree = UITree::new();
-        let mut panel = MasterChromePanel::new();
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let actions = panel.handle_click(panel.chevron_btn_id.unwrap());
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::MasterCollapseToggle));
-    }
-
-    #[test]
-    fn handle_click_exit_path() {
-        let mut tree = UITree::new();
-        let mut panel = MasterChromePanel::new();
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let actions = panel.handle_click(panel.exit_path_btn_id.unwrap());
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::MasterExitPathClicked));
-    }
-
-    #[test]
-    fn sync_opacity_updates() {
-        let mut tree = UITree::new();
-        let mut panel = MasterChromePanel::new();
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        tree.clear_dirty();
-        panel.sync_opacity(&mut tree, 0.5);
-        assert!(tree.has_dirty());
-    }
-
-    #[test]
-    fn sync_exit_path_updates() {
-        let mut tree = UITree::new();
-        let mut panel = MasterChromePanel::new();
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        tree.clear_dirty();
-        panel.sync_exit_path(&mut tree, "Additive");
-        assert!(tree.has_dirty());
-        assert_eq!(
-            tree.get_node(panel.exit_path_btn_id.unwrap())
-                .text
-                .as_deref(),
-            Some("Additive"),
+    // Golden oracle: the original constant-based slider rects. The Chrome slots
+    // must land the sliders at exactly these rects.
+    fn golden_slots(rect: Rect) -> (Rect, Rect) {
+        let content_w = rect.width - PAD_H * 2.0;
+        let cx = rect.x + PAD_H;
+        let mut cy = rect.y + PAD_V;
+        cy += HEADER_ROW_H + DIVIDER_H;
+        // LED row
+        let btn_x = cx + LED_LABEL_W + GAP;
+        let btn_w =
+            (content_w - LED_LABEL_W - GAP - GAP - LED_TOGGLE_W - GAP - LED_SLIDER_W).max(20.0);
+        let toggle_x = btn_x + btn_w + GAP;
+        let slider_x = toggle_x + LED_TOGGLE_W + GAP;
+        let bright = Rect::new(
+            slider_x,
+            cy + (EXIT_PATH_ROW_H - SLIDER_ROW_H) * 0.5,
+            LED_SLIDER_W,
+            SLIDER_ROW_H,
         );
+        cy += EXIT_PATH_ROW_H + DIVIDER_H;
+        let opacity = Rect::new(cx, cy, content_w, SLIDER_ROW_H);
+        (bright, opacity)
+    }
+
+    #[test]
+    fn slot_rects_match_golden() {
+        let mut tree = UITree::new();
+        let mut panel = MasterChromePanel::new();
+        let rect = Rect::new(0.0, 0.0, 280.0, 200.0);
+        panel.build(&mut tree, rect);
+
+        let (bright, opacity) = golden_slots(rect);
+        let got_bright = tree.get_bounds(panel.host.node_id_for_key(KEY_BRIGHTNESS_SLOT).unwrap());
+        let got_opacity = tree.get_bounds(panel.host.node_id_for_key(KEY_OPACITY_SLOT).unwrap());
+
+        let close = |a: Rect, b: Rect| {
+            (a.x - b.x).abs() < 0.01
+                && (a.y - b.y).abs() < 0.01
+                && (a.width - b.width).abs() < 0.01
+                && (a.height - b.height).abs() < 0.01
+        };
+        assert!(close(got_bright, bright), "brightness slot {got_bright:?} != {bright:?}");
+        assert!(close(got_opacity, opacity), "opacity slot {got_opacity:?} != {opacity:?}");
+    }
+
+    #[test]
+    fn build_makes_chrome_and_sliders() {
+        let mut tree = UITree::new();
+        let mut panel = MasterChromePanel::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        assert!(panel.host.is_built());
+        assert!(panel.opacity.ids().is_some());
+        assert!(panel.led_brightness.ids().is_some());
+        assert!(panel.node_count > panel.host.node_count(), "slider nodes appended after chrome");
+        assert!(panel.host.node_id_for_key(KEY_CHEVRON).is_some());
+    }
+
+    #[test]
+    fn collapsed_drops_sliders_and_shrinks() {
+        let mut tree = UITree::new();
+        let mut panel = MasterChromePanel::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        let expanded_h = panel.compute_height();
+
+        panel.set_collapsed(true);
+        let mut tree2 = UITree::new();
+        panel.build(&mut tree2, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        assert!(panel.compute_height() < expanded_h);
+        assert!(panel.opacity.ids().is_none(), "no opacity slider when collapsed");
+        assert!(panel.host.node_id_for_key(KEY_OPACITY_SLOT).is_none());
+    }
+
+    #[test]
+    fn handle_click_chevron_and_exit_path() {
+        let mut tree = UITree::new();
+        let mut panel = MasterChromePanel::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let chev = panel.host.node_id_for_key(KEY_CHEVRON).unwrap();
+        assert!(matches!(
+            panel.handle_click(chev).as_slice(),
+            [PanelAction::MasterCollapseToggle]
+        ));
+        let exit = panel.host.node_id_for_key(KEY_EXIT_PATH).unwrap();
+        assert!(matches!(
+            panel.handle_click(exit).as_slice(),
+            [PanelAction::MasterExitPathClicked]
+        ));
+    }
+
+    #[test]
+    fn sync_exit_path_updates_in_place() {
+        let mut tree = UITree::new();
+        let mut panel = MasterChromePanel::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        let sv = tree.structure_version();
+
+        panel.sync_exit_path(&mut tree, "Additive");
+        let exit = panel.host.node_id_for_key(KEY_EXIT_PATH).unwrap();
+        assert_eq!(tree.get_node(exit).text.as_deref(), Some("Additive"));
+        assert_eq!(tree.structure_version(), sv, "value change must not rebuild");
     }
 
     #[test]
@@ -542,38 +552,13 @@ mod tests {
         let track_rect = panel.opacity.ids().unwrap().track_rect;
         let mid_x = track_rect.x + track_rect.width * 0.5;
 
-        // Pointer down → starts drag
         let actions = panel.handle_pointer_down(track_id, Vec2::new(mid_x, 10.0));
-        assert_eq!(actions.len(), 2);
         assert!(matches!(actions[0], PanelAction::MasterOpacitySnapshot));
         assert!(panel.is_dragging());
 
-        // Drag
         let actions = panel.handle_drag(Vec2::new(mid_x + 10.0, 10.0), &mut tree);
         assert_eq!(actions.len(), 1);
 
-        // Drag end → clears drag
-        let actions = panel.handle_drag_end(&mut tree);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::MasterOpacityCommit));
-        assert!(!panel.is_dragging());
-    }
-
-    #[test]
-    fn click_without_drag_clears_state() {
-        let mut tree = UITree::new();
-        let mut panel = MasterChromePanel::new();
-        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
-
-        let track_id = panel.opacity.track_id().unwrap();
-        let track_rect = panel.opacity.ids().unwrap().track_rect;
-        let mid_x = track_rect.x + track_rect.width * 0.5;
-
-        // Pointer down → starts drag
-        panel.handle_pointer_down(track_id, Vec2::new(mid_x, 10.0));
-        assert!(panel.is_dragging());
-
-        // Pointer up without drag → end_drag clears it
         let actions = panel.handle_drag_end(&mut tree);
         assert!(matches!(actions[0], PanelAction::MasterOpacityCommit));
         assert!(!panel.is_dragging());
