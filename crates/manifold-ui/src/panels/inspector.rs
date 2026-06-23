@@ -33,6 +33,15 @@ const SCROLLBAR_STYLE: ScrollbarStyle = ScrollbarStyle {
 
 const ADD_EFFECT_BTN_H: f32 = 26.0;
 
+// ── Tab strip ───────────────────────────────────────────────────
+const TAB_STRIP_HEIGHT: f32 = 24.0;
+const TAB_GAP: f32 = 2.0;
+const TAB_FONT_SIZE: u16 = 12;
+const TAB_BG_ACTIVE: Color32 = Color32::new(48, 48, 52, 255);
+const TAB_BG_INACTIVE: Color32 = Color32::new(26, 26, 28, 255);
+const TAB_TEXT_ACTIVE: Color32 = Color32::new(224, 224, 228, 255);
+const TAB_TEXT_INACTIVE: Color32 = Color32::new(132, 132, 138, 255);
+
 /// Key for recovering the materialised "+ Add Effect" button's node id (the same
 /// key is reused per column — each [`chrome::materialize`] call returns only its
 /// own button).
@@ -128,7 +137,18 @@ pub struct InspectorCompositePanel {
     layer_effects: Vec<ParamCardPanel>,
     gen_params: Option<ParamCardPanel>,
 
-    // Section visibility
+    // ── Tabs ──
+    /// The single scope currently shown. Drives the section-visibility bools
+    /// below (only the active scope renders). Mirrors the timeline selection;
+    /// set by the app via `configure_tabs`. See docs/UI_LAYOUT_DESIGN.md.
+    active_tab: InspectorTab,
+    /// The tab rungs available for the current selection, in display order
+    /// (local→global). Only the rungs that exist are shown.
+    available_tabs: Vec<InspectorTab>,
+    /// Node id → tab, for routing tab-strip clicks.
+    tab_node_ids: Vec<(NodeId, InspectorTab)>,
+
+    // Section visibility (derived from active_tab via set_active_tab)
     master_visible: bool,
     layer_visible: bool,
     clip_visible: bool,
@@ -191,9 +211,12 @@ impl InspectorCompositePanel {
             master_effects: Vec::new(),
             layer_effects: Vec::new(),
             gen_params: None,
+            active_tab: InspectorTab::Master,
+            available_tabs: vec![InspectorTab::Master],
+            tab_node_ids: Vec::new(),
             master_visible: true,
-            layer_visible: true,
-            clip_visible: true,
+            layer_visible: false,
+            clip_visible: false,
             add_master_effect_btn: None,
             add_layer_effect_btn: None,
             master_scroll: ScrollContainer::new(),
@@ -229,8 +252,78 @@ impl InspectorCompositePanel {
     pub fn set_section_visible(&mut self, section: InspectorTab, visible: bool) {
         match section {
             InspectorTab::Master => self.master_visible = visible,
-            InspectorTab::Layer => self.layer_visible = visible,
+            InspectorTab::Layer | InspectorTab::Group => self.layer_visible = visible,
             InspectorTab::Clip => self.clip_visible = visible,
+        }
+    }
+
+    /// The scope currently shown in the inspector.
+    pub fn active_tab(&self) -> InspectorTab {
+        self.active_tab
+    }
+
+    /// Set which tab rungs are available (display order, local→global) and which
+    /// is active. Drives section visibility so only the active scope renders.
+    pub fn configure_tabs(&mut self, available: &[InspectorTab], active: InspectorTab) {
+        self.available_tabs.clear();
+        self.available_tabs.extend_from_slice(available);
+        self.set_active_tab(active);
+    }
+
+    /// Point the inspector at a single scope. `Group` shares the layer section.
+    fn set_active_tab(&mut self, tab: InspectorTab) {
+        self.active_tab = tab;
+        self.master_visible = tab == InspectorTab::Master;
+        self.layer_visible = tab.is_layer_scope();
+        self.clip_visible = tab == InspectorTab::Clip;
+    }
+
+    /// Display label for a tab rung.
+    fn tab_label(tab: InspectorTab) -> &'static str {
+        match tab {
+            InspectorTab::Clip => "Clip",
+            InspectorTab::Layer => "Layer",
+            InspectorTab::Group => "Group",
+            InspectorTab::Master => "Master",
+        }
+    }
+
+    /// Build the tab strip: one button per available rung, the active one
+    /// highlighted. Records node ids for click routing.
+    fn build_tab_strip(&mut self, tree: &mut UITree, rect: Rect) {
+        self.tab_node_ids.clear();
+        if self.available_tabs.is_empty() {
+            return;
+        }
+        let n = self.available_tabs.len();
+        let total_gap = TAB_GAP * n.saturating_sub(1) as f32;
+        let tab_w = ((rect.width - total_gap) / n as f32).floor();
+        let tabs = self.available_tabs.clone();
+        let mut x = rect.x;
+        for tab in tabs {
+            let active = tab == self.active_tab;
+            let id = tree.add_label(
+                None,
+                x,
+                rect.y,
+                tab_w,
+                rect.height,
+                Self::tab_label(tab),
+                UIStyle {
+                    bg_color: if active { TAB_BG_ACTIVE } else { TAB_BG_INACTIVE },
+                    text_color: if active {
+                        TAB_TEXT_ACTIVE
+                    } else {
+                        TAB_TEXT_INACTIVE
+                    },
+                    font_size: TAB_FONT_SIZE,
+                    text_align: TextAlign::Center,
+                    corner_radius: 3.0,
+                    ..UIStyle::default()
+                },
+            );
+            self.tab_node_ids.push((id, tab));
+            x += tab_w + TAB_GAP;
         }
     }
 
@@ -356,7 +449,7 @@ impl InspectorCompositePanel {
     ) -> bool {
         let cards = match tab {
             InspectorTab::Master => &self.master_effects,
-            InspectorTab::Layer | InspectorTab::Clip => &self.layer_effects,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &self.layer_effects,
         };
         cards
             .get(fx_idx)
@@ -514,7 +607,7 @@ impl InspectorCompositePanel {
     fn selection_for_tab(&self, tab: InspectorTab) -> (&HashSet<EffectId>, &[ParamCardPanel]) {
         match tab {
             InspectorTab::Master => (&self.selected_master_ids, &self.master_effects),
-            InspectorTab::Layer | InspectorTab::Clip => {
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
                 (&self.selected_layer_ids, &self.layer_effects)
             }
         }
@@ -523,21 +616,21 @@ impl InspectorCompositePanel {
     fn last_clicked_for_tab(&self, tab: InspectorTab) -> Option<&EffectId> {
         match tab {
             InspectorTab::Master => self.last_clicked_master.as_ref(),
-            InspectorTab::Layer | InspectorTab::Clip => self.last_clicked_layer.as_ref(),
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => self.last_clicked_layer.as_ref(),
         }
     }
 
     fn set_last_clicked_for_tab(&mut self, tab: InspectorTab, id: Option<EffectId>) {
         match tab {
             InspectorTab::Master => self.last_clicked_master = id,
-            InspectorTab::Layer | InspectorTab::Clip => self.last_clicked_layer = id,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => self.last_clicked_layer = id,
         }
     }
 
     fn selection_set_mut(&mut self, tab: InspectorTab) -> &mut HashSet<EffectId> {
         match tab {
             InspectorTab::Master => &mut self.selected_master_ids,
-            InspectorTab::Layer | InspectorTab::Clip => &mut self.selected_layer_ids,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &mut self.selected_layer_ids,
         }
     }
 
@@ -936,13 +1029,9 @@ impl InspectorCompositePanel {
             }
 
             // Create ghost + indicator nodes — scoped to the correct column
-            let (col_x, col_w) = if self.card_drag_tab == InspectorTab::Master {
-                let half = ((self.viewport_rect.width - COLUMN_PAD * 2.0 - 2.0) * 0.5).floor();
-                (self.viewport_rect.x + COLUMN_PAD, half)
-            } else {
-                let half = ((self.viewport_rect.width - COLUMN_PAD * 2.0 - 2.0) * 0.5).floor();
-                (self.column_split_x, half)
-            };
+            // Single full-width active column — both tabs drag within it.
+            let col_x = self.viewport_rect.x + COLUMN_PAD;
+            let col_w = (self.viewport_rect.width - COLUMN_PAD * 2.0).max(0.0);
             let ghost_w = (col_w - 24.0).min(160.0);
             self.card_drag_ghost_id = Some(tree.add_label(
                 None,
@@ -985,13 +1074,9 @@ impl InspectorCompositePanel {
         }
 
         let vp = self.viewport_rect;
-        let (col_x, col_w) = if self.card_drag_tab == InspectorTab::Master {
-            let half = ((vp.width - COLUMN_PAD * 2.0 - 2.0) * 0.5).floor();
-            (vp.x + COLUMN_PAD, half)
-        } else {
-            let half = ((vp.width - COLUMN_PAD * 2.0 - 2.0) * 0.5).floor();
-            (self.column_split_x, half)
-        };
+        // Single full-width active column — both tabs drag within it.
+        let col_x = vp.x + COLUMN_PAD;
+        let col_w = (vp.width - COLUMN_PAD * 2.0).max(0.0);
         let ghost_w = (col_w - 24.0).min(160.0);
 
         // Position ghost centered on cursor, clamped to column
@@ -1163,14 +1248,14 @@ impl InspectorCompositePanel {
     fn cards_for_tab(&self, tab: InspectorTab) -> &[ParamCardPanel] {
         match tab {
             InspectorTab::Master => &self.master_effects,
-            InspectorTab::Layer | InspectorTab::Clip => &self.layer_effects,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &self.layer_effects,
         }
     }
 
     fn cards_for_tab_mut(&mut self, tab: InspectorTab) -> &mut Vec<ParamCardPanel> {
         match tab {
             InspectorTab::Master => &mut self.master_effects,
-            InspectorTab::Layer | InspectorTab::Clip => &mut self.layer_effects,
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => &mut self.layer_effects,
         }
     }
 
@@ -1202,6 +1287,10 @@ impl InspectorCompositePanel {
     }
 
     fn route_click(&mut self, node_id: NodeId, modifiers: Modifiers) -> Vec<PanelAction> {
+        // Tab strip — selecting a tab mirrors the timeline selection.
+        if let Some((_, tab)) = self.tab_node_ids.iter().find(|(id, _)| *id == node_id) {
+            return vec![PanelAction::SelectInspectorTab(*tab)];
+        }
         // Add Effect buttons
         if self.add_master_effect_btn == Some(node_id) {
             return vec![PanelAction::AddEffectClicked(InspectorTab::Master)];
@@ -1381,14 +1470,6 @@ impl Panel for InspectorCompositePanel {
         }
 
         self.viewport_rect = rect;
-        let col_gap = 2.0_f32;
-        let total_pad = COLUMN_PAD * 2.0 + col_gap; // left pad + right pad + gap
-        let half_w = ((rect.width - total_pad) * 0.5).floor();
-        let left_x = rect.x + COLUMN_PAD;
-        let right_x = left_x + half_w + col_gap;
-        let left_content_w = half_w - SCROLLBAR_W;
-        let right_content_w = half_w - SCROLLBAR_W;
-        self.column_split_x = right_x;
 
         // Background panel
         self.bg_panel_id = Some(tree.add_panel(
@@ -1403,15 +1484,44 @@ impl Panel for InspectorCompositePanel {
             },
         ));
 
-        // Macros height for column offset — panel built AFTER columns for z-order
+        // Tab strip across the very top: the rungs of the current selection
+        // (Clip · Layer · Group · Master), active one highlighted.
+        let tab_h = TAB_STRIP_HEIGHT;
+        self.build_tab_strip(tree, Rect::new(rect.x, rect.y, rect.width, tab_h));
+
+        // One full-width column for the active scope. Both scroll containers are
+        // still begun every frame so their node ids never go stale; the inactive
+        // one collapses to zero width. column_split_x routes scroll/drag to the
+        // live column.
+        let col_x = rect.x + COLUMN_PAD;
+        let content_w = (rect.width - COLUMN_PAD * 2.0 - SCROLLBAR_W).max(0.0);
+        let full_col_w = (rect.width - COLUMN_PAD * 2.0).max(0.0);
+        let (master_col_w, layer_col_w) = if self.master_visible {
+            (full_col_w, 0.0)
+        } else {
+            (0.0, full_col_w)
+        };
+        // Aliases so the per-section build blocks below read unchanged.
+        let left_x = col_x;
+        let right_x = col_x;
+        let left_content_w = if self.master_visible { content_w } else { 0.0 };
+        let right_content_w = if self.master_visible { 0.0 } else { content_w };
+        self.column_split_x = if self.master_visible {
+            rect.x + rect.width
+        } else {
+            rect.x
+        };
+
+        // Macros strip below the tab strip (built AFTER columns for z-order).
         let macros_h = self.macros_panel.height();
-        let columns_y = rect.y + macros_h + 2.0; // 2px gap
-        let columns_h = rect.height - macros_h - 2.0;
+        let macros_y = rect.y + tab_h;
+        let columns_y = macros_y + macros_h + 2.0; // 2px gap
+        let columns_h = (rect.y + rect.height - columns_y).max(0.0);
         self.columns_y = columns_y;
         self.columns_height = columns_h;
 
-        // ── LEFT COLUMN: Master FX ──────────────────────────────────
-        let left_clip_rect = Rect::new(left_x, columns_y, half_w, columns_h);
+        // ── MASTER COLUMN (full width when active, else collapsed) ──
+        let left_clip_rect = Rect::new(left_x, columns_y, master_col_w, columns_h);
         self.master_scroll.begin(tree, left_clip_rect);
         let left_start = tree.count();
 
@@ -1455,8 +1565,8 @@ impl Panel for InspectorCompositePanel {
         self.master_scroll
             .build_scrollbar(tree, left_x + left_content_w, &SCROLLBAR_STYLE);
 
-        // ── RIGHT COLUMN: Layer + Clip ──────────────────────────────
-        let right_clip_rect = Rect::new(right_x, columns_y, half_w, columns_h);
+        // ── LAYER/GROUP/CLIP COLUMN (full width when active, else collapsed) ──
+        let right_clip_rect = Rect::new(right_x, columns_y, layer_col_w, columns_h);
         self.layer_scroll.begin(tree, right_clip_rect);
         let right_start = tree.count();
 
@@ -1530,8 +1640,8 @@ impl Panel for InspectorCompositePanel {
         self.layer_scroll
             .build_scrollbar(tree, right_x + right_content_w, &SCROLLBAR_STYLE);
 
-        // ── MACROS STRIP (built last so it renders on top of columns) ──
-        let macros_rect = Rect::new(left_x, rect.y, rect.width - COLUMN_PAD * 2.0, macros_h);
+        // ── MACROS STRIP (below the tab strip, on top of columns) ──
+        let macros_rect = Rect::new(left_x, macros_y, rect.width - COLUMN_PAD * 2.0, macros_h);
         self.macros_panel.build(tree, macros_rect);
 
         self.update_scroll_bounds();
@@ -1741,14 +1851,42 @@ mod tests {
     }
 
     #[test]
-    fn section_visibility() {
+    fn active_tab_drives_section_visibility() {
         let mut panel = InspectorCompositePanel::new();
-        panel.set_section_visible(InspectorTab::Master, false);
-        panel.set_section_visible(InspectorTab::Layer, false);
 
+        // Master active → only the master section renders.
+        panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        assert!(panel.master_visible);
+        assert!(!panel.layer_visible);
+        assert!(!panel.clip_visible);
+
+        // Layer active → only the layer section.
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        assert!(!panel.master_visible);
+        assert!(panel.layer_visible);
+        assert!(!panel.clip_visible);
+
+        // Group shares the layer section (a group is a layer).
+        panel.configure_tabs(
+            &[InspectorTab::Group, InspectorTab::Master],
+            InspectorTab::Group,
+        );
+        assert!(panel.layer_visible);
+        assert!(!panel.master_visible);
+        assert!(!panel.clip_visible);
+
+        // Clip active → only the clip section.
+        panel.configure_tabs(
+            &[InspectorTab::Clip, InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Clip,
+        );
+        assert!(panel.clip_visible);
         assert!(!panel.master_visible);
         assert!(!panel.layer_visible);
-        assert!(panel.clip_visible);
+        assert_eq!(panel.active_tab(), InspectorTab::Clip);
     }
 
     #[test]

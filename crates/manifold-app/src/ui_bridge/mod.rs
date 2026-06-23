@@ -57,6 +57,61 @@ impl DispatchResult {
     }
 }
 
+/// Handle an inspector tab-strip click. The tab strip mirrors the timeline
+/// selection: selecting a rung re-points the selection up/down the ownership
+/// chain, except `Master`, which pins the inspector without disturbing the
+/// timeline selection (and any later selection change releases the pin).
+/// See docs/UI_LAYOUT_DESIGN.md.
+fn inspector_select_tab(
+    tab: InspectorTab,
+    project: &Project,
+    selection: &mut SelectionState,
+    active_layer: &mut Option<LayerId>,
+    ui: &mut UIRoot,
+) {
+    use manifold_core::types::LayerType;
+    match tab {
+        // Pin the inspector to Master; timeline selection is preserved.
+        InspectorTab::Master => selection.select_master_scope(),
+        // Clip is only offered when a clip is already selected — just release
+        // any Master pin so the scope falls back to that clip.
+        InspectorTab::Clip => selection.clear_master_scope(),
+        // Select the layer owning the current selection.
+        InspectorTab::Layer => {
+            let lid = active_layer
+                .clone()
+                .or_else(|| selection.primary_selected_layer_id.clone())
+                .or_else(|| selection.selected_layer_id_for_clip.clone());
+            if let Some(lid) = lid {
+                *active_layer = Some(lid.clone());
+                selection.select_layer(lid);
+                ui.inspector.clear_effect_selection(&mut ui.tree);
+            }
+        }
+        // Select the group: the active layer's group parent, or the active
+        // layer itself when it is already a group.
+        InspectorTab::Group => {
+            let gid = active_layer
+                .as_ref()
+                .and_then(|lid| project.timeline.find_layer_index_by_id(lid))
+                .and_then(|idx| project.timeline.find_group_parent(idx))
+                .map(|(_, l)| l.layer_id.clone())
+                .or_else(|| {
+                    active_layer
+                        .as_ref()
+                        .and_then(|lid| project.timeline.find_layer_by_id(lid))
+                        .filter(|(_, l)| l.layer_type == LayerType::Group)
+                        .map(|(_, l)| l.layer_id.clone())
+                });
+            if let Some(gid) = gid {
+                *active_layer = Some(gid.clone());
+                selection.select_layer(gid);
+                ui.inspector.clear_effect_selection(&mut ui.tree);
+            }
+        }
+    }
+}
+
 /// Dispatch a panel action. Mutates local_project for immediate feedback;
 /// sends commands to the content thread for authoritative execution.
 pub fn dispatch(
@@ -104,10 +159,16 @@ pub fn dispatch(
         | PanelAction::FpsFieldClicked
         | PanelAction::ZoomIn
         | PanelAction::ZoomOut
-        | PanelAction::SelectInspectorTab(_)
         | PanelAction::InspectorScrolled(_)
         | PanelAction::InspectorSectionClicked(_) => {
             transport::dispatch_transport(action, project, content_tx, content_state, ui, selection)
+        }
+
+        // Inspector tab strip — mirrors the timeline selection (needs
+        // `active_layer`, which the transport handler doesn't carry).
+        PanelAction::SelectInspectorTab(tab) => {
+            inspector_select_tab(*tab, project, selection, active_layer, ui);
+            DispatchResult::structural()
         }
 
         // ── Viewport clip interaction + context menus ──────────────
@@ -559,7 +620,7 @@ pub(crate) fn resolve_effect_target(
 ) -> EffectTarget {
     match tab {
         InspectorTab::Master => EffectTarget::Master,
-        InspectorTab::Layer | InspectorTab::Clip => {
+        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
             let layer_id = active_layer.clone().unwrap_or_else(|| {
                 project
                     .timeline
@@ -582,7 +643,7 @@ pub(crate) fn resolve_effects_read<'a>(
 ) -> (Option<&'a [PresetInstance]>, EffectTarget) {
     match tab {
         InspectorTab::Master => (Some(&project.settings.master_effects), EffectTarget::Master),
-        InspectorTab::Layer => {
+        InspectorTab::Layer | InspectorTab::Group => {
             let target = resolve_effect_target(tab, active_layer, project);
             let effects = resolve_active_layer_index(active_layer, project)
                 .and_then(|idx| project.timeline.layers.get(idx))
@@ -627,7 +688,7 @@ pub(crate) fn resolve_effects_mut<'a>(
             let effects = &mut project.settings.master_effects;
             (Some(effects), EffectTarget::Master)
         }
-        InspectorTab::Layer => {
+        InspectorTab::Layer | InspectorTab::Group => {
             let layer_id = active_layer.clone().unwrap_or_else(|| {
                 project
                     .timeline

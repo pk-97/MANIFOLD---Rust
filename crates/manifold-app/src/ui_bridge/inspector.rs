@@ -219,7 +219,7 @@ fn ableton_mapping_target(
                     effect_type,
                     param_id: param_id.clone(),
                 }),
-                InspectorTab::Layer => Some(T::LayerEffect {
+                InspectorTab::Layer | InspectorTab::Group => Some(T::LayerEffect {
                     layer_id: active_layer.clone()?,
                     effect_type,
                     param_id: param_id.clone(),
@@ -254,7 +254,7 @@ fn macro_mapping_target(
                     effect_type,
                     param_id: param_id.clone(),
                 }),
-                InspectorTab::Layer | InspectorTab::Clip => {
+                InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
                     let layer_id = active_layer.clone().unwrap_or_else(|| {
                         project
                             .timeline
@@ -2444,7 +2444,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let target = match tab {
                 InspectorTab::Master => EffectTarget::Master,
-                InspectorTab::Layer => {
+                InspectorTab::Layer | InspectorTab::Group => {
                     if let Some(idx) = layer_idx {
                         let layer_id = project
                             .timeline

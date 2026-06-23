@@ -64,7 +64,7 @@ Pure geometry, no behavior change. All in the `ScreenLayout` single source of tr
 
 The two-column `InspectorCompositePanel` relocates to the top-right as-is (it reads `layout.inspector()`), just shorter — its scroll containers absorb the reduced height. Phase B then collapses the two columns into the tabbed single column.
 
-### Phase B — Tabbed inspector + Group + mirror  (planned)
+### Phase B — Tabbed inspector + Group + mirror  ✅ DONE (2026-06-23)
 
 1. **One `InspectorScope` as the single source of truth**, derived from selection: clip → `Clip`; else layer → `Layer`; else `Master`. The only new state is a small `master_scope_active: bool` on the existing `UISelectionState` (set when the Master tab is clicked, cleared on any clip/layer selection). The active tab is otherwise pure-derived — this is what makes "always mirror" true with one authority.
 2. **Tab click = navigate the hierarchy** (changes selection, never forks from it): Layer tab → select the clip's layer; Group tab → select the parent `Group` layer; Clip tab → select the clip; Master → set the flag, deselect.
@@ -72,7 +72,15 @@ The two-column `InspectorCompositePanel` relocates to the top-right as-is (it re
 4. **Render a tab strip** in the inspector View tree and build **only the active scope's** content (today both Master and Layer build simultaneously, [crates/manifold-ui/src/panels/inspector.rs](../crates/manifold-ui/src/panels/inspector.rs)). Add `Group` to the `InspectorTab` enum and route it to the selected group layer.
 5. **Reuse what exists** — the `SelectInspectorTab` action, per-tab effect routing, and the selection→tab derive fn are already built; this phase tightens them into one bidirectional binding and deletes any now-redundant independent tab state.
 
-**Open decision (blocks B):** the `master_scope_active` flag is the recommended way to keep Master in a selection-driven model without a fake lane (Master parks the inspector until the next selection). Alternative: make Master a first-class selectable target in `UISelectionState` — heavier, no real upside. Confirm before building B.
+**Settled decision:** Master is kept in the selection-driven model via a Master *pin*, not a fake lane. Implemented as `master_pinned_at_version: Option<u64>` on `UIState`: Master is active iff the stored version still equals `selection_version`, so any selection change (which already bumps the version) auto-clears the pin — zero edits to the ~10 selection mutators. `clear_master_scope()` releases the pin without touching the timeline selection.
+
+**Behavior note (strict mirror):** a tab click changes the *selection*. Clicking `Layer` while a clip is selected selects the layer (the clip deselects), so the `Clip` rung then disappears — the tab set always reflects the live selection's ancestry. This is the single-source-of-truth tradeoff; if A/B-ing a clip against its layer turns out to want the Clip rung to persist, revisit by making the tab a view-level into a stable selection context instead of a selection change.
+
+**Where it landed:**
+- `InspectorTab` gains `Group`; `is_layer_scope()` folds Group into the layer column everywhere.
+- `InspectorCompositePanel`: `active_tab` + `available_tabs` + `configure_tabs`/`set_active_tab` drive the existing `*_visible` gates so only the active scope renders; `build_tab_strip` renders the rungs; tab clicks route through `route_click` → `SelectInspectorTab`. The two scroll columns still build every frame (inactive one collapses to zero width) so no node ids go stale.
+- `sync_inspector_data` computes the available rungs + active scope from the selection (+ pin) and the layer hierarchy, then `configure_tabs`.
+- `inspector_select_tab` (in `ui_bridge`) handles the click: Master pins, Clip releases the pin, Layer/Group re-point the selection (and `active_layer`) up the chain.
 
 ## Constraints honored
 

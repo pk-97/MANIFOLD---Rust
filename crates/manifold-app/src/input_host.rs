@@ -1426,7 +1426,7 @@ fn resolve_effects_ref<'a>(
 ) -> Option<&'a [PresetInstance]> {
     match tab {
         InspectorTab::Master => Some(&project.settings.master_effects),
-        InspectorTab::Layer => active_layer
+        InspectorTab::Layer | InspectorTab::Group => active_layer
             .as_ref()
             .and_then(|id| project.timeline.find_layer_index_by_id(id))
             .and_then(|idx| project.timeline.layers.get(idx))
@@ -1450,11 +1450,7 @@ fn resolve_effect_target(
 ) -> EffectTarget {
     match tab {
         InspectorTab::Master => EffectTarget::Master,
-        InspectorTab::Layer => {
-            let layer_id = active_layer.clone().unwrap_or_default();
-            EffectTarget::Layer { layer_id }
-        }
-        InspectorTab::Clip => {
+        InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
             let layer_id = active_layer.clone().unwrap_or_default();
             EffectTarget::Layer { layer_id }
         }

@@ -1063,7 +1063,7 @@ impl Application {
                             .master_effects
                             .get(effect_idx)
                             .map(|fx| (fx.id.clone(), fx.effect_type(), fx.get_base_param(param_idx))),
-                        manifold_ui::InspectorTab::Layer => self
+                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
                             .active_layer_id
                             .as_ref()
                             .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
@@ -1226,7 +1226,7 @@ impl Application {
                             .as_ref()
                             .and_then(|groups| groups.get(group_idx))
                             .map(|g| (g.id.clone(), g.name.clone())),
-                        manifold_ui::InspectorTab::Layer => self
+                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
                             .active_layer_id
                             .as_ref()
                             .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
@@ -1249,7 +1249,9 @@ impl Application {
                             manifold_ui::InspectorTab::Master => {
                                 manifold_editing::commands::effect_target::EffectTarget::Master
                             }
-                            manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Clip => {
+                            manifold_ui::InspectorTab::Layer
+                            | manifold_ui::InspectorTab::Group
+                            | manifold_ui::InspectorTab::Clip => {
                                 let layer_id = self.active_layer_id.clone().unwrap_or_default();
                                 manifold_editing::commands::effect_target::EffectTarget::Layer {
                                     layer_id,

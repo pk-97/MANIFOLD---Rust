@@ -718,11 +718,24 @@ pub enum SyncSource {
     Midi,
 }
 
+/// The scope an inspector tab addresses — a rung in the selection's ownership
+/// hierarchy (clip → layer → group → master). `Group` is a group *layer*
+/// (`LayerType::Group`), so internally it renders through the same column as
+/// `Layer`; only the tab label and which layer the app feeds differ.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InspectorTab {
     Master,
     Layer,
+    Group,
     Clip,
+}
+
+impl InspectorTab {
+    /// Group renders through the layer column (a group is a layer). Used to
+    /// fold `Group` into the existing `Layer` section gates.
+    pub fn is_layer_scope(self) -> bool {
+        matches!(self, InspectorTab::Layer | InspectorTab::Group)
+    }
 }
 
 /// Trait for all UI panels.

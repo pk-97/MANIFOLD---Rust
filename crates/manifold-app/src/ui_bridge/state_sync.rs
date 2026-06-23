@@ -1231,6 +1231,48 @@ pub fn sync_inspector_data(
         ui.set_audio_trigger_layers(trigger_layers);
     }
 
+    // ── Inspector tabs: the selection's ownership rungs (local→global) ──
+    // Only the rungs that exist for the current selection are offered; the
+    // active rung mirrors the selection (Master pin wins while set).
+    {
+        use manifold_core::types::LayerType;
+        use manifold_ui::InspectorTab;
+        let has_clip = selection.primary_selected_clip_id.is_some();
+        let layer = active_layer.and_then(|i| project.timeline.layers.get(i));
+        let layer_is_group = layer.is_some_and(|l| l.layer_type == LayerType::Group);
+        let has_group_parent =
+            active_layer.is_some_and(|i| project.timeline.find_group_parent(i).is_some());
+
+        let mut tabs: Vec<InspectorTab> = Vec::new();
+        if has_clip {
+            tabs.push(InspectorTab::Clip);
+        }
+        if let Some(l) = layer {
+            if l.layer_type == LayerType::Group {
+                tabs.push(InspectorTab::Group);
+            } else {
+                tabs.push(InspectorTab::Layer);
+                if has_group_parent {
+                    tabs.push(InspectorTab::Group);
+                }
+            }
+        }
+        tabs.push(InspectorTab::Master);
+
+        let active = if selection.master_scope_active() {
+            InspectorTab::Master
+        } else if has_clip {
+            InspectorTab::Clip
+        } else if layer_is_group {
+            InspectorTab::Group
+        } else if layer.is_some() {
+            InspectorTab::Layer
+        } else {
+            InspectorTab::Master
+        };
+        ui.inspector.configure_tabs(&tabs, active);
+    }
+
     // Master effects → inspector (envelopes ride on each instance)
     let mut master_configs = effects_to_configs(&project.settings.master_effects, OscScope::Master);
     attach_audio_sends(&mut master_configs, &project.audio_setup);

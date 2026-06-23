@@ -185,10 +185,7 @@ pub(super) fn dispatch_transport(
         }
 
         // ── Inspector navigation ───────────────────────────────────
-        PanelAction::SelectInspectorTab(tab) => {
-            log::debug!("Inspector tab: {:?}", tab);
-            DispatchResult::handled()
-        }
+        // SelectInspectorTab is handled in `dispatch` (it needs active_layer).
         PanelAction::InspectorScrolled(delta) => {
             ui.inspector.handle_scroll(*delta);
             DispatchResult::handled()
