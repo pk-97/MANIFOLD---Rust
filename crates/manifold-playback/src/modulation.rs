@@ -537,7 +537,6 @@ mod tests {
                 ParamSpec::continuous("speed", "Speed", 0.0, 10.0, 0.0, "F2", ""),
                 ParamSpec::whole("count", "Count", 0.0, 8.0, 0.0, ""),
             ],
-            string_params: &[],
         }
     }
 

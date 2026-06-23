@@ -1291,27 +1291,6 @@ mod tests {
         }
         out
     }
-    /// Drive `reduce_send` once on a tilted column (no predecessor → only the
-    /// stateless features) and return the resulting per-band features.
-    fn reduced(col: Vec<f32>) -> SendFeatures {
-        let c = cfg();
-        let nb = c.num_bins(SR as f32);
-        let (low_bin, mid_bin) = band_edges(&c, SR as f32, nb, 250.0, 2000.0);
-        let mut s = SendState {
-            window: Vec::new(),
-            since_hop: 0,
-            col,
-            prev_col: vec![0.0f32; nb],
-            transient_refractory: [0; 4],
-            odf_hist: [[0.0; ODF_MEDIAN_HOPS]; 4],
-            has_prev: false,
-            centroid_yfb: [-1.0; 4],
-            features: SendFeatures::default(),
-        };
-        reduce_send(&mut s, nb, low_bin, mid_bin, c.db_min, c.db_max);
-        s.features
-    }
-
     #[test]
     fn band_amplitude_localizes_a_tone() {
         let (_full, low, mid, high) = bands();
