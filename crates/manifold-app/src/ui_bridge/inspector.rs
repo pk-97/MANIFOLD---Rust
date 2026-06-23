@@ -234,43 +234,20 @@ fn ableton_mapping_target(
     }
 }
 
-/// The `MacroMappingTarget` for a resolved param `target` on `tab` (macro
-/// twin of [`ableton_mapping_target`]). Unlike the Ableton variant the macro
-/// path treats the `Clip` tab as a layer mapping (with a first-layer
-/// fallback), matching the pre-unification macro arm.
+/// The `MacroMappingTarget` for a resolved param `target` (macro twin of
+/// [`ableton_mapping_target`]). Effects address by stable `EffectId`, which
+/// reaches master / layer / clip effects directly — so the macro drives the
+/// exact instance the user mapped, even with two same-type effects on a layer.
 fn macro_mapping_target(
     target: &manifold_core::GraphTarget,
-    tab: InspectorTab,
-    active_layer: &Option<LayerId>,
-    project: &Project,
     param_id: &manifold_core::effects::ParamId,
 ) -> Option<manifold_core::MacroMappingTarget> {
     use manifold_core::MacroMappingTarget as T;
     match target {
-        manifold_core::GraphTarget::Effect(eid) => {
-            let effect_type = project.find_effect_by_id(eid)?.effect_type().clone();
-            match tab {
-                InspectorTab::Master => Some(T::MasterEffect {
-                    effect_type,
-                    param_id: param_id.clone(),
-                }),
-                InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
-                    let layer_id = active_layer.clone().unwrap_or_else(|| {
-                        project
-                            .timeline
-                            .layers
-                            .first()
-                            .map(|l| l.layer_id.clone())
-                            .unwrap_or_default()
-                    });
-                    Some(T::LayerEffect {
-                        layer_id,
-                        effect_type,
-                        param_id: param_id.clone(),
-                    })
-                }
-            }
-        }
+        manifold_core::GraphTarget::Effect(eid) => Some(T::Effect {
+            effect_id: eid.clone(),
+            param_id: param_id.clone(),
+        }),
         manifold_core::GraphTarget::Generator(lid) => Some(T::GenParam {
             layer_id: lid.clone(),
             param_id: param_id.clone(),
@@ -2497,8 +2474,7 @@ pub(super) fn dispatch_inspector(
             let macro_idx = *macro_idx;
             if let Some(target) =
                 resolve_graph_target(gpt, editor_target, effective_tab, active_layer, selection, project)
-                && let Some(mapping_target) =
-                    macro_mapping_target(&target, effective_tab, active_layer, project, param_id)
+                && let Some(mapping_target) = macro_mapping_target(&target, param_id)
             {
                 // Graph-authority-first range so a generator's (or graph-backed
                 // effect's) true slider range isn't squashed to the registry's.
@@ -2511,6 +2487,7 @@ pub(super) fn dispatch_inspector(
                     range_max: max,
                     curve: MacroCurve::Linear,
                     legacy_param_index: None,
+                    legacy_effect_addr: None,
                 };
                 project.settings.macro_bank.slots[macro_idx]
                     .mappings

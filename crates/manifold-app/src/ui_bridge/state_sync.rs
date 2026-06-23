@@ -2130,10 +2130,14 @@ fn describe_macro_mapping(
     use manifold_core::MacroMappingTarget;
     match target {
         MacroMappingTarget::MasterOpacity => "Master Opacity".to_string(),
-        MacroMappingTarget::MasterEffect {
-            effect_type,
+        MacroMappingTarget::Effect {
+            effect_id,
             param_id,
         } => {
+            let Some(fx) = project.find_effect_by_id(effect_id) else {
+                return "Effect → ?".to_string();
+            };
+            let effect_type = fx.effect_type();
             let def = manifold_core::preset_definition_registry::try_get(effect_type);
             let effect_name = def
                 .as_ref()
@@ -2149,7 +2153,20 @@ fn describe_macro_mapping(
                         .map(|p| p.name.clone())
                 })
                 .unwrap_or_else(|| "?".to_string());
-            format!("{} → {}", effect_name, param_name)
+            // Prefix with the owning layer's name; master effects have none.
+            match project.layer_id_for_effect(effect_id) {
+                Some(layer_id) => {
+                    let layer_name = project
+                        .timeline
+                        .layers
+                        .iter()
+                        .find(|l| l.layer_id == layer_id)
+                        .map(|l| l.name.as_str())
+                        .unwrap_or("?");
+                    format!("{} {} → {}", layer_name, effect_name, param_name)
+                }
+                None => format!("{} → {}", effect_name, param_name),
+            }
         }
         MacroMappingTarget::LayerOpacity { layer_id } => {
             let layer_name = project
@@ -2160,35 +2177,6 @@ fn describe_macro_mapping(
                 .map(|l| l.name.as_str())
                 .unwrap_or(layer_id.as_str());
             format!("{} Opacity", layer_name)
-        }
-        MacroMappingTarget::LayerEffect {
-            layer_id,
-            effect_type,
-            param_id,
-        } => {
-            let layer_name = project
-                .timeline
-                .layers
-                .iter()
-                .find(|l| l.layer_id == *layer_id)
-                .map(|l| l.name.as_str())
-                .unwrap_or("?");
-            let def = manifold_core::preset_definition_registry::try_get(effect_type);
-            let effect_name = def
-                .as_ref()
-                .map(|d| d.display_name.clone())
-                .unwrap_or_else(|| effect_type.as_str().to_string());
-            let param_name = def
-                .as_ref()
-                .and_then(|d| {
-                    d.id_to_index
-                        .get(param_id.as_ref())
-                        .copied()
-                        .and_then(|i| d.param_defs.get(i))
-                        .map(|p| p.name.clone())
-                })
-                .unwrap_or_else(|| "?".to_string());
-            format!("{} {} → {}", layer_name, effect_name, param_name)
         }
         MacroMappingTarget::GenParam { layer_id, param_id } => {
             let layer = project

@@ -28,6 +28,67 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
     p
 }
 
+/// BUG-005: a macro mapping addresses its effect by stable `EffectId`, so with
+/// two effects of the same type on one layer it drives the exact one mapped —
+/// not whichever comes first by type (the old `find(effect_type)` bug).
+#[test]
+fn macro_drives_the_exact_effect_among_two_of_the_same_type() {
+    use manifold_core::PresetTypeId;
+    use manifold_core::effects::PresetInstance;
+    use manifold_core::layer::Layer;
+    use manifold_core::macro_bank::{MacroBank, MacroCurve, MacroMapping, MacroMappingTarget};
+    use manifold_core::project::Project;
+    use manifold_core::types::LayerType;
+
+    let ty = PresetTypeId::new("Bloom");
+    let pid = manifold_core::preset_definition_registry::param_index_to_id(&ty, 0)
+        .expect("Bloom must have a param 0 in the live registry");
+
+    // Two same-type effects, both seeded to a sentinel so a stray write is
+    // visible. A first-match-by-type resolver would hit `fx_a` (the first).
+    let mut fx_a = PresetInstance::new(ty.clone());
+    fx_a.align_to_definition();
+    fx_a.set_base_param(0, 0.25);
+    let mut fx_b = PresetInstance::new(ty.clone());
+    fx_b.align_to_definition();
+    fx_b.set_base_param(0, 0.25);
+    let id_a = fx_a.id.clone();
+    let id_b = fx_b.id.clone();
+
+    let mut project = Project::default();
+    let mut layer = Layer::new("L".into(), LayerType::Video, 0);
+    layer.effects = Some(vec![fx_a, fx_b]);
+    project.timeline.layers.push(layer);
+
+    // Map macro slot 0 to the SECOND Bloom's param.
+    project.settings.macro_bank.slots[0]
+        .mappings
+        .push(MacroMapping {
+            target: MacroMappingTarget::Effect {
+                effect_id: id_b.clone(),
+                param_id: std::borrow::Cow::Owned(pid.to_string()),
+            },
+            range_min: 0.0,
+            range_max: 1.0,
+            curve: MacroCurve::Linear,
+            legacy_param_index: None,
+            legacy_effect_addr: None,
+        });
+
+    MacroBank::apply_macro(&mut project, 0, 1.0);
+
+    let after_a = project.find_effect_by_id(&id_a).unwrap().get_base_param(0);
+    let after_b = project.find_effect_by_id(&id_b).unwrap().get_base_param(0);
+    assert!(
+        (after_a - 0.25).abs() < 1e-6,
+        "the OTHER same-type effect must be untouched, got {after_a}"
+    );
+    assert!(
+        (after_b - 1.0).abs() < 1e-6,
+        "the mapped effect must receive the macro value, got {after_b}"
+    );
+}
+
 #[test]
 fn burn_v5_drivers_resolve_to_stable_param_ids() {
     let path = fixture_path("Burn V5.manifold");
@@ -527,30 +588,23 @@ fn liveschool_macro_mappings_resolve_to_stable_param_ids() {
                 MacroMappingTarget::MasterOpacity | MacroMappingTarget::LayerOpacity { .. } => {
                     // No param to resolve.
                 }
-                MacroMappingTarget::MasterEffect {
-                    effect_type,
-                    param_id,
-                } => {
+                MacroMappingTarget::Effect { effect_id, param_id } => {
                     param_total += 1;
-                    if param_id.is_empty() {
+                    // BUG-005 migration: a legacy type-keyed macro mapping must
+                    // resolve to a concrete EffectId, clear its parked legacy
+                    // address, and carry a resolved param_id.
+                    if effect_id.is_empty() {
+                        empty.push(format!("slot[{si}].mapping[{mi}] effect id unresolved"));
+                    } else if param_id.is_empty() {
                         empty.push(format!(
-                            "slot[{si}].mapping[{mi}] master.{}",
-                            effect_type.as_str()
+                            "slot[{si}].mapping[{mi}] effect {} param_id empty",
+                            effect_id.as_str()
                         ));
                     }
-                }
-                MacroMappingTarget::LayerEffect {
-                    effect_type,
-                    param_id,
-                    ..
-                } => {
-                    param_total += 1;
-                    if param_id.is_empty() {
-                        empty.push(format!(
-                            "slot[{si}].mapping[{mi}] layer.{}",
-                            effect_type.as_str()
-                        ));
-                    }
+                    assert!(
+                        mapping.legacy_effect_addr.is_none(),
+                        "slot[{si}].mapping[{mi}] legacy effect addr not cleared after resolve"
+                    );
                 }
                 MacroMappingTarget::GenParam { param_id, layer_id } => {
                     param_total += 1;

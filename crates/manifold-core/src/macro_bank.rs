@@ -7,7 +7,7 @@
 
 use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamId;
-use crate::id::LayerId;
+use crate::id::{EffectId, LayerId};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
@@ -47,38 +47,44 @@ impl MacroCurve {
 
 /// What a macro mapping points to. Mirrors OscParamTarget but is serializable.
 ///
-/// Parameter-bearing variants (`MasterEffect`, `LayerEffect`, `GenParam`)
-/// address by stable [`ParamId`] (since step 11). Custom [`Deserialize`]
-/// accepts both V1.1 (`paramIndex: usize`) and V1.2+ (`paramId: "amount"`)
-/// shapes; legacy indices are parked on [`MacroMapping::legacy_param_index`]
-/// for the post-load resolver.
+/// An effect param is addressed by stable [`EffectId`] (`Effect`), resolved via
+/// [`crate::project::Project::find_effect_by_id_mut`] — which reaches master,
+/// layer, and clip effects. This replaced the former type-keyed `MasterEffect`/
+/// `LayerEffect` variants, which mis-routed when a layer held two effects of the
+/// same type (the macro drove whichever came first). Legacy `masterEffect`/
+/// `layerEffect` mappings deserialize into `Effect` with an empty `effect_id`
+/// and a parked [`LegacyEffectAddr`]; the post-load migration
+/// (`Project::on_after_deserialize`) resolves them to a concrete `EffectId`.
 ///
-/// Serialize: this enum has no recovery state of its own — its
-/// [`MacroMapping`] wrapper carries `legacy_param_index`. To preserve
-/// recovery information across save→load when the registry is missing,
-/// the wrapper's custom [`Serialize`] re-renders the variant via
-/// internal helpers (it can't delegate to `derive(Serialize)` here
-/// because the "emit param_id XOR param_index" choice depends on the
-/// wrapper's state, not the variant's).
+/// Param addressing within the effect is by stable [`ParamId`]. Custom
+/// [`Deserialize`] accepts both V1.1 (`paramIndex`) and V1.2+ (`paramId`)
+/// shapes; legacy indices are parked on [`MacroMapping::legacy_param_index`].
 #[derive(Debug, Clone)]
 pub enum MacroMappingTarget {
     MasterOpacity,
-    MasterEffect {
-        effect_type: PresetTypeId,
-        param_id: ParamId,
-    },
     LayerOpacity {
         layer_id: LayerId,
     },
-    LayerEffect {
-        layer_id: LayerId,
-        effect_type: PresetTypeId,
+    /// A param on an effect instance (master, layer, or clip), addressed by
+    /// stable id. `effect_id` is empty only for an unresolved legacy mapping
+    /// awaiting migration (see [`MacroMapping::legacy_effect_addr`]).
+    Effect {
+        effect_id: EffectId,
         param_id: ParamId,
     },
     GenParam {
         layer_id: LayerId,
         param_id: ParamId,
     },
+}
+
+/// Pre-[`EffectId`] effect address parked from a legacy `masterEffect`/
+/// `layerEffect` mapping, resolved to an `EffectId` by the post-load migration.
+/// `layer_id == None` means a master-chain effect.
+#[derive(Debug, Clone)]
+pub struct LegacyEffectAddr {
+    pub layer_id: Option<LayerId>,
+    pub effect_type: PresetTypeId,
 }
 
 // ── Mapping ────────────────────────────────────────────────────────
@@ -96,6 +102,12 @@ pub struct MacroMapping {
     /// recovery invariant — same contract here, but the param_id lives
     /// in the target variant rather than on the wrapper.
     pub legacy_param_index: Option<i32>,
+    /// Parked legacy effect address for an `Effect` target whose `effect_id`
+    /// has not yet been resolved (a pre-EffectId `masterEffect`/`layerEffect`
+    /// mapping). Cleared by the post-load migration once the `EffectId` is
+    /// resolved. `None` for natively-EffectId mappings and all non-effect
+    /// targets.
+    pub legacy_effect_addr: Option<LegacyEffectAddr>,
 }
 
 // Custom Serialize: the wrapper's `legacy_param_index` plus the variant's
@@ -117,6 +129,7 @@ impl Serialize for MacroMapping {
             &MacroMappingTargetSer {
                 target: &self.target,
                 legacy_param_index: self.legacy_param_index,
+                legacy_effect_addr: self.legacy_effect_addr.as_ref(),
             },
         )?;
         s.serialize_field("rangeMin", &self.range_min)?;
@@ -132,6 +145,7 @@ impl Serialize for MacroMapping {
 struct MacroMappingTargetSer<'a> {
     target: &'a MacroMappingTarget,
     legacy_param_index: Option<i32>,
+    legacy_effect_addr: Option<&'a LegacyEffectAddr>,
 }
 
 impl Serialize for MacroMappingTargetSer<'_> {
@@ -154,45 +168,88 @@ impl Serialize for MacroMappingTargetSer<'_> {
                 m.serialize_entry("layer_id", layer_id)?;
                 m.end()
             }
-            MacroMappingTarget::MasterEffect {
-                effect_type,
+            MacroMappingTarget::Effect {
+                effect_id,
                 param_id,
             } => {
                 let (emit_id, emit_idx) = decide_emit(param_id, leg);
-                let mut count = 2;
-                if emit_id || emit_idx {
-                    count += 1;
+                // Normal path: a resolved EffectId. Emit the canonical
+                // `effect` shape.
+                if !effect_id.is_empty() {
+                    let mut count = 2;
+                    if emit_id || emit_idx {
+                        count += 1;
+                    }
+                    let mut m = serializer.serialize_map(Some(count))?;
+                    m.serialize_entry("type", "effect")?;
+                    m.serialize_entry("effect_id", effect_id)?;
+                    if emit_id {
+                        m.serialize_entry("param_id", param_id)?;
+                    } else if emit_idx {
+                        m.serialize_entry("param_index", &leg.unwrap())?;
+                    }
+                    return m.end();
                 }
-                let mut m = serializer.serialize_map(Some(count))?;
-                m.serialize_entry("type", "masterEffect")?;
-                m.serialize_entry("effect_type", effect_type)?;
-                if emit_id {
-                    m.serialize_entry("param_id", param_id)?;
-                } else if emit_idx {
-                    m.serialize_entry("param_index", &leg.unwrap())?;
+                // Unresolved legacy mapping (migration couldn't find the
+                // effect). Re-emit the original `masterEffect`/`layerEffect`
+                // shape so no addressing information is lost across a save.
+                match self.legacy_effect_addr {
+                    Some(LegacyEffectAddr {
+                        layer_id: Some(layer_id),
+                        effect_type,
+                    }) => {
+                        let mut count = 3;
+                        if emit_id || emit_idx {
+                            count += 1;
+                        }
+                        let mut m = serializer.serialize_map(Some(count))?;
+                        m.serialize_entry("type", "layerEffect")?;
+                        m.serialize_entry("layer_id", layer_id)?;
+                        m.serialize_entry("effect_type", effect_type)?;
+                        if emit_id {
+                            m.serialize_entry("param_id", param_id)?;
+                        } else if emit_idx {
+                            m.serialize_entry("param_index", &leg.unwrap())?;
+                        }
+                        m.end()
+                    }
+                    Some(LegacyEffectAddr {
+                        layer_id: None,
+                        effect_type,
+                    }) => {
+                        let mut count = 2;
+                        if emit_id || emit_idx {
+                            count += 1;
+                        }
+                        let mut m = serializer.serialize_map(Some(count))?;
+                        m.serialize_entry("type", "masterEffect")?;
+                        m.serialize_entry("effect_type", effect_type)?;
+                        if emit_id {
+                            m.serialize_entry("param_id", param_id)?;
+                        } else if emit_idx {
+                            m.serialize_entry("param_index", &leg.unwrap())?;
+                        }
+                        m.end()
+                    }
+                    None => {
+                        // No effect_id and no parked legacy addr — fully
+                        // orphaned. Emit the canonical shape with the (empty)
+                        // id; resolves to a no-op.
+                        let mut count = 2;
+                        if emit_id || emit_idx {
+                            count += 1;
+                        }
+                        let mut m = serializer.serialize_map(Some(count))?;
+                        m.serialize_entry("type", "effect")?;
+                        m.serialize_entry("effect_id", effect_id)?;
+                        if emit_id {
+                            m.serialize_entry("param_id", param_id)?;
+                        } else if emit_idx {
+                            m.serialize_entry("param_index", &leg.unwrap())?;
+                        }
+                        m.end()
+                    }
                 }
-                m.end()
-            }
-            MacroMappingTarget::LayerEffect {
-                layer_id,
-                effect_type,
-                param_id,
-            } => {
-                let (emit_id, emit_idx) = decide_emit(param_id, leg);
-                let mut count = 3;
-                if emit_id || emit_idx {
-                    count += 1;
-                }
-                let mut m = serializer.serialize_map(Some(count))?;
-                m.serialize_entry("type", "layerEffect")?;
-                m.serialize_entry("layer_id", layer_id)?;
-                m.serialize_entry("effect_type", effect_type)?;
-                if emit_id {
-                    m.serialize_entry("param_id", param_id)?;
-                } else if emit_idx {
-                    m.serialize_entry("param_index", &leg.unwrap())?;
-                }
-                m.end()
             }
             MacroMappingTarget::GenParam { layer_id, param_id } => {
                 let (emit_id, emit_idx) = decide_emit(param_id, leg);
@@ -247,6 +304,15 @@ impl<'de> Deserialize<'de> for MacroMapping {
         #[serde(rename_all = "camelCase", tag = "type")]
         enum RawTarget {
             MasterOpacity,
+            /// Canonical EffectId-addressed form.
+            Effect {
+                effect_id: String,
+                #[serde(default)]
+                param_id: Option<String>,
+                #[serde(default)]
+                param_index: Option<i32>,
+            },
+            /// Legacy type-keyed master effect (pre-EffectId).
             MasterEffect {
                 effect_type: PresetTypeId,
                 #[serde(default)]
@@ -257,6 +323,7 @@ impl<'de> Deserialize<'de> for MacroMapping {
             LayerOpacity {
                 layer_id: LayerId,
             },
+            /// Legacy type-keyed layer effect (pre-EffectId).
             LayerEffect {
                 layer_id: LayerId,
                 effect_type: PresetTypeId,
@@ -295,8 +362,24 @@ impl<'de> Deserialize<'de> for MacroMapping {
         }
 
         let raw = Raw::deserialize(deserializer)?;
-        let (target, legacy_param_index) = match raw.target {
-            RawTarget::MasterOpacity => (MacroMappingTarget::MasterOpacity, None),
+        // Returns (target, legacy_param_index, legacy_effect_addr).
+        let (target, legacy_param_index, legacy_effect_addr) = match raw.target {
+            RawTarget::MasterOpacity => (MacroMappingTarget::MasterOpacity, None, None),
+            RawTarget::Effect {
+                effect_id,
+                param_id,
+                param_index,
+            } => {
+                let (param_id, legacy) = split_id(param_id, param_index);
+                (
+                    MacroMappingTarget::Effect {
+                        effect_id: EffectId::new(effect_id),
+                        param_id,
+                    },
+                    legacy,
+                    None,
+                )
+            }
             RawTarget::MasterEffect {
                 effect_type,
                 param_id,
@@ -304,15 +387,19 @@ impl<'de> Deserialize<'de> for MacroMapping {
             } => {
                 let (param_id, legacy) = split_id(param_id, param_index);
                 (
-                    MacroMappingTarget::MasterEffect {
-                        effect_type,
+                    MacroMappingTarget::Effect {
+                        effect_id: EffectId::default(),
                         param_id,
                     },
                     legacy,
+                    Some(LegacyEffectAddr {
+                        layer_id: None,
+                        effect_type,
+                    }),
                 )
             }
             RawTarget::LayerOpacity { layer_id } => {
-                (MacroMappingTarget::LayerOpacity { layer_id }, None)
+                (MacroMappingTarget::LayerOpacity { layer_id }, None, None)
             }
             RawTarget::LayerEffect {
                 layer_id,
@@ -322,12 +409,15 @@ impl<'de> Deserialize<'de> for MacroMapping {
             } => {
                 let (param_id, legacy) = split_id(param_id, param_index);
                 (
-                    MacroMappingTarget::LayerEffect {
-                        layer_id,
-                        effect_type,
+                    MacroMappingTarget::Effect {
+                        effect_id: EffectId::default(),
                         param_id,
                     },
                     legacy,
+                    Some(LegacyEffectAddr {
+                        layer_id: Some(layer_id),
+                        effect_type,
+                    }),
                 )
             }
             RawTarget::GenParam {
@@ -336,7 +426,11 @@ impl<'de> Deserialize<'de> for MacroMapping {
                 param_index,
             } => {
                 let (param_id, legacy) = split_id(param_id, param_index);
-                (MacroMappingTarget::GenParam { layer_id, param_id }, legacy)
+                (
+                    MacroMappingTarget::GenParam { layer_id, param_id },
+                    legacy,
+                    None,
+                )
             }
         };
 
@@ -346,6 +440,7 @@ impl<'de> Deserialize<'de> for MacroMapping {
             range_max: raw.range_max,
             curve: raw.curve,
             legacy_param_index,
+            legacy_effect_addr,
         })
     }
 }
@@ -431,23 +526,20 @@ impl MacroBank {
                 MacroMappingTarget::MasterOpacity => {
                     project.settings.set_master_opacity(mapped);
                 }
-                MacroMappingTarget::MasterEffect {
-                    effect_type,
+                MacroMappingTarget::Effect {
+                    effect_id,
                     param_id,
                 } => {
-                    let Some(idx) = crate::preset_definition_registry::param_id_to_index(
-                        effect_type,
-                        param_id.as_ref(),
-                    ) else {
-                        continue;
-                    };
-                    if let Some(fx) = project
-                        .settings
-                        .master_effects
-                        .iter_mut()
-                        .find(|f| f.effect_type() == effect_type)
-                    {
-                        fx.set_base_param(idx, mapped);
+                    // Resolve by stable id — reaches master, layer, and clip
+                    // effects, and never confuses two same-type effects.
+                    if let Some(fx) = project.find_effect_by_id_mut(effect_id) {
+                        let effect_type = fx.effect_type().clone();
+                        if let Some(idx) = crate::preset_definition_registry::param_id_to_index(
+                            &effect_type,
+                            param_id.as_ref(),
+                        ) {
+                            fx.set_base_param(idx, mapped);
+                        }
                     }
                 }
                 MacroMappingTarget::LayerOpacity { layer_id } => {
@@ -455,26 +547,6 @@ impl MacroBank {
                         project.timeline.find_layer_by_id_mut(layer_id.as_str())
                     {
                         layer.opacity = mapped.clamp(0.0, 1.0);
-                    }
-                }
-                MacroMappingTarget::LayerEffect {
-                    layer_id,
-                    effect_type,
-                    param_id,
-                } => {
-                    let Some(idx) = crate::preset_definition_registry::param_id_to_index(
-                        effect_type,
-                        param_id.as_ref(),
-                    ) else {
-                        continue;
-                    };
-                    if let Some((_, layer)) =
-                        project.timeline.find_layer_by_id_mut(layer_id.as_str())
-                        && let Some(effects) = &mut layer.effects
-                        && let Some(fx) =
-                            effects.iter_mut().find(|f| f.effect_type() == effect_type)
-                    {
-                        fx.set_base_param(idx, mapped);
                     }
                 }
                 MacroMappingTarget::GenParam { layer_id, param_id } => {
@@ -560,7 +632,31 @@ mod tests {
     // LEDS.manifold` for an authoritative shape sample.
 
     #[test]
-    fn deserialize_legacy_master_effect_param_index() {
+    fn deserialize_canonical_effect_shape() {
+        let json = r#"{
+            "target": {
+                "type": "effect",
+                "effect_id": "fx-9",
+                "param_id": "amount"
+            }
+        }"#;
+        let m: MacroMapping = serde_json::from_str(json).unwrap();
+        match &m.target {
+            MacroMappingTarget::Effect { effect_id, param_id } => {
+                assert_eq!(effect_id.as_str(), "fx-9");
+                assert_eq!(param_id, "amount");
+            }
+            _ => panic!("wrong variant"),
+        }
+        assert!(m.legacy_effect_addr.is_none());
+        assert_eq!(m.legacy_param_index, None);
+    }
+
+    #[test]
+    fn deserialize_legacy_master_effect_parks_addr_and_index() {
+        // A pre-EffectId masterEffect mapping deserializes into an unresolved
+        // Effect (empty id) with the address + legacy index parked for the
+        // post-load migration.
         let json = r#"{
             "target": {
                 "type": "masterEffect",
@@ -572,16 +668,20 @@ mod tests {
         }"#;
         let m: MacroMapping = serde_json::from_str(json).unwrap();
         match &m.target {
-            MacroMappingTarget::MasterEffect { param_id, .. } => {
+            MacroMappingTarget::Effect { effect_id, param_id } => {
+                assert!(effect_id.is_empty(), "unresolved until migration");
                 assert!(param_id.is_empty());
             }
             _ => panic!("wrong variant"),
         }
         assert_eq!(m.legacy_param_index, Some(2));
+        let addr = m.legacy_effect_addr.expect("legacy effect addr parked");
+        assert!(addr.layer_id.is_none(), "master-chain effect");
+        assert_eq!(addr.effect_type.as_str(), "Bloom");
     }
 
     #[test]
-    fn deserialize_canonical_layer_effect_param_id() {
+    fn deserialize_legacy_layer_effect_parks_addr_with_param_id() {
         let json = r#"{
             "target": {
                 "type": "layerEffect",
@@ -592,12 +692,16 @@ mod tests {
         }"#;
         let m: MacroMapping = serde_json::from_str(json).unwrap();
         match &m.target {
-            MacroMappingTarget::LayerEffect { param_id, .. } => {
+            MacroMappingTarget::Effect { effect_id, param_id } => {
+                assert!(effect_id.is_empty(), "unresolved until migration");
                 assert_eq!(param_id, "amount");
             }
             _ => panic!("wrong variant"),
         }
         assert_eq!(m.legacy_param_index, None);
+        let addr = m.legacy_effect_addr.expect("legacy effect addr parked");
+        assert_eq!(addr.layer_id.as_ref().unwrap().as_str(), "layer-1");
+        assert_eq!(addr.effect_type.as_str(), "Mirror");
     }
 
     #[test]
@@ -632,7 +736,7 @@ mod tests {
         }"#;
         let m: MacroMapping = serde_json::from_str(json).unwrap();
         match &m.target {
-            MacroMappingTarget::MasterEffect { param_id, .. } => {
+            MacroMappingTarget::Effect { param_id, .. } => {
                 assert_eq!(param_id, "threshold");
             }
             _ => panic!("wrong variant"),
@@ -666,18 +770,27 @@ mod tests {
     }
 
     #[test]
-    fn serialize_emits_param_id_not_param_index() {
+    fn serialize_emits_effect_id_and_param_id() {
         let mapping = MacroMapping {
-            target: MacroMappingTarget::MasterEffect {
-                effect_type: PresetTypeId::from_string("Bloom".to_string()),
+            target: MacroMappingTarget::Effect {
+                effect_id: EffectId::new("fx-1"),
                 param_id: Cow::Borrowed("amount"),
             },
             range_min: 0.0,
             range_max: 1.0,
             curve: MacroCurve::Linear,
             legacy_param_index: None,
+            legacy_effect_addr: None,
         };
         let json = serde_json::to_string(&mapping).unwrap();
+        assert!(
+            json.contains("\"type\":\"effect\""),
+            "Serialize must emit canonical effect shape; got: {json}"
+        );
+        assert!(
+            json.contains("\"effect_id\":\"fx-1\""),
+            "Serialize must emit effect_id; got: {json}"
+        );
         assert!(
             json.contains("\"param_id\":\"amount\""),
             "Serialize must emit param_id; got: {json}"

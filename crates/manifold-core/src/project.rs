@@ -1,4 +1,5 @@
 use crate::PresetTypeId;
+use crate::id::EffectId;
 use crate::effect_graph_def::EffectGraphDef;
 use crate::midi::MidiMappingConfig;
 use crate::percussion::PercussionImportState;
@@ -555,33 +556,52 @@ impl Project {
         }
 
         // Macro mappings are stored on `settings.macro_bank.slots[*].mappings`.
-        // Each `MacroMapping` carries a `legacy_param_index` parked from the
-        // V1.1 shape; the variant tells us whether to look up via the effect
-        // or generator registry. `GenParam` requires the layer to be alive
-        // because the generator type isn't recorded on the target itself —
-        // a missing layer is treated as `RegistryMissing` so the index
-        // survives until the layer reappears.
+        // A legacy (pre-EffectId) effect mapping carries a parked
+        // `legacy_effect_addr` (layer/master + effect_type); we resolve it to a
+        // concrete `EffectId` here by first-match (correct for pre-duplication
+        // saves). It may also carry a `legacy_param_index` from the V1.1 shape,
+        // resolved against the effect_type the address records. `GenParam`
+        // requires the layer alive for generator-type lookup — a missing layer
+        // is `RegistryMissing` so the index survives until it reappears.
         fn resolve_macro_mapping(
             mapping: &mut crate::macro_bank::MacroMapping,
             timeline: &crate::timeline::Timeline,
+            master_effects: &[(PresetTypeId, EffectId)],
         ) {
             use crate::macro_bank::MacroMappingTarget;
             let legacy_idx = mapping.legacy_param_index;
-            let outcome = match &mapping.target {
-                MacroMappingTarget::MasterOpacity | MacroMappingTarget::LayerOpacity { .. } => {
-                    // No param-bearing variant — drop legacy idx, no id work.
-                    ResolveOutcome::Drop
+
+            // Step 1: resolve a parked legacy effect address → EffectId.
+            if let (MacroMappingTarget::Effect { effect_id, .. }, Some(addr)) =
+                (&mut mapping.target, &mapping.legacy_effect_addr)
+                && effect_id.is_empty()
+            {
+                let resolved = match &addr.layer_id {
+                    None => master_effects
+                        .iter()
+                        .find(|(ty, _)| ty == &addr.effect_type)
+                        .map(|(_, id)| id.clone()),
+                    Some(lid) => timeline
+                        .layers
+                        .iter()
+                        .find(|l| l.layer_id == *lid)
+                        .and_then(|l| l.effects.as_ref())
+                        .and_then(|fx| fx.iter().find(|f| f.effect_type() == &addr.effect_type))
+                        .map(|f| f.id.clone()),
+                };
+                if let Some(id) = resolved {
+                    *effect_id = id;
                 }
-                MacroMappingTarget::MasterEffect {
-                    effect_type,
-                    param_id,
-                } => resolve_for_effect(effect_type, param_id, legacy_idx),
-                MacroMappingTarget::LayerEffect {
-                    effect_type,
-                    param_id,
-                    ..
-                } => resolve_for_effect(effect_type, param_id, legacy_idx),
-                MacroMappingTarget::GenParam { layer_id, param_id } => {
+            }
+
+            // Step 2: resolve a parked legacy param index → param_id. A macro
+            // mapping only ever has a legacy index in the legacy shape, so the
+            // effect_type comes from the parked address.
+            let outcome = match (&mapping.target, &mapping.legacy_effect_addr) {
+                (MacroMappingTarget::Effect { param_id, .. }, Some(addr)) => {
+                    resolve_for_effect(&addr.effect_type, param_id, legacy_idx)
+                }
+                (MacroMappingTarget::GenParam { layer_id, param_id }, _) => {
                     match timeline
                         .layers
                         .iter()
@@ -591,22 +611,19 @@ impl Project {
                         Some(gp) => {
                             resolve_for_generator(gp.generator_type(), param_id, legacy_idx)
                         }
-                        // Layer or its gen_params missing — same recovery
-                        // semantics as registry-missing on effect/generator.
                         None => ResolveOutcome::RegistryMissing,
                     }
                 }
+                // Opacity, or a native EffectId mapping (no legacy data).
+                _ => ResolveOutcome::Drop,
             };
 
-            // Apply the outcome to the variant's `param_id` (where it
-            // exists) plus the wrapper's `legacy_param_index`.
             match (&mut mapping.target, outcome) {
                 (_, ResolveOutcome::NoChange | ResolveOutcome::Drop) => {
                     mapping.legacy_param_index = None;
                 }
                 (
-                    MacroMappingTarget::MasterEffect { param_id, .. }
-                    | MacroMappingTarget::LayerEffect { param_id, .. }
+                    MacroMappingTarget::Effect { param_id, .. }
                     | MacroMappingTarget::GenParam { param_id, .. },
                     ResolveOutcome::Update(id),
                 ) => {
@@ -614,13 +631,19 @@ impl Project {
                     mapping.legacy_param_index = None;
                 }
                 (_, ResolveOutcome::Update(_)) => {
-                    // Update outcome on a no-param variant can't happen
-                    // given the resolve match above, but be safe.
                     mapping.legacy_param_index = None;
                 }
                 (_, ResolveOutcome::RegistryMissing) => {
                     // Preserve legacy index for next-load recovery.
                 }
+            }
+
+            // Once the EffectId is resolved, drop the parked address so it
+            // isn't re-emitted as a legacy shape on the next save.
+            if let MacroMappingTarget::Effect { effect_id, .. } = &mapping.target
+                && !effect_id.is_empty()
+            {
+                mapping.legacy_effect_addr = None;
             }
         }
 
@@ -687,14 +710,21 @@ impl Project {
             }
         }
 
-        // Macro mappings live on the bank, but `GenParam` resolution
-        // needs to look up the generator type via the layer. `timeline`
-        // and `settings` are disjoint fields of `Project` so the split
-        // borrow is fine.
+        // Macro mappings live on the bank. Resolving a legacy effect address
+        // needs the master-effect chain (type → id) and `GenParam` needs the
+        // generator type via the layer. Snapshot the master chain into an owned
+        // (type, id) table first so its borrow ends before the mutable bank
+        // borrow; `timeline` is a disjoint field of `Project`.
+        let master_effects: Vec<(PresetTypeId, EffectId)> = self
+            .settings
+            .master_effects
+            .iter()
+            .map(|f| (f.effect_type().clone(), f.id.clone()))
+            .collect();
         let timeline = &self.timeline;
         for slot in &mut self.settings.macro_bank.slots {
             for mapping in &mut slot.mappings {
-                resolve_macro_mapping(mapping, timeline);
+                resolve_macro_mapping(mapping, timeline, &master_effects);
             }
         }
     }
@@ -940,6 +970,25 @@ impl Project {
                     if &fx.id == effect_id {
                         return Some(fx);
                     }
+                }
+            }
+        }
+        None
+    }
+
+    /// The owning layer for an effect/clip-effect instance, or `None` for a
+    /// master-chain effect (or an unknown id). Used where an `EffectId` needs
+    /// its container — e.g. labelling an EffectId-addressed macro mapping.
+    pub fn layer_id_for_effect(&self, effect_id: &crate::id::EffectId) -> Option<crate::id::LayerId> {
+        for layer in &self.timeline.layers {
+            if let Some(effects) = layer.effects.as_ref()
+                && effects.iter().any(|fx| &fx.id == effect_id)
+            {
+                return Some(layer.layer_id.clone());
+            }
+            for clip in &layer.clips {
+                if clip.effects.iter().any(|fx| &fx.id == effect_id) {
+                    return Some(layer.layer_id.clone());
                 }
             }
         }
