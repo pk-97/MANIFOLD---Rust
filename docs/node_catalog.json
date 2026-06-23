@@ -12258,6 +12258,11 @@
           "name": "line_spacing",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "stroke_width",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Render Text",
@@ -12368,6 +12373,31 @@
         },
         {
           "default": "0",
+          "label": "Stroke Width",
+          "name": "stroke_width",
+          "range": [
+            "0",
+            "0.5"
+          ],
+          "tooltip": "Outline thickness around the letters, as a fraction of the text size. 0 is no outline, higher draws a thicker border.",
+          "type": "float"
+        },
+        {
+          "default": "[1, 1, 1, 1]",
+          "label": "Fill Color",
+          "name": "fill_color",
+          "tooltip": "The colour of the letters themselves.",
+          "type": "color"
+        },
+        {
+          "default": "[0, 0, 0, 1]",
+          "label": "Stroke Color",
+          "name": "stroke_color",
+          "tooltip": "The colour of the outline drawn around the letters when stroke width is above 0.",
+          "type": "color"
+        },
+        {
+          "default": "0",
           "label": "Text",
           "name": "text",
           "tooltip": "The words to draw. Wire this through the card so you can change the message live during a show.",
@@ -12381,7 +12411,7 @@
           "type": "string"
         }
       ],
-      "purpose": "Render a text string to the output texture. The host wires `text` and `fontFamily` through preset stringBindings; size/position/scale/alignment/spacing are port-shadows-param scalars. CPU-rasterizes the glyphs via CoreText into an internal R8Unorm bitmap (dirty-cached — only re-rasterized when text/font/size/style change), then composites white-on-black into the output with aspect correction. Single-node text generator: drop it between `system.generator_input` and `system.final_output`.",
+      "purpose": "Render a text string to the output texture. The host wires `text` and `fontFamily` through preset stringBindings; size/position/scale/alignment/spacing/stroke_width are port-shadows-param scalars; fill_color and stroke_color are editor-set Color params. CPU-rasterizes the glyphs via CoreText into internal R8Unorm coverage bitmaps — a fill mask always, plus an outline mask when stroke_width > 0 (both dirty-cached — only re-rasterized when text/font/size/style change). A compute kernel composites them as premultiplied alpha (fill over stroke over transparent) with aspect correction, so the text keys cleanly over the layer below. Single-node text generator: drop it between `system.generator_input` and `system.final_output`.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live.",
@@ -18530,6 +18560,13 @@
           "max": "3",
           "min": "0.5",
           "name": "Line Spacing"
+        },
+        {
+          "default": "0",
+          "id": "stroke_width",
+          "max": "0.5",
+          "min": "0",
+          "name": "Stroke Width"
         }
       ]
     },

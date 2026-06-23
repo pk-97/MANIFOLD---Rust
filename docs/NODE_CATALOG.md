@@ -384,7 +384,7 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | `Strobe` | Strobe | effect | Stylize | 3 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 3 |
 | `Tesseract` | Tesseract | generator | Procedural | 12 |
-| `Text` | Text | generator | Source | 8 |
+| `Text` | Text | generator | Source | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Stylize | 3 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
