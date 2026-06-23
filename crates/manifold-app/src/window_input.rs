@@ -1,32 +1,514 @@
-//! Graph-editor window input dispatch (Phase 4.6 — "fold the editor event loop
-//! into the shared path").
+//! The window input owner (Phase 7 — "one shared input owner for both windows").
 //!
-//! The editor window's pointer / scroll / keyboard handling used to be inlined
-//! across ~20 `if is_graph_editor { … return; }` branches inside the single
-//! `App::window_event` match — a second dispatch *policy* that drifted from the
-//! primary timeline path (the audit's "two parallel event loops"). Those branch
-//! bodies live here now as one named owner: `window_event` delegates to a single
-//! method per arm, so the editor's input runs through one place instead of being
-//! smeared across the match.
+//! Both the timeline/inspector window and the graph-editor window enter their
+//! pointer / scroll / keyboard handling through the `input_*` dispatchers here.
+//! `App::window_event` is a thin router: each input arm is one delegation into
+//! this module, and the `is_graph_editor` / `is_primary` branching lives in the
+//! dispatcher — not smeared across the match. This replaces the two parallel
+//! event *policies* the audit flagged ("two parallel event loops"): the primary
+//! window's bodies used to be inlined in `window_event`, the editor's in a
+//! separate `editor_input.rs`. Now there is one owner.
 //!
-//! Behaviour-preserving: each method is the verbatim old branch body. Event
-//! values arrive by value (they're `Copy`, or `Key` cheap-clones once per
-//! keypress) so the bodies move unchanged. The viewport-slice math
-//! (`palette_width`/`sidebar_x`) and the explicit `offscreen_dirty` marking (the
-//! editor has no idle repaint loop) are preserved exactly — losing either would
-//! mis-hit-test or freeze the editor.
+//! The shared core both windows route through:
+//! - **Gesture production** — `UIInputSystem` (`ui_root.input`), already the
+//!   same type on both `Workspace`s.
+//! - **Scroll normalization** — [`normalize_scroll_delta`] (one line-delta→pixel
+//!   rule for the primary scroll, the dropdown scroll, and the editor zoom).
+//! - **Cursor projection** — [`Application::logical_cursor`] (physical→logical).
+//!
+//! The keyboard text-input `match` blocks stay window-specific *by design*: the
+//! search field, the WGSL code field, and the mapping-popover field have
+//! genuinely different Enter / Escape / `typing`-gating policy. They delegate to
+//! the same `TextInput` methods (the real shared core); merging the policy
+//! matches would be a behaviour change, not a dedup.
+//!
+//! Behaviour-preserving: the moved bodies are verbatim. The editor's
+//! viewport-slice math (`palette_width`/`sidebar_x`) and the explicit
+//! `offscreen_dirty` marking (the editor has no idle repaint loop) are preserved
+//! exactly — losing either would mis-hit-test or freeze the editor.
 
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
-use winit::keyboard::Key;
+use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
+use manifold_ui::cursors::TimelineCursor;
+use manifold_ui::input::PointerAction;
 use manifold_ui::node::Vec2;
 
 use crate::app::Application;
 use crate::content_command::ContentCommand;
+use crate::window_registry::WindowRole;
+
+/// One mouse-wheel notch in logical pixels. A `LineDelta` notch is this many
+/// pixels; a `PixelDelta` (trackpad) is already in pixels. The single rule for
+/// every scroll consumer — primary timeline scroll, the open-dropdown scroll,
+/// and the editor's cursor-anchored zoom — so a notch means the same everywhere.
+pub(crate) const LINE_DELTA_PX: f32 = 20.0;
+
+/// Normalize a winit scroll delta to logical pixels `(dx, dy)`.
+///
+/// `LineDelta` (mouse wheel) is scaled by [`LINE_DELTA_PX`] per notch;
+/// `PixelDelta` (trackpad) passes through. Downstream consumers apply their own
+/// speed constant on top.
+pub(crate) fn normalize_scroll_delta(delta: MouseScrollDelta) -> (f32, f32) {
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => (x * LINE_DELTA_PX, y * LINE_DELTA_PX),
+        MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
+    }
+}
 
 impl Application {
+    /// Physical→logical cursor position using `window_id`'s scale factor. The
+    /// one place that conversion lives; both the primary cursor track and the
+    /// editor's zoom anchor read it.
+    pub(crate) fn logical_cursor(
+        &self,
+        window_id: WindowId,
+        position: PhysicalPosition<f64>,
+    ) -> Vec2 {
+        let scale = self
+            .window_registry
+            .get(&window_id)
+            .map(|ws| ws.window.scale_factor())
+            .unwrap_or(1.0);
+        Vec2::new(position.x as f32 / scale as f32, position.y as f32 / scale as f32)
+    }
+
+    // ── Dispatchers: the single owner entry per winit input event ──────────
+    // `window_event` calls exactly one of these per arm; the primary / editor /
+    // output-window split lives here, not in the match.
+
+    /// `CursorMoved` for any window.
+    pub(crate) fn input_cursor_moved(
+        &mut self,
+        window_id: WindowId,
+        is_primary: bool,
+        is_graph_editor: bool,
+        position: PhysicalPosition<f64>,
+    ) {
+        if is_graph_editor {
+            self.editor_cursor_moved(window_id, position);
+        } else if is_primary {
+            self.primary_cursor_moved(window_id, position);
+        }
+    }
+
+    /// `MouseInput` for any window.
+    pub(crate) fn input_mouse_input(
+        &mut self,
+        window_id: WindowId,
+        is_primary: bool,
+        is_graph_editor: bool,
+        button: MouseButton,
+        state: ElementState,
+    ) {
+        if is_graph_editor {
+            self.editor_mouse_input(window_id, button, state);
+        } else {
+            self.primary_mouse_input(window_id, is_primary, button, state);
+        }
+    }
+
+    /// `MouseWheel` for any window.
+    pub(crate) fn input_mouse_wheel(
+        &mut self,
+        window_id: WindowId,
+        is_primary: bool,
+        is_graph_editor: bool,
+        delta: MouseScrollDelta,
+    ) {
+        if is_graph_editor {
+            // The editor's zoom is self-contained; the primary scroll block
+            // below is `is_primary`-gated and would never run for the editor
+            // window, so the old bool return is moot here.
+            self.editor_mouse_wheel(window_id, delta);
+        } else {
+            self.primary_mouse_wheel(is_primary, delta);
+        }
+    }
+
+    /// `CursorMoved` in the timeline/inspector window: cursor tracking, perform-
+    /// mode handoff, split / inspector-resize drags, then the shared
+    /// `UIInputSystem` move + the timeline `InteractionOverlay` hover.
+    pub(crate) fn primary_cursor_moved(
+        &mut self,
+        window_id: WindowId,
+        position: PhysicalPosition<f64>,
+    ) {
+        // Convert to logical pixels
+        self.cursor_pos = self.logical_cursor(window_id, position);
+
+        if self.perform_handle_cursor_moved(self.cursor_pos) {
+            return;
+        }
+
+        // Split handle drag takes highest priority
+        // From Unity PanelResizeHandle.OnDrag
+        if self.split_dragging {
+            self.ws
+                .ui_root
+                .layout
+                .update_split_from_drag(self.cursor_pos.y);
+            self.cursor_manager.set(TimelineCursor::ResizeVertical);
+            self.needs_rebuild = true;
+        }
+        // Inspector resize drag takes next priority
+        else if self.ws.ui_root.inspector_resize_dragging {
+            if self.ws.ui_root.update_inspector_resize(self.cursor_pos.x) {
+                self.needs_rebuild = true;
+            }
+            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
+        } else {
+            self.ws.ui_root.pointer_event(
+                self.cursor_pos,
+                PointerAction::Move,
+                self.time_since_start,
+            );
+
+            // Route hover through InteractionOverlay (port of Unity OnPointerMove).
+            // This handles: CursorBeat/CursorLayerIndex tracking, per-layer bitmap
+            // invalidation on hover change, and cursor shape feedback.
+            if let Some(content_tx) = self.content_tx.as_ref() {
+                let mut host = crate::editing_host::AppEditingHost::new(
+                    &mut self.local_project,
+                    content_tx,
+                    &self.content_state,
+                    &mut self.cursor_manager,
+                    &mut self.active_layer_id,
+                    &mut self.needs_rebuild,
+                    &mut self.needs_structural_sync,
+                    &mut self.scroll_dirty,
+                    &mut self.invalidate_layers,
+                    &mut self.pre_drag_commands,
+                );
+                self.overlay.on_pointer_move(
+                    self.cursor_pos,
+                    &mut host,
+                    &mut self.selection,
+                    &self.ws.ui_root.viewport,
+                );
+            }
+
+            // Update cursor based on current interaction state.
+            // From Unity: Cursors.SetMove/SetBlocked/SetResizeHorizontal/SetDefault
+            self.update_cursor_for_position();
+        }
+
+        // Apply cursor to window if changed
+        if self.cursor_manager.needs_update()
+            && let Some(ws) = self.window_registry.get(&window_id)
+        {
+            let icon = match self.cursor_manager.pending_cursor_icon() {
+                TimelineCursor::Default => winit::window::CursorIcon::Default,
+                TimelineCursor::ResizeHorizontal => winit::window::CursorIcon::ColResize,
+                TimelineCursor::ResizeVertical => winit::window::CursorIcon::RowResize,
+                TimelineCursor::Move => winit::window::CursorIcon::Move,
+                TimelineCursor::Blocked => winit::window::CursorIcon::NotAllowed,
+            };
+            ws.window.set_cursor(icon);
+            self.cursor_manager.mark_applied();
+        }
+    }
+
+    /// `MouseInput` in the timeline/inspector window (`is_primary`) or the output
+    /// window (the `else` — double-click toggles borderless presentation).
+    pub(crate) fn primary_mouse_input(
+        &mut self,
+        window_id: WindowId,
+        is_primary: bool,
+        button: MouseButton,
+        state: ElementState,
+    ) {
+        if is_primary && self.perform_handle_mouse_input(button, state) {
+            return;
+        }
+        if is_primary {
+            match button {
+                MouseButton::Left => {
+                    match state {
+                        ElementState::Pressed => {
+                            self.mouse_pressed = true;
+
+                            // Track which panel has focus for context-sensitive shortcuts.
+                            // Matches Unity's InputHandler.inspectorHasFocus.
+                            // Any click outside inspector clears focus and effect selection
+                            // — layer headers, timeline tracks, transport bar, etc.
+                            let inspector_rect = self.ws.ui_root.layout.inspector();
+                            let in_inspector = inspector_rect.contains(self.cursor_pos);
+                            if !in_inspector && self.input_handler.inspector_has_focus {
+                                let ui = &mut self.ws.ui_root;
+                                ui.inspector.clear_effect_selection(&mut ui.tree);
+                            }
+                            self.input_handler.inspector_has_focus = in_inspector;
+
+                            // If a dropdown is open and the click lands outside it,
+                            // dismiss the dropdown and consume the event so that the
+                            // background node never receives a PointerDown (prevents
+                            // phantom pressed_id on the node behind the dropdown).
+                            if self.ws.ui_root.dropdown.is_open()
+                                && !self.ws.ui_root.dropdown.contains_point(self.cursor_pos)
+                            {
+                                self.ws.ui_root.dropdown.close(&mut self.ws.ui_root.tree);
+                                // Click is consumed by dismiss — do not forward.
+                            } else if self
+                                .ws
+                                .ui_root
+                                .layout
+                                .is_near_split_handle(self.cursor_pos)
+                            {
+                                // Begin video/timeline split drag.
+                                // From Unity PanelResizeHandle.OnPointerDown.
+                                self.split_dragging = true;
+                                self.ws.ui_root.set_split_handle_drag();
+                            } else if self.ws.ui_root.is_near_inspector_edge(self.cursor_pos) {
+                                self.ws.ui_root.begin_inspector_resize(self.cursor_pos.x);
+                                self.ws.ui_root.set_inspector_handle_drag();
+                            } else {
+                                self.ws.ui_root.pointer_event(
+                                    self.cursor_pos,
+                                    PointerAction::Down,
+                                    self.time_since_start,
+                                );
+                            }
+                        }
+                        ElementState::Released => {
+                            self.mouse_pressed = false;
+                            if self.split_dragging {
+                                // End video/timeline split drag.
+                                // From Unity PanelResizeHandle.OnPointerUp.
+                                self.split_dragging = false;
+                                self.cursor_manager.set_default();
+                                self.ws.ui_root.set_split_handle_idle();
+                                // Width/ratio are captured at save time from
+                                // the live UI layout (save_viewport_state) —
+                                // a write here would be clobbered by the next
+                                // content snapshot clone of local_project.
+                            } else if self.ws.ui_root.inspector_resize_dragging {
+                                self.ws.ui_root.end_inspector_resize();
+                            } else {
+                                self.ws.ui_root.pointer_event(
+                                    self.cursor_pos,
+                                    PointerAction::Up,
+                                    self.time_since_start,
+                                );
+                            }
+                        }
+                    }
+                }
+                MouseButton::Right => {
+                    if state == ElementState::Pressed {
+                        self.ws.ui_root.right_click(self.cursor_pos);
+                    }
+                }
+                _ => {}
+            }
+        } else if button == MouseButton::Left && state == ElementState::Pressed {
+            // Double-click on the output window toggles a dedicated
+            // borderless presentation window instead of mutating the
+            // existing titled window in place.
+            const DOUBLE_CLICK_MS: u128 = 300;
+            let now = std::time::Instant::now();
+            let is_double = self
+                .output_last_click
+                .map(|t| now.duration_since(t).as_millis() < DOUBLE_CLICK_MS)
+                .unwrap_or(false);
+
+            if is_double {
+                self.output_last_click = None;
+                // Toggle fullscreen by resizing the existing window in place.
+                // Do NOT destroy/recreate — that disrupts the CVDisplayLink
+                // cadence and tears the output.
+                if let Some(ws) = self.window_registry.get_mut(&window_id)
+                    && let WindowRole::Output {
+                        ref mut presentation,
+                        ..
+                    } = ws.role
+                {
+                    let new_presentation = !*presentation;
+                    *presentation = new_presentation;
+
+                    if new_presentation {
+                        // → Fullscreen: save frame, expand to monitor
+                        let outer = ws.window.outer_position().unwrap_or_default();
+                        let inner = ws.window.inner_size();
+                        self.output_saved_frame = Some([
+                            outer.x as f64,
+                            outer.y as f64,
+                            inner.width as f64,
+                            inner.height as f64,
+                        ]);
+                        if let Some(monitor) = ws.window.current_monitor() {
+                            let mon_pos = monitor.position();
+                            let mon_size = monitor.size();
+                            let scale = monitor.scale_factor();
+                            let lw = mon_size.width as f64 / scale;
+                            let lh = mon_size.height as f64 / scale;
+                            let lx = mon_pos.x as f64 / scale;
+                            let ly = mon_pos.y as f64 / scale;
+                            ws.window.set_decorations(false);
+                            let _ = ws
+                                .window
+                                .request_inner_size(winit::dpi::LogicalSize::new(lw, lh));
+                            ws.window
+                                .set_outer_position(winit::dpi::LogicalPosition::new(lx, ly));
+                        }
+                        // Set window level above menu bar (NSMainMenuWindowLevel=24)
+                        // so our borderless window covers it on this
+                        // display only — no global setPresentationOptions.
+                        #[cfg(target_os = "macos")]
+                        crate::edr_surface::set_window_level(&ws.window, 25);
+                    } else {
+                        // → Windowed: restore saved frame + menu bar
+                        ws.window.set_decorations(true);
+                        if let Some(frame) = self.output_saved_frame.take() {
+                            ws.window.set_outer_position(winit::dpi::PhysicalPosition::new(
+                                frame[0], frame[1],
+                            ));
+                            let _ = ws.window.request_inner_size(winit::dpi::PhysicalSize::new(
+                                frame[2], frame[3],
+                            ));
+                        }
+                        // Restore NSNormalWindowLevel=0 so the menu
+                        // bar is no longer covered.
+                        #[cfg(target_os = "macos")]
+                        crate::edr_surface::set_window_level(&ws.window, 0);
+                    }
+
+                    let new_size = ws.window.inner_size();
+                    self.send_content_cmd(ContentCommand::ResizeOutputSurface(
+                        new_size.width.max(1),
+                        new_size.height.max(1),
+                    ));
+                }
+            } else {
+                self.output_last_click = Some(now);
+            }
+        }
+    }
+
+    /// `MouseWheel` in the timeline/inspector window: perform-mode handoff, open-
+    /// dropdown scroll, then timeline zoom / pan / vertical scroll.
+    pub(crate) fn primary_mouse_wheel(&mut self, is_primary: bool, delta: MouseScrollDelta) {
+        if is_primary && self.perform_handle_mouse_wheel() {
+            return;
+        }
+        if is_primary {
+            // When the dropdown is open, route scroll to the UIEvent
+            // pipeline so the dropdown can handle it.
+            if self.ws.ui_root.dropdown.is_open() {
+                let (dx, dy) = normalize_scroll_delta(delta);
+                self.ws
+                    .ui_root
+                    .input
+                    .process_scroll(self.cursor_pos, Vec2::new(dx, dy));
+                return;
+            }
+            // Convert line deltas (mouse wheel notches) to logical pixels.
+            // Each downstream consumer applies its own speed constant on top.
+            let (dx, dy) = normalize_scroll_delta(delta);
+
+            let pos = self.cursor_pos;
+            let inspector_rect = self.ws.ui_root.layout.inspector();
+            let tracks_rect = self.ws.ui_root.layout.timeline_tracks();
+
+            if inspector_rect.contains(pos) {
+                // Scroll the inspector panel — full rebuild (inspector is static)
+                self.ws.ui_root.inspector.handle_scroll_at(dy, pos.x);
+                self.needs_rebuild = true;
+            } else if tracks_rect.contains(pos) {
+                if self.modifiers.alt {
+                    // Alt + scroll Y → zoom (step through zoom levels)
+                    // Always anchor on the playhead, not the mouse cursor.
+                    let playhead_beat = self.content_state.current_beat.as_f32();
+                    let current_ppb = self.ws.ui_root.viewport.pixels_per_beat();
+                    let playhead_px = self
+                        .ws
+                        .ui_root
+                        .viewport
+                        .beat_to_pixel(manifold_core::Beats::from_f32(playhead_beat));
+                    let anchor_x = (playhead_px - tracks_rect.x).clamp(0.0, tracks_rect.width);
+                    let levels = &manifold_ui::color::ZOOM_LEVELS;
+                    let current_idx = levels
+                        .iter()
+                        .position(|&l| (l - current_ppb).abs() < 0.01)
+                        .unwrap_or_else(|| {
+                            levels
+                                .iter()
+                                .enumerate()
+                                .min_by(|(_, a), (_, b)| {
+                                    (*a - current_ppb)
+                                        .abs()
+                                        .partial_cmp(&(*b - current_ppb).abs())
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                                .map(|(i, _)| i)
+                                .unwrap_or(0)
+                        });
+                    let new_idx = if dy > 0.0 {
+                        current_idx.saturating_add(1).min(levels.len() - 1)
+                    } else {
+                        current_idx.saturating_sub(1)
+                    };
+                    if new_idx != current_idx {
+                        let new_ppb = levels[new_idx];
+                        // Anchor: keep the playhead at the same screen X
+                        let new_scroll = playhead_beat - anchor_x / new_ppb;
+                        self.ws.ui_root.viewport.set_zoom(new_ppb);
+                        self.ws.ui_root.viewport.set_scroll(
+                            new_scroll.max(0.0),
+                            self.ws.ui_root.viewport.scroll_y_px(),
+                        );
+                        self.scroll_dirty.zoom = true;
+                    }
+                } else if self.modifiers.shift {
+                    // Shift + scroll Y → horizontal pan
+                    let ppb = self.ws.ui_root.viewport.pixels_per_beat();
+                    let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
+                    let new_x =
+                        (self.ws.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
+                    if self
+                        .ws
+                        .ui_root
+                        .viewport
+                        .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px())
+                    {
+                        self.scroll_dirty.scroll_x = true;
+                    }
+                } else {
+                    // Plain scroll → vertical track scroll
+                    let new_y = (self.ws.ui_root.viewport.scroll_y_px() - dy).max(0.0);
+                    if self.ws.ui_root.viewport.set_scroll(
+                        self.ws.ui_root.viewport.scroll_x_beats().as_f32(),
+                        new_y,
+                    ) {
+                        // Sync layer headers with viewport vertical scroll
+                        self.ws
+                            .ui_root
+                            .layer_headers
+                            .set_scroll_y(self.ws.ui_root.viewport.scroll_y_px());
+                        self.scroll_dirty.scroll_y = true;
+                    }
+                }
+                // Native horizontal scroll (trackpad two-finger swipe)
+                if dx.abs() > 0.01 && !self.modifiers.alt {
+                    let ppb = self.ws.ui_root.viewport.pixels_per_beat();
+                    let beat_delta = dx * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
+                    let new_x =
+                        (self.ws.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
+                    if self
+                        .ws
+                        .ui_root
+                        .viewport
+                        .set_scroll(new_x, self.ws.ui_root.viewport.scroll_y_px())
+                    {
+                        self.scroll_dirty.scroll_x = true;
+                    }
+                }
+            }
+        }
+    }
+
     /// `CursorMoved` in the editor window: update the canvas cursor + popovers,
     /// and forward into the editor UITree only when the cursor is in a margin
     /// (palette / sidebar) or the node picker is open.
@@ -805,5 +1287,233 @@ impl Application {
             ed.offscreen_dirty = true;
         }
         let _ = scale_factor;
+    }
+
+    /// `KeyboardInput` (a `Pressed` key) for any window. This is the one keyboard
+    /// owner: perform-mode handoff, then the editor's keyboard ([`Self::
+    /// editor_keyboard_input`], called unconditionally because its leading
+    /// popover-editing block is ungated), then the open-editor chord, then the
+    /// primary window's text-input + `InputHandler` shortcuts + file ops + the
+    /// UI-forward. Each `return` ends the keystroke; ordering is exactly the old
+    /// `window_event` arm's, by focused window.
+    pub(crate) fn input_keyboard(
+        &mut self,
+        is_primary: bool,
+        is_graph_editor: bool,
+        logical_key: Key,
+    ) {
+        if is_primary && self.perform_handle_key(&logical_key) {
+            return;
+        }
+        // Editor-window keyboard handling — popover/canvas text-field
+        // editing, node-picker filter, graph text fields, node delete,
+        // scope nav, and the editor shortcuts. Called unconditionally
+        // because the leading popover-editing block is ungated (its
+        // `is_editing` guard only fires in the editor); the rest gate on
+        // `is_graph_editor`.
+        if self.editor_keyboard_input(is_graph_editor, logical_key.clone()) {
+            return;
+        }
+        // Cmd+Shift+G — open the node-graph editor window.
+        // App-level shortcut, fires before text input or UI
+        // forwarding so it's always available regardless of
+        // focus.
+        if is_primary
+            && self.modifiers.command
+            && self.modifiers.shift
+            && let winit::keyboard::Key::Character(c) = &logical_key
+            && c.eq_ignore_ascii_case("g")
+        {
+            self.pending_open_graph_editor = true;
+            return;
+        }
+        // App-level shortcuts (handled before UI forwarding)
+        let mut consumed = false;
+        let data_version_before = self.content_state.data_version;
+        if is_primary {
+            // Text input mode: intercept all keys for text editing
+            if self.text_input.active {
+                match &logical_key {
+                    Key::Named(NamedKey::Escape) => {
+                        self.text_input.cancel();
+                        consumed = true;
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        if self.text_input.multiline && self.modifiers.shift {
+                            self.text_input.insert_char('\n');
+                        } else {
+                            let (field, text) = self.text_input.commit();
+                            self.handle_text_input_commit(field, &text);
+                        }
+                        consumed = true;
+                    }
+                    Key::Named(NamedKey::Backspace) => {
+                        self.text_input.backspace();
+                        consumed = true;
+                    }
+                    Key::Named(NamedKey::Delete) => {
+                        self.text_input.delete();
+                        consumed = true;
+                    }
+                    Key::Named(NamedKey::ArrowLeft) => {
+                        self.text_input.move_left();
+                        consumed = true;
+                    }
+                    Key::Named(NamedKey::ArrowRight) => {
+                        self.text_input.move_right();
+                        consumed = true;
+                    }
+                    Key::Named(NamedKey::Space) => {
+                        self.text_input.insert_char(' ');
+                        consumed = true;
+                    }
+                    Key::Character(c) => {
+                        // Cmd+A / Ctrl+A → select all
+                        if c == "a" && self.modifiers.command {
+                            self.text_input.select_all_text();
+                        } else {
+                            for ch in c.chars() {
+                                self.text_input.insert_char(ch);
+                            }
+                        }
+                        consumed = true;
+                    }
+                    _ => {
+                        consumed = true;
+                    } // Suppress all other keys
+                }
+                // Reactive search: push filter on every keystroke
+                if consumed
+                    && self.text_input.field == crate::text_input::TextInputField::SearchFilter
+                {
+                    self.ws
+                        .ui_root
+                        .browser_popup
+                        .set_filter(self.text_input.text.trim().to_string());
+                    self.needs_rebuild = true;
+                }
+                // Skip normal shortcut processing when text input consumed the key
+                if consumed {
+                    return;
+                }
+            }
+            // ── Shortcut dispatch via InputHandler ──
+            // Port of Unity InputHandler.HandleKeyboardInput().
+            // All viewport access goes through the TimelineInputHost trait.
+            if !consumed && let Some(content_tx) = self.content_tx.as_ref() {
+                let mut host = crate::input_host::AppInputHost {
+                    project: &mut self.local_project,
+                    content_tx,
+                    content_state: &self.content_state,
+                    ui_root: &mut self.ws.ui_root,
+                    selection: &mut self.selection,
+                    active_layer: &mut self.active_layer_id,
+                    needs_rebuild: &mut self.needs_rebuild,
+                    needs_structural_sync: &mut self.needs_structural_sync,
+                    scroll_dirty: &mut self.scroll_dirty,
+                    current_project_path: &self.current_project_path,
+                    has_output_window: self.window_registry.has_output_window(),
+                    pending_close_output: &mut self.pending_close_output,
+                    pending_export: &mut self.pending_export,
+                    effect_clipboard: &mut self.effect_clipboard,
+                };
+                if self
+                    .input_handler
+                    .handle_keyboard_input(&logical_key, self.modifiers, &mut host)
+                {
+                    consumed = true;
+                }
+            }
+
+            // File operations: Save/Open/New require rfd dialogs and window
+            // handles not available to AppInputHost. InputHandler returns false
+            // for these, so they fall through here.
+            if !consumed {
+                let m = self.modifiers;
+                match &logical_key {
+                    // ── Save: Cmd+S ──
+                    Key::Character(c) if c.as_str() == "s" && m.is_command_only() => {
+                        self.save_project();
+                        consumed = true;
+                    }
+                    // ── Open: Cmd+O ──
+                    Key::Character(c) if c.as_str() == "o" && m.is_command_only() => {
+                        self.open_project();
+                        consumed = true;
+                    }
+                    // ── Import Video: Cmd+I ──
+                    Key::Character(c) if c.as_str() == "i" && m.is_command_only() => {
+                        self.import_video_clip();
+                        consumed = true;
+                    }
+                    // ── New: Cmd+N ──
+                    Key::Character(c) if c.as_str() == "n" && m.is_command_only() => {
+                        let project = Self::create_default_project();
+                        self.local_project = project.clone();
+                        self.suppress_snapshot_until = self.content_state.data_version + 1;
+                        self.suppress_snapshot_set_at = self.frame_count;
+                        self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
+                        self.send_content_cmd(ContentCommand::SetProject);
+                        self.selection.clear_selection();
+                        self.active_layer_id = self
+                            .local_project
+                            .timeline
+                            .layers
+                            .first()
+                            .map(|l| l.layer_id.clone());
+                        self.needs_rebuild = true;
+                        log::info!("New project created");
+                        consumed = true;
+                    }
+
+                    _ => {}
+                }
+            } // end if !consumed (file operations)
+        } // end if is_primary
+
+        // All other shortcuts handled by InputHandler → AppInputHost.
+
+        // If any keyboard shortcut mutated project data, trigger structural sync
+        if self.content_state.data_version != data_version_before {
+            self.needs_structural_sync = true;
+            self.needs_rebuild = true;
+        }
+
+        // Forward to UI input system (unless consumed by app shortcut)
+        if is_primary
+            && !consumed
+            && let Some(ui_key) = Self::convert_key(&logical_key)
+        {
+            self.ws.ui_root.key_event(ui_key, self.modifiers);
+        }
+
+        // Output window: Escape no longer closes it — during a live
+        // show an accidental Escape would black out the audience.
+        // Close via the UI Monitor button instead.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::dpi::PhysicalPosition;
+
+    // Pins the scroll-normalization rule the three former call sites (primary
+    // scroll, open-dropdown scroll, editor zoom) now share. A regression here
+    // would silently change wheel speed in one window but not the other — the
+    // exact "two parallel loops" drift Phase 7 removed.
+    #[test]
+    fn line_delta_scales_by_notch_pixels() {
+        let (dx, dy) = normalize_scroll_delta(MouseScrollDelta::LineDelta(2.0, -3.0));
+        assert_eq!(dx, 2.0 * LINE_DELTA_PX);
+        assert_eq!(dy, -3.0 * LINE_DELTA_PX);
+    }
+
+    #[test]
+    fn pixel_delta_passes_through() {
+        let (dx, dy) =
+            normalize_scroll_delta(MouseScrollDelta::PixelDelta(PhysicalPosition::new(7.5, -4.25)));
+        assert_eq!(dx, 7.5);
+        assert_eq!(dy, -4.25);
     }
 }

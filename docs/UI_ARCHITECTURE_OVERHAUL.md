@@ -14,25 +14,32 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phases 0–5 + 8 COMPLETE (2026-06-23); Phases 6–7 remain (each its
+> **Status: Phases 0–5 + 7 + 8 COMPLETE (2026-06-23); only Phase 6 remains (its
 > own chat, scoped in §13).** Phase 2 (Chrome API), Phase 3 (Timeline API),
-> Phase 4 (Canvas API), Phase 5 (layering inversion), and **Phase 8 (relocate the
-> graph canvas into `manifold-ui`)** all landed behaviour-preserving, tests +
-> clippy green — see each phase's sub-design doc (`CHROME_API_DESIGN`,
-> `TIMELINE_API_DESIGN`, `CANVAS_API_DESIGN`, `UI_LAYERING_INVERSION`) and the §13
-> checklist. **Phase 5** moved `manifold-ui` to UI-local events + view-data (the
-> app maps them to engine commands via `ui_translate.rs`) so the crate compiles
-> with no `manifold-core` dependency — it depends only on the new zero-dep
-> `manifold-foundation`. That *unblocked* three deeper moves earlier phases
-> deferred to it (Phases 6–8, each independent, its own chat, scoped in §13):
-> generalise `IntentRegistry` off `PanelAction` (6), one shared input owner for
-> the editor window (7), relocate the graph canvas out of `manifold-app` (8).
-> **Phase 8 is now done** — the 4,334-line `graph_canvas/` + its mapping popover
-> moved into `manifold-ui` reading a UI-local `graph_view` snapshot (the app
-> translates the renderer's via `ui_translate.rs`) and painting through a new
-> `Painter` trait the renderer impls for `UIRenderer`; the canvas no longer
-> depends on `manifold-renderer`. **Phases 6 and 7 are the remaining follow-ons.**
-> The Phase-2b-era status below is kept as history.
+> Phase 4 (Canvas API), Phase 5 (layering inversion), **Phase 7 (one shared input
+> owner)**, and **Phase 8 (relocate the graph canvas into `manifold-ui`)** all
+> landed behaviour-preserving, tests + clippy green — see each phase's sub-design
+> doc (`CHROME_API_DESIGN`, `TIMELINE_API_DESIGN`, `CANVAS_API_DESIGN`,
+> `UI_LAYERING_INVERSION`) and the §13 checklist. **Phase 5** moved `manifold-ui`
+> to UI-local events + view-data (the app maps them to engine commands via
+> `ui_translate.rs`) so the crate compiles with no `manifold-core` dependency — it
+> depends only on the new zero-dep `manifold-foundation`. That *unblocked* three
+> deeper moves earlier phases deferred to it (Phases 6–8, each independent, its
+> own chat, scoped in §13): generalise `IntentRegistry` off `PanelAction` (6), one
+> shared input owner for the editor window (7), relocate the graph canvas out of
+> `manifold-app` (8). **Phase 7 is now done** — `editor_input.rs` became
+> `window_input.rs`, the single owner both windows route input through:
+> `window_event`'s pointer/wheel/keyboard arms are one delegation each into
+> `input_*` dispatchers, the ~614 inlined primary-window input lines moved beside
+> the `editor_*` bodies, and the line-delta→pixel scroll rule + physical→logical
+> cursor projection are now shared helpers (the canvas stays immediate-mode and
+> the three text-input keyboard policies stay window-specific by design — see §13
+> Phase 7). **Phase 8 is also done** — the 4,334-line `graph_canvas/` + its
+> mapping popover moved into `manifold-ui` reading a UI-local `graph_view`
+> snapshot (the app translates the renderer's via `ui_translate.rs`) and painting
+> through a new `Painter` trait the renderer impls for `UIRenderer`; the canvas no
+> longer depends on `manifold-renderer`. **Phase 6 is the one remaining
+> follow-on.** The Phase-2b-era status below is kept as history.
 >
 > **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 panels fully migrated; **3 of
 > the 4 heavyweights chrome-staged** (`param_card` frame + generator header,
@@ -902,16 +909,45 @@ pass (see §0).
   with registered intents). _Done when:_ the sidebar resolves clicks through the
   registry and emits `GraphEditCommand`, with no behavioural change.
 
-### Phase 7 — One shared input owner for the editor window (was Canvas-API 4.6)
-> Medium. 4.6 already folded the editor event loop into `editor_input.rs` (807
-> lines of per-event handlers — `editor_cursor_moved`/`editor_mouse_input`/…); the
-> remaining literal unification with the main window's `UIInputSystem` /
-> `process_events` is a real refactor. Interaction-drift is the risk — verify hard.
-- [ ] **7.1** Route the editor window through the main window's
-  `UIInputSystem`/`process_events` path; collapse the per-event `editor_*`
-  handlers into the shared gesture→action core. _Done when:_ both windows share
-  one input owner and editor interaction (drag, box-select, pan/zoom, right-click,
-  keyboard) is unchanged.
+### Phase 7 — One shared input owner for the editor window — **COMPLETE (2026-06-23)** (was Canvas-API 4.6)
+> 4.6 folded the editor event loop into `editor_input.rs`; Phase 7 went the rest
+> of the way to **one owner for both windows**. `editor_input.rs` is now
+> `window_input.rs`: the single module every window's pointer / wheel / keyboard
+> input flows through. `App::window_event` is a thin router — its four input arms
+> are one delegation each into `input_cursor_moved` / `input_mouse_input` /
+> `input_mouse_wheel` / `input_keyboard`, and the `is_graph_editor` / `is_primary`
+> branching that used to be smeared across the match now lives in those
+> dispatchers. The primary window's ~614 inlined input lines moved out of
+> `window_event` into `primary_*` methods beside the `editor_*` ones, so neither
+> window has a private input policy anymore. Behaviour-preserving: every moved
+> body is verbatim; `cargo test -p manifold-app` (55, incl. two new scroll tests)
+> + `cargo clippy -p manifold-app --tests -- -D warnings` green.
+- [x] **7.1** Route both windows through one input owner; collapse the per-event
+  `editor_*` handlers into the shared core. **DONE 2026-06-23.**
+  - **One owner module.** `editor_input.rs` → `window_input.rs` (git mv, history
+    kept). It holds the `input_*` dispatchers (the single entry per winit event),
+    the relocated `primary_*` bodies, and the `editor_*` bodies — every window's
+    input dispatch in one place. `window_event`'s input arms are one line each.
+  - **Genuinely-shared core, not just co-location.** `UIInputSystem`
+    (`ui_root.input`) was already the shared gesture machine both windows use;
+    Phase 7 added `normalize_scroll_delta` (the line-delta→pixel rule the primary
+    scroll, the open-dropdown scroll, and the editor zoom all triplicated — now
+    one fn, unit-tested) and `logical_cursor` (physical→logical, shared by the
+    primary cursor track and the editor zoom anchor).
+  - **Deliberately NOT forced into one path** (the same boundary §5.4 / §11 draw):
+    (1) the **canvas stays immediate-mode** — it is not routed through
+    `UIInputSystem`/`UITree`; forcing it would drop middle-button pan and the
+    box-select/drag semantics the tree-gesture model can't express. (2) The three
+    keyboard **text-input `match` blocks** (search field / WGSL code field /
+    mapping-popover field) stay window-specific: they have genuinely different
+    Enter (shift vs `!command` inserts newline), Escape (cancel vs cancel +
+    clear-search), and `typing`-gating policy, and all already delegate to the
+    same `TextInput` methods — the real shared core. Merging the policy matches
+    would be a behaviour change, not a dedup. The literal single
+    `process_events` for both windows is not achievable while the canvas's
+    dispatch surfaces (canvas, card, popovers) live on `Application` rather than
+    `UIRoot`; routing them there is a deeper move than Phase 7's input-owner
+    unification and is not required by the done-when.
 
 ### Phase 8 — Relocate the graph canvas out of `manifold-app` — **COMPLETE (2026-06-23)** (was Canvas-API 4.2)
 > The 4,334-line `graph_canvas/` + its `mapping_popover` now live in

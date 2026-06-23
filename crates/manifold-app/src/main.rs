@@ -16,7 +16,6 @@ mod dialog_path_memory;
 #[cfg(target_os = "macos")]
 mod display_link;
 mod editing_host;
-mod editor_input;
 mod edr_surface;
 mod frame_timer;
 // The graph canvas + its mapping popover moved into `manifold-ui` (Phase 8 of
@@ -39,6 +38,7 @@ mod ui_bridge;
 mod ui_root;
 mod ui_translate;
 mod user_prefs;
+mod window_input;
 mod window_registry;
 mod workspace;
 
