@@ -661,10 +661,15 @@ impl InspectorCompositePanel {
             PressedTarget::MasterChrome | PressedTarget::MasterEffect(_) => {
                 self.last_effect_tab = InspectorTab::Master;
             }
-            PressedTarget::LayerChrome | PressedTarget::LayerEffect(_) => {
+            // The generator card is part of the layer scope (it sits in the
+            // layer section, above the layer effects), so it resolves to the
+            // Layer tab — not Clip.
+            PressedTarget::LayerChrome
+            | PressedTarget::LayerEffect(_)
+            | PressedTarget::GenParam => {
                 self.last_effect_tab = InspectorTab::Layer;
             }
-            PressedTarget::ClipChrome | PressedTarget::GenParam => {
+            PressedTarget::ClipChrome => {
                 self.last_effect_tab = InspectorTab::Clip;
             }
             PressedTarget::Macros | PressedTarget::Scrollbar => {}
@@ -919,7 +924,9 @@ impl InspectorCompositePanel {
             }
         }
 
-        // Layer section
+        // Layer section. The generator card lives here (built, sized, and
+        // range-registered under `layer_visible`), so it must be hit-tested
+        // here too — not under the clip section, which is a different tab.
         if self.layer_visible {
             if in_range(
                 idx,
@@ -927,6 +934,11 @@ impl InspectorCompositePanel {
                 self.layer_chrome.node_count(),
             ) {
                 return Some(PressedTarget::LayerChrome);
+            }
+            if let Some(ref gp) = self.gen_params
+                && in_range(idx, gp.first_node(), gp.node_count())
+            {
+                return Some(PressedTarget::GenParam);
             }
             for (i, card) in self.layer_effects.iter().enumerate() {
                 if in_range(idx, card.first_node(), card.node_count()) {
@@ -936,19 +948,14 @@ impl InspectorCompositePanel {
         }
 
         // Clip section
-        if self.clip_visible {
-            if in_range(
+        if self.clip_visible
+            && in_range(
                 idx,
                 self.clip_chrome.first_node(),
                 self.clip_chrome.node_count(),
-            ) {
-                return Some(PressedTarget::ClipChrome);
-            }
-            if let Some(ref gp) = self.gen_params
-                && in_range(idx, gp.first_node(), gp.node_count())
-            {
-                return Some(PressedTarget::GenParam);
-            }
+            )
+        {
+            return Some(PressedTarget::ClipChrome);
         }
 
         None
@@ -2100,6 +2107,54 @@ mod tests {
             !subs.contains(&stale),
             "stale master_chrome range {stale:?} must not leak into sub_region_ranges: {subs:?}"
         );
+    }
+
+    /// Regression: the generator card is built, sized, and range-registered
+    /// under the LAYER section (gated on `layer_visible`), but `find_target_for_node`
+    /// used to hit-test it under the CLIP section (gated on `clip_visible`). Because
+    /// the inspector tabs are mutually exclusive, the Layer tab leaves
+    /// `clip_visible == false`, so every click / pointer-down / drag on the gen card
+    /// resolved to `None` and was dropped — the card rendered but was completely
+    /// dead. Every node in the gen card's range must resolve to `GenParam`.
+    #[test]
+    fn gen_card_is_hit_testable_on_layer_tab() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 500.0;
+            l
+        };
+
+        let mut text_gen = mk_config(ParamCardKind::Generator, "Text", 3);
+        text_gen.string_params = vec![super::super::param_card::ParamCardStringInfo {
+            name: "Text".into(),
+            key: "text".into(),
+            value: "HELLO".into(),
+            use_dropdown: false,
+        }];
+        panel.configure_gen_params(Some(&text_gen), None);
+        // Layer tab active → layer_visible, clip_visible == false (the regression
+        // case: no clip selected, so the clip section is gone entirely).
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        tree.clear();
+        panel.build(&mut tree, &layout);
+
+        let gp = panel.gen_params.as_ref().expect("gen card configured");
+        let (first, count) = (gp.first_node(), gp.node_count());
+        assert!(count > 0, "gen card should have built nodes");
+
+        for i in first..first + count {
+            let target = panel.find_target_for_node(NodeId(i as u32));
+            assert!(
+                matches!(target, Some(PressedTarget::GenParam)),
+                "gen-card node {i} must route to GenParam on the Layer tab, got {target:?}",
+            );
+        }
     }
 
     /// The full-panel render path (`render_tree_range` → `traverse_range`) walks
