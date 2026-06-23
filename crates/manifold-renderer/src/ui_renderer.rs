@@ -1209,6 +1209,61 @@ impl TextMeasure for UIRenderer {
     }
 }
 
+/// Implement the immediate-mode `Painter` for `UIRenderer` so the graph canvas
+/// and its mapping popover (now in `manifold-ui`) can paint through
+/// `&mut dyn Painter` without depending on `manifold-renderer`. Each method
+/// forwards to the inherent `UIRenderer` method of the same name (method-call
+/// syntax resolves to the inherent one, so there is no recursion); `Depth` maps
+/// 1:1 since the two share the same tier constants. See
+/// `crates/manifold-ui/src/draw.rs`.
+impl manifold_ui::draw::Painter for UIRenderer {
+    fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
+        self.draw_rect(x, y, w, h, color);
+    }
+
+    fn draw_rounded_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4], corner: f32) {
+        self.draw_rounded_rect(x, y, w, h, color, corner);
+    }
+
+    fn draw_bordered_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: [f32; 4],
+        corner: f32,
+        border_width: f32,
+        border_color: [f32; 4],
+    ) {
+        self.draw_bordered_rect(x, y, w, h, color, corner, border_width, border_color);
+    }
+
+    fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, color: [f32; 4]) {
+        self.draw_line(x0, y0, x1, y1, thickness, color);
+    }
+
+    fn draw_text(&mut self, x: f32, y: f32, text: &str, font_size: f32, color: [u8; 4]) {
+        self.draw_text(x, y, text, font_size, color);
+    }
+
+    fn push_immediate_clip(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.push_immediate_clip(x, y, w, h);
+    }
+
+    fn pop_immediate_clip(&mut self) {
+        self.pop_immediate_clip();
+    }
+
+    fn push_depth(&mut self, depth: manifold_ui::draw::Depth) {
+        self.push_depth(Depth(depth.0));
+    }
+
+    fn pop_depth(&mut self) {
+        self.pop_depth();
+    }
+}
+
 // ── Geometry helpers ────────────────────────────────────────────────────────
 
 /// Intersect two rects (for nested clipping).
