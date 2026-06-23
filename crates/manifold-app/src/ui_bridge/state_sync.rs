@@ -1273,12 +1273,16 @@ pub fn sync_inspector_data(
             .pinned_scope()
             .filter(|t| tabs.contains(t))
             .unwrap_or_else(|| {
-                if has_clip {
-                    InspectorTab::Clip
-                } else if layer_is_group {
+                // Default to the LAYER scope on any selection — the layer (its
+                // generator, effects, macros) is the persistent thing you tune,
+                // so landing there is less jarring than the per-clip view. The
+                // Clip tab is still one click away whenever a clip is selected.
+                if layer_is_group {
                     InspectorTab::Group
                 } else if layer.is_some() {
                     InspectorTab::Layer
+                } else if has_clip {
+                    InspectorTab::Clip
                 } else {
                     InspectorTab::Master
                 }

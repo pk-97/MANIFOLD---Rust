@@ -701,9 +701,13 @@ impl Panel for TimelineViewportPanel {
             return;
         }
 
-        // Viewport areas
-        let layer_ctrl_w = color::LAYER_CONTROLS_WIDTH;
-        let tracks_w = body.width - layer_ctrl_w;
+        // Viewport areas. The tracks occupy the timeline body to the RIGHT of the
+        // layer controls; `layout.timeline_tracks()` is the single source for that
+        // x/width split (the layer headers read the matching
+        // `layout.layer_controls()`), so the two cannot drift apart.
+        let tracks = layout.timeline_tracks();
+        let tracks_x = tracks.x;
+        let tracks_w = tracks.width;
         if tracks_w <= 0.0 {
             self.node_count = 0;
             return;
@@ -714,15 +718,15 @@ impl Panel for TimelineViewportPanel {
         // viewport and `layer_header` read it, so the layer controls cannot drift
         // out of vertical alignment with their tracks (nothing recomputes it).
         let header_h = layout.track_header_height();
-        self.viewport_rect = Rect::new(body.x, body.y, tracks_w, body.height);
+        self.viewport_rect = Rect::new(tracks_x, body.y, tracks_w, body.height);
         self.ruler_rect = Rect::new(
-            body.x,
+            tracks_x,
             body.y + color::OVERVIEW_STRIP_HEIGHT,
             tracks_w,
             RULER_HEIGHT,
         );
         self.tracks_rect = Rect::new(
-            body.x,
+            tracks_x,
             body.y + header_h,
             tracks_w,
             (body.height - header_h).max(0.0),
@@ -744,7 +748,7 @@ impl Panel for TimelineViewportPanel {
         // Overview strip at top of viewport.
         // From Unity OverviewStripPanel.cs — mini-timeline with clip miniatures,
         // viewport indicator, playhead, and export range markers.
-        self.overview_rect = Rect::new(body.x, body.y, tracks_w, color::OVERVIEW_STRIP_HEIGHT);
+        self.overview_rect = Rect::new(tracks_x, body.y, tracks_w, color::OVERVIEW_STRIP_HEIGHT);
         let overview_rect = self.overview_rect;
         // Interactive button so hit_test returns valid ID for click/drag scrubbing.
         // Clip miniatures (non-interactive panels) are added on top but fall through

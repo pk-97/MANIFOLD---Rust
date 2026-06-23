@@ -51,7 +51,8 @@ impl ScreenLayout {
     // ── Derived ─────────────────────────────────────────────────────
 
     /// X offset for the central content (right of the left effect browser).
-    /// The inspector now lives on the RIGHT, so it no longer pushes content.
+    /// The inspector is a full-height column on the RIGHT, so it bounds the
+    /// content's width (see [`content_area`]) but not its left edge.
     pub fn content_left(&self) -> f32 {
         self.effect_browser_width
     }
@@ -63,15 +64,19 @@ impl ScreenLayout {
         Rect::new(0.0, 0.0, self.screen_width, self.transport_bar_height)
     }
 
-    /// Full area below the transport bar — full width, down to the bottom edge.
-    /// Parent of the top region (preview + inspector) and the timeline.
+    /// Working area below the transport bar and LEFT of the full-height
+    /// inspector — parent of the top region (preview) and the timeline. The
+    /// inspector is a full-height right column, so it bounds this on the right
+    /// (and the effect browser, if any, on the left).
     pub fn content_area(&self) -> Rect {
         let top = self.transport_bar_height;
-        Rect::new(0.0, top, self.screen_width, self.screen_height - top)
+        let left = self.effect_browser_width;
+        let w = (self.screen_width - left - self.inspector_width).max(0.0);
+        Rect::new(left, top, w, self.screen_height - top)
     }
 
-    /// Top region: below the transport bar, above the timeline, full width.
-    /// Holds the preview (left) and the inspector (right).
+    /// Top region: below the transport bar, above the timeline, content width
+    /// (left of the full-height inspector). Holds the preview.
     pub fn top_region(&self) -> Rect {
         let content = self.content_area();
         let timeline_h = content.height * self.timeline_split_ratio;
@@ -79,12 +84,11 @@ impl ScreenLayout {
         Rect::new(content.x, content.y, content.width, h)
     }
 
-    /// Video container (preview): top-LEFT of the top region, left of the inspector.
+    /// Video container (preview): the whole top region — content width (the
+    /// inspector is a separate full-height column to the right, and the timeline
+    /// sits below).
     pub fn video_area(&self) -> Rect {
-        let tr = self.top_region();
-        let left = self.effect_browser_width;
-        let w = (tr.width - left - self.inspector_width).max(0.0);
-        Rect::new(left, tr.y, w, tr.height)
+        self.top_region()
     }
 
     /// Full timeline region: lower portion of content area.
@@ -122,15 +126,16 @@ impl ScreenLayout {
         Rect::new(tl.x, top, tl.width, h)
     }
 
-    /// Inspector sidebar: top-RIGHT of the top region — right of the preview,
-    /// sitting above the full-width timeline (no longer full-height on the left).
+    /// Inspector sidebar: a FULL-HEIGHT column against the right edge, from just
+    /// below the transport bar down to the bottom of the screen. The preview and
+    /// the timeline share the content area to its left.
     pub fn inspector(&self) -> Rect {
         if self.inspector_width <= 0.0 {
             return Rect::ZERO;
         }
-        let tr = self.top_region();
+        let top = self.transport_bar_height;
         let x = self.screen_width - self.inspector_width;
-        Rect::new(x, tr.y, self.inspector_width, tr.height)
+        Rect::new(x, top, self.inspector_width, self.screen_height - top)
     }
 
     /// Effect browser: leftmost sidebar.
@@ -198,18 +203,25 @@ impl ScreenLayout {
         color::STEM_LANE_HEIGHT
     }
 
-    /// Layer controls region: right side of timeline body.
+    /// Layer controls region: LEFT side of timeline body — the track headers
+    /// anchor each row (DAW/NLE convention), with the tracks scrolling to their
+    /// right.
     pub fn layer_controls(&self) -> Rect {
         let body = self.timeline_body();
         let w = color::LAYER_CONTROLS_WIDTH;
-        Rect::new(body.x + body.width - w, body.y, w, body.height)
+        Rect::new(body.x, body.y, w, body.height)
     }
 
-    /// Timeline tracks region: timeline body minus layer controls.
+    /// Timeline tracks region: timeline body to the RIGHT of the layer controls.
     pub fn timeline_tracks(&self) -> Rect {
         let body = self.timeline_body();
         let ctrl_w = color::LAYER_CONTROLS_WIDTH;
-        Rect::new(body.x, body.y, body.width - ctrl_w, body.height)
+        Rect::new(
+            body.x + ctrl_w,
+            body.y,
+            (body.width - ctrl_w).max(0.0),
+            body.height,
+        )
     }
 
     /// Split handle rect: the boundary between video area and timeline area.
@@ -273,12 +285,12 @@ mod tests {
     }
 
     #[test]
-    fn content_area_below_transport() {
+    fn content_area_below_transport_left_of_inspector() {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let content = layout.content_area();
-        assert_eq!(content.x, 0.0); // full width — inspector no longer offsets it
+        assert_eq!(content.x, 0.0); // no effect browser
         assert_eq!(content.y, 36.0); // below transport
-        assert_eq!(content.width, 1920.0);
+        assert_eq!(content.width, 1420.0); // 1920 - 500 inspector
         assert_eq!(content.height, 1044.0); // 1080 - 36
     }
 
@@ -310,15 +322,19 @@ mod tests {
     }
 
     #[test]
-    fn inspector_on_right_top() {
+    fn inspector_is_full_height_right_column() {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let inspector = layout.inspector();
         assert_eq!(inspector.width, 500.0);
         assert_eq!(inspector.x, 1420.0); // 1920 - 500, against the right edge
-        assert_eq!(inspector.y, 36.0); // top of the top region (below transport)
+        assert_eq!(inspector.y, 36.0); // below transport
+        assert_eq!(inspector.height, 1044.0); // full height down to the bottom
         // Preview sits directly left of the inspector, no gap.
         let video = layout.video_area();
         assert!((video.x + video.width - inspector.x).abs() < 0.1);
+        // The timeline also stops at the inspector's left edge.
+        let timeline = layout.timeline_area();
+        assert!((timeline.x + timeline.width - inspector.x).abs() < 0.1);
     }
 
     #[test]
@@ -330,16 +346,32 @@ mod tests {
     }
 
     #[test]
-    fn inspector_shrinks_preview_not_timeline() {
+    fn inspector_shrinks_both_preview_and_timeline() {
         let mut layout = ScreenLayout::new(1920.0, 1080.0);
-        // Timeline spans full width regardless of inspector.
+        // Both preview and timeline are content-width, left of the inspector.
         let tl = layout.timeline_area();
         assert_eq!(tl.x, 0.0);
-        assert_eq!(tl.width, 1920.0);
-        // Widening the inspector shrinks the preview, never the timeline.
+        assert_eq!(tl.width, 1420.0); // 1920 - 500 inspector
+        // Widening the full-height inspector shrinks the content column —
+        // preview and timeline both narrow together.
         let preview_before = layout.video_area().width;
+        let timeline_before = layout.timeline_area().width;
         layout.inspector_width = 600.0;
         assert!(layout.video_area().width < preview_before);
-        assert_eq!(layout.timeline_area().width, 1920.0);
+        assert!(layout.timeline_area().width < timeline_before);
+    }
+
+    #[test]
+    fn layer_controls_on_left_tracks_on_right() {
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let body = layout.timeline_body();
+        let controls = layout.layer_controls();
+        let tracks = layout.timeline_tracks();
+        // Controls anchor the left edge of the timeline body.
+        assert_eq!(controls.x, body.x);
+        assert_eq!(controls.width, color::LAYER_CONTROLS_WIDTH);
+        // Tracks begin immediately to the right of the controls, no gap/overlap.
+        assert!((tracks.x - (controls.x + controls.width)).abs() < 0.1);
+        assert!((tracks.x + tracks.width - (body.x + body.width)).abs() < 0.1);
     }
 }
