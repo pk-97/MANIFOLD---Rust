@@ -400,6 +400,9 @@ struct SegmentResult {
 }
 
 struct SegmentWorker {
+    // Only sent on from the production (`not(test)`) path; in test builds the
+    // worker is never fed, so the field reads as dead there.
+    #[cfg_attr(test, allow(dead_code))]
     tx: std::sync::mpsc::Sender<SegmentJob>,
     /// Drained only by the content thread ([`pump_segment_results`]); the
     /// Mutex exists solely because `OnceLock` requires `Sync` — it is never
@@ -495,26 +498,30 @@ pub fn fused_segment_view_for(
     #[cfg(test)]
     {
         let _ = newly_queued;
-        return SegmentLookup::Pending;
+        SegmentLookup::Pending
     }
+    // Each cfg branch is a self-contained tail expression, so neither build
+    // sees the other's `Pending` as unreachable code.
     #[cfg(not(test))]
-    if newly_queued {
-        let job = SegmentJob {
-            key,
-            cards: cards.iter().map(|(d, v)| ((*d).clone(), *v)).collect(),
-        };
-        if segment_worker().tx.send(job).is_err() {
-            // Worker died (startup panic) — refuse rather than wedge Pending.
-            SEGMENT_PENDING.with(|p| {
-                p.borrow_mut().remove(&key);
-            });
-            SEGMENT_CACHE.with(|c| {
-                c.borrow_mut().insert(key, None);
-            });
-            return SegmentLookup::Refused;
+    {
+        if newly_queued {
+            let job = SegmentJob {
+                key,
+                cards: cards.iter().map(|(d, v)| ((*d).clone(), *v)).collect(),
+            };
+            if segment_worker().tx.send(job).is_err() {
+                // Worker died (startup panic) — refuse rather than wedge Pending.
+                SEGMENT_PENDING.with(|p| {
+                    p.borrow_mut().remove(&key);
+                });
+                SEGMENT_CACHE.with(|c| {
+                    c.borrow_mut().insert(key, None);
+                });
+                return SegmentLookup::Refused;
+            }
         }
+        SegmentLookup::Pending
     }
-    SegmentLookup::Pending
 }
 
 /// Compile one segment: concat the member cards, fuse the seam-spanning regions

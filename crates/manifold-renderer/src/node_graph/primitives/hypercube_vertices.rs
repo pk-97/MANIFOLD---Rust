@@ -370,11 +370,10 @@ mod gpu_tests {
         let verts = run_hypercube_vertices(4.0);
         for (i, v) in verts.iter().enumerate() {
             let p = v.position;
-            for c in 0..4 {
+            for (c, comp) in p.iter().enumerate() {
                 assert!(
-                    (p[c].abs() - 0.125).abs() < 1e-6,
-                    "vertex {i} component {c} = {} (want ±0.125)",
-                    p[c],
+                    (comp.abs() - 0.125).abs() < 1e-6,
+                    "vertex {i} component {c} = {comp} (want ±0.125)",
                 );
             }
             let mag = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2] + p[3] * p[3]).sqrt();
