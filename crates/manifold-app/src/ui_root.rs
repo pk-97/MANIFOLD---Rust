@@ -553,10 +553,11 @@ impl UIRoot {
             ));
         }
 
-        // Inspector resize handle — thin vertical bar at inspector right edge.
+        // Inspector resize handle — thin vertical bar at the inspector's LEFT
+        // edge (the inspector now sits on the right, preview to its left).
         {
-            let edge_x = self.layout.content_left() - 2.0;
             let insp = self.layout.inspector();
+            let edge_x = insp.x - 2.0;
             self.inspector_handle_id = Some(self.tree.add_panel(
                 None,
                 edge_x,
@@ -1949,10 +1950,12 @@ impl UIRoot {
     const INSPECTOR_MIN_W: f32 = manifold_ui::color::MIN_INSPECTOR_WIDTH;
     const INSPECTOR_MAX_W: f32 = manifold_ui::color::MAX_INSPECTOR_WIDTH;
 
-    /// Returns true if pos is near the inspector right edge (resize handle).
+    /// Returns true if pos is near the inspector's LEFT edge (resize handle).
     pub fn is_near_inspector_edge(&self, pos: Vec2) -> bool {
-        let edge_x = self.layout.content_left();
-        (pos.x - edge_x).abs() < Self::RESIZE_EDGE_PX && pos.y >= self.layout.inspector().y
+        let insp = self.layout.inspector();
+        (pos.x - insp.x).abs() < Self::RESIZE_EDGE_PX
+            && pos.y >= insp.y
+            && pos.y <= insp.y + insp.height
     }
 
     /// Begin an inspector resize drag.
@@ -1967,8 +1970,10 @@ impl UIRoot {
         if !self.inspector_resize_dragging {
             return false;
         }
+        // Inspector is anchored to the right edge, so dragging its left handle
+        // LEFT (negative delta) widens it.
         let delta = x - self.inspector_drag_start_x;
-        let new_width = (self.inspector_drag_start_width + delta)
+        let new_width = (self.inspector_drag_start_width - delta)
             .clamp(Self::INSPECTOR_MIN_W, Self::INSPECTOR_MAX_W);
         if (new_width - self.layout.inspector_width).abs() > 1.0 {
             self.layout.inspector_width = new_width;
