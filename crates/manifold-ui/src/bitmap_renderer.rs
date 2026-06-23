@@ -9,7 +9,7 @@ use crate::color;
 use crate::node::Color32;
 use crate::panels::viewport::{SelectionRegion, ViewportClip};
 #[cfg(test)]
-use manifold_core::{Beats, ClipId};
+use manifold_foundation::{Beats, ClipId};
 
 // ── Constants (Unity LayerBitmapRenderer lines 47-48) ──
 

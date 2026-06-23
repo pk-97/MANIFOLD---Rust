@@ -21,7 +21,7 @@ use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
 use crate::tree::UITree;
-use manifold_core::macro_bank::MACRO_COUNT;
+use crate::types::MACRO_COUNT;
 
 // ── Layout constants ───────────────────────────────────────────────
 

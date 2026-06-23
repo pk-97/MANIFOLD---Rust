@@ -21,7 +21,7 @@ use manifold_ui::node::{Color32, FontWeight, Rect, UINodeType, Vec2};
 use manifold_ui::text::TextMeasure;
 use manifold_ui::tree::UITree;
 use manifold_ui::{GraphParamTarget, PanelAction};
-use manifold_core::effects::ParamId;
+use manifold_foundation::ParamId;
 
 // ── Layout constants (param-card feel) ──────────────────────────────
 const CARD_PAD: f32 = 4.0;

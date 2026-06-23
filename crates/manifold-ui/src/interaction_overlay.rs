@@ -7,7 +7,7 @@
 //! purely rendering + coordinate conversion. The overlay calls through the
 //! `TimelineEditingHost` trait for operations that need engine/editing access.
 
-use manifold_core::{Beats, ClipId, Seconds};
+use manifold_foundation::{Beats, ClipId, Seconds};
 use std::collections::HashSet;
 
 use crate::clip_hit_tester::{ClipHitResult, ClipHitTester, HitRegion};

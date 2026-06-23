@@ -11,8 +11,8 @@ use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::scroll_container::{SCROLLBAR_W, ScrollContainer, ScrollbarStyle};
 use crate::tree::UITree;
-use manifold_core::EffectId;
-use manifold_core::LayerId;
+use manifold_foundation::EffectId;
+use manifold_foundation::LayerId;
 use std::collections::HashSet;
 
 // ── Layout constants ────────────────────────────────────────────

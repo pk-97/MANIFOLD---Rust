@@ -8,12 +8,12 @@
 //! generator target + catalog default + scope at the boundary (exactly as the
 //! old `PanelAction` arms did — the action stays intentionally context-free).
 //!
-//! Payloads carry `manifold_core` types (`NodeId`, `ParamConvert`,
-//! `SerializedParamValue`) — the same ones the old `PanelAction` variants
-//! carried; the layering win is moving them off the shared god-enum onto the
-//! graph surface's *own* focused type. This is also the first piece of Phase
-//! 5's layering inversion applied early: a UI-local command the app maps to an
-//! engine command.
+//! Payloads carry the shared `NodeId` (from `manifold-foundation`) and UI-local
+//! mirrors (`crate::types::ParamConvert` / `SerializedParamValue`) — the app
+//! translates them to the engine types at the boundary. The layering win is
+//! moving them off the shared god-enum onto the graph surface's *own* focused
+//! type. Part of Phase 5's layering inversion: a UI-local command the app maps
+//! to an engine command.
 //!
 //! Deliberately NOT here (see `docs/CANVAS_API_DESIGN.md` §3): the
 //! `EffectMapping*` binding-edit family (a different command family —
@@ -78,7 +78,7 @@ pub enum GraphEditCommand {
     SetGraphNodeParam {
         node_id: u32,
         param_name: String,
-        new_value: manifold_core::effect_graph_def::SerializedParamValue,
+        new_value: crate::types::SerializedParamValue,
     },
     /// Open a native folder picker for a path-like String param and set it to
     /// the chosen path. Emitted by the inspector's Browse button.
@@ -136,7 +136,7 @@ pub enum GraphEditCommand {
     /// `convert`/`value_labels` are the inner-node ParamDef metadata captured
     /// at panel-build time (kept off the renderer registry on the click path).
     ToggleNodeParamExpose {
-        node_id: manifold_core::NodeId,
+        node_id: manifold_foundation::NodeId,
         node_handle: String,
         inner_param: String,
         expose: bool,
@@ -144,7 +144,7 @@ pub enum GraphEditCommand {
         min: f32,
         max: f32,
         default_value: f32,
-        convert: manifold_core::effects::ParamConvert,
+        convert: crate::types::ParamConvert,
         is_angle: bool,
         value_labels: Vec<String>,
     },

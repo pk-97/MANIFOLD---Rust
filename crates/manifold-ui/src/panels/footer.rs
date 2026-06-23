@@ -12,7 +12,7 @@ use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
-use manifold_core::TonemapCurve;
+use crate::types::TonemapCurve;
 
 // ── Layout constants (from FooterLayout.cs) ────────────────────────
 

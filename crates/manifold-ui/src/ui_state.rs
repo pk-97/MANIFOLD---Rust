@@ -4,8 +4,8 @@
 // Mechanical 1:1 port of Unity UIState.cs.
 // Replaces the former app::SelectionState + app::ClipDragState.
 
-use manifold_core::selection::SelectionRegion;
-use manifold_core::{Beats, ClipId, LayerId, MarkerId};
+use crate::view::SelectionRegion;
+use manifold_foundation::{Beats, ClipId, LayerId, MarkerId};
 use std::collections::HashSet;
 
 pub struct UIState {
@@ -160,7 +160,7 @@ impl UIState {
         end_beat: Beats,
         start_layer: i32,
         end_layer: i32,
-        layers: &[manifold_core::layer::Layer],
+        layers: &[crate::view::UiLayer],
     ) {
         self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;
@@ -196,7 +196,7 @@ impl UIState {
         end_beat: Beats,
         start_layer: i32,
         end_layer: i32,
-        layers: &[manifold_core::layer::Layer],
+        layers: &[crate::view::UiLayer],
     ) {
         self.clear_layer_selection();
         self.insert_cursor_beat = None;
@@ -330,7 +330,7 @@ impl UIState {
     pub fn select_layer_range(
         &mut self,
         target_layer_id: &str,
-        layers: &[manifold_core::layer::Layer],
+        layers: &[crate::view::UiLayer],
     ) {
         self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;

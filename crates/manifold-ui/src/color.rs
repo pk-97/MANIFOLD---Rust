@@ -369,8 +369,8 @@ pub const MARKER_LABEL_HEIGHT: f32 = 12.0;
 pub const MARKER_LABEL_BG: Color32 = Color32::new(40, 40, 40, 200);
 pub const MARKER_SELECTED_OUTLINE: Color32 = Color32::new(255, 255, 255, 200);
 
-pub fn marker_color_to_color32(color: manifold_core::MarkerColor) -> Color32 {
-    use manifold_core::MarkerColor;
+pub fn marker_color_to_color32(color: crate::types::MarkerColor) -> Color32 {
+    use crate::types::MarkerColor;
     match color {
         MarkerColor::Red => MARKER_RED,
         MarkerColor::Orange => MARKER_ORANGE,

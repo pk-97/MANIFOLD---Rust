@@ -15,7 +15,7 @@ use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
 use crate::tree::UITree;
-use manifold_core::{Beats, Seconds};
+use manifold_foundation::{Beats, Seconds};
 
 // ── Layout constants (from ClipChromeBitmapPanel.cs) ──────────────
 

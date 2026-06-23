@@ -7,8 +7,8 @@ use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::snap;
 use crate::tree::UITree;
-use manifold_core::marker::TimelineMarker;
-use manifold_core::{Beats, ClipId, LayerId, MarkerId};
+use crate::view::UiMarker;
+use manifold_foundation::{Beats, ClipId, LayerId, MarkerId};
 
 // ── Layout constants ────────────────────────────────────────────
 
@@ -144,7 +144,7 @@ pub struct TimelineViewportPanel {
 
     // Timeline markers
     marker_groups: Vec<MarkerNodeGroup>,
-    markers: Vec<TimelineMarker>,
+    markers: Vec<UiMarker>,
     marker_line_cache: Vec<(f32, Color32)>,
     selected_marker_ids: Vec<MarkerId>,
     marker_node_ids: Vec<NodeId>,
@@ -334,7 +334,7 @@ impl TimelineViewportPanel {
 
     /// Rebuild the CoordinateMapper's Y-layout from layer data.
     /// Call this from app.rs when layers change (before build).
-    pub fn rebuild_mapper_layout(&mut self, layers: &[manifold_core::layer::Layer]) {
+    pub fn rebuild_mapper_layout(&mut self, layers: &[crate::view::UiLayer]) {
         self.mapper.rebuild_y_layout(layers);
     }
 
@@ -573,7 +573,7 @@ impl TimelineViewportPanel {
         self.hovered_clip_id = id;
     }
 
-    pub fn set_markers(&mut self, markers: Vec<TimelineMarker>) {
+    pub fn set_markers(&mut self, markers: Vec<UiMarker>) {
         self.marker_line_cache = markers
             .iter()
             .map(|m| {
@@ -587,7 +587,7 @@ impl TimelineViewportPanel {
 
     /// Check if the provided markers differ from the cached set.
     /// Uses length + first/last beat as a fast proxy to avoid full comparison.
-    pub fn markers_stale(&self, source: &[TimelineMarker]) -> bool {
+    pub fn markers_stale(&self, source: &[UiMarker]) -> bool {
         if self.markers.len() != source.len() {
             return true;
         }
@@ -949,15 +949,13 @@ mod tests {
 
     #[test]
     fn marker_hit_test_matches_drawn_flag() {
-        use manifold_core::marker::TimelineMarker;
-
         let mut panel = TimelineViewportPanel::new();
         panel.tracks_rect = Rect::new(100.0, 200.0, 1000.0, 500.0);
         panel.ruler_rect = Rect::new(100.0, 160.0, 1000.0, 40.0);
         panel.set_zoom(120.0);
         panel.scroll_x_beats = Beats(2.0);
 
-        let marker = TimelineMarker::new(Beats::from_f32(6.0));
+        let marker = UiMarker::new(Beats::from_f32(6.0));
         let marker_id = marker.id.clone();
         panel.set_markers(vec![marker]);
 

@@ -7,7 +7,7 @@
 //! Used on the driver toggle button to show the active waveform shape.
 
 use crate::node::Color32;
-use manifold_core::DriverWaveform;
+use crate::types::DriverWaveform;
 use std::sync::OnceLock;
 
 // ── Constants (DriverWaveformIcons.cs lines 13-17) ──

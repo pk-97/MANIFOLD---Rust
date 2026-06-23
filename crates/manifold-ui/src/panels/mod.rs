@@ -27,7 +27,11 @@ use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
 use crate::node::Color32;
 use crate::tree::UITree;
-use manifold_core::{AudioSendId, ClipId, LayerId};
+use crate::types::{
+    AbletonMacroAddress, AudioBand, AudioDeviceRef, AudioFeature, MacroCurve, MidiTriggerMode,
+    PresetTypeId, TonemapCurve,
+};
+use manifold_foundation::{AudioSendId, Beats, ClipId, LayerId, ParamId};
 pub use viewport::HitRegion;
 
 /// A stable, distinct identity color for an audio send, derived from its id so
@@ -203,7 +207,7 @@ pub enum PanelAction {
     AudioSendClicked(usize),
     /// Route an audio layer to a send (layer index, send id). `None` clears the
     /// layer's send routing (reverts the previously-fed send to a capture source).
-    SetLayerAudioSend(usize, Option<manifold_core::AudioSendId>),
+    SetLayerAudioSend(usize, Option<AudioSendId>),
     /// Audio-layer Gain slider drag begins (layer index) — snapshot for undo.
     AudioGainSnapshot(usize),
     /// Audio-layer Gain slider dragged to a new dB value (layer index, dB).
@@ -259,9 +263,9 @@ pub enum PanelAction {
     /// Audio clip: open instrument N's target-layer dropdown (anchored to trigger).
     ClipDetectLayerClicked(usize),
     /// Audio clip: set the quantize grid (None = off; Some(beats) = on at step).
-    ClipDetectSetQuantize(Option<manifold_core::Beats>),
+    ClipDetectSetQuantize(Option<Beats>),
     /// Audio clip: route instrument N to a layer (None = Auto / by-name).
-    ClipDetectSetLayer(usize, Option<manifold_core::LayerId>),
+    ClipDetectSetLayer(usize, Option<LayerId>),
     ClipLoopToggle,
     ClipSlipSnapshot,
     ClipSlipChanged(f32),
@@ -285,7 +289,7 @@ pub enum PanelAction {
     /// `param_id`; the host resolves its current range/scale/offset/invert/curve
     /// from the edited effect and anchors the drawer beside the row. Editor-only:
     /// the perform inspector never emits it (the chevron is Author-context).
-    OpenCardMapping(manifold_core::effects::ParamId),
+    OpenCardMapping(ParamId),
     // ── Per-effect-param actions ────────────────────────────────────
     //
     // Every variant in this block carries `(fx_idx: usize, param_id: ParamId)`
@@ -305,76 +309,76 @@ pub enum PanelAction {
     // action can't be emitted or dispatched for the wrong kind. The
     // dispatch matches `Effect(fx_idx)` and `Generator` as separate arms,
     // so the two bodies stay distinct where they genuinely differ.
-    ParamSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
-    ParamChanged(GraphParamTarget, manifold_core::effects::ParamId, f32),
-    ParamCommit(GraphParamTarget, manifold_core::effects::ParamId),
-    ParamRightClick(GraphParamTarget, manifold_core::effects::ParamId, f32), // target, param_id, default_value
-    DriverToggle(GraphParamTarget, manifold_core::effects::ParamId),
-    EnvelopeToggle(GraphParamTarget, manifold_core::effects::ParamId),
-    DriverConfig(GraphParamTarget, manifold_core::effects::ParamId, DriverConfigAction),
+    ParamSnapshot(GraphParamTarget, ParamId),
+    ParamChanged(GraphParamTarget, ParamId, f32),
+    ParamCommit(GraphParamTarget, ParamId),
+    ParamRightClick(GraphParamTarget, ParamId, f32), // target, param_id, default_value
+    DriverToggle(GraphParamTarget, ParamId),
+    EnvelopeToggle(GraphParamTarget, ParamId),
+    DriverConfig(GraphParamTarget, ParamId, DriverConfigAction),
     /// Arm/disarm audio modulation on a param. Arming assigns the project's
     /// first audio send with a default feature; re-clicking toggles enabled.
     /// No-op when no sends exist (the audio button is inert until the Audio
     /// Setup defines one). See `docs/AUDIO_MODULATION_DESIGN.md`.
-    AudioModToggle(GraphParamTarget, manifold_core::effects::ParamId),
+    AudioModToggle(GraphParamTarget, ParamId),
     /// Set an audio modulation's source: which send + which feature.
     AudioModSetSource(
         GraphParamTarget,
-        manifold_core::effects::ParamId,
-        manifold_core::AudioSendId,
-        manifold_core::AudioFeature,
+        ParamId,
+        AudioSendId,
+        AudioFeature,
     ),
     /// Remove the audio modulation from a param.
-    AudioModRemove(GraphParamTarget, manifold_core::effects::ParamId),
+    AudioModRemove(GraphParamTarget, ParamId),
     /// Toggle an audio modulation's invert flag (`AudioModShape::invert`) — the
     /// drawer's "Inv" button (loud → low).
-    AudioModSetInvert(GraphParamTarget, manifold_core::effects::ParamId),
+    AudioModSetInvert(GraphParamTarget, ParamId),
     /// Toggle an audio modulation's rate-of-change flag
     /// (`AudioModShape::rate_of_change`) — the drawer's "d/dt" button; the
     /// feature drives on its motion rather than its level.
-    AudioModSetRateOfChange(GraphParamTarget, manifold_core::effects::ParamId),
+    AudioModSetRateOfChange(GraphParamTarget, ParamId),
     /// Snapshot an audio mod's shape before a drawer-slider drag (undo start).
-    AudioModShapeSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    AudioModShapeSnapshot(GraphParamTarget, ParamId),
     /// Live-edit one shape scalar during a drawer-slider drag (no undo entry).
     AudioModShapeParamChanged(
         GraphParamTarget,
-        manifold_core::effects::ParamId,
+        ParamId,
         AudioShapeParam,
         f32,
     ),
     /// Commit a shape-slider drag as one undo step (drag end).
-    AudioModShapeCommit(GraphParamTarget, manifold_core::effects::ParamId),
+    AudioModShapeCommit(GraphParamTarget, ParamId),
 
     // ── Audio Setup panel (project-level send routing) ──
     /// Open the input-device dropdown (anchored to the clicked trigger).
     AudioSetupDeviceClicked,
     /// Open a send's input-channel dropdown (anchored to the clicked trigger).
-    AudioSendChannelClicked(manifold_core::AudioSendId),
+    AudioSendChannelClicked(AudioSendId),
     /// Set (or clear) the capture input device. `None` = system default input.
-    AudioSetDevice(Option<manifold_core::AudioDeviceRef>),
+    AudioSetDevice(Option<AudioDeviceRef>),
     /// Add a new empty send.
     AudioAddSend,
     /// Remove a send by id.
-    AudioRemoveSend(manifold_core::AudioSendId),
+    AudioRemoveSend(AudioSendId),
     /// Rename a send (commit with the new label).
-    AudioRenameSend(manifold_core::AudioSendId, String),
+    AudioRenameSend(AudioSendId, String),
     /// Begin inline editing of a send's label (clicked its name).
-    AudioSendLabelClicked(manifold_core::AudioSendId),
+    AudioSendLabelClicked(AudioSendId),
     /// Set a send's input channels (downmixed to mono for analysis).
-    AudioSetSendChannels(manifold_core::AudioSendId, Vec<u16>),
+    AudioSetSendChannels(AudioSendId, Vec<u16>),
     /// Toggle a send between mono (one channel) and stereo (a channel pair).
-    AudioSendStereoToggle(manifold_core::AudioSendId),
+    AudioSendStereoToggle(AudioSendId),
     /// Open the read-only routings dropdown for a send — a non-editable list of
     /// where the send is fed from (the capture device + each feeding layer). The
     /// host opens a dropdown anchored to the source chip; nothing is selectable.
-    AudioSendRoutingsClicked(manifold_core::AudioSendId),
+    AudioSendRoutingsClicked(AudioSendId),
     /// Step a send's input gain trim by a dB delta (the panel's −/＋ buttons).
     /// The host reads the send's current gain, applies the delta, clamps, and
     /// commits — so the project stays the single source of truth.
-    AudioSendGainStep(manifold_core::AudioSendId, f32),
+    AudioSendGainStep(AudioSendId, f32),
     /// Step the selected send's pre-analysis noise floor by a dB delta (the
     /// spectrogram's Floor −/＋). Off ⇄ engaged is handled host-side.
-    AudioSendFloorStep(manifold_core::AudioSendId, f32),
+    AudioSendFloorStep(AudioSendId, f32),
     /// Begin dragging a band-divider line on the spectrogram — snapshot the
     /// current crossovers so the commit records one undo step.
     AudioCrossoverDragBegin,
@@ -388,41 +392,41 @@ pub enum PanelAction {
     /// fires one-shot clips on a layer. The band identifies the route within the
     /// selected send.
     /// Toggle a band's trigger route on/off (creates it if absent).
-    AudioTriggerToggled(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand),
+    AudioTriggerToggled(AudioSendId, AudioBand),
     /// Step a band route's sensitivity by a delta (the row's −/＋ buttons). The
     /// host reads the current value, applies + clamps, and commits.
-    AudioTriggerSensitivityStep(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand, f32),
+    AudioTriggerSensitivityStep(AudioSendId, AudioBand, f32),
     /// Scale a band route's one-shot length by a factor (the row's −/＋ buttons,
     /// musical halve/double). The host reads the current length, applies + clamps.
-    AudioTriggerLengthStep(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand, f32),
+    AudioTriggerLengthStep(AudioSendId, AudioBand, f32),
     /// Open a band route's target-layer dropdown (anchored to the clicked trigger).
-    AudioTriggerLayerClicked(manifold_core::AudioSendId, manifold_core::audio_mod::AudioBand),
+    AudioTriggerLayerClicked(AudioSendId, AudioBand),
     /// Set a band route's target layer (`None` = auto-route by send name).
     AudioTriggerSetLayer(
-        manifold_core::AudioSendId,
-        manifold_core::audio_mod::AudioBand,
-        Option<manifold_core::LayerId>,
+        AudioSendId,
+        AudioBand,
+        Option<LayerId>,
     ),
     /// A modulator output sub-range handle moved during a drag. `TrimKind`
     /// selects which modulator (driver / Ableton / audio) — the three formerly
     /// parallel `*TrimChanged` variants are one path now.
-    TrimChanged(TrimKind, GraphParamTarget, manifold_core::effects::ParamId, f32, f32),
+    TrimChanged(TrimKind, GraphParamTarget, ParamId, f32, f32),
     /// Snapshot trim state before drag (for undo).
-    TrimSnapshot(TrimKind, GraphParamTarget, manifold_core::effects::ParamId),
+    TrimSnapshot(TrimKind, GraphParamTarget, ParamId),
     /// Commit trim drag (record undo command).
-    TrimCommit(TrimKind, GraphParamTarget, manifold_core::effects::ParamId),
+    TrimCommit(TrimKind, GraphParamTarget, ParamId),
     /// Envelope target (orange handle / `target_normalized`) changed.
-    TargetChanged(GraphParamTarget, manifold_core::effects::ParamId, f32),
+    TargetChanged(GraphParamTarget, ParamId, f32),
     /// Snapshot target before drag (for undo).
-    TargetSnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    TargetSnapshot(GraphParamTarget, ParamId),
     /// Commit target drag (record undo command).
-    TargetCommit(GraphParamTarget, manifold_core::effects::ParamId),
+    TargetCommit(GraphParamTarget, ParamId),
     /// Envelope decay slider (`decay_beats`) changed.
-    EnvDecayChanged(GraphParamTarget, manifold_core::effects::ParamId, f32),
+    EnvDecayChanged(GraphParamTarget, ParamId, f32),
     /// Snapshot decay before drag (for undo).
-    EnvDecaySnapshot(GraphParamTarget, manifold_core::effects::ParamId),
+    EnvDecaySnapshot(GraphParamTarget, ParamId),
     /// Commit decay drag (record undo command).
-    EnvDecayCommit(GraphParamTarget, manifold_core::effects::ParamId),
+    EnvDecayCommit(GraphParamTarget, ParamId),
     /// Reorder effect card: move from_index to to_index.
     /// Unity: EffectsListBitmapPanel.onCardReorder.
     EffectReorder(usize, usize),
@@ -479,7 +483,7 @@ pub enum PanelAction {
     /// Set the binding's response curve. One-shot edit.
     EffectMappingCurve {
         binding_id: String,
-        curve: manifold_core::macro_bank::MacroCurve,
+        curve: MacroCurve,
     },
     /// Snapshot the binding's pre-drag (scale, offset) before a
     /// scale/offset scrub, so the matching commit records one undo entry
@@ -517,12 +521,12 @@ pub enum PanelAction {
     // target-carrying `ParamSnapshot` … `TargetCommit` variants above. Only
     // these have no effect counterpart and stay generator-only.
     GenTypeClicked(Option<LayerId>), // layer_id
-    GenParamToggle(manifold_core::effects::ParamId),
+    GenParamToggle(ParamId),
     /// Outer-card click on a `is_trigger` param's button — increment the
     /// underlying monotonic counter by one. Same write path as a toggle
     /// (`ChangeGraphParamCommand` on the generator), but `+1` instead of a
     /// `0↔1` flip. Wired in [`crate::panels::param_card`].
-    GenParamFire(manifold_core::effects::ParamId),
+    GenParamFire(ParamId),
 
     // Generator string params (per-clip text, etc.)
     GenStringParamClicked(usize), // string_param_index — open text input
@@ -572,26 +576,26 @@ pub enum PanelAction {
     // Macro mapping (from context menu on param right-click). Param
     // is addressed by `ParamId`, macro slot by positional index
     // (macros are a fixed 8-slot bank).
-    MapParamToMacro(GraphParamTarget, manifold_core::effects::ParamId, usize), // gpt, param_id, macro_idx
+    MapParamToMacro(GraphParamTarget, ParamId, usize), // gpt, param_id, macro_idx
     UnmapMacro(usize, usize),                                                  // macro_idx, mapping_idx
     ClearMacroMappings(usize),                                                 // macro_idx
 
     // Param label right-click → opens "Map to Macro" / "Map from Ableton" context menu
-    ParamLabelRightClick(GraphParamTarget, manifold_core::effects::ParamId),
+    ParamLabelRightClick(GraphParamTarget, ParamId),
 
     // Ableton mapping (from context menu on param right-click). Map + unmap
     // both address the param by the unified `GraphParamTarget`; the dispatch
     // resolves the `AbletonMappingTarget` through the one shared helper.
     MapParamToAbleton(
         GraphParamTarget,
-        manifold_core::effects::ParamId,
-        manifold_core::ableton_mapping::AbletonMacroAddress,
+        ParamId,
+        AbletonMacroAddress,
     ), // gpt, param_id, address
-    UnmapParamAbleton(GraphParamTarget, manifold_core::effects::ParamId), // gpt, param_id
+    UnmapParamAbleton(GraphParamTarget, ParamId), // gpt, param_id
     /// Open the Ableton picker popup for a param (effect or generator).
-    OpenAbletonPickerForParam(GraphParamTarget, manifold_core::effects::ParamId), // gpt, param_id
+    OpenAbletonPickerForParam(GraphParamTarget, ParamId), // gpt, param_id
     /// Ableton mapping for macro slots.
-    MapMacroToAbleton(usize, manifold_core::ableton_mapping::AbletonMacroAddress),
+    MapMacroToAbleton(usize, AbletonMacroAddress),
     UnmapMacroAbleton(usize),
     OpenAbletonPickerForMacro(usize),
 
@@ -604,7 +608,7 @@ pub enum PanelAction {
     AbletonMacroTrimCommit(usize),                                        // slot_idx
 
     // Ableton config actions
-    AbletonInvertToggle(GraphParamTarget, manifold_core::effects::ParamId),
+    AbletonInvertToggle(GraphParamTarget, ParamId),
     AbletonMacroInvertToggle(usize),                             // slot_idx
 
     // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)
@@ -647,13 +651,13 @@ pub enum PanelAction {
     SetMidiNote(usize, i32),              // layer_index, note (0-127)
     SetMidiChannel(usize, i32),           // layer_index, channel (0-15 internal, displayed 1-16)
     SetMidiDevice(usize, Option<String>), // layer_index, device name (None = any)
-    SetMidiTriggerMode(usize, manifold_core::types::MidiTriggerMode),
+    SetMidiTriggerMode(usize, MidiTriggerMode),
     SetResolution(usize),           // preset index
     SetDisplayResolution(i32, i32), // direct width, height (no undo, matches Unity)
     SetRenderScale(f32),            // render scale: 1.0 (native), 0.75 (quality), 0.5 (performance)
-    SetTonemapCurve(manifold_core::TonemapCurve),
-    AddEffect(InspectorTab, manifold_core::PresetTypeId), // tab, preset type id
-    SetGenType(Option<LayerId>, manifold_core::PresetTypeId), // layer_id, preset type id
+    SetTonemapCurve(TonemapCurve),
+    AddEffect(InspectorTab, PresetTypeId), // tab, preset type id
+    SetGenType(Option<LayerId>, PresetTypeId), // layer_id, preset type id
     SetMidiClockDevice(i32),            // MIDI device index
 
     // Layer header right-click

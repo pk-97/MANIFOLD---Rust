@@ -5,7 +5,7 @@
 // - Magnetic snap finds nearest candidate within a pixel threshold
 // - Candidates include grid lines AND neighboring clip edges
 
-use manifold_core::Beats;
+use manifold_foundation::Beats;
 
 /// Threshold in pixels — snap engages within this distance.
 pub const SNAP_THRESHOLD_PX: f32 = 12.0;

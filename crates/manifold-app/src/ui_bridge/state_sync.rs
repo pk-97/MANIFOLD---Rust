@@ -431,7 +431,9 @@ pub fn push_state(
         ui.footer
             .set_fps_text(&format!("{:.0} FPS", project.settings.frame_rate));
         ui.footer.set_render_scale(project.settings.render_scale);
-        ui.footer.set_tonemap_curve(project.settings.tonemap_curve);
+        ui.footer.set_tonemap_curve(crate::ui_translate::tonemap_curve_to_ui(
+            project.settings.tonemap_curve,
+        ));
     }
 
     // Footer stats
@@ -460,9 +462,8 @@ pub fn push_state(
     // Region → viewport (sync from UIState so clearing via set_insert_cursor propagates)
     if selection.has_region() {
         let r = selection.get_region();
-        let (start_layer, end_layer) = r
-            .layer_index_range(&project.timeline.layers)
-            .unwrap_or((0, 0));
+        let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
+        let (start_layer, end_layer) = r.layer_index_range(&ui_layers).unwrap_or((0, 0));
         ui.viewport
             .set_selection_region(Some(manifold_ui::panels::viewport::SelectionRegion {
                 start_beat: r.start_beat,
@@ -583,7 +584,7 @@ pub fn push_state(
                     macro_name: m.address.macro_name.clone(),
                     track_name: m.address.track_name.clone(),
                     device_name: m.address.device_name.clone(),
-                    status: m.status,
+                    status: crate::ui_translate::ableton_mapping_status_to_ui(m.status),
                     inverted: m.inverted,
                 })
         })
@@ -745,7 +746,7 @@ pub fn push_state(
                     manifold_core::preset_type_registry::display_name(effect.effect_type()),
                 );
                 card.sync_enabled(tree, effect.enabled);
-                card.sync_values(tree, &effect.param_values);
+                card.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&effect.param_values));
             }
         }
 
@@ -761,7 +762,7 @@ pub fn push_state(
                         manifold_core::preset_type_registry::display_name(effect.effect_type()),
                     );
                     card.sync_enabled(tree, effect.enabled);
-                    card.sync_values(tree, &effect.param_values);
+                    card.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&effect.param_values));
                 }
             }
         }
@@ -776,7 +777,7 @@ pub fn push_state(
                 tree,
                 manifold_core::preset_type_registry::display_name(gp_state.generator_type()),
             );
-            gp.sync_values(tree, &gp_state.param_values);
+            gp.sync_values(tree, &crate::ui_translate::param_slots_to_ui(&gp_state.param_values));
         }
     }
 }
@@ -793,7 +794,8 @@ pub fn sync_project_data(
     {
         // Rebuild CoordinateMapper Y-layout FIRST so layer headers and viewport share
         // the same Y offsets. Unity: LayerHeaderPanel reads from CoordinateMapper.
-        ui.viewport.rebuild_mapper_layout(&project.timeline.layers);
+        ui.viewport
+            .rebuild_mapper_layout(&crate::ui_translate::layers_to_ui(&project.timeline.layers));
 
         // Layer data → LayerHeaderPanel (Y from mapper — matches viewport exactly)
         let layers: Vec<LayerInfo> = project
@@ -969,7 +971,8 @@ pub fn sync_project_data(
         ui.viewport.set_clips(viewport_clips);
 
         // Timeline markers → viewport
-        ui.viewport.set_markers(project.timeline.markers.clone());
+        ui.viewport
+            .set_markers(crate::ui_translate::markers_to_ui(&project.timeline.markers));
         ui.viewport
             .set_selected_marker_ids(selection.selected_marker_ids.iter().cloned().collect());
 
@@ -1047,9 +1050,11 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
         }
     }
     ui.viewport.set_clips(viewport_clips);
-    // Only sync markers when marker data has changed (avoids full clone on every drag frame).
-    if ui.viewport.markers_stale(&project.timeline.markers) {
-        ui.viewport.set_markers(project.timeline.markers.clone());
+    // Only sync markers when marker data has changed (avoids re-pushing on every
+    // drag frame). Markers are few (dozens), so building the UI view to compare is cheap.
+    let ui_markers = crate::ui_translate::markers_to_ui(&project.timeline.markers);
+    if ui.viewport.markers_stale(&ui_markers) {
+        ui.viewport.set_markers(ui_markers);
     }
 }
 
@@ -1204,8 +1209,15 @@ pub fn sync_inspector_data(
                 .then(|| "\u{26A0} Microphone access blocked — check System Settings".to_string())
         });
 
-        ui.audio_setup_panel
-            .configure(project.audio_setup.device.clone(), sends, status_warning);
+        ui.audio_setup_panel.configure(
+            project
+                .audio_setup
+                .device
+                .as_ref()
+                .map(crate::ui_translate::audio_device_ref_to_ui),
+            sends,
+            status_warning,
+        );
 
         // Candidate target layers for the trigger rows' layer dropdowns (every
         // non-group layer), so a fire can be pointed at any look.
@@ -1910,7 +1922,7 @@ fn preset_to_config(
                 macro_name: mapping.address.macro_name.clone(),
                 track_name: mapping.address.track_name.clone(),
                 device_name: mapping.address.device_name.clone(),
-                status: mapping.status,
+                status: crate::ui_translate::ableton_mapping_status_to_ui(mapping.status),
                 inverted: mapping.inverted,
             });
             let ableton_range = abl_mapping.map(|m| (m.range_min, m.range_max));

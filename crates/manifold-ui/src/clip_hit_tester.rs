@@ -7,7 +7,7 @@
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::hit::Span;
 use crate::panels::viewport::ViewportClip;
-use manifold_core::ClipId;
+use manifold_foundation::ClipId;
 
 // ── Data Types ──────────────────────────────────────────────────
 
@@ -178,7 +178,7 @@ mod tests {
     use super::*;
     use crate::coordinate_mapper::CoordinateMapper;
     use crate::node::Color32;
-    use manifold_core::Beats;
+    use manifold_foundation::Beats;
 
     fn make_mapper(ppb: f32, layer_heights: &[f32]) -> CoordinateMapper {
         let mut mapper = CoordinateMapper::new();

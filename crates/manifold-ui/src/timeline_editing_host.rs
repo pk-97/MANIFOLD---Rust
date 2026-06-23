@@ -12,8 +12,8 @@
 //! on manifold-editing.
 
 use crate::node::Vec2;
-use manifold_core::selection::SelectionRegion;
-use manifold_core::{Beats, ClipId, LayerId, Seconds};
+use crate::view::{SelectionRegion, UiLayer};
+use manifold_foundation::{Beats, ClipId, LayerId, Seconds};
 use std::collections::HashSet;
 
 /// Cursor shapes the overlay can request.
@@ -62,7 +62,7 @@ pub trait TimelineEditingHost {
     fn layer_count(&self) -> usize;
 
     /// Read-only access to the layer array (for populating region selection LayerIds).
-    fn layers(&self) -> &[manifold_core::layer::Layer];
+    fn layers(&self) -> &[UiLayer];
 
     /// Get the LayerId at a positional index (for resolving indices to stable IDs).
     fn layer_id_at_index(&self, index: usize) -> Option<LayerId>;

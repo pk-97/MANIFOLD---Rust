@@ -10,7 +10,6 @@ use manifold_core::{Beats, ClipId, LayerId, Seconds};
 use std::collections::HashSet;
 
 use manifold_core::clip::TimelineClip;
-use manifold_core::selection::SelectionRegion;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::service::EditingService;
 
@@ -20,6 +19,7 @@ use manifold_ui::panels::PanelAction;
 use manifold_ui::timeline_editing_host::{
     ClipRef, RegionSplitResult, TimelineCursor, TimelineEditingHost,
 };
+use manifold_ui::view::{SelectionRegion as UiSelectionRegion, UiLayer};
 
 /// Wrapper that implements TimelineEditingHost by borrowing Application fields.
 ///
@@ -51,6 +51,12 @@ pub struct AppEditingHost<'a> {
     /// PanelActions generated during overlay processing (e.g. right-click context menus).
     /// Drained by app.rs after the overlay event loop.
     pub pending_actions: Vec<PanelAction>,
+
+    /// UI-local snapshot of the layer list (Phase 5: the `TimelineEditingHost`
+    /// trait speaks UI view-models, not engine types). Built once per host
+    /// construction from `project.timeline.layers` — per-interaction, not
+    /// per-frame, and tiny (one entry per layer).
+    ui_layers: Vec<UiLayer>,
 }
 
 impl<'a> AppEditingHost<'a> {
@@ -66,6 +72,7 @@ impl<'a> AppEditingHost<'a> {
         invalidate_layers: &'a mut Vec<usize>,
         pre_drag_commands: &'a mut Vec<Box<dyn Command>>,
     ) -> Self {
+        let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
         Self {
             project,
             content_tx,
@@ -79,6 +86,7 @@ impl<'a> AppEditingHost<'a> {
             command_batch: Vec::new(),
             pre_drag_commands,
             pending_actions: Vec::new(),
+            ui_layers,
         }
     }
 }
@@ -92,8 +100,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             .unwrap_or(0)
     }
 
-    fn layers(&self) -> &[manifold_core::layer::Layer] {
-        &self.project.timeline.layers
+    fn layers(&self) -> &[UiLayer] {
+        &self.ui_layers
     }
 
     fn layer_id_at_index(&self, index: usize) -> Option<manifold_core::LayerId> {
@@ -403,12 +411,14 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Region-partial move ─────────────────────────────────────
 
-    fn split_clips_for_region_move(&mut self, region: &SelectionRegion) -> RegionSplitResult {
+    fn split_clips_for_region_move(&mut self, region: &UiSelectionRegion) -> RegionSplitResult {
         // Port of Unity EditingService.SplitClipsForRegionMove.
         // 1. Split clips at region boundaries (executed immediately)
         // 2. Store split commands in pre_drag_commands for composite undo
         //    (Unity: preDragSplitCommands, lines 69, 430-433)
         // 3. Return interior clips (the drag set)
+        let region = crate::ui_translate::selection_region_to_core(region);
+        let region = &region;
         let spb = self.get_seconds_per_beat();
 
         // Step 1: Build split commands (immutable borrow)

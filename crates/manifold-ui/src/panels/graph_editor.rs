@@ -36,8 +36,10 @@ use crate::color;
 use crate::input::UIEvent;
 use crate::node::*;
 use crate::tree::UITree;
-use manifold_core::effect_graph_def::SerializedParamValue;
-use manifold_core::effects::ParamConvert;
+use crate::types::{ParamConvert, SerializedParamValue};
+// The stable graph-node identity (engine `NodeId`), aliased to avoid colliding
+// with the UI tree's own `node::NodeId` (a `u32`) brought in via `node::*`.
+use manifold_foundation::NodeId as GraphNodeId;
 
 use crate::GraphEditCommand;
 
@@ -177,10 +179,10 @@ pub struct GraphEditorNodeView {
     /// app-side handler can build a `SetGraphNodeParamCommand` keyed
     /// on the same stable id the canvas uses for selection.
     pub runtime_node_id: u32,
-    /// Stable [`manifold_core::NodeId`] of the node — the addressing
+    /// Stable [`GraphNodeId`] of the node — the addressing
     /// identity the expose action stores, invariant under grouping.
     /// `Default` (empty) for anonymous boundary nodes.
-    pub node_id: manifold_core::NodeId,
+    pub node_id: GraphNodeId,
     /// Stable handle if the node was registered with one. `None` for
     /// anonymous boundary nodes (Source / FinalOutput) — those have no
     /// user-exposable params. Display / id-readability only.
@@ -276,7 +278,7 @@ enum RowState {
         node_runtime_id: u32,
         /// Stable graph-node id — the addressing identity the expose
         /// action stores.
-        node_id: manifold_core::NodeId,
+        node_id: GraphNodeId,
         node_handle: String,
         inner_param: String,
         label: String,
@@ -1902,7 +1904,7 @@ mod tests {
     fn snap_node_with_params(handle: Option<&str>) -> GraphEditorNodeView {
         GraphEditorNodeView {
             runtime_node_id: 42,
-            node_id: handle.map(manifold_core::NodeId::new).unwrap_or_default(),
+            node_id: handle.map(GraphNodeId::new).unwrap_or_default(),
             node_handle: handle.map(|h| h.to_string()),
             title: "UV Transform".to_string(),
             parameters: vec![
@@ -2274,7 +2276,7 @@ mod tests {
     fn snap_node_with_mixed_kinds() -> GraphEditorNodeView {
         GraphEditorNodeView {
             runtime_node_id: 7,
-            node_id: manifold_core::NodeId::new("uv_transform"),
+            node_id: GraphNodeId::new("uv_transform"),
             node_handle: Some("uv_transform".to_string()),
             title: "Transform".to_string(),
             parameters: vec![
@@ -2779,7 +2781,7 @@ mod tests {
     fn snap_node_with_color(initial: [f32; 4]) -> GraphEditorNodeView {
         GraphEditorNodeView {
             runtime_node_id: 9,
-            node_id: manifold_core::NodeId::new("tint"),
+            node_id: GraphNodeId::new("tint"),
             node_handle: Some("tint".to_string()),
             title: "Tint".to_string(),
             parameters: vec![GraphEditorParam {
@@ -2894,7 +2896,7 @@ mod tests {
     fn snap_node_with_string(name: &str, value: &str) -> GraphEditorNodeView {
         GraphEditorNodeView {
             runtime_node_id: 11,
-            node_id: manifold_core::NodeId::new("img"),
+            node_id: GraphNodeId::new("img"),
             node_handle: Some("img".to_string()),
             title: "Image Folder".to_string(),
             parameters: vec![GraphEditorParam {
@@ -3022,7 +3024,7 @@ mod tests {
         let cols = rows.first().map(|r| r.len()).unwrap_or(0);
         GraphEditorNodeView {
             runtime_node_id: 13,
-            node_id: manifold_core::NodeId::new("ramp"),
+            node_id: GraphNodeId::new("ramp"),
             node_handle: Some("ramp".to_string()),
             title: "Gradient Ramp".to_string(),
             parameters: vec![GraphEditorParam {

@@ -195,7 +195,8 @@ pub(super) fn dispatch_layer(
             {
                 if modifiers.shift {
                     // Shift+Click: range select from primary to target
-                    selection.select_layer_range(&layer_id, &project.timeline.layers);
+                    let ui_layers = crate::ui_translate::layers_to_ui(&project.timeline.layers);
+                    selection.select_layer_range(&layer_id, &ui_layers);
                 } else if modifiers.ctrl || modifiers.command {
                     // Cmd/Ctrl+Click: toggle layer in/out of selection
                     selection.toggle_layer_selection(layer_id);

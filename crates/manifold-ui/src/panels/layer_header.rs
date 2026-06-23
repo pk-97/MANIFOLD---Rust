@@ -6,8 +6,8 @@ use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::scroll_container::ScrollContainer;
 use crate::tree::UITree;
-use manifold_core::LayerId;
-use manifold_core::midi::note_number_to_name;
+use manifold_foundation::LayerId;
+use crate::types::note_number_to_name;
 
 // Stable keys for the host-owned top chrome (background + recording controls).
 const KEY_BG: u64 = 80_001;

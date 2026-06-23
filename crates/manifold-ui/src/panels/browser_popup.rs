@@ -14,7 +14,7 @@ use crate::node::Color32;
 use crate::node::*;
 use crate::scroll_container::ScrollContainer;
 use crate::tree::UITree;
-use manifold_core::LayerId;
+use manifold_foundation::LayerId;
 
 // ── Layout constants (from Unity BrowserPopupPanel.cs + BrowserPopupLayout.cs) ──
 
@@ -807,11 +807,11 @@ impl Overlay for BrowserPopupPanel {
                         let action = match mode {
                             BrowserPopupMode::Effect => PanelAction::AddEffect(
                                 tab,
-                                manifold_core::PresetTypeId::from_string(type_id),
+                                crate::types::PresetTypeId::from_string(type_id),
                             ),
                             BrowserPopupMode::Generator => PanelAction::SetGenType(
                                 layer_id,
-                                manifold_core::PresetTypeId::from_string(type_id),
+                                crate::types::PresetTypeId::from_string(type_id),
                             ),
                             // Node mode is editor-window only; never reached on
                             // the main-window overlay path.

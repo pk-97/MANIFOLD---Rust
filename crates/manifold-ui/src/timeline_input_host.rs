@@ -4,7 +4,7 @@
 //! Implemented by the app layer (WorkspaceController equivalent) as thin delegations.
 //! InputHandler calls through this trait for operations that need engine/UI access.
 
-use manifold_core::{Beats, ClipId, Seconds};
+use manifold_foundation::{Beats, ClipId, Seconds};
 
 /// Callback interface for InputHandler → host communication.
 /// Port of ITimelineInputHost.cs — every method maps 1:1.

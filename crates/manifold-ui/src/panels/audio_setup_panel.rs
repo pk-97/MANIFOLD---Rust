@@ -12,8 +12,8 @@
 //! gain trim. Per-send labels are auto-assigned ("Audio N") until a text-field
 //! rename lands; multi-channel downmix and the v2 analysis toggles are future.
 
-use manifold_core::audio_mod::AudioBand;
-use manifold_core::{AudioDeviceRef, AudioSendId};
+use crate::types::{AudioBand, AudioDeviceRef};
+use manifold_foundation::AudioSendId;
 
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color;
@@ -87,7 +87,7 @@ pub struct AudioSendRow {
 }
 
 /// One band's trigger row in the Audio Setup modal — the display state of a
-/// (potential) [`TriggerRoute`](manifold_core::audio_trigger::TriggerRoute).
+/// (potential) audio trigger route (the engine's `TriggerRoute`).
 #[derive(Clone, Debug, Default)]
 pub struct TriggerRouteRow {
     /// Whether a route exists for this band and is enabled.
@@ -842,8 +842,8 @@ impl AudioSetupPanel {
                 .as_ref()
                 .and_then(|id| self.sends.iter().find(|s| &s.id == id))
                 .map(|s| s.floor_db)
-                .unwrap_or(manifold_core::audio_setup::FLOOR_DB_OFF);
-            let floor_text = if floor_db <= manifold_core::audio_setup::FLOOR_DB_OFF {
+                .unwrap_or(crate::types::FLOOR_DB_OFF);
+            let floor_text = if floor_db <= crate::types::FLOOR_DB_OFF {
                 "Off".to_string()
             } else {
                 format!("{floor_db:.0} dB")
@@ -1898,7 +1898,7 @@ mod tests {
                     channels: vec![0],
                     channel_label: "Channel 1".into(),
                     gain_db: 0.0,
-                    floor_db: manifold_core::audio_setup::FLOOR_DB_OFF,
+                    floor_db: crate::types::FLOOR_DB_OFF,
                     driven_count: 0,
                     source_label: "Cap".into(),
                     layer_fed: false,
@@ -1911,7 +1911,7 @@ mod tests {
                     channels: vec![2],
                     channel_label: "MacBook Mic".into(),
                     gain_db: 0.0,
-                    floor_db: manifold_core::audio_setup::FLOOR_DB_OFF,
+                    floor_db: crate::types::FLOOR_DB_OFF,
                     driven_count: 0,
                     source_label: "Cap".into(),
                     layer_fed: false,

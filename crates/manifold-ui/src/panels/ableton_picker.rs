@@ -8,9 +8,7 @@
 //! Does NOT depend on manifold_playback — callers pass `AbletonPickerSession`
 //! which is constructed from the bridge session in manifold-app.
 
-use manifold_core::ableton_mapping::{
-    AbletonDeviceIdentity, AbletonMacroAddress, is_default_macro_name,
-};
+use crate::types::{AbletonDeviceIdentity, AbletonMacroAddress, is_default_macro_name};
 
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 use crate::color;
@@ -113,7 +111,7 @@ pub enum AbletonPickerContext {
     /// code path instead of two parallel effect/generator arms.
     Param {
         gpt: super::GraphParamTarget,
-        param_id: manifold_core::effects::ParamId,
+        param_id: manifold_foundation::ParamId,
     },
     MacroSlot {
         slot_idx: usize,

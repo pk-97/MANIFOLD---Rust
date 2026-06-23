@@ -23,7 +23,7 @@ use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
-use manifold_core::{EffectId, LayerId};
+use manifold_foundation::{EffectId, LayerId};
 
 // Stable keys for the host-owned card frame + header.
 const KEY_BORDER: u64 = 90_001;
@@ -86,13 +86,13 @@ pub enum CardContext {
 /// user-exposed tail for effects).
 #[derive(Debug, Clone)]
 pub struct ParamInfo {
-    /// Stable [`ParamId`](manifold_core::effects::ParamId) for this slot — for
+    /// Stable [`ParamId`](manifold_foundation::ParamId) for this slot — for
     /// static-tier params the `&'static str` declared in the preset's
     /// `ParamSpec`; for user-tier (graph-editor-exposed) effect params the
     /// owned id from `PresetInstance.user_param_bindings[j].id`. Carried on
     /// the wire when a widget emits a [`PanelAction`](super::PanelAction) so
     /// the bridge never does a positional `pi → ParamId` lookup.
-    pub param_id: manifold_core::effects::ParamId,
+    pub param_id: manifold_foundation::ParamId,
     pub name: String,
     pub min: f32,
     pub max: f32,
@@ -734,7 +734,7 @@ impl ParamCardPanel {
     }
 
     /// Hit-test the param NAME labels (slider + toggle/trigger rows) and return
-    /// the [`ParamId`](manifold_core::effects::ParamId) of the row whose label
+    /// the [`ParamId`](manifold_foundation::ParamId) of the row whose label
     /// contains `(sx, sy)`, or `None`. Read-only — no behaviour change and no
     /// effect on the performance card; the graph-editor host calls it in Author
     /// context to jump from a card param straight to the node that defines it.
@@ -743,7 +743,7 @@ impl ParamCardPanel {
         tree: &UITree,
         sx: f32,
         sy: f32,
-    ) -> Option<manifold_core::effects::ParamId> {
+    ) -> Option<manifold_foundation::ParamId> {
         let pos = Vec2::new(sx, sy);
         for (i, info) in self.param_info.iter().enumerate() {
             let label_id = self
@@ -1670,7 +1670,7 @@ impl ParamCardPanel {
 
     // ── Sync methods ──────────────────────────────────────────────
 
-    pub fn sync_values(&mut self, tree: &mut UITree, values: &[manifold_core::effects::ParamSlot]) {
+    pub fn sync_values(&mut self, tree: &mut UITree, values: &[crate::view::UiParamSlot]) {
         match self.kind {
             ParamCardKind::Effect => self.sync_values_effect(tree, values),
             ParamCardKind::Generator => self.sync_values_generator(tree, values),
@@ -1722,7 +1722,7 @@ impl ParamCardPanel {
     fn sync_values_effect(
         &mut self,
         tree: &mut UITree,
-        values: &[manifold_core::effects::ParamSlot],
+        values: &[crate::view::UiParamSlot],
     ) {
         let copied_label = self
             .copied_flash
@@ -1836,7 +1836,7 @@ impl ParamCardPanel {
     fn sync_values_generator(
         &mut self,
         tree: &mut UITree,
-        values: &[manifold_core::effects::ParamSlot],
+        values: &[crate::view::UiParamSlot],
     ) {
         let copied_label = self
             .copied_flash
@@ -1956,12 +1956,12 @@ impl ParamCardPanel {
     // ── Event handling ────────────────────────────────────────────
 
     /// Resolve the panel-local positional `pi` back to its stable
-    /// [`ParamId`](manifold_core::effects::ParamId) for outbound
+    /// [`ParamId`](manifold_foundation::ParamId) for outbound
     /// [`PanelAction`] emission. The panel's per-widget bookkeeping is
     /// legitimately positional (it indexes `param_info`, `driver_btn_ids`,
     /// etc.); this is the one helper that keeps that off the wire format.
     #[inline]
-    fn pid_at(&self, pi: usize) -> manifold_core::effects::ParamId {
+    fn pid_at(&self, pi: usize) -> manifold_foundation::ParamId {
         self.param_info[pi].param_id.clone()
     }
 
@@ -2014,7 +2014,7 @@ impl ParamCardPanel {
             kind_override.unwrap_or_else(|| ms.audio_kind_idx.get(pi).copied().unwrap_or(0) as usize);
         let band_idx =
             band_override.unwrap_or_else(|| ms.audio_band_idx.get(pi).copied().unwrap_or(0) as usize);
-        let feature = manifold_core::AudioFeature::new(
+        let feature = crate::types::AudioFeature::new(
             audio_kind_from_index(kind_idx),
             audio_band_from_index(band_idx),
         );
@@ -3080,7 +3080,7 @@ mod tests {
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
 
         tree.clear_dirty();
-        use manifold_core::effects::ParamSlot;
+        use crate::view::UiParamSlot as ParamSlot;
         panel.sync_values(
             &mut tree,
             &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)],
@@ -3349,9 +3349,9 @@ mod tests {
         panel.sync_values(
             &mut tree,
             &[
-                manifold_core::effects::ParamSlot::exposed(5.0),
-                manifold_core::effects::ParamSlot::exposed(1.0),
-                manifold_core::effects::ParamSlot::exposed(2.5),
+                crate::view::UiParamSlot::exposed(5.0),
+                crate::view::UiParamSlot::exposed(1.0),
+                crate::view::UiParamSlot::exposed(2.5),
             ],
         );
         assert!(tree.has_dirty());

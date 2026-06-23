@@ -16,7 +16,7 @@ use crate::node::{Color32, NodeId, Rect, TextAlign, UIStyle};
 use crate::tree::UITree;
 use crate::waveform_painter;
 use crate::waveform_renderer::WaveformRenderer;
-use manifold_core::units::Beats;
+use manifold_foundation::Beats;
 
 use super::{Panel, PanelAction};
 

@@ -6,7 +6,7 @@
 // - Minimum clip duration is 0.25 beats (1/16 note)
 // - Right trim on non-looping video clips clamps to source length
 
-use manifold_core::{Beats, Seconds};
+use manifold_foundation::{Beats, Seconds};
 
 /// Minimum clip duration in beats (1/16 note).
 pub const MIN_CLIP_DURATION_BEATS: f32 = 0.25;

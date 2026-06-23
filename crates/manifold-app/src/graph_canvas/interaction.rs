@@ -404,9 +404,7 @@ impl GraphCanvas {
                 self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
                     node_id,
                     param_name,
-                    new_value: manifold_core::effect_graph_def::SerializedParamValue::Float {
-                        value: v,
-                    },
+                    new_value: manifold_ui::SerializedParamValue::Float { value: v },
                 });
             }
             DragMode::None => {

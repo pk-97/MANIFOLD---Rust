@@ -159,7 +159,9 @@ pub(super) fn dispatch_project(
                 let old_mode = layer.midi_trigger_mode;
                 let cmd =
                     manifold_editing::commands::settings::ChangeLayerMidiTriggerModeCommand::new(
-                        layer_id, old_mode, *new_mode,
+                        layer_id,
+                        old_mode,
+                        crate::ui_translate::midi_trigger_mode_to_core(*new_mode),
                     );
                 let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                 boxed.execute(project);
@@ -213,9 +215,10 @@ pub(super) fn dispatch_project(
         }
         PanelAction::SetTonemapCurve(curve) => {
             let old_curve = project.settings.tonemap_curve;
-            if *curve != old_curve {
+            let curve = crate::ui_translate::tonemap_curve_to_core(*curve);
+            if curve != old_curve {
                 let cmd = manifold_editing::commands::settings::ChangeTonemapCurveCommand::new(
-                    old_curve, *curve,
+                    old_curve, curve,
                 );
                 {
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
@@ -227,6 +230,7 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
         PanelAction::SetGenType(opt_layer_id, new_type) => {
+            let new_type = crate::ui_translate::preset_type_id_to_core(new_type);
             let resolved_idx = opt_layer_id
                 .as_ref()
                 .and_then(|lid| project.timeline.find_layer_index_by_id(lid));
@@ -238,7 +242,7 @@ pub(super) fn dispatch_project(
                     .unwrap_or(PresetTypeId::NONE);
                 // The action carries the chosen preset id directly (registry
                 // entries AND project-embedded presets), so no index lookup.
-                if *new_type != old_type {
+                if new_type != old_type {
                     let old_params: Vec<f32> = layer
                         .gen_params()
                         .map(|gp| gp.param_values.iter().map(|s| s.value).collect())

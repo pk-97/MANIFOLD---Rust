@@ -33,6 +33,7 @@ mod texture_pane;
 mod text_input;
 mod ui_bridge;
 mod ui_root;
+mod ui_translate;
 mod user_prefs;
 mod window_registry;
 mod workspace;

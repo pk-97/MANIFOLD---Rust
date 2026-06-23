@@ -28,7 +28,9 @@ pub mod timeline_input_host;
 pub mod transform;
 pub mod tree;
 pub mod trim;
+pub mod types;
 pub mod ui_state;
+pub mod view;
 pub mod waveform_painter;
 pub mod waveform_renderer;
 pub mod widget_layout;
@@ -62,5 +64,12 @@ pub use panels::{
 };
 pub use slider::{BitmapSlider, SliderColors, SliderNodeIds};
 pub use tree::UITree;
+pub use types::{
+    AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AudioBand, AudioDeviceRef,
+    AudioFeature, AudioFeatureKind, AudioSourceKind, DriverWaveform, FLOOR_DB_OFF, LayerType,
+    MACRO_COUNT, MacroCurve, MarkerColor, MidiTriggerMode, ParamConvert, PresetTypeId,
+    SerializedParamValue, TonemapCurve, is_default_macro_name, note_number_to_name,
+};
 pub use ui_state::UIState;
+pub use view::{UiLayer, UiMarker, UiParamSlot};
 pub use waveform_renderer::WaveformRenderer;

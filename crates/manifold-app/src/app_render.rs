@@ -1280,7 +1280,7 @@ impl Application {
                             &t,
                             binding_id,
                             BindingMappingEdit {
-                                curve: Some(*curve),
+                                curve: Some(crate::ui_translate::macro_curve_to_core(*curve)),
                                 ..Default::default()
                             },
                         );
@@ -1980,7 +1980,7 @@ impl Application {
                             eid.clone(),
                             *node_id,
                             param_name.clone(),
-                            new_value.clone(),
+                            crate::ui_translate::serialized_param_value_to_core(new_value),
                             default.clone(),
                         )
                         .with_scope(canvas_scope.clone());
@@ -2192,7 +2192,7 @@ impl Application {
                                 *min,
                                 *max,
                                 *default_value,
-                                *convert,
+                                crate::ui_translate::param_convert_to_core(*convert),
                                 *is_angle,
                                 value_labels.clone(),
                             );
@@ -3192,7 +3192,8 @@ impl Application {
                 self.editor_card_config_hash = Some(config_hash);
             }
             self.editor_card.build(&mut ws.ui_root.tree, palette_viewport);
-            self.editor_card.sync_values(&mut ws.ui_root.tree, values);
+            self.editor_card
+                .sync_values(&mut ws.ui_root.tree, &crate::ui_translate::param_slots_to_ui(values));
             card_h = self.editor_card.compute_height();
             // Close the drawer only when the row it anchored on is actually gone
             // (target changed, param unexposed) — NOT on any config change. The

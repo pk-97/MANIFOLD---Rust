@@ -7,7 +7,7 @@
 //! Unity: `ImportedAudioWaveformLane` + `ImportedAudioWaveformScrubHandler`
 //!        + `ImportedAudioWaveformDragHandler`.
 
-use manifold_core::{Beats, ClipId, LayerId};
+use manifold_foundation::{Beats, ClipId, LayerId};
 
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;

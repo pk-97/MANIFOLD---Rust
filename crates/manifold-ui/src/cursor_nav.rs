@@ -27,7 +27,7 @@ pub struct NavLayerInfo {
     pub height: f32,
 }
 
-use manifold_core::ClipId;
+use manifold_foundation::ClipId;
 
 /// Info about a clip for auto-select during navigation.
 #[derive(Debug, Clone)]

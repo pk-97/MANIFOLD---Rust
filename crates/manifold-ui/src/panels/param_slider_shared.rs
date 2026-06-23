@@ -13,7 +13,7 @@ use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
-pub use manifold_core::ableton_mapping::AbletonMappingStatus;
+pub use crate::types::AbletonMappingStatus;
 
 // ── Shared layout constants ─────────────────────────────────────
 
@@ -185,43 +185,43 @@ pub struct ParamModState {
     pub audio_send_labels: Vec<String>,
     /// Card-level: send ids parallel to `audio_send_labels` — turns a selected
     /// drawer index into the id an `AudioModSetSource` command needs.
-    pub audio_send_ids: Vec<manifold_core::AudioSendId>,
+    pub audio_send_ids: Vec<manifold_foundation::AudioSendId>,
 }
 
 /// Map a feature-row button index to its `AudioFeatureKind` (clamped).
-pub(crate) fn audio_kind_from_index(idx: usize) -> manifold_core::AudioFeatureKind {
-    manifold_core::AudioFeatureKind::ALL
+pub(crate) fn audio_kind_from_index(idx: usize) -> crate::types::AudioFeatureKind {
+    crate::types::AudioFeatureKind::ALL
         .get(idx)
         .copied()
-        .unwrap_or(manifold_core::AudioFeatureKind::Amplitude)
+        .unwrap_or(crate::types::AudioFeatureKind::Amplitude)
 }
 
 /// Map a band-row button index to its `AudioBand` (clamped).
-pub(crate) fn audio_band_from_index(idx: usize) -> manifold_core::AudioBand {
-    manifold_core::AudioBand::ALL
+pub(crate) fn audio_band_from_index(idx: usize) -> crate::types::AudioBand {
+    crate::types::AudioBand::ALL
         .get(idx)
         .copied()
-        .unwrap_or(manifold_core::AudioBand::Full)
+        .unwrap_or(crate::types::AudioBand::Full)
 }
 
 /// Feature-row button labels, in `AudioFeatureKind::ALL` order.
 pub(crate) fn audio_kind_labels() -> [&'static str; 5] {
     [
-        manifold_core::AudioFeatureKind::Amplitude.label(),
-        manifold_core::AudioFeatureKind::Centroid.label(),
-        manifold_core::AudioFeatureKind::Noisiness.label(),
-        manifold_core::AudioFeatureKind::Flux.label(),
-        manifold_core::AudioFeatureKind::Transients.label(),
+        crate::types::AudioFeatureKind::Amplitude.label(),
+        crate::types::AudioFeatureKind::Centroid.label(),
+        crate::types::AudioFeatureKind::Noisiness.label(),
+        crate::types::AudioFeatureKind::Flux.label(),
+        crate::types::AudioFeatureKind::Transients.label(),
     ]
 }
 
 /// Band-row button labels, in `AudioBand::ALL` order.
 pub(crate) fn audio_band_labels() -> [&'static str; 4] {
     [
-        manifold_core::AudioBand::Full.label(),
-        manifold_core::AudioBand::Low.label(),
-        manifold_core::AudioBand::Mid.label(),
-        manifold_core::AudioBand::High.label(),
+        crate::types::AudioBand::Full.label(),
+        crate::types::AudioBand::Low.label(),
+        crate::types::AudioBand::Mid.label(),
+        crate::types::AudioBand::High.label(),
     ]
 }
 
@@ -238,7 +238,7 @@ pub struct AudioCardState {
     pub active: Vec<bool>,
     /// Per-param: the mod's send id, if any. Resolved to an index into
     /// `send_ids` by [`ParamModState::sync_audio`].
-    pub send_id: Vec<Option<manifold_core::AudioSendId>>,
+    pub send_id: Vec<Option<manifold_foundation::AudioSendId>>,
     /// Per-param: selected feature `kind` and `band` indices (the matrix axes).
     pub kind_idx: Vec<i32>,
     pub band_idx: Vec<i32>,
@@ -257,7 +257,7 @@ pub struct AudioCardState {
     pub send_labels: Vec<String>,
     /// Card-level: send ids parallel to `send_labels` — what the click handler
     /// turns a selected index into for the `AudioModSetSource` command.
-    pub send_ids: Vec<manifold_core::AudioSendId>,
+    pub send_ids: Vec<manifold_foundation::AudioSendId>,
 }
 
 impl ParamModState {

@@ -1,7 +1,7 @@
 //! Timeline model — the addressable items the viewport paints and hit-tests.
 //!
 //! Lanes (`TrackInfo`), clips (`ViewportClip`), and markers (via
-//! `manifold_core::marker::TimelineMarker`, stored on the panel) are the items
+//! [`crate::view::UiMarker`], stored on the panel) are the items
 //! the timeline addresses. A single source of each drives **both** the CPU
 //! paint and the hit-test, so they cannot disagree. Track *height* lives only on
 //! the `CoordinateMapper`; marker flag geometry lives only in `coordinate.rs`.

@@ -1493,7 +1493,7 @@ impl UIRoot {
                         };
                         // Store stable UID + display name from the cached metadata.
                         let action = PanelAction::AudioSetDevice(Some(
-                            manifold_core::AudioDeviceRef::new(d.uid.clone(), d.name.clone()),
+                            manifold_ui::AudioDeviceRef::new(d.uid.clone(), d.name.clone()),
                         ));
                         items.push(DropdownItem::new(&label).with_action(action));
                     }
@@ -1504,7 +1504,7 @@ impl UIRoot {
                     if caps.system_audio {
                         items.push(DropdownItem::new("System Audio").with_action(
                             PanelAction::AudioSetDevice(Some(
-                                manifold_core::AudioDeviceRef::system_audio(),
+                                manifold_ui::AudioDeviceRef::system_audio(),
                             )),
                         ));
                     }
@@ -1518,7 +1518,7 @@ impl UIRoot {
                             format!("{} (idle)", app.name)
                         };
                         let action = PanelAction::AudioSetDevice(Some(
-                            manifold_core::AudioDeviceRef::app(
+                            manifold_ui::AudioDeviceRef::app(
                                 app.bundle_id.clone(),
                                 app.name.clone(),
                             ),

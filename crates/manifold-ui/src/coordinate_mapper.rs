@@ -8,9 +8,9 @@
 use crate::color;
 use crate::snap;
 use crate::transform::Axis;
-use manifold_core::Beats;
-use manifold_core::layer::Layer;
-use manifold_core::types::LayerType;
+use crate::types::LayerType;
+use crate::view::UiLayer;
+use manifold_foundation::Beats;
 
 pub struct CoordinateMapper {
     pixels_per_beat: f32,
@@ -140,7 +140,7 @@ impl CoordinateMapper {
     /// - Collapsed generator → CollapsedGeneratorTrackHeight (62)
     /// - Collapsed regular → CollapsedTrackHeight (48)
     /// - Expanded (all types) → TrackHeight (140)
-    pub fn rebuild_y_layout(&mut self, layers: &[Layer]) {
+    pub fn rebuild_y_layout(&mut self, layers: &[UiLayer]) {
         let count = layers.len();
         self.layer_y_offsets.resize(count, 0.0);
         self.layer_heights.resize(count, 0.0);
@@ -169,7 +169,7 @@ impl CoordinateMapper {
     /// - Collapsed generator → CollapsedGeneratorTrackHeight (62)
     /// - Collapsed regular → CollapsedTrackHeight (48)
     /// - Expanded (all other types) → TrackHeight (140)
-    pub fn layer_height(layers: &[Layer], index: usize) -> f32 {
+    pub fn layer_height(layers: &[UiLayer], index: usize) -> f32 {
         let layer = match layers.get(index) {
             Some(l) => l,
             None => return color::TRACK_HEIGHT,
@@ -286,7 +286,7 @@ impl CoordinateMapper {
 
 /// Linear search for parent layer by LayerId.
 /// Unity CoordinateMapper.FindParentInList (lines 218-225).
-fn find_parent_in_list<'a>(layers: &'a [Layer], parent_id: Option<&str>) -> Option<&'a Layer> {
+fn find_parent_in_list<'a>(layers: &'a [UiLayer], parent_id: Option<&str>) -> Option<&'a UiLayer> {
     let parent_id = parent_id?;
     layers.iter().find(|l| l.layer_id == parent_id)
 }
@@ -294,11 +294,15 @@ fn find_parent_in_list<'a>(layers: &'a [Layer], parent_id: Option<&str>) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::layer::Layer;
-    use manifold_core::types::LayerType;
+    use manifold_foundation::LayerId;
 
-    fn make_layer(name: &str, layer_type: LayerType, index: i32) -> Layer {
-        Layer::new(name.into(), layer_type, index)
+    fn make_layer(name: &str, layer_type: LayerType, _index: i32) -> UiLayer {
+        UiLayer {
+            layer_id: LayerId::new(name),
+            parent_layer_id: None,
+            layer_type,
+            is_collapsed: false,
+        }
     }
 
     // ── Beat ↔ Pixel conversions (Unity CoordinateMapperTests.cs) ────

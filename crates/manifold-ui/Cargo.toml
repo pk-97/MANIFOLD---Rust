@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 bitflags = "2"
-manifold-core = { path = "../manifold-core" }
+manifold-foundation = { path = "../manifold-foundation" }
 
 [dev-dependencies]
 

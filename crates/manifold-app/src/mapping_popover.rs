@@ -512,7 +512,7 @@ impl MappingPopover {
                     self.curve = c;
                     self.pending_actions.push(PanelAction::EffectMappingCurve {
                         binding_id: self.binding_id.clone(),
-                        curve: c,
+                        curve: crate::ui_translate::macro_curve_to_ui(c),
                     });
                 }
                 return true;
@@ -1042,7 +1042,7 @@ mod tests {
         assert!(matches!(
             actions.as_slice(),
             [PanelAction::EffectMappingCurve {
-                curve: MacroCurve::Exponential,
+                curve: manifold_ui::MacroCurve::Exponential,
                 ..
             }]
         ));

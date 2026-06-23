@@ -1326,7 +1326,7 @@ pub(super) fn dispatch_inspector(
             let driver_target = DriverTarget::from(&target);
             let new_source = manifold_core::audio_mod::AudioModSource {
                 send_id: send_id.clone(),
-                feature: *feature,
+                feature: crate::ui_translate::audio_feature_to_core(*feature),
             };
             let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
                 if let Some(old) = old_source {
@@ -1340,7 +1340,7 @@ pub(super) fn dispatch_inspector(
                     let m = manifold_core::audio_mod::ParameterAudioMod::new(
                         param_id.clone(),
                         send_id.clone(),
-                        *feature,
+                        crate::ui_translate::audio_feature_to_core(*feature),
                     );
                     Box::new(AddAudioModCommand::new(driver_target, m))
                 };
@@ -1494,7 +1494,10 @@ pub(super) fn dispatch_inspector(
             audio_setup_command(
                 project,
                 content_tx,
-                Box::new(SetAudioInputDeviceCommand::new(old, device.clone())),
+                Box::new(SetAudioInputDeviceCommand::new(
+                    old,
+                    device.as_ref().map(crate::ui_translate::audio_device_ref_to_core),
+                )),
             )
         }
         PanelAction::AudioAddSend => {
@@ -1603,7 +1606,7 @@ pub(super) fn dispatch_inspector(
                 return DispatchResult::structural();
             };
             let old = send.triggers.clone();
-            let new = send.triggers_with_route(*band, |r| r.enabled = !r.enabled);
+            let new = send.triggers_with_route(crate::ui_translate::audio_band_to_core(*band), |r| r.enabled = !r.enabled);
             audio_setup_command(
                 project,
                 content_tx,
@@ -1616,7 +1619,7 @@ pub(super) fn dispatch_inspector(
             };
             let old = send.triggers.clone();
             let new = send
-                .triggers_with_route(*band, |r| r.sensitivity = (r.sensitivity + *delta).clamp(0.0, 1.0));
+                .triggers_with_route(crate::ui_translate::audio_band_to_core(*band), |r| r.sensitivity = (r.sensitivity + *delta).clamp(0.0, 1.0));
             audio_setup_command(
                 project,
                 content_tx,
@@ -1629,7 +1632,7 @@ pub(super) fn dispatch_inspector(
             };
             let old = send.triggers.clone();
             // Multiplicative (halve/double), clamped to a musical 1/4..16 beat range.
-            let new = send.triggers_with_route(*band, |r| {
+            let new = send.triggers_with_route(crate::ui_translate::audio_band_to_core(*band), |r| {
                 let beats = (r.one_shot_beats.as_f32() * *factor).clamp(0.25, 16.0);
                 r.one_shot_beats = manifold_core::units::Beats::from_f32(beats);
             });
@@ -1644,7 +1647,7 @@ pub(super) fn dispatch_inspector(
                 return DispatchResult::structural();
             };
             let old = send.triggers.clone();
-            let new = send.triggers_with_route(*band, |r| r.target_layer = layer.clone());
+            let new = send.triggers_with_route(crate::ui_translate::audio_band_to_core(*band), |r| r.target_layer = layer.clone());
             audio_setup_command(
                 project,
                 content_tx,
@@ -2434,7 +2437,8 @@ pub(super) fn dispatch_inspector(
             use manifold_core::effects::PresetInstance;
             // The action carries the chosen preset id directly (registry
             // entries AND project-embedded presets), so no index lookup.
-            let defaults = manifold_core::preset_definition_registry::get_defaults(effect_type);
+            let effect_type = crate::ui_translate::preset_type_id_to_core(effect_type);
+            let defaults = manifold_core::preset_definition_registry::get_defaults(&effect_type);
             let mut effect = PresetInstance::new(effect_type.clone());
             effect.param_values = defaults;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -2577,7 +2581,7 @@ pub(super) fn dispatch_inspector(
                     content_tx,
                     ContentCommand::AbletonMapParam {
                         target: mapping_target,
-                        address: address.clone(),
+                        address: crate::ui_translate::ableton_macro_address_to_core(address),
                     },
                 );
             }
@@ -2608,7 +2612,7 @@ pub(super) fn dispatch_inspector(
                 content_tx,
                 ContentCommand::AbletonMapParam {
                     target,
-                    address: address.clone(),
+                    address: crate::ui_translate::ableton_macro_address_to_core(address),
                 },
             );
             DispatchResult::handled()

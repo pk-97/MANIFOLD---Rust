@@ -445,7 +445,7 @@ pub fn update_region_from_clip_selection_inline(
             max_beat,
             min_layer,
             max_layer,
-            &project.timeline.layers,
+            &crate::ui_translate::layers_to_ui(&project.timeline.layers),
         );
     }
 }
@@ -477,7 +477,7 @@ pub(crate) fn select_region_to_with_project(
     } else if selection.has_region() {
         let r = selection.get_region();
         let start_idx = r
-            .layer_index_range(&project.timeline.layers)
+            .layer_index_range(&crate::ui_translate::layers_to_ui(&project.timeline.layers))
             .map(|(lo, _)| lo)
             .unwrap_or(0);
         Some((r.start_beat, start_idx))
@@ -508,7 +508,7 @@ pub(crate) fn select_region_to_with_project(
                 max_beat,
                 min_layer,
                 max_layer,
-                &project.timeline.layers,
+                &crate::ui_translate::layers_to_ui(&project.timeline.layers),
             );
         }
         None => {
