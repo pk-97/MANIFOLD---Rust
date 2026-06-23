@@ -302,15 +302,18 @@ impl InspectorCompositePanel {
         let mut x = rect.x;
         for tab in tabs {
             let active = tab == self.active_tab;
-            let id = tree.add_label(
+            // Interactive button (not a label) so clicks hit-test and route —
+            // a plain label carries no INTERACTIVE flag and is invisible to the
+            // event system, which is why the tabs were unclickable.
+            let id = tree.add_button(
                 None,
                 x,
                 rect.y,
                 tab_w,
                 rect.height,
-                Self::tab_label(tab),
                 UIStyle {
                     bg_color: if active { TAB_BG_ACTIVE } else { TAB_BG_INACTIVE },
+                    hover_bg_color: TAB_BG_ACTIVE,
                     text_color: if active {
                         TAB_TEXT_ACTIVE
                     } else {
@@ -321,6 +324,7 @@ impl InspectorCompositePanel {
                     corner_radius: 3.0,
                     ..UIStyle::default()
                 },
+                Self::tab_label(tab),
             );
             self.tab_node_ids.push((id, tab));
             x += tab_w + TAB_GAP;
@@ -331,6 +335,14 @@ impl InspectorCompositePanel {
     /// Returns (node_start, node_end) for each sub-panel: chrome panels,
     /// effect cards, gen params. Used by the cache manager to detect which
     /// parts of the inspector changed and only re-render those.
+    ///
+    /// Only the *active* scope's sub-panels are reported. A sub-panel whose
+    /// section wasn't built this frame (the inactive scope) still holds the
+    /// node range from the last frame it WAS built — feeding those stale
+    /// indices to the incremental cache would point it at whatever nodes now
+    /// occupy them (the active scope's content). Gating on the same
+    /// `*_visible` flags that `find_target_for_node` uses keeps every consumer
+    /// of these ranges honest about what was actually built.
     pub fn sub_region_ranges(&self) -> Vec<(usize, usize)> {
         let mut ranges =
             Vec::with_capacity(4 + self.master_effects.len() + self.layer_effects.len() + 1);
@@ -339,34 +351,41 @@ impl InspectorCompositePanel {
                 ranges.push((first, first + count));
             }
         };
+        // Macros always builds (it sits above both columns every frame).
         push(
             &mut ranges,
             self.macros_panel.first_node(),
             self.macros_panel.node_count(),
         );
-        push(
-            &mut ranges,
-            self.master_chrome.first_node(),
-            self.master_chrome.node_count(),
-        );
-        for card in &self.master_effects {
-            push(&mut ranges, card.first_node(), card.node_count());
+        if self.master_visible {
+            push(
+                &mut ranges,
+                self.master_chrome.first_node(),
+                self.master_chrome.node_count(),
+            );
+            for card in &self.master_effects {
+                push(&mut ranges, card.first_node(), card.node_count());
+            }
         }
-        push(
-            &mut ranges,
-            self.layer_chrome.first_node(),
-            self.layer_chrome.node_count(),
-        );
-        push(
-            &mut ranges,
-            self.clip_chrome.first_node(),
-            self.clip_chrome.node_count(),
-        );
-        if let Some(ref gp) = self.gen_params {
-            push(&mut ranges, gp.first_node(), gp.node_count());
+        if self.layer_visible {
+            push(
+                &mut ranges,
+                self.layer_chrome.first_node(),
+                self.layer_chrome.node_count(),
+            );
+            if let Some(ref gp) = self.gen_params {
+                push(&mut ranges, gp.first_node(), gp.node_count());
+            }
+            for card in &self.layer_effects {
+                push(&mut ranges, card.first_node(), card.node_count());
+            }
         }
-        for card in &self.layer_effects {
-            push(&mut ranges, card.first_node(), card.node_count());
+        if self.clip_visible {
+            push(
+                &mut ranges,
+                self.clip_chrome.first_node(),
+                self.clip_chrome.node_count(),
+            );
         }
         ranges
     }
@@ -1708,18 +1727,27 @@ impl Panel for InspectorCompositePanel {
     /// matching. (clip_chrome has no right-click affordance, so nothing to
     /// register.) See `docs/NODE_INTENT_DISPATCH.md`.
     fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        for card in &self.master_effects {
-            card.register_intents(intents);
-        }
-        for card in &self.layer_effects {
-            card.register_intents(intents);
-        }
-        if let Some(gp) = self.gen_params.as_ref() {
-            gp.register_intents(intents);
-        }
+        // Only the active scope's sub-panels were built this frame; the inactive
+        // scope's cards hold stale node ids that now belong to the active
+        // content, so registering their intents would bind right-clicks on live
+        // nodes to phantom targets. Gate on the same `*_visible` SSOT the rest of
+        // the panel uses. Macros always builds.
         self.macros_panel.register_intents(intents);
-        self.master_chrome.register_intents(intents);
-        self.layer_chrome.register_intents(intents);
+        if self.master_visible {
+            self.master_chrome.register_intents(intents);
+            for card in &self.master_effects {
+                card.register_intents(intents);
+            }
+        }
+        if self.layer_visible {
+            self.layer_chrome.register_intents(intents);
+            if let Some(gp) = self.gen_params.as_ref() {
+                gp.register_intents(intents);
+            }
+            for card in &self.layer_effects {
+                card.register_intents(intents);
+            }
+        }
     }
 
     fn first_node(&self) -> usize {
@@ -1887,6 +1915,191 @@ mod tests {
         assert!(!panel.master_visible);
         assert!(!panel.layer_visible);
         assert_eq!(panel.active_tab(), InspectorTab::Clip);
+    }
+
+    fn mk_param(id: &'static str, name: &str) -> super::super::param_card::ParamInfo {
+        super::super::param_card::ParamInfo {
+            param_id: std::borrow::Cow::Borrowed(id),
+            name: name.into(),
+            min: 0.0,
+            max: 1.0,
+            default: 0.5,
+            whole_numbers: false,
+            is_angle: false,
+            exposed: true,
+            is_toggle: false,
+            is_trigger: false,
+            value_labels: None,
+            osc_address: None,
+            ableton_display: None,
+            ableton_range: None,
+            mappable: false,
+        }
+    }
+
+    fn mk_config(kind: super::super::param_card::ParamCardKind, name: &str, n: usize) -> ParamCardConfig {
+        use super::super::param_card::ParamCardKind;
+        let params: Vec<_> = (0..n)
+            .map(|i| mk_param(["a", "b", "c", "d"][i % 4], &format!("P{i}")))
+            .collect();
+        ParamCardConfig {
+            kind,
+            name: name.into(),
+            params,
+            string_params: vec![],
+            collapsed: false,
+            effect_index: 0,
+            effect_id: if kind == ParamCardKind::Effect {
+                EffectId::new(name)
+            } else {
+                EffectId::new("")
+            },
+            enabled: true,
+            supports_envelopes: true,
+            has_drv: false,
+            has_env: false,
+            has_abl: false,
+            has_graph_mod: false,
+            layer_id: None,
+            driver_active: vec![false; n],
+            envelope_active: vec![false; n],
+            trim_min: vec![0.0; n],
+            trim_max: vec![1.0; n],
+            target_norm: vec![1.0; n],
+            env_decay: vec![1.0; n],
+            driver_beat_div_idx: vec![-1; n],
+            driver_waveform_idx: vec![-1; n],
+            driver_reversed: vec![false; n],
+            driver_dotted: vec![false; n],
+            driver_triplet: vec![false; n],
+            audio: Default::default(),
+        }
+    }
+
+    /// Regression: switching scope leaves the inactive section's chrome panels
+    /// holding a node range from the frame they were last built. Those ranges
+    /// now overlap the active scope's nodes, so `sub_region_ranges()` /
+    /// `register_intents()` must NOT report them — they're gated on `*_visible`.
+    /// Before the gate, the stale master_chrome range leaked into the cache's
+    /// incremental list and the intent registry (phantom right-click targets).
+    #[test]
+    fn subregions_exclude_inactive_scope_after_scope_switch() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 500.0;
+            l
+        };
+
+        // Frame 1: master active → builds the master chrome (records a range).
+        panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "MasterFX", 2)]);
+        panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        tree.clear();
+        panel.build(&mut tree, &layout);
+        let master_chrome_first = panel.master_chrome.first_node();
+        let master_chrome_count = panel.master_chrome.node_count();
+        assert!(master_chrome_count > 0, "master chrome should have built");
+
+        // Frame 2: layer active (gen + layer effect). Master chrome is NOT rebuilt,
+        // so its first_node/node_count are now stale and overlap layer content.
+        panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "LayerFX", 2)]);
+        let mut text_gen = mk_config(ParamCardKind::Generator, "Text", 3);
+        text_gen.string_params = vec![super::super::param_card::ParamCardStringInfo {
+            name: "Text".into(),
+            key: "text".into(),
+            value: "HELLO".into(),
+            use_dropdown: false,
+        }];
+        panel.configure_gen_params(Some(&text_gen), None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        tree.clear();
+        panel.build(&mut tree, &layout);
+
+        // The master chrome's range is unchanged (stale) — proves the precondition.
+        assert_eq!(panel.master_chrome.first_node(), master_chrome_first);
+        assert_eq!(panel.master_chrome.node_count(), master_chrome_count);
+        let stale = (master_chrome_first, master_chrome_first + master_chrome_count);
+
+        // The gen card IS covered (active scope), and the stale master range is NOT
+        // reported (it would point the incremental cache at live layer nodes).
+        let genp = panel.gen_params.as_ref().unwrap();
+        let gen_range = (genp.first_node(), genp.first_node() + genp.node_count());
+        let subs = panel.sub_region_ranges();
+        assert!(
+            subs.iter().any(|&(s, e)| s <= gen_range.0 && gen_range.1 <= e),
+            "gen card must be covered: gen={gen_range:?} subs={subs:?}"
+        );
+        assert!(
+            !subs.contains(&stale),
+            "stale master_chrome range {stale:?} must not leak into sub_region_ranges: {subs:?}"
+        );
+    }
+
+    /// The full-panel render path (`render_tree_range` → `traverse_range`) walks
+    /// only roots in range and descends. After the layer column's content is
+    /// reparented under the scroll clip, EVERY visible inspector node must still
+    /// be reachable from an in-range root — otherwise the post-`invalidate_all`
+    /// full render silently drops it and the card body renders blank.
+    #[test]
+    fn full_render_traversal_reaches_every_visible_node() {
+        use super::super::param_card::ParamCardKind;
+        use crate::tree::TraversalEvent;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 500.0;
+            l
+        };
+        panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "LayerFX", 2)]);
+        let mut text_gen = mk_config(ParamCardKind::Generator, "Text", 3);
+        text_gen.string_params = vec![super::super::param_card::ParamCardStringInfo {
+            name: "Text".into(),
+            key: "text".into(),
+            value: "HELLO".into(),
+            use_dropdown: false,
+        }];
+        panel.configure_gen_params(Some(&text_gen), None);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+
+        let start = panel.first_node();
+        let end = start + panel.node_count();
+
+        // Collect node indices the full-render traversal actually visits.
+        let mut visited = std::collections::HashSet::new();
+        tree.traverse_range(start, end, |ev| {
+            if let TraversalEvent::Node(n) = ev {
+                visited.insert(n.id.index());
+            }
+        });
+
+        // Every VISIBLE node with a non-zero area in the inspector range must be
+        // visited (these are the nodes the GPU would draw).
+        let mut missed = Vec::new();
+        for i in start..end {
+            let n = tree.get_node(NodeId(i as u32));
+            let drawable = n.flags.contains(UIFlags::VISIBLE)
+                && n.bounds.width > 0.0
+                && n.bounds.height > 0.0;
+            if drawable && !visited.contains(&i) {
+                missed.push((i, n.node_type, n.bounds));
+            }
+        }
+        assert!(
+            missed.is_empty(),
+            "full-render traversal skipped {} drawable node(s): {:?}",
+            missed.len(),
+            missed
+        );
     }
 
     #[test]
