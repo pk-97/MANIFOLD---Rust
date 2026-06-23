@@ -14,19 +14,20 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phases 0–5 COMPLETE (2026-06-23).** The planned overhaul is done.
-> Phase 2 (Chrome API), Phase 3 (Timeline API), Phase 4 (Canvas API), and Phase 5
+> **Status: Phases 0–5 COMPLETE (2026-06-23); Phases 6–8 are the remaining
+> follow-ons Phase 5 unblocked (each its own chat, scoped in §13).** Phase 2
+> (Chrome API), Phase 3 (Timeline API), Phase 4 (Canvas API), and Phase 5
 > (layering inversion) all landed behaviour-preserving, tests + clippy green —
 > see each phase's sub-design doc (`CHROME_API_DESIGN`, `TIMELINE_API_DESIGN`,
 > `CANVAS_API_DESIGN`, `UI_LAYERING_INVERSION`) and the §13 checklist. **Phase 5**
 > moved `manifold-ui` to UI-local events + view-data (the app maps them to engine
 > commands via `ui_translate.rs`) so the crate compiles with no `manifold-core`
 > dependency — it depends only on the new zero-dep `manifold-foundation`. That
-> *unblocks* three deeper moves earlier phases deferred to it — relocating the
-> canvas out of `manifold-app` (4.2), generalising `IntentRegistry` off
-> `PanelAction` (4.5), and one shared `process_events`/`InputHandler` for the
-> editor window (4.6) — each now its own focused follow-on phase (scoped in §13).
-> The Phase-2b-era status below is kept as history.
+> *unblocks* three deeper moves earlier phases deferred to it, now promoted to
+> **Phases 6–8** (each independent, its own chat, scoped in §13): generalise
+> `IntentRegistry` off `PanelAction` (6), one shared input owner for the editor
+> window (7), relocate the graph canvas out of `manifold-app` (8). The
+> Phase-2b-era status below is kept as history.
 >
 > **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 panels fully migrated; **3 of
 > the 4 heavyweights chrome-staged** (`param_card` frame + generator header,
@@ -878,24 +879,48 @@ pass (see §0).
   `manifold-core/tests/generator_param_counts.rs` (they test the registry, not
   the UI).
 
-### Phase 5 — unblocked follow-ons (NOT done; each its own focused phase)
-Phase 5 was the prerequisite for three moves earlier phases deferred to it.
-Scope grounded in the code as of the 5.1–5.3 landing — pick up individually:
-- **4.2 — relocate the graph canvas out of `manifold-app`.** Gated on a UI-local
-  *graph-snapshot view-model*: the 4,334-line `graph_canvas/` reads
-  `manifold_renderer::node_graph::{GraphSnapshot, ParamSnapshot, ParamSnapshotKind,
-  OuterParamRouting, LiveNodeParams, Category, descriptor_for, tooltip_for}`.
-  Mirroring that surface + app translation is a sub-project on the scale of the
-  timeline view-model work in 5.1. Until then the canvas stays in `manifold-app`.
-- **4.5 — generalise `IntentRegistry` off `PanelAction`.** `IntentRegistry` /
-  `NodeIntent` are hardwired to `PanelAction`; making them generic over the
-  action type (default `= PanelAction` keeps every chrome panel unchanged) only
-  pays off if the editor sidebar is *rewired* onto the registry — a behavioural
-  change to the sidebar. Doc-rated marginal benefit; medium risk.
-- **4.6 — one shared `process_events`/`InputHandler` for the editor window.** 4.6
-  already folded the editor loop into `editor_input.rs` (807 lines of per-event
-  handlers); the literal unification with the main window's `UIInputSystem` is a
-  real refactor with interaction-drift risk.
+> **Phases 6–8 below** are the three moves Phase 5 unblocked. They are
+> **independent** of each other (any order) and each is **its own chat/phase** —
+> one PR, one focused session, behaviour-preserving like every phase before.
+> Ordered easiest→hardest. Scope grounded in the code as of the 5.1–5.3 landing.
+
+### Phase 6 — Generalise `IntentRegistry` off `PanelAction` (was Canvas-API 4.5)
+> Smallest of the three. `IntentRegistry`/`NodeIntent` (`manifold-ui/src/intent.rs`)
+> are hardwired to `PanelAction`. The generic param is cheap; the payoff is the
+> editor sidebar folding onto the same intent system instead of its own click
+> dispatch.
+- [ ] **6.1** Make `IntentRegistry<A>` / `NodeIntent<A>` generic over the action
+  type, with default `A = PanelAction` so every chrome panel + the main-window
+  resolve path compile unchanged.
+- [ ] **6.2** Rewire the graph-editor sidebar's click handling onto
+  `IntentRegistry<GraphEditCommand>` (replace its `handle_event` click dispatch
+  with registered intents). _Done when:_ the sidebar resolves clicks through the
+  registry and emits `GraphEditCommand`, with no behavioural change.
+
+### Phase 7 — One shared input owner for the editor window (was Canvas-API 4.6)
+> Medium. 4.6 already folded the editor event loop into `editor_input.rs` (807
+> lines of per-event handlers — `editor_cursor_moved`/`editor_mouse_input`/…); the
+> remaining literal unification with the main window's `UIInputSystem` /
+> `process_events` is a real refactor. Interaction-drift is the risk — verify hard.
+- [ ] **7.1** Route the editor window through the main window's
+  `UIInputSystem`/`process_events` path; collapse the per-event `editor_*`
+  handlers into the shared gesture→action core. _Done when:_ both windows share
+  one input owner and editor interaction (drag, box-select, pan/zoom, right-click,
+  keyboard) is unchanged.
+
+### Phase 8 — Relocate the graph canvas out of `manifold-app` (was Canvas-API 4.2)
+> Largest — a graph view-model sub-project on the scale of Phase 5's timeline
+> work. The 4,334-line `graph_canvas/` reads `manifold_renderer::node_graph`
+> snapshots, and `manifold-ui` can't depend on `manifold-renderer`.
+- [ ] **8.1** Define a UI-local graph-snapshot view-model mirroring the surface the
+  canvas reads: `GraphSnapshot`, `ParamSnapshot`, `ParamSnapshotKind`,
+  `OuterParamRouting`, `LiveNodeParams`, `Category`, `descriptor_for`,
+  `tooltip_for`.
+- [ ] **8.2** App translates the renderer snapshot → that view-model when pushing
+  to the canvas (the Phase-5 `ui_translate.rs` pattern, extended to graph data).
+- [ ] **8.3** Move `graph_canvas/` into `manifold-ui` (or a UI-side crate that
+  doesn't pull the renderer). _Done when:_ the canvas compiles with no
+  `manifold_renderer` dependency and the editor window renders identically.
 
 ### Deferred (§10.2) — intentionally NOT on this checklist
 Widget catalog/descriptors, visual snapshot testing, runtime introspection,
