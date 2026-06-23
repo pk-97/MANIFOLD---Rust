@@ -555,9 +555,14 @@ impl UIRoot {
 
         // Inspector resize handle — thin vertical bar at the inspector's LEFT
         // edge (the inspector now sits on the right, preview to its left).
+        // Drawn just *inside* the inspector (not straddling the edge): the
+        // preview is an opaque GPU blit on top of the UI atlas and fills the
+        // video area up to `insp.x`, so a straddling handle would have its left
+        // half painted over. The hit test (`is_near_inspector_edge`) stays
+        // centered on the seam, so the grab zone is unchanged.
         {
             let insp = self.layout.inspector();
-            let edge_x = insp.x - 2.0;
+            let edge_x = insp.x;
             self.inspector_handle_id = Some(self.tree.add_panel(
                 None,
                 edge_x,

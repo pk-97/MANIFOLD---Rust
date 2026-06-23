@@ -215,11 +215,17 @@ impl ScreenLayout {
     /// Split handle rect: the boundary between video area and timeline area.
     /// From Unity PanelResizeHandle.cs — a thin horizontal bar the user can drag
     /// to adjust the video/timeline proportion.
-    /// Handle height: 6px (same as InspectorResizeHandleWidth), centered on the split line.
+    /// Handle height: 6px (same as InspectorResizeHandleWidth).
+    ///
+    /// Sits just *below* the seam (inside the timeline header), not centered on
+    /// it. The preview is an opaque GPU blit drawn on top of the UI atlas and
+    /// fills the video area down to `tl.y`; a handle straddling the seam would
+    /// have its top half painted over. Keeping it on the UI side of the seam
+    /// means the hover/drag highlight is always fully visible.
     pub fn split_handle(&self) -> Rect {
         let tl = self.timeline_area();
         let handle_h = color::INSPECTOR_RESIZE_HANDLE_WIDTH; // 6px
-        Rect::new(tl.x, tl.y - handle_h * 0.5, tl.width, handle_h)
+        Rect::new(tl.x, tl.y, tl.width, handle_h)
     }
 
     /// Check if a point is near the video/timeline split handle.
