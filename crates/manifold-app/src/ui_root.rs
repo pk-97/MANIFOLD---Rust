@@ -584,6 +584,16 @@ impl UIRoot {
     /// Static panels (transport, header, footer, inspector) keep their tree nodes.
     ///
     /// Uses `dirty` flags to skip layer header rebuild on horizontal-only scroll.
+    /// Scroll the inspector in place (offset its content nodes) instead of
+    /// rebuilding the whole tree. Returns true if handled in place; false means
+    /// nothing is built yet and the caller should fall back to a full rebuild.
+    /// Kept on `UIRoot` so the disjoint `inspector` + `tree` field borrows stay
+    /// internal.
+    pub fn try_inspector_scroll(&mut self, delta: f32, cursor_x: f32) -> bool {
+        self.inspector
+            .try_scroll_in_place(delta, cursor_x, &mut self.tree)
+    }
+
     pub fn rebuild_scroll_panels(&mut self, dirty: ScrollDirty) {
         if !self.built {
             return self.build();

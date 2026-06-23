@@ -101,6 +101,16 @@ impl UICacheManager {
         self.panel_valid[PanelSlot::Viewport as usize] = false;
     }
 
+    /// Invalidate only the inspector region — for an in-place inspector scroll
+    /// that offset the content nodes without rebuilding the tree. No atlas clear
+    /// is needed: the inspector's opaque full-rect background re-paints over the
+    /// old content when the slot re-renders. Avoids the full-screen
+    /// `invalidate_all` (whole-atlas clear + all panels) that a `needs_rebuild`
+    /// scroll would otherwise force every frame.
+    pub fn invalidate_inspector(&mut self) {
+        self.panel_valid[PanelSlot::Inspector as usize] = false;
+    }
+
     /// Ensure atlas texture matches the screen size.
     pub fn ensure_atlas(&mut self, device: &GpuDevice, logical_w: u32, logical_h: u32) {
         let sf = self.scale_factor;

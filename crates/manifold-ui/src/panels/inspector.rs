@@ -540,6 +540,38 @@ impl InspectorCompositePanel {
         }
     }
 
+    /// Scroll the inspector in place — the cheap path that mirrors how the
+    /// timeline viewport scrolls. Applies the delta to the column under the
+    /// cursor, then offsets that column's already-built content nodes instead of
+    /// triggering a full `ui_root.build()` + whole-atlas clear. The caller
+    /// invalidates only the inspector's cache slot afterwards.
+    ///
+    /// Returns `false` only when there is nothing built to offset yet (the very
+    /// first frame), in which case it has NOT touched the scroll offset and the
+    /// caller must fall back to `handle_scroll_at` + a rebuild. Once built it
+    /// always handles the scroll in place (returning `true`), so the two paths
+    /// never both apply the delta.
+    pub fn try_scroll_in_place(&mut self, delta: f32, cursor_x: f32, tree: &mut UITree) -> bool {
+        if self.bg_panel_id.is_none() {
+            return false;
+        }
+        let scroll = if cursor_x < self.column_split_x {
+            &mut self.master_scroll
+        } else {
+            &mut self.layer_scroll
+        };
+        let old = scroll.scroll_offset();
+        if !scroll.apply_scroll_delta(delta) {
+            // Already at a scroll limit — consumed, nothing moved.
+            return true;
+        }
+        let delta_y = -(scroll.scroll_offset() - old);
+        if scroll.offset_content(tree, delta_y) {
+            scroll.update_scrollbar(tree);
+        }
+        true
+    }
+
     /// Content height for the master column (left).
     fn master_column_height(&self) -> f32 {
         if !self.master_visible {
@@ -2099,6 +2131,119 @@ mod tests {
             "full-render traversal skipped {} drawable node(s): {:?}",
             missed.len(),
             missed
+        );
+
+        // Replicate the GPU cull: track the intersected clip stack exactly as
+        // `UIRenderer::handle_push_clip` + `draw_node` do, and assert no drawable
+        // gen-card node is culled by its EFFECTIVE clip. This catches a tight or
+        // wrong CLIPS_CHILDREN ancestor (section card / card frame) that would
+        // leave the header drawn but the body blank — which counting visited
+        // nodes alone cannot detect.
+        fn intersect(a: Rect, b: Rect) -> Rect {
+            let x0 = a.x.max(b.x);
+            let y0 = a.y.max(b.y);
+            let x1 = (a.x + a.width).min(b.x + b.width);
+            let y1 = (a.y + a.height).min(b.y + b.height);
+            Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+        }
+        let genp = panel.gen_params.as_ref().unwrap();
+        let (gs, gc) = (genp.first_node(), genp.node_count());
+        let mut clip_stack: Vec<Rect> = Vec::new();
+        let mut culled: Vec<(usize, crate::node::Rect)> = Vec::new();
+        tree.traverse_range(start, end, |ev| match ev {
+            TraversalEvent::PushClip(r) => {
+                let clipped = clip_stack.last().map(|c| intersect(*c, r)).unwrap_or(r);
+                clip_stack.push(clipped);
+            }
+            TraversalEvent::PopClip => {
+                clip_stack.pop();
+            }
+            TraversalEvent::Node(n) => {
+                let i = n.id.index();
+                if i < gs || i >= gs + gc {
+                    return;
+                }
+                let b = n.bounds;
+                if !n.flags.contains(UIFlags::VISIBLE) || b.width <= 0.0 || b.height <= 0.0 {
+                    return;
+                }
+                if let Some(c) = clip_stack.last() {
+                    let out = b.x >= c.x + c.width
+                        || b.x + b.width <= c.x
+                        || b.y >= c.y + c.height
+                        || b.y + b.height <= c.y;
+                    if out {
+                        culled.push((i, b));
+                    }
+                }
+            }
+        });
+        assert!(
+            culled.is_empty(),
+            "{} gen-card node(s) culled by their effective clip (body would render blank): {:?}",
+            culled.len(),
+            culled
+        );
+    }
+
+    /// In-place inspector scroll: offsets the live content nodes by the scroll
+    /// delta WITHOUT a rebuild, and lands them exactly where a fresh rebuild at
+    /// the same offset would — so scrolling stays cheap and a later rebuild never
+    /// jumps. Guards the fix for the scroll-blank churn.
+    #[test]
+    fn in_place_scroll_matches_rebuild() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 400.0;
+            l
+        };
+        // Many effects so the layer column overflows the viewport (scrollable).
+        let effects: Vec<_> = (0..12)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3))
+            .collect();
+        panel.configure_layer_effects(&effects);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+        assert!(
+            panel.layer_scroll.max_scroll() > 0.0,
+            "test needs scrollable content"
+        );
+
+        // A scroll node's y before scrolling.
+        let probe = panel.layer_chrome.first_node();
+        let y_before = tree.get_node(NodeId(probe as u32)).bounds.y;
+        let off_before = panel.layer_scroll.scroll_offset();
+
+        // Scroll down (negative wheel delta raises the offset). Cursor anywhere
+        // in the inspector routes to the layer column when it's the active scope.
+        let cursor_x = layout.inspector().x + 10.0;
+        let handled = panel.try_scroll_in_place(-30.0, cursor_x, &mut tree);
+        assert!(handled, "built inspector must scroll in place");
+
+        let off_after = panel.layer_scroll.scroll_offset();
+        assert!(off_after > off_before, "offset should rise scrolling down");
+        let y_after = tree.get_node(NodeId(probe as u32)).bounds.y;
+        // Content moved up by exactly the offset delta.
+        assert!(
+            ((y_after - y_before) - -(off_after - off_before)).abs() < 0.01,
+            "content shift {} must equal -offset-delta {}",
+            y_after - y_before,
+            -(off_after - off_before)
+        );
+
+        // A full rebuild at the new offset lands the same node at the same y —
+        // in-place and rebuild agree, so no jump when the next rebuild lands.
+        panel.build(&mut tree, &layout);
+        let y_rebuilt = tree.get_node(NodeId(panel.layer_chrome.first_node() as u32)).bounds.y;
+        assert!(
+            (y_rebuilt - y_after).abs() < 0.01,
+            "rebuild y {y_rebuilt} must match in-place y {y_after}"
         );
     }
 

@@ -45,6 +45,11 @@ pub struct ScrollContainer {
     clip_node_id: Option<NodeId>,
     /// Index into tree.nodes where content starts (for reparenting).
     content_start: usize,
+    /// One-past-the-last content node index (set during `reparent_content`).
+    /// `[content_start, content_end)` is the reparented content, excluding the
+    /// clip node (before) and the scrollbar (after) — the exact range an
+    /// in-place scroll offsets. `content_start == content_end` ⇒ no content.
+    content_end: usize,
 
     // Scrollbar state
     track_id: Option<NodeId>,
@@ -59,6 +64,7 @@ impl ScrollContainer {
             viewport: Rect::ZERO,
             clip_node_id: None,
             content_start: 0,
+            content_end: 0,
             track_id: None,
             thumb_id: None,
         }
@@ -93,12 +99,35 @@ impl ScrollContainer {
 
     /// Reparent all nodes added since `begin()` under the clip region.
     /// Call this after building content if nodes were created with parent=None.
-    pub fn reparent_content(&self, tree: &mut UITree, start: usize) {
-        let count = tree.count() - start;
+    /// Records `[content_start, content_end)` so an in-place scroll can later
+    /// offset exactly the content (scrollbar is built afterwards, so it's
+    /// excluded).
+    pub fn reparent_content(&mut self, tree: &mut UITree, start: usize) {
+        self.content_start = start;
+        self.content_end = tree.count();
+        let count = self.content_end - start;
         if count > 0
             && let Some(clip_id) = self.clip_node_id {
                 tree.reparent_root_nodes(start, count, clip_id);
             }
+    }
+
+    /// Shift every content node by `delta_y` in place — the cheap scroll path.
+    /// Content nodes carry absolute bounds, so each is moved exactly once (no
+    /// recursion); the clip node (the viewport) and scrollbar are untouched, so
+    /// the content scrolls within the stable viewport. Returns false if there's
+    /// no recorded content to move (caller should fall back to a rebuild).
+    pub fn offset_content(&self, tree: &mut UITree, delta_y: f32) -> bool {
+        if self.content_end <= self.content_start {
+            return false;
+        }
+        for i in self.content_start..self.content_end {
+            let id = NodeId(i as u32);
+            let mut b = tree.get_bounds(id);
+            b.y += delta_y;
+            tree.set_bounds(id, b);
+        }
+        true
     }
 
     // ── Scrollbar ──────────────────────────────────────────────────

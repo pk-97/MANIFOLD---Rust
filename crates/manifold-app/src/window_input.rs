@@ -413,9 +413,20 @@ impl Application {
             let tracks_rect = self.ws.ui_root.layout.timeline_tracks();
 
             if inspector_rect.contains(pos) {
-                // Scroll the inspector panel — full rebuild (inspector is static)
-                self.ws.ui_root.inspector.handle_scroll_at(dy, pos.x);
-                self.needs_rebuild = true;
+                // Scroll the inspector in place — offset the content nodes and
+                // re-render only the inspector's atlas slot. This replaces the
+                // old full `ui_root.build()` + `invalidate_all()` (whole-atlas
+                // clear + all 7 panels) that ran on every scroll frame and could
+                // flash the inspector blank. Falls back to the rebuild only when
+                // nothing is built yet (so the offset never double-applies).
+                if self.ws.ui_root.try_inspector_scroll(dy, pos.x) {
+                    if let Some(cm) = &mut self.ui_cache_manager {
+                        cm.invalidate_inspector();
+                    }
+                } else {
+                    self.ws.ui_root.inspector.handle_scroll_at(dy, pos.x);
+                    self.needs_rebuild = true;
+                }
             } else if tracks_rect.contains(pos) {
                 if self.modifiers.alt {
                     // Alt + scroll Y → zoom (step through zoom levels)
