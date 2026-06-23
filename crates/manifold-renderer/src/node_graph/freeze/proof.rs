@@ -2504,8 +2504,33 @@ fn particletext_seed_gate_matches_ungated() {
     let mut ungated = gated.clone();
     strip_reset_wire(&mut ungated, "seed_pattern");
 
-    let g = render_generator_8_frames(gated, &registry, &device, w, h);
-    let u = render_generator_8_frames(ungated, &registry, &device, w, h);
+    // Render through the RAW executor (unfused), not the fused PresetRuntime.
+    // The reset gate is an executor/aliasing property, independent of fusion.
+    // Rendering fused pollutes the A/B with the parked f16-seed fused
+    // divergence ([[particletext_canonical_fused_diag]]): stripping the reset
+    // wire changes the fusion topology, so the two sides fuse into different
+    // f16 kernels and diverge for reasons unrelated to the gate. (Same reason
+    // `oilyfluid_inloop_f16_fusion_matches_unfused` uses the raw harness.)
+    let pick_final = |d: &EffectGraphDef| {
+        let fo = d
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "system.final_output")
+            .map(|n| n.id)
+            .expect("final_output");
+        d.wires
+            .iter()
+            .find(|w| w.to_node == fo)
+            .map(|w| w.from_node)
+            .expect("final_output fed")
+    };
+    let (g, gd) =
+        render_def_capture_node_host(&gated, &registry, &device, w, h, 8, &pick_final, true)
+            .expect("gated renders");
+    let (u, ud) =
+        render_def_capture_node_host(&ungated, &registry, &device, w, h, 8, &pick_final, true)
+            .expect("ungated renders");
+    assert_eq!(gd, ud, "gated/ungated dims match");
     let differ = TextureDiff::new(&device);
     let r = differ.compare(&device, &g.texture, &u.texture, 1.0e-3, 1.0e-2);
     assert!(
