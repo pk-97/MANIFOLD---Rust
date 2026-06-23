@@ -16,6 +16,7 @@ mod dialog_path_memory;
 #[cfg(target_os = "macos")]
 mod display_link;
 mod editing_host;
+mod editor_input;
 mod edr_surface;
 mod frame_timer;
 mod graph_canvas;
