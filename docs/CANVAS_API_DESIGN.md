@@ -249,29 +249,28 @@ keep the `GraphPaletteAtom` data struct (used by the spawn popup). Its tests go
 with it.
 
 **(b) Collapse `GraphEditorPanel` to one dispatch model.** The runtime drives
-`handle_event` (`app_render.rs:897`); `dispatch_clicks` is dead and `handle_click`
-is tests-only. The target is the model the editor_card already uses and the
-`Panel` trait prescribes (`mod.rs:910-927`): **discrete clicks resolve through the
-`IntentRegistry` at build; drag stays in `handle_event`.**
+`handle_event`; `dispatch_clicks` is dead and `handle_click` is tests-only — the
+"three competing dispatch paths" the audit named. Collapse to **one**:
+`handle_event` is the sole discrete-input path (`Click` → row → `GraphEditCommand`;
+`DragBegin`/`Drag`/`DragEnd` → value-cell scrub). Delete `dispatch_clicks` and
+`handle_click`; the click tests drive `handle_event` via a `click()` test helper
+that wraps a `UIEvent::Click` (the real runtime path), the drag tests already do.
 
-- `register_intents(&self, &mut IntentRegistry)` walks `self.rows` and registers
-  each clickable row's `Gesture::Click → GraphEditCommand` (checkbox →
-  `ToggleNodeParamExpose`; value-cell click on Bool/Enum → `SetGraphNodeParam`;
-  Browse/Wgsl/EditText/TableCell buttons → their commands; preview toggle →
-  `SetNodePreviewNormalize`). The **wire-driven** dead-row guard maps to
-  `claim_area`-without-action (`intent.rs:119`) so a click on a wired param is
-  absorbed, not dispatched — preserving today's semantics.
-- `handle_event` keeps **only** the drag arms (`DragBegin`/`Drag`/`DragEnd` →
-  the scrub `SetGraphNodeParam` stream and the Color/Vec channel scrubs). This is
-  the exact split the Chrome API draws (drag is not an intent;
-  `CHROME_API_DESIGN.md` "Intent at build").
-- Delete `dispatch_clicks` and `handle_click`; rewrite the panel's ~30 click
-  tests to build → `register_intents` → `IntentRegistry::resolve` (the pattern
-  Phase 1.6 used for the transport/header/footer twins). Drag tests keep driving
-  `handle_event`.
-- The editor window resolves sidebar clicks through one registry alongside the
-  editor_card's (`app_render.rs:846-879`), so both halves of the window run one
-  dispatch architecture.
+**Why `handle_event` and not `register_intents` (a scoping decision made during
+implementation):** the design above aimed to put the sidebar's discrete clicks on
+the `IntentRegistry` like the editor_card. But `IntentRegistry`/`NodeIntent` are
+hardcoded to carry **`PanelAction`** (`intent.rs:30,112`), and Phase 4.3 made the
+sidebar emit **`GraphEditCommand`**. Registering its clicks as intents would
+require generalising the registry to carry both action types (or a wrapper enum)
+— a crate-wide change touching every panel, larger than 4.5's "one dispatch
+model" warrants, and the registry's headline benefit (parent-chain fold-up) is
+marginal for the sidebar's *flat* rows (no nested inert children to fold through).
+So 4.5 delivers the stated goal — the three id-matching entry points collapse to
+one — without the registry generalisation. Folding the sidebar onto a
+`GraphEditCommand`-aware registry is left to whenever the registry is generalised
+(naturally part of Phase 5's UI-local-event work). This mirrors
+`TIMELINE_API_DESIGN` §3.3's "not reusing `trim.rs`" call: take the correct,
+scoped step, record why the larger one waited.
 
 **Why not a full declarative `view()` rewrite of the 3,110-line `build()`:** the
 Chrome API's headline win is killing the `build()`/`update()` dual-write — but
@@ -280,15 +279,13 @@ dual-write to kill. Its value cells carry stateful drag (scrub, per-channel
 Color/Vec sliders) and inline String/Table/WGSL editors — the exact
 "widget-imperative" surface Phase 2b kept imperative *by design*, with a runtime
 visual pass as the verification boundary (which isn't available headlessly). So
-4.5's "on the Chrome API" for this panel is the **intent-at-build + one-dispatch-
-model** half — headlessly verifiable, and it removes the actual foot-gun (three
-id-matching paths). Converting the imperative `build()` body to a `View` tree is
-tracked as the same runtime-visual-pass follow-up Phase 2b carved out for
-drag-bearing panels (§4).
+4.5's deliverable for this panel is the **one-dispatch-model** half — headlessly
+verifiable, and it removes the actual foot-gun (three id-matching paths).
+Converting the imperative `build()` body to a `View` tree (and onto a generalised
+intent registry) is tracked as the runtime-visual-pass + Phase-5 follow-up.
 
-*Done when:* `GraphPalette` is deleted; `GraphEditorPanel` has one click path
-(`register_intents`) + one drag path (`handle_event`); `dispatch_clicks`/
-`handle_click` are gone; the editor window resolves its sidebar clicks centrally;
+*Done when:* `GraphPalette` is deleted; `GraphEditorPanel` has one discrete-input
+path (`handle_event`); `dispatch_clicks`/`handle_click` are gone;
 `cargo test -p manifold-ui -p manifold-app` green.
 
 ### 4.6 — Fold the editor event loop into the shared path

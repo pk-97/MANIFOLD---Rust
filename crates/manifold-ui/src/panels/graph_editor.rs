@@ -19,12 +19,16 @@
 //! subtree only when something material changed (selection,
 //! parameters, or exposed-set).
 //!
-//! ## Why not the `Panel` trait
+//! ## Dispatch model
 //!
-//! There's no shared `Panel` trait in this codebase yet (each panel is
-//! its own struct with its own methods). This panel follows the same
-//! convention: `new` / `configure` / `build` / `handle_click`, called
-//! by the editor-window present path.
+//! One discrete-input path: `handle_event(&UIEvent)` — `Click` resolves a row
+//! and emits a `GraphEditCommand`; `DragBegin`/`Drag`/`DragEnd` scrub a
+//! numeric/colour value cell. The old `handle_click` / `dispatch_clicks` shims
+//! were deleted in Phase 4.5 ("one dispatch model"). This panel stays imperative
+//! (it full-rebuilds each frame; there's no `build()`/`update()` dual-write to
+//! collapse) — moving its discrete clicks onto the `IntentRegistry` is blocked
+//! because that registry carries `PanelAction` and this panel emits
+//! `GraphEditCommand` (Phase 4.3); see `docs/CANVAS_API_DESIGN.md` §3.
 
 use std::collections::{HashMap, HashSet};
 
@@ -1392,13 +1396,6 @@ impl GraphEditorPanel {
         }
     }
 
-    /// Backwards-compatible shim — pre-Phase-B callers passed click
-    /// node ids directly. Tests still use this; runtime is migrated
-    /// to `handle_event`.
-    pub fn handle_click(&mut self, node_id: NodeId) -> Vec<GraphEditCommand> {
-        self.handle_click_event(node_id)
-    }
-
     fn handle_click_event(&mut self, node_id: NodeId) -> Vec<GraphEditCommand> {
         // No effect_index guard here on purpose: post-unification the
         // graph editor is one surface for both Effect-hosted AND
@@ -1733,15 +1730,6 @@ impl GraphEditorPanel {
         }]
     }
 
-    /// Convenience wrapper: walk a slice of clicked button ids, map
-    /// each through `handle_click`. Used by the editor-window present
-    /// path's compatibility shim where only click ids were captured.
-    pub fn dispatch_clicks(&mut self, clicks: &[NodeId]) -> Vec<GraphEditCommand> {
-        clicks
-            .iter()
-            .flat_map(|&n| self.handle_click_event(n))
-            .collect()
-    }
 }
 
 /// Translate a click on an inner-param value cell into a
@@ -1995,6 +1983,19 @@ mod tests {
             .collect()
     }
 
+    /// Drive a discrete click through the single dispatch path (`handle_event`),
+    /// the way the runtime does. The old `handle_click` shim was deleted in
+    /// Phase 4.5 (one dispatch model); tests exercise the real path.
+    fn click(panel: &mut GraphEditorPanel, id: NodeId) -> Vec<GraphEditCommand> {
+        use crate::input::{Modifiers, UIEvent};
+        use crate::node::Vec2;
+        panel.handle_event(&UIEvent::Click {
+            node_id: id,
+            pos: Vec2::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
+        })
+    }
+
     #[test]
     fn build_renders_rows_for_supported_params_only() {
         let mut tree = UITree::new();
@@ -2085,7 +2086,8 @@ mod tests {
             HashSet::new(),
         );
         panel.build(&mut tree, viewport());
-        let actions = panel.handle_click(preview_toggle_id(&panel));
+        let id = preview_toggle_id(&panel);
+        let actions = click(&mut panel, id);
         assert!(
             matches!(
                 actions.as_slice(),
@@ -2097,7 +2099,8 @@ mod tests {
         // Off → clicking requests on.
         panel.set_node_preview_normalize(false);
         panel.build(&mut tree, viewport());
-        let actions = panel.handle_click(preview_toggle_id(&panel));
+        let id = preview_toggle_id(&panel);
+        let actions = click(&mut panel, id);
         assert!(
             matches!(
                 actions.as_slice(),
@@ -2128,7 +2131,7 @@ mod tests {
             .filter(|r| matches!(r, RowState::InnerNode { .. }))
             .collect();
         let translate_cb = checkbox_id_of(inner_rows[0]);
-        let actions = panel.handle_click(translate_cb);
+        let actions = click(&mut panel,translate_cb);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::ToggleNodeParamExpose {
@@ -2182,7 +2185,7 @@ mod tests {
             .filter(|r| matches!(r, RowState::InnerNode { .. }))
             .collect();
         let translate_cb = checkbox_id_of(inner_rows[0]);
-        let actions = panel.handle_click(translate_cb);
+        let actions = click(&mut panel,translate_cb);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::ToggleNodeParamExpose { expose, .. } => {
@@ -2207,7 +2210,7 @@ mod tests {
         );
         panel.build(&mut tree, viewport());
         // Random unrelated node id.
-        assert!(panel.handle_click(NodeId(99999)).is_empty());
+        assert!(click(&mut panel,NodeId(99999)).is_empty());
     }
 
     /// Post-unification: the graph editor is one surface for both
@@ -2235,9 +2238,12 @@ mod tests {
             HashSet::new(),
         );
         panel.build(&mut tree, viewport());
-        let rows = inner_rows(&panel);
-        let row = rows.first().expect("at least one inner-node row");
-        let actions = panel.handle_click(checkbox_id_of(row));
+        let cb_id = {
+            let rows = inner_rows(&panel);
+            let row = rows.first().expect("at least one inner-node row");
+            checkbox_id_of(row)
+        };
+        let actions = click(&mut panel, cb_id);
         assert_eq!(
             actions.len(),
             1,
@@ -2339,7 +2345,7 @@ mod tests {
             )
             .expect("bool row exists");
         let cell = value_cell_id_of(bool_row).expect("bool row has value cell");
-        let actions = panel.handle_click(cell);
+        let actions = click(&mut panel,cell);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::SetGraphNodeParam {
@@ -2376,7 +2382,7 @@ mod tests {
             .find(|r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "mode"))
             .expect("mode row exists");
         let cell = value_cell_id_of(mode_row).expect("mode row has value cell");
-        let actions = panel.handle_click(cell);
+        let actions = click(&mut panel,cell);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::SetGraphNodeParam {
@@ -2419,7 +2425,7 @@ mod tests {
             .find(|r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "mode"))
             .unwrap();
         let cell = value_cell_id_of(mode_row).unwrap();
-        match &panel.handle_click(cell)[0] {
+        match &click(&mut panel,cell)[0] {
             GraphEditCommand::SetGraphNodeParam { new_value, .. } => {
                 assert_eq!(*new_value, SerializedParamValue::Enum { value: 0 });
             }
@@ -2595,7 +2601,7 @@ mod tests {
 
         // Clicking still emits a SetGraphNodeParam — the user can
         // override the outer.
-        let actions = panel.handle_click(mode_cell);
+        let actions = click(&mut panel,mode_cell);
         assert_eq!(actions.len(), 1);
         assert!(matches!(&actions[0], GraphEditCommand::SetGraphNodeParam { .. }));
     }
@@ -2632,7 +2638,7 @@ mod tests {
             )
             .expect("scale row exists");
         let cb_id = checkbox_id_of(scale_row);
-        let actions = panel.handle_click(cb_id);
+        let actions = click(&mut panel,cb_id);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::ToggleNodeParamExpose {
@@ -2672,7 +2678,7 @@ mod tests {
             )
             .expect("enabled row exists");
         let cb_id = checkbox_id_of(enabled_row);
-        let actions = panel.handle_click(cb_id);
+        let actions = click(&mut panel,cb_id);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::ToggleNodeParamExpose {
@@ -2731,7 +2737,7 @@ mod tests {
         // already disabled. Belt-and-braces in case the styling drifts.
         let cb_id = checkbox_id_of(translate_row);
         assert!(
-            panel.handle_click(cb_id).is_empty(),
+            click(&mut panel,cb_id).is_empty(),
             "checkbox click on a wire-driven row must not emit any action",
         );
     }
@@ -2763,7 +2769,7 @@ mod tests {
             )
             .expect("scale row exists");
         let cb_id = checkbox_id_of(scale_row);
-        let actions = panel.handle_click(cb_id);
+        let actions = click(&mut panel,cb_id);
         assert_eq!(actions.len(), 1, "non-wired sibling stays interactive");
     }
 
@@ -2934,7 +2940,7 @@ mod tests {
                 _ => None,
             })
             .expect("a path-like String param has a Browse button");
-        match panel.handle_click(browse).as_slice() {
+        match click(&mut panel,browse).as_slice() {
             [GraphEditCommand::BrowseGraphNodePath {
                 node_id,
                 param_name,
@@ -2995,7 +3001,7 @@ mod tests {
                 _ => None,
             })
             .expect("a non-path String param has a clickable value cell");
-        match panel.handle_click(cell).as_slice() {
+        match click(&mut panel,cell).as_slice() {
             [GraphEditCommand::EditGraphNodeStringParam {
                 node_id,
                 param_name,
@@ -3087,7 +3093,7 @@ mod tests {
                 _ => None,
             })
             .expect("row 1 col 2 cell exists");
-        match panel.handle_click(btn).as_slice() {
+        match click(&mut panel,btn).as_slice() {
             [GraphEditCommand::EditGraphNodeTableCell {
                 node_id,
                 param_name,
