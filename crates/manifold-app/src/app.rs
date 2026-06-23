@@ -348,6 +348,15 @@ pub struct Application {
     /// inspector (rather than the card's old exact-id `handle_right_click`).
     /// Repopulated from the card's node ids each editor frame that has events.
     pub(crate) editor_card_intents: manifold_ui::intent::IntentRegistry,
+    /// Node-intent dispatch for the editor's right-sidebar inspector
+    /// (`graph_editor_panel`) — typed to its own `GraphEditCommand` vocabulary
+    /// (the generic `IntentRegistry<A>` from Phase 6.1). Discrete sidebar clicks
+    /// fold through this registry exactly like every chrome panel, replacing the
+    /// panel's old per-row click loop (Phase 6.2). Repopulated from the panel's
+    /// rows each editor frame that has events; stateful drags stay on
+    /// `GraphEditorPanel::handle_event`.
+    pub(crate) editor_sidebar_intents:
+        manifold_ui::intent::IntentRegistry<manifold_ui::GraphEditCommand>,
     /// Hash of the editor card's last-applied `ParamCardConfig`. `configure`
     /// rebuilds the card's transient UI state (open driver/envelope drawers,
     /// the mapping drawer), so — exactly like the inspector, whose
@@ -580,6 +589,7 @@ impl Application {
             },
             editor_card_config_hash: None,
             editor_card_intents: manifold_ui::intent::IntentRegistry::new(),
+            editor_sidebar_intents: manifold_ui::intent::IntentRegistry::new(),
             editor_mapping_popover: crate::mapping_popover::MappingPopover::new(),
             graph_node_clipboard: None,
             palette_atoms_cache: {

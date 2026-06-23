@@ -850,6 +850,14 @@ impl Application {
                     self.editor_card_intents.clear();
                     self.editor_card
                         .register_intents(&mut self.editor_card_intents);
+                    // Right-sidebar inspector clicks fold through the shared
+                    // intent registry too now (Phase 6.2). Refresh from the
+                    // panel's current rows — the sidebar built into
+                    // `ed.ui_root.tree` last present, so the row ids match this
+                    // frame's events, exactly like the card above.
+                    self.editor_sidebar_intents.clear();
+                    self.graph_editor_panel
+                        .register_intents(&mut self.editor_sidebar_intents);
                 }
                 for event in &events {
                     // Left-lane card: map editor pointer events to the card's
@@ -894,10 +902,21 @@ impl Application {
                             other => editor_card_actions.push(other),
                         }
                     }
-                    // Forward every event into the right-sidebar inspector panel
-                    // too — it wants Click (toggle/cycle) plus DragBegin/Drag/
-                    // DragEnd (numeric scrub) for the per-node expose rows.
-                    graph_edits.extend(self.graph_editor_panel.handle_event(event));
+                    // Right-sidebar inspector dispatch (Phase 6.2): discrete
+                    // clicks (toggle / cycle / open-editor) resolve through the
+                    // shared intent registry; the stateful DragBegin/Drag/DragEnd
+                    // numeric scrub stays on the panel's `handle_event`.
+                    if let UIEvent::Click { node_id, .. } = event {
+                        if let Some(cmd) = self.editor_sidebar_intents.resolve(
+                            &ed.ui_root.tree,
+                            Some(*node_id),
+                            manifold_ui::intent::Gesture::Click,
+                        ) {
+                            graph_edits.push(cmd);
+                        }
+                    } else {
+                        graph_edits.extend(self.graph_editor_panel.handle_event(event));
+                    }
                 }
             }
         }

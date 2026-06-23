@@ -21,19 +21,29 @@
 //!
 //! ## Dispatch model
 //!
-//! One discrete-input path: `handle_event(&UIEvent)` — `Click` resolves a row
-//! and emits a `GraphEditCommand`; `DragBegin`/`Drag`/`DragEnd` scrub a
-//! numeric/colour value cell. The old `handle_click` / `dispatch_clicks` shims
-//! were deleted in Phase 4.5 ("one dispatch model"). This panel stays imperative
-//! (it full-rebuilds each frame; there's no `build()`/`update()` dual-write to
-//! collapse) — moving its discrete clicks onto the `IntentRegistry` is blocked
-//! because that registry carries `PanelAction` and this panel emits
-//! `GraphEditCommand` (Phase 4.3); see `docs/CANVAS_API_DESIGN.md` §3.
+//! Two paths, split by gesture kind (UI Architecture Overhaul Phase 6.2):
+//! - **Discrete clicks** fold onto the shared [`IntentRegistry`] — now generic,
+//!   so this panel registers `IntentRegistry<GraphEditCommand>` intents at build
+//!   via [`GraphEditorPanel::register_intents`] and the app resolves clicks
+//!   through it, exactly like every chrome panel. This replaces the old
+//!   per-row `handle_click_event` id-matching loop. The Phase 4.5 blocker —
+//!   "the registry carries `PanelAction`, this panel emits `GraphEditCommand`" —
+//!   is gone now that 6.1 made the registry generic over the action type.
+//! - **Stateful drags** stay in `handle_event(&UIEvent)`: `DragBegin`/`Drag`/
+//!   `DragEnd` scrub a numeric/colour value cell against a captured anchor.
+//!   Drag is inherently stateful (it mutates `self.drag` across frames), so it
+//!   does not fit the build-time intent model — the same boundary the registry
+//!   draws everywhere (intent dispatch is for node→action gestures; drag/scroll
+//!   stay in the stateful path). See `docs/CANVAS_API_DESIGN.md` §3.
+//!
+//! This panel stays imperative (it full-rebuilds each frame; there's no
+//! `build()`/`update()` dual-write to collapse).
 
 use std::collections::{HashMap, HashSet};
 
 use crate::color;
 use crate::input::UIEvent;
+use crate::intent::{Gesture, IntentRegistry};
 use crate::node::*;
 use crate::tree::UITree;
 use crate::types::{ParamConvert, SerializedParamValue};
@@ -237,11 +247,11 @@ const CHECKBOX_GAP: f32 = 10.0;
 const FONT_SIZE: u16 = 12;
 const HEADER_FONT_SIZE: u16 = 14;
 
-/// Per-row state captured during `build` so `handle_event` can map
-/// a tree node id back to its parameter without re-walking the
-/// snapshot. Inner-node rows track BOTH the expose checkbox and the
-/// editable value cell, since each lands on a distinct tree node id
-/// and emits a distinct `PanelAction`.
+/// Per-row state captured during `build` so `register_intents` (clicks) and
+/// `handle_event` (drags) can map a tree node id back to its parameter without
+/// re-walking the snapshot. Inner-node rows track BOTH the expose checkbox and
+/// the editable value cell, since each lands on a distinct tree node id and
+/// emits a distinct `GraphEditCommand`.
 ///
 /// The top "Effect Parameters" list is read-only after the V2
 /// unification (any toggling lives on the per-node rows below), so it
@@ -1363,70 +1373,42 @@ impl GraphEditorPanel {
         }
     }
 
-    /// Translate a single UITree event into zero or more `PanelAction`s.
+    /// Register this panel's discrete-click intents into `reg` (UI Architecture
+    /// Overhaul Phase 6.2). Each clickable row maps its tree node to the
+    /// `GraphEditCommand` it fires; the app resolves clicks through the shared
+    /// [`IntentRegistry`] — now generic over the action type (6.1) — folding the
+    /// sidebar onto the same dispatch every chrome panel uses, replacing the old
+    /// per-row `handle_click_event` id-matching loop.
     ///
-    /// Click on an inner-param checkbox / static-block checkbox →
-    /// `EffectParamExpose` / `EffectStaticParamExpose`.
+    /// Call once per frame that carries events, after [`Self::build`]: the row
+    /// table holds the node ids from the last build, which match this frame's
+    /// events. Drags are NOT registered — they stay in [`Self::handle_event`].
     ///
-    /// Click on an inner-param value cell:
-    /// - Bool → emit `SetGraphNodeParam` with the toggled bool.
-    /// - Enum → emit `SetGraphNodeParam` with `(current + 1) %
-    ///   enum_count`; wraps to 0 past the last option.
-    /// - Float / Int → no-op; numeric edits go through drag.
+    /// No `effect_index` guard, on purpose: post-unification the editor is one
+    /// surface for both Effect- and Generator-hosted graphs (generators have no
+    /// `effect_index`). An empty `self.rows` (nothing selected) registers
+    /// nothing; the app-side `ToggleNodeParamExpose` handler gates on the watched
+    /// target so no command fires without one.
     ///
-    /// `DragBegin` on a Float/Int value cell captures the anchor
-    /// (`start_value`). Subsequent `Drag` events scale the cumulative
-    /// pixel delta into a value delta over `DRAG_FULL_RANGE_PX` and
-    /// emit one `SetGraphNodeParam` per delta. `DragEnd` clears the
-    /// captured anchor.
-    pub fn handle_event(&mut self, event: &UIEvent) -> Vec<GraphEditCommand> {
-        match event {
-            UIEvent::Click { node_id, .. } => self.handle_click_event(*node_id),
-            UIEvent::DragBegin {
-                node_id, origin, ..
-            } => self.handle_drag_begin(*node_id, origin.x),
-            UIEvent::Drag { node_id, pos, .. } => self.handle_drag(*node_id, pos.x),
-            UIEvent::DragEnd { node_id, .. } => {
-                if let Some(drag) = self.drag
-                    && drag.value_cell_node_id == *node_id
-                {
-                    self.drag = None;
-                }
-                Vec::new()
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn handle_click_event(&mut self, node_id: NodeId) -> Vec<GraphEditCommand> {
-        // No effect_index guard here on purpose: post-unification the
-        // graph editor is one surface for both Effect-hosted AND
-        // Generator-hosted graphs. Generators have no `effect_index`
-        // by definition, so gating on it silently dropped every
-        // checkbox click on a generator's inner-node row — the bug
-        // that left WireframeShape's Animate / Color / etc. params
-        // un-exposable. The per-row loop below is the real
-        // short-circuit: if `self.rows` is empty (no selected node,
-        // no inner-node rows built), every match arm falls through
-        // and we return Vec::new() at the bottom. The app-side
-        // dispatcher (`GraphEditCommand::ToggleNodeParamExpose` handler in
-        // app_render.rs) already gates on `watched_graph_target` so
-        // there's no risk of emitting an action without a target.
-        //
-        // Inner-node checkbox clicks: route to EffectStaticParamExpose
-        // when the param is a static-block target (`static_block_slot`
-        // is `Some`), otherwise to EffectParamExpose. Static-block
-        // routing flips `param_values[slot].exposed` directly; the
-        // user-binding path adds / removes a `UserParamBinding`.
-        // Value-cell clicks always route to SetGraphNodeParam.
+    /// Click semantics by row:
+    /// - Inner-param checkbox → `ToggleNodeParamExpose` (expose flips). One
+    ///   command whether or not `(handle, param)` maps to a static-block slot —
+    ///   the content-thread command dispatches internally.
+    /// - Inner-param value cell → `SetGraphNodeParam` for Bool/Enum/Trigger;
+    ///   Float/Int cells edit by drag, so they register no click intent.
+    /// - Wire-driven rows register nothing — the wire wins each frame, so both
+    ///   the checkbox and the value cell are dead (the old short-circuit).
+    /// - Browse / EditText / Wgsl / Table-cell buttons → their open-editor command.
+    /// - Preview-normalize toggle → `SetNodePreviewNormalize` (flipped).
+    pub fn register_intents(&self, reg: &mut IntentRegistry<GraphEditCommand>) {
         for row in &self.rows {
             match row {
                 RowState::PreviewNormalizeToggle { button_node_id } => {
-                    if *button_node_id == node_id {
-                        return vec![GraphEditCommand::SetNodePreviewNormalize(
-                            !self.normalize_preview,
-                        )];
-                    }
+                    reg.on(
+                        *button_node_id,
+                        Gesture::Click,
+                        GraphEditCommand::SetNodePreviewNormalize(!self.normalize_preview),
+                    );
                 }
                 RowState::InnerNode {
                     checkbox_node_id,
@@ -1448,23 +1430,18 @@ impl GraphEditorPanel {
                     static_block_slot,
                     wire_driven,
                 } => {
-                    // Wire-driven rows: clicks on either target are
-                    // dead. Local edits and exposure changes through
-                    // here would lie — the wire wins each frame.
-                    if *wire_driven
-                        && (*checkbox_node_id == node_id
-                            || value_cell_node_id.map(|v| v == node_id).unwrap_or(false))
-                    {
-                        return Vec::new();
+                    // Wire-driven rows: clicks on either target are dead — the
+                    // wire wins every frame, so neither the checkbox nor the
+                    // value cell registers an intent.
+                    if *wire_driven {
+                        continue;
                     }
-                    if *checkbox_node_id == node_id {
-                        // Unified: one PanelAction regardless of whether
-                        // (handle, param) maps to a static-block slot
-                        // or a user-bound tail entry. The content-thread
-                        // command (`ToggleNodeParamExposeCommand`) does
-                        // the dispatch internally.
-                        let _ = static_block_slot;
-                        return vec![GraphEditCommand::ToggleNodeParamExpose {
+                    // Checkbox → unified expose toggle.
+                    let _ = static_block_slot;
+                    reg.on(
+                        *checkbox_node_id,
+                        Gesture::Click,
+                        GraphEditCommand::ToggleNodeParamExpose {
                             node_id: row_node_id.clone(),
                             node_handle: node_handle.clone(),
                             inner_param: inner_param.clone(),
@@ -1476,35 +1453,41 @@ impl GraphEditorPanel {
                             convert: *convert,
                             is_angle: matches!(*kind, GraphEditorParamKind::Angle),
                             value_labels: enum_labels.clone(),
-                        }];
-                    }
-                    if value_cell_node_id.map(|v| v == node_id).unwrap_or(false) {
-                        if let Some(new_value) =
+                        },
+                    );
+                    // Value cell → SetGraphNodeParam for the click-editable kinds
+                    // (Bool toggle, Enum cycle, Trigger fire). Float/Int return
+                    // None and edit by drag, so they register no click intent.
+                    if let Some(cell) = value_cell_node_id
+                        && let Some(new_value) =
                             value_cell_click_to_param(*kind, *current_value, *enum_labels_count)
-                        {
-                            return vec![GraphEditCommand::SetGraphNodeParam {
+                    {
+                        reg.on(
+                            *cell,
+                            Gesture::Click,
+                            GraphEditCommand::SetGraphNodeParam {
                                 node_id: *node_runtime_id,
                                 param_name: inner_param.clone(),
                                 new_value,
-                            }];
-                        }
-                        return Vec::new();
+                            },
+                        );
                     }
                 }
-                // Colour / vector channel cells edit by drag only; a click is a
-                // no-op (handled in handle_drag / handle_drag_begin).
+                // Colour / vector channel cells edit by drag only — no click intent.
                 RowState::VecComponent { .. } => {}
                 RowState::BrowseButton {
                     button_node_id,
                     node_runtime_id,
                     param_name,
                 } => {
-                    if *button_node_id == node_id {
-                        return vec![GraphEditCommand::BrowseGraphNodePath {
+                    reg.on(
+                        *button_node_id,
+                        Gesture::Click,
+                        GraphEditCommand::BrowseGraphNodePath {
                             node_id: *node_runtime_id,
                             param_name: param_name.clone(),
-                        }];
-                    }
+                        },
+                    );
                 }
                 RowState::EditTextButton {
                     button_node_id,
@@ -1513,27 +1496,31 @@ impl GraphEditorPanel {
                     current,
                     rect,
                 } => {
-                    if *button_node_id == node_id {
-                        return vec![GraphEditCommand::EditGraphNodeStringParam {
+                    reg.on(
+                        *button_node_id,
+                        Gesture::Click,
+                        GraphEditCommand::EditGraphNodeStringParam {
                             node_id: *node_runtime_id,
                             param_name: param_name.clone(),
                             current: current.clone(),
                             anchor: *rect,
-                        }];
-                    }
+                        },
+                    );
                 }
                 RowState::WgslButton {
                     button_node_id,
                     node_runtime_id,
                     source,
                 } => {
-                    if *button_node_id == node_id {
-                        return vec![GraphEditCommand::EditGraphNodeWgsl {
+                    reg.on(
+                        *button_node_id,
+                        Gesture::Click,
+                        GraphEditCommand::EditGraphNodeWgsl {
                             node_id: *node_runtime_id,
                             current: source.clone(),
                             anchor: (0.0, 0.0, 0.0, 0.0),
-                        }];
-                    }
+                        },
+                    );
                 }
                 RowState::TableCell {
                     button_node_id,
@@ -1543,21 +1530,23 @@ impl GraphEditorPanel {
                     col,
                     rect,
                 } => {
-                    if *button_node_id == node_id {
-                        // Look up the full table off the selected node so the
-                        // host can rebuild just the edited cell on commit.
-                        if let Some(rows) = self
-                            .selected_node
-                            .as_ref()
-                            .and_then(|n| n.parameters.iter().find(|p| &p.name == param_name))
-                            .and_then(|p| p.table_value.clone())
-                        {
-                            let current = rows
-                                .get(*row)
-                                .and_then(|r| r.get(*col))
-                                .copied()
-                                .unwrap_or(0.0);
-                            return vec![GraphEditCommand::EditGraphNodeTableCell {
+                    // Look up the full table off the selected node so the host can
+                    // rebuild just the edited cell on commit.
+                    if let Some(rows) = self
+                        .selected_node
+                        .as_ref()
+                        .and_then(|n| n.parameters.iter().find(|p| &p.name == param_name))
+                        .and_then(|p| p.table_value.clone())
+                    {
+                        let current = rows
+                            .get(*row)
+                            .and_then(|r| r.get(*col))
+                            .copied()
+                            .unwrap_or(0.0);
+                        reg.on(
+                            *button_node_id,
+                            Gesture::Click,
+                            GraphEditCommand::EditGraphNodeTableCell {
                                 node_id: *node_runtime_id,
                                 param_name: param_name.clone(),
                                 row: *row,
@@ -1565,13 +1554,36 @@ impl GraphEditorPanel {
                                 current,
                                 rows,
                                 anchor: *rect,
-                            }];
-                        }
+                            },
+                        );
                     }
                 }
             }
         }
-        Vec::new()
+    }
+
+    /// Stateful pointer-drag dispatch — the half of the old `handle_event` that
+    /// can't be a build-time intent. `DragBegin` on a Float/Int (or colour /
+    /// vector channel) value cell captures the scrub anchor; each `Drag` scales
+    /// the cumulative pixel delta over `DRAG_FULL_RANGE_PX` and emits one
+    /// `SetGraphNodeParam`; `DragEnd` clears the anchor. Discrete clicks are
+    /// handled via [`Self::register_intents`].
+    pub fn handle_event(&mut self, event: &UIEvent) -> Vec<GraphEditCommand> {
+        match event {
+            UIEvent::DragBegin {
+                node_id, origin, ..
+            } => self.handle_drag_begin(*node_id, origin.x),
+            UIEvent::Drag { node_id, pos, .. } => self.handle_drag(*node_id, pos.x),
+            UIEvent::DragEnd { node_id, .. } => {
+                if let Some(drag) = self.drag
+                    && drag.value_cell_node_id == *node_id
+                {
+                    self.drag = None;
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
     }
 
     fn handle_drag_begin(&mut self, node_id: NodeId, origin_x: f32) -> Vec<GraphEditCommand> {
@@ -1985,17 +1997,16 @@ mod tests {
             .collect()
     }
 
-    /// Drive a discrete click through the single dispatch path (`handle_event`),
-    /// the way the runtime does. The old `handle_click` shim was deleted in
-    /// Phase 4.5 (one dispatch model); tests exercise the real path.
-    fn click(panel: &mut GraphEditorPanel, id: NodeId) -> Vec<GraphEditCommand> {
-        use crate::input::{Modifiers, UIEvent};
-        use crate::node::Vec2;
-        panel.handle_event(&UIEvent::Click {
-            node_id: id,
-            pos: Vec2::new(0.0, 0.0),
-            modifiers: Modifiers::default(),
-        })
+    /// Drive a discrete click through the real runtime path (Phase 6.2): build
+    /// the panel's intent registry, then resolve the hit node through it with the
+    /// same fold-up the app uses. Returns the resolved `GraphEditCommand` (zero
+    /// or one), keeping the old `Vec` shape so existing assertions stand.
+    fn click(panel: &GraphEditorPanel, tree: &UITree, id: NodeId) -> Vec<GraphEditCommand> {
+        let mut reg = IntentRegistry::<GraphEditCommand>::new();
+        panel.register_intents(&mut reg);
+        reg.resolve(tree, Some(id), Gesture::Click)
+            .into_iter()
+            .collect()
     }
 
     #[test]
@@ -2089,7 +2100,7 @@ mod tests {
         );
         panel.build(&mut tree, viewport());
         let id = preview_toggle_id(&panel);
-        let actions = click(&mut panel, id);
+        let actions = click(&panel, &tree, id);
         assert!(
             matches!(
                 actions.as_slice(),
@@ -2102,7 +2113,7 @@ mod tests {
         panel.set_node_preview_normalize(false);
         panel.build(&mut tree, viewport());
         let id = preview_toggle_id(&panel);
-        let actions = click(&mut panel, id);
+        let actions = click(&panel, &tree, id);
         assert!(
             matches!(
                 actions.as_slice(),
@@ -2133,7 +2144,7 @@ mod tests {
             .filter(|r| matches!(r, RowState::InnerNode { .. }))
             .collect();
         let translate_cb = checkbox_id_of(inner_rows[0]);
-        let actions = click(&mut panel,translate_cb);
+        let actions = click(&panel, &tree,translate_cb);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::ToggleNodeParamExpose {
@@ -2187,7 +2198,7 @@ mod tests {
             .filter(|r| matches!(r, RowState::InnerNode { .. }))
             .collect();
         let translate_cb = checkbox_id_of(inner_rows[0]);
-        let actions = click(&mut panel,translate_cb);
+        let actions = click(&panel, &tree,translate_cb);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::ToggleNodeParamExpose { expose, .. } => {
@@ -2195,6 +2206,50 @@ mod tests {
             }
             other => panic!("unexpected action: {other:?}"),
         }
+    }
+
+    /// The Phase 6.2 contract, asserted directly on `register_intents` rather
+    /// than through the `click` helper: a Float param's checkbox registers a
+    /// `ToggleNodeParamExpose` Click intent, but its value cell registers *none*
+    /// (Float edits by drag), and an unrelated node folds up to nothing.
+    #[test]
+    fn register_intents_wires_checkbox_but_not_float_value_cell() {
+        let mut tree = UITree::new();
+        let mut panel = GraphEditorPanel::new();
+        let node = snap_node_with_params(Some("uv_transform"));
+        panel.configure(
+            Some(0),
+            Some(&node),
+            HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        panel.build(&mut tree, viewport());
+
+        let mut reg = IntentRegistry::<GraphEditCommand>::new();
+        panel.register_intents(&mut reg);
+
+        let row = inner_rows(&panel)[0]; // "translate", a Float param
+        let cb = checkbox_id_of(row);
+        let cell = value_cell_id_of(row).expect("Float row has an editable value cell");
+
+        assert!(
+            matches!(
+                reg.resolve(&tree, Some(cb), Gesture::Click),
+                Some(GraphEditCommand::ToggleNodeParamExpose { .. })
+            ),
+            "checkbox click must resolve to a ToggleNodeParamExpose"
+        );
+        assert!(
+            reg.resolve(&tree, Some(cell), Gesture::Click).is_none(),
+            "a Float value cell edits by drag — it must register no click intent"
+        );
+        assert!(
+            reg.resolve(&tree, Some(NodeId(99999)), Gesture::Click)
+                .is_none(),
+            "an unrelated node folds up to nothing"
+        );
     }
 
     #[test]
@@ -2212,7 +2267,7 @@ mod tests {
         );
         panel.build(&mut tree, viewport());
         // Random unrelated node id.
-        assert!(click(&mut panel,NodeId(99999)).is_empty());
+        assert!(click(&panel, &tree,NodeId(99999)).is_empty());
     }
 
     /// Post-unification: the graph editor is one surface for both
@@ -2245,7 +2300,7 @@ mod tests {
             let row = rows.first().expect("at least one inner-node row");
             checkbox_id_of(row)
         };
-        let actions = click(&mut panel, cb_id);
+        let actions = click(&panel, &tree, cb_id);
         assert_eq!(
             actions.len(),
             1,
@@ -2347,7 +2402,7 @@ mod tests {
             )
             .expect("bool row exists");
         let cell = value_cell_id_of(bool_row).expect("bool row has value cell");
-        let actions = click(&mut panel,cell);
+        let actions = click(&panel, &tree,cell);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::SetGraphNodeParam {
@@ -2384,7 +2439,7 @@ mod tests {
             .find(|r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "mode"))
             .expect("mode row exists");
         let cell = value_cell_id_of(mode_row).expect("mode row has value cell");
-        let actions = click(&mut panel,cell);
+        let actions = click(&panel, &tree,cell);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::SetGraphNodeParam {
@@ -2427,7 +2482,7 @@ mod tests {
             .find(|r| matches!(r, RowState::InnerNode { inner_param, .. } if inner_param == "mode"))
             .unwrap();
         let cell = value_cell_id_of(mode_row).unwrap();
-        match &click(&mut panel,cell)[0] {
+        match &click(&panel, &tree,cell)[0] {
             GraphEditCommand::SetGraphNodeParam { new_value, .. } => {
                 assert_eq!(*new_value, SerializedParamValue::Enum { value: 0 });
             }
@@ -2603,7 +2658,7 @@ mod tests {
 
         // Clicking still emits a SetGraphNodeParam — the user can
         // override the outer.
-        let actions = click(&mut panel,mode_cell);
+        let actions = click(&panel, &tree,mode_cell);
         assert_eq!(actions.len(), 1);
         assert!(matches!(&actions[0], GraphEditCommand::SetGraphNodeParam { .. }));
     }
@@ -2640,7 +2695,7 @@ mod tests {
             )
             .expect("scale row exists");
         let cb_id = checkbox_id_of(scale_row);
-        let actions = click(&mut panel,cb_id);
+        let actions = click(&panel, &tree,cb_id);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::ToggleNodeParamExpose {
@@ -2680,7 +2735,7 @@ mod tests {
             )
             .expect("enabled row exists");
         let cb_id = checkbox_id_of(enabled_row);
-        let actions = click(&mut panel,cb_id);
+        let actions = click(&panel, &tree,cb_id);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             GraphEditCommand::ToggleNodeParamExpose {
@@ -2739,7 +2794,7 @@ mod tests {
         // already disabled. Belt-and-braces in case the styling drifts.
         let cb_id = checkbox_id_of(translate_row);
         assert!(
-            click(&mut panel,cb_id).is_empty(),
+            click(&panel, &tree,cb_id).is_empty(),
             "checkbox click on a wire-driven row must not emit any action",
         );
     }
@@ -2771,7 +2826,7 @@ mod tests {
             )
             .expect("scale row exists");
         let cb_id = checkbox_id_of(scale_row);
-        let actions = click(&mut panel,cb_id);
+        let actions = click(&panel, &tree,cb_id);
         assert_eq!(actions.len(), 1, "non-wired sibling stays interactive");
     }
 
@@ -2942,7 +2997,7 @@ mod tests {
                 _ => None,
             })
             .expect("a path-like String param has a Browse button");
-        match click(&mut panel,browse).as_slice() {
+        match click(&panel, &tree,browse).as_slice() {
             [GraphEditCommand::BrowseGraphNodePath {
                 node_id,
                 param_name,
@@ -3003,7 +3058,7 @@ mod tests {
                 _ => None,
             })
             .expect("a non-path String param has a clickable value cell");
-        match click(&mut panel,cell).as_slice() {
+        match click(&panel, &tree,cell).as_slice() {
             [GraphEditCommand::EditGraphNodeStringParam {
                 node_id,
                 param_name,
@@ -3095,7 +3150,7 @@ mod tests {
                 _ => None,
             })
             .expect("row 1 col 2 cell exists");
-        match click(&mut panel,btn).as_slice() {
+        match click(&panel, &tree,btn).as_slice() {
             [GraphEditCommand::EditGraphNodeTableCell {
                 node_id,
                 param_name,

@@ -14,6 +14,19 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
+> **Status: ALL PHASES 0–8 COMPLETE (2026-06-23).** The overhaul checklist is
+> done end-to-end; only the §10.2 deferred next-gen items remain, and those are
+> intentionally unscheduled. **Phase 6** (the last follow-on) generalised
+> `IntentRegistry<A>` / `NodeIntent<A>` off `PanelAction` (default `A =
+> PanelAction`, so every chrome panel + `ui_root` compile unchanged) and rewired
+> the graph-editor sidebar's click dispatch onto its own
+> `IntentRegistry<GraphEditCommand>`: `GraphEditorPanel::handle_click_event`
+> became `register_intents`, `handle_event` now carries only the stateful drag,
+> and the app resolves sidebar clicks through a new `editor_sidebar_intents`
+> registry (mirroring `editor_card_intents`). Behaviour-preserving; manifold-ui
+> 370 + manifold-app 55 tests green, clippy `-D warnings` clean. The historical
+> per-phase status below is kept as the running record.
+>
 > **Status: Phases 0–5 + 7 + 8 COMPLETE (2026-06-23); only Phase 6 remains (its
 > own chat, scoped in §13).** Phase 2 (Chrome API), Phase 3 (Timeline API),
 > Phase 4 (Canvas API), Phase 5 (layering inversion), **Phase 7 (one shared input
@@ -896,18 +909,44 @@ pass (see §0).
 > one PR, one focused session, behaviour-preserving like every phase before.
 > Ordered easiest→hardest. Scope grounded in the code as of the 5.1–5.3 landing.
 
-### Phase 6 — Generalise `IntentRegistry` off `PanelAction` (was Canvas-API 4.5)
-> Smallest of the three. `IntentRegistry`/`NodeIntent` (`manifold-ui/src/intent.rs`)
-> are hardwired to `PanelAction`. The generic param is cheap; the payoff is the
-> editor sidebar folding onto the same intent system instead of its own click
-> dispatch.
-- [ ] **6.1** Make `IntentRegistry<A>` / `NodeIntent<A>` generic over the action
+### Phase 6 — Generalise `IntentRegistry` off `PanelAction` — **COMPLETE (2026-06-23)** (was Canvas-API 4.5)
+> Smallest of the three, and the last follow-on. `IntentRegistry`/`NodeIntent`
+> (`manifold-ui/src/intent.rs`) were hardwired to `PanelAction`; the generic
+> param was cheap and the payoff is the editor sidebar folding onto the same
+> intent system instead of its own click dispatch. Behaviour-preserving;
+> manifold-ui 370 + manifold-app 55 tests green (incl. a generic-action-type
+> test and a direct `register_intents` test), `cargo clippy -p manifold-ui -p
+> manifold-app --tests -- -D warnings` clean. With this, **Phases 0–8 are all
+> done — the overhaul checklist is complete** (only the §10.2 deferred next-gen
+> items remain, intentionally not scheduled).
+- [x] **6.1** Make `IntentRegistry<A>` / `NodeIntent<A>` generic over the action
   type, with default `A = PanelAction` so every chrome panel + the main-window
-  resolve path compile unchanged.
-- [ ] **6.2** Rewire the graph-editor sidebar's click handling onto
-  `IntentRegistry<GraphEditCommand>` (replace its `handle_event` click dispatch
-  with registered intents). _Done when:_ the sidebar resolves clicks through the
-  registry and emits `GraphEditCommand`, with no behavioural change.
+  resolve path compile unchanged. **DONE 2026-06-23.** Both types carry
+  `<A = PanelAction>`; `Default` is hand-rolled on each (no spurious `A: Default`
+  bound), `on(node, g, action: A)` / `resolve(...) -> Option<A> where A: Clone`.
+  The chrome API (`View`/`ViewIntent`/`ChromeHost::register_intents`) and the
+  `Panel` trait stay on the default `PanelAction`, so all ~22 panels + `ui_root`
+  compile untouched. A `generic_action_type_resolves_and_folds_up` unit test
+  exercises the param with a non-`PanelAction` enum (direct hit + fold-up +
+  claim-absorb), proving the sidebar rides shared code, not a fork.
+- [x] **6.2** Rewire the graph-editor sidebar's click handling onto
+  `IntentRegistry<GraphEditCommand>`. **DONE 2026-06-23.** `GraphEditorPanel`'s
+  old per-row `handle_click_event` id-matching loop became
+  `register_intents(&self, &mut IntentRegistry<GraphEditCommand>)` — a faithful
+  1:1 port that registers each clickable row's `Click → GraphEditCommand` at
+  build (wire-driven rows register nothing; Float/Int value cells register no
+  click intent — they edit by drag). `handle_event` now carries **only** the
+  stateful `DragBegin`/`Drag`/`DragEnd` scrub. The app holds a new
+  `editor_sidebar_intents: IntentRegistry<GraphEditCommand>`, refreshes it from
+  the panel's rows each editor frame that has events (mirroring
+  `editor_card_intents`), and resolves sidebar `Click`s through it — drags still
+  go to `handle_event`. The 25 existing sidebar click tests now drive the real
+  registry-resolve path (the `click` helper builds the registry and resolves),
+  so they directly prove no behavioural change; the canvas's own `GraphEditCommand`
+  emission (drain_edits) is untouched. _Boundary kept:_ the sidebar is NOT moved
+  onto the `Panel` trait's `register_intents` (that's `IntentRegistry<PanelAction>`
+  and main-window-only) — it owns a typed registry of its own command vocabulary,
+  which is exactly what 6.1's generic param enables.
 
 ### Phase 7 — One shared input owner for the editor window — **COMPLETE (2026-06-23)** (was Canvas-API 4.6)
 > 4.6 folded the editor event loop into `editor_input.rs`; Phase 7 went the rest

@@ -278,6 +278,16 @@ one — without the registry generalisation. Folding the sidebar onto a
 `TIMELINE_API_DESIGN` §3.3's "not reusing `trim.rs`" call: take the correct,
 scoped step, record why the larger one waited.
 
+> **RESOLVED by Phase 6 (2026-06-23).** The registry is now generic —
+> `IntentRegistry<A>` / `NodeIntent<A>`, default `A = PanelAction` — so the
+> sidebar folds onto its own `IntentRegistry<GraphEditCommand>` after all.
+> `handle_click_event` became `GraphEditorPanel::register_intents`; `handle_event`
+> keeps only the stateful drag; the app resolves sidebar clicks through a new
+> `editor_sidebar_intents` registry (mirroring `editor_card_intents`). The
+> "crate-wide change touching every panel" never materialised — the default type
+> param means the chrome panels + `ui_root` compile untouched. See
+> `UI_ARCHITECTURE_OVERHAUL.md` §13 Phase 6.
+
 **Why not a full declarative `view()` rewrite of the 3,110-line `build()`:** the
 Chrome API's headline win is killing the `build()`/`update()` dual-write — but
 `GraphEditorPanel` has no `update()`; it full-rebuilds each frame, so there is no

@@ -4,9 +4,15 @@
 //! A panel attaches an *intent* to a node at build time (what this region means
 //! for a given gesture) instead of re-deriving it from stored ids at handle
 //! time. A single central resolver folds a hit node up its parent chain to the
-//! nearest ancestor carrying an intent for the gesture, then emits that
-//! `PanelAction`. The fold-up is what kills dead zones: a right-click on a
-//! slider's non-interactive fill resolves to the owning card.
+//! nearest ancestor carrying an intent for the gesture, then emits that action.
+//! The fold-up is what kills dead zones: a right-click on a slider's
+//! non-interactive fill resolves to the owning card.
+//!
+//! The registry is generic over the **action type** `A` (`IntentRegistry<A>` /
+//! `NodeIntent<A>`), defaulting to [`PanelAction`] so every chrome panel and the
+//! main-window resolve path read as `IntentRegistry` unchanged. The graph-editor
+//! sidebar instantiates it as `IntentRegistry<GraphEditCommand>` to fold its own
+//! click dispatch onto the same machinery (UI Architecture Overhaul Phase 6).
 //!
 //! See `docs/NODE_INTENT_DISPATCH.md` for the full design + migration plan.
 
@@ -23,13 +29,14 @@ pub enum Gesture {
     RightClick,
 }
 
-/// Per-node intent: which `PanelAction` each gesture maps to. Most nodes carry
+/// Per-node intent: which action `A` each gesture maps to. Most nodes carry
 /// none, so the registry stores these sparsely (boxed, behind `Option`).
-#[derive(Default, Clone)]
-pub struct NodeIntent {
-    pub click: Option<PanelAction>,
-    pub double_click: Option<PanelAction>,
-    pub right_click: Option<PanelAction>,
+/// Generic over the action type (default [`PanelAction`]); the graph-editor
+/// sidebar uses `NodeIntent<GraphEditCommand>`.
+pub struct NodeIntent<A = PanelAction> {
+    pub click: Option<A>,
+    pub double_click: Option<A>,
+    pub right_click: Option<A>,
     /// When set, this node claims its whole area for fold-up: a gesture on any
     /// non-intent descendant resolves here. Container backgrounds (card body,
     /// panel bg) set this so their padding/gaps are live, not dead.
@@ -41,8 +48,21 @@ pub struct NodeIntent {
     pub claims_area: bool,
 }
 
-impl NodeIntent {
-    fn action_for(&self, g: Gesture) -> Option<&PanelAction> {
+// Hand-rolled so the impl carries no `A: Default` bound — an empty intent is
+// "all `None`" regardless of whether the action type is `Default`.
+impl<A> Default for NodeIntent<A> {
+    fn default() -> Self {
+        Self {
+            click: None,
+            double_click: None,
+            right_click: None,
+            claims_area: false,
+        }
+    }
+}
+
+impl<A> NodeIntent<A> {
+    fn action_for(&self, g: Gesture) -> Option<&A> {
         match g {
             Gesture::Click => self.click.as_ref(),
             Gesture::DoubleClick => self.double_click.as_ref(),
@@ -60,14 +80,21 @@ impl NodeIntent {
 
 /// Dense, node-id-indexed intent store (`id == index`, parallel to the SoA
 /// tree). Cleared at build start and repopulated as panels create nodes.
-#[derive(Default)]
-pub struct IntentRegistry {
-    slots: Vec<Option<Box<NodeIntent>>>,
+/// Generic over the action type (default [`PanelAction`]).
+pub struct IntentRegistry<A = PanelAction> {
+    slots: Vec<Option<Box<NodeIntent<A>>>>,
 }
 
-impl IntentRegistry {
-    pub fn new() -> Self {
+// Hand-rolled to avoid a spurious `A: Default` bound (`Vec::new()` needs none).
+impl<A> Default for IntentRegistry<A> {
+    fn default() -> Self {
         Self { slots: Vec::new() }
+    }
+}
+
+impl<A> IntentRegistry<A> {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Drop all intent. Call once at the start of each tree build.
@@ -75,7 +102,7 @@ impl IntentRegistry {
         self.slots.clear();
     }
 
-    fn slot_mut(&mut self, node: NodeId) -> &mut NodeIntent {
+    fn slot_mut(&mut self, node: NodeId) -> &mut NodeIntent<A> {
         let idx = node.index();
         if idx >= self.slots.len() {
             self.slots.resize_with(idx + 1, || None);
@@ -84,7 +111,7 @@ impl IntentRegistry {
     }
 
     /// Map a gesture on `node` to `action`.
-    pub fn on(&mut self, node: NodeId, g: Gesture, action: PanelAction) {
+    pub fn on(&mut self, node: NodeId, g: Gesture, action: A) {
         let slot = self.slot_mut(node);
         match g {
             Gesture::Click => slot.click = Some(action),
@@ -98,7 +125,7 @@ impl IntentRegistry {
         self.slot_mut(node).claims_area = true;
     }
 
-    fn get(&self, node: NodeId) -> Option<&NodeIntent> {
+    fn get(&self, node: NodeId) -> Option<&NodeIntent<A>> {
         self.slots
             .get(node.index())
             .and_then(|s| s.as_deref())
@@ -109,7 +136,10 @@ impl IntentRegistry {
     /// for `g`. A `claims_area` node with no matching gesture intent stops the
     /// walk and absorbs the gesture (returns `None`) — it deliberately shadows
     /// outer intents so an inner region can opt out.
-    pub fn resolve(&self, tree: &UITree, hit: Option<NodeId>, g: Gesture) -> Option<PanelAction> {
+    pub fn resolve(&self, tree: &UITree, hit: Option<NodeId>, g: Gesture) -> Option<A>
+    where
+        A: Clone,
+    {
         let mut cur = hit;
         while let Some(node) = cur {
             if let Some(intent) = self.get(node) {
@@ -203,7 +233,45 @@ mod tests {
     #[test]
     fn miss_resolves_to_nothing() {
         let tree = UITree::new();
-        let intents = IntentRegistry::new();
+        // `None` hit constrains nothing, so name the action type explicitly.
+        let intents = IntentRegistry::<PanelAction>::new();
         assert!(intents.resolve(&tree, None, Gesture::RightClick).is_none());
+    }
+
+    /// A registry parameterised over a *non-`PanelAction`* action type resolves
+    /// (and folds up) exactly like the default one. Proves Phase 6.1's generic
+    /// param is real — the graph-editor sidebar's `IntentRegistry<GraphEditCommand>`
+    /// rides this same code, not a fork.
+    #[test]
+    fn generic_action_type_resolves_and_folds_up() {
+        #[derive(Clone, PartialEq, Debug)]
+        enum MyAction {
+            Open(u32),
+            Close,
+        }
+
+        let mut tree = UITree::new();
+        let mut intents: IntentRegistry<MyAction> = IntentRegistry::new();
+
+        let card = tree.add_panel(None, 0.0, 0.0, 200.0, 100.0, style());
+        intents.claim_area(card);
+        intents.on(card, Gesture::Click, MyAction::Close);
+
+        let row = tree.add_panel(Some(card), 0.0, 0.0, 200.0, 30.0, style());
+        let button = tree.add_button(Some(row), 0.0, 0.0, 80.0, 30.0, style(), "");
+        intents.on(button, Gesture::Click, MyAction::Open(7));
+
+        // Direct hit on the button resolves to its own action.
+        assert_eq!(
+            intents.resolve(&tree, Some(button), Gesture::Click),
+            Some(MyAction::Open(7))
+        );
+        // A dead sibling folds up to the claiming card.
+        assert_eq!(
+            intents.resolve(&tree, Some(row), Gesture::Click),
+            Some(MyAction::Close)
+        );
+        // A gesture the card doesn't carry is absorbed by the claim (None).
+        assert_eq!(intents.resolve(&tree, Some(row), Gesture::RightClick), None);
     }
 }
