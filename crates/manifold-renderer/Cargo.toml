@@ -31,6 +31,9 @@ core-graphics = "0.23"
 core-foundation = "0.9"
 
 [dev-dependencies]
+# Serializes GPU tests on the shared Metal device (see `test_device`). Reentrant
+# so a single test may acquire it more than once without deadlocking.
+parking_lot = { workspace = true }
 
 [[bin]]
 name = "check-presets"

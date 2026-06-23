@@ -2072,6 +2072,7 @@ dependencies = [
  "manifold-playback",
  "manifold-ui",
  "naga",
+ "parking_lot",
  "serde",
  "serde_json",
  "tiff 0.9.1",

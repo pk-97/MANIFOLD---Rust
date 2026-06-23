@@ -724,16 +724,14 @@ mod array_buffer_tests {
     //! pre-bound slot, no-op release for pinned arrays, and
     //! `drop_all_resources` cleanup.
 
-    use std::sync::Arc;
-
-    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+    use manifold_gpu::GpuTextureFormat;
 
     use super::*;
     use crate::node_graph::backend::Backend;
     use crate::node_graph::execution_plan::ResourceId;
     use crate::node_graph::ports::{ArrayType, PortType};
 
-    fn make_backend() -> (Arc<GpuDevice>, MetalBackend) {
+    fn make_backend() -> (crate::TestDevice, MetalBackend) {
         let device = crate::test_device();
         let backend = MetalBackend::new(&device, 16, 16, GpuTextureFormat::Rgba16Float);
         (device, backend)
@@ -944,9 +942,7 @@ mod alias_tests {
     //! `copy_texture_to_texture` blit. See `EffectNode::skip_passthrough`
     //! for the runtime hook that drives this.
 
-    use std::sync::Arc;
-
-    use manifold_gpu::{GpuDevice, GpuTextureFormat};
+    use manifold_gpu::GpuTextureFormat;
 
     use super::*;
     use crate::node_graph::backend::Backend;
@@ -959,7 +955,7 @@ mod alias_tests {
     const W: u32 = 16;
     const H: u32 = 16;
 
-    fn make_backend() -> (Arc<GpuDevice>, MetalBackend) {
+    fn make_backend() -> (crate::TestDevice, MetalBackend) {
         let device = crate::test_device();
         let backend = MetalBackend::new(&device, W, H, GpuTextureFormat::Rgba16Float);
         (device, backend)

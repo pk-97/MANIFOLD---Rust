@@ -2451,11 +2451,10 @@ mod chain_pool_tests {
     //! `EffectChain` (including the cached `chain_graph`) survives
     //! by construction.
     use super::*;
-    use std::sync::Arc;
 
     /// Build a minimal compositor. Tiny size keeps GPU costs low; tests
     /// don't render, so resolution doesn't matter.
-    fn make_compositor() -> (Arc<GpuDevice>, LayerCompositor) {
+    fn make_compositor() -> (crate::TestDevice, LayerCompositor) {
         let device = crate::test_device();
         let comp = LayerCompositor::new(&device, 64, 64);
         (device, comp)
