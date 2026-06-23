@@ -862,6 +862,8 @@ impl Layer {
 
     /// Deep-clone this layer with all nested IDs regenerated.
     /// Used for duplicate-layer: new LayerId, new ClipIds, new EffectIds, remapped EffectGroupIds.
+    /// Effects are duplicated via [`PresetInstance::duplicated`], so hardware
+    /// bindings (Ableton / audio mods) are dropped on the copy.
     /// `parent_layer_id` is NOT remapped here — callers handle group subtree remapping.
     pub fn clone_with_new_ids(&self) -> Self {
         let mut cloned = self.clone();
@@ -885,7 +887,7 @@ impl Layer {
 
             if let Some(effects) = &mut cloned.effects {
                 for effect in effects.iter_mut() {
-                    effect.regenerate_id();
+                    *effect = effect.duplicated();
                     if let Some(ref old_gid) = effect.group_id.clone()
                         && let Some(new_gid) = id_map.get(old_gid)
                     {
@@ -895,7 +897,7 @@ impl Layer {
             }
         } else if let Some(effects) = &mut cloned.effects {
             for effect in effects.iter_mut() {
-                effect.regenerate_id();
+                *effect = effect.duplicated();
             }
         }
 
@@ -1020,6 +1022,42 @@ mod tests {
 
         assert_eq!(layer.clips.len(), 1);
         assert_eq!(layer.clips[0].layer_id, layer.layer_id);
+    }
+
+    #[test]
+    fn clone_with_new_ids_regenerates_layer_and_clip_effect_ids() {
+        // BUG-002/004: duplicating a layer must give fresh EffectIds to both the
+        // layer's own effects AND the effects nested inside its clips, and drop
+        // hardware bindings on the copies.
+        let mut layer = Layer::new("Video 1".into(), LayerType::Video, 0);
+
+        let mut layer_fx = PresetInstance::new(crate::PresetTypeId::new("Blur"));
+        layer_fx.ableton_mappings = Some(Vec::new());
+        layer.effects = Some(vec![layer_fx]);
+
+        let mut clip = TimelineClip::default();
+        clip.effects
+            .push(PresetInstance::new(crate::PresetTypeId::new("Bloom")));
+        layer.clips.push(clip);
+
+        let cloned = layer.clone_with_new_ids();
+
+        assert_ne!(cloned.layer_id, layer.layer_id, "fresh LayerId");
+
+        let src_fx = &layer.effects.as_ref().unwrap()[0];
+        let new_fx = &cloned.effects.as_ref().unwrap()[0];
+        assert_ne!(new_fx.id, src_fx.id, "layer effect gets a fresh EffectId");
+        assert!(
+            new_fx.ableton_mappings.is_none(),
+            "layer effect's hardware mappings dropped on duplicate"
+        );
+
+        let src_clip_fx = &layer.clips[0].effects[0];
+        let new_clip_fx = &cloned.clips[0].effects[0];
+        assert_ne!(
+            new_clip_fx.id, src_clip_fx.id,
+            "clip effect gets a fresh EffectId"
+        );
     }
 
     #[test]

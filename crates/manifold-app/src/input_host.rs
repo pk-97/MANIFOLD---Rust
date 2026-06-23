@@ -262,6 +262,11 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         let clones = self.effect_clipboard.get_paste_clones();
         for (offset, fx) in clones.into_iter().enumerate() {
+            // Fresh, independent copy: new EffectId + dropped hardware bindings.
+            // Drop group membership too — this is a cross-chain paste, so the
+            // source's group doesn't exist in the destination chain.
+            let mut fx = fx.duplicated();
+            fx.group_id = None;
             let cmd = manifold_editing::commands::effects::AddEffectCommand::new(
                 target.clone(),
                 fx,

@@ -165,9 +165,15 @@ impl TimelineClip {
     }
 
     /// Deep clone with new ID.
+    ///
+    /// The clip's nested effects are also given fresh identities (via
+    /// [`PresetInstance::duplicated`]); otherwise a duplicated/split/pasted
+    /// clip's effects would share `EffectId`s with the source clip's effects
+    /// and collide under the project's first-match `find_effect_by_id` lookup.
     pub fn clone_with_new_id(&self) -> Self {
         let mut cloned = self.clone();
         cloned.id = ClipId::new(crate::short_id());
+        cloned.effects = self.effects.iter().map(|e| e.duplicated()).collect();
         cloned
     }
 
@@ -369,6 +375,26 @@ mod tests {
         let mut clip = TimelineClip::default();
         clip.set_duration_beats(Beats(-5.0));
         assert_eq!(clip.duration_beats, Beats(0.0));
+    }
+
+    #[test]
+    fn clone_with_new_id_regenerates_nested_effect_ids() {
+        // BUG-002: a duplicated/split/pasted clip must give its effects fresh
+        // EffectIds. Otherwise two clips' effects collide under the project's
+        // first-match find_effect_by_id lookup (edits cross-talk).
+        let mut clip = TimelineClip::new_generator(Beats(0.0), Beats(4.0));
+        clip.effects
+            .push(PresetInstance::new(crate::PresetTypeId::new("Blur")));
+        clip.effects
+            .push(PresetInstance::new(crate::PresetTypeId::new("Bloom")));
+
+        let cloned = clip.clone_with_new_id();
+
+        assert_ne!(cloned.id, clip.id, "clip gets a fresh ClipId");
+        assert_eq!(cloned.effects.len(), clip.effects.len());
+        for (a, b) in cloned.effects.iter().zip(&clip.effects) {
+            assert_ne!(a.id, b.id, "each cloned effect gets a fresh EffectId");
+        }
     }
 
     #[test]

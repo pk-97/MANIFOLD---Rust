@@ -1773,6 +1773,26 @@ impl PresetInstance {
         self.id = EffectId::new(crate::math::short_id());
     }
 
+    /// A fresh, independent copy of this instance for duplication / paste.
+    ///
+    /// Mints a new [`EffectId`] (so the copy is a distinct identity, not a
+    /// reference to the original) and applies the "fresh copy" carry-rule:
+    /// hardware/external bindings are dropped — `ableton_mappings` and
+    /// `audio_mods` are cleared, so a pasted card is NOT mapped to the same
+    /// Ableton control or audio send as its source. Per-instance modulation
+    /// that has no external binding (`drivers`, `envelopes`) is kept.
+    ///
+    /// `group_id` is left untouched — the caller decides: a cross-chain paste
+    /// drops it (the source group doesn't exist in the destination); a
+    /// whole-layer duplicate remaps it to the duplicated group.
+    pub fn duplicated(&self) -> Self {
+        let mut copy = self.clone();
+        copy.regenerate_id();
+        copy.ableton_mappings = None;
+        copy.audio_mods = None;
+        copy
+    }
+
     /// Number of parameters currently allocated. Unity line 84.
     pub fn param_count(&self) -> usize {
         self.param_values.len()
@@ -3616,6 +3636,37 @@ mod tests {
         let k = std::f32::consts::PI / 180.0;
         assert!((apply_card_reshape(85.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 85.0 * k).abs() < 1e-5);
         assert!((apply_card_reshape(400.0, 0.0, 360.0, false, MacroCurve::Linear, k, 0.0) - 400.0 * k).abs() < 1e-4);
+    }
+
+    #[test]
+    fn duplicated_assigns_fresh_id_and_drops_hardware_bindings() {
+        // BUG-001/004: a duplicated/pasted effect must be an INDEPENDENT copy —
+        // a fresh EffectId (not a shared reference) and no carried-over hardware
+        // bindings (Ableton mappings / audio mods). Per-instance modulation
+        // (drivers) is kept; group_id is left for the caller to decide.
+        let mut src = PresetInstance::new(PresetTypeId::new("Blur"));
+        src.ableton_mappings = Some(Vec::new());
+        src.audio_mods = Some(Vec::new());
+        src.group_id = Some(EffectGroupId::new("grp"));
+        src.create_driver("amount".into());
+        assert!(src.has_drivers());
+
+        let copy = src.duplicated();
+
+        assert_ne!(copy.id, src.id, "copy must get a fresh EffectId");
+        assert!(
+            copy.ableton_mappings.is_none(),
+            "Ableton mappings must not ride along on a copy"
+        );
+        assert!(
+            copy.audio_mods.is_none(),
+            "audio mods must not ride along on a copy"
+        );
+        assert!(copy.has_drivers(), "per-instance drivers are kept");
+        assert_eq!(
+            copy.group_id, src.group_id,
+            "duplicated() leaves group_id for the caller to remap/clear"
+        );
     }
 
     #[test]
