@@ -264,3 +264,192 @@ pub fn selection_region_to_core(r: &UiSelectionRegion) -> SelectionRegion {
         selected_layer_ids: r.selected_layer_ids.clone(),
     }
 }
+
+// ── Editor graph snapshot (renderer → UI view-model) ─────────────────────────
+//
+// Phase 8 of `docs/UI_ARCHITECTURE_OVERHAUL.md`: the graph canvas lives in
+// `manifold-ui` and reads `manifold_ui::graph_view`, so the app translates the
+// renderer's `GraphSnapshot` at the boundary — the same pattern as the layer /
+// marker view-models above. The node catalog stays renderer-side: the node
+// `category` + `tooltip` and per-param `tooltip` are *resolved here* (via the
+// renderer's `descriptor_for` / `tooltip_for`) and baked into the UI snapshot, so
+// the canvas reads them straight off the data.
+
+use manifold_renderer::node_graph as rg;
+use manifold_ui::graph_view as gv;
+
+/// Translate the renderer's editor-graph snapshot into the UI-local view-model
+/// the canvas consumes. The whole nested structure (group bodies, ports, params,
+/// wires, outer routings) is converted; `descriptor_for`/`tooltip_for` are
+/// applied per node so the catalog never leaves the renderer crate.
+pub fn graph_snapshot_to_ui(s: &rg::GraphSnapshot) -> gv::GraphSnapshot {
+    gv::GraphSnapshot {
+        nodes: s.nodes.iter().map(graph_node_to_ui).collect(),
+        wires: s.wires.iter().map(graph_wire_to_ui).collect(),
+        outer_routings: s.outer_routings.iter().map(outer_routing_to_ui).collect(),
+    }
+}
+
+fn graph_node_to_ui(n: &rg::NodeSnapshot) -> gv::NodeSnapshot {
+    let descriptor = rg::descriptor_for(&n.type_id);
+    let category = descriptor
+        .map(|d| category_to_ui(d.category))
+        .unwrap_or(gv::Category::Uncategorized);
+    let tooltip = descriptor
+        .map(|d| d.summary)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    gv::NodeSnapshot {
+        id: n.id,
+        node_id: n.node_id.clone(),
+        node_handle: n.node_handle.clone(),
+        type_id: n.type_id.clone(),
+        title: n.title.clone(),
+        inputs: n.inputs.iter().map(graph_port_to_ui).collect(),
+        outputs: n.outputs.iter().map(graph_port_to_ui).collect(),
+        parameters: n
+            .parameters
+            .iter()
+            .map(|p| graph_param_to_ui(&n.type_id, p))
+            .collect(),
+        editor_pos: n.editor_pos,
+        breaks_dependency_cycle: n.breaks_dependency_cycle,
+        group: n
+            .group
+            .as_deref()
+            .map(|g| Box::new(graph_group_to_ui(g))),
+        wgsl_source: n.wgsl_source.clone(),
+        category,
+        tooltip,
+    }
+}
+
+fn graph_group_to_ui(g: &rg::GroupSnapshot) -> gv::GroupSnapshot {
+    gv::GroupSnapshot {
+        nodes: g.nodes.iter().map(graph_node_to_ui).collect(),
+        wires: g.wires.iter().map(graph_wire_to_ui).collect(),
+        tint: g.tint,
+    }
+}
+
+fn graph_param_to_ui(type_id: &str, p: &rg::ParamSnapshot) -> gv::ParamSnapshot {
+    gv::ParamSnapshot {
+        name: p.name.clone(),
+        label: p.label.clone(),
+        kind: param_kind_to_ui(p.kind),
+        default_value: p.default_value,
+        current_value: p.current_value,
+        range: p.range,
+        enum_labels: p.enum_labels.clone(),
+        exposed: p.exposed,
+        summary: p.summary.clone(),
+        vec_value: p.vec_value,
+        string_value: p.string_value.clone(),
+        table_value: p.table_value.clone(),
+        tooltip: rg::tooltip_for(type_id, &p.name).map(str::to_owned),
+    }
+}
+
+fn graph_port_to_ui(p: &rg::PortSnapshot) -> gv::PortSnapshot {
+    gv::PortSnapshot {
+        name: p.name.clone(),
+        kind: port_kind_to_ui(&p.kind),
+    }
+}
+
+fn graph_wire_to_ui(w: &rg::WireSnapshot) -> gv::WireSnapshot {
+    gv::WireSnapshot {
+        from_node: w.from_node,
+        from_port: w.from_port.clone(),
+        to_node: w.to_node,
+        to_port: w.to_port.clone(),
+    }
+}
+
+fn outer_routing_to_ui(r: &rg::OuterParamRouting) -> gv::OuterParamRouting {
+    gv::OuterParamRouting {
+        outer_label: r.outer_label.clone(),
+        outer_param_id: r.outer_param_id.clone(),
+        node_handle: r.node_handle.clone(),
+        inner_param: r.inner_param.clone(),
+        source: match r.source {
+            rg::OuterParamSource::Static => gv::OuterParamSource::Static,
+            rg::OuterParamSource::User => gv::OuterParamSource::User,
+        },
+    }
+}
+
+fn port_kind_to_ui(k: &rg::PortKindSnapshot) -> gv::PortKindSnapshot {
+    match k {
+        rg::PortKindSnapshot::Texture2D => gv::PortKindSnapshot::Texture2D,
+        rg::PortKindSnapshot::Texture2DTyped { slots } => gv::PortKindSnapshot::Texture2DTyped {
+            slots: slots.clone(),
+        },
+        rg::PortKindSnapshot::Texture3D => gv::PortKindSnapshot::Texture3D,
+        rg::PortKindSnapshot::Scalar => gv::PortKindSnapshot::Scalar,
+        rg::PortKindSnapshot::Array {
+            channels,
+            match_mode,
+            item_size,
+            item_align,
+        } => gv::PortKindSnapshot::Array {
+            channels: channels
+                .iter()
+                .map(|c| gv::ChannelSnapshot {
+                    name: c.name.clone(),
+                    ty: c.ty.clone(),
+                })
+                .collect(),
+            match_mode: match match_mode {
+                rg::ArrayMatchMode::Exact => gv::ArrayMatchMode::Exact,
+                rg::ArrayMatchMode::Permissive => gv::ArrayMatchMode::Permissive,
+            },
+            item_size: *item_size,
+            item_align: *item_align,
+        },
+        rg::PortKindSnapshot::Camera => gv::PortKindSnapshot::Camera,
+        rg::PortKindSnapshot::Light => gv::PortKindSnapshot::Light,
+        rg::PortKindSnapshot::Material => gv::PortKindSnapshot::Material,
+    }
+}
+
+fn param_kind_to_ui(k: rg::ParamSnapshotKind) -> gv::ParamSnapshotKind {
+    match k {
+        rg::ParamSnapshotKind::Float => gv::ParamSnapshotKind::Float,
+        rg::ParamSnapshotKind::Angle => gv::ParamSnapshotKind::Angle,
+        rg::ParamSnapshotKind::Frequency => gv::ParamSnapshotKind::Frequency,
+        rg::ParamSnapshotKind::Int => gv::ParamSnapshotKind::Int,
+        rg::ParamSnapshotKind::Bool => gv::ParamSnapshotKind::Bool,
+        rg::ParamSnapshotKind::Enum => gv::ParamSnapshotKind::Enum,
+        rg::ParamSnapshotKind::Trigger => gv::ParamSnapshotKind::Trigger,
+        rg::ParamSnapshotKind::Color => gv::ParamSnapshotKind::Color,
+        rg::ParamSnapshotKind::Vec2 => gv::ParamSnapshotKind::Vec2,
+        rg::ParamSnapshotKind::Vec3 => gv::ParamSnapshotKind::Vec3,
+        rg::ParamSnapshotKind::Vec4 => gv::ParamSnapshotKind::Vec4,
+        rg::ParamSnapshotKind::String => gv::ParamSnapshotKind::String,
+        rg::ParamSnapshotKind::Other => gv::ParamSnapshotKind::Other,
+    }
+}
+
+fn category_to_ui(c: rg::Category) -> gv::Category {
+    match c {
+        rg::Category::Uncategorized => gv::Category::Uncategorized,
+        rg::Category::ColorAndTone => gv::Category::ColorAndTone,
+        rg::Category::BlurAndSharpen => gv::Category::BlurAndSharpen,
+        rg::Category::DistortAndWarp => gv::Category::DistortAndWarp,
+        rg::Category::Stylize => gv::Category::Stylize,
+        rg::Category::Generate => gv::Category::Generate,
+        rg::Category::Noise => gv::Category::Noise,
+        rg::Category::Mask => gv::Category::Mask,
+        rg::Category::Composite => gv::Category::Composite,
+        rg::Category::Geometry3D => gv::Category::Geometry3D,
+        rg::Category::MaterialsAndLighting => gv::Category::MaterialsAndLighting,
+        rg::Category::Particles2D => gv::Category::Particles2D,
+        rg::Category::Particles3D => gv::Category::Particles3D,
+        rg::Category::Control => gv::Category::Control,
+        rg::Category::DetectionAndSampling => gv::Category::DetectionAndSampling,
+        rg::Category::MathAndConvert => gv::Category::MathAndConvert,
+        rg::Category::Routing => gv::Category::Routing,
+        rg::Category::FieldsAndCoordinates => gv::Category::FieldsAndCoordinates,
+    }
+}

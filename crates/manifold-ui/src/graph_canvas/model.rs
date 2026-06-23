@@ -46,11 +46,11 @@ impl PortView {
 #[derive(Debug, Clone)]
 pub(crate) struct NodeView {
     pub(crate) id: u32,
-    /// Stable [`manifold_core::NodeId`] of this node — the addressing identity
+    /// Stable [`manifold_foundation::NodeId`] of this node — the addressing identity
     /// that survives grouping. Empty for anonymous boundary nodes. Used to match
     /// the per-frame live param tap (`ContentState::live_node_params`, keyed by
     /// node_id) onto this view so on-face values reflect live modulation.
-    pub(crate) node_id: manifold_core::NodeId,
+    pub(crate) node_id: manifold_foundation::NodeId,
     /// Stable string handle from the def, if any (`None` for boundary /
     /// anonymous nodes). Used to mint a collision-free handle when this
     /// node's level gets a new group, and by Ctrl+G's payload.
@@ -104,7 +104,7 @@ pub(crate) struct NodeView {
     /// group still previews what it emits without any extra capture — that
     /// inner node is already a cell in the flattened atlas. The presence of a
     /// value is what gives the node a preview band ([`Self::preview_h`]).
-    pub(crate) preview_node_id: Option<manifold_core::NodeId>,
+    pub(crate) preview_node_id: Option<manifold_foundation::NodeId>,
 }
 
 /// Whether a port carries an image (the only kind the thumbnail atlas captures).
@@ -123,7 +123,7 @@ pub(crate) fn port_kind_is_image(kind: &PortKindSnapshot) -> bool {
 /// [`NodeView::preview_node_id`]. `pub(crate)` so the host can build the
 /// thumbnail-atlas visible set (the nodes the canvas asks thumbnails for) from
 /// the current scope's nodes.
-pub(crate) fn node_preview_target(n: &NodeSnapshot) -> Option<manifold_core::NodeId> {
+pub fn node_preview_target(n: &NodeSnapshot) -> Option<manifold_foundation::NodeId> {
     if let Some(body) = n.group.as_deref() {
         let port = group_primary_output_port(&n.outputs)?;
         group_output_producer(body, port)
@@ -152,7 +152,7 @@ pub(crate) fn group_primary_output_port(outputs: &[PortSnapshot]) -> Option<&str
 /// `manifold_core::flatten::producer_for_output`. `None` if the port is fed by
 /// the group's own input (an unsupported passthrough the flattener also rejects)
 /// or has no producer.
-pub(crate) fn group_output_producer(body: &GroupSnapshot, port: &str) -> Option<manifold_core::NodeId> {
+pub(crate) fn group_output_producer(body: &GroupSnapshot, port: &str) -> Option<manifold_foundation::NodeId> {
     let out_boundary = body
         .nodes
         .iter()
@@ -263,7 +263,7 @@ pub(crate) struct ParamView {
     /// Snapshot kind + declared range, retained so a per-frame live value
     /// ([`GraphCanvas::apply_live_values`]) can reformat the value string and
     /// fill bar exactly as the structural snapshot did, without re-snapshotting.
-    pub(crate) kind: manifold_renderer::node_graph::ParamSnapshotKind,
+    pub(crate) kind: crate::graph_view::ParamSnapshotKind,
     pub(crate) range: Option<(f32, f32)>,
     pub(crate) value: String,
     /// `Some(0..1)` position of the current value within its declared
@@ -296,8 +296,8 @@ pub(crate) struct ScrubInfo {
 /// plus, when the param has a numeric range, the 0..1 position of the
 /// current value within it. Value formatting mirrors the inspector
 /// (degrees for angles, Hz for frequencies, enum labels, On/Off).
-pub(crate) fn format_param_for_node(p: &manifold_renderer::node_graph::ParamSnapshot) -> ParamView {
-    use manifold_renderer::node_graph::ParamSnapshotKind;
+pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> ParamView {
+    use crate::graph_view::ParamSnapshotKind;
     // Numeric / bool kinds share their formatting + fill with the per-frame
     // live-value path; enum / trigger / other are display-only here.
     let (value, fill) = match numeric_value_fill(p.kind, p.current_value, p.range) {
@@ -348,9 +348,9 @@ pub(crate) fn format_param_for_node(p: &manifold_renderer::node_graph::ParamSnap
         value,
         fill,
         scrub,
-        // Resolved by the caller that knows the owning node's type_id;
-        // this formatter only sees the param snapshot.
-        tooltip: None,
+        // Baked into the snapshot at translation time (the renderer's
+        // `tooltip_for`), so the formatter carries it straight through.
+        tooltip: p.tooltip.clone(),
     }
 }
 
@@ -362,11 +362,11 @@ pub(crate) fn format_param_for_node(p: &manifold_renderer::node_graph::ParamSnap
 /// per-frame live refresh ([`GraphCanvas::apply_live_values`]), so a frozen and
 /// a modulated value format identically.
 pub(crate) fn numeric_value_fill(
-    kind: manifold_renderer::node_graph::ParamSnapshotKind,
+    kind: crate::graph_view::ParamSnapshotKind,
     value: f32,
     range: Option<(f32, f32)>,
 ) -> Option<(String, Option<f32>)> {
-    use manifold_renderer::node_graph::ParamSnapshotKind;
+    use crate::graph_view::ParamSnapshotKind;
     let s = match kind {
         ParamSnapshotKind::Float => format!("{value:.2}"),
         // Stored radians, shown as degrees (see ParamType::Angle).
@@ -396,11 +396,11 @@ pub(crate) fn numeric_value_fill(
 /// Scrub metadata for the draggable numeric kinds (Float / Angle / Frequency /
 /// Int) that declared a range. `None` otherwise.
 pub(crate) fn scrub_for(
-    kind: manifold_renderer::node_graph::ParamSnapshotKind,
+    kind: crate::graph_view::ParamSnapshotKind,
     value: f32,
     range: Option<(f32, f32)>,
 ) -> Option<ScrubInfo> {
-    use manifold_renderer::node_graph::ParamSnapshotKind;
+    use crate::graph_view::ParamSnapshotKind;
     match kind {
         ParamSnapshotKind::Float
         | ParamSnapshotKind::Angle
@@ -439,8 +439,8 @@ pub(crate) fn spark_has_variation(hist: &std::collections::VecDeque<f32>) -> boo
 /// summary ("Mode: FoldX", "Scale: 0.02") shown on the collapsed node face.
 /// Prefers an enum (its label is descriptive), then a numeric, else the
 /// first param. `None` for param-less nodes.
-pub(crate) fn node_summary(params: &[manifold_renderer::node_graph::ParamSnapshot]) -> Option<String> {
-    use manifold_renderer::node_graph::ParamSnapshotKind;
+pub(crate) fn node_summary(params: &[crate::graph_view::ParamSnapshot]) -> Option<String> {
+    use crate::graph_view::ParamSnapshotKind;
     let pick = params
         .iter()
         .find(|p| p.kind == ParamSnapshotKind::Enum)
@@ -490,8 +490,8 @@ pub(crate) fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
 /// saturation and brightness so headers stay subtle on the dark canvas; an
 /// exhaustive match means a new `Category` variant forces a colour choice
 /// here rather than silently defaulting.
-pub(crate) fn category_header_color(cat: manifold_renderer::node_graph::Category) -> [f32; 4] {
-    use manifold_renderer::node_graph::Category as C;
+pub(crate) fn category_header_color(cat: crate::graph_view::Category) -> [f32; 4] {
+    use crate::graph_view::Category as C;
     match cat {
         C::ColorAndTone => [0.40, 0.30, 0.22, 1.0],
         C::BlurAndSharpen => [0.22, 0.30, 0.40, 1.0],
@@ -543,7 +543,7 @@ impl GraphCanvas {
     pub fn visible_node_thumbnails(
         &self,
         viewport: Rect,
-    ) -> Vec<(manifold_core::NodeId, f32, f32, f32, f32)> {
+    ) -> Vec<(manifold_foundation::NodeId, f32, f32, f32, f32)> {
         let mut out = Vec::new();
         let header = NODE_HEADER_HEIGHT * self.zoom;
         let pad = PREVIEW_PAD * self.zoom;
@@ -627,21 +627,10 @@ impl GraphCanvas {
             // auto-layout.
             for node in &mut self.nodes {
                 if let Some(sn) = level_nodes.iter().find(|s| s.id == node.id) {
-                    // Param tooltips are static per (type_id, name); carry the
-                    // already-resolved ones forward by index rather than
-                    // re-scanning the doc inventory on this per-frame path.
-                    let prev_tips: Vec<Option<String>> =
-                        node.params.iter().map(|p| p.tooltip.clone()).collect();
-                    node.params = sn
-                        .parameters
-                        .iter()
-                        .enumerate()
-                        .map(|(i, p)| {
-                            let mut pv = format_param_for_node(p);
-                            pv.tooltip = prev_tips.get(i).cloned().flatten();
-                            pv
-                        })
-                        .collect();
+                    // Param tooltips ride the snapshot (baked at translation),
+                    // so `format_param_for_node` carries them straight through —
+                    // no re-resolve, no carry-forward-by-index dance.
+                    node.params = sn.parameters.iter().map(format_param_for_node).collect();
                     node.summary = node_summary(&sn.parameters);
                 }
             }
@@ -667,24 +656,13 @@ impl GraphCanvas {
                 node_id: n.node_id.clone(),
                 handle: n.node_handle.clone(),
                 title: n.title.clone(),
-                params: n
-                    .parameters
-                    .iter()
-                    .map(|p| {
-                        let mut pv = format_param_for_node(p);
-                        pv.tooltip =
-                            manifold_renderer::node_graph::tooltip_for(&n.type_id, &p.name)
-                                .map(str::to_owned);
-                        pv
-                    })
-                    .collect(),
+                params: n.parameters.iter().map(format_param_for_node).collect(),
                 summary: node_summary(&n.parameters),
                 collapsed: self.collapsed.get(&n.id).copied().unwrap_or(true),
-                header_color: category_header_color(
-                    manifold_renderer::node_graph::descriptor_for(&n.type_id)
-                        .map(|d| d.category)
-                        .unwrap_or(manifold_renderer::node_graph::Category::Uncategorized),
-                ),
+                // Category + tooltips are baked into the snapshot at translation
+                // time (the renderer's `descriptor_for`/`tooltip_for`), so the
+                // catalog stays renderer-side and the canvas just reads them.
+                header_color: category_header_color(n.category),
                 pos_graph: prev_positions
                     .get(&n.id)
                     .copied()
@@ -702,10 +680,7 @@ impl GraphCanvas {
                 breaks_dependency_cycle: n.breaks_dependency_cycle,
                 is_group: n.type_id == GROUP_TYPE_ID,
                 group_tint: n.group.as_ref().and_then(|g| g.tint),
-                tooltip: manifold_renderer::node_graph::descriptor_for(&n.type_id)
-                    .map(|d| d.summary)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned),
+                tooltip: n.tooltip.clone(),
                 preview_node_id: node_preview_target(n),
             })
             .collect();
@@ -796,11 +771,11 @@ impl GraphCanvas {
     /// refreshes via `graph_version`). The param the user is actively scrubbing
     /// is skipped so the live feed never fights a drag. No-op when `live` is
     /// empty (no editor watching), so the closed-editor path pays nothing.
-    pub fn apply_live_values(&mut self, live: &manifold_renderer::node_graph::LiveNodeParams) {
+    pub fn apply_live_values(&mut self, live: &crate::graph_view::LiveNodeParams) {
         if live.is_empty() {
             return;
         }
-        let by_id: ahash::AHashMap<&manifold_core::NodeId, &Vec<(&'static str, f32)>> =
+        let by_id: ahash::AHashMap<&manifold_foundation::NodeId, &Vec<(&'static str, f32)>> =
             live.iter().map(|(id, vals)| (id, vals)).collect();
         // The param the user is mid-scrub on stays the source of truth until
         // release; cloned so the per-node mutable walk below has no live borrow
@@ -816,7 +791,7 @@ impl GraphCanvas {
         // Sparkline samples gathered during the mutable node walk, applied to
         // `spark_history` afterwards (can't touch `self.spark_history` while
         // `self.nodes` is borrowed mutably).
-        let mut spark_updates: Vec<(manifold_core::NodeId, f32)> = Vec::new();
+        let mut spark_updates: Vec<(manifold_foundation::NodeId, f32)> = Vec::new();
         for node in &mut self.nodes {
             if node.node_id.is_empty() {
                 continue;
@@ -875,7 +850,7 @@ impl GraphCanvas {
 /// `(nodes, wires)` of the addressed level. Empty scope → the document root.
 /// `None` if any id in the path isn't a group at its level — e.g. the group
 /// was deleted or ungrouped out from under the canvas. Pure; unit-tested.
-pub(crate) fn resolve_level<'a>(
+pub fn resolve_level<'a>(
     snap: &'a GraphSnapshot,
     scope: &[u32],
 ) -> Option<(&'a [NodeSnapshot], &'a [WireSnapshot])> {
@@ -889,18 +864,18 @@ pub(crate) fn resolve_level<'a>(
     Some((nodes, wires))
 }
 
-/// Locate a node by stable [`NodeId`](manifold_core::NodeId) anywhere in the
+/// Locate a node by stable [`NodeId`](manifold_foundation::NodeId) anywhere in the
 /// hierarchical snapshot. Returns the scope path of group runtime ids to its
 /// level, those groups' titles (for the breadcrumb), and the node's runtime id.
 /// `None` if no node carries that id. Used by jump-to-node to navigate the
 /// canvas to a card param's defining node, even when it lives inside a group.
 pub(crate) fn find_node_scope(
     snap: &GraphSnapshot,
-    target: &manifold_core::NodeId,
+    target: &manifold_foundation::NodeId,
 ) -> Option<(Vec<u32>, Vec<String>, u32)> {
     fn search(
         nodes: &[NodeSnapshot],
-        target: &manifold_core::NodeId,
+        target: &manifold_foundation::NodeId,
         path: &mut Vec<u32>,
         titles: &mut Vec<String>,
     ) -> Option<u32> {
@@ -930,15 +905,15 @@ pub(crate) fn find_node_scope(
 }
 
 /// Resolve a card param id (a binding's `outer_param_id`) to the stable
-/// [`NodeId`](manifold_core::NodeId) of the node it's exposed from, using the
+/// [`NodeId`](manifold_foundation::NodeId) of the node it's exposed from, using the
 /// snapshot's `outer_routings` (the same map for effects and generators). The
 /// routing carries the node *handle*; we resolve that to the node's id so
 /// jump-to-node addresses by the grouping-invariant identity. `None` when the
 /// param isn't a routed binding or its node isn't in the snapshot.
-pub(crate) fn resolve_card_param_node_id(
+pub fn resolve_card_param_node_id(
     snap: &GraphSnapshot,
     param_id: &str,
-) -> Option<manifold_core::NodeId> {
+) -> Option<manifold_foundation::NodeId> {
     let handle = snap
         .outer_routings
         .iter()
@@ -949,8 +924,8 @@ pub(crate) fn resolve_card_param_node_id(
 
 /// The stable `NodeId` of the node whose handle is `handle`, searched through
 /// the full nested snapshot. `None` if no such (id-bearing) node exists.
-pub(crate) fn node_id_for_handle(snap: &GraphSnapshot, handle: &str) -> Option<manifold_core::NodeId> {
-    fn search(nodes: &[NodeSnapshot], handle: &str) -> Option<manifold_core::NodeId> {
+pub(crate) fn node_id_for_handle(snap: &GraphSnapshot, handle: &str) -> Option<manifold_foundation::NodeId> {
+    fn search(nodes: &[NodeSnapshot], handle: &str) -> Option<manifold_foundation::NodeId> {
         for n in nodes {
             if n.node_handle.as_deref() == Some(handle) && !n.node_id.is_empty() {
                 return Some(n.node_id.clone());

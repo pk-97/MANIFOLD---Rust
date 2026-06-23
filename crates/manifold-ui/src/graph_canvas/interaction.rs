@@ -273,7 +273,7 @@ impl GraphCanvas {
         min: f32,
         max: f32,
         invert: bool,
-        curve: manifold_core::macro_bank::MacroCurve,
+        curve: crate::MacroCurve,
         scale: f32,
         offset: f32,
         range: Option<(f32, f32)>,
@@ -404,7 +404,7 @@ impl GraphCanvas {
                 self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
                     node_id,
                     param_name,
-                    new_value: manifold_ui::SerializedParamValue::Float { value: v },
+                    new_value: crate::SerializedParamValue::Float { value: v },
                 });
             }
             DragMode::None => {

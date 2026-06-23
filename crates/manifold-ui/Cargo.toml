@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+ahash = { workspace = true }
 bitflags = "2"
 manifold-foundation = { path = "../manifold-foundation" }
 

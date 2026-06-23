@@ -17,18 +17,17 @@
 //! / Panel infrastructure. Pan via middle-mouse drag, zoom via scroll
 //! wheel, hover highlights. No editing yet.
 
-use manifold_renderer::node_graph::{
-    GraphSnapshot, GroupSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
+use crate::graph_view::{
+    GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GraphSnapshot, GroupSnapshot,
+    NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
 };
 // Re-exported so sibling submodules see both via `use super::*;`. The canvas
 // emits `GraphEditCommand` (Phase 4.3); `PanelAction` remains for the mapping
 // popover's `EffectMapping*` edits, which are a separate command family.
-pub(crate) use manifold_ui::{GraphEditCommand, PanelAction};
-use manifold_ui::transform::Axis;
-
-use manifold_core::effect_graph_def::{GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID};
-
-use crate::mapping_popover::MappingPopover;
+pub(crate) use crate::{GraphEditCommand, PanelAction};
+use crate::transform::Axis;
+// `MappingPopover` is brought into module scope by the `pub use` re-export below,
+// so the `mapping_popover` field can name it without a second import.
 
 /// Set `GROUP_CANVAS_LOG=1` in the environment to print the gesture pipeline
 /// (scope enter/exit, group/ungroup emits, marquee commits) to stderr. Cheap
@@ -58,6 +57,7 @@ mod camera;
 mod hit;
 mod interaction;
 mod layout;
+pub mod mapping_popover;
 mod model;
 mod render;
 
@@ -75,9 +75,12 @@ mod tests;
 // `rects_overlap`) are imported directly by `tests.rs` from their module.
 pub(crate) use hit::marquee_hits;
 pub(crate) use interaction::DragMode;
+pub use mapping_popover::MappingPopover;
+// App-facing structural-walk helpers — the editor present path resolves the
+// canvas scope level + preview targets off the same UI snapshot the canvas reads.
+pub use model::{node_preview_target, resolve_card_param_node_id, resolve_level};
 pub(crate) use model::{
-    NodeView, ParamView, PortHit, WireView, find_node_scope, node_preview_target,
-    resolve_card_param_node_id, resolve_level, spark_has_variation, wrap_text,
+    NodeView, ParamView, PortHit, WireView, find_node_scope, spark_has_variation, wrap_text,
 };
 
 const HEADER_HEIGHT: f32 = 28.0;
@@ -331,7 +334,8 @@ pub struct GraphCanvas {
     /// moving trace — the design's "even the invisible math nodes become
     /// legible." Bounded to [`SPARK_CAPACITY`] points per node; pruned to the
     /// live node set on a topology rebuild. Empty when no editor is watching.
-    pub(crate) spark_history: ahash::AHashMap<manifold_core::NodeId, std::collections::VecDeque<f32>>,
+    pub(crate) spark_history:
+        ahash::AHashMap<manifold_foundation::NodeId, std::collections::VecDeque<f32>>,
     /// Runtime id of a node the canvas should centre + select once it is laid
     /// out at the current scope — set by [`Self::focus_node`] (jump-to-node from
     /// a card param) and consumed by [`Self::resolve_pending_focus`] one frame

@@ -7,7 +7,7 @@ use super::*;
 // non-test build).
 use super::hit::{ports_compatible, rects_overlap};
 use super::layout::LayeredLayout;
-use manifold_renderer::node_graph::{
+use crate::graph_view::{
     GraphSnapshot, GroupSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
 };
 
@@ -22,7 +22,7 @@ fn port(name: &str) -> PortSnapshot {
 fn node(id: u32, type_id: &str, handle: Option<&str>) -> NodeSnapshot {
     NodeSnapshot {
         id,
-        node_id: handle.map(manifold_core::NodeId::new).unwrap_or_default(),
+        node_id: handle.map(manifold_foundation::NodeId::new).unwrap_or_default(),
         node_handle: handle.map(|h| h.to_string()),
         type_id: type_id.to_string(),
         title: handle.unwrap_or(type_id).to_string(),
@@ -33,6 +33,8 @@ fn node(id: u32, type_id: &str, handle: Option<&str>) -> NodeSnapshot {
         breaks_dependency_cycle: false,
         group: None,
         wgsl_source: None,
+        category: crate::graph_view::Category::Uncategorized,
+        tooltip: None,
     }
 }
 
@@ -302,11 +304,11 @@ fn layout_threads_long_edge_straight_through_waypoint() {
 // ── Live values overlay ─────────────────────────────────────────
 
 /// A Float param snapshot over `[0, 1]`, current value `current`.
-fn float_param(name: &str, current: f32) -> manifold_renderer::node_graph::ParamSnapshot {
-    manifold_renderer::node_graph::ParamSnapshot {
+fn float_param(name: &str, current: f32) -> crate::graph_view::ParamSnapshot {
+    crate::graph_view::ParamSnapshot {
         name: name.to_string(),
         label: name.to_string(),
-        kind: manifold_renderer::node_graph::ParamSnapshotKind::Float,
+        kind: crate::graph_view::ParamSnapshotKind::Float,
         default_value: 0.0,
         current_value: current,
         range: Some((0.0, 1.0)),
@@ -316,6 +318,7 @@ fn float_param(name: &str, current: f32) -> manifold_renderer::node_graph::Param
         vec_value: None,
         string_value: None,
         table_value: None,
+        tooltip: None,
     }
 }
 
@@ -323,7 +326,7 @@ fn float_param(name: &str, current: f32) -> manifold_renderer::node_graph::Param
 /// `params`, wrapped in a root snapshot.
 fn snapshot_with_param_node(
     handle: &str,
-    params: Vec<manifold_renderer::node_graph::ParamSnapshot>,
+    params: Vec<crate::graph_view::ParamSnapshot>,
 ) -> GraphSnapshot {
     let mut n = node(1, "node.gain", Some(handle));
     n.parameters = params;
@@ -343,7 +346,7 @@ fn apply_live_values_refreshes_on_face_value_and_fill() {
 
     // A live value of 0.80 overlays the frozen value, refreshing the string,
     // the fill bar, and the scrub anchor — matched by stable node_id.
-    let live = vec![(manifold_core::NodeId::new("gain"), vec![("amount", 0.8_f32)])];
+    let live = vec![(manifold_foundation::NodeId::new("gain"), vec![("amount", 0.8_f32)])];
     canvas.apply_live_values(&live);
     let pv = &canvas.find_node(1).unwrap().params[0];
     assert_eq!(pv.value, "0.80");
@@ -365,7 +368,7 @@ fn apply_live_values_skips_the_actively_scrubbed_param() {
         is_int: false,
         press_origin_x: 0.0,
     };
-    let live = vec![(manifold_core::NodeId::new("gain"), vec![("amount", 0.8_f32)])];
+    let live = vec![(manifold_foundation::NodeId::new("gain"), vec![("amount", 0.8_f32)])];
     canvas.apply_live_values(&live);
     assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
 }
@@ -383,7 +386,7 @@ fn apply_live_values_ignores_unmatched_node_ids() {
     let mut canvas = GraphCanvas::new();
     canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.25)]));
     // A live entry for a different node leaves this one untouched.
-    let live = vec![(manifold_core::NodeId::new("other"), vec![("amount", 0.8_f32)])];
+    let live = vec![(manifold_foundation::NodeId::new("other"), vec![("amount", 0.8_f32)])];
     canvas.apply_live_values(&live);
     assert_eq!(canvas.find_node(1).unwrap().params[0].value, "0.25");
 }
@@ -394,13 +397,13 @@ fn apply_live_values_feeds_sparkline_history() {
     canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.2)]));
     for v in [0.2_f32, 0.5, 0.8] {
         canvas.apply_live_values(&vec![(
-            manifold_core::NodeId::new("gain"),
+            manifold_foundation::NodeId::new("gain"),
             vec![("amount", v)],
         )]);
     }
     let hist = canvas
         .spark_history
-        .get(&manifold_core::NodeId::new("gain"))
+        .get(&manifold_foundation::NodeId::new("gain"))
         .expect("history recorded for the primary param");
     assert_eq!(hist.len(), 3);
     // Range is 0..1, so the stored normalized (fill) value equals the input.
@@ -415,13 +418,13 @@ fn sparkline_history_is_capped_at_capacity() {
     for i in 0..(SPARK_CAPACITY + 10) {
         let v = (i % 10) as f32 / 10.0;
         canvas.apply_live_values(&vec![(
-            manifold_core::NodeId::new("gain"),
+            manifold_foundation::NodeId::new("gain"),
             vec![("amount", v)],
         )]);
     }
     let hist = canvas
         .spark_history
-        .get(&manifold_core::NodeId::new("gain"))
+        .get(&manifold_foundation::NodeId::new("gain"))
         .unwrap();
     assert_eq!(hist.len(), SPARK_CAPACITY, "ring buffer holds the cap, no more");
 }
@@ -431,10 +434,10 @@ fn topology_rebuild_prunes_stale_sparkline_history() {
     let mut canvas = GraphCanvas::new();
     canvas.set_snapshot(&snapshot_with_param_node("gain", vec![float_param("amount", 0.2)]));
     canvas.apply_live_values(&vec![(
-        manifold_core::NodeId::new("gain"),
+        manifold_foundation::NodeId::new("gain"),
         vec![("amount", 0.5_f32)],
     )]);
-    assert!(canvas.spark_history.contains_key(&manifold_core::NodeId::new("gain")));
+    assert!(canvas.spark_history.contains_key(&manifold_foundation::NodeId::new("gain")));
 
     // A real topology change (different runtime id, so `hash_level` differs
     // and `set_snapshot` takes the full-rebuild path) evicts the old node's
@@ -447,7 +450,7 @@ fn topology_rebuild_prunes_stale_sparkline_history() {
         outer_routings: Vec::new(),
     };
     canvas.set_snapshot(&snap2);
-    assert!(!canvas.spark_history.contains_key(&manifold_core::NodeId::new("gain")));
+    assert!(!canvas.spark_history.contains_key(&manifold_foundation::NodeId::new("gain")));
 }
 
 // ── Jump-to-node ────────────────────────────────────────────────
@@ -456,17 +459,17 @@ fn topology_rebuild_prunes_stale_sparkline_history() {
 fn find_node_scope_locates_root_and_nested_nodes() {
     let snap = grouped_snapshot();
     // Root-level node: empty scope.
-    let (path, _, rid) = find_node_scope(&snap, &manifold_core::NodeId::new("source")).unwrap();
+    let (path, _, rid) = find_node_scope(&snap, &manifold_foundation::NodeId::new("source")).unwrap();
     assert!(path.is_empty());
     assert_eq!(rid, 0);
     // Node inside the group: scope = [group runtime id], title carried.
     let (path, titles, rid) =
-        find_node_scope(&snap, &manifold_core::NodeId::new("inner")).unwrap();
+        find_node_scope(&snap, &manifold_foundation::NodeId::new("inner")).unwrap();
     assert_eq!(path, vec![10]);
     assert_eq!(titles, vec!["tweak".to_string()]);
     assert_eq!(rid, 1);
     // Unknown id.
-    assert!(find_node_scope(&snap, &manifold_core::NodeId::new("nope")).is_none());
+    assert!(find_node_scope(&snap, &manifold_foundation::NodeId::new("nope")).is_none());
 }
 
 #[test]
@@ -474,7 +477,7 @@ fn focus_node_descends_into_the_group_and_selects() {
     let snap = grouped_snapshot();
     let mut canvas = GraphCanvas::new();
     canvas.set_snapshot(&snap);
-    assert!(canvas.focus_node(&snap, &manifold_core::NodeId::new("inner")));
+    assert!(canvas.focus_node(&snap, &manifold_foundation::NodeId::new("inner")));
     assert_eq!(canvas.scope_path(), &[10]);
     assert_eq!(canvas.selected_ids(), vec![1]);
     assert_eq!(canvas.pending_focus, Some(1));
@@ -485,7 +488,7 @@ fn focus_node_unknown_id_is_a_noop() {
     let snap = grouped_snapshot();
     let mut canvas = GraphCanvas::new();
     canvas.set_snapshot(&snap);
-    assert!(!canvas.focus_node(&snap, &manifold_core::NodeId::new("nope")));
+    assert!(!canvas.focus_node(&snap, &manifold_foundation::NodeId::new("nope")));
     assert!(canvas.scope_path().is_empty());
     assert_eq!(canvas.pending_focus, None);
 }
@@ -493,12 +496,12 @@ fn focus_node_unknown_id_is_a_noop() {
 #[test]
 fn resolve_card_param_node_id_via_outer_routing() {
     let mut snap = grouped_snapshot();
-    snap.outer_routings = vec![manifold_renderer::node_graph::OuterParamRouting {
+    snap.outer_routings = vec![crate::graph_view::OuterParamRouting {
         outer_label: "Amount".into(),
         outer_param_id: "user.inner.amount.0".into(),
         node_handle: "inner".into(),
         inner_param: "amount".into(),
-        source: manifold_renderer::node_graph::OuterParamSource::Static,
+        source: crate::graph_view::OuterParamSource::Static,
     }];
     let nid = resolve_card_param_node_id(&snap, "user.inner.amount.0").unwrap();
     assert_eq!(nid.as_str(), "inner");

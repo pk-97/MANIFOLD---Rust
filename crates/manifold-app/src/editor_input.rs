@@ -145,6 +145,9 @@ impl Application {
             }
             return;
         }
+        // The UI-local graph snapshot for the jump-to-node path below — taken
+        // before the `&mut self.graph_canvas` borrow (it returns an owned `Arc`).
+        let editor_ui_snap = self.editor_ui_snapshot();
         if let Some(canvas) = self.graph_canvas.as_mut() {
             let window_size = self
                 .window_registry
@@ -210,8 +213,7 @@ impl Application {
                             && let Some(ed) = self.graph_editor.as_ref()
                             && let Some(param_id) =
                                 self.editor_card.label_hit(&ed.ui_root.tree, cx, cy)
-                            && let Some(snap) =
-                                self.content_state.active_graph_snapshot.as_deref()
+                            && let Some(snap) = editor_ui_snap.as_deref()
                             && let Some(node_id) =
                                 crate::graph_canvas::resolve_card_param_node_id(
                                     snap, &param_id,
@@ -286,8 +288,8 @@ impl Application {
                         )
                     {
                         canvas.open_mapping_popover(
-                            viewport, node_id, pi, binding_id, label, min, max,
-                            invert, curve, scale, offset, range,
+                            viewport, node_id, pi, binding_id, label, min, max, invert,
+                            crate::ui_translate::macro_curve_to_ui(curve), scale, offset, range,
                         );
                     }
                 }

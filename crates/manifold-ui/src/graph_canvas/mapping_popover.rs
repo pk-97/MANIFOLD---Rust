@@ -10,10 +10,10 @@
 //! rendered output update the moment you drag a handle or click a button —
 //! no separate plumbing.
 //!
-//! Why it draws with `UIRenderer` rect/text primitives rather than the
-//! `param_slider_shared.rs` builders: those builders are `UITree`-based
-//! (`tree.add_button`, parent ids), and the host surface here — the graph
-//! canvas — renders entirely through `UIRenderer` immediate-mode
+//! Why it draws with [`Painter`](crate::draw::Painter) rect/text primitives
+//! rather than the `param_slider_shared.rs` builders: those builders are
+//! `UITree`-based (`tree.add_button`, parent ids), and the host surface here —
+//! the graph canvas — renders entirely through `Painter` immediate-mode
 //! primitives with no `UITree`. So the popover mirrors the *visual
 //! conventions* of the shared widgets (a min/max trim track with two drag
 //! bars, an `INV` toggle, a 4-option curve dropdown) while staying inside
@@ -22,17 +22,18 @@
 //! coalesces into one undo entry.
 //!
 //! Label editing is intentionally **deferred**: a real text field on the
-//! `UIRenderer` canvas would need caret/selection/IME handling that
+//! immediate-mode canvas would need caret/selection/IME handling that
 //! doesn't exist on this surface yet. The label is shown read-only in the
 //! popover header so you know which binding you're reshaping; renaming
 //! still works from the (existing) `EffectMappingLabel` action whenever a
 //! text-field surface lands.
 
-use manifold_core::macro_bank::MacroCurve;
-use manifold_renderer::ui_renderer::UIRenderer;
-use manifold_ui::PanelAction;
+use crate::MacroCurve;
+use crate::PanelAction;
+use crate::apply_card_reshape;
+use crate::draw::Painter;
 
-use crate::graph_canvas::Rect;
+use super::Rect;
 
 // ── Layout constants ────────────────────────────────────────────────
 const POPOVER_W: f32 = 188.0;
@@ -512,7 +513,8 @@ impl MappingPopover {
                     self.curve = c;
                     self.pending_actions.push(PanelAction::EffectMappingCurve {
                         binding_id: self.binding_id.clone(),
-                        curve: crate::ui_translate::macro_curve_to_ui(c),
+                        // `c` is already the UI `MacroCurve` the action carries.
+                        curve: c,
                     });
                 }
                 return true;
@@ -740,7 +742,7 @@ impl MappingPopover {
     /// preview and place the live dot, so the picture can never disagree with
     /// what the engine does to the value.
     fn reshape_output(&self, input: f32) -> f32 {
-        manifold_core::effects::apply_card_reshape(
+        apply_card_reshape(
             input,
             self.cur_min,
             self.cur_max,
@@ -755,7 +757,7 @@ impl MappingPopover {
     /// invert → curve → scale/offset) plotted as input→output, with a dot at
     /// the current live value. This is the "see what you do" surface — picking
     /// S-Curve or dragging the range reshapes this line in real time.
-    fn render_preview(&self, ui: &mut UIRenderer) {
+    fn render_preview(&self, ui: &mut dyn Painter) {
         let r = self.preview_rect();
         ui.draw_rounded_rect(r.x, r.y, r.w, r.h, PREVIEW_BG, 3.0);
         // Faint centre cross for orientation.
@@ -806,7 +808,7 @@ impl MappingPopover {
     /// or, while that field is being edited, the typed buffer + caret.
     fn draw_value_field(
         &self,
-        ui: &mut UIRenderer,
+        ui: &mut dyn Painter,
         panel_x: f32,
         which: DragTarget,
         name: &str,
@@ -827,7 +829,7 @@ impl MappingPopover {
         ui.draw_text(r.x + r.w - tw - 5.0, r.y + 3.0, &txt, FONT_SMALL, TEXT_PRIMARY);
     }
 
-    pub fn render(&self, ui: &mut UIRenderer) {
+    pub fn render(&self, ui: &mut dyn Painter) {
         if !self.open {
             return;
         }
@@ -1042,7 +1044,7 @@ mod tests {
         assert!(matches!(
             actions.as_slice(),
             [PanelAction::EffectMappingCurve {
-                curve: manifold_ui::MacroCurve::Exponential,
+                curve: MacroCurve::Exponential,
                 ..
             }]
         ));

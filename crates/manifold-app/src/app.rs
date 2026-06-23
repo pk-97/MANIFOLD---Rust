@@ -316,6 +316,17 @@ pub struct Application {
     /// editor window is open; cleared on close. Phase 4 seeds it with
     /// a hardcoded view of `NodeGraphTestFX`'s graph.
     pub(crate) graph_canvas: Option<crate::graph_canvas::GraphCanvas>,
+    /// Cached UI-local translation of `content_state.active_graph_snapshot`
+    /// (Phase 8: the canvas reads `manifold_ui::graph_view`, so the app
+    /// translates the renderer snapshot at the boundary). Re-derived only when
+    /// the source `Arc` changes (`Arc::ptr_eq`), so an unchanged frame pays
+    /// nothing; the effect path mints a fresh snapshot each frame and so
+    /// re-translates, matching the canvas's own per-frame `set_snapshot`. Holds
+    /// the source `Arc` alongside the translation purely for that identity check.
+    pub(crate) editor_ui_graph: Option<(
+        std::sync::Arc<manifold_renderer::node_graph::GraphSnapshot>,
+        std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>,
+    )>,
     /// Right-sidebar checkbox panel for V2 user-exposed parameters.
     /// Shares the editor window with `graph_canvas`.
     pub(crate) graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel,
@@ -556,6 +567,7 @@ impl Application {
             graph_editor_window_id: None,
             graph_editor_geometry: None,
             graph_canvas: None,
+            editor_ui_graph: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
             node_preview_normalize: false,
             editor_card: {

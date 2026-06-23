@@ -647,12 +647,11 @@ impl Application {
         }
 
         // 1c. Push the latest graph snapshot into the editor canvas
-        // (read-only viewer of the running NodeGraphTestFX).
-        if let (Some(canvas), Some(snap)) = (
-            self.graph_canvas.as_mut(),
-            self.content_state.active_graph_snapshot.as_ref(),
-        ) {
-            canvas.set_snapshot(snap);
+        // (read-only viewer of the running NodeGraphTestFX). Translate the
+        // renderer snapshot into the UI view-model once (cached by Arc identity).
+        let ui_snap = self.editor_ui_snapshot();
+        if let (Some(canvas), Some(ui_snap)) = (self.graph_canvas.as_mut(), ui_snap) {
+            canvas.set_snapshot(&ui_snap);
             // Overlay this frame's live (modulated) node values on top of the
             // just-pushed structural snapshot, so a driver / Ableton / envelope /
             // card slider is seen moving each knob on the node face. Empty (and a
@@ -1340,13 +1339,12 @@ impl Application {
                     // from the live snapshot (outer routing → node handle → id)
                     // and centre the editor canvas on it. Same path as the
                     // card-label jump-to-node, triggered from the mapping drawer.
-                    if let (Some(snap), Some(canvas)) = (
-                        self.content_state.active_graph_snapshot.as_deref(),
-                        self.graph_canvas.as_mut(),
-                    ) && let Some(node_id) =
-                        crate::graph_canvas::resolve_card_param_node_id(snap, binding_id)
+                    if let Some(ui_snap) = self.editor_ui_snapshot()
+                        && let Some(node_id) =
+                            crate::graph_canvas::resolve_card_param_node_id(&ui_snap, binding_id)
+                        && let Some(canvas) = self.graph_canvas.as_mut()
                     {
-                        canvas.focus_node(snap, &node_id);
+                        canvas.focus_node(&ui_snap, &node_id);
                     }
                     continue;
                 }
@@ -2874,8 +2872,8 @@ impl Application {
             .unwrap_or_else(|| crate::graph_canvas::Rect::new(0.0, 0.0, 1280.0, 800.0));
 
         self.editor_mapping_popover.open(
-            binding_id.to_string(), label, min, max, invert, curve, scale, offset, range, anchor,
-            clip,
+            binding_id.to_string(), label, min, max, invert,
+            crate::ui_translate::macro_curve_to_ui(curve), scale, offset, range, anchor, clip,
         );
         if let Some(ed) = self.graph_editor.as_mut() {
             ed.offscreen_dirty = true;
@@ -2912,6 +2910,23 @@ impl Application {
         ))
     }
 
+    /// The current editor graph as the UI-local view-model the canvas reads,
+    /// translating (and caching) the renderer snapshot on change. Returns an
+    /// owned `Arc` (no `self` borrow held), so callers can use it alongside a
+    /// `&mut self.graph_canvas` borrow. `None` when no graph is active.
+    pub(crate) fn editor_ui_snapshot(
+        &mut self,
+    ) -> Option<std::sync::Arc<manifold_ui::graph_view::GraphSnapshot>> {
+        let src = self.content_state.active_graph_snapshot.as_ref()?;
+        let fresh =
+            matches!(&self.editor_ui_graph, Some((cached, _)) if std::sync::Arc::ptr_eq(cached, src));
+        if !fresh {
+            let ui = std::sync::Arc::new(crate::ui_translate::graph_snapshot_to_ui(src));
+            self.editor_ui_graph = Some((src.clone(), ui));
+        }
+        self.editor_ui_graph.as_ref().map(|(_, ui)| ui.clone())
+    }
+
     fn present_graph_editor_window(&mut self) {
         // Forward the editor's single-node selection to the content thread so
         // it can capture that node's output for the preview pane. Deduplicated
@@ -2921,10 +2936,11 @@ impl Application {
         // (Group Input/Output, final output) has no runtime instance of its
         // own, so resolve it against the hierarchical snapshot at the canvas
         // scope to the concrete node whose texture stands in for that boundary.
-        let preview_node = match (
-            self.graph_canvas.as_ref(),
-            self.content_state.active_graph_snapshot.as_deref(),
-        ) {
+        // The UI-local graph view-model the canvas + these editor helpers read
+        // (Phase 8). Translated once (cached by Arc identity); the renderer
+        // snapshot stays the source for the binding/exposure helpers below.
+        let editor_ui_snap = self.editor_ui_snapshot();
+        let preview_node = match (self.graph_canvas.as_ref(), editor_ui_snap.as_deref()) {
             (Some(canvas), Some(snap)) => canvas
                 .selected_node_id()
                 .and_then(|id| resolve_preview_target(snap, canvas.scope_path(), id)),
@@ -2949,7 +2965,7 @@ impl Application {
         // scope descend/ascend or a topology edit, not on pan/zoom.
         let visible_nodes: Vec<manifold_core::NodeId> = match (
             self.graph_canvas.as_ref(),
-            self.content_state.active_graph_snapshot.as_deref(),
+            editor_ui_snap.as_deref(),
         ) {
             (Some(canvas), Some(snap)) => {
                 let (nodes, _) =
@@ -3077,7 +3093,7 @@ impl Application {
             .map(|c| (c.selected_node_id(), c.scope_path().to_vec()))
             .unwrap_or((None, Vec::new()));
         let view_for_panel =
-            build_graph_editor_view(selected_node_u32, snap_arc.as_deref(), &panel_scope);
+            build_graph_editor_view(selected_node_u32, editor_ui_snap.as_deref(), &panel_scope);
         // V2 unification: the right-sidebar's top "Effect Parameters"
         // list is a read-only summary of every inner-node param
         // currently exposed on the effect card (static-block + user-
@@ -4274,10 +4290,10 @@ fn fmt_table_cell_seed(v: f32) -> String {
 
 fn build_graph_editor_view(
     selected_node: Option<u32>,
-    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
+    snapshot: Option<&manifold_ui::graph_view::GraphSnapshot>,
     scope: &[u32],
 ) -> Option<manifold_ui::panels::graph_editor::GraphEditorNodeView> {
-    use manifold_renderer::node_graph::ParamSnapshotKind;
+    use manifold_ui::graph_view::ParamSnapshotKind;
     use manifold_ui::panels::graph_editor::{
         GraphEditorNodeView, GraphEditorParam, GraphEditorParamKind,
     };
@@ -4350,7 +4366,7 @@ fn build_graph_editor_view(
 ///
 /// Pure over the snapshot, so it's unit-tested below.
 fn resolve_preview_target(
-    snap: &manifold_renderer::node_graph::GraphSnapshot,
+    snap: &manifold_ui::graph_view::GraphSnapshot,
     scope: &[u32],
     selected: u32,
 ) -> Option<manifold_core::NodeId> {
@@ -4361,10 +4377,10 @@ fn resolve_preview_target(
 }
 
 fn resolve_boundary_node(
-    node: &manifold_renderer::node_graph::NodeSnapshot,
-    nodes: &[manifold_renderer::node_graph::NodeSnapshot],
-    wires: &[manifold_renderer::node_graph::WireSnapshot],
-    snap: &manifold_renderer::node_graph::GraphSnapshot,
+    node: &manifold_ui::graph_view::NodeSnapshot,
+    nodes: &[manifold_ui::graph_view::NodeSnapshot],
+    wires: &[manifold_ui::graph_view::WireSnapshot],
+    snap: &manifold_ui::graph_view::GraphSnapshot,
     scope: &[u32],
 ) -> Option<manifold_core::NodeId> {
     use manifold_core::effect_graph_def::{GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID};
@@ -4401,10 +4417,10 @@ fn resolve_boundary_node(
 /// container id (content `group_preview_map`); a `group_input` producer recurses
 /// to the parent feed; anything else previews itself.
 fn resolve_producer(
-    producer: &manifold_renderer::node_graph::NodeSnapshot,
-    nodes: &[manifold_renderer::node_graph::NodeSnapshot],
-    wires: &[manifold_renderer::node_graph::WireSnapshot],
-    snap: &manifold_renderer::node_graph::GraphSnapshot,
+    producer: &manifold_ui::graph_view::NodeSnapshot,
+    nodes: &[manifold_ui::graph_view::NodeSnapshot],
+    wires: &[manifold_ui::graph_view::WireSnapshot],
+    snap: &manifold_ui::graph_view::GraphSnapshot,
     scope: &[u32],
 ) -> Option<manifold_core::NodeId> {
     use manifold_core::effect_graph_def::GROUP_INPUT_TYPE_ID;
@@ -4422,9 +4438,9 @@ fn resolve_producer(
 fn producer_into<'a>(
     to_node: u32,
     to_port: &str,
-    nodes: &'a [manifold_renderer::node_graph::NodeSnapshot],
-    wires: &[manifold_renderer::node_graph::WireSnapshot],
-) -> Option<&'a manifold_renderer::node_graph::NodeSnapshot> {
+    nodes: &'a [manifold_ui::graph_view::NodeSnapshot],
+    wires: &[manifold_ui::graph_view::WireSnapshot],
+) -> Option<&'a manifold_ui::graph_view::NodeSnapshot> {
     let w = wires
         .iter()
         .find(|w| w.to_node == to_node && w.to_port == to_port)
@@ -4433,8 +4449,8 @@ fn producer_into<'a>(
 }
 
 /// First `Texture2D`(-typed) port name, else the first port of any type.
-fn primary_texture_port(ports: &[manifold_renderer::node_graph::PortSnapshot]) -> Option<&str> {
-    use manifold_renderer::node_graph::PortKindSnapshot;
+fn primary_texture_port(ports: &[manifold_ui::graph_view::PortSnapshot]) -> Option<&str> {
+    use manifold_ui::graph_view::PortKindSnapshot;
     ports
         .iter()
         .find(|p| {
@@ -4647,9 +4663,9 @@ fn build_static_block_targets(
 mod preview_target_tests {
     use super::resolve_preview_target;
     use manifold_core::NodeId;
-    use manifold_core::effect_graph_def::{GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID};
-    use manifold_renderer::node_graph::{
-        GraphSnapshot, GroupSnapshot, NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
+    use manifold_ui::graph_view::{
+        GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GraphSnapshot, GroupSnapshot,
+        NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
     };
 
     fn tex(name: &str) -> PortSnapshot {
@@ -4679,6 +4695,8 @@ mod preview_target_tests {
             breaks_dependency_cycle: false,
             group: None,
             wgsl_source: None,
+            category: manifold_ui::graph_view::Category::Uncategorized,
+            tooltip: None,
         }
     }
 

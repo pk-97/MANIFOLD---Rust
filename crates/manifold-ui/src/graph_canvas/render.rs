@@ -1,15 +1,15 @@
 //! Immediate-mode painting for the canvas — the master `render` plus every
-//! `draw_*` helper. Goes through `UIRenderer` rect+text primitives; no UITree.
+//! `draw_*` helper. Goes through the [`Painter`] rect+text primitives; no UITree.
 //! Reads node geometry from `NodeView` (the one geometry source) and projects
 //! through `to_screen`/`to_graph` (camera) — it never recomputes layout.
 
 use super::*;
-use manifold_renderer::ui_renderer::{Depth, UIRenderer};
+use crate::draw::{Depth, Painter};
 
 impl GraphCanvas {
     // ── Render ──────────────────────────────────────────────────────
 
-    pub fn render(&self, ui: &mut UIRenderer, viewport: Rect) {
+    pub fn render(&self, ui: &mut dyn Painter, viewport: Rect) {
         // Clip every node, wire, and label this canvas draws to its own lane so
         // nothing bleeds under the left palette or right sidebar. The panels
         // build their own scissored batches on top via `render_tree_range`.
@@ -199,7 +199,7 @@ impl GraphCanvas {
     /// summary. Both come from the doc side-channels (`param_doc` and
     /// `NodeDescriptor`) resolved at snapshot time. No-op when there's
     /// nothing registered for whatever the cursor is over.
-    fn draw_hover_tooltip(&self, ui: &mut UIRenderer, viewport: Rect, canvas: Rect) {
+    fn draw_hover_tooltip(&self, ui: &mut dyn Painter, viewport: Rect, canvas: Rect) {
         let (sx, sy) = self.cursor;
         // A param row under the cursor wins over the node summary — it's the
         // more specific thing the user is pointing at.
@@ -261,7 +261,7 @@ impl GraphCanvas {
     /// node/wire counts, selection, hover, and the active drag mode. Toggled
     /// by the backtick key. The handoff doc's debug-friendly mandate — Peter
     /// reads this instead of reaching for a debugger.
-    fn draw_debug_overlay(&self, ui: &mut UIRenderer, canvas: Rect) {
+    fn draw_debug_overlay(&self, ui: &mut dyn Painter, canvas: Rect) {
         let lines = [
             format!("scope: {:?}", self.scope),
             format!("crumbs: {:?}", self.scope_titles),
@@ -294,7 +294,7 @@ impl GraphCanvas {
 
     fn draw_ghost_wire(
         &self,
-        ui: &mut UIRenderer,
+        ui: &mut dyn Painter,
         viewport: Rect,
         from_node: u32,
         from_port: &str,
@@ -341,7 +341,7 @@ impl GraphCanvas {
         }
     }
 
-    fn draw_grid(&self, ui: &mut UIRenderer, canvas: Rect) {
+    fn draw_grid(&self, ui: &mut dyn Painter, canvas: Rect) {
         const GRAPH_SPACING: f32 = 32.0;
         let spacing = GRAPH_SPACING * self.zoom;
         if spacing < 8.0 {
@@ -376,7 +376,7 @@ impl GraphCanvas {
     /// Subtle by design — it signals "this knob is moving," it isn't a readout.
     fn draw_sparkline(
         &self,
-        ui: &mut UIRenderer,
+        ui: &mut dyn Painter,
         x: f32,
         y: f32,
         w: f32,
@@ -400,7 +400,7 @@ impl GraphCanvas {
         }
     }
 
-    fn draw_node(&self, ui: &mut UIRenderer, viewport: Rect, canvas: Rect, node: &NodeView) {
+    fn draw_node(&self, ui: &mut dyn Painter, viewport: Rect, canvas: Rect, node: &NodeView) {
         let (sx, sy) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
         let sw = NODE_WIDTH * self.zoom;
         let sh = node.height() * self.zoom;
@@ -689,7 +689,7 @@ impl GraphCanvas {
             .is_some_and(|p| p.is_control)
     }
 
-    fn draw_wire(&self, ui: &mut UIRenderer, viewport: Rect, wire: &WireView) {
+    fn draw_wire(&self, ui: &mut dyn Painter, viewport: Rect, wire: &WireView) {
         let (Some(from), Some(to)) = (self.find_node(wire.from_node), self.find_node(wire.to_node))
         else {
             return;

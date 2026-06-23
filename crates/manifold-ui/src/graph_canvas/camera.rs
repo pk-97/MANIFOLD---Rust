@@ -16,8 +16,8 @@ impl GraphCanvas {
     /// otherwise a node inside a just-entered group has no position yet.
     pub fn focus_node(
         &mut self,
-        snap: &manifold_renderer::node_graph::GraphSnapshot,
-        node_id: &manifold_core::NodeId,
+        snap: &crate::graph_view::GraphSnapshot,
+        node_id: &manifold_foundation::NodeId,
     ) -> bool {
         let Some((scope, titles, rid)) = find_node_scope(snap, node_id) else {
             return false;
