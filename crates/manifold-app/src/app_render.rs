@@ -649,8 +649,20 @@ impl Application {
         // 1c. Push the latest graph snapshot into the editor canvas
         // (read-only viewer of the running NodeGraphTestFX). Translate the
         // renderer snapshot into the UI view-model once (cached by Arc identity).
+        // Per-node preview screens take the project aspect ratio, so a portrait
+        // or wide show reads correctly on every node face. Set before
+        // `set_snapshot` so the first layout of a level uses the right heights.
+        let preview_aspect = self
+            .content_pipeline_output
+            .as_ref()
+            .map(|p| p.get_dimensions())
+            .filter(|(_, h)| *h > 0)
+            .map(|(w, h)| w as f32 / h as f32);
         let ui_snap = self.editor_ui_snapshot();
         if let (Some(canvas), Some(ui_snap)) = (self.graph_canvas.as_mut(), ui_snap) {
+            if let Some(aspect) = preview_aspect {
+                canvas.set_preview_aspect(aspect);
+            }
             canvas.set_snapshot(&ui_snap);
             // Overlay this frame's live (modulated) node values on top of the
             // just-pushed structural snapshot, so a driver / Ableton / envelope /
@@ -3084,8 +3096,29 @@ impl Application {
         // overlap. Logical units; the present pass draws the pane to match.
         let preview_pad = 8.0_f32;
         let preview_title_h = 18.0_f32;
-        let preview_w = (sidebar_width - 2.0 * preview_pad).max(1.0);
-        let preview_h = preview_w * 9.0 / 16.0;
+        // Monitors take the project aspect ratio (a portrait show → portrait
+        // monitors), fit to the column width and clamped in height so the two
+        // stacked panes always fit the editor window, never spilling onto the
+        // chrome below. Landscape stays full-width (unchanged); portrait is
+        // narrower and centred in the column.
+        let monitor_aspect = self
+            .content_pipeline_output
+            .as_ref()
+            .map(|p| p.get_dimensions())
+            .filter(|(_, h)| *h > 0)
+            .map(|(w, h)| w as f32 / h as f32)
+            .unwrap_or(16.0 / 9.0);
+        let avail_w = (sidebar_width - 2.0 * preview_pad).max(1.0);
+        // Height budget so 2×(title + body) + 3 pads fits the window vertically.
+        let max_body_h =
+            (((logical_h as f32) - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
+        let width_bound_h = avail_w / monitor_aspect;
+        let (preview_w, preview_h) = if width_bound_h <= max_body_h {
+            (avail_w, width_bound_h)
+        } else {
+            (max_body_h * monitor_aspect, max_body_h)
+        };
+        let preview_x = sidebar_x + (sidebar_width - preview_w) * 0.5;
         // The right column is monitors-only now — the inner-node param list moved
         // under the left card. Two equal stacked 16:9 monitors (the selected
         // node's output on top, the master compositor output below), each a
@@ -3103,7 +3136,7 @@ impl Application {
         let show_image = self.last_preview_node.is_some() && preview_has_image;
         let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
         let mut pane_y = (((logical_h as f32) - pane_block_h) * 0.5).max(preview_pad);
-        // Node-output monitor: title row + 16:9 body.
+        // Node-output monitor: title row + project-aspect body.
         let node_title_y = pane_y;
         let node_img_y = node_title_y + preview_title_h;
         pane_y = node_img_y + preview_h + preview_pad;
@@ -3302,7 +3335,7 @@ impl Application {
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             };
-            let title_x = sidebar_x + preview_pad;
+            let title_x = preview_x;
             // Backing panel for the whole right column so the two centred monitors
             // sit on a clean, uniform surface rather than a black void.
             ws.ui_root.tree.add_panel(
@@ -3501,6 +3534,18 @@ impl Application {
                     let inv = 1.0 / crate::content_pipeline::ATLAS_GRID as f32;
                     let half_tx = 0.5 / crate::content_pipeline::ATLAS_W as f32;
                     let half_ty = 0.5 / crate::content_pipeline::ATLAS_H as f32;
+                    // Each source is letterboxed into its 16:9 cell (transparent
+                    // margins). The on-canvas screen now takes the project aspect,
+                    // so sample only the letterboxed *content* sub-rect of the cell
+                    // — otherwise a non-16:9 image would be squashed to fill the
+                    // cell's full 16:9 extent. Centred fractions, computed once.
+                    let cell_aspect = crate::content_pipeline::ATLAS_CELL_W as f32
+                        / crate::content_pipeline::ATLAS_CELL_H as f32;
+                    let (content_w_frac, content_h_frac) = if monitor_aspect > cell_aspect {
+                        (1.0, cell_aspect / monitor_aspect)
+                    } else {
+                        (monitor_aspect / cell_aspect, 1.0)
+                    };
                     for (node_id, bx, by, bw, bh) in thumbs {
                         let Some(&cell) = layout.get(&node_id) else {
                             continue;
@@ -3531,6 +3576,13 @@ impl Application {
                         let v0 = gy * inv + half_ty;
                         let du = inv - 2.0 * half_tx;
                         let dv = inv - 2.0 * half_ty;
+                        // Narrow the cell UV to its centred content sub-rect so the
+                        // project-aspect screen maps the image 1:1, not the cell's
+                        // transparent letterbox margins.
+                        let u0 = u0 + du * (1.0 - content_w_frac) * 0.5;
+                        let v0 = v0 + dv * (1.0 - content_h_frac) * 0.5;
+                        let du = du * content_w_frac;
+                        let dv = dv * content_h_frac;
                         let cell_uv = [
                             u0 + du * (clip_l / bw),
                             v0 + dv * (clip_t / bh),
@@ -3578,7 +3630,7 @@ impl Application {
             let scale = scale as f32;
             let w = preview_w * scale;
             let h = preview_h * scale;
-            let x = (sidebar_x + preview_pad) * scale;
+            let x = preview_x * scale;
             // Node-output monitor — the selected image node's captured output.
             // Only when that node has an image; a non-image node's pane is
             // filled with the value inspector text instead (drawn above).

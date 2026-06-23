@@ -498,20 +498,25 @@ impl GraphCanvas {
             );
         }
 
-        // Output-preview strip — a recessed 16:9 "screen" directly under the
-        // header that the present pass blits this node's atlas thumbnail over.
+        // Output-preview screen — a recessed "screen" directly under the header
+        // that the present pass blits this node's atlas thumbnail over. Sized to
+        // the project aspect ratio (portrait shows get a portrait screen), so a
+        // non-16:9 output fills it instead of sitting letterboxed in a fixed box.
         // Drawn for any node (or group) that emits an image, at every zoom, so
-        // the strip is there before the first atlas frame lands and shows
-        // through the letterbox bars of a non-16:9 output. Lives in its own band
-        // above the param/port rows — ports never overlap it.
+        // the screen is there before the first atlas frame lands. Lives in its
+        // own band above the param/port rows — ports never overlap it. A screen
+        // narrower than the node is centred in the band.
         let preview_h = node.preview_h() * self.zoom;
-        if node.preview_node_id.is_some() {
+        if let Some((screen_w, screen_h)) = node.preview_screen {
             let pad = PREVIEW_PAD * self.zoom;
+            let sw_z = screen_w * self.zoom;
+            let sh_z = screen_h * self.zoom;
+            let screen_x = sx + pad + (PREVIEW_IMG_W * self.zoom - sw_z) * 0.5;
             ui.draw_bordered_rect(
-                sx + pad,
+                screen_x,
                 sy + header_h + pad,
-                PREVIEW_IMG_W * self.zoom,
-                PREVIEW_IMG_H * self.zoom,
+                sw_z,
+                sh_z,
                 PREVIEW_SCREEN_BG,
                 2.0 * self.zoom,
                 1.0,

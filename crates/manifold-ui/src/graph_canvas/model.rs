@@ -105,6 +105,11 @@ pub(crate) struct NodeView {
     /// inner node is already a cell in the flattened atlas. The presence of a
     /// value is what gives the node a preview band ([`Self::preview_h`]).
     pub(crate) preview_node_id: Option<manifold_foundation::NodeId>,
+    /// Size `(w, h)` in graph units of the recessed preview screen, at the
+    /// project aspect ratio (see [`preview_screen_size`]). `Some` exactly when
+    /// `preview_node_id` is `Some`. Recomputed on a topology rebuild and
+    /// whenever the project aspect changes ([`GraphCanvas::set_preview_aspect`]).
+    pub(crate) preview_screen: Option<(f32, f32)>,
 }
 
 /// Whether a port carries an image (the only kind the thumbnail atlas captures).
@@ -177,13 +182,13 @@ impl NodeView {
         NODE_HEADER_HEIGHT + self.preview_h() + self.body_h() + port_rows * PORT_ROW_HEIGHT + 6.0
     }
 
-    /// Height of the output-preview band below the header: the 16:9 strip plus
-    /// its padding, or `0` for a node that emits no image. Zoom-independent.
+    /// Height of the output-preview band below the header: the project-aspect
+    /// screen plus its padding, or `0` for a node that emits no image.
+    /// Zoom-independent.
     pub(crate) fn preview_h(&self) -> f32 {
-        if self.preview_node_id.is_some() {
-            PREVIEW_BAND_H
-        } else {
-            0.0
+        match self.preview_screen {
+            Some((_, h)) => h + 2.0 * PREVIEW_PAD,
+            None => 0.0,
         }
     }
 
@@ -548,7 +553,9 @@ impl GraphCanvas {
         let header = NODE_HEADER_HEIGHT * self.zoom;
         let pad = PREVIEW_PAD * self.zoom;
         for node in &self.nodes {
-            let Some(capture_id) = node.preview_node_id.clone() else {
+            let (Some(capture_id), Some((screen_w, screen_h))) =
+                (node.preview_node_id.clone(), node.preview_screen)
+            else {
                 continue;
             };
             let (sx, sy) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
@@ -561,10 +568,12 @@ impl GraphCanvas {
             {
                 continue;
             }
-            let strip_w = PREVIEW_IMG_W * self.zoom;
-            let strip_h = PREVIEW_IMG_H * self.zoom;
+            let strip_w = screen_w * self.zoom;
+            let strip_h = screen_h * self.zoom;
+            // Centre a narrower-than-full-width screen (portrait) in the band.
+            let strip_x = sx + pad + (PREVIEW_IMG_W * self.zoom - strip_w) * 0.5;
             if strip_h > 1.0 {
-                out.push((capture_id, sx + pad, sy + header + pad, strip_w, strip_h));
+                out.push((capture_id, strip_x, sy + header + pad, strip_w, strip_h));
             }
         }
         out
@@ -599,6 +608,28 @@ impl GraphCanvas {
             NODE_WIDTH * self.zoom,
             NODE_HEADER_HEIGHT * self.zoom,
         ))
+    }
+
+    /// Set the project aspect ratio (output width / height) the per-node preview
+    /// screens are sized to. Cheap no-op when unchanged. On a change, every
+    /// previewable node's screen is resized in place — node heights move with it,
+    /// but positions are preserved: an aspect change is rare (a resolution
+    /// switch), and silently re-running auto-layout would scramble a hand-arranged
+    /// graph. Call before [`Self::set_snapshot`] so the first layout of a level
+    /// already uses the right node heights.
+    pub fn set_preview_aspect(&mut self, aspect: f32) {
+        if !(aspect.is_finite() && aspect > 0.0)
+            || (aspect - self.preview_aspect).abs() < 1e-4
+        {
+            return;
+        }
+        self.preview_aspect = aspect;
+        let screen = crate::graph_canvas::preview_screen_size(aspect);
+        for node in &mut self.nodes {
+            if node.preview_screen.is_some() {
+                node.preview_screen = Some(screen);
+            }
+        }
     }
 
     /// Push the latest snapshot. Rebuilds nodes+wires; recomputes
@@ -649,6 +680,7 @@ impl GraphCanvas {
             .map(|n| (n.id, n.pos_graph))
             .collect();
 
+        let preview_aspect = self.preview_aspect;
         let new_nodes: Vec<NodeView> = level_nodes
             .iter()
             .map(|n| NodeView {
@@ -682,6 +714,8 @@ impl GraphCanvas {
                 group_tint: n.group.as_ref().and_then(|g| g.tint),
                 tooltip: n.tooltip.clone(),
                 preview_node_id: node_preview_target(n),
+                preview_screen: node_preview_target(n)
+                    .map(|_| crate::graph_canvas::preview_screen_size(preview_aspect)),
             })
             .collect();
         self.nodes = new_nodes;

@@ -142,8 +142,53 @@ fn visible_node_thumbnails_preview_image_nodes_and_groups_via_producer() {
         thumbs.iter().all(|(id, ..)| id.as_str() != "tweak"),
         "a group is never keyed to its own id — always its producer's"
     );
-    // Each preview-strip rect is the 16:9 image area and has positive size.
+    // Each preview-strip rect is the image area and has positive size.
     assert!(thumbs.iter().all(|(_, _, _, w, h)| *w > 0.0 && *h > 0.0));
+}
+
+#[test]
+fn preview_screen_size_follows_project_aspect() {
+    // Landscape (16:9) is width-bound: full inner width, short — the historical
+    // behaviour, unchanged.
+    let (w, h) = preview_screen_size(16.0 / 9.0);
+    assert!((w - PREVIEW_IMG_W).abs() < 0.01, "16:9 fills the node width");
+    assert!((w / h - 16.0 / 9.0).abs() < 0.01, "16:9 aspect preserved");
+    assert!(h <= PREVIEW_MAX_H, "16:9 height sits under the cap");
+
+    // Portrait (9:16) is height-bound: capped height, narrower, aspect kept.
+    let (pw, ph) = preview_screen_size(9.0 / 16.0);
+    assert!((ph - PREVIEW_MAX_H).abs() < 0.01, "portrait clamps to the height cap");
+    assert!((pw / ph - 9.0 / 16.0).abs() < 0.01, "portrait aspect preserved");
+    assert!(pw < PREVIEW_IMG_W, "portrait screen is narrower than the band");
+
+    // A non-finite / non-positive aspect falls back to 16:9 rather than NaN.
+    let (fw, fh) = preview_screen_size(0.0);
+    assert!(fw > 0.0 && fh > 0.0 && (fw / fh - 16.0 / 9.0).abs() < 0.01);
+}
+
+#[test]
+fn set_preview_aspect_resizes_screens_and_node_heights() {
+    let snap = grouped_snapshot();
+    let mut canvas = GraphCanvas::new();
+    canvas.set_snapshot(&snap);
+    let landscape_h = canvas
+        .nodes
+        .iter()
+        .find(|n| n.preview_screen.is_some())
+        .map(|n| n.height())
+        .expect("an image node exists");
+
+    // Switching to a portrait project grows previewable node heights (taller
+    // screen) and resizes the screens in place; positions are untouched.
+    canvas.set_preview_aspect(9.0 / 16.0);
+    let node = canvas
+        .nodes
+        .iter()
+        .find(|n| n.preview_screen.is_some())
+        .unwrap();
+    let (sw, sh) = node.preview_screen.unwrap();
+    assert!((sw / sh - 9.0 / 16.0).abs() < 0.01, "screen took the portrait aspect");
+    assert!(node.height() > landscape_h, "portrait preview makes the node taller");
 }
 
 #[test]

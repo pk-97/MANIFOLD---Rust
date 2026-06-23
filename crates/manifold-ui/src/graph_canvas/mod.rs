@@ -89,15 +89,41 @@ const NODE_HEADER_HEIGHT: f32 = 22.0;
 /// Padding around the preview strip inside a node, so the thumbnail reads as a
 /// recessed screen rather than a fill bleeding to the node edges.
 const PREVIEW_PAD: f32 = 6.0;
-/// Inner width / height of a node's output-preview strip — a 16:9 image area
-/// inset by `PREVIEW_PAD` on each side. Only nodes (and groups) that output an
-/// image carry the strip; pure scalar nodes (param distributors, the generator
-/// input) don't reserve the space. The strip sits in its own band between the
-/// header and the param/port rows, so ports never overlap the thumbnail.
+/// Bounding box of a node's output-preview screen, inset by `PREVIEW_PAD` on
+/// each side. Only nodes (and groups) that output an image carry the screen;
+/// pure scalar nodes (param distributors, the generator input) don't reserve
+/// the space. It sits in its own band between the header and the param/port
+/// rows, so ports never overlap the thumbnail.
+///
+/// The screen takes the *project* aspect ratio (see [`preview_screen_size`]),
+/// fit inside `PREVIEW_IMG_W` × `PREVIEW_MAX_H`. A landscape (16:9) show stays
+/// full-width and short — its 162px height sits under the cap, so nothing about
+/// the common case changes. A portrait show gets a taller, narrower screen
+/// centered in the band rather than a tiny letterboxed sliver in a fixed 16:9
+/// box.
 const PREVIEW_IMG_W: f32 = NODE_WIDTH - 2.0 * PREVIEW_PAD;
-const PREVIEW_IMG_H: f32 = PREVIEW_IMG_W * 9.0 / 16.0;
-/// Total vertical space the preview band occupies (image + pad above and below).
-const PREVIEW_BAND_H: f32 = PREVIEW_IMG_H + 2.0 * PREVIEW_PAD;
+/// Cap on the preview screen's height in graph units, so a portrait project
+/// doesn't blow the node up to its full-width portrait height (288×512). Kept
+/// above the 16:9 width-bound height (162) so landscape projects are unchanged.
+const PREVIEW_MAX_H: f32 = 200.0;
+
+/// Preview-screen size `(w, h)` in graph units for the given project aspect
+/// ratio (width / height), aspect-fit inside `PREVIEW_IMG_W` × `PREVIEW_MAX_H`.
+/// Landscape → width-bound (full width, short); portrait → height-bound
+/// (capped height, narrower, centered by the caller).
+pub(crate) fn preview_screen_size(aspect: f32) -> (f32, f32) {
+    let aspect = if aspect.is_finite() && aspect > 0.0 {
+        aspect
+    } else {
+        16.0 / 9.0
+    };
+    let width_bound_h = PREVIEW_IMG_W / aspect;
+    if width_bound_h <= PREVIEW_MAX_H {
+        (PREVIEW_IMG_W, width_bound_h)
+    } else {
+        (PREVIEW_MAX_H * aspect, PREVIEW_MAX_H)
+    }
+}
 /// Height of one on-node parameter row: label + value on one line, with a
 /// thin fill bar underneath for ranged values. Nodes carry their params on
 /// their face so you read (and, in a later pass, tune) them where you are,
@@ -353,6 +379,10 @@ pub struct GraphCanvas {
     /// doesn't contain it and brightens the matches, so a name jumps out of a
     /// busy graph. Empty = no search active. Set live by the editor's search box.
     pub(crate) node_search: String,
+    /// Project aspect ratio (output width / height) the per-node preview screens
+    /// are sized to. Defaults to 16:9; the host refreshes it each frame from the
+    /// live compositor dimensions via [`Self::set_preview_aspect`].
+    pub(crate) preview_aspect: f32,
 }
 
 impl GraphCanvas {
@@ -383,6 +413,7 @@ impl GraphCanvas {
             pending_focus: None,
             fit_pending: true,
             node_search: String::new(),
+            preview_aspect: 16.0 / 9.0,
             debug_overlay: false,
         }
     }
