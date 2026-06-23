@@ -57,10 +57,12 @@ impl DispatchResult {
     }
 }
 
-/// Handle an inspector tab-strip click. The tab strip mirrors the timeline
-/// selection: selecting a rung re-points the selection up/down the ownership
-/// chain, except `Master`, which pins the inspector without disturbing the
-/// timeline selection (and any later selection change releases the pin).
+/// Handle an inspector tab-strip click. A tab is a **view** over the live
+/// timeline selection, not a selection change: clicking a rung pins the
+/// inspector to that scope (Clip / Layer / Group / Master) and repoints the
+/// inspector's layer focus (`active_layer`) at it, but never touches what's
+/// selected — so the whole ownership chain stays available and the clip you
+/// were on stays selected. The pin auto-clears on the next selection change.
 /// See docs/UI_LAYOUT_DESIGN.md.
 fn inspector_select_tab(
     tab: InspectorTab,
@@ -70,44 +72,45 @@ fn inspector_select_tab(
     ui: &mut UIRoot,
 ) {
     use manifold_core::types::LayerType;
+    // The selection's own layer — the clip's layer, or the selected layer. The
+    // tab repoints `active_layer` relative to this; the selection itself is
+    // never changed.
+    let sel_layer = selection
+        .selected_layer_id_for_clip
+        .clone()
+        .or_else(|| selection.primary_selected_layer_id.clone());
     match tab {
-        // Pin the inspector to Master; timeline selection is preserved.
-        InspectorTab::Master => selection.select_master_scope(),
-        // Clip is only offered when a clip is already selected — just release
-        // any Master pin so the scope falls back to that clip.
-        InspectorTab::Clip => selection.clear_master_scope(),
-        // Select the layer owning the current selection.
-        InspectorTab::Layer => {
-            let lid = active_layer
-                .clone()
-                .or_else(|| selection.primary_selected_layer_id.clone())
-                .or_else(|| selection.selected_layer_id_for_clip.clone());
-            if let Some(lid) = lid {
-                *active_layer = Some(lid.clone());
-                selection.select_layer(lid);
-                ui.inspector.clear_effect_selection(&mut ui.tree);
+        // Master needs no layer focus; just pin the scope.
+        InspectorTab::Master => selection.pin_scope(InspectorTab::Master),
+        // Clip / Layer both focus the selection's own layer (clip chrome + gen
+        // params + that layer's effects).
+        InspectorTab::Clip | InspectorTab::Layer => {
+            if let Some(lid) = sel_layer.or_else(|| active_layer.clone()) {
+                *active_layer = Some(lid);
             }
+            ui.inspector.clear_effect_selection(&mut ui.tree);
+            selection.pin_scope(tab);
         }
-        // Select the group: the active layer's group parent, or the active
-        // layer itself when it is already a group.
+        // Group focuses the group: the selection layer's group parent, or the
+        // selection layer itself when it is already a group.
         InspectorTab::Group => {
-            let gid = active_layer
+            let gid = sel_layer
                 .as_ref()
                 .and_then(|lid| project.timeline.find_layer_index_by_id(lid))
                 .and_then(|idx| project.timeline.find_group_parent(idx))
                 .map(|(_, l)| l.layer_id.clone())
                 .or_else(|| {
-                    active_layer
+                    sel_layer
                         .as_ref()
                         .and_then(|lid| project.timeline.find_layer_by_id(lid))
                         .filter(|(_, l)| l.layer_type == LayerType::Group)
                         .map(|(_, l)| l.layer_id.clone())
                 });
             if let Some(gid) = gid {
-                *active_layer = Some(gid.clone());
-                selection.select_layer(gid);
-                ui.inspector.clear_effect_selection(&mut ui.tree);
+                *active_layer = Some(gid);
             }
+            ui.inspector.clear_effect_selection(&mut ui.tree);
+            selection.pin_scope(InspectorTab::Group);
         }
     }
 }

@@ -4,6 +4,7 @@
 // Mechanical 1:1 port of Unity UIState.cs.
 // Replaces the former app::SelectionState + app::ClipDragState.
 
+use crate::panels::InspectorTab;
 use crate::view::SelectionRegion;
 use manifold_foundation::{Beats, ClipId, LayerId, MarkerId};
 use std::collections::HashSet;
@@ -54,15 +55,17 @@ pub struct UIState {
     pub selected_marker_ids: HashSet<MarkerId>,
 
     // ── Inspector scope ──
-    /// The `selection_version` at which the inspector was pinned to the Master
-    /// scope (by clicking the Master tab). Master is active iff this still
-    /// equals the current `selection_version` — so any selection change, which
-    /// already bumps the version, auto-clears the pin and pulls the inspector
-    /// back to the selected thing. The timeline selection itself is preserved.
-    /// This is the one piece of inspector state that isn't pure selection — it
-    /// lets Master be reached without a fake timeline lane or losing your
-    /// place. See docs/UI_LAYOUT_DESIGN.md.
-    master_pinned_at_version: Option<u64>,
+    /// The inspector scope the user pinned by clicking a tab, plus the
+    /// `selection_version` it was pinned at. The pin is a *view* over the live
+    /// timeline selection: clicking a tab points the inspector at that rung
+    /// (Clip / Layer / Group / Master) WITHOUT changing what's selected, so the
+    /// full ownership chain stays available and you keep your place. It is
+    /// active only while still on the same `selection_version` — any selection
+    /// change already bumps the version, so the pin auto-clears and the
+    /// inspector falls back to the selection-derived default scope. This is the
+    /// one piece of inspector state that isn't pure selection. See
+    /// docs/UI_LAYOUT_DESIGN.md.
+    scope_pin: Option<(InspectorTab, u64)>,
 }
 
 impl Default for UIState {
@@ -88,35 +91,38 @@ impl UIState {
             hovered_clip_id: None,
             current_zoom_index: crate::color::DEFAULT_ZOOM_INDEX,
             selected_marker_ids: HashSet::new(),
-            master_pinned_at_version: None,
+            scope_pin: None,
         }
     }
 
     // ── Inspector scope ─────────────────────────────────────────────
 
-    /// Whether the inspector is currently pinned to the Master scope. True only
-    /// while no selection change has happened since the Master tab was clicked.
-    pub fn master_scope_active(&self) -> bool {
-        self.master_pinned_at_version == Some(self.selection_version)
+    /// The inspector scope currently pinned by a tab click, if the pin is still
+    /// live (no selection change since). `None` ⇒ fall back to the
+    /// selection-derived default scope.
+    pub fn pinned_scope(&self) -> Option<InspectorTab> {
+        self.scope_pin
+            .filter(|(_, v)| *v == self.selection_version)
+            .map(|(tab, _)| tab)
     }
 
-    /// Pin the inspector to the Master scope without touching the timeline
+    /// Pin the inspector to a scope (a tab click) WITHOUT touching the timeline
     /// selection. Bumps `selection_version` so the inspector rebuilds; the pin
-    /// is recorded against the new version and auto-clears on the next
-    /// selection change (which bumps the version again).
-    pub fn select_master_scope(&mut self) {
-        if self.master_scope_active() {
+    /// is recorded against the new version and auto-clears on the next selection
+    /// change (which bumps the version again). Idempotent for the active scope.
+    pub fn pin_scope(&mut self, tab: InspectorTab) {
+        if self.pinned_scope() == Some(tab) {
             return;
         }
         self.selection_version += 1;
-        self.master_pinned_at_version = Some(self.selection_version);
+        self.scope_pin = Some((tab, self.selection_version));
     }
 
-    /// Release the Master pin without changing the timeline selection, so the
-    /// inspector falls back to the selected scope. Bumps `selection_version`
-    /// (and so triggers a rebuild) only if a pin was actually set.
-    pub fn clear_master_scope(&mut self) {
-        if self.master_pinned_at_version.take().is_some() {
+    /// Release any scope pin without changing the timeline selection, so the
+    /// inspector falls back to the selection-derived scope. Bumps
+    /// `selection_version` (triggering a rebuild) only if a pin was set.
+    pub fn clear_scope_pin(&mut self) {
+        if self.scope_pin.take().is_some() {
             self.selection_version += 1;
         }
     }
@@ -574,41 +580,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn master_pin_sets_and_self_clears_on_selection() {
+    fn scope_pin_sets_and_self_clears_on_selection() {
         let mut s = UIState::new();
-        assert!(!s.master_scope_active());
+        assert_eq!(s.pinned_scope(), None);
 
-        // Pinning Master activates it and preserves selection.
-        s.select_master_scope();
-        assert!(s.master_scope_active());
+        // Pinning a scope activates it and preserves selection.
+        s.pin_scope(InspectorTab::Master);
+        assert_eq!(s.pinned_scope(), Some(InspectorTab::Master));
 
         // Any selection change auto-clears the pin (version moves on).
         s.select_layer(LayerId::new("layer-a"));
-        assert!(!s.master_scope_active());
+        assert_eq!(s.pinned_scope(), None);
         // ...and the layer is genuinely selected (pin didn't disturb it).
         assert_eq!(s.primary_selected_layer_id.as_deref(), Some("layer-a"));
     }
 
     #[test]
-    fn clear_master_scope_releases_pin_without_touching_selection() {
+    fn pinning_layer_scope_keeps_the_clip_selected() {
+        // The whole point of the generalised pin: viewing a non-Clip rung must
+        // NOT drop the clip selection, so the Clip rung stays reachable.
         let mut s = UIState::new();
         s.select_clip(ClipId::new("clip-1"), LayerId::new("layer-a"));
-        s.select_master_scope();
-        assert!(s.master_scope_active());
 
-        s.clear_master_scope();
-        assert!(!s.master_scope_active());
+        s.pin_scope(InspectorTab::Layer);
+        assert_eq!(s.pinned_scope(), Some(InspectorTab::Layer));
+        assert_eq!(s.primary_selected_clip_id.as_deref(), Some("clip-1"));
+
+        // Switch to Master, then back to Clip — selection never moved.
+        s.pin_scope(InspectorTab::Master);
+        assert_eq!(s.pinned_scope(), Some(InspectorTab::Master));
+        s.pin_scope(InspectorTab::Clip);
+        assert_eq!(s.pinned_scope(), Some(InspectorTab::Clip));
+        assert_eq!(s.primary_selected_clip_id.as_deref(), Some("clip-1"));
+    }
+
+    #[test]
+    fn clear_scope_pin_releases_without_touching_selection() {
+        let mut s = UIState::new();
+        s.select_clip(ClipId::new("clip-1"), LayerId::new("layer-a"));
+        s.pin_scope(InspectorTab::Master);
+        assert_eq!(s.pinned_scope(), Some(InspectorTab::Master));
+
+        s.clear_scope_pin();
+        assert_eq!(s.pinned_scope(), None);
         // The clip selection is intact — clearing the pin only changes scope.
         assert_eq!(s.primary_selected_clip_id.as_deref(), Some("clip-1"));
     }
 
     #[test]
-    fn pinning_master_twice_is_idempotent() {
+    fn pinning_same_scope_twice_is_idempotent() {
         let mut s = UIState::new();
-        s.select_master_scope();
+        s.pin_scope(InspectorTab::Master);
         let v = s.selection_version;
-        s.select_master_scope(); // already pinned — no extra version churn
+        s.pin_scope(InspectorTab::Master); // already pinned — no extra churn
         assert_eq!(s.selection_version, v);
-        assert!(s.master_scope_active());
+        assert_eq!(s.pinned_scope(), Some(InspectorTab::Master));
     }
 }

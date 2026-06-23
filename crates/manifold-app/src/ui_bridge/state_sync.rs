@@ -1232,16 +1232,26 @@ pub fn sync_inspector_data(
     }
 
     // ── Inspector tabs: the selection's ownership rungs (local→global) ──
-    // Only the rungs that exist for the current selection are offered; the
-    // active rung mirrors the selection (Master pin wins while set).
+    // The rung set is derived from the SELECTION's own layer (the clip's layer
+    // or the selected layer), NOT `active_layer` — which now follows the active
+    // tab (e.g. it points at the group when the Group rung is pinned). Deriving
+    // from the stable selection keeps the full chain available no matter which
+    // rung you're viewing. The active rung is the pin if one is set (a tab
+    // click), else the selection-derived default.
     {
         use manifold_core::types::LayerType;
         use manifold_ui::InspectorTab;
         let has_clip = selection.primary_selected_clip_id.is_some();
-        let layer = active_layer.and_then(|i| project.timeline.layers.get(i));
+        let sel_layer_idx = selection
+            .selected_layer_id_for_clip
+            .as_ref()
+            .or(selection.primary_selected_layer_id.as_ref())
+            .and_then(|id| project.timeline.find_layer_index_by_id(id))
+            .or(active_layer);
+        let layer = sel_layer_idx.and_then(|i| project.timeline.layers.get(i));
         let layer_is_group = layer.is_some_and(|l| l.layer_type == LayerType::Group);
         let has_group_parent =
-            active_layer.is_some_and(|i| project.timeline.find_group_parent(i).is_some());
+            sel_layer_idx.is_some_and(|i| project.timeline.find_group_parent(i).is_some());
 
         let mut tabs: Vec<InspectorTab> = Vec::new();
         if has_clip {
@@ -1259,17 +1269,20 @@ pub fn sync_inspector_data(
         }
         tabs.push(InspectorTab::Master);
 
-        let active = if selection.master_scope_active() {
-            InspectorTab::Master
-        } else if has_clip {
-            InspectorTab::Clip
-        } else if layer_is_group {
-            InspectorTab::Group
-        } else if layer.is_some() {
-            InspectorTab::Layer
-        } else {
-            InspectorTab::Master
-        };
+        let active = selection
+            .pinned_scope()
+            .filter(|t| tabs.contains(t))
+            .unwrap_or_else(|| {
+                if has_clip {
+                    InspectorTab::Clip
+                } else if layer_is_group {
+                    InspectorTab::Group
+                } else if layer.is_some() {
+                    InspectorTab::Layer
+                } else {
+                    InspectorTab::Master
+                }
+            });
         ui.inspector.configure_tabs(&tabs, active);
     }
 
