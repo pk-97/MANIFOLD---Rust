@@ -14,6 +14,19 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
+> **Status: Phases 0–4 COMPLETE (2026-06-23). Phase 5 (layering inversion) is the
+> only one left.** Phase 2 (Chrome API), Phase 3 (Timeline API), and Phase 4
+> (Canvas API) all landed behaviour-preserving, one commit per task, tests +
+> clippy green — see each phase's sub-design doc (`CHROME_API_DESIGN`,
+> `TIMELINE_API_DESIGN`, `CANVAS_API_DESIGN`) and the §13 checklist. **Phase 5**
+> moves `manifold-ui` to UI-local outgoing events (the app maps them to engine
+> commands) so the crate stands alone — and it's the prerequisite for the deeper
+> moves two earlier phases deliberately deferred *to* it: relocating the canvas
+> out of `manifold-app` (4.2), generalising the `IntentRegistry` off `PanelAction`
+> so the editor sidebar can fold onto intents (4.5), and routing the editor window
+> through a literal shared `process_events`/`InputHandler` (4.6). The
+> Phase-2b-era status below is kept as history.
+>
 > **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 panels fully migrated; **3 of
 > the 4 heavyweights chrome-staged** (`param_card` frame + generator header,
 > `layer_header` top chrome, `audio_setup` modal chrome); the `inspector`'s
@@ -805,16 +818,42 @@ pass (see §0).
 - [x] **3.6** Split the `viewport` god-panel (2,973 → 1,182-line parent) into
   `model` / `coordinate` / `render` / `interaction` submodules.
 
-### Phase 4 — Canvas API
-- [ ] **4.1** Sub-design-doc: graph-view framework + own command type + sidebar
-  boundary. _Done when:_ committed.
-- [ ] **4.2** Extract nodes/ports/wires/pan/zoom/box-select into a named module.
-- [ ] **4.3** Own command type for graph edits; remove them from `PanelAction`.
-- [ ] **4.4** `LayeredLayout` as a module of the framework.
-- [ ] **4.5** Sidebar on the Chrome API; clean boundary; one dispatch model (drop
-  the `handle_event`/`dispatch_clicks`/`register_intents` confusion).
-- [ ] **4.6** Fold the editor event loop into the shared path; delete the second
-  loop.
+### Phase 4 — Canvas API — **COMPLETE (2026-06-23)**
+> Sub-design `docs/CANVAS_API_DESIGN.md`. Behaviour-preserving throughout;
+> manifold-ui 330 + manifold-app 91 tests green, clippy `-D warnings` clean, one
+> commit per task. Key constraint recorded in the design doc: the canvas stays
+> in `manifold-app` (it consumes `manifold_renderer` snapshots; `manifold-ui`
+> can't depend on `manifold-renderer`), so 4.2 is a split-in-place, and a crate
+> move waits for Phase 5.
+- [x] **4.1** Sub-design-doc: graph-view framework + own command type + sidebar
+  boundary. → [`CANVAS_API_DESIGN.md`](CANVAS_API_DESIGN.md).
+- [x] **4.2** Extract nodes/ports/wires/pan/zoom/box-select into a named module.
+  The 4,262-line `graph_canvas.rs` is now a `graph_canvas/` directory:
+  `model`/`layout`/`camera`/`hit`/`render`/`interaction` + `tests`, one struct
+  whose impls split across siblings; public `use` paths unchanged.
+- [x] **4.3** Own command type for graph edits; remove them from `PanelAction`.
+  19 graph-edit variants left the 281-variant god-enum for
+  `manifold_ui::graph_edit::GraphEditCommand`; the canvas + sidebar emit it; the
+  app translates to `commands::graph::*` in a dedicated `graph_edits` loop. The
+  ui_bridge no-op chain dropped them. (`EffectMapping*` + `Open*` stay on
+  `PanelAction` — different families, recorded in the design doc.)
+- [x] **4.4** `LayeredLayout` as a module of the framework. → `graph_canvas/
+  layout.rs` (the Sugiyama engine + `auto_layout` adapter + its unit tests),
+  fell out of 4.2.
+- [x] **4.5** Sidebar — one dispatch model. Dead `GraphPalette` panel deleted
+  (kept `GraphPaletteAtom`); `GraphEditorPanel`'s three click entry points
+  (`handle_event`/`dispatch_clicks`/`handle_click`) collapsed to one
+  (`handle_event`). _Not_ moved onto the `IntentRegistry`: it's hardcoded to
+  `PanelAction` and 4.3 made the sidebar emit `GraphEditCommand` — generalising
+  the registry is a crate-wide change with marginal fold-up benefit for the
+  flat rows, deferred to Phase 5 (recorded in the design doc).
+- [x] **4.6** Fold the editor event loop into one input owner. The ~20
+  `is_graph_editor { … return; }` branch-bodies in `app.rs::window_event` move
+  verbatim into `editor_input.rs` (`editor_cursor_moved`/`editor_mouse_input`/
+  `editor_mouse_wheel`/`editor_keyboard_input`/`editor_resized`/
+  `editor_scale_factor_changed`); each arm is now one delegation, killing the
+  per-arm drift. The literal shared `process_events`/`InputHandler` unification
+  is Phase-5 substrate work.
 
 ### Phase 5 — Layering inversion
 - [ ] **5.1** UI-local event types (no core/renderer types in `manifold-ui`'s

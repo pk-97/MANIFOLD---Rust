@@ -1,5 +1,11 @@
 # Canvas API — Phase 4 Design
 
+> **SHIPPED 2026-06-23.** All six tasks landed behaviour-preserving, one commit
+> each; manifold-ui 330 + manifold-app 91 tests green, clippy `-D warnings`
+> clean. This doc is the as-built record — the §3 scoping notes (canvas stays in
+> `manifold-app`; `GraphEditCommand` not on the `IntentRegistry`; the editor
+> keyboard owner over a literal shared `process_events`) match what shipped.
+
 Sub-design-doc for **Phase 4** of the UI Architecture Overhaul
 (`docs/UI_ARCHITECTURE_OVERHAUL.md` §5.4, §13). Scopes the six Phase-4 tasks
 against the codebase as it actually stands today. Written after a full read of
