@@ -169,6 +169,11 @@ pub struct InspectorCompositePanel {
     columns_height: f32,
     dragging_scrollbar: bool,
     dragging_scrollbar_master: bool,
+    /// Set whenever a scroll (wheel or scrollbar drag) offset the content nodes
+    /// in place this frame. The app drains it with `take_scrolled_in_place` and
+    /// invalidates only the inspector's atlas slot — one signal for both scroll
+    /// inputs, so neither has to know about the cache.
+    scrolled_in_place: bool,
 
     // Event routing
     pressed_target: Option<PressedTarget>,
@@ -227,6 +232,7 @@ impl InspectorCompositePanel {
             columns_height: 0.0,
             dragging_scrollbar: false,
             dragging_scrollbar_master: false,
+            scrolled_in_place: false,
             pressed_target: None,
             last_effect_tab: InspectorTab::Layer,
             bg_panel_id: None,
@@ -555,21 +561,34 @@ impl InspectorCompositePanel {
         if self.bg_panel_id.is_none() {
             return false;
         }
-        let scroll = if cursor_x < self.column_split_x {
-            &mut self.master_scroll
-        } else {
-            &mut self.layer_scroll
+        let moved = {
+            let scroll = if cursor_x < self.column_split_x {
+                &mut self.master_scroll
+            } else {
+                &mut self.layer_scroll
+            };
+            let old = scroll.scroll_offset();
+            if !scroll.apply_scroll_delta(delta) {
+                // Already at a scroll limit — consumed, nothing moved.
+                return true;
+            }
+            let delta_y = -(scroll.scroll_offset() - old);
+            let moved = scroll.offset_content(tree, delta_y);
+            if moved {
+                scroll.update_scrollbar(tree);
+            }
+            moved
         };
-        let old = scroll.scroll_offset();
-        if !scroll.apply_scroll_delta(delta) {
-            // Already at a scroll limit — consumed, nothing moved.
-            return true;
-        }
-        let delta_y = -(scroll.scroll_offset() - old);
-        if scroll.offset_content(tree, delta_y) {
-            scroll.update_scrollbar(tree);
+        if moved {
+            self.scrolled_in_place = true;
         }
         true
+    }
+
+    /// Drain the "scrolled in place this frame" signal. The app calls this once
+    /// per frame and invalidates the inspector's cache slot when it returns true.
+    pub fn take_scrolled_in_place(&mut self) -> bool {
+        std::mem::take(&mut self.scrolled_in_place)
     }
 
     /// Content height for the master column (left).
@@ -962,12 +981,23 @@ impl InspectorCompositePanel {
     /// because it needs &mut UITree for slider visual feedback.
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         if self.dragging_scrollbar {
-            if self.dragging_scrollbar_master {
-                self.master_scroll.drag_to_scroll(pos.y);
+            // Drag the thumb to an absolute offset, then offset the content nodes
+            // by the delta — the same in-place scroll the wheel uses. Previously
+            // only the thumb moved (the content stayed frozen until some later
+            // rebuild), because the drag carried no rebuild trigger.
+            let scroll = if self.dragging_scrollbar_master {
+                &mut self.master_scroll
             } else {
-                self.layer_scroll.drag_to_scroll(pos.y);
+                &mut self.layer_scroll
+            };
+            let old = scroll.scroll_offset();
+            scroll.drag_to_scroll(pos.y);
+            let delta_y = -(scroll.scroll_offset() - old);
+            let moved = scroll.offset_content(tree, delta_y);
+            scroll.update_scrollbar(tree);
+            if moved {
+                self.scrolled_in_place = true;
             }
-            self.update_scrollbar(tree);
             return vec![PanelAction::InspectorScrolled(0.0)];
         }
 
@@ -2245,6 +2275,52 @@ mod tests {
             (y_rebuilt - y_after).abs() < 0.01,
             "rebuild y {y_rebuilt} must match in-place y {y_after}"
         );
+    }
+
+    /// Dragging the scrollbar thumb now moves the content with it (in place),
+    /// not just the thumb — and raises the `scrolled_in_place` signal so the app
+    /// re-renders the inspector slot.
+    #[test]
+    fn scrollbar_drag_scrolls_content_in_place() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 400.0;
+            l
+        };
+        let effects: Vec<_> = (0..12)
+            .map(|i| mk_config(ParamCardKind::Effect, &format!("FX{i}"), 3))
+            .collect();
+        panel.configure_layer_effects(&effects);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        panel.build(&mut tree, &layout);
+        assert!(panel.layer_scroll.max_scroll() > 0.0, "needs scrollable content");
+
+        let probe = panel.layer_chrome.first_node();
+        let y_before = tree.get_node(NodeId(probe as u32)).bounds.y;
+
+        // Begin a scrollbar drag on the layer thumb, then drag toward the bottom.
+        let thumb = panel.layer_scroll.thumb_id().unwrap();
+        let vp = panel.layer_scroll.viewport();
+        panel.route_pointer_down(thumb, Vec2::new(vp.x, vp.y), Modifiers::NONE);
+        assert!(panel.dragging_scrollbar);
+        let _ = panel.handle_drag(Vec2::new(vp.x, vp.y + vp.height * 0.8), &mut tree);
+
+        assert!(
+            panel.take_scrolled_in_place(),
+            "scrollbar drag must raise the in-place signal"
+        );
+        let y_after = tree.get_node(NodeId(probe as u32)).bounds.y;
+        assert!(
+            y_after < y_before - 1.0,
+            "content must move up when dragging the thumb down (before={y_before}, after={y_after})"
+        );
+        assert!(panel.layer_scroll.scroll_offset() > 0.0);
     }
 
     #[test]

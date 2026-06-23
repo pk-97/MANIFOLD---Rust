@@ -758,6 +758,16 @@ impl Application {
             .ui_root
             .sync_embedded_presets(&self.local_project);
         let mut actions = self.ws.ui_root.process_events();
+        // An in-place inspector scroll (wheel in window_input, or a scrollbar
+        // drag handled inside process_events) offset the content nodes without a
+        // rebuild — re-render just the inspector's atlas slot. A full rebuild
+        // later this frame (needs_rebuild → invalidate_all) supersedes it
+        // harmlessly. One drain point for both scroll inputs.
+        if self.ws.ui_root.inspector.take_scrolled_in_place()
+            && let Some(cm) = &mut self.ui_cache_manager
+        {
+            cm.invalidate_inspector();
+        }
         // Graph-editor edits (canvas + sidebar) accumulate here and dispatch
         // through their own command vocabulary (`GraphEditCommand`), separately
         // from the `PanelAction` loop — Phase 4.3.
