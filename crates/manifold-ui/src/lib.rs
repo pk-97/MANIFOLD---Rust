@@ -12,6 +12,7 @@ pub mod drag;
 pub mod draw;
 pub mod driver_waveform_icons;
 pub mod graph_edit;
+pub mod graph_view;
 pub mod hit;
 pub mod input;
 pub mod inspector_layout;
@@ -70,7 +71,8 @@ pub use types::{
     AbletonDeviceIdentity, AbletonMacroAddress, AbletonMappingStatus, AudioBand, AudioDeviceRef,
     AudioFeature, AudioFeatureKind, AudioSourceKind, DriverWaveform, FLOOR_DB_OFF, LayerType,
     MACRO_COUNT, MacroCurve, MarkerColor, MidiTriggerMode, ParamConvert, PresetTypeId,
-    SerializedParamValue, TonemapCurve, is_default_macro_name, note_number_to_name,
+    SerializedParamValue, TonemapCurve, apply_card_reshape, is_default_macro_name,
+    note_number_to_name,
 };
 pub use ui_state::UIState;
 pub use view::{UiLayer, UiMarker, UiParamSlot};

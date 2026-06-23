@@ -77,6 +77,56 @@ pub enum MacroCurve {
     SCurve,
 }
 
+impl MacroCurve {
+    /// Map a normalized 0–1 input through this curve, returning 0–1. Value-exact
+    /// mirror of `manifold_core::macro_bank::MacroCurve::apply` — the mapping
+    /// popover plots the response curve UI-side and must match the engine.
+    pub fn apply(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => t,
+            Self::Exponential => t * t,
+            Self::Logarithmic => t.sqrt(),
+            // Hermite S-curve: 3t² - 2t³
+            Self::SCurve => t * t * (3.0 - 2.0 * t),
+        }
+    }
+}
+
+/// Apply the card-binding reshape pipeline to a raw value. Value-exact mirror of
+/// `manifold_core::effects::apply_card_reshape`, kept UI-side so the mapping
+/// popover's live response preview evaluates the same transform the engine does
+/// at the write boundary (the popover renders in `manifold-ui` and can't reach
+/// into `manifold-core`).
+///
+/// Two stages: a slider response (normalize within `[min, max]` → invert → curve
+/// → scale back, clamped to `[0, 1]`), applied only when `invert` or a non-Linear
+/// `curve` is set; then the card→consumer affine `out = v * scale + offset`
+/// (unclamped). Identity inputs return `value` unchanged.
+pub fn apply_card_reshape(
+    value: f32,
+    min: f32,
+    max: f32,
+    invert: bool,
+    curve: MacroCurve,
+    scale: f32,
+    offset: f32,
+) -> f32 {
+    let mut v = value;
+    if invert || curve != MacroCurve::Linear {
+        let range = max - min;
+        if range.abs() >= f32::EPSILON {
+            let mut n = ((v - min) / range).clamp(0.0, 1.0);
+            if invert {
+                n = 1.0 - n;
+            }
+            n = curve.apply(n);
+            v = min + range * n;
+        }
+    }
+    v * scale + offset
+}
+
 /// Number of macro slots in the fixed bank. Mirror of
 /// `manifold_core::macro_bank::MACRO_COUNT`.
 pub const MACRO_COUNT: usize = 8;
