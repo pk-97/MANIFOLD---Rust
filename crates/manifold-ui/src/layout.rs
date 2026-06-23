@@ -64,15 +64,17 @@ impl ScreenLayout {
         Rect::new(0.0, 0.0, self.screen_width, self.transport_bar_height)
     }
 
-    /// Working area below the transport bar and LEFT of the full-height
-    /// inspector — parent of the top region (preview) and the timeline. The
-    /// inspector is a full-height right column, so it bounds this on the right
-    /// (and the effect browser, if any, on the left).
+    /// Working area below the transport bar, above the global footer, and LEFT
+    /// of the full-height inspector — parent of the top region (preview) and the
+    /// timeline. The transport (top) and footer (bottom) are full-width chrome
+    /// that bracket this; the inspector bounds it on the right (and the effect
+    /// browser, if any, on the left).
     pub fn content_area(&self) -> Rect {
         let top = self.transport_bar_height;
         let left = self.effect_browser_width;
         let w = (self.screen_width - left - self.inspector_width).max(0.0);
-        Rect::new(left, top, w, self.screen_height - top)
+        let h = (self.screen_height - top - self.footer_height).max(0.0);
+        Rect::new(left, top, w, h)
     }
 
     /// Top region: below the transport bar, above the timeline, content width
@@ -106,36 +108,39 @@ impl ScreenLayout {
         Rect::new(tl.x, tl.y, tl.width, self.header_height)
     }
 
-    /// Footer bar: bottom of timeline area, full width.
+    /// Footer status bar: global full-width chrome pinned to the very bottom of
+    /// the screen — the bottom counterpart to the transport bar. Spans the whole
+    /// width (under the inspector too); the content area and inspector stop at
+    /// its top edge.
     pub fn footer(&self) -> Rect {
-        let tl = self.timeline_area();
         Rect::new(
-            tl.x,
-            tl.y + tl.height - self.footer_height,
-            tl.width,
+            0.0,
+            self.screen_height - self.footer_height,
+            self.screen_width,
             self.footer_height,
         )
     }
 
-    /// Timeline body: between header and footer within timeline area.
+    /// Timeline body: below the header, down to the bottom of the timeline area
+    /// (which sits just above the global footer).
     pub fn timeline_body(&self) -> Rect {
         let tl = self.timeline_area();
         let top = tl.y + self.header_height;
-        let bottom = tl.y + tl.height - self.footer_height;
-        let h = (bottom - top).max(0.0);
+        let h = (tl.height - self.header_height).max(0.0);
         Rect::new(tl.x, top, tl.width, h)
     }
 
     /// Inspector sidebar: a FULL-HEIGHT column against the right edge, from just
-    /// below the transport bar down to the bottom of the screen. The preview and
-    /// the timeline share the content area to its left.
+    /// below the transport bar down to the top of the global footer. The preview
+    /// and the timeline share the content area to its left.
     pub fn inspector(&self) -> Rect {
         if self.inspector_width <= 0.0 {
             return Rect::ZERO;
         }
         let top = self.transport_bar_height;
         let x = self.screen_width - self.inspector_width;
-        Rect::new(x, top, self.inspector_width, self.screen_height - top)
+        let h = (self.screen_height - top - self.footer_height).max(0.0);
+        Rect::new(x, top, self.inspector_width, h)
     }
 
     /// Effect browser: leftmost sidebar.
@@ -291,7 +296,7 @@ mod tests {
         assert_eq!(content.x, 0.0); // no effect browser
         assert_eq!(content.y, 36.0); // below transport
         assert_eq!(content.width, 1420.0); // 1920 - 500 inspector
-        assert_eq!(content.height, 1044.0); // 1080 - 36
+        assert_eq!(content.height, 1015.0); // 1080 - 36 transport - 29 footer
     }
 
     #[test]
@@ -306,19 +311,24 @@ mod tests {
     }
 
     #[test]
-    fn header_footer_in_timeline() {
+    fn header_in_timeline_footer_is_global_chrome() {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let tl = layout.timeline_area();
         let header = layout.header();
         let footer = layout.footer();
         let body = layout.timeline_body();
 
-        // Header at top of timeline
+        // Header at top of timeline.
         assert_eq!(header.y, tl.y);
-        // Footer at bottom of timeline
-        assert!((footer.y + footer.height - tl.y - tl.height).abs() < 0.1);
-        // Body between header and footer
+        // Body runs from below the header to the bottom of the timeline area.
         assert!((body.y - (header.y + header.height)).abs() < 0.1);
+        assert!((body.y + body.height - (tl.y + tl.height)).abs() < 0.1);
+        // Footer is global full-width chrome pinned to the very bottom.
+        assert_eq!(footer.x, 0.0);
+        assert_eq!(footer.width, 1920.0);
+        assert!((footer.y + footer.height - 1080.0).abs() < 0.1);
+        // The timeline sits directly above the footer (no gap, no overlap).
+        assert!((tl.y + tl.height - footer.y).abs() < 0.1);
     }
 
     #[test]
@@ -328,7 +338,7 @@ mod tests {
         assert_eq!(inspector.width, 500.0);
         assert_eq!(inspector.x, 1420.0); // 1920 - 500, against the right edge
         assert_eq!(inspector.y, 36.0); // below transport
-        assert_eq!(inspector.height, 1044.0); // full height down to the bottom
+        assert_eq!(inspector.height, 1015.0); // down to the global footer (1080 - 36 - 29)
         // Preview sits directly left of the inspector, no gap.
         let video = layout.video_area();
         assert!((video.x + video.width - inspector.x).abs() < 0.1);
