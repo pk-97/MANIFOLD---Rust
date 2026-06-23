@@ -23,7 +23,17 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
-### BUG-001 — Pasting an effect shares the source's `EffectId` — HIGH
+_(none)_
+
+## Fixed
+
+All five entries below were fixed 2026-06-23, with a test per path:
+- BUG-001–004 — commit `2e3dc4f3` (`PresetInstance::duplicated()`, both paste paths, `Clip::clone_with_new_id`, `Layer::clone_with_new_ids`).
+- BUG-005 — commit `9f43f183` (macros address effects by `EffectId`; versioned load migration).
+
+The fresh-copy carry-rule (id always fresh; drop Ableton/MIDI + audio mods; drop cross-chain group; keep drivers/envelopes) is settled and lives in `PresetInstance::duplicated()`.
+
+### BUG-001 — Pasting an effect shares the source's `EffectId` — HIGH — ✅ FIXED (`2e3dc4f3`)
 
 Copy/paste of an effect card clones the `PresetInstance` verbatim and keeps the original's
 `EffectId`. Nothing mints a fresh id. The two cards then share one identity, and the whole
@@ -58,7 +68,7 @@ same pass. Add a paste test mirroring the graph-node one.
 
 ---
 
-### BUG-002 — `Clip::clone_with_new_id` doesn't regenerate nested effect ids — MED
+### BUG-002 — `Clip::clone_with_new_id` doesn't regenerate nested effect ids — MED — ✅ FIXED (`2e3dc4f3`)
 
 Same class as BUG-001, one layer down. `Clip::clone_with_new_id` mints a fresh `ClipId` but
 bare-`.clone()`s everything else, including `effects: Vec<PresetInstance>`
@@ -93,7 +103,7 @@ Make `Clip::clone_with_new_id` deep-regenerate `cloned.effects[*].id` (and clip-
 
 ---
 
-### BUG-003 — Duplicating a grouped effect leaves `group_id` pointing at the source's group — LOW
+### BUG-003 — Duplicating a grouped effect leaves `group_id` pointing at the source's group — LOW — ✅ FIXED (`2e3dc4f3`)
 
 A pasted/duplicated effect keeps its `group_id`, which still references a group on the
 **source's** chain. `Layer::clone_with_new_ids` remaps this for layer effects
@@ -106,7 +116,7 @@ ref.
 
 ---
 
-### BUG-004 — Effect paste carries Ableton/automation bindings; generator paste drops them — LOW
+### BUG-004 — Effect paste carries Ableton/automation bindings; generator paste drops them — LOW — ✅ FIXED (`2e3dc4f3`)
 
 Effect paste clones the whole `PresetInstance`, so `ableton_mappings`, `drivers`, `envelopes`,
 and `audio_mods` all ride along — a pasted effect ends up mapped to the **same Ableton
@@ -122,7 +132,7 @@ carry hardware/MIDI mappings onto a paste) and make both paths match.
 
 ---
 
-### BUG-005 — Macro targets can't disambiguate two same-type effects on one layer — LOW
+### BUG-005 — Macro targets can't disambiguate two same-type effects on one layer — LOW — ✅ FIXED (`9f43f183`)
 
 `MacroMappingTarget` addresses an effect param by `(layer_id | master, effect_type, param_id)`
 ([macro_bank.rs:64-82](../crates/manifold-core/src/macro_bank.rs#L64-L82)) — **not** by
@@ -169,6 +179,3 @@ field silently breaks identity), and `project_invariant_audit` (its "Positional 
 category is marked *already fixed*; BUG-001/002 are live counterexamples — correct that claim
 when one is fixed).
 
-## Fixed
-
-_(none yet)_
