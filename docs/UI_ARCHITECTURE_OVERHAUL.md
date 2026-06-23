@@ -14,20 +14,25 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phases 0–5 COMPLETE (2026-06-23); Phases 6–8 are the remaining
-> follow-ons Phase 5 unblocked (each its own chat, scoped in §13).** Phase 2
-> (Chrome API), Phase 3 (Timeline API), Phase 4 (Canvas API), and Phase 5
-> (layering inversion) all landed behaviour-preserving, tests + clippy green —
-> see each phase's sub-design doc (`CHROME_API_DESIGN`, `TIMELINE_API_DESIGN`,
-> `CANVAS_API_DESIGN`, `UI_LAYERING_INVERSION`) and the §13 checklist. **Phase 5**
-> moved `manifold-ui` to UI-local events + view-data (the app maps them to engine
-> commands via `ui_translate.rs`) so the crate compiles with no `manifold-core`
-> dependency — it depends only on the new zero-dep `manifold-foundation`. That
-> *unblocks* three deeper moves earlier phases deferred to it, now promoted to
-> **Phases 6–8** (each independent, its own chat, scoped in §13): generalise
-> `IntentRegistry` off `PanelAction` (6), one shared input owner for the editor
-> window (7), relocate the graph canvas out of `manifold-app` (8). The
-> Phase-2b-era status below is kept as history.
+> **Status: Phases 0–5 + 8 COMPLETE (2026-06-23); Phases 6–7 remain (each its
+> own chat, scoped in §13).** Phase 2 (Chrome API), Phase 3 (Timeline API),
+> Phase 4 (Canvas API), Phase 5 (layering inversion), and **Phase 8 (relocate the
+> graph canvas into `manifold-ui`)** all landed behaviour-preserving, tests +
+> clippy green — see each phase's sub-design doc (`CHROME_API_DESIGN`,
+> `TIMELINE_API_DESIGN`, `CANVAS_API_DESIGN`, `UI_LAYERING_INVERSION`) and the §13
+> checklist. **Phase 5** moved `manifold-ui` to UI-local events + view-data (the
+> app maps them to engine commands via `ui_translate.rs`) so the crate compiles
+> with no `manifold-core` dependency — it depends only on the new zero-dep
+> `manifold-foundation`. That *unblocked* three deeper moves earlier phases
+> deferred to it (Phases 6–8, each independent, its own chat, scoped in §13):
+> generalise `IntentRegistry` off `PanelAction` (6), one shared input owner for
+> the editor window (7), relocate the graph canvas out of `manifold-app` (8).
+> **Phase 8 is now done** — the 4,334-line `graph_canvas/` + its mapping popover
+> moved into `manifold-ui` reading a UI-local `graph_view` snapshot (the app
+> translates the renderer's via `ui_translate.rs`) and painting through a new
+> `Painter` trait the renderer impls for `UIRenderer`; the canvas no longer
+> depends on `manifold-renderer`. **Phases 6 and 7 are the remaining follow-ons.**
+> The Phase-2b-era status below is kept as history.
 >
 > **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 panels fully migrated; **3 of
 > the 4 heavyweights chrome-staged** (`param_card` frame + generator header,
@@ -908,19 +913,61 @@ pass (see §0).
   one input owner and editor interaction (drag, box-select, pan/zoom, right-click,
   keyboard) is unchanged.
 
-### Phase 8 — Relocate the graph canvas out of `manifold-app` (was Canvas-API 4.2)
-> Largest — a graph view-model sub-project on the scale of Phase 5's timeline
-> work. The 4,334-line `graph_canvas/` reads `manifold_renderer::node_graph`
-> snapshots, and `manifold-ui` can't depend on `manifold-renderer`.
-- [ ] **8.1** Define a UI-local graph-snapshot view-model mirroring the surface the
-  canvas reads: `GraphSnapshot`, `ParamSnapshot`, `ParamSnapshotKind`,
-  `OuterParamRouting`, `LiveNodeParams`, `Category`, `descriptor_for`,
-  `tooltip_for`.
-- [ ] **8.2** App translates the renderer snapshot → that view-model when pushing
-  to the canvas (the Phase-5 `ui_translate.rs` pattern, extended to graph data).
-- [ ] **8.3** Move `graph_canvas/` into `manifold-ui` (or a UI-side crate that
-  doesn't pull the renderer). _Done when:_ the canvas compiles with no
-  `manifold_renderer` dependency and the editor window renders identically.
+### Phase 8 — Relocate the graph canvas out of `manifold-app` — **COMPLETE (2026-06-23)** (was Canvas-API 4.2)
+> The 4,334-line `graph_canvas/` + its `mapping_popover` now live in
+> `manifold-ui` with **no `manifold-renderer` dependency**. Two renderer ties
+> were severed: the graph snapshot (a UI-local mirror + an app translator) and
+> the immediate-mode draw surface (a `Painter` trait the renderer impls for
+> `UIRenderer`). Behaviour-preserving; manifold-ui 368 lib tests (incl. the moved
+> canvas + popover tests) + manifold-app 65 tests green, clippy `-D warnings`
+> clean on both, workspace builds.
+- [x] **8.1** UI-local graph-snapshot view-model — `manifold_ui::graph_view`
+  mirrors `GraphSnapshot` / `NodeSnapshot` / `GroupSnapshot` / `WireSnapshot` /
+  `PortSnapshot` / `PortKindSnapshot` / `ChannelSnapshot` / `ArrayMatchMode` /
+  `ParamSnapshot` / `ParamSnapshotKind` / `OuterParamRouting` /
+  `OuterParamSource` / `Category`, the `LiveNodeParams` alias, and the `GROUP_*`
+  type-id constants. **The node catalog stayed renderer-side** (it's a large
+  generated table): `descriptor_for` / `tooltip_for` are *not* mirrored —
+  instead the node `category` + node/param `tooltip`s are resolved at
+  translation time (8.2) and baked into the snapshot, so the canvas reads them
+  straight off the data. `MacroCurve::apply` + `apply_card_reshape` also mirrored
+  (value-exact) so the popover plots its response curve UI-side.
+- [x] **8.2** App translates renderer → view-model — `ui_translate::
+  graph_snapshot_to_ui` (the Phase-5 pattern, extended to graph data), cached on
+  `Application.editor_ui_graph` and re-derived only when the source `Arc` changes
+  (`Arc::ptr_eq`). The `resolve_level`-dependent editor helpers
+  (`build_graph_editor_view`, `resolve_preview_target` + friends) consume the UI
+  view-model; the binding/exposure helpers keep reading the renderer snapshot
+  directly. `live_node_params` needs no conversion (its UI alias is the identical
+  type). `MacroCurve` translates core→UI at the two popover-open sites.
+- [x] **8.3** Move `graph_canvas/` into `manifold-ui` — done as a `git mv` so the
+  split-in-place modules (`mod`/`model`/`layout`/`camera`/`hit`/`render`/
+  `interaction` + `mapping_popover` + `tests`) keep history. The canvas + both
+  mapping popovers paint through `&mut dyn Painter`. `crate::graph_canvas` /
+  `crate::mapping_popover` remain as app-side re-exports of the relocated
+  `manifold_ui` modules, so the editor-window glue resolves the historic paths
+  unchanged. _Done:_ the canvas compiles with no `manifold_renderer` dependency
+  (only doc-comment prose names the mirrored originals) and the editor renders
+  identically.
+
+> **Phase 8 implementation notes / boundaries respected:**
+> - **`Painter` abstraction** (`manifold_ui::draw`) is the second half of "no
+>   renderer dependency": the canvas was both *reading* renderer snapshots and
+>   *drawing* through `UIRenderer`. The renderer implements `Painter for
+>   UIRenderer` (same orphan-rule pattern as the existing `impl TextMeasure for
+>   UIRenderer`); `&mut UIRenderer` coerces to `&mut dyn Painter` at the call
+>   sites, so the live render path is byte-identical.
+> - **The renderer's `GraphSnapshot` was *mirrored*, not moved.** The doc's
+>   8.1/8.2 chose mirror+translate (consistent with the sidebar's existing
+>   `GraphEditorNodeView` and Phase 5's `view`/`types`) over moving the types
+>   into `manifold-ui` and having the renderer build them — keeping the renderer
+>   snapshot renderer-local and the UI projection (category→tint, baked
+>   tooltips) app-side.
+> - **Not in scope (deferred follow-ons):** Phase 6 (generic `IntentRegistry`)
+>   and Phase 7 (one shared editor-window input owner) are independent and
+>   untouched here. The `u32`-vs-`NodeId` identity split and the render/hit
+>   row-geometry duplication noted in `CANVAS_API_DESIGN.md` §4 are likewise
+>   unchanged — Phase 8 is the *relocation*, not a canvas rewrite.
 
 ### Deferred (§10.2) — intentionally NOT on this checklist
 Widget catalog/descriptors, visual snapshot testing, runtime introspection,
