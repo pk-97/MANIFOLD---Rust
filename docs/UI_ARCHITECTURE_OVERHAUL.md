@@ -14,18 +14,19 @@ and how we get there."
 
 ## 0. CURRENT POSITION (read first, update last)
 
-> **Status: Phases 0–4 COMPLETE (2026-06-23). Phase 5 (layering inversion) is the
-> only one left.** Phase 2 (Chrome API), Phase 3 (Timeline API), and Phase 4
-> (Canvas API) all landed behaviour-preserving, one commit per task, tests +
-> clippy green — see each phase's sub-design doc (`CHROME_API_DESIGN`,
-> `TIMELINE_API_DESIGN`, `CANVAS_API_DESIGN`) and the §13 checklist. **Phase 5**
-> moves `manifold-ui` to UI-local outgoing events (the app maps them to engine
-> commands) so the crate stands alone — and it's the prerequisite for the deeper
-> moves two earlier phases deliberately deferred *to* it: relocating the canvas
-> out of `manifold-app` (4.2), generalising the `IntentRegistry` off `PanelAction`
-> so the editor sidebar can fold onto intents (4.5), and routing the editor window
-> through a literal shared `process_events`/`InputHandler` (4.6). The
-> Phase-2b-era status below is kept as history.
+> **Status: Phases 0–5 COMPLETE (2026-06-23).** The planned overhaul is done.
+> Phase 2 (Chrome API), Phase 3 (Timeline API), Phase 4 (Canvas API), and Phase 5
+> (layering inversion) all landed behaviour-preserving, tests + clippy green —
+> see each phase's sub-design doc (`CHROME_API_DESIGN`, `TIMELINE_API_DESIGN`,
+> `CANVAS_API_DESIGN`, `UI_LAYERING_INVERSION`) and the §13 checklist. **Phase 5**
+> moved `manifold-ui` to UI-local events + view-data (the app maps them to engine
+> commands via `ui_translate.rs`) so the crate compiles with no `manifold-core`
+> dependency — it depends only on the new zero-dep `manifold-foundation`. That
+> *unblocks* three deeper moves earlier phases deferred to it — relocating the
+> canvas out of `manifold-app` (4.2), generalising `IntentRegistry` off
+> `PanelAction` (4.5), and one shared `process_events`/`InputHandler` for the
+> editor window (4.6) — each now its own focused follow-on phase (scoped in §13).
+> The Phase-2b-era status below is kept as history.
 >
 > **Status: Phase 2b IN PROGRESS (2026-06-22)** — 7 panels fully migrated; **3 of
 > the 4 heavyweights chrome-staged** (`param_card` frame + generator header,
@@ -855,12 +856,46 @@ pass (see §0).
   per-arm drift. The literal shared `process_events`/`InputHandler` unification
   is Phase-5 substrate work.
 
-### Phase 5 — Layering inversion
-- [ ] **5.1** UI-local event types (no core/renderer types in `manifold-ui`'s
-  outgoing events).
-- [ ] **5.2** App maps UI events → engine commands.
-- [ ] **5.3** `manifold-ui` builds + tests standalone (no engine dependency for the
-  UI surface). _Done when:_ the crate compiles without the engine.
+### Phase 5 — Layering inversion — **COMPLETE (2026-06-23)**
+> Sub-design `docs/UI_LAYERING_INVERSION.md`. `manifold-ui` now depends only on
+> the new zero-dep `manifold-foundation` crate (shared primitive vocabulary:
+> `Beats`/`Seconds`/`Bpm`, the typed string ids, `ParamId`), **not** on
+> `manifold-core`. `manifold-core` re-exports those primitives at their historic
+> paths, so no other crate changed and project serialization is byte-identical.
+> Behaviour-preserving; `cargo clippy --workspace -D warnings` green; verified
+> manifold-ui 363 tests standalone, core 256 + io 18 (incl. `ln V6` fixture
+> load), app + editing + app-integration green.
+- [x] **5.1** UI-local event types — `manifold-ui`'s outgoing events and consumed
+  view-data carry no `manifold-core` types. `types.rs` holds UI-local mirrors of
+  the domain enums/structs; `view.rs` holds the view-models (`UiLayer`,
+  `UiParamSlot`, `UiMarker`, the rich `SelectionRegion`).
+- [x] **5.2** App maps UI events → engine commands — `manifold-app/ui_translate.rs`
+  is the sole reconciliation point (free fns; shared foundation primitives need
+  no conversion). The `TimelineEditingHost` impl caches a `Vec<UiLayer>` and
+  accepts the UI `SelectionRegion`.
+- [x] **5.3** `manifold-ui` builds + tests standalone — compiles with no
+  `manifold-core` dependency. The engine-registry parity tests moved to
+  `manifold-core/tests/generator_param_counts.rs` (they test the registry, not
+  the UI).
+
+### Phase 5 — unblocked follow-ons (NOT done; each its own focused phase)
+Phase 5 was the prerequisite for three moves earlier phases deferred to it.
+Scope grounded in the code as of the 5.1–5.3 landing — pick up individually:
+- **4.2 — relocate the graph canvas out of `manifold-app`.** Gated on a UI-local
+  *graph-snapshot view-model*: the 4,334-line `graph_canvas/` reads
+  `manifold_renderer::node_graph::{GraphSnapshot, ParamSnapshot, ParamSnapshotKind,
+  OuterParamRouting, LiveNodeParams, Category, descriptor_for, tooltip_for}`.
+  Mirroring that surface + app translation is a sub-project on the scale of the
+  timeline view-model work in 5.1. Until then the canvas stays in `manifold-app`.
+- **4.5 — generalise `IntentRegistry` off `PanelAction`.** `IntentRegistry` /
+  `NodeIntent` are hardwired to `PanelAction`; making them generic over the
+  action type (default `= PanelAction` keeps every chrome panel unchanged) only
+  pays off if the editor sidebar is *rewired* onto the registry — a behavioural
+  change to the sidebar. Doc-rated marginal benefit; medium risk.
+- **4.6 — one shared `process_events`/`InputHandler` for the editor window.** 4.6
+  already folded the editor loop into `editor_input.rs` (807 lines of per-event
+  handlers); the literal unification with the main window's `UIInputSystem` is a
+  real refactor with interaction-drift risk.
 
 ### Deferred (§10.2) — intentionally NOT on this checklist
 Widget catalog/descriptors, visual snapshot testing, runtime introspection,
