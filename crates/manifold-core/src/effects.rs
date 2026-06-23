@@ -14,7 +14,11 @@ use std::borrow::Cow;
 /// drivers, envelopes) all key on this — never on positional indices.
 ///
 /// See `docs/EFFECT_RUNTIME_UNIFICATION.md` §7 for the full design.
-pub type ParamId = Cow<'static, str>;
+///
+/// Defined in `manifold-foundation` (the shared primitive vocabulary) and
+/// re-exported here at its historical path so the UI can share the identical
+/// type without depending on the engine. See `docs/UI_LAYERING_INVERSION.md`.
+pub use manifold_foundation::ParamId;
 
 // ─── Param Definition ───
 

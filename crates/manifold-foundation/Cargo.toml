@@ -1,0 +1,19 @@
+[package]
+name = "manifold-foundation"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Zero-dependency primitive vocabulary shared by the engine (`manifold-core`)
+# and the UI (`manifold-ui`): unit-typed numbers, typed string ids, and the
+# `ParamId` alias. Holds NO domain logic — see docs/UI_LAYERING_INVERSION.md.
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+ahash = { workspace = true }
+
+[lints]
+workspace = true

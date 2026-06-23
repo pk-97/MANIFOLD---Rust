@@ -1919,6 +1919,7 @@ dependencies = [
  "ahash",
  "arc-swap",
  "inventory",
+ "manifold-foundation",
  "serde",
  "serde_json",
  "uuid",
@@ -1931,6 +1932,15 @@ dependencies = [
  "inventory",
  "manifold-core",
  "manifold-io",
+ "serde_json",
+]
+
+[[package]]
+name = "manifold-foundation"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "serde",
  "serde_json",
 ]
 

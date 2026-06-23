@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+manifold-foundation = { path = "../manifold-foundation" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

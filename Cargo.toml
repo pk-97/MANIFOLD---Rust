@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/manifold-foundation",
     "crates/manifold-core",
     "crates/manifold-ui",
     "crates/manifold-playback",
