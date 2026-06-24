@@ -263,7 +263,9 @@ problem; relocation is a separate call).
    **no longer a full ADSR** — it's a trigger-fired decay (target + decay). Renamed everywhere
    (tabs, arm buttons, header chips):
    - **Trigger** (was Envelope / E / ENV) — arm button **T**, chip **TRG**.
-   - **LFO** (was Driver / → / DRV) — arm button **∿**, chip **LFO**.
+   - **LFO** (was Driver / → / DRV) — arm button shows the **waveform icon** (the renderer's SDF
+     glyph U+E000..E004 for the driver's current shape, default sine), chip **LFO**. A plain "∿"
+     char isn't in the UI font and renders as tofu — must use the PUA icon glyph.
    - **Audio** (was A) — arm button **A**.
    Tabs spell the full word; arm buttons stay compact glyphs to match.
 2. **Hide all mod settings while keeping mods armed. ✅ SHIPPED 2026-06-24** (Peter's ask: "hide all
@@ -448,7 +450,7 @@ Not in most desktop checklists — these are ours because the tool is played liv
    checks pass each pass (param_card tests incl. golden + 3 new tabbed tests; clippy). **Still needs
    the running-app eyeball** — the renderer is custom, can't screenshot here.
 6. **Modulation-drawer follow-ups (§6.5) — ✅ Phase 6 COMPLETE 2026-06-24.**
-   **6a** ✅ renamed modulators (Trigger / LFO / Audio; arm T / ∿ / A; chips TRG / LFO).
+   **6a** ✅ renamed modulators (Trigger / LFO / Audio; arm T / waveform-icon / A; chips TRG / LFO).
    **6b** ✅ global compact toggle (⚙ in the tab strip) hides every card's mod drawers while mods
    stay armed; per-row ▾ deferred (not requested).
    **6c** ✅ LFO drawer redesign (grid kept + standardised to uniform cells, feel segment

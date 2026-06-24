@@ -1438,6 +1438,16 @@ pub(crate) fn build_param_row(
         } else {
             0.0
         };
+    // LFO arm button shows the waveform icon for the driver's current shape (the
+    // UIRenderer draws U+E000..E004 as the SDF waveform icon). Defaults to sine
+    // when unset. A plain "∿" char isn't in the UI font — it renders as tofu.
+    let lfo_wave = mod_state
+        .driver_waveform_idx
+        .get(i)
+        .copied()
+        .unwrap_or(0)
+        .clamp(0, WAVEFORM_COUNT as i32 - 1) as u32;
+    let lfo_icon = char::from_u32(0xE000 + lfo_wave).unwrap().to_string();
     ids.driver_btn = tree.add_button(
         parent,
         drv_btn_x,
@@ -1445,7 +1455,7 @@ pub(crate) fn build_param_row(
         DE_BUTTON_SIZE,
         DE_BUTTON_SIZE,
         de_btn_style(drv_active, color::DRIVER_ACTIVE_C32),
-        "\u{223F}", // ∿ LFO
+        &lfo_icon,
     );
 
     // Audio-modulation button — third in the lane, right of the driver button.
