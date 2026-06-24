@@ -140,7 +140,8 @@ Chrome/View declarative API.
 > IconButton, SegmentedControl (`segment` cell), Dropdown trigger, plus the ParamRow trailing
 > atoms (`reset_button`, `mod_badge`). The **full ParamRow composite is deferred to Phase 5** —
 > it has to thread the live slider materialisation + drag state that lives in `param_card`, so
-> it gets assembled (and seen) on the Edge Detect prototype. These supersede the scattered
+> it gets assembled in that generic card and tuned against Edge Detect as the reference instance.
+> These supersede the scattered
 > `*_btn_style` helpers in `param_slider_shared`; the old helpers stay in use until Phase 6
 > swaps them out. The kit is unused until Phase 5 wires it — intentional (build the kit, then
 > apply it), and it's covered by 7 unit tests.
@@ -383,9 +384,17 @@ Not in most desktop checklists — these are ours because the tool is played liv
    on the tokens: Toggle / Button / IconButton / SegmentedControl / Dropdown trigger + ParamRow
    atoms (reset, mod badge). Two forms each (`*_style` + `View` constructor). Full ParamRow
    composite deferred to Phase 5 (needs the live slider/drag wiring). 7 tests, clippy clean.
-5. **Prototype on Edge Detect only** — assemble the new card; run the app and screenshot each
-   pass (real bitmap, not a mockup). Lock the look. Fix Clip Trigger row alignment here (§6.4).
-6. **Roll out** — apply the template to every card, then the rest of the inspector.
+5. **Redesign the generic card; tune against one instance.** There is no per-effect card —
+   `panels::param_card` renders *every* effect from its param metadata, so the redesign (header,
+   collapse, modulation drawer, ParamRow composite, Clip Trigger row §6.4) lands once in that
+   generic code and hits all cards immediately. Use **Edge Detect as the on-screen reference**
+   while tuning — it has a representative param mix (sliders + an enum + a toggle) — and run the
+   app each pass (real bitmap, not a mockup). Lock the look here. *Scope is the verification
+   target, not the build target.*
+6. **Verify across the variety + roll through the inspector.** The single reference card can't
+   show everything: effects with many params, multiple enums, string params, generators (purple
+   tint), macros, clip params. Phase 6 is checking the generic redesign against that spread and
+   fixing edge cases — **no new design work** — then the rest of the inspector chrome.
 
 Each visual pass is verified by running the app and screenshotting — truth over speed, since
 the renderer is custom.
