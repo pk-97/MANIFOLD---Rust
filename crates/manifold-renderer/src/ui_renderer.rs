@@ -722,7 +722,7 @@ impl UIRenderer {
             });
         }
 
-        // Text (or icon if text starts with PUA marker U+E000..U+E004)
+        // Text (or icon if text starts with PUA marker U+E000..U+E005)
         #[cfg(target_os = "macos")]
         if let Some(text) = &node.text
             && !text.is_empty()
@@ -749,7 +749,7 @@ impl UIRenderer {
 
             let depth = self.current_depth();
             let first_char = text.chars().next().unwrap();
-            if ('\u{E000}'..='\u{E004}').contains(&first_char) {
+            if ('\u{E000}'..='\u{E005}').contains(&first_char) {
                 // Icon: square aspect ratio, centered in bounds
                 let icon_id = (first_char as u32 - 0xE000) as u8;
                 let pad = 2.0_f32;

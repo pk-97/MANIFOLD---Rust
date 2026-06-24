@@ -430,13 +430,18 @@ impl GlyphAtlas {
 
 // ─── Waveform Icon Generation ───────────────────────────────────────────────
 
-/// Icon IDs for the 5 driver waveforms. Exported for use by UIRenderer.
+/// Icon IDs for the driver waveforms + UI glyphs. Exported for use by UIRenderer.
+/// Each maps to a PUA codepoint U+E000 + id; the renderer draws the atlas icon
+/// for any text whose first char falls in that range.
 pub const ICON_WAVE_SINE: u8 = 0;
 pub const ICON_WAVE_TRIANGLE: u8 = 1;
 pub const ICON_WAVE_SAWTOOTH: u8 = 2;
 pub const ICON_WAVE_SQUARE: u8 = 3;
 pub const ICON_WAVE_RANDOM: u8 = 4;
-pub const ICON_COUNT: usize = 5;
+/// Cog / gear — the "hide modulation settings" toggle (U+E005). The UI font has
+/// no ⚙ glyph (renders as tofu), so it's a procedurally-drawn atlas icon.
+pub const ICON_COG: u8 = 5;
+pub const ICON_COUNT: usize = 6;
 
 /// Size of generated waveform icon bitmaps (physical pixels).
 /// 64px covers 2x retina for ~22px logical buttons with clarity to spare.
@@ -448,9 +453,64 @@ const ICON_AA_WIDTH: f32 = 1.4;
 /// so peaks don't touch the icon edge.
 const ICON_V_MARGIN: f32 = 0.1;
 
-/// Generate the 5 waveform SDF icons. Ported from Unity DriverWaveformIcons.cs.
+/// Generate the atlas icons: the 5 waveform SDF icons (ported from Unity
+/// DriverWaveformIcons.cs) plus the cog at [`ICON_COG`].
 fn generate_waveform_icons() -> [Vec<u8>; ICON_COUNT] {
-    std::array::from_fn(generate_single_waveform)
+    std::array::from_fn(|i| {
+        if i == ICON_COG as usize {
+            generate_cog_icon()
+        } else {
+            generate_single_waveform(i)
+        }
+    })
+}
+
+/// Procedural cog/gear icon — a filled annulus (body with a center hole) plus
+/// eight radial teeth, antialiased by 4×4 supersampled coverage. R8 like the
+/// waveform icons (alpha = coverage). Used for the "hide modulation settings"
+/// toggle, since the UI font carries no ⚙ glyph.
+fn generate_cog_icon() -> Vec<u8> {
+    const TEETH: usize = 8;
+    const R_HOLE: f32 = 0.17; // center hole radius (normalized)
+    const R_BODY: f32 = 0.30; // gear body radius (between teeth)
+    const R_TEETH: f32 = 0.43; // outer radius at a tooth
+    const TOOTH_HALF: f32 = 0.28; // tooth half-width as a fraction of one period
+    const SS: usize = 4; // supersample grid per axis
+    let period = std::f32::consts::TAU / TEETH as f32;
+    let size = ICON_SIZE as usize;
+    let mut pixels = vec![0u8; size * size];
+
+    for py in 0..size {
+        for px in 0..size {
+            let mut inside = 0u32;
+            for sy in 0..SS {
+                for sx in 0..SS {
+                    let nx = (px as f32 + (sx as f32 + 0.5) / SS as f32) / size as f32;
+                    let ny = (py as f32 + (sy as f32 + 0.5) / SS as f32) / size as f32;
+                    let dx = nx - 0.5;
+                    let dy = ny - 0.5;
+                    let r = (dx * dx + dy * dy).sqrt();
+                    if !(R_HOLE..=R_TEETH).contains(&r) {
+                        continue;
+                    }
+                    // Radius at this angle: full tooth radius inside a tooth arc,
+                    // body radius in the gaps between teeth.
+                    let frac = dy.atan2(dx).rem_euclid(period) / period; // 0..1 within a tooth period
+                    let r_eff = if (frac - 0.5).abs() < TOOTH_HALF {
+                        R_TEETH
+                    } else {
+                        R_BODY
+                    };
+                    if r <= r_eff {
+                        inside += 1;
+                    }
+                }
+            }
+            let coverage = inside as f32 / (SS * SS) as f32;
+            pixels[py * size + px] = (coverage * 255.0 + 0.5) as u8;
+        }
+    }
+    pixels
 }
 
 fn generate_single_waveform(idx: usize) -> Vec<u8> {

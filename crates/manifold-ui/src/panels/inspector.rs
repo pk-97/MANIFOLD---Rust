@@ -390,7 +390,7 @@ impl InspectorCompositePanel {
                     corner_radius: color::BUTTON_RADIUS,
                     ..UIStyle::default()
                 },
-                "\u{2699}", // ⚙ — hide/show modulation settings
+                "\u{E005}", // cog (atlas icon) — hide/show modulation settings
             );
             self.compact_toggle_btn_id = Some(id);
 
