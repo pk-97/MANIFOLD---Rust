@@ -220,7 +220,10 @@ pub struct ParamCardConfig {
 
 const HEADER_HEIGHT: f32 = 27.5;
 const BORDER_W: f32 = 1.0;
-const CORNER_RADIUS: f32 = 4.0;
+// Card corner = the design-token card radius (Phase 3). Radius is purely
+// visual — it doesn't move any laid rect, so the golden header-layout tests
+// are unaffected.
+const CORNER_RADIUS: f32 = color::CARD_RADIUS;
 const CARD_BOTTOM_MARGIN: f32 = 6.0;
 const CHEVRON_W: f32 = 18.0;
 const COG_W: f32 = 18.0;

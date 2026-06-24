@@ -556,30 +556,12 @@ pub(crate) fn config_btn_style_colored(
     }
 }
 
+// The canonical toggle look now lives in the Phase-4 component kit; this
+// shared helper delegates so every toggle (effect header, generator, param
+// rows) tracks the same tokens. Off-state moves onto the grey ramp (BG_3)
+// instead of the old BUTTON_INACTIVE grey.
 pub(crate) fn toggle_btn_style(enabled: bool) -> UIStyle {
-    if enabled {
-        UIStyle {
-            bg_color: color::ACCENT_BLUE_C32,
-            hover_bg_color: color::ACCENT_BLUE_HOVER_C32,
-            pressed_bg_color: color::ACCENT_BLUE_PRESS_C32,
-            text_color: color::TEXT_WHITE_C32,
-            font_size: color::FONT_CAPTION,
-            corner_radius: color::BUTTON_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    } else {
-        UIStyle {
-            bg_color: color::BUTTON_INACTIVE_C32,
-            hover_bg_color: color::BUTTON_INACTIVE_HOVER_C32,
-            pressed_bg_color: color::BUTTON_INACTIVE_PRESS_C32,
-            text_color: color::TEXT_DIMMED_C32,
-            font_size: color::FONT_CAPTION,
-            corner_radius: color::BUTTON_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    }
+    crate::chrome::components::toggle_style(enabled)
 }
 
 /// Style for a dropdown trigger — a control cell that shows the current
