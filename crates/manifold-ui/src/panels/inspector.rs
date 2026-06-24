@@ -1773,6 +1773,16 @@ impl Panel for InspectorCompositePanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
         self.cache_first_node = tree.count();
 
+        // Add-effect button ids are reassigned by node index every rebuild, but
+        // each is only *set* inside its `!collapsed` build branch. Clear them up
+        // front so a collapsed/hidden section can't leave a stale id pointing at
+        // an index another node now occupies — e.g. the generator card's Change
+        // button inheriting a stale add-layer-effect id and opening the effect
+        // browser instead of the generator picker. (The exact-id checks in
+        // handle_click run before the range-based find_target_for_node.)
+        self.add_master_effect_btn = None;
+        self.add_layer_effect_btn = None;
+
         let rect = layout.inspector();
         if rect.width <= 0.0 {
             return;
@@ -2401,6 +2411,52 @@ mod tests {
                 "gen-card node {i} must route to GenParam on the Layer tab, got {target:?}",
             );
         }
+    }
+
+    /// Regression: add-effect button ids are reassigned by node index every
+    /// rebuild, but each is only *set* inside its own `!collapsed`/`*_visible`
+    /// build branch. When a section stops being built (tab switch, collapse),
+    /// the stale id persisted and — because the exact-id checks in `route_click`
+    /// run before the range-based `find_target_for_node` — could shadow whatever
+    /// node now occupies that index. Concretely: the generator card's Change
+    /// button inheriting a stale add-effect id, opening the effect browser
+    /// instead of the generator picker. The ids must clear on every build.
+    #[test]
+    fn stale_add_effect_button_id_cleared_when_section_hidden() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = {
+            let mut l = ScreenLayout::new(1920.0, 1080.0);
+            l.inspector_width = 500.0;
+            l
+        };
+
+        // Master tab with master effects → the master add-effect button builds.
+        panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "MasterFX", 2)]);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Master,
+        );
+        tree.clear();
+        panel.build(&mut tree, &layout);
+        assert!(
+            panel.add_master_effect_btn.is_some(),
+            "master add-effect button must be registered on the Master tab",
+        );
+
+        // Switch to the Layer tab: the master section is no longer built, so its
+        // add-effect button is gone. The stale id must not survive the rebuild.
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        tree.clear();
+        panel.build(&mut tree, &layout);
+        assert!(
+            panel.add_master_effect_btn.is_none(),
+            "stale master add-effect id must clear when the section is hidden",
+        );
     }
 
     /// The full-panel render path (`render_tree_range` → `traverse_range`) walks
