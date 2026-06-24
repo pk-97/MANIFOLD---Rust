@@ -161,10 +161,9 @@ pub struct InspectorCompositePanel {
     /// (mods stay armed). UI-only, propagated to all cards each build.
     mods_compact: bool,
 
-    // Section visibility (derived from active_tab via set_active_tab)
-    master_visible: bool,
-    layer_visible: bool,
-    clip_visible: bool,
+    // Section visibility is derived from `active_tab` (the single source of
+    // truth) via the master_visible() / layer_visible() / clip_visible()
+    // accessors — no separate cached booleans.
 
     // Add Effect button node IDs
     add_master_effect_btn: Option<NodeId>,
@@ -235,9 +234,6 @@ impl InspectorCompositePanel {
             collapse_all_btn_id: None,
             compact_toggle_btn_id: None,
             mods_compact: false,
-            master_visible: true,
-            layer_visible: false,
-            clip_visible: false,
             add_master_effect_btn: None,
             add_layer_effect_btn: None,
             master_scroll: ScrollContainer::new(),
@@ -271,17 +267,21 @@ impl InspectorCompositePanel {
 
     // ── Configuration ─────────────────────────────────────────────
 
-    pub fn set_section_visible(&mut self, section: InspectorTab, visible: bool) {
-        match section {
-            InspectorTab::Master => self.master_visible = visible,
-            InspectorTab::Layer | InspectorTab::Group => self.layer_visible = visible,
-            InspectorTab::Clip => self.clip_visible = visible,
-        }
-    }
-
     /// The scope currently shown in the inspector.
     pub fn active_tab(&self) -> InspectorTab {
         self.active_tab
+    }
+
+    // ── Section visibility — derived from the single `active_tab` ──────
+    // (Master / Layer+Group / Clip partition the tab set.)
+    fn master_visible(&self) -> bool {
+        self.active_tab == InspectorTab::Master
+    }
+    fn layer_visible(&self) -> bool {
+        self.active_tab.is_layer_scope()
+    }
+    fn clip_visible(&self) -> bool {
+        self.active_tab == InspectorTab::Clip
     }
 
     /// Set which tab rungs are available (display order, local→global) and which
@@ -294,10 +294,8 @@ impl InspectorCompositePanel {
 
     /// Point the inspector at a single scope. `Group` shares the layer section.
     fn set_active_tab(&mut self, tab: InspectorTab) {
+        // Single source of truth — visibility is derived on read, not cached.
         self.active_tab = tab;
-        self.master_visible = tab == InspectorTab::Master;
-        self.layer_visible = tab.is_layer_scope();
-        self.clip_visible = tab == InspectorTab::Clip;
     }
 
     /// Display label for a tab rung.
@@ -320,20 +318,29 @@ impl InspectorCompositePanel {
             return;
         }
         let n = self.available_tabs.len();
-        // Reserve fixed slots at the right for the compact toggle + collapse-all
-        // control; tabs fill the rest. Hidden when the active column has no cards.
-        let show_collapse_all = self.active_column_card_count() > 0;
-        let tab_area_w = if show_collapse_all {
-            (rect.width - COLLAPSE_ALL_W - COMPACT_TOGGLE_W - TAB_GAP * 2.0).max(0.0)
+        // The per-column controls (compact toggle + collapse-all) are parented to
+        // the ACTIVE tab — rendered right after its button so they read as acting
+        // on it, and they travel as the active tab changes. Hidden when the active
+        // column has no cards. The block claims `controls_extra` after the active
+        // tab: [gap][cog][gap][collapse].
+        let show_controls = self.active_column_card_count() > 0;
+        let controls_extra = if show_controls {
+            TAB_GAP + COMPACT_TOGGLE_W + TAB_GAP + COLLAPSE_ALL_W
         } else {
-            rect.width
+            0.0
         };
-        let total_gap = TAB_GAP * n.saturating_sub(1) as f32;
-        let tab_w = ((tab_area_w - total_gap) / n as f32).floor();
+        let inter_gap = TAB_GAP * n.saturating_sub(1) as f32;
+        let tab_w = ((rect.width - inter_gap - controls_extra) / n as f32)
+            .floor()
+            .max(1.0);
+
         let tabs = self.available_tabs.clone();
         let mut x = rect.x;
-        for tab in tabs {
-            let active = tab == self.active_tab;
+        for (idx, tab) in tabs.iter().enumerate() {
+            if idx > 0 {
+                x += TAB_GAP;
+            }
+            let active = *tab == self.active_tab;
             // Interactive button (not a label) so clicks hit-test and route —
             // a plain label carries no INTERACTIVE flag and is invisible to the
             // event system, which is why the tabs were unclickable.
@@ -356,66 +363,74 @@ impl InspectorCompositePanel {
                     corner_radius: 3.0,
                     ..UIStyle::default()
                 },
-                Self::tab_label(tab),
+                Self::tab_label(*tab),
             );
-            self.tab_node_ids.push((id, tab));
-            x += tab_w + TAB_GAP;
+            self.tab_node_ids.push((id, *tab));
+            x += tab_w;
+            // Parent the controls to the active tab: render them immediately after
+            // its button, before the next tab's gap.
+            if show_controls && active {
+                x += TAB_GAP;
+                x = self.build_tab_controls(tree, x, rect.y, rect.height);
+            }
         }
+    }
 
-        // Collapse-all / expand-all control at the right edge. Label reflects the
-        // action it will take: "Collapse" while any card is open, else "Expand".
-        // A raised (BG_3) fill sets it apart from the recessed tabs as an action.
-        if show_collapse_all {
-            // §6b — compact toggle (gear): hide every card's modulation config
-            // drawers while keeping mods armed. Accent fill when engaged (hidden).
-            let cx = rect.x + tab_area_w + TAB_GAP;
-            let (bg, txt) = if self.mods_compact {
-                (color::ACCENT_BLUE, color::TEXT_WHITE_C32)
-            } else {
-                (color::BG_3, color::TEXT_DIMMED_C32)
-            };
-            let id = tree.add_button(
-                None,
-                cx,
-                rect.y,
-                COMPACT_TOGGLE_W,
-                rect.height,
-                UIStyle {
-                    bg_color: bg,
-                    hover_bg_color: color::BG_3_HOVER,
-                    pressed_bg_color: color::BG_3_PRESSED,
-                    text_color: txt,
-                    font_size: color::FONT_BODY,
-                    text_align: TextAlign::Center,
-                    corner_radius: color::BUTTON_RADIUS,
-                    ..UIStyle::default()
-                },
-                "\u{E005}", // cog (atlas icon) — hide/show modulation settings
-            );
-            self.compact_toggle_btn_id = Some(id);
+    /// Build the active tab's per-column controls (compact toggle + collapse-all),
+    /// laid out left→right starting at `x`. Returns the x after the last control.
+    /// They act on the active tab's column (the single source of truth).
+    fn build_tab_controls(&mut self, tree: &mut UITree, x: f32, y: f32, h: f32) -> f32 {
+        // §6b — compact toggle (cog): hide every card's modulation config drawers
+        // while keeping mods armed. Accent fill when engaged (hidden).
+        let (bg, txt) = if self.mods_compact {
+            (color::ACCENT_BLUE, color::TEXT_WHITE_C32)
+        } else {
+            (color::BG_3, color::TEXT_DIMMED_C32)
+        };
+        let id = tree.add_button(
+            None,
+            x,
+            y,
+            COMPACT_TOGGLE_W,
+            h,
+            UIStyle {
+                bg_color: bg,
+                hover_bg_color: color::BG_3_HOVER,
+                pressed_bg_color: color::BG_3_PRESSED,
+                text_color: txt,
+                font_size: color::FONT_BODY,
+                text_align: TextAlign::Center,
+                corner_radius: color::BUTTON_RADIUS,
+                ..UIStyle::default()
+            },
+            "\u{E005}", // cog (atlas icon) — hide/show modulation settings
+        );
+        self.compact_toggle_btn_id = Some(id);
 
-            let any_expanded = self.any_active_card_expanded();
-            let cx = cx + COMPACT_TOGGLE_W + TAB_GAP;
-            let id = tree.add_button(
-                None,
-                cx,
-                rect.y,
-                COLLAPSE_ALL_W,
-                rect.height,
-                UIStyle {
-                    bg_color: color::BG_3,
-                    hover_bg_color: color::BG_3_HOVER,
-                    pressed_bg_color: color::BG_3_PRESSED,
-                    text_color: color::TEXT_DIMMED_C32,
-                    font_size: color::FONT_BODY,
-                    text_align: TextAlign::Center,
-                    corner_radius: color::BUTTON_RADIUS,
-                    ..UIStyle::default()
-                },
-                if any_expanded { "Collapse" } else { "Expand" },
-            );
-            self.collapse_all_btn_id = Some(id);
-        }
+        // Collapse-all / expand-all. Label reflects the action it will take:
+        // "Collapse" while any card is open, else "Expand".
+        let x = x + COMPACT_TOGGLE_W + TAB_GAP;
+        let any_expanded = self.any_active_card_expanded();
+        let id = tree.add_button(
+            None,
+            x,
+            y,
+            COLLAPSE_ALL_W,
+            h,
+            UIStyle {
+                bg_color: color::BG_3,
+                hover_bg_color: color::BG_3_HOVER,
+                pressed_bg_color: color::BG_3_PRESSED,
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: color::FONT_BODY,
+                text_align: TextAlign::Center,
+                corner_radius: color::BUTTON_RADIUS,
+                ..UIStyle::default()
+            },
+            if any_expanded { "Collapse" } else { "Expand" },
+        );
+        self.collapse_all_btn_id = Some(id);
+        x + COLLAPSE_ALL_W
     }
 
     /// §6b — push the global compact flag onto every card (master + layer effect
@@ -436,10 +451,10 @@ impl InspectorCompositePanel {
     /// Number of effect cards in the active column (master or layer/clip).
     fn active_column_card_count(&self) -> usize {
         let mut n = 0;
-        if self.master_visible {
+        if self.master_visible() {
             n += self.master_effects.len();
         }
-        if self.layer_visible || self.clip_visible {
+        if self.layer_visible() || self.clip_visible() {
             n += self.layer_effects.len();
         }
         n
@@ -448,10 +463,10 @@ impl InspectorCompositePanel {
     /// True if any effect card in the active column is currently expanded — the
     /// collapse-all control collapses when this holds, expands otherwise.
     fn any_active_card_expanded(&self) -> bool {
-        if self.master_visible && self.master_effects.iter().any(|c| !c.is_collapsed()) {
+        if self.master_visible() && self.master_effects.iter().any(|c| !c.is_collapsed()) {
             return true;
         }
-        if (self.layer_visible || self.clip_visible)
+        if (self.layer_visible() || self.clip_visible())
             && self.layer_effects.iter().any(|c| !c.is_collapsed())
         {
             return true;
@@ -485,7 +500,7 @@ impl InspectorCompositePanel {
             self.macros_panel.first_node(),
             self.macros_panel.node_count(),
         );
-        if self.master_visible {
+        if self.master_visible() {
             push(
                 &mut ranges,
                 self.master_chrome.first_node(),
@@ -495,7 +510,7 @@ impl InspectorCompositePanel {
                 push(&mut ranges, card.first_node(), card.node_count());
             }
         }
-        if self.layer_visible {
+        if self.layer_visible() {
             push(
                 &mut ranges,
                 self.layer_chrome.first_node(),
@@ -508,7 +523,7 @@ impl InspectorCompositePanel {
                 push(&mut ranges, card.first_node(), card.node_count());
             }
         }
-        if self.clip_visible {
+        if self.clip_visible() {
             push(
                 &mut ranges,
                 self.clip_chrome.first_node(),
@@ -735,7 +750,7 @@ impl InspectorCompositePanel {
 
     /// Content height for the master column (left).
     fn master_column_height(&self) -> f32 {
-        if !self.master_visible {
+        if !self.master_visible() {
             return 0.0;
         }
         let mut h = SECTION_CARD_PAD + self.master_chrome.compute_height();
@@ -752,7 +767,7 @@ impl InspectorCompositePanel {
     /// Order: layer chrome → gen params → layer effects → add effect button.
     fn layer_column_height(&self) -> f32 {
         let mut h = 0.0;
-        if self.layer_visible {
+        if self.layer_visible() {
             h += SECTION_CARD_PAD + self.layer_chrome.compute_height();
             if !self.layer_chrome.is_collapsed() {
                 // Gen params sit above layer effects
@@ -772,7 +787,7 @@ impl InspectorCompositePanel {
     /// Height of the Clip section card (its own card below the layer section),
     /// or 0 when no clip is selected. BPM / warp / loop chrome lives here.
     fn clip_section_height(&self) -> f32 {
-        if self.clip_visible && self.clip_chrome.has_clip() {
+        if self.clip_visible() && self.clip_chrome.has_clip() {
             SECTION_CARD_PAD + self.clip_chrome.compute_height() + SECTION_CARD_PAD + SECTION_GAP
         } else {
             0.0
@@ -1038,14 +1053,14 @@ impl InspectorCompositePanel {
     /// visible cards and return its type-in action (empty if it isn't a value
     /// cell). Enum/toggle params are filtered out by the card itself.
     fn route_value_typein(&self, node_id: NodeId, tree: &UITree) -> Vec<PanelAction> {
-        if self.master_visible {
+        if self.master_visible() {
             for card in &self.master_effects {
                 if let Some(a) = card.value_cell_typein(node_id, tree) {
                     return vec![a];
                 }
             }
         }
-        if self.layer_visible {
+        if self.layer_visible() {
             if let Some(gp) = self.gen_params.as_ref()
                 && let Some(a) = gp.value_cell_typein(node_id, tree)
             {
@@ -1063,14 +1078,14 @@ impl InspectorCompositePanel {
     /// Resolve a clicked node to a driver Free-period field across the visible
     /// cards and return its type-in action (empty if it isn't a Free field).
     fn route_driver_period_typein(&self, node_id: NodeId, tree: &UITree) -> Vec<PanelAction> {
-        if self.master_visible {
+        if self.master_visible() {
             for card in &self.master_effects {
                 if let Some(a) = card.driver_period_typein(node_id, tree) {
                     return vec![a];
                 }
             }
         }
-        if self.layer_visible {
+        if self.layer_visible() {
             if let Some(gp) = self.gen_params.as_ref()
                 && let Some(a) = gp.driver_period_typein(node_id, tree)
             {
@@ -1102,7 +1117,7 @@ impl InspectorCompositePanel {
         }
 
         // Master section
-        if self.master_visible {
+        if self.master_visible() {
             if in_range(
                 idx,
                 self.master_chrome.first_node(),
@@ -1120,7 +1135,7 @@ impl InspectorCompositePanel {
         // Layer section. The generator card lives here (built, sized, and
         // range-registered under `layer_visible`), so it must be hit-tested
         // here too — not under the clip section, which is a different tab.
-        if self.layer_visible {
+        if self.layer_visible() {
             if in_range(
                 idx,
                 self.layer_chrome.first_node(),
@@ -1141,7 +1156,7 @@ impl InspectorCompositePanel {
         }
 
         // Clip section
-        if self.clip_visible
+        if self.clip_visible()
             && in_range(
                 idx,
                 self.clip_chrome.first_node(),
@@ -1498,7 +1513,7 @@ impl InspectorCompositePanel {
     /// Find which card's drag handle matches the given node_id.
     /// Returns (tab, card_index_in_vec, effect_index, effect_name).
     fn find_drag_handle(&self, node_id: NodeId) -> Option<(InspectorTab, usize, usize, String)> {
-        if self.master_visible {
+        if self.master_visible() {
             for (i, card) in self.master_effects.iter().enumerate() {
                 // ParamCardPanel::is_drag_handle still takes raw u32 (not yet converted).
                 if card.is_drag_handle(node_id) {
@@ -1511,7 +1526,7 @@ impl InspectorCompositePanel {
                 }
             }
         }
-        if self.layer_visible {
+        if self.layer_visible() {
             for (i, card) in self.layer_effects.iter().enumerate() {
                 if card.is_drag_handle(node_id) {
                     return Some((
@@ -1794,7 +1809,7 @@ impl Panel for InspectorCompositePanel {
         let col_x = rect.x + COLUMN_PAD;
         let content_w = (rect.width - COLUMN_PAD * 2.0 - SCROLLBAR_W).max(0.0);
         let full_col_w = (rect.width - COLUMN_PAD * 2.0).max(0.0);
-        let (master_col_w, layer_col_w) = if self.master_visible {
+        let (master_col_w, layer_col_w) = if self.master_visible() {
             (full_col_w, 0.0)
         } else {
             (0.0, full_col_w)
@@ -1802,9 +1817,9 @@ impl Panel for InspectorCompositePanel {
         // Aliases so the per-section build blocks below read unchanged.
         let left_x = col_x;
         let right_x = col_x;
-        let left_content_w = if self.master_visible { content_w } else { 0.0 };
-        let right_content_w = if self.master_visible { 0.0 } else { content_w };
-        self.column_split_x = if self.master_visible {
+        let left_content_w = if self.master_visible() { content_w } else { 0.0 };
+        let right_content_w = if self.master_visible() { 0.0 } else { content_w };
+        self.column_split_x = if self.master_visible() {
             rect.x + rect.width
         } else {
             rect.x
@@ -1825,7 +1840,7 @@ impl Panel for InspectorCompositePanel {
 
         {
             let mut cy = self.master_scroll.content_y(0.0);
-            if self.master_visible {
+            if self.master_visible() {
                 let section_h = self.master_column_height();
                 chrome::materialize(
                     tree,
@@ -1872,7 +1887,7 @@ impl Panel for InspectorCompositePanel {
             let mut cy = self.layer_scroll.content_y(0.0);
 
             // Layer section — includes gen params above layer effects
-            if self.layer_visible {
+            if self.layer_visible() {
                 let section_h = self.layer_column_height();
                 chrome::materialize(
                     tree,
@@ -1914,7 +1929,7 @@ impl Panel for InspectorCompositePanel {
 
             // Clip section — its own card below the layer section, shown when a
             // clip is selected. Holds the per-clip chrome (BPM / warp / loop).
-            if self.clip_visible && self.clip_chrome.has_clip() {
+            if self.clip_visible() && self.clip_chrome.has_clip() {
                 let clip_top = self.layer_scroll.content_y(0.0) + self.layer_column_height();
                 let section_h =
                     SECTION_CARD_PAD + self.clip_chrome.compute_height() + SECTION_CARD_PAD;
@@ -2024,13 +2039,13 @@ impl Panel for InspectorCompositePanel {
         // nodes to phantom targets. Gate on the same `*_visible` SSOT the rest of
         // the panel uses. Macros always builds.
         self.macros_panel.register_intents(intents);
-        if self.master_visible {
+        if self.master_visible() {
             self.master_chrome.register_intents(intents);
             for card in &self.master_effects {
                 card.register_intents(intents);
             }
         }
-        if self.layer_visible {
+        if self.layer_visible() {
             self.layer_chrome.register_intents(intents);
             if let Some(gp) = self.gen_params.as_ref() {
                 gp.register_intents(intents);
@@ -2175,36 +2190,36 @@ mod tests {
 
         // Master active → only the master section renders.
         panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
-        assert!(panel.master_visible);
-        assert!(!panel.layer_visible);
-        assert!(!panel.clip_visible);
+        assert!(panel.master_visible());
+        assert!(!panel.layer_visible());
+        assert!(!panel.clip_visible());
 
         // Layer active → only the layer section.
         panel.configure_tabs(
             &[InspectorTab::Layer, InspectorTab::Master],
             InspectorTab::Layer,
         );
-        assert!(!panel.master_visible);
-        assert!(panel.layer_visible);
-        assert!(!panel.clip_visible);
+        assert!(!panel.master_visible());
+        assert!(panel.layer_visible());
+        assert!(!panel.clip_visible());
 
         // Group shares the layer section (a group is a layer).
         panel.configure_tabs(
             &[InspectorTab::Group, InspectorTab::Master],
             InspectorTab::Group,
         );
-        assert!(panel.layer_visible);
-        assert!(!panel.master_visible);
-        assert!(!panel.clip_visible);
+        assert!(panel.layer_visible());
+        assert!(!panel.master_visible());
+        assert!(!panel.clip_visible());
 
         // Clip active → only the clip section.
         panel.configure_tabs(
             &[InspectorTab::Clip, InspectorTab::Layer, InspectorTab::Master],
             InspectorTab::Clip,
         );
-        assert!(panel.clip_visible);
-        assert!(!panel.master_visible);
-        assert!(!panel.layer_visible);
+        assert!(panel.clip_visible());
+        assert!(!panel.master_visible());
+        assert!(!panel.layer_visible());
         assert_eq!(panel.active_tab(), InspectorTab::Clip);
     }
 
