@@ -1294,6 +1294,10 @@ pub(crate) fn build_param_row(
     // Which config the modulation drawer shows when ≥2 are active (the panel's
     // stored per-param choice). Ignored when 0–1 configs are active.
     active_tab: ModTab,
+    // §6b: when false (compact mode), the config drawer + tab strip are not built
+    // — the row, arm buttons, and slider track overlays still show, so mods stay
+    // armed and their live ranges remain visible; only the settings are hidden.
+    show_drawer: bool,
 ) -> ParamRowIds {
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.
@@ -1465,7 +1469,11 @@ pub(crate) fn build_param_row(
     // the row, so arming is still one click. Track overlays (driver/audio trim
     // bars, envelope target) live on the slider above and show for every armed
     // mod regardless of which config tab is open.
-    let active_tabs = active_mod_tabs(mod_state, info, i);
+    let active_tabs = if show_drawer {
+        active_mod_tabs(mod_state, info, i)
+    } else {
+        Vec::new()
+    };
     let shown_tab = resolve_active_tab(&active_tabs, active_tab);
     if active_tabs.len() >= 2 {
         ids.mod_tabs =

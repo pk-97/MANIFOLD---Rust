@@ -262,6 +262,7 @@ pub fn dispatch(
         | PanelAction::EffectCollapseToggle(_)
         | PanelAction::SetAllCardsCollapsed { .. }
         | PanelAction::ModConfigTabChanged
+        | PanelAction::ModsCompactToggled
         | PanelAction::EffectCardClicked(_)
         | PanelAction::ParamRightClick(..)
         | PanelAction::ParamSnapshot(..)

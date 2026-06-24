@@ -300,6 +300,10 @@ pub enum PanelAction {
     /// rebuild so the drawer repaints with the newly-selected config; carries no
     /// payload and mutates no model.
     ModConfigTabChanged,
+    /// §6b — the global "hide mod settings" (compact) toggle was clicked. The
+    /// inspector already flipped its own UI-only flag; this routes to a
+    /// structural rebuild so every card's drawers hide/show. No model mutation.
+    ModsCompactToggled,
     EffectCardClicked(usize),
     /// Open the node-graph editor for this effect (cog icon click).
     /// Currently shows a hardcoded test graph regardless of which effect

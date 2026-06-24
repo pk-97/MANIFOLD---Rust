@@ -1121,6 +1121,12 @@ pub(super) fn dispatch_inspector(
             // with the newly-selected config. No model mutation.
             DispatchResult::structural()
         }
+        PanelAction::ModsCompactToggled => {
+            // §6b — the inspector already flipped its own compact flag in
+            // route_click; rebuild so every card hides/shows its mod drawers.
+            // No model mutation.
+            DispatchResult::structural()
+        }
         PanelAction::EffectCardClicked(_) => {
             // Deselect generator card when an effect card is clicked
             if let Some(gp) = ui.inspector.gen_params_mut() {

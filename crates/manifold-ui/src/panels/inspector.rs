@@ -39,6 +39,9 @@ const TAB_GAP: f32 = 2.0;
 /// Width of the collapse-all / expand-all control reserved at the right edge of
 /// the tab strip. The tabs lay out in the remaining width.
 const COLLAPSE_ALL_W: f32 = 60.0;
+/// §6b — width of the "hide mod settings" (compact) gear toggle, left of the
+/// collapse-all control.
+const COMPACT_TOGGLE_W: f32 = 26.0;
 const TAB_FONT_SIZE: u16 = 12;
 const TAB_BG_ACTIVE: Color32 = Color32::new(48, 48, 52, 255);
 const TAB_BG_INACTIVE: Color32 = Color32::new(26, 26, 28, 255);
@@ -152,6 +155,11 @@ pub struct InspectorCompositePanel {
     tab_node_ids: Vec<(NodeId, InspectorTab)>,
     /// The collapse-all / expand-all control at the right of the tab strip.
     collapse_all_btn_id: Option<NodeId>,
+    /// §6b — the "hide mod settings" (compact) toggle, left of collapse-all.
+    compact_toggle_btn_id: Option<NodeId>,
+    /// §6b — global compact mode: hide every card's modulation config drawers
+    /// (mods stay armed). UI-only, propagated to all cards each build.
+    mods_compact: bool,
 
     // Section visibility (derived from active_tab via set_active_tab)
     master_visible: bool,
@@ -225,6 +233,8 @@ impl InspectorCompositePanel {
             available_tabs: vec![InspectorTab::Master],
             tab_node_ids: Vec::new(),
             collapse_all_btn_id: None,
+            compact_toggle_btn_id: None,
+            mods_compact: false,
             master_visible: true,
             layer_visible: false,
             clip_visible: false,
@@ -305,15 +315,16 @@ impl InspectorCompositePanel {
     fn build_tab_strip(&mut self, tree: &mut UITree, rect: Rect) {
         self.tab_node_ids.clear();
         self.collapse_all_btn_id = None;
+        self.compact_toggle_btn_id = None;
         if self.available_tabs.is_empty() {
             return;
         }
         let n = self.available_tabs.len();
-        // Reserve a fixed slot at the right for the collapse-all control; tabs
-        // fill the rest. Hidden when the active column has no effect cards.
+        // Reserve fixed slots at the right for the compact toggle + collapse-all
+        // control; tabs fill the rest. Hidden when the active column has no cards.
         let show_collapse_all = self.active_column_card_count() > 0;
         let tab_area_w = if show_collapse_all {
-            (rect.width - COLLAPSE_ALL_W - TAB_GAP).max(0.0)
+            (rect.width - COLLAPSE_ALL_W - COMPACT_TOGGLE_W - TAB_GAP * 2.0).max(0.0)
         } else {
             rect.width
         };
@@ -355,8 +366,36 @@ impl InspectorCompositePanel {
         // action it will take: "Collapse" while any card is open, else "Expand".
         // A raised (BG_3) fill sets it apart from the recessed tabs as an action.
         if show_collapse_all {
-            let any_expanded = self.any_active_card_expanded();
+            // §6b — compact toggle (gear): hide every card's modulation config
+            // drawers while keeping mods armed. Accent fill when engaged (hidden).
             let cx = rect.x + tab_area_w + TAB_GAP;
+            let (bg, txt) = if self.mods_compact {
+                (color::ACCENT_BLUE, color::TEXT_WHITE_C32)
+            } else {
+                (color::BG_3, color::TEXT_DIMMED_C32)
+            };
+            let id = tree.add_button(
+                None,
+                cx,
+                rect.y,
+                COMPACT_TOGGLE_W,
+                rect.height,
+                UIStyle {
+                    bg_color: bg,
+                    hover_bg_color: color::BG_3_HOVER,
+                    pressed_bg_color: color::BG_3_PRESSED,
+                    text_color: txt,
+                    font_size: color::FONT_BODY,
+                    text_align: TextAlign::Center,
+                    corner_radius: color::BUTTON_RADIUS,
+                    ..UIStyle::default()
+                },
+                "\u{2699}", // ⚙ — hide/show modulation settings
+            );
+            self.compact_toggle_btn_id = Some(id);
+
+            let any_expanded = self.any_active_card_expanded();
+            let cx = cx + COMPACT_TOGGLE_W + TAB_GAP;
             let id = tree.add_button(
                 None,
                 cx,
@@ -376,6 +415,21 @@ impl InspectorCompositePanel {
                 if any_expanded { "Collapse" } else { "Expand" },
             );
             self.collapse_all_btn_id = Some(id);
+        }
+    }
+
+    /// §6b — push the global compact flag onto every card (master + layer effect
+    /// cards and the generator-param card) so their drawers hide/show together.
+    fn apply_mods_compact(&mut self) {
+        let c = self.mods_compact;
+        for card in &mut self.master_effects {
+            card.set_compact(c);
+        }
+        for card in &mut self.layer_effects {
+            card.set_compact(c);
+        }
+        if let Some(gp) = self.gen_params.as_mut() {
+            gp.set_compact(c);
         }
     }
 
@@ -1524,6 +1578,13 @@ impl InspectorCompositePanel {
             let collapsed = self.any_active_card_expanded();
             return vec![PanelAction::SetAllCardsCollapsed { collapsed }];
         }
+        // §6b — compact toggle: flip global mod-drawer visibility (UI-only). Flip
+        // here and return a structural no-op so the inspector rebuilds with the
+        // new state propagated to every card.
+        if self.compact_toggle_btn_id == Some(node_id) {
+            self.mods_compact = !self.mods_compact;
+            return vec![PanelAction::ModsCompactToggled];
+        }
         // Add Effect buttons
         if self.add_master_effect_btn == Some(node_id) {
             return vec![PanelAction::AddEffectClicked(InspectorTab::Master)];
@@ -1703,6 +1764,10 @@ impl Panel for InspectorCompositePanel {
         }
 
         self.viewport_rect = rect;
+
+        // §6b — propagate global compact mode to every card before layout, so
+        // compute_height and build agree on whether drawers are hidden.
+        self.apply_mods_compact();
 
         // Background panel
         self.bg_panel_id = Some(tree.add_panel(

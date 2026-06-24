@@ -451,6 +451,10 @@ pub struct ParamCardPanel {
     /// for routing tab clicks. Empty for rows with fewer than two active configs.
     /// Rebuilt each frame.
     mod_tab_ids: Vec<Vec<(NodeId, ModTab)>>,
+    /// §6b compact mode — when true, every modulation config drawer on this card
+    /// is hidden (mods stay armed; arm buttons + slider track overlays still
+    /// show). Driven globally by the inspector's "hide mod settings" toggle.
+    compact: bool,
 
     // ── Node IDs — per-param (generator) ──
     toggle_ids: Vec<Option<ToggleParamIds>>,
@@ -537,6 +541,7 @@ impl ParamCardPanel {
             ableton_config_ids: Vec::new(),
             mod_active_tab: Vec::new(),
             mod_tab_ids: Vec::new(),
+            compact: false,
             toggle_ids: Vec::new(),
             string_param_btn_ids: Vec::new(),
             mapping_chevron_ids: Vec::new(),
@@ -916,11 +921,21 @@ impl ParamCardPanel {
         h + CARD_BOTTOM_MARGIN
     }
 
+    /// §6b — set compact mode (hide all modulation config drawers on this card).
+    /// Driven by the inspector's global "hide mod settings" toggle.
+    pub fn set_compact(&mut self, compact: bool) {
+        self.compact = compact;
+    }
+
     /// Height contributed by the modulation config drawer for one slider param.
     /// Mirrors `build_param_row` exactly: 0 configs → 0; 1 → that config's
     /// height; ≥2 → the tab strip plus the single shown config (they no longer
     /// stack). Track overlays (trim bars, envelope target) add no height.
+    /// Compact mode hides every drawer, so the contribution is 0.
     fn row_drawer_height(&self, i: usize) -> f32 {
+        if self.compact {
+            return 0.0;
+        }
         let Some(info) = self.param_info.get(i) else {
             return 0.0;
         };
@@ -1490,6 +1505,7 @@ impl ParamCardPanel {
                 self.supports_envelopes,
                 label_width,
                 self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
+                !self.compact,
             );
             self.slider_ids[i] = row.slider;
             self.row_catcher_ids[i] = Some(row.row_catcher);
@@ -1670,6 +1686,7 @@ impl ParamCardPanel {
                         true,
                         label_width,
                         self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
+                        !self.compact,
                     );
                     self.slider_ids[i] = row.slider;
                     self.row_catcher_ids[i] = Some(row.row_catcher);
@@ -3606,6 +3623,25 @@ mod tests {
 
         assert!(expanded_h > base_h);
         assert!((expanded_h - base_h - driver_config_height()).abs() < 0.1);
+    }
+
+    #[test]
+    fn compact_mode_hides_driver_drawer_height() {
+        // §6b: with a driver armed, compact mode drops the drawer back out of the
+        // card height (mod stays armed; only the config drawer is hidden).
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&gen_config());
+        let base_h = panel.compute_height();
+        panel.state.mod_state.driver_expanded[0] = true;
+        let expanded_h = panel.compute_height();
+        assert!(expanded_h > base_h, "armed driver should add the drawer height");
+
+        panel.set_compact(true);
+        let compact_h = panel.compute_height();
+        assert!(
+            (compact_h - base_h).abs() < 0.1,
+            "compact should hide the drawer: compact={compact_h} base={base_h}"
+        );
     }
 
     #[test]

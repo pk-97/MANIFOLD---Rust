@@ -259,19 +259,21 @@ problem; relocation is a separate call).
 ### 6.5 Modulation drawer — follow-ups (decided 2026-06-24, eyeball of 5e)
 5e shipped the tabbed drawer. Eyeballing it on Layer 2 → Transform surfaced four more, in build order:
 
-1. **Rename the three modulators to full words.** The old "Envelope" mod is **no longer a full
-   ADSR** — it's a trigger-fired decay (target + decay). New names everywhere (tabs, arm buttons,
-   header chips):
-   - **Trigger** (was Envelope / E / ENV) — arm button **T**.
-   - **LFO** (was Driver / → / DRV) — arm button **∿**.
+1. **Rename the three modulators to full words. ✅ SHIPPED 2026-06-24.** The old "Envelope" mod is
+   **no longer a full ADSR** — it's a trigger-fired decay (target + decay). Renamed everywhere
+   (tabs, arm buttons, header chips):
+   - **Trigger** (was Envelope / E / ENV) — arm button **T**, chip **TRG**.
+   - **LFO** (was Driver / → / DRV) — arm button **∿**, chip **LFO**.
    - **Audio** (was A) — arm button **A**.
    Tabs spell the full word; arm buttons stay compact glyphs to match.
-2. **Collapse the config while keeping the mod armed.** Today the drawer auto-shows whenever a
-   mod is armed, with no way to reclaim the space without disarming. Add a **disclosure ▾/▸** on
-   the drawer (on the tab strip when ≥2 mods; a small ▾ on single-mod rows). Collapsed = arm
-   buttons stay lit (modulation keeps running), tabs + config hidden. Plus a **card-level
-   "compact"** toggle to collapse every drawer on the card at once ("hide all the settings").
-   Per-row collapse state persists now that cards are reused across rebuilds.
+2. **Hide all mod settings while keeping mods armed. ✅ SHIPPED 2026-06-24** (Peter's ask: "hide all
+   the settings while leaving modulation enabled"). A **global compact toggle** (⚙ in the inspector
+   tab strip, left of Collapse-all) hides **every** card's modulation config drawers at once. Mods
+   stay armed (arm buttons lit) and the slider track overlays still show the live ranges — only the
+   config drawers collapse. Implemented as inspector `mods_compact` → `card.set_compact()` →
+   `build_param_row(show_drawer=false)` (empty `active_tabs` ⇒ no tab strip / no drawer, height 0).
+   *Deferred:* a **per-row ▾/▸** (the doc's original finer-grained idea, not requested) — the global
+   toggle covers "hide all"; add per-row only if finer control is wanted.
 3. **LFO drawer redesign — keep the grid, neaten it, add a free period. ✅ SHIPPED 2026-06-24.**
    The earlier "grids → dropdowns (blanket)" decision is **reversed.** Eyeballing the grid, Peter:
    *"this is actually good and useful"* — keep it as a button grid, just make it **standardised,
@@ -291,10 +293,11 @@ problem; relocation is a separate call).
      `evaluate_with_period()` is the shared core; grid/feel click clears free (back to sync).
    Audio Source/Feature/Band grids were **not** touched (they stay grids). The blanket dropdown
    conversion is dropped.
-4. **Merge the chrome header to one row.** Layer/Master/Clip chrome is 3 rows today
-   (`Layer ▾` · `Layer 2` · `Opacity ▓▓▓ 1.00`). Collapse to one:
-   `Layer 2 ▾   Opacity ▓▓▓▓▓░  1.00`. Applies to all three chrome panels for consistency
-   (LayerChromePanel / MasterChromePanel / ClipChromePanel).
+4. **Merge the chrome header to one row. ✅ SHIPPED 2026-06-24.** Layer chrome was three stacked
+   rows (type header / name / opacity); now one: `[Layer 2 ▾]  [Opacity ▓▓▓▓▓░ 1.00]`. Master
+   chrome moved opacity inline onto the title row (`[Master FX ▾] [Opacity]`); the LED row stays
+   below. Clip chrome is a content panel (single name row + source / warp / trigger sections) with
+   no header+opacity triple — nothing to merge, left as-is.
 
 Also note — **card panels are now reused across rebuilds** (matched by effect id; generator by
 layer), not re-allocated every sync. Fixed the mod-tab snap-back (UI-only tab state was on a
@@ -444,13 +447,16 @@ Not in most desktop checklists — these are ours because the tool is played liv
    header chips, type-in = Phase 2b, per-slider drawers), so Phase 5 was the genuine deltas. Static
    checks pass each pass (param_card tests incl. golden + 3 new tabbed tests; clippy). **Still needs
    the running-app eyeball** — the renderer is custom, can't screenshot here.
-6. **Modulation-drawer follow-ups (§6.5)** — eyeball of 5e surfaced four:
-   **6a** rename modulators to full words (Trigger / LFO / Audio; arm T / ∿ / A) — *pending*;
-   **6b** collapse the config while keeping the mod armed (per-row ▾ + card-level compact) —
-   *pending*; **6c** ✅ **DONE — LFO drawer redesign** (grid kept + standardised to uniform cells,
-   feel segment Straight/Dotted/Triplet, Rev→Invert, **free period (pro)** via beats type-in;
-   blanket grids→dropdowns *reversed* per Peter's eyeball); **6d** merge the chrome header to one
-   row (Layer/Master/Clip) — *pending*. Card-panel reuse (mod-tab snap-back fix) already shipped.
+6. **Modulation-drawer follow-ups (§6.5) — ✅ Phase 6 COMPLETE 2026-06-24.**
+   **6a** ✅ renamed modulators (Trigger / LFO / Audio; arm T / ∿ / A; chips TRG / LFO).
+   **6b** ✅ global compact toggle (⚙ in the tab strip) hides every card's mod drawers while mods
+   stay armed; per-row ▾ deferred (not requested).
+   **6c** ✅ LFO drawer redesign (grid kept + standardised to uniform cells, feel segment
+   Straight/Dotted/Triplet, Rev→Invert, **free period (pro)** via beats type-in; blanket
+   grids→dropdowns *reversed* per Peter's eyeball).
+   **6d** ✅ chrome header merged to one row (layer + master; clip N/A — content panel).
+   Card-panel reuse (mod-tab snap-back fix) already shipped. **Whole phase still needs Peter's
+   running-app eyeball** — custom renderer, can't screenshot here.
 7. **Verify across the variety + roll through the inspector.** The single reference card can't
    show everything: effects with many params, multiple enums, string params, generators (purple
    tint), macros, clip params. Check the generic redesign against that spread and fix edge cases —
