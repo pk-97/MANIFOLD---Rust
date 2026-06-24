@@ -413,6 +413,10 @@ pub struct ParamCardPanel {
 
     // ── Node IDs — per-param (shared) ──
     slider_ids: Vec<Option<SliderNodeIds>>,
+    /// Per-param base (pre-modulation) value, cached each sync so a value-cell
+    /// double-click prefills the type-in box with the user-set value, not the
+    /// live modulated display. Sized to the param count in `configure`.
+    base_values: Vec<f32>,
     /// Per-param transparent full-row hit catcher behind the slider widgets.
     /// Carries the param's right-click menu intent so the value cell + gaps
     /// resolve to the param menu (track stays instant-reset). None if unbuilt.
@@ -504,6 +508,7 @@ impl ParamCardPanel {
             cached_has_abl: false,
             cached_has_graph_mod: false,
             slider_ids: Vec::new(),
+            base_values: Vec::new(),
             row_catcher_ids: Vec::new(),
             driver_btn_ids: Vec::new(),
             envelope_btn_ids: Vec::new(),
@@ -577,6 +582,7 @@ impl ParamCardPanel {
             .collect();
         self.copied_flash.clear();
         self.slider_ids = vec![None; n];
+        self.base_values = vec![0.0; n];
         self.row_catcher_ids = vec![None; n];
         self.driver_btn_ids = vec![None; n];
         self.envelope_btn_ids = vec![None; n];
@@ -620,6 +626,34 @@ impl ParamCardPanel {
             ParamCardKind::Generator => GraphParamTarget::Generator,
         }
     }
+    /// If `node_id` is a numeric param's value cell, build the [`PanelAction`]
+    /// that opens a type-in box for it: target + id, the cell's anchor rect, the
+    /// base value to prefill, the clamp range, and the int-rounding flag. Returns
+    /// `None` for non-value-cell nodes and for enum params (`value_labels` use the
+    /// dropdown, not text). Toggle/trigger rows carry no slider, so never match.
+    pub fn value_cell_typein(&self, node_id: NodeId, tree: &UITree) -> Option<PanelAction> {
+        for (pi, slot) in self.slider_ids.iter().enumerate() {
+            let Some(ids) = slot else { continue };
+            if ids.value_text != node_id {
+                continue;
+            }
+            let info = self.param_info.get(pi)?;
+            if info.value_labels.is_some() {
+                return None;
+            }
+            return Some(PanelAction::BeginParamTextInput {
+                target: self.param_target(),
+                param_id: self.pid_at(pi),
+                anchor: tree.get_bounds(ids.value_text),
+                value: self.base_values.get(pi).copied().unwrap_or(info.default),
+                min: info.min,
+                max: info.max,
+                whole_numbers: info.whole_numbers,
+            });
+        }
+        None
+    }
+
     pub fn effect_id(&self) -> &EffectId {
         &self.effect_id
     }
@@ -1802,6 +1836,9 @@ impl ParamCardPanel {
         // Per-param slider values + label (dirty-check via param_cache / label_cache)
         for (i, slot) in values.iter().enumerate().take(self.param_info.len()) {
             let val = slot.value;
+            if let Some(b) = self.base_values.get_mut(i) {
+                *b = slot.base;
+            }
             let info = &self.param_info[i];
             let new_label = Some(info.name.clone());
 
@@ -1847,6 +1884,9 @@ impl ParamCardPanel {
 
         for (i, slot) in values.iter().enumerate().take(self.param_info.len()) {
             let val = slot.value;
+            if let Some(b) = self.base_values.get_mut(i) {
+                *b = slot.base;
+            }
             let info = &self.param_info[i];
 
             // Label dirty-check (slider rows only — toggle/trigger rows have

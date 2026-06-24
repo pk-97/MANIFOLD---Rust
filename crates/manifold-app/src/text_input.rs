@@ -36,6 +36,11 @@ pub enum TextInputField {
     GenParam(usize),
     /// Generator string parameter: (string_param_index).
     GenStringParam(usize),
+    /// Inspector param value type-in (effect / generator), opened by a
+    /// double-click on the value cell. The target + id + clamp range ride on
+    /// [`TextInputState::inspector_param`] (carries a non-`Copy` `ParamId`).
+    /// Commit parses the f32, clamps, and dispatches `ParamChanged` + `ParamCommit`.
+    InspectorParam,
     /// Browser popup search filter — commit updates filter, no undo command.
     SearchFilter,
     /// Timeline marker rename. MarkerId stored in TextInputState::marker_id.
@@ -88,6 +93,20 @@ pub struct TableCellEdit {
     pub col: usize,
     /// The full table at edit-open time, row-major.
     pub rows: Vec<Vec<f32>>,
+}
+
+/// Context for an in-flight inspector param type-in — set when the box opens
+/// ([`TextInputField::InspectorParam`]) and read on commit. Lives off the `Copy`
+/// field enum because `ParamId` isn't `Copy`.
+#[derive(Debug, Clone)]
+pub struct InspectorParamCtx {
+    pub target: manifold_ui::panels::GraphParamTarget,
+    pub param_id: manifold_core::effects::ParamId,
+    /// Base value at open — the undo "from" value and the slider's set point.
+    pub old_value: f32,
+    pub min: f32,
+    pub max: f32,
+    pub whole_numbers: bool,
 }
 
 /// Screen-space rectangle for anchoring the text input overlay.
@@ -143,6 +162,9 @@ pub struct TextInputState {
     /// Cell context for `GraphTableCell` (carries the full table, so stored
     /// here rather than on the `Copy` field enum).
     pub graph_table_edit: Option<TableCellEdit>,
+    /// Context for `InspectorParam` (target + id + clamp range; `ParamId` is
+    /// not `Copy`). Set right after `begin()` by the app, read on commit.
+    pub inspector_param: Option<InspectorParamCtx>,
 }
 
 impl TextInputState {
@@ -160,6 +182,7 @@ impl TextInputState {
             audio_send_id: None,
             graph_param_name: None,
             graph_table_edit: None,
+            inspector_param: None,
         }
     }
 
@@ -183,6 +206,9 @@ impl TextInputState {
             field,
             TextInputField::GenStringParam(_) | TextInputField::GraphWgsl(_)
         );
+        // Stale param ctx from a prior session must not leak in; the caller sets
+        // it again immediately for an `InspectorParam` field.
+        self.inspector_param = None;
     }
 
     /// Cancel editing without committing.
@@ -195,6 +221,7 @@ impl TextInputState {
         // edit can't be mistaken for a later one.
         self.graph_param_name = None;
         self.graph_table_edit = None;
+        self.inspector_param = None;
     }
 
     /// Insert a character at the cursor position.

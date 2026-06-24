@@ -983,6 +983,53 @@ impl Application {
                     self.needs_rebuild = true;
                 }
             }
+            TextInputField::InspectorParam => {
+                if let Some(ctx) = self.text_input.inspector_param.take() {
+                    // Lenient parse: keep only the numeric head so a value typed
+                    // with a unit suffix (e.g. an angle "45°") still commits.
+                    let cleaned: String = text
+                        .trim()
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
+                        .collect();
+                    if let Ok(parsed) = cleaned.parse::<f32>() {
+                        let mut v = parsed.clamp(ctx.min, ctx.max);
+                        if ctx.whole_numbers {
+                            v = v.round();
+                        }
+                        // Mirror the slider drag's live-set + commit so the type-in
+                        // is one undoable step: snapshot the old base, set the new
+                        // value live, then commit (builds the undo from the snap).
+                        self.slider_snapshot = Some(ctx.old_value);
+                        let content_tx = self.content_tx.as_ref().unwrap().clone();
+                        use manifold_ui::panels::PanelAction;
+                        for act in [
+                            PanelAction::ParamChanged(ctx.target, ctx.param_id.clone(), v),
+                            PanelAction::ParamCommit(ctx.target, ctx.param_id.clone()),
+                        ] {
+                            let _ = crate::ui_bridge::dispatch(
+                                &act,
+                                &mut self.local_project,
+                                &content_tx,
+                                &self.content_state,
+                                &mut self.ws.ui_root,
+                                &mut self.selection,
+                                &mut self.active_layer_id,
+                                &mut self.slider_snapshot,
+                                &mut self.trim_snapshot,
+                                &mut self.target_snapshot,
+                                &mut self.decay_snapshot,
+                                &mut self.audio_shape_snapshot,
+                                &mut self.audio_crossover_snapshot,
+                                &mut self.user_prefs,
+                                &mut self.active_inspector_drag,
+                                None,
+                            );
+                        }
+                        self.needs_rebuild = true;
+                    }
+                }
+            }
             TextInputField::LayerName(idx) => {
                 if let Some(layer) = self.local_project.timeline.layers.get(idx) {
                     let layer_id = layer.layer_id.clone();

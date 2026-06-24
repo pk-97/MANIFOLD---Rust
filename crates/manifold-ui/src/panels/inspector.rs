@@ -892,6 +892,32 @@ impl InspectorCompositePanel {
 
     // ── Node range ownership ─────────────────────────────────────
 
+    /// Resolve a double-clicked node to a numeric param's value cell across the
+    /// visible cards and return its type-in action (empty if it isn't a value
+    /// cell). Enum/toggle params are filtered out by the card itself.
+    fn route_value_typein(&self, node_id: NodeId, tree: &UITree) -> Vec<PanelAction> {
+        if self.master_visible {
+            for card in &self.master_effects {
+                if let Some(a) = card.value_cell_typein(node_id, tree) {
+                    return vec![a];
+                }
+            }
+        }
+        if self.layer_visible {
+            if let Some(gp) = self.gen_params.as_ref()
+                && let Some(a) = gp.value_cell_typein(node_id, tree)
+            {
+                return vec![a];
+            }
+            for card in &self.layer_effects {
+                if let Some(a) = card.value_cell_typein(node_id, tree) {
+                    return vec![a];
+                }
+            }
+        }
+        Vec::new()
+    }
+
     fn find_target_for_node(&self, node_id: NodeId) -> Option<PressedTarget> {
         let idx = node_id.index();
         // Macros panel (above both columns)
@@ -1744,7 +1770,7 @@ impl Panel for InspectorCompositePanel {
         //   inspector.master_chrome_mut().sync_opacity(&mut tree, 0.5);
     }
 
-    fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
+    fn handle_event(&mut self, event: &UIEvent, tree: &UITree) -> Vec<PanelAction> {
         match event {
             UIEvent::Click {
                 node_id,
@@ -1765,6 +1791,12 @@ impl Panel for InspectorCompositePanel {
                     return Vec::new();
                 }
                 self.route_pointer_down(*node_id, *pos, *modifiers)
+            }
+            UIEvent::DoubleClick { node_id, pos, .. } => {
+                if !self.viewport_rect.contains(*pos) {
+                    return Vec::new();
+                }
+                self.route_value_typein(*node_id, tree)
             }
             UIEvent::DragBegin { node_id, pos, .. } => {
                 if !self.viewport_rect.contains(*pos) {

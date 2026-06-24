@@ -25,7 +25,7 @@ pub mod waveform_lane;
 
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
-use crate::node::Color32;
+use crate::node::{Color32, Rect};
 use crate::tree::UITree;
 use crate::types::{
     AbletonMacroAddress, AudioBand, AudioDeviceRef, AudioFeature, MacroCurve, MidiTriggerMode,
@@ -312,6 +312,19 @@ pub enum PanelAction {
     ParamSnapshot(GraphParamTarget, ParamId),
     ParamChanged(GraphParamTarget, ParamId, f32),
     ParamCommit(GraphParamTarget, ParamId),
+    /// Double-click on a numeric param's value cell → open a type-in box. Carries
+    /// the target + id, the value-cell anchor rect, the base value to prefill, the
+    /// clamp range, and whether the param rounds to an integer — everything the
+    /// app needs to begin the session and commit it.
+    BeginParamTextInput {
+        target: GraphParamTarget,
+        param_id: ParamId,
+        anchor: Rect,
+        value: f32,
+        min: f32,
+        max: f32,
+        whole_numbers: bool,
+    },
     ParamRightClick(GraphParamTarget, ParamId, f32), // target, param_id, default_value
     DriverToggle(GraphParamTarget, ParamId),
     EnvelopeToggle(GraphParamTarget, ParamId),

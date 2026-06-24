@@ -1518,6 +1518,43 @@ impl Application {
                     );
                     continue;
                 }
+                PanelAction::BeginParamTextInput {
+                    target,
+                    param_id,
+                    anchor,
+                    value,
+                    min,
+                    max,
+                    whole_numbers,
+                } => {
+                    // Prefill the box with the base (set) value, formatted as a
+                    // plain number so editing in place stays parseable.
+                    let initial = if *whole_numbers {
+                        format!("{}", value.round() as i64)
+                    } else {
+                        format!("{:.3}", value)
+                    };
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::InspectorParam,
+                        &initial,
+                        crate::text_input::AnchorRect::new(
+                            anchor.x,
+                            anchor.y,
+                            anchor.width,
+                            anchor.height,
+                        ),
+                        11.0,
+                    );
+                    self.text_input.inspector_param = Some(crate::text_input::InspectorParamCtx {
+                        target: *target,
+                        param_id: param_id.clone(),
+                        old_value: *value,
+                        min: *min,
+                        max: *max,
+                        whole_numbers: *whole_numbers,
+                    });
+                    continue;
+                }
                 PanelAction::LayerDoubleClicked(idx) => {
                     // Open text input for layer rename
                     {

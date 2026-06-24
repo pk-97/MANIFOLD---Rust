@@ -174,6 +174,11 @@ pub fn dispatch(
             DispatchResult::structural()
         }
 
+        // Opens a param type-in session — handled at the Application layer
+        // (app_render) before dispatch, so it never actually reaches here; the
+        // arm exists only to keep this match exhaustive.
+        PanelAction::BeginParamTextInput { .. } => DispatchResult::handled(),
+
         // ── Viewport clip interaction + context menus ──────────────
         PanelAction::ClipClicked(..)
         | PanelAction::ClipDoubleClicked(_)
