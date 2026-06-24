@@ -1080,6 +1080,41 @@ pub(super) fn dispatch_inspector(
             );
             DispatchResult::structural()
         }
+        PanelAction::SetAllCardsCollapsed { collapsed } => {
+            // Collapse/expand every effect card in the active column at once.
+            // Mirrors EffectCollapseToggle's two-write pattern (snapshot now,
+            // MutateProject so the content thread's snapshot doesn't overwrite).
+            let tab = effective_tab;
+            let collapsed = *collapsed;
+            {
+                let (effects_mut, _target) =
+                    resolve_effects_mut(tab, project, active_layer, selection);
+                if let Some(effects) = effects_mut {
+                    for fx in effects.iter_mut() {
+                        fx.collapsed = collapsed;
+                    }
+                }
+            }
+            let target = super::resolve_effect_target(tab, active_layer, project);
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProject(Box::new(move |p| {
+                    let effects = match &target {
+                        EffectTarget::Master => Some(&mut p.settings.master_effects),
+                        EffectTarget::Layer { layer_id } => p
+                            .timeline
+                            .find_layer_by_id_mut(layer_id)
+                            .map(|(_, l)| l.effects_mut()),
+                    };
+                    if let Some(effects) = effects {
+                        for fx in effects.iter_mut() {
+                            fx.collapsed = collapsed;
+                        }
+                    }
+                })),
+            );
+            DispatchResult::structural()
+        }
         PanelAction::EffectCardClicked(_) => {
             // Deselect generator card when an effect card is clicked
             if let Some(gp) = ui.inspector.gen_params_mut() {

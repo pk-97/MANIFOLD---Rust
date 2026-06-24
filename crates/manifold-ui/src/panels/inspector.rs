@@ -36,6 +36,9 @@ const ADD_EFFECT_BTN_H: f32 = 26.0;
 // ── Tab strip ───────────────────────────────────────────────────
 const TAB_STRIP_HEIGHT: f32 = 24.0;
 const TAB_GAP: f32 = 2.0;
+/// Width of the collapse-all / expand-all control reserved at the right edge of
+/// the tab strip. The tabs lay out in the remaining width.
+const COLLAPSE_ALL_W: f32 = 60.0;
 const TAB_FONT_SIZE: u16 = 12;
 const TAB_BG_ACTIVE: Color32 = Color32::new(48, 48, 52, 255);
 const TAB_BG_INACTIVE: Color32 = Color32::new(26, 26, 28, 255);
@@ -147,6 +150,8 @@ pub struct InspectorCompositePanel {
     available_tabs: Vec<InspectorTab>,
     /// Node id → tab, for routing tab-strip clicks.
     tab_node_ids: Vec<(NodeId, InspectorTab)>,
+    /// The collapse-all / expand-all control at the right of the tab strip.
+    collapse_all_btn_id: Option<NodeId>,
 
     // Section visibility (derived from active_tab via set_active_tab)
     master_visible: bool,
@@ -219,6 +224,7 @@ impl InspectorCompositePanel {
             active_tab: InspectorTab::Master,
             available_tabs: vec![InspectorTab::Master],
             tab_node_ids: Vec::new(),
+            collapse_all_btn_id: None,
             master_visible: true,
             layer_visible: false,
             clip_visible: false,
@@ -298,12 +304,21 @@ impl InspectorCompositePanel {
     /// highlighted. Records node ids for click routing.
     fn build_tab_strip(&mut self, tree: &mut UITree, rect: Rect) {
         self.tab_node_ids.clear();
+        self.collapse_all_btn_id = None;
         if self.available_tabs.is_empty() {
             return;
         }
         let n = self.available_tabs.len();
+        // Reserve a fixed slot at the right for the collapse-all control; tabs
+        // fill the rest. Hidden when the active column has no effect cards.
+        let show_collapse_all = self.active_column_card_count() > 0;
+        let tab_area_w = if show_collapse_all {
+            (rect.width - COLLAPSE_ALL_W - TAB_GAP).max(0.0)
+        } else {
+            rect.width
+        };
         let total_gap = TAB_GAP * n.saturating_sub(1) as f32;
-        let tab_w = ((rect.width - total_gap) / n as f32).floor();
+        let tab_w = ((tab_area_w - total_gap) / n as f32).floor();
         let tabs = self.available_tabs.clone();
         let mut x = rect.x;
         for tab in tabs {
@@ -335,6 +350,59 @@ impl InspectorCompositePanel {
             self.tab_node_ids.push((id, tab));
             x += tab_w + TAB_GAP;
         }
+
+        // Collapse-all / expand-all control at the right edge. Label reflects the
+        // action it will take: "Collapse" while any card is open, else "Expand".
+        // A raised (BG_3) fill sets it apart from the recessed tabs as an action.
+        if show_collapse_all {
+            let any_expanded = self.any_active_card_expanded();
+            let cx = rect.x + tab_area_w + TAB_GAP;
+            let id = tree.add_button(
+                None,
+                cx,
+                rect.y,
+                COLLAPSE_ALL_W,
+                rect.height,
+                UIStyle {
+                    bg_color: color::BG_3,
+                    hover_bg_color: color::BG_3_HOVER,
+                    pressed_bg_color: color::BG_3_PRESSED,
+                    text_color: color::TEXT_DIMMED_C32,
+                    font_size: color::FONT_BODY,
+                    text_align: TextAlign::Center,
+                    corner_radius: color::BUTTON_RADIUS,
+                    ..UIStyle::default()
+                },
+                if any_expanded { "Collapse" } else { "Expand" },
+            );
+            self.collapse_all_btn_id = Some(id);
+        }
+    }
+
+    /// Number of effect cards in the active column (master or layer/clip).
+    fn active_column_card_count(&self) -> usize {
+        let mut n = 0;
+        if self.master_visible {
+            n += self.master_effects.len();
+        }
+        if self.layer_visible || self.clip_visible {
+            n += self.layer_effects.len();
+        }
+        n
+    }
+
+    /// True if any effect card in the active column is currently expanded — the
+    /// collapse-all control collapses when this holds, expands otherwise.
+    fn any_active_card_expanded(&self) -> bool {
+        if self.master_visible && self.master_effects.iter().any(|c| !c.is_collapsed()) {
+            return true;
+        }
+        if (self.layer_visible || self.clip_visible)
+            && self.layer_effects.iter().any(|c| !c.is_collapsed())
+        {
+            return true;
+        }
+        false
     }
 
     /// Sub-region node ranges for incremental cache re-rendering.
@@ -1404,6 +1472,12 @@ impl InspectorCompositePanel {
         // Tab strip — selecting a tab mirrors the timeline selection.
         if let Some((_, tab)) = self.tab_node_ids.iter().find(|(id, _)| *id == node_id) {
             return vec![PanelAction::SelectInspectorTab(*tab)];
+        }
+        // Collapse-all / expand-all — resolve the target state from the active
+        // column's current cards (collapse if any open, else expand).
+        if self.collapse_all_btn_id == Some(node_id) {
+            let collapsed = self.any_active_card_expanded();
+            return vec![PanelAction::SetAllCardsCollapsed { collapsed }];
         }
         // Add Effect buttons
         if self.add_master_effect_btn == Some(node_id) {

@@ -279,6 +279,13 @@ pub enum PanelAction {
     // Effect card (effect_index, param_index where applicable)
     EffectToggle(usize),
     EffectCollapseToggle(usize),
+    /// Collapse or expand every effect card in the active inspector column at
+    /// once (the collapse-all / expand-all control in the tab strip). The UI
+    /// resolves the target state — collapse if any card is currently open, else
+    /// expand them all.
+    SetAllCardsCollapsed {
+        collapsed: bool,
+    },
     EffectCardClicked(usize),
     /// Open the node-graph editor for this effect (cog icon click).
     /// Currently shows a hardcoded test graph regardless of which effect

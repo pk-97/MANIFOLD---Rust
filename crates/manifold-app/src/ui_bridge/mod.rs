@@ -257,6 +257,7 @@ pub fn dispatch(
         | PanelAction::ClipLoopRightClick
         | PanelAction::EffectToggle(_)
         | PanelAction::EffectCollapseToggle(_)
+        | PanelAction::SetAllCardsCollapsed { .. }
         | PanelAction::EffectCardClicked(_)
         | PanelAction::ParamRightClick(..)
         | PanelAction::ParamSnapshot(..)
