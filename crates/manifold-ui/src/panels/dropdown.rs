@@ -618,7 +618,15 @@ impl DropdownPanel {
                     self.move_hover(-1);
                     None
                 }
-                _ => None,
+                // Type-ahead: a letter/number jumps the hover to the next
+                // matching item (and steps through on repeat). Non-printable
+                // keys fall through to a no-op.
+                other => {
+                    if let Some(ch) = other.to_char() {
+                        self.type_ahead(ch);
+                    }
+                    None
+                }
             },
             UIEvent::Scroll { delta, .. } => {
                 if self.content_height > self.viewport_height {
@@ -648,6 +656,38 @@ impl DropdownPanel {
 
     fn color_index_for_node(&self, node_id: NodeId) -> Option<usize> {
         self.color_swatch_ids.iter().position(|&id| id == node_id)
+    }
+
+    /// Type-ahead: move the hover to the next enabled item whose label starts
+    /// with `ch`, wrapping. Searching from `hovered_index + 1` makes repeating
+    /// the same key step through every match (standard list UX). Mirrors
+    /// `move_hover`'s no-tree contract — the hover highlight repaints per frame.
+    fn type_ahead(&mut self, ch: char) {
+        if self.items.is_empty() {
+            return;
+        }
+        let ch = ch.to_ascii_lowercase();
+        let count = self.items.len();
+        let start = if self.hovered_index >= 0 {
+            self.hovered_index as usize + 1
+        } else {
+            0
+        };
+        for offset in 0..count {
+            let idx = (start + offset) % count;
+            let item = &self.items[idx];
+            if item.enabled
+                && item
+                    .label
+                    .trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with(ch)
+            {
+                self.hovered_index = idx as i32;
+                self.ensure_hovered_visible();
+                return;
+            }
+        }
     }
 
     fn move_hover(&mut self, direction: i32) {
@@ -940,6 +980,73 @@ mod tests {
         // Down again — wrap to 0.
         dd.move_hover(1);
         assert_eq!(dd.hovered_index, 0);
+    }
+
+    #[test]
+    fn type_ahead_jumps_and_steps_through_matches() {
+        let mut dd = DropdownPanel::new();
+        dd.items = vec![
+            DropdownItem::new("Amplitude"),
+            DropdownItem::new("Centroid"),
+            DropdownItem::new("Noisiness"),
+            DropdownItem::new("Flux"),
+            DropdownItem::new("Transients"),
+        ];
+        dd.is_open = true;
+        dd.hovered_index = -1;
+
+        // 'c' → Centroid (index 1), case-insensitive.
+        dd.type_ahead('C');
+        assert_eq!(dd.hovered_index, 1);
+
+        // 't' → Transients (index 4).
+        dd.type_ahead('t');
+        assert_eq!(dd.hovered_index, 4);
+
+        // No match → hover unchanged.
+        dd.type_ahead('z');
+        assert_eq!(dd.hovered_index, 4);
+    }
+
+    #[test]
+    fn type_ahead_repeats_cycle_through_same_prefix() {
+        let mut dd = DropdownPanel::new();
+        dd.items = vec![
+            DropdownItem::new("Low"),
+            DropdownItem::new("Mid"),
+            DropdownItem::new("High"),
+            DropdownItem::new("Master"),
+        ];
+        dd.is_open = true;
+        dd.hovered_index = -1;
+
+        // First 'm' → Mid (index 1).
+        dd.type_ahead('m');
+        assert_eq!(dd.hovered_index, 1);
+        // Repeat 'm' → Master (index 3), stepping from after the current.
+        dd.type_ahead('m');
+        assert_eq!(dd.hovered_index, 3);
+        // Repeat 'm' → wrap back to Mid (index 1).
+        dd.type_ahead('m');
+        assert_eq!(dd.hovered_index, 1);
+    }
+
+    #[test]
+    fn type_ahead_skips_disabled() {
+        let mut dd = DropdownPanel::new();
+        dd.items = vec![
+            DropdownItem::new("Sobel"),
+            DropdownItem::disabled("Scharr"),
+            DropdownItem::new("Sketch"),
+        ];
+        dd.is_open = true;
+        dd.hovered_index = -1;
+
+        // 's' → Sobel (0). Repeat skips disabled Scharr (1) → Sketch (2).
+        dd.type_ahead('s');
+        assert_eq!(dd.hovered_index, 0);
+        dd.type_ahead('s');
+        assert_eq!(dd.hovered_index, 2);
     }
 
     #[test]
