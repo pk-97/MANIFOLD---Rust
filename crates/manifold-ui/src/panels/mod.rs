@@ -60,14 +60,23 @@ pub fn audio_send_color(id: &AudioSendId) -> Color32 {
     Color32::new(r, g, b, 255)
 }
 
-/// Actions for driver configuration sub-panels.
+/// Actions for driver (LFO) configuration sub-panels.
 #[derive(Debug, Clone)]
 pub enum DriverConfigAction {
+    /// Pick a sync beat-division (grid index) — also returns to sync mode.
     BeatDiv(usize),
+    /// Pick a waveform shape (index).
     Wave(usize),
-    Dot,
+    /// Feel = straight (strip dotted/triplet from the division).
+    Straight,
+    /// Feel = dotted (×1.5 period).
+    Dotted,
+    /// Feel = triplet (×2/3 period).
     Triplet,
-    Reverse,
+    /// Toggle output-polarity invert (`reversed`).
+    Invert,
+    /// Set the free-running period in beats (free mode). From the type-in commit.
+    SetFreePeriod(f32),
 }
 
 /// Which graph host a per-param [`PanelAction`] targets — the
@@ -341,6 +350,16 @@ pub enum PanelAction {
     DriverToggle(GraphParamTarget, ParamId),
     EnvelopeToggle(GraphParamTarget, ParamId),
     DriverConfig(GraphParamTarget, ParamId, DriverConfigAction),
+    /// Click on the driver drawer's Free field → open a beats type-in for the
+    /// LFO's free-running period (free mode). Carries the target + id, the field
+    /// anchor rect, and the current period to prefill (the division's beats when
+    /// in sync mode, so the box opens at a sensible value).
+    BeginDriverPeriodTextInput {
+        target: GraphParamTarget,
+        param_id: ParamId,
+        anchor: Rect,
+        value: f32,
+    },
     /// Arm/disarm audio modulation on a param. Arming assigns the project's
     /// first audio send with a default feature; re-clicking toggles enabled.
     /// No-op when no sends exist (the audio button is inert until the Audio

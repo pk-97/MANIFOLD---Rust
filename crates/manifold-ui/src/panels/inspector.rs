@@ -1006,6 +1006,31 @@ impl InspectorCompositePanel {
         Vec::new()
     }
 
+    /// Resolve a clicked node to a driver Free-period field across the visible
+    /// cards and return its type-in action (empty if it isn't a Free field).
+    fn route_driver_period_typein(&self, node_id: NodeId, tree: &UITree) -> Vec<PanelAction> {
+        if self.master_visible {
+            for card in &self.master_effects {
+                if let Some(a) = card.driver_period_typein(node_id, tree) {
+                    return vec![a];
+                }
+            }
+        }
+        if self.layer_visible {
+            if let Some(gp) = self.gen_params.as_ref()
+                && let Some(a) = gp.driver_period_typein(node_id, tree)
+            {
+                return vec![a];
+            }
+            for card in &self.layer_effects {
+                if let Some(a) = card.driver_period_typein(node_id, tree) {
+                    return vec![a];
+                }
+            }
+        }
+        Vec::new()
+    }
+
     fn find_target_for_node(&self, node_id: NodeId) -> Option<PressedTarget> {
         let idx = node_id.index();
         // Macros panel (above both columns)
@@ -1874,6 +1899,12 @@ impl Panel for InspectorCompositePanel {
                 if !self.viewport_rect.contains(*pos) {
                     return Vec::new();
                 }
+                // The driver Free-period field opens a type-in (needs `tree` for
+                // its anchor), so intercept it before the command-routing click.
+                let typein = self.route_driver_period_typein(*node_id, tree);
+                if !typein.is_empty() {
+                    return typein;
+                }
                 self.route_click(*node_id, *modifiers)
             }
             UIEvent::PointerDown {
@@ -2167,6 +2198,7 @@ mod tests {
             driver_reversed: vec![false; n],
             driver_dotted: vec![false; n],
             driver_triplet: vec![false; n],
+            driver_free_period: vec![None; n],
             audio: Default::default(),
         }
     }

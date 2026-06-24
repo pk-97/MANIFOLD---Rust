@@ -3156,6 +3156,15 @@ pub struct ParameterDriver {
     pub trim_min: f32,
     pub trim_max: f32,
     pub reversed: bool,
+    /// Free-running LFO period in beats. `None` => **sync mode** (period derives
+    /// from [`beat_division`], including its dotted/triplet variants — the grid
+    /// and feel segment). `Some(p)` => **free mode**: the LFO cycles every `p`
+    /// beats regardless of the grid, enabling odd periods (3, 1.5, 0.375…) and
+    /// polyrhythm against the bar. The type-in field writes this; clicking a grid
+    /// cell or the feel segment clears it back to `None`. Serialized as
+    /// `freePeriodBeats`, omitted when `None` so pre-free-mode projects round-trip
+    /// unchanged.
+    pub free_period_beats: Option<f32>,
     /// Parked legacy `paramIndex: i32` from V1.1 deserialization or from
     /// a load against an unregistered effect type.
     ///
@@ -3195,11 +3204,16 @@ impl Serialize for ParameterDriver {
 
         let emit_param_id = !self.param_id.is_empty();
         let emit_legacy_index = !emit_param_id && self.legacy_param_index.is_some();
+        let emit_free_period = self.free_period_beats.is_some();
 
         // 8 base fields (beat_division, waveform, enabled, phase,
-        // base_value, trim_min, trim_max, reversed) + addressing field.
+        // base_value, trim_min, trim_max, reversed) + addressing field
+        // + optional freePeriodBeats (only in free mode).
         let mut field_count = 8;
         if emit_param_id || emit_legacy_index {
+            field_count += 1;
+        }
+        if emit_free_period {
             field_count += 1;
         }
 
@@ -3218,6 +3232,9 @@ impl Serialize for ParameterDriver {
         s.serialize_field("trimMin", &self.trim_min)?;
         s.serialize_field("trimMax", &self.trim_max)?;
         s.serialize_field("reversed", &self.reversed)?;
+        if let Some(p) = self.free_period_beats {
+            s.serialize_field("freePeriodBeats", &p)?;
+        }
         s.end()
     }
 }
@@ -3239,20 +3256,41 @@ impl ParameterDriver {
             trim_min: 0.0,
             trim_max: 1.0,
             reversed: false,
+            free_period_beats: None,
             legacy_param_index: None,
             is_paused_by_user: false,
         }
     }
 
+    /// Effective LFO period in beats. Free mode (`free_period_beats = Some(p)`)
+    /// uses `p` directly; sync mode falls back to the `beat_division` period
+    /// (which already encodes dotted/triplet via its variants).
+    pub fn period_beats(&self) -> f32 {
+        self.free_period_beats
+            .unwrap_or_else(|| self.beat_division.beats())
+    }
+
     /// Evaluate driver at given beat position -> [0, 1].
-    /// Port of Unity DriverEvaluator.Evaluate.
+    /// Port of Unity DriverEvaluator.Evaluate. Sync-mode convenience: resolves
+    /// the division to a period and defers to [`evaluate_with_period`].
     pub fn evaluate(
         current_beat: Beats,
         division: BeatDivision,
         waveform: DriverWaveform,
         phase_offset: f32,
     ) -> f32 {
-        let period = division.beats();
+        Self::evaluate_with_period(current_beat, division.beats(), waveform, phase_offset)
+    }
+
+    /// Evaluate the waveform at `current_beat` for an explicit `period` in beats
+    /// -> [0, 1]. The shared core for both sync mode (period from the division)
+    /// and free mode (period typed directly).
+    pub fn evaluate_with_period(
+        current_beat: Beats,
+        period: f32,
+        waveform: DriverWaveform,
+        phase_offset: f32,
+    ) -> f32 {
         if period <= 0.0 {
             return 0.5;
         }
@@ -3330,6 +3368,8 @@ impl<'de> Deserialize<'de> for ParameterDriver {
             trim_max: f32,
             #[serde(default)]
             reversed: bool,
+            #[serde(default)]
+            free_period_beats: Option<f32>,
         }
 
         let raw = Raw::deserialize(deserializer)?;
@@ -3358,6 +3398,7 @@ impl<'de> Deserialize<'de> for ParameterDriver {
             trim_min: raw.trim_min,
             trim_max: raw.trim_max,
             reversed: raw.reversed,
+            free_period_beats: raw.free_period_beats,
             legacy_param_index,
             is_paused_by_user: false,
         })
@@ -3832,6 +3873,72 @@ mod tests {
         assert_eq!(back.beat_division, driver.beat_division);
         assert_eq!(back.waveform, driver.waveform);
         assert_eq!(back.legacy_param_index, None);
+    }
+
+    #[test]
+    fn driver_sync_mode_omits_free_period_field() {
+        // Sync mode (the default) must not write freePeriodBeats — pre-free-mode
+        // projects round-trip byte-identically and stay tiny.
+        let driver = ParameterDriver::new("amount", BeatDivision::Quarter, DriverWaveform::Sine);
+        assert_eq!(driver.free_period_beats, None);
+        let json = serde_json::to_string(&driver).unwrap();
+        assert!(
+            !json.contains("freePeriodBeats"),
+            "sync-mode driver must not emit freePeriodBeats; got: {json}"
+        );
+    }
+
+    #[test]
+    fn driver_free_period_round_trips() {
+        let mut driver =
+            ParameterDriver::new("amount", BeatDivision::Quarter, DriverWaveform::Sine);
+        driver.free_period_beats = Some(3.0);
+        let json = serde_json::to_string(&driver).unwrap();
+        assert!(json.contains("\"freePeriodBeats\":3"), "got: {json}");
+        let back: ParameterDriver = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.free_period_beats, Some(3.0));
+    }
+
+    #[test]
+    fn driver_legacy_json_loads_as_sync_mode() {
+        // A project saved before free mode existed has no freePeriodBeats key.
+        let json = r#"{
+            "paramId": "amount",
+            "beatDivision": 3,
+            "waveform": 0,
+            "enabled": true,
+            "phase": 0.0,
+            "baseValue": 0.0,
+            "trimMin": 0.0,
+            "trimMax": 1.0,
+            "reversed": false
+        }"#;
+        let d: ParameterDriver = serde_json::from_str(json).unwrap();
+        assert_eq!(d.free_period_beats, None, "legacy driver must default to sync mode");
+        assert_eq!(d.period_beats(), BeatDivision::Quarter.beats());
+    }
+
+    #[test]
+    fn free_period_overrides_division_for_evaluation() {
+        // period_beats() prefers the free period; evaluate_with_period cycles on it.
+        let mut d = ParameterDriver::new("amount", BeatDivision::Quarter, DriverWaveform::Sawtooth);
+        d.free_period_beats = Some(3.0);
+        assert_eq!(d.period_beats(), 3.0);
+        // Sawtooth = phase; at beat 0 phase 0, at beat 1.5 phase 0.5 over a 3-beat period.
+        let v0 = ParameterDriver::evaluate_with_period(
+            Beats(0.0),
+            d.period_beats(),
+            d.waveform,
+            d.phase,
+        );
+        let v_half = ParameterDriver::evaluate_with_period(
+            Beats(1.5),
+            d.period_beats(),
+            d.waveform,
+            d.phase,
+        );
+        assert!(v0.abs() < 1e-6, "phase 0 at beat 0");
+        assert!((v_half - 0.5).abs() < 1e-6, "half phase at beat 1.5 over 3-beat period");
     }
 
     // ── ParamEnvelope backward-compat Deserialize (step 9) ──────

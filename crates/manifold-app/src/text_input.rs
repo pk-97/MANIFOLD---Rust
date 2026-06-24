@@ -41,6 +41,10 @@ pub enum TextInputField {
     /// [`TextInputState::inspector_param`] (carries a non-`Copy` `ParamId`).
     /// Commit parses the f32, clamps, and dispatches `ParamChanged` + `ParamCommit`.
     InspectorParam,
+    /// Driver (LFO) free-period type-in, opened by a click on the drawer's Free
+    /// field. The target + id ride on [`TextInputState::driver_free_period`].
+    /// Commit parses the beats f32 and dispatches `DriverConfig(SetFreePeriod)`.
+    DriverFreePeriod,
     /// Browser popup search filter — commit updates filter, no undo command.
     SearchFilter,
     /// Timeline marker rename. MarkerId stored in TextInputState::marker_id.
@@ -109,6 +113,15 @@ pub struct InspectorParamCtx {
     pub whole_numbers: bool,
 }
 
+/// Context for an in-flight driver Free-period type-in — set when the box opens
+/// ([`TextInputField::DriverFreePeriod`]) and read on commit. Lives off the
+/// `Copy` field enum because `ParamId` isn't `Copy`.
+#[derive(Debug, Clone)]
+pub struct DriverFreePeriodCtx {
+    pub target: manifold_ui::panels::GraphParamTarget,
+    pub param_id: manifold_core::effects::ParamId,
+}
+
 /// Screen-space rectangle for anchoring the text input overlay.
 #[derive(Debug, Clone, Copy)]
 pub struct AnchorRect {
@@ -165,6 +178,9 @@ pub struct TextInputState {
     /// Context for `InspectorParam` (target + id + clamp range; `ParamId` is
     /// not `Copy`). Set right after `begin()` by the app, read on commit.
     pub inspector_param: Option<InspectorParamCtx>,
+    /// Context for `DriverFreePeriod` (target + id). Set right after `begin()`,
+    /// read on commit.
+    pub driver_free_period: Option<DriverFreePeriodCtx>,
 }
 
 impl TextInputState {
@@ -183,6 +199,7 @@ impl TextInputState {
             graph_param_name: None,
             graph_table_edit: None,
             inspector_param: None,
+            driver_free_period: None,
         }
     }
 
@@ -207,8 +224,9 @@ impl TextInputState {
             TextInputField::GenStringParam(_) | TextInputField::GraphWgsl(_)
         );
         // Stale param ctx from a prior session must not leak in; the caller sets
-        // it again immediately for an `InspectorParam` field.
+        // it again immediately for an `InspectorParam` / `DriverFreePeriod` field.
         self.inspector_param = None;
+        self.driver_free_period = None;
     }
 
     /// Cancel editing without committing.
@@ -222,6 +240,7 @@ impl TextInputState {
         self.graph_param_name = None;
         self.graph_table_edit = None;
         self.inspector_param = None;
+        self.driver_free_period = None;
     }
 
     /// Insert a character at the cursor position.

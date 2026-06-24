@@ -272,16 +272,25 @@ problem; relocation is a separate call).
    buttons stay lit (modulation keeps running), tabs + config hidden. Plus a **card-level
    "compact"** toggle to collapse every drawer on the card at once ("hide all the settings").
    Per-row collapse state persists now that cards are reused across rebuilds.
-3. **Button grids → dropdowns (blanket).** The drawer option pickers are button grids: LFO
-   **beat-div** (1/32…32), LFO **waveform**, audio **Source / Feature / Band**. **Decision:
-   convert them all to dropdowns.** Rationale (Peter): grids are **hard to read / eyeball**, and
-   a grid **caps how many options + rows** can fit; dropdowns read cleaner and scale. This
-   *overrides* the earlier "keep grids for one-click live speed" take — the readability win wins,
-   and the drawers are on-demand (collapsible per #2) so the speed cost is acceptable. **Toggles
-   stay toggles** (Inv, Delta, Rev, dotted/triplet) — only the multi-option *pickers* become
-   dropdowns. Reuses the Phase-4 Dropdown component + the existing `DropdownPanel`; the audio
-   click routing is currently flat-index based (`RowClick::AudioSelect{Send,Kind,Band}`) and
-   moves to dropdown-trigger + menu.
+3. **LFO drawer redesign — keep the grid, neaten it, add a free period. ✅ SHIPPED 2026-06-24.**
+   The earlier "grids → dropdowns (blanket)" decision is **reversed.** Eyeballing the grid, Peter:
+   *"this is actually good and useful"* — keep it as a button grid, just make it **standardised,
+   ordered, neat, logical.** What shipped, three uniform-width button rows:
+   - **Row 1 — Rate grid:** the 11 beat-division cells (1/32…32), now **uniform width** (were
+     ragged/proportional). Lights the base division in sync mode; none in free mode.
+   - **Row 2 — Rate detail:** `[Straight][Dotted][Triplet][Free]`. The feel trio replaces the
+     cryptic **"." / "T"** toggles with a mutually-exclusive segment whose labels say what they do
+     (addresses the "better UX around dotted/triplet" ask). **Free** opens a beats type-in.
+   - **Row 3 — Shape + polarity:** the 5 waveform icons (kept — Peter: "the current icons are
+     pretty good already") then **Invert** (renamed from **"Rev"** — verified correct: `reversed`
+     is `1 - value`, an amplitude invert, matching audio mod's INV).
+   - **Free period (PRO).** New serialized `ParameterDriver.free_period_beats: Option<f32>`
+     (omitted when `None`; old projects round-trip). `None` = sync (grid/feel); `Some(p)` = free,
+     the LFO cycles every **p beats** → polyrhythm against the bar. The type-in takes a single
+     **beats** number (`3`, `1.5`, `0.375`); fractions/bars stay the grid's job (unambiguous).
+     `evaluate_with_period()` is the shared core; grid/feel click clears free (back to sync).
+   Audio Source/Feature/Band grids were **not** touched (they stay grids). The blanket dropdown
+   conversion is dropped.
 4. **Merge the chrome header to one row.** Layer/Master/Clip chrome is 3 rows today
    (`Layer ▾` · `Layer 2` · `Opacity ▓▓▓ 1.00`). Collapse to one:
    `Layer 2 ▾   Opacity ▓▓▓▓▓░  1.00`. Applies to all three chrome panels for consistency
@@ -306,7 +315,6 @@ card thrown away each frame) and removed a per-frame allocation. Shipped.
 
 - The always-visible **E / → / A** button trio on every param (→ into the drawer).
 - The **repeated full audio-mod panels** shown per param (→ collapsed by default).
-- **Button grids** for option params (→ dropdowns).
 - **Ragged right-aligned labels** and **mismatched per-card headers**.
 - **Knobs as a control idea** — explicitly rejected (see §10).
 
@@ -436,12 +444,13 @@ Not in most desktop checklists — these are ours because the tool is played liv
    header chips, type-in = Phase 2b, per-slider drawers), so Phase 5 was the genuine deltas. Static
    checks pass each pass (param_card tests incl. golden + 3 new tabbed tests; clippy). **Still needs
    the running-app eyeball** — the renderer is custom, can't screenshot here.
-6. **Modulation-drawer follow-ups (§6.5)** — eyeball of 5e surfaced four, in order:
-   **6a** rename modulators to full words (Trigger / LFO / Audio; arm T / ∿ / A); **6b** collapse
-   the config while keeping the mod armed (per-row ▾ + card-level compact); **6c** button grids →
-   dropdowns, blanket (beat-div, waveform, audio Source/Feature/Band; toggles stay toggles);
-   **6d** merge the chrome header to one row (Layer/Master/Clip). Card-panel reuse (mod-tab
-   snap-back fix) already shipped.
+6. **Modulation-drawer follow-ups (§6.5)** — eyeball of 5e surfaced four:
+   **6a** rename modulators to full words (Trigger / LFO / Audio; arm T / ∿ / A) — *pending*;
+   **6b** collapse the config while keeping the mod armed (per-row ▾ + card-level compact) —
+   *pending*; **6c** ✅ **DONE — LFO drawer redesign** (grid kept + standardised to uniform cells,
+   feel segment Straight/Dotted/Triplet, Rev→Invert, **free period (pro)** via beats type-in;
+   blanket grids→dropdowns *reversed* per Peter's eyeball); **6d** merge the chrome header to one
+   row (Layer/Master/Clip) — *pending*. Card-panel reuse (mod-tab snap-back fix) already shipped.
 7. **Verify across the variety + roll through the inspector.** The single reference card can't
    show everything: effects with many params, multiple enums, string params, generators (purple
    tint), macros, clip params. Check the generic redesign against that spread and fix edge cases —

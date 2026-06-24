@@ -19,7 +19,9 @@ fn layout_header_height() {
 
 #[test]
 fn layout_footer_height() {
-    assert_eq!(color::FOOTER_HEIGHT, 29.0);
+    // Raised 29→36 when the footer became global full-width chrome pinned to the
+    // screen bottom (commit a52b2997).
+    assert_eq!(color::FOOTER_HEIGHT, 36.0);
 }
 
 #[test]
@@ -165,8 +167,9 @@ fn color_text_primary_c32() {
 
 #[test]
 fn color_track_background_deep_level() {
-    // Unity TrackBackground = Color(0.14, 0.14, 0.145, 1) → (36, 36, 37, 255)
-    assert_eq!(color::TRACK_BG, Color32::new(36, 36, 37, 255));
+    // Phase 3 design tokens re-pointed TRACK_BG to the BG_2 grey-ramp step
+    // (31, 31, 33), replacing the old Unity-ported (36, 36, 37).
+    assert_eq!(color::TRACK_BG, Color32::new(31, 31, 33, 255));
 }
 
 // Generator param-count parity tests moved to

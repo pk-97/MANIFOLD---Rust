@@ -38,9 +38,11 @@ use manifold_core::types::LayerType;
 
 /// Map a driver's normalized output onto a target parameter's value range.
 fn driver_target_value(driver: &ParameterDriver, current_beat: Beats, min: f32, max: f32) -> f32 {
-    let mut normalized = ParameterDriver::evaluate(
+    // `period_beats()` is the free period when the driver is in free mode, else
+    // the sync division's period (dotted/triplet baked into the variant).
+    let mut normalized = ParameterDriver::evaluate_with_period(
         current_beat,
-        driver.beat_division,
+        driver.period_beats(),
         driver.waveform,
         driver.phase,
     );

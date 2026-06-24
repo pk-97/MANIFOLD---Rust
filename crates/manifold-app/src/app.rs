@@ -1030,6 +1030,48 @@ impl Application {
                     }
                 }
             }
+            TextInputField::DriverFreePeriod => {
+                if let Some(ctx) = self.text_input.driver_free_period.take() {
+                    // Lenient parse: keep the numeric head (so "3 b" still works).
+                    let cleaned: String = text
+                        .trim()
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
+                        .collect();
+                    // Only a positive period is meaningful; a zero/garbage entry
+                    // leaves the driver in its prior mode (no command issued).
+                    if let Ok(parsed) = cleaned.parse::<f32>()
+                        && parsed > 0.0
+                    {
+                        let content_tx = self.content_tx.as_ref().unwrap().clone();
+                        use manifold_ui::panels::{DriverConfigAction, PanelAction};
+                        let act = PanelAction::DriverConfig(
+                            ctx.target,
+                            ctx.param_id.clone(),
+                            DriverConfigAction::SetFreePeriod(parsed),
+                        );
+                        let _ = crate::ui_bridge::dispatch(
+                            &act,
+                            &mut self.local_project,
+                            &content_tx,
+                            &self.content_state,
+                            &mut self.ws.ui_root,
+                            &mut self.selection,
+                            &mut self.active_layer_id,
+                            &mut self.slider_snapshot,
+                            &mut self.trim_snapshot,
+                            &mut self.target_snapshot,
+                            &mut self.decay_snapshot,
+                            &mut self.audio_shape_snapshot,
+                            &mut self.audio_crossover_snapshot,
+                            &mut self.user_prefs,
+                            &mut self.active_inspector_drag,
+                            None,
+                        );
+                        self.needs_rebuild = true;
+                    }
+                }
+            }
             TextInputField::LayerName(idx) => {
                 if let Some(layer) = self.local_project.timeline.layers.get(idx) {
                     let layer_id = layer.layer_id.clone();

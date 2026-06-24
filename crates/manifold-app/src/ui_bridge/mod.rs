@@ -178,6 +178,9 @@ pub fn dispatch(
         // (app_render) before dispatch, so it never actually reaches here; the
         // arm exists only to keep this match exhaustive.
         PanelAction::BeginParamTextInput { .. } => DispatchResult::handled(),
+        // Same: the driver Free-period type-in is opened in app_render before
+        // dispatch; this arm only keeps the match exhaustive.
+        PanelAction::BeginDriverPeriodTextInput { .. } => DispatchResult::handled(),
 
         // ── Viewport clip interaction + context menus ──────────────
         PanelAction::ClipClicked(..)

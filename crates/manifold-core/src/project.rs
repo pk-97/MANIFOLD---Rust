@@ -1472,6 +1472,7 @@ mod tests {
             trim_min: 0.0,
             trim_max: 1.0,
             reversed: false,
+            free_period_beats: None,
             legacy_param_index: Some(0),
             is_paused_by_user: false,
         }]);
@@ -1560,6 +1561,7 @@ mod tests {
             trim_min: 0.0,
             trim_max: 1.0,
             reversed: false,
+            free_period_beats: None,
             legacy_param_index: Some(99),
             is_paused_by_user: false,
         }]);
@@ -1598,6 +1600,7 @@ mod tests {
             trim_min: 0.0,
             trim_max: 1.0,
             reversed: false,
+            free_period_beats: None,
             legacy_param_index: Some(2),
             is_paused_by_user: false,
         };
@@ -1681,6 +1684,7 @@ mod tests {
             trim_min: 0.0,
             trim_max: 1.0,
             reversed: false,
+            free_period_beats: None,
             legacy_param_index: Some(2),
             is_paused_by_user: false,
         }]);

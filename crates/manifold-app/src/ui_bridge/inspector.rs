@@ -13,7 +13,7 @@ use manifold_editing::commands::clip::{
 use manifold_editing::commands::clip_detection::SetClipDetectionConfigCommand;
 use manifold_editing::commands::drivers::{
     AddDriverCommand, ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand, ChangeTrimCommand,
-    ToggleDriverEnabledCommand, ToggleDriverReversedCommand,
+    SetDriverFreePeriodCommand, ToggleDriverEnabledCommand, ToggleDriverReversedCommand,
 };
 use manifold_editing::commands::audio_mod::{
     AddAudioModCommand, RemoveAudioModCommand, SetAudioModShapeCommand, SetAudioModSourceCommand,
@@ -1282,6 +1282,7 @@ pub(super) fn dispatch_inspector(
                         trim_min: 0.0,
                         trim_max: 1.0,
                         reversed: false,
+                        free_period_beats: None,
                         legacy_param_index: None,
                         is_paused_by_user: false,
                     };
@@ -1773,12 +1774,15 @@ pub(super) fn dispatch_inspector(
                         .and_then(|ds| ds.iter().position(|d| d.param_id == *param_id))
                         .map(|di| {
                             let d = &inst.drivers.as_ref().unwrap()[di];
-                            (di, d.beat_division, d.waveform, d.reversed)
+                            (di, d.beat_division, d.waveform, d.reversed, d.free_period_beats)
                         })
                 })
                 .flatten();
-            if let Some((di, beat_division, waveform, reversed)) = info {
+            if let Some((di, beat_division, waveform, reversed, free)) = info {
                 type BoxedCmd = Box<dyn manifold_editing::command::Command + Send>;
+                // The feel segment sets the division's modifier from its base; a
+                // base without a dotted/triplet variant (e.g. 1/32) keeps the base.
+                let base = beat_division.base_division();
                 let cmd: Option<BoxedCmd> = match cfg {
                     DriverConfigAction::BeatDiv(idx) => BeatDivision::from_button_index(*idx)
                         .map(|new_div| {
@@ -1787,6 +1791,7 @@ pub(super) fn dispatch_inspector(
                                 di,
                                 beat_division,
                                 new_div,
+                                free,
                             )) as BoxedCmd
                         }),
                     DriverConfigAction::Wave(idx) => DriverWaveform::from_index(*idx).map(|new_wave| {
@@ -1797,28 +1802,41 @@ pub(super) fn dispatch_inspector(
                             new_wave,
                         )) as BoxedCmd
                     }),
-                    DriverConfigAction::Dot => beat_division.toggle_dotted().map(|new_div| {
-                        Box::new(ChangeDriverBeatDivCommand::new(
-                            driver_target,
-                            di,
-                            beat_division,
-                            new_div,
-                        )) as BoxedCmd
-                    }),
-                    DriverConfigAction::Triplet => beat_division.toggle_triplet().map(|new_div| {
-                        Box::new(ChangeDriverBeatDivCommand::new(
-                            driver_target,
-                            di,
-                            beat_division,
-                            new_div,
-                        )) as BoxedCmd
-                    }),
-                    DriverConfigAction::Reverse => Some(Box::new(ToggleDriverReversedCommand::new(
+                    DriverConfigAction::Straight => Some(Box::new(ChangeDriverBeatDivCommand::new(
+                        driver_target,
+                        di,
+                        beat_division,
+                        base,
+                        free,
+                    )) as BoxedCmd),
+                    DriverConfigAction::Dotted => Some(Box::new(ChangeDriverBeatDivCommand::new(
+                        driver_target,
+                        di,
+                        beat_division,
+                        base.toggle_dotted().unwrap_or(base),
+                        free,
+                    )) as BoxedCmd),
+                    DriverConfigAction::Triplet => Some(Box::new(ChangeDriverBeatDivCommand::new(
+                        driver_target,
+                        di,
+                        beat_division,
+                        base.toggle_triplet().unwrap_or(base),
+                        free,
+                    )) as BoxedCmd),
+                    DriverConfigAction::Invert => Some(Box::new(ToggleDriverReversedCommand::new(
                         driver_target,
                         di,
                         reversed,
                         !reversed,
                     )) as BoxedCmd),
+                    DriverConfigAction::SetFreePeriod(p) => {
+                        Some(Box::new(SetDriverFreePeriodCommand::new(
+                            driver_target,
+                            di,
+                            free,
+                            Some(*p),
+                        )) as BoxedCmd)
+                    }
                 };
                 if let Some(mut boxed) = cmd {
                     boxed.execute(project);

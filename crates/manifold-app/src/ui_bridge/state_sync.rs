@@ -1583,6 +1583,7 @@ struct CardModulation {
     driver_reversed: Vec<bool>,
     driver_dotted: Vec<bool>,
     driver_triplet: Vec<bool>,
+    driver_free_period: Vec<Option<f32>>,
     envelope_active: Vec<bool>,
     target_norm: Vec<f32>,
     env_decay: Vec<f32>,
@@ -1604,6 +1605,7 @@ fn build_card_modulation(
         driver_reversed: vec![false; n],
         driver_dotted: vec![false; n],
         driver_triplet: vec![false; n],
+        driver_free_period: vec![None; n],
         envelope_active: vec![false; n],
         target_norm: vec![1.0; n],
         env_decay: vec![1.0; n],
@@ -1624,6 +1626,7 @@ fn build_card_modulation(
             m.driver_reversed[pi] = d.reversed;
             m.driver_dotted[pi] = d.beat_division.is_dotted();
             m.driver_triplet[pi] = d.beat_division.is_triplet();
+            m.driver_free_period[pi] = d.free_period_beats;
         }
     }
     if let Some(ref envelopes) = inst.envelopes {
@@ -1801,6 +1804,7 @@ fn empty_generator_config(inst: &PresetInstance) -> ParamCardConfig {
         driver_reversed: vec![],
         driver_dotted: vec![],
         driver_triplet: vec![],
+        driver_free_period: vec![],
         audio: Default::default(),
     }
 }
@@ -2083,6 +2087,7 @@ fn preset_to_config(
         driver_reversed: m.driver_reversed,
         driver_dotted: m.driver_dotted,
         driver_triplet: m.driver_triplet,
+        driver_free_period: m.driver_free_period,
         audio,
     })
 }

@@ -1555,6 +1555,38 @@ impl Application {
                     });
                     continue;
                 }
+                PanelAction::BeginDriverPeriodTextInput {
+                    target,
+                    param_id,
+                    anchor,
+                    value,
+                } => {
+                    // Prefill with the current period in beats (whole numbers
+                    // without a decimal), select-all so the first keystroke
+                    // replaces it.
+                    let initial = if (value.fract()).abs() < 1e-3 {
+                        format!("{}", value.round() as i64)
+                    } else {
+                        format!("{value:.2}")
+                    };
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::DriverFreePeriod,
+                        &initial,
+                        crate::text_input::AnchorRect::new(
+                            anchor.x,
+                            anchor.y,
+                            anchor.width,
+                            anchor.height,
+                        ),
+                        11.0,
+                    );
+                    self.text_input.driver_free_period =
+                        Some(crate::text_input::DriverFreePeriodCtx {
+                            target: *target,
+                            param_id: param_id.clone(),
+                        });
+                    continue;
+                }
                 PanelAction::LayerDoubleClicked(idx) => {
                     // Open text input for layer rename
                     {

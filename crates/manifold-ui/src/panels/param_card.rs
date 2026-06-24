@@ -207,6 +207,8 @@ pub struct ParamCardConfig {
     pub driver_dotted: Vec<bool>,
     /// Per-param driver triplet modifier active.
     pub driver_triplet: Vec<bool>,
+    /// Per-param driver free-running period in beats (`Some` => free mode).
+    pub driver_free_period: Vec<Option<f32>>,
     /// Audio-modulation state (per-param active/send/feature + card-level send
     /// list). Bundled so the config grows by one field.
     pub audio: super::param_slider_shared::AudioCardState,
@@ -587,6 +589,7 @@ impl ParamCardPanel {
             &config.driver_reversed,
             &config.driver_dotted,
             &config.driver_triplet,
+            &config.driver_free_period,
         );
         self.state.mod_state.sync_audio(n, &config.audio);
         self.osc_addresses = config
@@ -671,6 +674,24 @@ impl ParamCardPanel {
             });
         }
         None
+    }
+
+    /// If `node_id` is a driver drawer's Free-period field, build the action that
+    /// opens its beats type-in (free mode). Prefilled with the LFO's current
+    /// effective period so the box opens at the live value. Returns `None`
+    /// otherwise. The Free field is a type-in trigger like a value cell, so it
+    /// routes here (tree-aware) rather than through `handle_click`.
+    pub fn driver_period_typein(&self, node_id: NodeId, tree: &UITree) -> Option<PanelAction> {
+        let pi = crate::panels::param_slider_shared::driver_free_field_index(
+            node_id,
+            &self.driver_config_ids,
+        )?;
+        Some(PanelAction::BeginDriverPeriodTextInput {
+            target: self.param_target(),
+            param_id: self.pid_at(pi),
+            anchor: tree.get_bounds(node_id),
+            value: self.state.mod_state.driver_effective_period(pi),
+        })
     }
 
     pub fn effect_id(&self) -> &EffectId {
@@ -3011,6 +3032,7 @@ mod tests {
             driver_reversed: vec![false; n],
             driver_dotted: vec![false; n],
             driver_triplet: vec![false; n],
+            driver_free_period: vec![None; n],
             audio: Default::default(),
         }
     }
@@ -3497,6 +3519,7 @@ mod tests {
             driver_reversed: vec![false; 3],
             driver_dotted: vec![false; 3],
             driver_triplet: vec![false; 3],
+            driver_free_period: vec![None; 3],
             audio: Default::default(),
         }
     }
@@ -3582,7 +3605,7 @@ mod tests {
         let expanded_h = panel.compute_height();
 
         assert!(expanded_h > base_h);
-        assert!((expanded_h - base_h - DRIVER_CONFIG_HEIGHT).abs() < 0.1);
+        assert!((expanded_h - base_h - driver_config_height()).abs() < 0.1);
     }
 
     #[test]

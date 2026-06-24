@@ -109,13 +109,17 @@ impl Command for ToggleDriverEnabledCommand {
     }
 }
 
-/// Change driver beat division.
+/// Change driver beat division. Selecting a division (grid / dotted / triplet)
+/// also returns the driver to **sync mode** by clearing any free period, so the
+/// grid and the type-in can't both claim the rate. `old_free` is captured so
+/// undo restores a free-mode driver exactly.
 #[derive(Debug)]
 pub struct ChangeDriverBeatDivCommand {
     target: DriverTarget,
     driver_index: usize,
     old_div: BeatDivision,
     new_div: BeatDivision,
+    old_free: Option<f32>,
 }
 
 impl ChangeDriverBeatDivCommand {
@@ -124,12 +128,14 @@ impl ChangeDriverBeatDivCommand {
         driver_index: usize,
         old_div: BeatDivision,
         new_div: BeatDivision,
+        old_free: Option<f32>,
     ) -> Self {
         Self {
             target,
             driver_index,
             old_div,
             new_div,
+            old_free,
         }
     }
 }
@@ -141,6 +147,7 @@ impl Command for ChangeDriverBeatDivCommand {
         with_drivers_mut(project, &self.target, |drivers| {
             if let Some(d) = drivers.get_mut(idx) {
                 d.beat_division = val;
+                d.free_period_beats = None; // grid pick => sync mode
             }
         });
     }
@@ -148,15 +155,70 @@ impl Command for ChangeDriverBeatDivCommand {
     fn undo(&mut self, project: &mut Project) {
         let idx = self.driver_index;
         let val = self.old_div;
+        let free = self.old_free;
         with_drivers_mut(project, &self.target, |drivers| {
             if let Some(d) = drivers.get_mut(idx) {
                 d.beat_division = val;
+                d.free_period_beats = free;
             }
         });
     }
 
     fn description(&self) -> &str {
         "Change Driver Beat Division"
+    }
+}
+
+/// Set (or clear) the driver's free-running period in beats. `Some(p)` puts the
+/// driver in **free mode** (cycles every `p` beats, ignoring the grid); `None`
+/// returns it to sync mode. The type-in field writes this.
+#[derive(Debug)]
+pub struct SetDriverFreePeriodCommand {
+    target: DriverTarget,
+    driver_index: usize,
+    old_free: Option<f32>,
+    new_free: Option<f32>,
+}
+
+impl SetDriverFreePeriodCommand {
+    pub fn new(
+        target: DriverTarget,
+        driver_index: usize,
+        old_free: Option<f32>,
+        new_free: Option<f32>,
+    ) -> Self {
+        Self {
+            target,
+            driver_index,
+            old_free,
+            new_free,
+        }
+    }
+}
+
+impl Command for SetDriverFreePeriodCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let idx = self.driver_index;
+        let val = self.new_free;
+        with_drivers_mut(project, &self.target, |drivers| {
+            if let Some(d) = drivers.get_mut(idx) {
+                d.free_period_beats = val;
+            }
+        });
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let idx = self.driver_index;
+        let val = self.old_free;
+        with_drivers_mut(project, &self.target, |drivers| {
+            if let Some(d) = drivers.get_mut(idx) {
+                d.free_period_beats = val;
+            }
+        });
+    }
+
+    fn description(&self) -> &str {
+        "Set Driver Free Period"
     }
 }
 

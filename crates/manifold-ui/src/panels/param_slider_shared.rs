@@ -46,10 +46,15 @@ const MOD_TAB_H: f32 = 16.0;
 /// the audio trim-handle green so the whole audio-mod identity reads as one.
 pub(crate) const AUDIO_MOD_ACTIVE_C32: crate::node::Color32 = color::AUDIO_TRIM_BAR_C32;
 
-// Total height of the driver drawer container (two button rows + pads). The
-// per-row metrics (row height, button gap, horizontal pad) now live in the
-// shared `drawer` module, which builds this drawer.
-pub(crate) const DRIVER_CONFIG_HEIGHT: f32 = 56.0;
+// Height of the driver (LFO) drawer container. Three button rows + pads:
+//   1. the 11-cell beat-division grid (sync rate),
+//   2. the feel + free + invert modifiers (Straight/Dotted/Triplet/Free/Invert),
+//   3. the 5 waveform-shape icons.
+// Derived from the shared drawer metrics so the card's reserved height can't
+// drift from what's actually drawn (mirrors `audio_config_height`).
+pub(crate) fn driver_config_height() -> f32 {
+    crate::panels::drawer::uniform_rows_height(3)
+}
 pub(crate) const BEAT_DIV_COUNT: usize = 11;
 pub(crate) const WAVEFORM_COUNT: usize = 5;
 
@@ -92,6 +97,13 @@ pub(crate) const BEAT_DIV_LABELS: [&str; BEAT_DIV_COUNT] = [
     "1/32", "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16", "32",
 ];
 
+/// Period in beats for each grid button index — mirrors core's
+/// `BeatDivision::from_button_index(idx).beats()` (the UI carries only the button
+/// index, not the core enum). Quarter ("1/4") = 1 beat; "1" = a whole note = 4
+/// beats. Used to prefill the Free type-in with the current sync period.
+pub(crate) const BEAT_DIV_BEATS: [f32; BEAT_DIV_COUNT] =
+    [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0];
+
 // Waveform text labels kept for accessibility / tooltips if needed later.
 #[allow(dead_code)]
 pub(crate) const WAVEFORM_LABELS: [&str; WAVEFORM_COUNT] = ["Sin", "Tri", "Saw", "Sqr", "Rnd"];
@@ -101,10 +113,15 @@ pub(crate) const WAVEFORM_LABELS: [&str; WAVEFORM_COUNT] = ["Sin", "Tri", "Saw",
 pub(crate) struct DriverConfigIds {
     pub(crate) _container_id: NodeId,
     pub(crate) beat_div_btn_ids: [NodeId; BEAT_DIV_COUNT],
-    pub(crate) dot_btn_id: NodeId,
+    /// Feel segment (mutually exclusive): straight / dotted / triplet.
+    pub(crate) straight_btn_id: NodeId,
+    pub(crate) dotted_btn_id: NodeId,
     pub(crate) triplet_btn_id: NodeId,
+    /// Free-period field — clicking opens the beats type-in (free mode).
+    pub(crate) free_btn_id: NodeId,
+    /// Output polarity invert (`reversed` -> `1 - value`).
+    pub(crate) invert_btn_id: NodeId,
     pub(crate) wave_btn_ids: [NodeId; WAVEFORM_COUNT],
-    pub(crate) reverse_btn_id: NodeId,
 }
 
 /// The orange envelope target handle on a parameter's slider track — sets the
@@ -168,6 +185,10 @@ pub struct ParamModState {
     pub driver_reversed: Vec<bool>,
     pub driver_dotted: Vec<bool>,
     pub driver_triplet: Vec<bool>,
+    /// Per-param: free-running LFO period in beats when the driver is in **free
+    /// mode** (`Some`), else `None` for sync mode (grid/feel). Drives the Free
+    /// field's label + highlight and the type-in prefill.
+    pub driver_free_period: Vec<Option<f32>>,
 
     // ── Audio modulation (per-param + card-level send list) ──
     /// Per-param: an audio modulation exists and is enabled (button highlight +
@@ -289,6 +310,7 @@ impl ParamModState {
             driver_reversed: vec![false; param_count],
             driver_dotted: vec![false; param_count],
             driver_triplet: vec![false; param_count],
+            driver_free_period: vec![None; param_count],
             audio_active: vec![false; param_count],
             audio_send_idx: vec![-1; param_count],
             audio_kind_idx: vec![0; param_count],
@@ -347,6 +369,7 @@ impl ParamModState {
         driver_reversed: &[bool],
         driver_dotted: &[bool],
         driver_triplet: &[bool],
+        driver_free_period: &[Option<f32>],
     ) {
         for i in 0..n {
             self.driver_expanded[i] = driver_active.get(i).copied().unwrap_or(false);
@@ -360,7 +383,25 @@ impl ParamModState {
             self.driver_reversed[i] = driver_reversed.get(i).copied().unwrap_or(false);
             self.driver_dotted[i] = driver_dotted.get(i).copied().unwrap_or(false);
             self.driver_triplet[i] = driver_triplet.get(i).copied().unwrap_or(false);
+            self.driver_free_period[i] = driver_free_period.get(i).copied().flatten();
         }
+    }
+
+    /// The driver's current effective period in beats — the free period when in
+    /// free mode, else the sync division's period with its feel modifier applied.
+    /// Used to prefill the Free type-in so the box opens at the live value.
+    pub fn driver_effective_period(&self, i: usize) -> f32 {
+        if let Some(p) = self.driver_free_period.get(i).copied().flatten() {
+            return p;
+        }
+        let idx = self.driver_beat_div_idx.get(i).copied().unwrap_or(3).max(0) as usize;
+        let mut beats = BEAT_DIV_BEATS.get(idx).copied().unwrap_or(1.0);
+        if self.driver_dotted.get(i).copied().unwrap_or(false) {
+            beats *= 1.5;
+        } else if self.driver_triplet.get(i).copied().unwrap_or(false) {
+            beats *= 2.0 / 3.0;
+        }
+        beats
     }
 }
 
@@ -645,57 +686,93 @@ pub(crate) fn build_driver_config(
         .get(param_idx)
         .copied()
         .unwrap_or(false);
-    let no_mod = !is_dotted && !is_triplet;
+    let free_period = mod_state
+        .driver_free_period
+        .get(param_idx)
+        .copied()
+        .flatten();
+    let is_free = free_period.is_some();
+    let is_sync = !is_free;
 
-    // Row 1: 11 beat-division buttons, proportional width — fraction labels
-    // ("1/32") need more room than integers ("1"), so weighting by label length
-    // keeps all 11 on one row without "1/32" clipping.
+    // Row 1 — Rate grid: 11 uniform beat-division cells. Highlights the base
+    // division only in sync mode (free mode lights none — the Free field owns
+    // the rate). Uniform width keeps the grid neat and easy to eyeball.
     let beat_div_buttons: Vec<DrawerButton> = (0..BEAT_DIV_COUNT)
-        .map(|j| DrawerButton::new(BEAT_DIV_LABELS[j], j as i32 == active_div && no_mod))
+        .map(|j| DrawerButton::new(BEAT_DIV_LABELS[j], is_sync && j as i32 == active_div))
         .collect();
 
-    // Row 2: [.] [T] [Sin] [Tri] [Saw] [Sqr] [Rnd] [Rev] — uniform width.
-    // The waveform glyphs are PUA markers U+E000..U+E004 (the UIRenderer draws
-    // the SDF waveform icon); dot/triplet/reverse are modifier toggles.
-    let mut row2_buttons: Vec<DrawerButton> =
-        vec![DrawerButton::new(".", is_dotted), DrawerButton::new("T", is_triplet)];
-    for j in 0..WAVEFORM_COUNT {
-        let icon_char = char::from_u32(0xE000 + j as u32).unwrap();
-        row2_buttons.push(DrawerButton::new(icon_char.to_string(), j as i32 == active_wave));
-    }
-    row2_buttons.push(DrawerButton::new("Rev", is_reversed));
+    // Row 2 — Rate detail: [Straight][Dotted][Triplet][Free]. The feel trio is a
+    // mutually-exclusive segment (one lit) shown only in sync mode; Free shows
+    // the typed period (free mode) or "Free" (sync) and opens the beats type-in.
+    let free_label = match free_period {
+        Some(p) => fmt_free_period(p),
+        None => "Free".to_string(),
+    };
+    let row2_buttons: Vec<DrawerButton> = vec![
+        DrawerButton::new("Straight", is_sync && !is_dotted && !is_triplet),
+        DrawerButton::new("Dotted", is_sync && is_dotted),
+        DrawerButton::new("Triplet", is_sync && is_triplet),
+        DrawerButton::new(free_label, is_free),
+    ];
+
+    // Row 3 — Shape + polarity: 5 waveform icons then Invert. The wave glyphs are
+    // PUA markers U+E000..U+E004 (the UIRenderer draws the SDF waveform icon);
+    // both shape and Invert apply in either rate mode.
+    let mut row3_buttons: Vec<DrawerButton> = (0..WAVEFORM_COUNT)
+        .map(|j| {
+            let icon_char = char::from_u32(0xE000 + j as u32).unwrap();
+            DrawerButton::new(icon_char.to_string(), j as i32 == active_wave)
+        })
+        .collect();
+    row3_buttons.push(DrawerButton::new("Invert", is_reversed));
 
     let spec = DrawerSpec {
         rows: vec![
             DrawerRow::Buttons {
                 buttons: beat_div_buttons,
-                width: ButtonWidth::Proportional,
+                width: ButtonWidth::Uniform,
                 label: None,
             },
             DrawerRow::Buttons { buttons: row2_buttons, width: ButtonWidth::Uniform, label: None },
+            DrawerRow::Buttons { buttons: row3_buttons, width: ButtonWidth::Uniform, label: None },
         ],
         btn_font_size,
         slider_font_size: FONT_SIZE,
     };
     let dids = drawer::build(tree, parent, x, y, w, &spec);
 
-    // Reconstruct the typed ids from the flat button list: row 1 is indices
-    // 0..BEAT_DIV_COUNT; row 2 is dot, triplet, WAVEFORM_COUNT waves, reverse.
+    // Reconstruct typed ids from the flat button list (row order):
+    //   0..11  grid · 11 straight · 12 dotted · 13 triplet · 14 free
+    //   15..20 waveforms · 20 invert.
     let ids = dids.button_ids();
     let beat_div_btn_ids: [NodeId; BEAT_DIV_COUNT] = std::array::from_fn(|j| ids[j]);
-    let dot_btn_id = ids[BEAT_DIV_COUNT];
-    let triplet_btn_id = ids[BEAT_DIV_COUNT + 1];
-    let wave_base = BEAT_DIV_COUNT + 2;
+    let straight_btn_id = ids[BEAT_DIV_COUNT];
+    let dotted_btn_id = ids[BEAT_DIV_COUNT + 1];
+    let triplet_btn_id = ids[BEAT_DIV_COUNT + 2];
+    let free_btn_id = ids[BEAT_DIV_COUNT + 3];
+    let wave_base = BEAT_DIV_COUNT + 4;
     let wave_btn_ids: [NodeId; WAVEFORM_COUNT] = std::array::from_fn(|j| ids[wave_base + j]);
-    let reverse_btn_id = ids[wave_base + WAVEFORM_COUNT];
+    let invert_btn_id = ids[wave_base + WAVEFORM_COUNT];
 
     DriverConfigIds {
         _container_id: dids.container,
         beat_div_btn_ids,
-        dot_btn_id,
+        straight_btn_id,
+        dotted_btn_id,
         triplet_btn_id,
+        free_btn_id,
+        invert_btn_id,
         wave_btn_ids,
-        reverse_btn_id,
+    }
+}
+
+/// Format a free LFO period (beats) for the Free field label. Whole numbers show
+/// without a decimal ("3"); fractional values keep two places ("1.5", "0.38").
+pub(crate) fn fmt_free_period(p: f32) -> String {
+    if (p.fract()).abs() < 1e-3 {
+        format!("{}", p.round() as i64)
+    } else {
+        format!("{p:.2}")
     }
 }
 
@@ -910,13 +987,16 @@ pub(crate) fn build_trim_handles_explicit(
 
 // ── Shared event helpers ────────────────────────────────────────
 
-/// Result of checking a click against driver config buttons.
+/// Result of checking a click against driver config buttons. The Free field is
+/// *not* here — it opens a type-in (handled via [`driver_free_field_index`] on
+/// the tree-aware click path), not a config command.
 pub(crate) enum DriverClickResult {
     BeatDiv(usize),
-    Dot,
+    Straight,
+    Dotted,
     Triplet,
+    Invert,
     Wave(usize),
-    Reverse,
 }
 
 /// Check if a click hit any button in a driver config panel.
@@ -932,23 +1012,40 @@ pub(crate) fn check_driver_config_click(
                     return Some((pi, DriverClickResult::BeatDiv(j)));
                 }
             }
-            if node_id == c.dot_btn_id {
-                return Some((pi, DriverClickResult::Dot));
+            if node_id == c.straight_btn_id {
+                return Some((pi, DriverClickResult::Straight));
+            }
+            if node_id == c.dotted_btn_id {
+                return Some((pi, DriverClickResult::Dotted));
             }
             if node_id == c.triplet_btn_id {
                 return Some((pi, DriverClickResult::Triplet));
+            }
+            if node_id == c.invert_btn_id {
+                return Some((pi, DriverClickResult::Invert));
             }
             for (j, &wid) in c.wave_btn_ids.iter().enumerate() {
                 if node_id == wid {
                     return Some((pi, DriverClickResult::Wave(j)));
                 }
             }
-            if node_id == c.reverse_btn_id {
-                return Some((pi, DriverClickResult::Reverse));
-            }
         }
     }
     None
+}
+
+/// If `node_id` is a driver drawer's Free-period field, return its param index.
+/// The Free field opens a beats type-in (free mode) rather than issuing a config
+/// command, so it's matched separately from [`check_driver_config_click`].
+pub(crate) fn driver_free_field_index(
+    node_id: NodeId,
+    driver_config_ids: &[Option<DriverConfigIds>],
+) -> Option<usize> {
+    driver_config_ids.iter().enumerate().find_map(|(pi, cfg)| {
+        cfg.as_ref()
+            .filter(|c| c.free_btn_id == node_id)
+            .map(|_| pi)
+    })
 }
 
 // ── Ableton config drawer ───────────────────────────────────────
@@ -1111,7 +1208,7 @@ pub(crate) fn resolve_active_tab(active: &[ModTab], stored: ModTab) -> Option<Mo
 pub(crate) fn mod_config_height(tab: ModTab) -> f32 {
     match tab {
         ModTab::Envelope => ENV_CONFIG_HEIGHT,
-        ModTab::Driver => DRIVER_CONFIG_HEIGHT,
+        ModTab::Driver => driver_config_height(),
         ModTab::Audio => audio_config_height(),
         ModTab::Ableton => ABL_CONFIG_HEIGHT,
     }
@@ -1397,7 +1494,7 @@ pub(crate) fn build_param_row(
             i,
             config_font,
         ));
-        cy += DRIVER_CONFIG_HEIGHT;
+        cy += driver_config_height();
     }
 
     // Ableton config drawer. ModTab::Ableton is only in the active set when a
@@ -1586,14 +1683,16 @@ pub(crate) fn match_param_row_click(
         }
     }
 
-    // Driver config drawer buttons.
+    // Driver config drawer buttons (the Free field is handled separately, on the
+    // tree-aware type-in path).
     if let Some((pi, result)) = check_driver_config_click(id, driver_config_ids) {
         let action = match result {
             DriverClickResult::BeatDiv(j) => DriverConfigAction::BeatDiv(j),
-            DriverClickResult::Dot => DriverConfigAction::Dot,
+            DriverClickResult::Straight => DriverConfigAction::Straight,
+            DriverClickResult::Dotted => DriverConfigAction::Dotted,
             DriverClickResult::Triplet => DriverConfigAction::Triplet,
+            DriverClickResult::Invert => DriverConfigAction::Invert,
             DriverClickResult::Wave(j) => DriverConfigAction::Wave(j),
-            DriverClickResult::Reverse => DriverConfigAction::Reverse,
         };
         return Some(RowClick::DriverConfig(pi, action));
     }
