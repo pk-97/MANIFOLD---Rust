@@ -393,13 +393,14 @@ Not in most desktop checklists — these are ours because the tool is played liv
    on the tokens: Toggle / Button / IconButton / SegmentedControl / Dropdown trigger + ParamRow
    atoms (reset, mod badge). Two forms each (`*_style` + `View` constructor). Full ParamRow
    composite deferred to Phase 5 (needs the live slider/drag wiring). 7 tests, clippy clean.
-5. **Redesign the generic card; tune against one instance.** There is no per-effect card —
-   `panels::param_card` renders *every* effect from its param metadata, so the redesign (header,
-   collapse, modulation drawer, ParamRow composite, Clip Trigger row §6.4) lands once in that
-   generic code and hits all cards immediately. Use **Edge Detect as the on-screen reference**
-   while tuning — it has a representative param mix (sliders + an enum + a toggle) — and run the
-   app each pass (real bitmap, not a mockup). Lock the look here. *Scope is the verification
-   target, not the build target.*
+5. **Redesign the generic card** ✅ — landed once in `panels::param_card` (hits all cards). Shipped
+   as five passes: **5a** card radius token + toggle on the kit; **5b** left-align labels; **5c**
+   Collapse-all / Expand-all control (new cards stay expanded); **5d** toggle/trigger rows aligned
+   to the slider grid (§6.4); **5e** tabbed modulation config drawer, one-click arm kept (§6.2).
+   Grounding showed most of the original list already existed (reset = right-click, glance badge =
+   header chips, type-in = Phase 2b, per-slider drawers), so Phase 5 was the genuine deltas. Static
+   checks pass each pass (param_card tests incl. golden + 3 new tabbed tests; clippy). **Still needs
+   the running-app eyeball** — the renderer is custom, can't screenshot here.
 6. **Verify across the variety + roll through the inspector.** The single reference card can't
    show everything: effects with many params, multiple enums, string params, generators (purple
    tint), macros, clip params. Phase 6 is checking the generic redesign against that spread and
