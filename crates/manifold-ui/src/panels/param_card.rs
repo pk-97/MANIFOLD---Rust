@@ -704,6 +704,21 @@ impl ParamCardPanel {
         self.layer_id = id;
     }
 
+    /// Whether this panel already represents `config`'s effect instance. The
+    /// inspector uses this to **reuse** a panel across the per-snapshot rebuild
+    /// instead of allocating a fresh one — so transient UI-only state (the
+    /// modulation config tab, drag, copy-flash) survives. Matches on effect
+    /// identity; effect lists never carry the default id, so this is exact.
+    pub(crate) fn matches_effect_config(&self, config: &ParamCardConfig) -> bool {
+        self.kind == config.kind && self.effect_id == config.effect_id
+    }
+
+    /// The owning layer (generator card) — for reusing the generator panel only
+    /// when the selection still points at the same layer's generator.
+    pub(crate) fn owning_layer_id(&self) -> Option<&LayerId> {
+        self.layer_id.as_ref()
+    }
+
     /// Set the chrome context (Perform vs Author). Author suppresses the cog /
     /// drag-reorder handle / perform-mapping menu and adds the sideways
     /// mapping-drawer chevron on mappable rows. Takes effect on the next
@@ -3286,6 +3301,42 @@ mod tests {
         let actions = panel.handle_click(env_tab_id);
         assert!(matches!(actions.as_slice(), [PanelAction::ModConfigTabChanged]));
         assert_eq!(panel.mod_active_tab[0], ModTab::Envelope);
+    }
+
+    #[test]
+    fn reconfigure_preserves_mod_tab_choice() {
+        // The bug fix: a re-sync reconfigures the SAME panel (the inspector now
+        // reuses it by effect id), so the user's tab choice must survive
+        // `configure` instead of resetting to the default and snapping back.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.state.mod_state.driver_expanded[0] = true;
+        panel.state.mod_state.envelope_expanded[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        let (env_tab_id, _) = panel.mod_tab_ids[0]
+            .iter()
+            .find(|(_, t)| *t == ModTab::Envelope)
+            .copied()
+            .expect("envelope tab present");
+        panel.handle_click(env_tab_id);
+        assert_eq!(panel.mod_active_tab[0], ModTab::Envelope);
+
+        // Re-sync (same effect) → configure must not clobber the tab choice.
+        panel.configure(&effect_config());
+        assert_eq!(
+            panel.mod_active_tab[0],
+            ModTab::Envelope,
+            "configure reset the tab — the snap-back bug would be back"
+        );
+
+        // And the rebuilt drawer shows the envelope config, not the driver.
+        panel.state.mod_state.driver_expanded[0] = true;
+        panel.state.mod_state.envelope_expanded[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+        assert!(panel.envelope_config_ids[0].is_some());
+        assert!(panel.driver_config_ids[0].is_none());
     }
 
     #[test]

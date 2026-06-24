@@ -465,11 +465,13 @@ impl InspectorCompositePanel {
     }
 
     pub fn configure_master_effects(&mut self, configs: &[ParamCardConfig]) {
-        self.master_effects = Self::build_cards(configs);
+        let existing = std::mem::take(&mut self.master_effects);
+        self.master_effects = Self::reconcile_cards(existing, configs);
     }
 
     pub fn configure_layer_effects(&mut self, configs: &[ParamCardConfig]) {
-        self.layer_effects = Self::build_cards(configs);
+        let existing = std::mem::take(&mut self.layer_effects);
+        self.layer_effects = Self::reconcile_cards(existing, configs);
     }
 
     pub fn configure_gen_params(
@@ -479,24 +481,42 @@ impl InspectorCompositePanel {
     ) {
         // The generator card is a single optional, distinct from the effect
         // lists (it carries no EffectId and is outside the selection +
-        // drag-reorder model), so it isn't built through `build_cards`.
-        // `set_layer_id` is applied before `configure` per its contract.
+        // drag-reorder model). Reuse the existing panel when the selection still
+        // points at the same layer's generator, so its transient UI state (the
+        // modulation config tab) survives the rebuild. `set_layer_id` is applied
+        // before `configure` per its contract.
         self.gen_params = config.map(|cfg| {
-            let mut panel = ParamCardPanel::new();
+            let reused = self
+                .gen_params
+                .take()
+                .filter(|p| p.owning_layer_id() == layer_id.as_ref());
+            let mut panel = reused.unwrap_or_default();
             panel.set_layer_id(layer_id);
             panel.configure(cfg);
             panel
         });
     }
 
-    /// Build a fresh effect-card panel per config, in order. Shared by the
-    /// master + layer effect lists (the only structural difference between
-    /// them is which `Vec` the result lands in).
-    fn build_cards(configs: &[ParamCardConfig]) -> Vec<ParamCardPanel> {
+    /// Reconcile the existing card panels against the new configs, **reusing** a
+    /// panel whose effect identity matches so its transient UI-only state (the
+    /// modulation config tab, drag, copy-flash) survives the per-snapshot
+    /// rebuild instead of being thrown away. New effects get a fresh panel;
+    /// removed ones are dropped; the result is in config (effect) order.
+    ///
+    /// Replaces the old build-fresh-every-frame path, which reset transient UI
+    /// state every sync and re-allocated every panel each frame.
+    fn reconcile_cards(
+        mut existing: Vec<ParamCardPanel>,
+        configs: &[ParamCardConfig],
+    ) -> Vec<ParamCardPanel> {
         configs
             .iter()
             .map(|cfg| {
-                let mut card = ParamCardPanel::new();
+                let mut card = existing
+                    .iter()
+                    .position(|c| c.matches_effect_config(cfg))
+                    .map(|pos| existing.remove(pos))
+                    .unwrap_or_default();
                 card.configure(cfg);
                 card
             })
