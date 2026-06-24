@@ -26,7 +26,7 @@ pub(crate) const FONT_SIZE: u16 = color::FONT_BODY;
 pub(crate) const DE_BUTTON_SIZE: f32 = 20.0;
 pub(crate) const DE_BUTTON_GAP: f32 = 2.0;
 
-/// Per-row modulation config tabs. The E/→/A arm buttons stay on the row (one-
+/// Per-row modulation config tabs. The T/∿/A arm buttons stay on the row (one-
 /// click arm); when two or more configs are active they share ONE drawer with a
 /// tab strip rather than stacking three deep (§6.2). A single active config
 /// shows directly with no tab strip, exactly as before.
@@ -1216,10 +1216,10 @@ pub(crate) fn mod_config_height(tab: ModTab) -> f32 {
 
 fn mod_tab_label(tab: ModTab) -> &'static str {
     match tab {
-        ModTab::Envelope => "Env",
-        ModTab::Driver => "Drv",
-        ModTab::Audio => "Aud",
-        ModTab::Ableton => "Abl",
+        ModTab::Envelope => "Trigger",
+        ModTab::Driver => "LFO",
+        ModTab::Audio => "Audio",
+        ModTab::Ableton => "Ableton",
     }
 }
 
@@ -1424,7 +1424,7 @@ pub(crate) fn build_param_row(
             DE_BUTTON_SIZE,
             DE_BUTTON_SIZE,
             de_btn_style(env_active, color::ENVELOPE_ACTIVE_C32),
-            "E",
+            "T", // Trigger
         ));
     }
     let drv_active = mod_state.driver_expanded.get(i).copied().unwrap_or(false);
@@ -1441,7 +1441,7 @@ pub(crate) fn build_param_row(
         DE_BUTTON_SIZE,
         DE_BUTTON_SIZE,
         de_btn_style(drv_active, color::DRIVER_ACTIVE_C32),
-        "\u{2192}", // →
+        "\u{223F}", // ∿ LFO
     );
 
     // Audio-modulation button — third in the lane, right of the driver button.
@@ -1461,7 +1461,7 @@ pub(crate) fn build_param_row(
 
     // Modulation config drawer. Zero or one active config shows directly (no tab
     // strip — unchanged); two or more share this one drawer behind a tab strip
-    // so they never stack three deep (§6.2). The E/→/A arm buttons above stay on
+    // so they never stack three deep (§6.2). The T/∿/A arm buttons above stay on
     // the row, so arming is still one click. Track overlays (driver/audio trim
     // bars, envelope target) live on the slider above and show for every armed
     // mod regardless of which config tab is open.

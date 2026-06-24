@@ -1324,7 +1324,7 @@ impl ParamCardPanel {
             badge_y,
             BADGE_W,
             BADGE_H,
-            "ENV",
+            "TRG",
             UIStyle {
                 text_color: color::TEXT_WHITE_C32,
                 font_size: color::FONT_CAPTION,
@@ -1357,7 +1357,7 @@ impl ParamCardPanel {
             badge_y,
             BADGE_W,
             BADGE_H,
-            "DRV",
+            "LFO",
             UIStyle {
                 text_color: color::TEXT_WHITE_C32,
                 font_size: color::FONT_CAPTION,
