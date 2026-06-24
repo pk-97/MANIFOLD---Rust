@@ -120,11 +120,11 @@ Chrome/View declarative API.
 | Component | Used for |
 |---|---|
 | **Toggle** | `ON`, `Inv`, `Delta`, mute/solo — one style, shape *and* colour |
-| **Dropdown** | option lists: `Source`, `Feature`, `Band`, `Mode` — flat, single-level |
+| **Dropdown** | option lists: `Source`, `Feature`, `Band`, `Mode` — flat, single-level; **type-ahead** (first char jumps + steps through matches) |
 | **SegmentedControl** | nav tabs (Clip/Layer/Master) + any param flipped *live* |
 | **IconButton** | hamburger menu, chevrons |
 | **Button** (primary / secondary) | `Change`, dialog actions |
-| **ParamRow** | label · slider · value · modulation badge · reset |
+| **ParamRow** | label · slider · value · modulation badge · reset; **double-click value → type-in** (numeric params only) |
 
 Dropdowns are the default for option pickers (your call — reduces clutter, scales). The
 guardrail: keep them **single-level flat lists**; never bury a frequent action in a menu.
@@ -149,6 +149,14 @@ Goal: every card identical and calm; clutter hidden until wanted; modulation leg
 - A **glance badge** on the collapsed row shows modulation state (filled = armed).
 - **Reset (↺)** lives in a fixed right-side column — same spot every row (Resolve pattern).
 - **Drag-scrub number fields** (drag or type) so sliders can shrink and reclaim width.
+- **Type-in any numeric param** — double-click the value cell → type → clamp to range →
+  dispatch via the same path as a drag edit. Reuses the existing `TextInputState`
+  ([text_input.rs](../crates/manifold-app/src/text_input.rs)); graph params / FPS / BPM already
+  type, the inspector sliders are the only gap. Enums use dropdowns, toggles stay toggles — no
+  text entry.
+- **The handle + number already track the live post-modulation value** (`param_values` via
+  `sync_values`), so "value rides" is *done*. The open gap is marking the *base setpoint* while
+  modulated — see §11.
 
 ### 6.3 Mockups (rough — spacing tuned in the real renderer)
 
@@ -200,6 +208,15 @@ now:    Amount  ▓▓▓▓▓░░  0.96  [E][→][A]
         Band [Full|Low|Mid|High]  Inv  Δ  ...always shown
 after:  Amount  ▓▓▓▓▓░░  0.96  ●A  ↺      ← guts in the drawer
 ```
+
+### 6.4 Toggle/trigger rows (e.g. "Clip Trigger")
+Today toggle/trigger rows ([param_card.rs:1529](../crates/manifold-ui/src/panels/param_card.rs#L1529))
+**left-align** their label while slider rows **right-align** in a column, and the button is
+pinned far-right — so the row doesn't line up with the slider grid and reads as bolted-on.
+Fix is the same row template: left-align *all* labels in one column, put the toggle/button in
+the same right control column as slider values. **Open question:** "Clip Trigger" is a card
+*behaviour* setting (does this generator react to clip launches), not a look param — consider
+moving it to a card-settings/header area rather than the tail of the param list.
 
 ---
 
@@ -266,8 +283,14 @@ Recurring complaints across the pro apps, and the rule each implies. Sources at 
 
 Not in most desktop checklists — these are ours because the tool is played live.
 
-- **Modulation legibility** — the classic "why won't this move?" When a param is modulated,
-  *show* it (value rides, row tints) and make taking manual control obvious.
+- **Modulation legibility** — the classic "why won't this move?" **Status: already largely
+  handled** — the slider handle + number track the live post-modulation value (`param_values`,
+  written each frame by drivers/Ableton/envelopes, fed via `sync_values`
+  [state_sync.rs:749](../crates/manifold-app/src/ui_bridge/state_sync.rs#L749)). The green
+  range / orange target handles show the mod's config. The "green band" is the audio-mod
+  *output sub-range* (trim handles), **not** a live indicator. Remaining gap: the **base
+  setpoint isn't cleanly marked** while the handle rides live (you lose sight of the value you
+  set).
 - **Shape + colour, never colour alone** — ~8% of men can't separate red/green, and on a dark
   stage with coloured wash, hue-only states wash out. An armed toggle changes fill/icon, not
   just hue.
@@ -292,10 +315,23 @@ Not in most desktop checklists — these are ours because the tool is played liv
 - **No HTML / Claude Design mockups** — prototype directly in the native bitmap renderer.
   HTML would misrepresent the real font/metrics/AA, and we build in Rust anyway.
 - Tokens come *before* components, components before applying.
+- **Type-in for numeric params** — double-click → type → clamp → dispatch; reuses `TextInputState`.
+  Enums/toggles excluded (dropdown / toggle, not text entry).
+- **Dropdown type-ahead** — first char jumps `hovered_index` and steps on repeat; slots into the
+  existing dropdown `KeyDown` ([dropdown.rs:597](../crates/manifold-ui/src/panels/dropdown.rs#L597)).
+- **Per-card audio level meter — dropped** for now.
+- **Correction:** the inspector slider already shows the live post-modulation value (handle +
+  number). An earlier note here that it didn't was wrong (it read only the build path, missed
+  the per-frame `sync_values` update).
 
 **Open:**
 - **Which params (if any) are switched *live*?** Those stay segmented (one-click); everything
   else becomes a dropdown. Best guess: Feature/Band/Source/Mode are all set-once → all dropdowns.
+- **Clip Trigger** — keep as an aligned toggle row, or move to a card-settings area? (§6.4)
+- **Base setpoint marking** while a param is modulated — the handle rides live, so the value you
+  *set* isn't shown cleanly. Worth a subtle base tick / hover-reveal.
+- **"Modulated-only" view** — optional per-layer filter to audit just audio-driven params (idea,
+  not committed).
 - Exact token values (grey ramp steps, radii, spacing) — §4 is a proposal to lock.
 - Whether to match transport/footer heights exactly or keep a deliberate ratio.
 
@@ -305,12 +341,15 @@ Not in most desktop checklists — these are ours because the tool is played liv
 
 1. **Quick wins** — match transport/footer heights; add a slim auto-hiding inspector scrollbar.
    Low risk, warms up the screenshot loop.
-2. **Design tokens** — audit `color.rs`, lock the grey ramp / spacing / radius / divider tokens.
-3. **Components** — build Toggle / Dropdown / SegmentedControl / IconButton / Button / ParamRow
+2. **Type-in + dropdown type-ahead** — extend `TextInputState` to inspector numeric params
+   (double-click → type → clamp → dispatch); add type-ahead to the dropdown `KeyDown`.
+   Self-contained, infra already exists.
+3. **Design tokens** — audit `color.rs`, lock the grey ramp / spacing / radius / divider tokens.
+4. **Components** — build Toggle / Dropdown / SegmentedControl / IconButton / Button / ParamRow
    on the tokens.
-4. **Prototype on Edge Detect only** — assemble the new card; run the app and screenshot each
-   pass (real bitmap, not a mockup). Lock the look.
-5. **Roll out** — apply the template to every card, then the rest of the inspector.
+5. **Prototype on Edge Detect only** — assemble the new card; run the app and screenshot each
+   pass (real bitmap, not a mockup). Lock the look. Fix Clip Trigger row alignment here (§6.4).
+6. **Roll out** — apply the template to every card, then the rest of the inspector.
 
 Each visual pass is verified by running the app and screenshotting — truth over speed, since
 the renderer is custom.
