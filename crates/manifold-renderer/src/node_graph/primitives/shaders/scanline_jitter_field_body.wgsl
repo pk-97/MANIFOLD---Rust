@@ -32,8 +32,12 @@ fn body(uv: vec2<f32>, dims: vec2<f32>, amount: f32, scanline: f32, speed: f32, 
 
     if motion == 1u {
         // Slide — smooth, ungated, every band drifts. speed=2 → website 0.13.
-        let band_count = select(res.y, bands, bands > 0.0);
-        let band = floor(uv.y * band_count);
+        // bands = 0 → no rows (offset 0): a downstream flow/domain warp carries
+        // the motion instead of slicing the image into per-row tears.
+        if bands <= 0.0 {
+            return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        }
+        let band = floor(uv.y * bands);
         let t = time * speed * 0.065;
         let n = sjf_value_noise(vec2<f32>(band, t));
         let offset_x = (n - 0.5) * amount * 0.05;

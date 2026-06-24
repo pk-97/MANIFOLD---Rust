@@ -57,8 +57,13 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     if u.motion == 1 {
         // Slide — smooth, ungated, every band drifts. speed=2 → website 0.13.
-        let band_count = select(res.y, u.bands, u.bands > 0.0);
-        let band = floor(uv.y * band_count);
+        // bands = 0 → no rows (offset 0): a downstream flow/domain warp carries
+        // the motion instead of slicing the image into per-row tears.
+        if u.bands <= 0.0 {
+            textureStore(offset_out, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
+            return;
+        }
+        let band = floor(uv.y * u.bands);
         let t = u.time * u.speed * 0.065;
         let n = value_noise(vec2<f32>(band, t));
         let offset_x = (n - 0.5) * u.amount * 0.05;
