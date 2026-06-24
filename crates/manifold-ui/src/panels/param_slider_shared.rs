@@ -1089,7 +1089,7 @@ pub(crate) fn build_param_row(
     slider_colors: &SliderColors,
     config_font: u16,
     build_env_button: bool,
-    // Width of the right-aligned label cell at the row's left edge. The
+    // Width of the left-aligned label cell at the row's left edge. The
     // inspector passes the default; the graph editor's wide lane passes a
     // larger value so friendly names ("Particle Count") don't clip.
     label_width: f32,

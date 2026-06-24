@@ -132,7 +132,10 @@ impl BitmapSlider {
         let y = rect.y;
         let h = rect.height;
 
-        // ── Label (fixed width, left, interactive for right-click mapping) ──
+        // ── Label (fixed width, left-aligned, interactive for right-click mapping) ──
+        // Name sits at the row's left edge; tracks all start at the same x, so a
+        // column of rows reads as an aligned grid (Ableton/Resolve inspector
+        // style). The value cell stays right-aligned like a mixer column.
         if let Some(label_text) = label
             && !label_text.is_empty()
         {
@@ -143,7 +146,7 @@ impl BitmapSlider {
                 UIStyle {
                     text_color: colors.text,
                     font_size,
-                    text_align: TextAlign::Right,
+                    text_align: TextAlign::Left,
                     ..UIStyle::default()
                 },
                 Some(label_text),
