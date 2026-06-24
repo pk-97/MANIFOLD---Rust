@@ -256,6 +256,41 @@ with the slider grid. **Still open (deferred):** "Clip Trigger" is a card *behav
 card-settings/header area is a structural change, parked for now (the alignment was the felt
 problem; relocation is a separate call).
 
+### 6.5 Modulation drawer — follow-ups (decided 2026-06-24, eyeball of 5e)
+5e shipped the tabbed drawer. Eyeballing it on Layer 2 → Transform surfaced four more, in build order:
+
+1. **Rename the three modulators to full words.** The old "Envelope" mod is **no longer a full
+   ADSR** — it's a trigger-fired decay (target + decay). New names everywhere (tabs, arm buttons,
+   header chips):
+   - **Trigger** (was Envelope / E / ENV) — arm button **T**.
+   - **LFO** (was Driver / → / DRV) — arm button **∿**.
+   - **Audio** (was A) — arm button **A**.
+   Tabs spell the full word; arm buttons stay compact glyphs to match.
+2. **Collapse the config while keeping the mod armed.** Today the drawer auto-shows whenever a
+   mod is armed, with no way to reclaim the space without disarming. Add a **disclosure ▾/▸** on
+   the drawer (on the tab strip when ≥2 mods; a small ▾ on single-mod rows). Collapsed = arm
+   buttons stay lit (modulation keeps running), tabs + config hidden. Plus a **card-level
+   "compact"** toggle to collapse every drawer on the card at once ("hide all the settings").
+   Per-row collapse state persists now that cards are reused across rebuilds.
+3. **Button grids → dropdowns (blanket).** The drawer option pickers are button grids: LFO
+   **beat-div** (1/32…32), LFO **waveform**, audio **Source / Feature / Band**. **Decision:
+   convert them all to dropdowns.** Rationale (Peter): grids are **hard to read / eyeball**, and
+   a grid **caps how many options + rows** can fit; dropdowns read cleaner and scale. This
+   *overrides* the earlier "keep grids for one-click live speed" take — the readability win wins,
+   and the drawers are on-demand (collapsible per #2) so the speed cost is acceptable. **Toggles
+   stay toggles** (Inv, Delta, Rev, dotted/triplet) — only the multi-option *pickers* become
+   dropdowns. Reuses the Phase-4 Dropdown component + the existing `DropdownPanel`; the audio
+   click routing is currently flat-index based (`RowClick::AudioSelect{Send,Kind,Band}`) and
+   moves to dropdown-trigger + menu.
+4. **Merge the chrome header to one row.** Layer/Master/Clip chrome is 3 rows today
+   (`Layer ▾` · `Layer 2` · `Opacity ▓▓▓ 1.00`). Collapse to one:
+   `Layer 2 ▾   Opacity ▓▓▓▓▓░  1.00`. Applies to all three chrome panels for consistency
+   (LayerChromePanel / MasterChromePanel / ClipChromePanel).
+
+Also note — **card panels are now reused across rebuilds** (matched by effect id; generator by
+layer), not re-allocated every sync. Fixed the mod-tab snap-back (UI-only tab state was on a
+card thrown away each frame) and removed a per-frame allocation. Shipped.
+
 ---
 
 ## 7. Text & density rules
@@ -401,10 +436,16 @@ Not in most desktop checklists — these are ours because the tool is played liv
    header chips, type-in = Phase 2b, per-slider drawers), so Phase 5 was the genuine deltas. Static
    checks pass each pass (param_card tests incl. golden + 3 new tabbed tests; clippy). **Still needs
    the running-app eyeball** — the renderer is custom, can't screenshot here.
-6. **Verify across the variety + roll through the inspector.** The single reference card can't
+6. **Modulation-drawer follow-ups (§6.5)** — eyeball of 5e surfaced four, in order:
+   **6a** rename modulators to full words (Trigger / LFO / Audio; arm T / ∿ / A); **6b** collapse
+   the config while keeping the mod armed (per-row ▾ + card-level compact); **6c** button grids →
+   dropdowns, blanket (beat-div, waveform, audio Source/Feature/Band; toggles stay toggles);
+   **6d** merge the chrome header to one row (Layer/Master/Clip). Card-panel reuse (mod-tab
+   snap-back fix) already shipped.
+7. **Verify across the variety + roll through the inspector.** The single reference card can't
    show everything: effects with many params, multiple enums, string params, generators (purple
-   tint), macros, clip params. Phase 6 is checking the generic redesign against that spread and
-   fixing edge cases — **no new design work** — then the rest of the inspector chrome.
+   tint), macros, clip params. Check the generic redesign against that spread and fix edge cases —
+   **no new design work** — then the rest of the inspector chrome.
 
 Each visual pass is verified by running the app and screenshotting — truth over speed, since
 the renderer is custom.
