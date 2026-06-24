@@ -16,6 +16,7 @@
 //! See `docs/CHROME_API_DESIGN.md` for the full rationale and the Phase 2b
 //! migration contract.
 
+pub mod components;
 pub mod diff;
 pub mod layout;
 pub mod view;

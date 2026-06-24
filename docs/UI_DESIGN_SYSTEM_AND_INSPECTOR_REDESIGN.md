@@ -132,6 +132,19 @@ Distinct steps + bold accents, still dark.
 A small typed set, built on the tokens, applied everywhere. Built on the existing
 Chrome/View declarative API.
 
+> **Status: built (Phase 4).** Kit lives in
+> [chrome/components.rs](../crates/manifold-ui/src/chrome/components.rs), on the Phase-3
+> tokens. Each component has **two forms** because the runtime has two write paths: a
+> `*_style(state) -> UIStyle` (for the in-place `set_style` update path) and a `*(..) -> View`
+> constructor (for the declarative build path). Built: Toggle, Button (primary/secondary),
+> IconButton, SegmentedControl (`segment` cell), Dropdown trigger, plus the ParamRow trailing
+> atoms (`reset_button`, `mod_badge`). The **full ParamRow composite is deferred to Phase 5** —
+> it has to thread the live slider materialisation + drag state that lives in `param_card`, so
+> it gets assembled (and seen) on the Edge Detect prototype. These supersede the scattered
+> `*_btn_style` helpers in `param_slider_shared`; the old helpers stay in use until Phase 6
+> swaps them out. The kit is unused until Phase 5 wires it — intentional (build the kit, then
+> apply it), and it's covered by 7 unit tests.
+
 | Component | Used for |
 |---|---|
 | **Toggle** | `ON`, `Inv`, `Delta`, mute/solo — one style, shape *and* colour |
@@ -366,8 +379,10 @@ Not in most desktop checklists — these are ours because the tool is played liv
    (`SPACE_XL` 16 / `SPACE_XXL` 24), card radius (4→5), and the two divider tokens (`DIVIDER`
    hairline + `GROOVE`) locked. Semantic greys re-pointed onto the ramp. Static checks pass
    (clippy, 385 ui tests); the global palette shift needs an eyeball pass on the running app.
-4. **Components** — build Toggle / Dropdown / SegmentedControl / IconButton / Button / ParamRow
-   on the tokens.
+4. **Components** ✅ — typed kit in [chrome/components.rs](../crates/manifold-ui/src/chrome/components.rs)
+   on the tokens: Toggle / Button / IconButton / SegmentedControl / Dropdown trigger + ParamRow
+   atoms (reset, mod badge). Two forms each (`*_style` + `View` constructor). Full ParamRow
+   composite deferred to Phase 5 (needs the live slider/drag wiring). 7 tests, clippy clean.
 5. **Prototype on Edge Detect only** — assemble the new card; run the app and screenshot each
    pass (real bitmap, not a mockup). Lock the look. Fix Clip Trigger row alignment here (§6.4).
 6. **Roll out** — apply the template to every card, then the rest of the inspector.
