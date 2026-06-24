@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(content.x, 0.0); // no effect browser
         assert_eq!(content.y, 36.0); // below transport
         assert_eq!(content.width, 1420.0); // 1920 - 500 inspector
-        assert_eq!(content.height, 1015.0); // 1080 - 36 transport - 29 footer
+        assert_eq!(content.height, 1008.0); // 1080 - 36 transport - 36 footer
     }
 
     #[test]
@@ -338,7 +338,7 @@ mod tests {
         assert_eq!(inspector.width, 500.0);
         assert_eq!(inspector.x, 1420.0); // 1920 - 500, against the right edge
         assert_eq!(inspector.y, 36.0); // below transport
-        assert_eq!(inspector.height, 1015.0); // down to the global footer (1080 - 36 - 29)
+        assert_eq!(inspector.height, 1008.0); // down to the global footer (1080 - 36 - 36)
         // Preview sits directly left of the inspector, no gap.
         let video = layout.video_area();
         assert!((video.x + video.width - inspector.x).abs() < 0.1);

@@ -561,7 +561,10 @@ pub const INSERT_CURSOR_RULER_MARKER_SIZE: f32 = 6.0;
 // ── Layout constants ────────────────────────────────────────────────
 pub const TRANSPORT_BAR_HEIGHT: f32 = 36.0;
 pub const HEADER_HEIGHT: f32 = 40.0;
-pub const FOOTER_HEIGHT: f32 = 29.0;
+// The bottom status bar is the counterpart to the transport bar — same height
+// so they read as one deliberate top/bottom chrome frame (and their buttons
+// match). Locked to TRANSPORT_BAR_HEIGHT rather than a loose literal.
+pub const FOOTER_HEIGHT: f32 = TRANSPORT_BAR_HEIGHT;
 pub const TRACK_HEIGHT: f32 = 140.0;
 pub const COLLAPSED_TRACK_HEIGHT: f32 = 48.0;
 pub const COLLAPSED_GEN_TRACK_HEIGHT: f32 = 62.0;
