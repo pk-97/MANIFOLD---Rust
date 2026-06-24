@@ -1568,11 +1568,20 @@ impl ParamCardPanel {
                     // ON/OFF for sticky toggles, ▶ for momentary fire-once
                     // triggers. Click handler dispatches differently (toggle vs
                     // fire) based on the is_trigger flag.
+                    //
+                    // §6.4: line the toggle up with the slider grid — its button
+                    // right-aligns to the same control column as slider VALUES
+                    // (x = cx + slider_w), so it doesn't float at the far edge and
+                    // read as bolted-on. A toggle can't be modulated, so the
+                    // D/E/A lane to its right is correctly left empty. The label
+                    // fills the column to the button's left (left-aligned, same
+                    // start x as every slider label).
+                    let toggle_btn_x = cx + slider_w - TOGGLE_BTN_W;
                     let label_id = tree.add_label(
                         None,
                         cx,
                         cy,
-                        content_w - TOGGLE_BTN_W - GAP,
+                        (slider_w - TOGGLE_BTN_W - GAP).max(0.0),
                         ROW_HEIGHT,
                         &info.name,
                         UIStyle {
@@ -1592,7 +1601,7 @@ impl ParamCardPanel {
                     };
                     let button_id = tree.add_button(
                         None,
-                        cx + content_w - TOGGLE_BTN_W,
+                        toggle_btn_x,
                         cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5,
                         TOGGLE_BTN_W,
                         TOGGLE_BTN_H,

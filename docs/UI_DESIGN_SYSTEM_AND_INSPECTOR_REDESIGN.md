@@ -238,14 +238,16 @@ now:    Amount  ▓▓▓▓▓░░  0.96  [E][→][A]
 after:  Amount  ▓▓▓▓▓░░  0.96  ●A  ↺      ← guts in the drawer
 ```
 
-### 6.4 Toggle/trigger rows (e.g. "Clip Trigger")
-Today toggle/trigger rows ([param_card.rs:1529](../crates/manifold-ui/src/panels/param_card.rs#L1529))
-**left-align** their label while slider rows **right-align** in a column, and the button is
-pinned far-right — so the row doesn't line up with the slider grid and reads as bolted-on.
-Fix is the same row template: left-align *all* labels in one column, put the toggle/button in
-the same right control column as slider values. **Open question:** "Clip Trigger" is a card
-*behaviour* setting (does this generator react to clip launches), not a look param — consider
-moving it to a card-settings/header area rather than the tail of the param list.
+### 6.4 Toggle/trigger rows (e.g. "Clip Trigger") — DONE (5b + 5d)
+The original misalignment was two parts: labels (toggle left, slider right) and the button
+pinned to the far edge. **5b** flipped slider labels to left-align, so all labels now share one
+column start. **5d** right-aligns the toggle/trigger button to the **same control column as
+slider values** (`x = cx + slider_w`) instead of the card's far edge — a toggle can't be
+modulated, so the D/E/A lane to its right is correctly left empty, and the row now lines up
+with the slider grid. **Still open (deferred):** "Clip Trigger" is a card *behaviour* setting
+(does this generator react to clip launches), not a look param — moving it to a
+card-settings/header area is a structural change, parked for now (the alignment was the felt
+problem; relocation is a separate call).
 
 ---
 
