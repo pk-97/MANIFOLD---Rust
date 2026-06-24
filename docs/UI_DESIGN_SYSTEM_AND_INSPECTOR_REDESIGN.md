@@ -339,8 +339,10 @@ Not in most desktop checklists — these are ours because the tool is played liv
 
 ## 13. Build order
 
-1. **Quick wins** — match transport/footer heights; add a slim auto-hiding inspector scrollbar.
-   Low risk, warms up the screenshot loop.
+1. **Quick wins** — match transport/footer heights ✅ (done, `FOOTER_HEIGHT` locked to
+   `TRANSPORT_BAR_HEIGHT`). NOTE: the inspector scrollbar **already exists** — a 4px draggable
+   thumb on both columns ([inspector.rs:1654](../crates/manifold-ui/src/panels/inspector.rs#L1654)),
+   not missing. Any visibility polish (width/contrast) folds into Phase 3 tokens, not a separate add.
 2. **Type-in + dropdown type-ahead** — extend `TextInputState` to inspector numeric params
    (double-click → type → clamp → dispatch); add type-ahead to the dropdown `KeyDown`.
    Self-contained, infra already exists.
