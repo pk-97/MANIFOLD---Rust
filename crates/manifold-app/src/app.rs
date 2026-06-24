@@ -491,6 +491,13 @@ pub struct Application {
     /// Set by keyboard shortcuts that mutate project data (undo, delete, etc.).
     /// Consumed by tick_and_render to trigger sync_project_data + rebuild.
     pub(crate) needs_structural_sync: bool,
+    /// Whether a content-building modal overlay (effect/generator/node browser,
+    /// Ableton picker, dropdown) was open last frame. Overlays build their nodes
+    /// into the shared tree and render via the separate overlay pass; closing one
+    /// only flips `is_open` and never removes those nodes. On the open→closed
+    /// transition we force a full rebuild so the stale cells can't get baked into
+    /// the cached offscreen (the "ghost Bloom/Highlight cells" bug).
+    pub(crate) modal_overlay_was_open: bool,
 }
 
 impl Application {
@@ -675,6 +682,7 @@ impl Application {
             needs_rebuild: false,
             scroll_dirty: crate::ui_root::ScrollDirty::default(),
             needs_structural_sync: false,
+            modal_overlay_was_open: false,
         }
     }
 

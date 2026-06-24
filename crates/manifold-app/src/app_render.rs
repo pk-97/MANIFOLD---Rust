@@ -2442,6 +2442,24 @@ impl Application {
         if overlay_changed {
             self.scroll_dirty.visual = true;
         }
+
+        // Content-building modal overlays (effect/generator/node browser, Ableton
+        // picker, dropdown) build their cells into the shared UI tree and draw via
+        // the separate overlay pass. Closing one only flips `is_open`; the nodes
+        // and the stale `overlay_draw` range survive until a *truncating* rebuild
+        // runs. The normal close paths set `overlay_dirty` (→ scroll rebuild),
+        // but some don't — e.g. the direct `close()` on a perform-mode toggle —
+        // leaving the cells composited on top of the cached offscreen as ghost
+        // text. Force a full rebuild on the open→closed edge so this can't leak,
+        // regardless of how the overlay closed.
+        let modal_open_now = self.ws.ui_root.browser_popup.is_open()
+            || self.ws.ui_root.ableton_picker.is_open()
+            || self.ws.ui_root.dropdown.is_open();
+        if self.modal_overlay_was_open && !modal_open_now {
+            self.needs_rebuild = true;
+        }
+        self.modal_overlay_was_open = modal_open_now;
+
         let scroll_dirty = self.scroll_dirty;
         self.scroll_dirty.clear();
 

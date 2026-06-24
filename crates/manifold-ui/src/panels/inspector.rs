@@ -1797,10 +1797,19 @@ impl Panel for InspectorCompositePanel {
             },
         ));
 
-        // Tab strip across the very top: the rungs of the current selection
+        // Macros strip pinned to the very top of the inspector. The macro bank is
+        // a global (project-level) control, so it sits ABOVE the per-scope tab
+        // strip rather than reading as part of any one inspector (Clip/Layer/
+        // Master). Built AFTER the columns for z-order — see the build call near
+        // the end of this fn. height() is a pure getter, safe to read here.
+        let macros_h = self.macros_panel.height();
+        let macros_y = rect.y;
+
+        // Tab strip below the macros: the rungs of the current selection
         // (Clip · Layer · Group · Master), active one highlighted.
         let tab_h = TAB_STRIP_HEIGHT;
-        self.build_tab_strip(tree, Rect::new(rect.x, rect.y, rect.width, tab_h));
+        let tab_y = macros_y + macros_h + 2.0; // 2px gap below macros
+        self.build_tab_strip(tree, Rect::new(rect.x, tab_y, rect.width, tab_h));
 
         // One full-width column for the active scope. Both scroll containers are
         // still begun every frame so their node ids never go stale; the inactive
@@ -1825,10 +1834,8 @@ impl Panel for InspectorCompositePanel {
             rect.x
         };
 
-        // Macros strip below the tab strip (built AFTER columns for z-order).
-        let macros_h = self.macros_panel.height();
-        let macros_y = rect.y + tab_h;
-        let columns_y = macros_y + macros_h + 2.0; // 2px gap
+        // Columns start below the tab strip.
+        let columns_y = tab_y + tab_h + 2.0; // 2px gap below tabs
         let columns_h = (rect.y + rect.height - columns_y).max(0.0);
         self.columns_y = columns_y;
         self.columns_height = columns_h;
@@ -1953,7 +1960,8 @@ impl Panel for InspectorCompositePanel {
         self.layer_scroll
             .build_scrollbar(tree, right_x + right_content_w, &SCROLLBAR_STYLE);
 
-        // ── MACROS STRIP (below the tab strip, on top of columns) ──
+        // ── MACROS STRIP (pinned to the top, above the tab strip; built last so
+        // it draws on top of any column content) ──
         let macros_rect = Rect::new(left_x, macros_y, rect.width - COLUMN_PAD * 2.0, macros_h);
         self.macros_panel.build(tree, macros_rect);
 
