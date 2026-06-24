@@ -15,8 +15,6 @@ use crate::tree::UITree;
 // ── Layout constants (from LayerChromeBitmapPanel.cs) ─────────────
 
 const HEADER_ROW_H: f32 = 27.5;
-const NAME_ROW_H: f32 = 20.0;
-const SLIDER_ROW_H: f32 = 22.5;
 const DIVIDER_H: f32 = 1.0;
 const PAD_H: f32 = 2.0;
 const PAD_V: f32 = 2.0;
@@ -25,7 +23,6 @@ const CHEVRON_W: f32 = 18.0;
 const CHEVRON_H: f32 = 16.0;
 const OPACITY_LABEL_W: f32 = 50.0;
 const FONT_SIZE: u16 = color::FONT_BODY;
-const NAME_FONT_SIZE: u16 = color::FONT_SUBHEADING;
 
 const KEY_CHEVRON: u64 = 1;
 const KEY_OPACITY_SLOT: u64 = 2;
@@ -69,18 +66,10 @@ impl LayerChromePanel {
     }
 
     pub fn compute_height(&self) -> f32 {
-        if self.is_collapsed {
-            return PAD_V + HEADER_ROW_H + PAD_V;
-        }
-        let mut h = PAD_V + HEADER_ROW_H;
-        if self.show_name {
-            h += DIVIDER_H + NAME_ROW_H;
-        }
-        if self.show_opacity {
-            h += DIVIDER_H + SLIDER_ROW_H;
-        }
-        h += DIVIDER_H + PAD_V;
-        h
+        // §6d: name + chevron + opacity are merged onto one row, so the chrome is
+        // a single row + trailing divider — constant whether collapsed (opacity
+        // hidden in-place) or expanded.
+        PAD_V + HEADER_ROW_H + DIVIDER_H + PAD_V
     }
 
     pub fn first_node(&self) -> usize {
@@ -138,39 +127,29 @@ impl LayerChromePanel {
             .inert()
             .key(KEY_CHEVRON);
 
-        let header = View::row(GAP)
+        // §6d — one merged row: the layer name (the meaningful identity; falls
+        // back to the type header when unnamed), the collapse chevron, then the
+        // opacity slider inline. Was three stacked rows (type header / name /
+        // opacity). The chevron still collapses the layer's inspector section;
+        // collapsing hides the inline opacity in place (row height unchanged).
+        let label_text = if self.show_name && !self.cached_name.is_empty() {
+            self.cached_name.as_str()
+        } else {
+            self.cached_header_text.as_str()
+        };
+        let mut header = View::row(GAP)
             .fill_w()
             .h(Sizing::Fixed(HEADER_ROW_H))
             .cross_align(Align::Center)
             .child(
-                View::label(self.cached_header_text.as_str())
-                    .fill_w()
-                    .fill_h()
+                View::label(label_text)
                     .font(color::FONT_HEADING)
                     .text_color(color::TEXT_PRIMARY_C32)
                     .align_text(TextAlign::Left),
             )
             .child(chevron);
 
-        let mut root = View::column(0.0)
-            .fill()
-            .pad(Pad { l: PAD_H, t: PAD_V, r: PAD_H, b: PAD_V })
-            .child(header);
-        if self.is_collapsed {
-            return root;
-        }
-
-        if self.show_name {
-            root = root.child(Self::divider()).child(
-                View::label(self.cached_name.as_str())
-                    .fill_w()
-                    .h(Sizing::Fixed(NAME_ROW_H))
-                    .font(NAME_FONT_SIZE)
-                    .text_color(color::TEXT_PRIMARY_C32)
-                    .align_text(TextAlign::Center),
-            );
-        }
-        if self.show_opacity {
+        if !self.is_collapsed && self.show_opacity {
             let v = self.opacity.cached_value();
             let v = if v.is_nan() { 1.0 } else { v };
             let spec = SliderSpec {
@@ -181,14 +160,19 @@ impl LayerChromePanel {
                 font_size: FONT_SIZE,
                 label_width: OPACITY_LABEL_W,
             };
-            root = root.child(Self::divider()).child(
+            header = header.child(
                 View::slider_row(spec)
                     .fill_w()
-                    .h(Sizing::Fixed(SLIDER_ROW_H))
+                    .h(Sizing::Fixed(HEADER_ROW_H))
                     .key(KEY_OPACITY_SLOT),
             );
         }
-        root.child(Self::divider())
+
+        View::column(0.0)
+            .fill()
+            .pad(Pad { l: PAD_H, t: PAD_V, r: PAD_H, b: PAD_V })
+            .child(header)
+            .child(Self::divider())
     }
 
     // ── Build ────────────────────────────────────────────────────
@@ -298,32 +282,21 @@ mod tests {
     use super::*;
     use crate::tree::UITree;
 
-    fn golden_opacity_slot(rect: Rect, show_name: bool) -> Rect {
-        let content_w = rect.width - PAD_H * 2.0;
-        let cx = rect.x + PAD_H;
-        let mut cy = rect.y + PAD_V + HEADER_ROW_H;
-        if show_name {
-            cy += DIVIDER_H + NAME_ROW_H;
-        }
-        cy += DIVIDER_H;
-        Rect::new(cx, cy, content_w, SLIDER_ROW_H)
-    }
-
     #[test]
-    fn slot_rect_matches_golden() {
+    fn opacity_slot_is_inline_on_header_row() {
+        // §6d: the opacity slider now sits on the single merged header row, not a
+        // stacked row below. Assert it's at the header-row Y with real width.
         let mut tree = UITree::new();
         let mut panel = LayerChromePanel::new();
         let rect = Rect::new(0.0, 0.0, 280.0, 200.0);
         panel.build(&mut tree, rect);
 
         let got = tree.get_bounds(panel.host.node_id_for_key(KEY_OPACITY_SLOT).unwrap());
-        let want = golden_opacity_slot(rect, true);
+        assert!((got.y - (rect.y + PAD_V)).abs() < 0.01, "opacity not on header row: {got:?}");
+        assert!(got.width > 0.0, "opacity slot has no width: {got:?}");
+        // Whole chrome is one row + trailing divider.
         assert!(
-            (got.x - want.x).abs() < 0.01
-                && (got.y - want.y).abs() < 0.01
-                && (got.width - want.width).abs() < 0.01
-                && (got.height - want.height).abs() < 0.01,
-            "opacity slot {got:?} != golden {want:?}"
+            (panel.compute_height() - (PAD_V + HEADER_ROW_H + DIVIDER_H + PAD_V)).abs() < 0.01
         );
     }
 
@@ -337,11 +310,13 @@ mod tests {
     }
 
     #[test]
-    fn visibility_hides_rows() {
+    fn height_is_constant_one_row() {
+        // §6d merge: height no longer changes with name/opacity visibility — it's
+        // always one row + trailing divider.
         let mut panel = LayerChromePanel::new();
         let full_h = panel.compute_height();
         panel.set_visibility(false, false);
-        assert!(panel.compute_height() < full_h);
+        assert_eq!(panel.compute_height(), full_h);
     }
 
     #[test]

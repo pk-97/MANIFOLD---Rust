@@ -89,14 +89,9 @@ impl MasterChromePanel {
         if self.is_collapsed {
             PAD_V + HEADER_ROW_H + PAD_V
         } else {
-            PAD_V
-                + HEADER_ROW_H
-                + DIVIDER_H
-                + EXIT_PATH_ROW_H
-                + DIVIDER_H
-                + SLIDER_ROW_H
-                + DIVIDER_H
-                + PAD_V
+            // §6d: opacity is now inline on the header row; only the LED row
+            // stays below it.
+            PAD_V + HEADER_ROW_H + DIVIDER_H + EXIT_PATH_ROW_H + DIVIDER_H + PAD_V
         }
     }
 
@@ -186,19 +181,28 @@ impl MasterChromePanel {
             .inert() // click handled via handle_click (inspector routing kept)
             .key(KEY_CHEVRON);
 
-        View::row(GAP)
+        // §6d — title + chevron, then the opacity slider inline (was a separate
+        // stacked row). The LED row stays below in `chrome_view`.
+        let mut row = View::row(GAP)
             .fill_w()
             .h(Sizing::Fixed(HEADER_ROW_H))
             .cross_align(Align::Center)
             .child(
                 View::label("Master FX")
-                    .fill_w()
-                    .fill_h()
                     .font(color::FONT_HEADING)
                     .text_color(color::TEXT_PRIMARY_C32)
                     .align_text(TextAlign::Left),
             )
-            .child(chevron)
+            .child(chevron);
+        if !self.is_collapsed {
+            row = row.child(
+                View::slider_row(Self::slider_spec(&self.opacity, Some("Opacity"), OPACITY_LABEL_W))
+                    .fill_w()
+                    .h(Sizing::Fixed(HEADER_ROW_H))
+                    .key(KEY_OPACITY_SLOT),
+            );
+        }
+        row
     }
 
     fn led_row(&self) -> View {
@@ -257,13 +261,6 @@ impl MasterChromePanel {
         }
         root.child(Self::divider())
             .child(self.led_row())
-            .child(Self::divider())
-            .child(
-                View::slider_row(Self::slider_spec(&self.opacity, Some("Opacity"), OPACITY_LABEL_W))
-                    .fill_w()
-                    .h(Sizing::Fixed(SLIDER_ROW_H))
-                    .key(KEY_OPACITY_SLOT),
-            )
             .child(Self::divider())
     }
 
@@ -412,28 +409,24 @@ mod tests {
     use super::*;
     use crate::tree::UITree;
 
-    // Golden oracle: the original constant-based slider rects. The Chrome slots
-    // must land the sliders at exactly these rects.
-    fn golden_slots(rect: Rect) -> (Rect, Rect) {
+    // Golden oracle for the LED brightness slot (unchanged by §6d — still on the
+    // LED row, the second row). The opacity slot moved inline onto the header row
+    // and its X depends on the measured title width, so it's checked structurally.
+    fn golden_brightness(rect: Rect) -> Rect {
         let content_w = rect.width - PAD_H * 2.0;
         let cx = rect.x + PAD_H;
-        let mut cy = rect.y + PAD_V;
-        cy += HEADER_ROW_H + DIVIDER_H;
-        // LED row
+        let cy = rect.y + PAD_V + HEADER_ROW_H + DIVIDER_H; // LED row top
         let btn_x = cx + LED_LABEL_W + GAP;
         let btn_w =
             (content_w - LED_LABEL_W - GAP - GAP - LED_TOGGLE_W - GAP - LED_SLIDER_W).max(20.0);
         let toggle_x = btn_x + btn_w + GAP;
         let slider_x = toggle_x + LED_TOGGLE_W + GAP;
-        let bright = Rect::new(
+        Rect::new(
             slider_x,
             cy + (EXIT_PATH_ROW_H - SLIDER_ROW_H) * 0.5,
             LED_SLIDER_W,
             SLIDER_ROW_H,
-        );
-        cy += EXIT_PATH_ROW_H + DIVIDER_H;
-        let opacity = Rect::new(cx, cy, content_w, SLIDER_ROW_H);
-        (bright, opacity)
+        )
     }
 
     #[test]
@@ -443,7 +436,7 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 280.0, 200.0);
         panel.build(&mut tree, rect);
 
-        let (bright, opacity) = golden_slots(rect);
+        let bright = golden_brightness(rect);
         let got_bright = tree.get_bounds(panel.host.node_id_for_key(KEY_BRIGHTNESS_SLOT).unwrap());
         let got_opacity = tree.get_bounds(panel.host.node_id_for_key(KEY_OPACITY_SLOT).unwrap());
 
@@ -454,7 +447,11 @@ mod tests {
                 && (a.height - b.height).abs() < 0.01
         };
         assert!(close(got_bright, bright), "brightness slot {got_bright:?} != {bright:?}");
-        assert!(close(got_opacity, opacity), "opacity slot {got_opacity:?} != {opacity:?}");
+        // §6d: opacity is inline on the header row now.
+        assert!(
+            (got_opacity.y - (rect.y + PAD_V)).abs() < 0.01 && got_opacity.width > 0.0,
+            "opacity slot not inline on header row: {got_opacity:?}"
+        );
     }
 
     #[test]
