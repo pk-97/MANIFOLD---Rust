@@ -26,6 +26,21 @@ pub(crate) const FONT_SIZE: u16 = color::FONT_BODY;
 pub(crate) const DE_BUTTON_SIZE: f32 = 20.0;
 pub(crate) const DE_BUTTON_GAP: f32 = 2.0;
 
+/// Per-row modulation config tabs. The E/→/A arm buttons stay on the row (one-
+/// click arm); when two or more configs are active they share ONE drawer with a
+/// tab strip rather than stacking three deep (§6.2). A single active config
+/// shows directly with no tab strip, exactly as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModTab {
+    Envelope,
+    Driver,
+    Audio,
+    Ableton,
+}
+/// Height of the modulation-config tab strip (only drawn when ≥2 configs active).
+pub(crate) const MOD_TAB_STRIP_H: f32 = 18.0;
+const MOD_TAB_H: f32 = 16.0;
+
 /// Active tint for the audio-modulation ("A") button + drawer — a clean green,
 /// kept distinct from the driver (teal) and envelope (orange) actives. Shares
 /// the audio trim-handle green so the whole audio-mod identity reads as one.
@@ -1054,13 +1069,99 @@ pub(crate) struct ParamRowIds {
     /// kept so click resolution can split the flat button index into
     /// send / new-send / feature regions.
     pub(crate) audio_config: Option<(crate::panels::drawer::DrawerIds, usize)>,
-    /// `y` after this row's slider + any expanded driver/envelope/Ableton
-    /// drawers — the caller continues the next row from here.
+    /// Modulation-config tab strip node ids (paired with their `ModTab`). Empty
+    /// when fewer than two configs are active (no strip drawn). The caller stores
+    /// these to route tab clicks to the active-tab switch.
+    pub(crate) mod_tabs: Vec<(NodeId, ModTab)>,
+    /// `y` after this row's slider + its modulation config drawer — the caller
+    /// continues the next row from here.
     pub(crate) new_cy: f32,
 }
 
-/// Build one parameter's slider row plus its expanded driver/envelope/Ableton
-/// drawers, returning the created node IDs and the post-row `y`.
+/// The modulation configs active on param `i`, in tab display order (E, →, A,
+/// ABL). Drives both the build and the height calc, so they can't drift.
+pub(crate) fn active_mod_tabs(mod_state: &ParamModState, info: &ParamInfo, i: usize) -> Vec<ModTab> {
+    let mut v = Vec::new();
+    if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
+        v.push(ModTab::Envelope);
+    }
+    if mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
+        v.push(ModTab::Driver);
+    }
+    if mod_state.audio_active.get(i).copied().unwrap_or(false) {
+        v.push(ModTab::Audio);
+    }
+    if info.ableton_display.is_some() {
+        v.push(ModTab::Ableton);
+    }
+    v
+}
+
+/// Which config is shown in the drawer: the stored choice if it's still active,
+/// otherwise the first active one. `None` when nothing is active.
+pub(crate) fn resolve_active_tab(active: &[ModTab], stored: ModTab) -> Option<ModTab> {
+    if active.contains(&stored) {
+        Some(stored)
+    } else {
+        active.first().copied()
+    }
+}
+
+/// Height a single config tab's drawer contributes (excludes the tab strip).
+pub(crate) fn mod_config_height(tab: ModTab) -> f32 {
+    match tab {
+        ModTab::Envelope => ENV_CONFIG_HEIGHT,
+        ModTab::Driver => DRIVER_CONFIG_HEIGHT,
+        ModTab::Audio => audio_config_height(),
+        ModTab::Ableton => ABL_CONFIG_HEIGHT,
+    }
+}
+
+fn mod_tab_label(tab: ModTab) -> &'static str {
+    match tab {
+        ModTab::Envelope => "Env",
+        ModTab::Driver => "Drv",
+        ModTab::Audio => "Aud",
+        ModTab::Ableton => "Abl",
+    }
+}
+
+/// Tab strip selecting which active config the drawer shows. Drawn only when ≥2
+/// configs are active. Returns the tab node ids paired with their `ModTab` for
+/// click routing.
+fn build_mod_tab_strip(
+    tree: &mut UITree,
+    parent: Option<NodeId>,
+    x: f32,
+    cy: f32,
+    w: f32,
+    active: &[ModTab],
+    shown: Option<ModTab>,
+) -> Vec<(NodeId, ModTab)> {
+    let n = active.len().max(1);
+    let gap = DE_BUTTON_GAP;
+    let tab_w = ((w - gap * (n as f32 - 1.0)) / n as f32).floor().max(1.0);
+    let mut out = Vec::with_capacity(active.len());
+    let mut tx = x;
+    for &tab in active {
+        let id = tree.add_button(
+            parent,
+            tx,
+            cy,
+            tab_w,
+            MOD_TAB_H,
+            crate::chrome::components::segment_style(shown == Some(tab)),
+            mod_tab_label(tab),
+        );
+        out.push((id, tab));
+        tx += tab_w + gap;
+    }
+    out
+}
+
+/// Build one parameter's slider row plus its modulation config drawer (one
+/// active config shown directly, or several behind a tab strip), returning the
+/// created node IDs and the post-row `y`.
 ///
 /// This is the per-parameter core shared verbatim by the effect and generator
 /// kinds of `ParamCardPanel` — the bulk of what used to be duplicated between
@@ -1093,6 +1194,9 @@ pub(crate) fn build_param_row(
     // inspector passes the default; the graph editor's wide lane passes a
     // larger value so friendly names ("Particle Count") don't clip.
     label_width: f32,
+    // Which config the modulation drawer shows when ≥2 are active (the panel's
+    // stored per-param choice). Ignored when 0–1 configs are active.
+    active_tab: ModTab,
 ) -> ParamRowIds {
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.
@@ -1110,6 +1214,7 @@ pub(crate) fn build_param_row(
         driver_config: None,
         ableton_config: None,
         audio_config: None,
+        mod_tabs: Vec::new(),
         new_cy: cy,
     };
     let mut cy = cy;
@@ -1257,9 +1362,23 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
+    // Modulation config drawer. Zero or one active config shows directly (no tab
+    // strip — unchanged); two or more share this one drawer behind a tab strip
+    // so they never stack three deep (§6.2). The E/→/A arm buttons above stay on
+    // the row, so arming is still one click. Track overlays (driver/audio trim
+    // bars, envelope target) live on the slider above and show for every armed
+    // mod regardless of which config tab is open.
+    let active_tabs = active_mod_tabs(mod_state, info, i);
+    let shown_tab = resolve_active_tab(&active_tabs, active_tab);
+    if active_tabs.len() >= 2 {
+        ids.mod_tabs =
+            build_mod_tab_strip(tree, parent, x, cy, config_w, &active_tabs, shown_tab);
+        cy += MOD_TAB_STRIP_H;
+    }
+
     // Envelope drawer — a single "Decay" slider. Depth is the orange target
     // handle on the track above; this is how fast the value falls back.
-    if mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
+    if shown_tab == Some(ModTab::Envelope) {
         ids.envelope_config = Some(build_envelope_config(
             tree, parent, x, cy, config_w, mod_state, i,
         ));
@@ -1267,7 +1386,7 @@ pub(crate) fn build_param_row(
     }
 
     // Driver config drawer.
-    if mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
+    if shown_tab == Some(ModTab::Driver) {
         ids.driver_config = Some(build_driver_config(
             tree,
             parent,
@@ -1281,17 +1400,20 @@ pub(crate) fn build_param_row(
         cy += DRIVER_CONFIG_HEIGHT;
     }
 
-    // Ableton config drawer (auto-shows when mapping exists).
-    if let Some(ref display) = info.ableton_display {
+    // Ableton config drawer. ModTab::Ableton is only in the active set when a
+    // mapping exists, so the let-binding always resolves here.
+    if shown_tab == Some(ModTab::Ableton)
+        && let Some(ref display) = info.ableton_display
+    {
         ids.ableton_config = Some(build_ableton_config(tree, parent, x, cy, config_w, display));
         cy += ABL_CONFIG_HEIGHT;
     }
 
-    // Audio-modulation drawer — auto-shows while a mod is active (mirrors the
-    // driver). Two rows: send selector (the project's sends — new sends are
-    // created in the Audio Setup panel, not here) and feature selector. Built
-    // on the shared drawer API.
-    if audio_active {
+    // Audio-modulation drawer — shown when the Audio config tab is active. Two
+    // rows: send selector (the project's sends — new sends are created in the
+    // Audio Setup panel, not here) and feature selector. Built on the shared
+    // drawer API.
+    if shown_tab == Some(ModTab::Audio) {
         use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
         use crate::slider::SliderColors;
         let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);

@@ -171,12 +171,19 @@ Goal: every card identical and calm; clutter hidden until wanted; modulation leg
 ```
 
 ### 6.2 Behaviour
-- Cards **collapse by default**; expand to see controls.
-- Each slider gets a **collapsible drawer** holding its modulation config.
-- The modulation buttons **E (envelope) / → (driver/LFO) / A (audio)** move *into* the drawer
-  as **tabs** — a row never shows three button clusters at once.
-- A **glance badge** on the collapsed row shows modulation state (filled = armed).
-- **Reset (↺)** lives in a fixed right-side column — same spot every row (Resolve pattern).
+- Cards collapse/expand per-card (persisted); new cards stay **expanded** (Ableton/Resolve
+  convention) and a **Collapse-all / Expand-all** control declutters a big stack — see 5c.
+- Each slider's modulation config lives in a drawer below the row.
+- **Modulation — DECIDED (5e), revised from the original plan.** The **E / → / A arm buttons stay
+  on the row** (one-click arm — fast for live; moving them into the drawer would make arming 3
+  clicks). The original pain — three *config drawers* stacking when several are armed — is fixed
+  by giving them **one shared drawer with E/→/A tabs that appears only when ≥2 configs are
+  active**. One armed mod shows its config directly (unchanged); arming a mod focuses its tab.
+  Track overlays (driver/audio trim bars, envelope target) stay on the slider for *every* armed
+  mod regardless of the open tab.
+- A **glance badge** on the collapsed row shows modulation state — *already done* via the
+  header DRV/ENV/ABL/MOD chips (visible when collapsed too).
+- **Reset** — *already done*: right-click a slider track resets it to default (no icon needed).
 - **Drag-scrub number fields** (drag or type) so sliders can shrink and reclaim width.
 - **Type-in any numeric param** — double-click the value cell → type → clamp to range →
   dispatch via the same path as a drag edit. Reuses the existing `TextInputState`

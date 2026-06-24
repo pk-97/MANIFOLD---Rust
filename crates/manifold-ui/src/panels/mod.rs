@@ -286,6 +286,11 @@ pub enum PanelAction {
     SetAllCardsCollapsed {
         collapsed: bool,
     },
+    /// A modulation-config tab was clicked on a param row (the card already
+    /// switched its own UI-only active-tab state). Routes to a structural
+    /// rebuild so the drawer repaints with the newly-selected config; carries no
+    /// payload and mutates no model.
+    ModConfigTabChanged,
     EffectCardClicked(usize),
     /// Open the node-graph editor for this effect (cog icon click).
     /// Currently shows a hardcoded test graph regardless of which effect

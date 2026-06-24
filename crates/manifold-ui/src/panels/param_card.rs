@@ -440,6 +440,15 @@ pub struct ParamCardPanel {
     /// Per-param green audio-mod trim handles (when an audio mod is armed).
     audio_trim_ids: Vec<Option<TrimHandleIds>>,
     ableton_config_ids: Vec<Option<AbletonConfigIds>>,
+    /// Per-param stored modulation-config tab choice — which config the shared
+    /// drawer shows when ≥2 are active. UI-only state, preserved across rebuilds
+    /// (configure resizes without clobbering existing entries). `resolve_active_tab`
+    /// clamps a stale choice to an active one at build time.
+    mod_active_tab: Vec<ModTab>,
+    /// Per-param modulation-config tab strip node ids paired with their `ModTab`,
+    /// for routing tab clicks. Empty for rows with fewer than two active configs.
+    /// Rebuilt each frame.
+    mod_tab_ids: Vec<Vec<(NodeId, ModTab)>>,
 
     // ── Node IDs — per-param (generator) ──
     toggle_ids: Vec<Option<ToggleParamIds>>,
@@ -524,6 +533,8 @@ impl ParamCardPanel {
             ableton_trim_ids: Vec::new(),
             audio_trim_ids: Vec::new(),
             ableton_config_ids: Vec::new(),
+            mod_active_tab: Vec::new(),
+            mod_tab_ids: Vec::new(),
             toggle_ids: Vec::new(),
             string_param_btn_ids: Vec::new(),
             mapping_chevron_ids: Vec::new(),
@@ -606,6 +617,11 @@ impl ParamCardPanel {
         self.audio_trim_ids.resize_with(n, || None);
         self.ableton_config_ids = Vec::new();
         self.ableton_config_ids.resize_with(n, || None);
+        // Preserve the per-param tab choice across rebuilds (UI state); only grow
+        // for new params. resolve_active_tab clamps stale choices at build time.
+        self.mod_active_tab.resize(n, ModTab::Driver);
+        self.mod_active_tab.truncate(n);
+        self.mod_tab_ids = vec![Vec::new(); n];
         self.toggle_ids = Vec::new();
         self.toggle_ids.resize_with(n, || None);
         self.mapping_chevron_ids = vec![None; n];
@@ -864,49 +880,24 @@ impl ParamCardPanel {
         h + CARD_BOTTOM_MARGIN
     }
 
-    /// Height contributed by the expanded driver/envelope/Ableton drawers for
-    /// one slider param. Shared by both kinds' height computations.
+    /// Height contributed by the modulation config drawer for one slider param.
+    /// Mirrors `build_param_row` exactly: 0 configs → 0; 1 → that config's
+    /// height; ≥2 → the tab strip plus the single shown config (they no longer
+    /// stack). Track overlays (trim bars, envelope target) add no height.
     fn row_drawer_height(&self, i: usize) -> f32 {
-        let mut h = 0.0;
-        if self
-            .state
-            .mod_state
-            .driver_expanded
-            .get(i)
-            .copied()
-            .unwrap_or(false)
-        {
-            h += DRIVER_CONFIG_HEIGHT;
+        let Some(info) = self.param_info.get(i) else {
+            return 0.0;
+        };
+        let active = active_mod_tabs(&self.state.mod_state, info, i);
+        match active.len() {
+            0 => 0.0,
+            1 => mod_config_height(active[0]),
+            _ => {
+                let stored = self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver);
+                let shown = resolve_active_tab(&active, stored).unwrap_or(active[0]);
+                MOD_TAB_STRIP_H + mod_config_height(shown)
+            }
         }
-        // An armed envelope adds a single "Decay" slider drawer (the target is
-        // an overlay handle on the track, so only the drawer adds height).
-        if self
-            .state
-            .mod_state
-            .envelope_expanded
-            .get(i)
-            .copied()
-            .unwrap_or(false)
-        {
-            h += ENV_CONFIG_HEIGHT;
-        }
-        if self.param_info[i].ableton_display.is_some() {
-            h += ABL_CONFIG_HEIGHT;
-        }
-        // The audio-modulation drawer auto-shows while a mod is armed (same gate
-        // `build_param_row` uses), so reserve its height — otherwise the card is
-        // too short and the drawer draws past its bounds into the next row.
-        if self
-            .state
-            .mod_state
-            .audio_active
-            .get(i)
-            .copied()
-            .unwrap_or(false)
-        {
-            h += crate::panels::param_slider_shared::audio_config_height();
-        }
-        h
     }
 
     // ── Build ─────────────────────────────────────────────────────
@@ -1462,6 +1453,7 @@ impl ParamCardPanel {
                 CONFIG_BTN_FONT_SIZE,
                 self.supports_envelopes,
                 label_width,
+                self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
             );
             self.slider_ids[i] = row.slider;
             self.row_catcher_ids[i] = Some(row.row_catcher);
@@ -1476,6 +1468,7 @@ impl ParamCardPanel {
             self.ableton_config_ids[i] = row.ableton_config;
             self.audio_btn_ids[i] = Some(row.audio_btn);
             self.audio_configs[i] = row.audio_config;
+            self.mod_tab_ids[i] = row.mod_tabs;
             // Mapping-drawer chevron at the row's right edge (Author + mappable).
             // A subtle ">" that opens the sideways range/scale/offset/invert/
             // curve drawer for this binding. Sits past the D/E buttons in the
@@ -1640,6 +1633,7 @@ impl ParamCardPanel {
                         FONT_SIZE,
                         true,
                         label_width,
+                        self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                     );
                     self.slider_ids[i] = row.slider;
                     self.row_catcher_ids[i] = Some(row.row_catcher);
@@ -1654,6 +1648,7 @@ impl ParamCardPanel {
                     self.ableton_config_ids[i] = row.ableton_config;
                     self.audio_btn_ids[i] = Some(row.audio_btn);
                     self.audio_configs[i] = row.audio_config;
+                    self.mod_tab_ids[i] = row.mod_tabs;
                     // Mapping-drawer chevron at the row's right edge (Author +
                     // mappable) — identical to the effect card. Opens the same
                     // sideways range/scale/offset/invert/curve drawer; click
@@ -2017,6 +2012,25 @@ impl ParamCardPanel {
         self.param_info[pi].param_id.clone()
     }
 
+    /// Match a clicked node against this card's modulation-config tab strips
+    /// (only present on rows with ≥2 active configs). Returns the param index and
+    /// the tab the click selects.
+    fn mod_tab_hit(&self, id: NodeId) -> Option<(usize, ModTab)> {
+        self.mod_tab_ids.iter().enumerate().find_map(|(pi, tabs)| {
+            tabs.iter()
+                .find(|(tid, _)| *tid == id)
+                .map(|&(_, t)| (pi, t))
+        })
+    }
+
+    /// Point param `pi`'s config drawer at `tab` — used when arming a modulator
+    /// so its config comes forward. No-op if `pi` is out of range.
+    fn focus_mod_tab(&mut self, pi: usize, tab: ModTab) {
+        if let Some(slot) = self.mod_active_tab.get_mut(pi) {
+            *slot = tab;
+        }
+    }
+
     /// The "A" audio-mod button action — always opens (arms) or closes
     /// (disarms) this param's audio drawer, never the Audio Setup modal. With no
     /// sends defined yet, arming auto-creates the project's first send and points
@@ -2105,6 +2119,15 @@ impl ParamCardPanel {
             return vec![PanelAction::OpenCardMapping(self.pid_at(pi))];
         }
 
+        // Modulation config tab strip (≥2 configs active) → switch which config
+        // the shared drawer shows. UI-only state; a rebuild repaints it.
+        if let Some((pi, tab)) = self.mod_tab_hit(id) {
+            if let Some(slot) = self.mod_active_tab.get_mut(pi) {
+                *slot = tab;
+            }
+            return vec![PanelAction::ModConfigTabChanged];
+        }
+
         // Per-param row elements (D/E buttons, config drawers, label copy) —
         // shared dispatch; map the abstract RowClick to effect-side actions.
         if let Some(rc) = match_param_row_click(
@@ -2121,9 +2144,11 @@ impl ParamCardPanel {
         ) {
             return match rc {
                 RowClick::DriverToggle(pi) => {
+                    self.focus_mod_tab(pi, ModTab::Driver);
                     vec![PanelAction::DriverToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::EnvelopeToggle(pi) => {
+                    self.focus_mod_tab(pi, ModTab::Envelope);
                     vec![PanelAction::EnvelopeToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::DriverConfig(pi, action) => {
@@ -2133,6 +2158,7 @@ impl ParamCardPanel {
                     vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Effect(ei), self.pid_at(pi))]
                 }
                 RowClick::AudioToggle(pi) => {
+                    self.focus_mod_tab(pi, ModTab::Audio);
                     self.audio_toggle_action(GraphParamTarget::Effect(ei), pi)
                 }
                 RowClick::AudioSelectSend(pi, k) => {
@@ -2237,6 +2263,12 @@ impl ParamCardPanel {
             }
         }
 
+        // Modulation config tab strip (≥2 configs active) → switch shown config.
+        if let Some((pi, tab)) = self.mod_tab_hit(id) {
+            self.focus_mod_tab(pi, tab);
+            return vec![PanelAction::ModConfigTabChanged];
+        }
+
         // Per-param row elements (D/E buttons, config drawers, slider-label
         // copy) — shared dispatch; map RowClick to generator-side actions.
         // Toggle/trigger params are skipped for D/E inside the matcher.
@@ -2253,8 +2285,12 @@ impl ParamCardPanel {
             &self.param_info,
         ) {
             return match rc {
-                RowClick::DriverToggle(pi) => vec![PanelAction::DriverToggle(GraphParamTarget::Generator, self.pid_at(pi))],
+                RowClick::DriverToggle(pi) => {
+                    self.focus_mod_tab(pi, ModTab::Driver);
+                    vec![PanelAction::DriverToggle(GraphParamTarget::Generator, self.pid_at(pi))]
+                }
                 RowClick::EnvelopeToggle(pi) => {
+                    self.focus_mod_tab(pi, ModTab::Envelope);
                     vec![PanelAction::EnvelopeToggle(GraphParamTarget::Generator, self.pid_at(pi))]
                 }
                 RowClick::DriverConfig(pi, action) => {
@@ -2264,6 +2300,7 @@ impl ParamCardPanel {
                     vec![PanelAction::AbletonInvertToggle(GraphParamTarget::Generator, self.pid_at(pi))]
                 }
                 RowClick::AudioToggle(pi) => {
+                    self.focus_mod_tab(pi, ModTab::Audio);
                     self.audio_toggle_action(GraphParamTarget::Generator, pi)
                 }
                 RowClick::AudioSelectSend(pi, k) => {
@@ -3174,6 +3211,81 @@ mod tests {
 
         // Arming the envelope adds the orange target handle on the slider track.
         assert!(panel.target_ids[0].is_some());
+    }
+
+    #[test]
+    fn two_mods_share_one_tabbed_drawer() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        // Arm driver + envelope on param 0 → two configs active.
+        panel.state.mod_state.driver_expanded[0] = true;
+        panel.state.mod_state.envelope_expanded[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        // A tab strip appears with one tab per active config, and only the shown
+        // config (the stored default, Driver) is built — not both stacked.
+        assert_eq!(
+            panel.mod_tab_ids[0].len(),
+            2,
+            "tab strip shows both active configs"
+        );
+        assert!(
+            panel.driver_config_ids[0].is_some(),
+            "the shown config (driver) is built"
+        );
+        assert!(
+            panel.envelope_config_ids[0].is_none(),
+            "the hidden config is not built (no stacking)"
+        );
+        // Track overlays still show for every armed mod regardless of the tab.
+        assert!(panel.trim_ids[0].is_some(), "driver trim stays on the track");
+        assert!(
+            panel.target_ids[0].is_some(),
+            "envelope target stays on the track"
+        );
+    }
+
+    #[test]
+    fn tabbed_drawer_height_is_one_config_plus_strip_not_the_sum() {
+        let mut driver_only = ParamCardPanel::new();
+        driver_only.configure(&effect_config());
+        driver_only.state.mod_state.driver_expanded[0] = true;
+        let driver_h = driver_only.compute_height();
+
+        let mut both = ParamCardPanel::new();
+        both.configure(&effect_config());
+        both.state.mod_state.driver_expanded[0] = true;
+        both.state.mod_state.envelope_expanded[0] = true;
+        let both_h = both.compute_height();
+
+        // Two armed = the shown config (driver) + the tab strip — exactly one
+        // tab strip taller than driver-only. The old stacking would have added a
+        // whole ENV_CONFIG_HEIGHT on top.
+        let expected = driver_h + crate::panels::param_slider_shared::MOD_TAB_STRIP_H;
+        assert!(
+            (both_h - expected).abs() < 0.01,
+            "two mods = one config + tab strip, not stacked: both={both_h} expected={expected}"
+        );
+    }
+
+    #[test]
+    fn clicking_a_mod_tab_switches_the_shown_config() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.state.mod_state.driver_expanded[0] = true;
+        panel.state.mod_state.envelope_expanded[0] = true;
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+
+        let (env_tab_id, _) = panel.mod_tab_ids[0]
+            .iter()
+            .find(|(_, t)| *t == ModTab::Envelope)
+            .copied()
+            .expect("envelope tab present");
+        let actions = panel.handle_click(env_tab_id);
+        assert!(matches!(actions.as_slice(), [PanelAction::ModConfigTabChanged]));
+        assert_eq!(panel.mod_active_tab[0], ModTab::Envelope);
     }
 
     #[test]

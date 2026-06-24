@@ -1115,6 +1115,12 @@ pub(super) fn dispatch_inspector(
             );
             DispatchResult::structural()
         }
+        PanelAction::ModConfigTabChanged => {
+            // The card already switched its own active-tab UI state in
+            // handle_click; this just forces a rebuild so the drawer repaints
+            // with the newly-selected config. No model mutation.
+            DispatchResult::structural()
+        }
         PanelAction::EffectCardClicked(_) => {
             // Deselect generator card when an effect card is clicked
             if let Some(gp) = ui.inspector.gen_params_mut() {
