@@ -22,6 +22,48 @@ pub fn contrast_text_color(bg: Color32) -> Color32 {
     }
 }
 
+// ════════════════════════════════════════════════════════════════════
+// DESIGN TOKENS — single source of truth for the UI's look.
+//
+// The semantic constants below (PANEL_BG, INSPECTOR_BG, DROPDOWN_BG, …)
+// map ONTO these tokens. Edit a token here and every surface that consumes
+// it shifts together — that is the whole point: no more per-panel greys
+// drifting apart.
+//
+// Grouping comes from FILL LEVEL, not boxes: a section is BG_2 sitting on
+// BG_1; a control is BG_3 sitting on BG_2. Each ramp step is ~9–11 apart so
+// the layers read as distinct (the old palette had ~4 greys colliding at
+// 26–27, so nothing separated). (+1–2 blue channel for screen neutrality.)
+//
+// Keep it dark. "High contrast" for a live tool means clearly DISTINCT
+// LEVELS, not a bright UI — a bright UI is fatiguing on stage and glows in a
+// dark room. Distinct steps + bold accent, still dark.
+//
+// Spacing / radius / font scales are tokens too — they live further down
+// (search "Spacing scale", "Corner radii", "Font sizes").
+// ════════════════════════════════════════════════════════════════════
+
+// ── Grey ramp (elevation) ───────────────────────────────────────────
+pub const BG_0: Color32 = Color32::new(13, 13, 14, 255); // app / void
+pub const BG_1: Color32 = Color32::new(22, 22, 24, 255); // panel
+pub const BG_2: Color32 = Color32::new(31, 31, 33, 255); // card / section (on a panel)
+pub const BG_3: Color32 = Color32::new(42, 42, 45, 255); // control / input (on a section)
+// Hover = one notch up, pressed = one notch down. Same deltas everywhere.
+pub const BG_1_HOVER: Color32 = Color32::new(30, 30, 32, 255);
+pub const BG_2_HOVER: Color32 = Color32::new(39, 39, 42, 255);
+pub const BG_2_PRESSED: Color32 = Color32::new(26, 26, 28, 255);
+pub const BG_3_HOVER: Color32 = Color32::new(50, 50, 54, 255);
+pub const BG_3_PRESSED: Color32 = Color32::new(36, 36, 39, 255);
+
+// ── Dividers (two roles, one value each) ────────────────────────────
+// Was five near-duplicate line colours hand-picked per panel. Now:
+//   DIVIDER — subtle hairline BETWEEN groups (chrome, dropdown items,
+//             section breaks). A line between things, not a box around them.
+//   GROOVE  — dark inset line separating stacked tracks/rows in the
+//             timeline + layer panel (reads as void showing through).
+pub const DIVIDER: Color32 = Color32::new(56, 56, 60, 255);
+pub const GROOVE: Color32 = Color32::new(12, 12, 14, 255);
+
 // All UI color constants ported from UIConstants.cs.
 //
 // PALETTE: "Studio"
@@ -29,30 +71,32 @@ pub fn contrast_text_color(bg: Color32) -> Color32 {
 // Primary accent: Clean blue (0.35, 0.58, 0.92) — selection, focus, interactive
 // Semantic: Desaturated green/gold/coral — status only
 // Text: Off-white primary (0.88) — reduces eye strain over long sessions
-// Elevation: 6-level hierarchy, each step 3-5% luminance apart
+// Elevation: 4-step grey ramp (BG_0..BG_3) above — see DESIGN TOKENS
 
 // ── Panel / Background ──────────────────────────────────────────────
-// 6-level elevation: Void → Deep → Base → Surface → Raised → Elevated
-pub const PANEL_BG: Color32 = Color32::new(37, 37, 38, 245);
-pub const TRACK_BG: Color32 = Color32::new(36, 36, 37, 255);
-pub const TRACK_BG_ALT: Color32 = Color32::new(27, 27, 28, 255);
-pub const INSPECTOR_BG: Color32 = Color32::new(26, 26, 27, 255);
-pub const INSPECTOR_BG_FOCUSED: Color32 = Color32::new(32, 32, 34, 255);
-pub const HEADER_BG: Color32 = Color32::new(16, 16, 16, 255);
-pub const CONTROL_BG: Color32 = Color32::new(27, 27, 28, 255);
-pub const INPUT_FIELD_BG: Color32 = Color32::new(49, 49, 51, 255);
-pub const INPUT_FIELD_BG_ALT: Color32 = Color32::new(40, 40, 42, 255);
-pub const DARK_BG: Color32 = Color32::new(13, 13, 14, 255);
+// Mapped onto the grey ramp (BG_0..BG_3). Chrome bars (header / transport /
+// footer / HUD) keep their own near-black level — they're the deliberate
+// dark frame around the app, not part of the elevation ramp.
+pub const PANEL_BG: Color32 = Color32::new(22, 22, 24, 245); // BG_1 @ a245
+pub const TRACK_BG: Color32 = BG_2; // timeline lane
+pub const TRACK_BG_ALT: Color32 = BG_1; // alternating lane
+pub const INSPECTOR_BG: Color32 = BG_1;
+pub const INSPECTOR_BG_FOCUSED: Color32 = BG_1_HOVER;
+pub const HEADER_BG: Color32 = Color32::new(16, 16, 16, 255); // chrome
+pub const CONTROL_BG: Color32 = BG_2;
+pub const INPUT_FIELD_BG: Color32 = BG_3;
+pub const INPUT_FIELD_BG_ALT: Color32 = BG_2;
+pub const DARK_BG: Color32 = BG_0;
 pub const SCROLLBAR_BG: Color32 = Color32::new(18, 18, 19, 128);
-pub const DROPDOWN_BG: Color32 = Color32::new(27, 27, 28, 255);
-pub const DROPDOWN_ITEM_BG: Color32 = Color32::new(49, 49, 51, 255);
-pub const DROPDOWN_TEMPLATE_BG: Color32 = Color32::new(33, 33, 34, 255);
-pub const PICKER_BG: Color32 = Color32::new(14, 14, 15, 247);
-pub const PROGRESS_BAR_BG: Color32 = Color32::new(36, 36, 38, 242);
-pub const TRANSPORT_BAR_BG: Color32 = Color32::new(16, 16, 16, 255);
-pub const FOOTER_BG: Color32 = Color32::new(19, 19, 20, 255);
-pub const OVERLAY_BG: Color32 = Color32::new(13, 13, 14, 237);
-pub const HUD_BG: Color32 = Color32::new(10, 10, 11, 255);
+pub const DROPDOWN_BG: Color32 = BG_2;
+pub const DROPDOWN_ITEM_BG: Color32 = BG_3;
+pub const DROPDOWN_TEMPLATE_BG: Color32 = BG_2;
+pub const PICKER_BG: Color32 = Color32::new(14, 14, 15, 247); // overlay scrim
+pub const PROGRESS_BAR_BG: Color32 = Color32::new(31, 31, 33, 242); // BG_2 @ a242
+pub const TRANSPORT_BAR_BG: Color32 = Color32::new(16, 16, 16, 255); // chrome
+pub const FOOTER_BG: Color32 = Color32::new(19, 19, 20, 255); // chrome
+pub const OVERLAY_BG: Color32 = Color32::new(13, 13, 14, 237); // BG_0 @ a237
+pub const HUD_BG: Color32 = Color32::new(10, 10, 11, 255); // HUD (below void)
 
 // ── Accent colors ─────────────────────────────────────────────────
 pub const ACCENT_BLUE: Color32 = Color32::new(89, 148, 235, 255);
@@ -68,15 +112,15 @@ pub const BUTTON_INACTIVE: Color32 = Color32::new(59, 59, 61, 255);
 pub const BUTTON_DIM: Color32 = Color32::new(71, 71, 74, 255);
 pub const BUTTON_HIGHLIGHTED: Color32 = Color32::new(87, 87, 89, 255);
 pub const BUTTON_PRESSED: Color32 = Color32::new(46, 46, 48, 255);
-pub const SEPARATOR_COLOR: Color32 = Color32::new(15, 15, 17, 255);
+pub const SEPARATOR_COLOR: Color32 = GROOVE; // track groove
 pub const TRACK_SEPARATOR_HEIGHT: f32 = 2.0;
 pub const GROUP_SEPARATOR_HEIGHT: f32 = 3.0;
-pub const GROUP_SEPARATOR_COLOR: Color32 = Color32::new(10, 10, 12, 255);
-pub const DIVIDER_COLOR: Color32 = Color32::new(56, 56, 60, 255);
+pub const GROUP_SEPARATOR_COLOR: Color32 = GROOVE; // group groove (heavier via height, not colour)
+pub const DIVIDER_COLOR: Color32 = DIVIDER;
 pub const HANDLE_BG: Color32 = Color32::new(59, 59, 61, 255);
 pub const CHEVRON_COLOR: Color32 = Color32::new(102, 102, 107, 179);
 pub const SCROLLBAR_HANDLE: Color32 = Color32::new(89, 89, 94, 204);
-pub const SLIDER_BG: Color32 = Color32::new(31, 31, 32, 255);
+pub const SLIDER_BG: Color32 = BG_2;
 pub const DRAG_HANDLE_HOVER: Color32 = Color32::new(46, 46, 48, 255);
 pub const SLIDER_HANDLE: Color32 = Color32::new(199, 199, 204, 255);
 pub const TOGGLE_HIGHLIGHTED: Color32 = Color32::new(217, 217, 222, 255);
@@ -158,12 +202,12 @@ pub const ANALYSIS_COLOR: Color32 = Color32::new(0, 178, 170, 255);
 
 // ── Effect rack ─────────────────────────────────────────────────────
 pub const RACK_BORDER: Color32 = Color32::new(56, 56, 61, 255);
-pub const RACK_BG: Color32 = Color32::new(29, 29, 31, 255);
+pub const RACK_BG: Color32 = BG_2;
 pub const CARD_BORDER: Color32 = Color32::new(46, 46, 49, 255);
 pub const RACK_HANDLE_BG: Color32 = Color32::new(37, 37, 43, 255);
 pub const RACK_HANDLE_TEXT: Color32 = Color32::new(122, 128, 158, 255);
 pub const EFFECT_HEADER_NAME: Color32 = Color32::new(184, 199, 235, 255);
-pub const EFFECT_CARD_INNER_BG: Color32 = Color32::new(19, 19, 20, 255);
+pub const EFFECT_CARD_INNER_BG: Color32 = BG_0; // dark well, recessed in the card
 pub const REMOVE_BTN_BG: Color32 = Color32::new(71, 33, 33, 255);
 pub const REMOVE_BTN_HIGHLIGHTED: Color32 = Color32::new(230, 191, 191, 255);
 pub const REMOVE_BTN_PRESSED: Color32 = Color32::new(184, 140, 140, 255);
@@ -197,7 +241,7 @@ pub const ENVELOPE_INACTIVE: Color32 = Color32::new(64, 64, 69, 255);
 pub const ENVELOPE_CARD_BG: Color32 = Color32::new(23, 23, 24, 255);
 
 // ── Param group ─────────────────────────────────────────────────────
-pub const PARAM_GROUP_BG: Color32 = Color32::new(46, 46, 48, 255);
+pub const PARAM_GROUP_BG: Color32 = BG_3;
 
 // ── Grid lines ──────────────────────────────────────────────────────
 pub const GRID_BAR_LINE: Color32 = Color32::new(107, 107, 112, 128);
@@ -387,17 +431,17 @@ pub fn marker_color_to_color32(color: crate::types::MarkerColor) -> Color32 {
 pub const TRANSPARENT: Color32 = Color32::new(0, 0, 0, 0);
 pub const HOVER_OVERLAY: Color32 = Color32::new(255, 255, 255, 15);
 pub const PRESS_OVERLAY: Color32 = Color32::new(255, 255, 255, 25);
-pub const PANEL_BG_DARK: Color32 = Color32::new(26, 26, 27, 255);
+pub const PANEL_BG_DARK: Color32 = BG_1;
 pub const TEXT_PRIMARY_C32: Color32 = Color32::new(224, 224, 230, 255);
 pub const TEXT_WHITE_C32: Color32 = Color32::new(255, 255, 255, 255);
 pub const TEXT_LIGHT_C32: Color32 = Color32::new(220, 220, 225, 255);
 pub const TEXT_DIMMED_C32: Color32 = Color32::new(158, 158, 163, 255);
-pub const DIVIDER_C32: Color32 = Color32::new(56, 56, 60, 255);
+pub const DIVIDER_C32: Color32 = DIVIDER;
 
 // ── Bitmap Slider Palette ───────────────────────────────────────────
-pub const SLIDER_TRACK_C32: Color32 = Color32::new(40, 40, 42, 255);
-pub const SLIDER_TRACK_HOVER_C32: Color32 = Color32::new(48, 48, 52, 255);
-pub const SLIDER_TRACK_PRESSED_C32: Color32 = Color32::new(36, 36, 38, 255);
+pub const SLIDER_TRACK_C32: Color32 = BG_3;
+pub const SLIDER_TRACK_HOVER_C32: Color32 = BG_3_HOVER;
+pub const SLIDER_TRACK_PRESSED_C32: Color32 = BG_3_PRESSED;
 pub const SLIDER_FILL_C32: Color32 = Color32::new(55, 85, 125, 180);
 pub const SLIDER_THUMB_C32: Color32 = Color32::new(180, 200, 230, 255);
 pub const SLIDER_TEXT_C32: Color32 = Color32::new(190, 190, 195, 255);
@@ -422,7 +466,7 @@ pub const ENVELOPE_ACTIVE_HOVER_C32: Color32 = Color32::new(211, 135, 40, 255);
 pub const ENVELOPE_ACTIVE_PRESS_C32: Color32 = Color32::new(171, 95, 10, 255);
 
 // ── Bitmap Config Drawer ────────────────────────────────────────────
-pub const CONFIG_BG_C32: Color32 = Color32::new(30, 30, 32, 255);
+pub const CONFIG_BG_C32: Color32 = BG_2;
 pub const CONFIG_BTN_INACTIVE_C32: Color32 = Color32::new(44, 44, 48, 255);
 pub const CONFIG_BTN_HOVER_C32: Color32 = Color32::new(54, 54, 58, 255);
 pub const CONFIG_BTN_PRESSED_C32: Color32 = Color32::new(38, 38, 42, 255);
@@ -458,7 +502,7 @@ pub const MOD_BADGE_C32: Color32 = Color32::new(220, 60, 140, 255);
 pub const MOD_HEADER_BG_C32: Color32 = Color32::new(70, 30, 50, 255);
 
 // ── Bitmap Effect Card ──────────────────────────────────────────────
-pub const EFFECT_CARD_INNER_BG_C32: Color32 = Color32::new(19, 19, 20, 255);
+pub const EFFECT_CARD_INNER_BG_C32: Color32 = BG_0; // dark well, recessed in the card
 pub const CARD_BORDER_C32: Color32 = Color32::new(55, 55, 60, 255);
 pub const DRAG_HANDLE_BG_C32: Color32 = Color32::new(38, 38, 42, 255);
 pub const DRAG_HANDLE_HOVER_BG_C32: Color32 = Color32::new(52, 52, 56, 255);
@@ -591,14 +635,20 @@ pub const GROUP_ACCENT_BAR_WIDTH: f32 = 5.0;
 pub const GROUP_BOTTOM_BORDER_HEIGHT: f32 = 2.0;
 
 // ── Spacing scale ───────────────────────────────────────────────────
+// 4px base rhythm: 4 / 8 / 12 / 16 / 24. XS (2) is a half-step kept only for
+// genuinely tight chrome. One rhythm everywhere — no ad-hoc paddings.
 pub const SPACE_XS: f32 = 2.0;
 pub const SPACE_S: f32 = 4.0;
 pub const SPACE_M: f32 = 8.0;
 pub const SPACE_L: f32 = 12.0;
+pub const SPACE_XL: f32 = 16.0;
+pub const SPACE_XXL: f32 = 24.0;
 
 // ── Corner radii ────────────────────────────────────────────────────
+// Small + consistent: ~3px controls, ~5px cards. Softens the hard
+// rectangles without going consumer-app bubbly.
 pub const BUTTON_RADIUS: f32 = 3.0;
-pub const CARD_RADIUS: f32 = 4.0;
+pub const CARD_RADIUS: f32 = 5.0;
 pub const SMALL_RADIUS: f32 = 2.0;
 pub const POPUP_RADIUS: f32 = 6.0;
 

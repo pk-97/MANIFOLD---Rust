@@ -72,6 +72,14 @@ not lines.
 
 Build these first. Without them, any new card drifts again within weeks.
 
+> **Status: LOCKED + implemented (Phase 3).** Tokens live in
+> [color.rs](../crates/manifold-ui/src/color.rs) under the `DESIGN TOKENS` banner.
+> The existing semantic constants (`PANEL_BG`, `INSPECTOR_BG`, `DROPDOWN_BG`, …) now map
+> *onto* the ramp rather than each hand-picking a grey, so editing one token shifts every
+> surface that consumes it. This is a **global, visible palette shift** (panels darken from
+> ~37 to bg-1 22; the colliding 26/27 greys spread across distinct steps) — everything is in
+> one file and trivially tunable, but it needs an eyeball pass on the running app.
+
 ### 4.1 Grey ramp (the big one)
 Replace the muddle with a small ramp where each step is clearly distinct (~9–10 values apart):
 
@@ -95,7 +103,14 @@ without going consumer-app bubbly.
 
 ### 4.4 Dividers
 **One** hairline colour, used *between groups only* — not as boxes around everything.
-Retire the three divider constants.
+
+> **Deviation from "retire all three" (deliberate).** Grounded in usage, the three constants
+> are actually **two roles**: `SEPARATOR_COLOR` (15) + `GROUP_SEPARATOR_COLOR` (10) are the
+> dark *track grooves* in the timeline / layer panel, while `DIVIDER_COLOR` / `DIVIDER_C32`
+> (both 56) are the light *chrome hairlines*. Forcing the timeline grooves to a light hairline
+> would restyle the most-used surface blind. So Phase 3 collapses the **redundancy** into one
+> token per role — `DIVIDER` (hairline, 56) and `GROOVE` (12) — instead of one global value.
+> The old names persist as thin aliases. If we want grooves gone too, it's a one-line change.
 
 ### 4.5 Text tiers
 Keep the existing ramp (primary/secondary/dim/faint). Ensure each clears a contrast floor
@@ -332,7 +347,8 @@ Not in most desktop checklists — these are ours because the tool is played liv
   *set* isn't shown cleanly. Worth a subtle base tick / hover-reveal.
 - **"Modulated-only" view** — optional per-layer filter to audit just audio-driven params (idea,
   not committed).
-- Exact token values (grey ramp steps, radii, spacing) — §4 is a proposal to lock.
+- ~~Exact token values (grey ramp steps, radii, spacing) — §4 is a proposal to lock.~~ **Locked
+  in Phase 3** (13/22/31/42 ramp, 3px/5px radius, 4/8/12/16/24 spacing); tunable in one file.
 - Whether to match transport/footer heights exactly or keep a deliberate ratio.
 
 ---
@@ -346,7 +362,10 @@ Not in most desktop checklists — these are ours because the tool is played liv
 2. **Type-in + dropdown type-ahead** — extend `TextInputState` to inspector numeric params
    (double-click → type → clamp → dispatch); add type-ahead to the dropdown `KeyDown`.
    Self-contained, infra already exists.
-3. **Design tokens** — audit `color.rs`, lock the grey ramp / spacing / radius / divider tokens.
+3. **Design tokens** ✅ — `color.rs` audited; grey ramp (`BG_0..BG_3` + hover/pressed), spacing
+   (`SPACE_XL` 16 / `SPACE_XXL` 24), card radius (4→5), and the two divider tokens (`DIVIDER`
+   hairline + `GROOVE`) locked. Semantic greys re-pointed onto the ramp. Static checks pass
+   (clippy, 385 ui tests); the global palette shift needs an eyeball pass on the running app.
 4. **Components** — build Toggle / Dropdown / SegmentedControl / IconButton / Button / ParamRow
    on the tokens.
 5. **Prototype on Edge Detect only** — assemble the new card; run the app and screenshot each
