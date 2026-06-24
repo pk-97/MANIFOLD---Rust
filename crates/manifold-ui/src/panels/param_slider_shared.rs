@@ -694,25 +694,25 @@ pub(crate) fn build_driver_config(
     let is_free = free_period.is_some();
     let is_sync = !is_free;
 
-    // Row 1 — Rate grid: 11 uniform beat-division cells. Highlights the base
-    // division only in sync mode (free mode lights none — the Free field owns
-    // the rate). Uniform width keeps the grid neat and easy to eyeball.
-    let beat_div_buttons: Vec<DrawerButton> = (0..BEAT_DIV_COUNT)
-        .map(|j| DrawerButton::new(BEAT_DIV_LABELS[j], is_sync && j as i32 == active_div))
-        .collect();
-
-    // Row 2 — Rate detail: [Straight][Dotted][Triplet][Free]. The feel trio is a
-    // mutually-exclusive segment (one lit) shown only in sync mode; Free shows
-    // the typed period (free mode) or "Free" (sync) and opens the beats type-in.
+    // Row 1 — Rate: the 11 beat-division cells then Free (an alternative rate, so
+    // it sits with the divisions). Uniform width keeps the row neat. The grid
+    // lights the base division only in sync mode; Free lights in free mode and
+    // shows the typed period (else "Free"), opening the beats type-in.
     let free_label = match free_period {
         Some(p) => fmt_free_period(p),
         None => "Free".to_string(),
     };
+    let mut row1_buttons: Vec<DrawerButton> = (0..BEAT_DIV_COUNT)
+        .map(|j| DrawerButton::new(BEAT_DIV_LABELS[j], is_sync && j as i32 == active_div))
+        .collect();
+    row1_buttons.push(DrawerButton::new(free_label, is_free));
+
+    // Row 2 — Feel: [Straight][Dotted][Triplet], a mutually-exclusive segment
+    // (one lit) shown only in sync mode.
     let row2_buttons: Vec<DrawerButton> = vec![
         DrawerButton::new("Straight", is_sync && !is_dotted && !is_triplet),
         DrawerButton::new("Dotted", is_sync && is_dotted),
         DrawerButton::new("Triplet", is_sync && is_triplet),
-        DrawerButton::new(free_label, is_free),
     ];
 
     // Row 3 — Shape + polarity: 5 waveform icons then Invert. The wave glyphs are
@@ -729,7 +729,7 @@ pub(crate) fn build_driver_config(
     let spec = DrawerSpec {
         rows: vec![
             DrawerRow::Buttons {
-                buttons: beat_div_buttons,
+                buttons: row1_buttons,
                 width: ButtonWidth::Uniform,
                 label: None,
             },
@@ -742,14 +742,14 @@ pub(crate) fn build_driver_config(
     let dids = drawer::build(tree, parent, x, y, w, &spec);
 
     // Reconstruct typed ids from the flat button list (row order):
-    //   0..11  grid · 11 straight · 12 dotted · 13 triplet · 14 free
+    //   0..11  grid · 11 free · 12 straight · 13 dotted · 14 triplet
     //   15..20 waveforms · 20 invert.
     let ids = dids.button_ids();
     let beat_div_btn_ids: [NodeId; BEAT_DIV_COUNT] = std::array::from_fn(|j| ids[j]);
-    let straight_btn_id = ids[BEAT_DIV_COUNT];
-    let dotted_btn_id = ids[BEAT_DIV_COUNT + 1];
-    let triplet_btn_id = ids[BEAT_DIV_COUNT + 2];
-    let free_btn_id = ids[BEAT_DIV_COUNT + 3];
+    let free_btn_id = ids[BEAT_DIV_COUNT];
+    let straight_btn_id = ids[BEAT_DIV_COUNT + 1];
+    let dotted_btn_id = ids[BEAT_DIV_COUNT + 2];
+    let triplet_btn_id = ids[BEAT_DIV_COUNT + 3];
     let wave_base = BEAT_DIV_COUNT + 4;
     let wave_btn_ids: [NodeId; WAVEFORM_COUNT] = std::array::from_fn(|j| ids[wave_base + j]);
     let invert_btn_id = ids[wave_base + WAVEFORM_COUNT];
