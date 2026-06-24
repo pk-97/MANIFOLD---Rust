@@ -1,0 +1,247 @@
+{
+  "version": 2,
+  "name": "DigitalDrift",
+  "description": "Digital Drift — a faithful node-graph rebuild of the Latent Space website background mosh, reconstructed from composable atoms (no wgsl_compute monolith). The website's single fragment pass decomposes into three contributions that all sum into one UV offset and resample the source once, exactly as the original does: (1) the per-band horizontal slide is node.scanline_jitter_field in its new Slide motion (smooth value-noise drift, every band, ungated — band count = `bands`), emitting a signed R offset; (2) the organic domain-warp flow is built from atoms — system.generator_input.time → two node.math (Multiply by +0.13 / -0.13) produce the website's t = u_time*0.13 and -t, fed into two node.noise nodes in the new Value type (the 123.34/456.21/45.32 value-noise hash) sampled at uv*3 ± t, packed R/G by node.pack_channels and re-ranged to a signed UV offset by node.scale_offset_texture(scale 0.028, offset -0.014) = (value_noise - 0.5)*0.028; (3) node.mix(Add) sums the flow offset (RG) and the slide offset (R), and node.remap(Relative) warps the source by the summed field in a single resample. The RGB fringe at the seams is node.radial_offset_field(Linear, angle 0) → node.chromatic_displace, the horizontal channel split. A final node.mix(Lerp, amount) crossfades the whole effect back over the untouched source so Drift=0 is a clean passthrough (skipMode onZero). node.value fans the master Drift to both the slide amount and the final crossfade. The value-noise field is the literal website function — the Value type on node.noise and the matching hash on node.scanline_jitter_field's Slide mode both carry the same 123.34/456.21/45.32 constants — so this is the actual effect, not a lookalike. Documented divergences vs the website: (a) the warp + slide resample once after summing (the website also samples once); the chromatic split is a separate post pass on the warped image (a tiny extra bilinear tap, visually negligible) rather than folded into the same fetch; (b) the website's occasional glitch-gate `g` (smoothstep-gated big shift + g-scaled chromatic) is omitted — Digital Drift is the calm continuous form; add a second node.scanline_jitter_field in Tear mode for the spiky accent; (c) source UVs are canvas [0,1] (the clip already fills the canvas) rather than the website's aspect-cover branch. Time comes from system.generator_input.time (flow) and FrameTime.seconds (the slide reads it internally).",
+  "presetMetadata": {
+    "id": "DigitalDrift",
+    "displayName": "Digital Drift",
+    "category": "Filmic",
+    "oscPrefix": "digitaldrift",
+    "available": true,
+    "params": [
+      {
+        "id": "amount",
+        "name": "Drift",
+        "min": 0.0,
+        "max": 1.0,
+        "defaultValue": 1.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2"
+      },
+      {
+        "id": "speed",
+        "name": "Speed",
+        "min": 0.1,
+        "max": 10.0,
+        "defaultValue": 2.0,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "Speed"
+      },
+      {
+        "id": "bands",
+        "name": "Bands",
+        "min": 0.0,
+        "max": 128.0,
+        "defaultValue": 36.0,
+        "wholeNumbers": true,
+        "isToggle": false,
+        "formatString": "F0",
+        "oscSuffix": "Bands"
+      },
+      {
+        "id": "rgb_shift",
+        "name": "RGB Shift",
+        "min": 0.0,
+        "max": 0.03,
+        "defaultValue": 0.008,
+        "wholeNumbers": false,
+        "isToggle": false,
+        "formatString": "F2",
+        "oscSuffix": "RGBShift"
+      }
+    ],
+    "bindings": [
+      {
+        "id": "amount",
+        "label": "Drift",
+        "defaultValue": 1.0,
+        "target": { "kind": "node", "nodeId": "drift_amount", "param": "value" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "speed",
+        "label": "Speed",
+        "defaultValue": 2.0,
+        "target": { "kind": "node", "nodeId": "rows", "param": "speed" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "bands",
+        "label": "Bands",
+        "defaultValue": 36.0,
+        "target": { "kind": "node", "nodeId": "rows", "param": "bands" },
+        "convert": { "type": "Float" }
+      },
+      {
+        "id": "rgb_shift",
+        "label": "RGB Shift",
+        "defaultValue": 0.008,
+        "target": { "kind": "node", "nodeId": "split", "param": "amount" },
+        "convert": { "type": "Float" },
+        "scale": -1000.0
+      }
+    ],
+    "skipMode": {
+      "kind": "onZero",
+      "paramId": "amount"
+    }
+  },
+  "nodes": [
+    { "id": 0, "typeId": "system.source", "handle": "source", "nodeId": "source" },
+    { "id": 1, "typeId": "system.generator_input", "handle": "gen_in", "nodeId": "gen_in" },
+    {
+      "id": 2,
+      "typeId": "node.math",
+      "handle": "t_pos", "nodeId": "t_pos",
+      "title": "t = time*0.13",
+      "params": {
+        "op": { "type": "Enum", "value": 2 },
+        "b": { "type": "Float", "value": 0.13 }
+      }
+    },
+    {
+      "id": 3,
+      "typeId": "node.math",
+      "handle": "t_neg", "nodeId": "t_neg",
+      "title": "-t = time*-0.13",
+      "params": {
+        "op": { "type": "Enum", "value": 2 },
+        "b": { "type": "Float", "value": -0.13 }
+      }
+    },
+    {
+      "id": 4,
+      "typeId": "node.noise",
+      "handle": "flow_a", "nodeId": "flow_a",
+      "title": "value_noise(uv*3 + t)",
+      "params": {
+        "type": { "type": "Enum", "value": 3 },
+        "scale": { "type": "Float", "value": 3.0 }
+      }
+    },
+    {
+      "id": 5,
+      "typeId": "node.noise",
+      "handle": "flow_b", "nodeId": "flow_b",
+      "title": "value_noise(uv*3 - t)",
+      "params": {
+        "type": { "type": "Enum", "value": 3 },
+        "scale": { "type": "Float", "value": 3.0 }
+      }
+    },
+    {
+      "id": 6,
+      "typeId": "node.pack_channels",
+      "handle": "flow_pack", "nodeId": "flow_pack",
+      "title": "pack R=A G=B"
+    },
+    {
+      "id": 7,
+      "typeId": "node.scale_offset_texture",
+      "handle": "flow_offset", "nodeId": "flow_offset",
+      "title": "(n - 0.5) * 0.028",
+      "params": {
+        "scale": { "type": "Float", "value": 0.028 },
+        "offset": { "type": "Float", "value": -0.014 }
+      }
+    },
+    {
+      "id": 8,
+      "typeId": "node.scanline_jitter_field",
+      "handle": "rows", "nodeId": "rows",
+      "title": "Slide rows",
+      "params": {
+        "amount": { "type": "Float", "value": 0.0 },
+        "scanline": { "type": "Float", "value": 0.3 },
+        "speed": { "type": "Float", "value": 2.0 },
+        "motion": { "type": "Enum", "value": 1 },
+        "bands": { "type": "Float", "value": 36.0 }
+      }
+    },
+    {
+      "id": 9,
+      "typeId": "node.mix",
+      "handle": "sum_offset", "nodeId": "sum_offset",
+      "title": "flow + slide",
+      "params": {
+        "amount": { "type": "Float", "value": 1.0 },
+        "mode": { "type": "Enum", "value": 2 }
+      }
+    },
+    {
+      "id": 10,
+      "typeId": "node.remap",
+      "handle": "warp", "nodeId": "warp",
+      "title": "warp source",
+      "params": {
+        "wrap": { "type": "Enum", "value": 0 },
+        "mode": { "type": "Enum", "value": 1 }
+      }
+    },
+    {
+      "id": 11,
+      "typeId": "node.radial_offset_field",
+      "handle": "split_dir", "nodeId": "split_dir",
+      "title": "horizontal split dir",
+      "params": {
+        "mode": { "type": "Enum", "value": 1 },
+        "angle": { "type": "Float", "value": 0.0 },
+        "falloff": { "type": "Float", "value": 0.5 }
+      }
+    },
+    {
+      "id": 12,
+      "typeId": "node.chromatic_displace",
+      "handle": "split", "nodeId": "split",
+      "title": "RGB split",
+      "params": {
+        "amount": { "type": "Float", "value": -8.0 }
+      }
+    },
+    {
+      "id": 13,
+      "typeId": "node.value",
+      "handle": "drift_amount", "nodeId": "drift_amount",
+      "title": "Drift",
+      "params": {
+        "value": { "type": "Float", "value": 0.0 }
+      }
+    },
+    {
+      "id": 14,
+      "typeId": "node.mix",
+      "handle": "crossfade", "nodeId": "crossfade",
+      "title": "crossfade over source",
+      "params": {
+        "amount": { "type": "Float", "value": 0.0 },
+        "mode": { "type": "Enum", "value": 0 }
+      }
+    },
+    { "id": 15, "typeId": "system.final_output", "handle": "final_output", "nodeId": "final_output" }
+  ],
+  "wires": [
+    { "fromNode": 0, "fromPort": "out", "toNode": 10, "toPort": "source" },
+    { "fromNode": 1, "fromPort": "time", "toNode": 2, "toPort": "a" },
+    { "fromNode": 1, "fromPort": "time", "toNode": 3, "toPort": "a" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "offset_x" },
+    { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "offset_y" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "offset_x" },
+    { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "offset_y" },
+    { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "r" },
+    { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "g" },
+    { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" },
+    { "fromNode": 7, "fromPort": "out", "toNode": 9, "toPort": "a" },
+    { "fromNode": 8, "fromPort": "offset", "toNode": 9, "toPort": "b" },
+    { "fromNode": 9, "fromPort": "out", "toNode": 10, "toPort": "uv_field" },
+    { "fromNode": 10, "fromPort": "out", "toNode": 12, "toPort": "in" },
+    { "fromNode": 11, "fromPort": "out", "toNode": 12, "toPort": "velocity" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 8, "toPort": "amount" },
+    { "fromNode": 13, "fromPort": "out", "toNode": 14, "toPort": "amount" },
+    { "fromNode": 0, "fromPort": "out", "toNode": 14, "toPort": "a" },
+    { "fromNode": 12, "fromPort": "out", "toNode": 14, "toPort": "b" },
+    { "fromNode": 14, "fromPort": "out", "toNode": 15, "toPort": "in" }
+  ]
+}

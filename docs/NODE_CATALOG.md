@@ -116,7 +116,7 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Flow Field Noise | `node.flow_field_noise` | Source | Generates a swirling 2D flow field from layered noise, the velocity field you feed into advect or displace for fluid-like motion. |
-| Noise | `node.noise` | Source | Procedural noise in one node. Pick the Type, set the Scale, and raise Detail to stack octaves into rich fractal noise. Perlin and Simplex are smooth and organi… |
+| Noise | `node.noise` | Source | Procedural noise in one node. Pick the Type, set the Scale, and raise Detail to stack octaves into rich fractal noise. Perlin, Simplex, and Value are smooth an… |
 | Simplex Field 2D | `node.simplex_field_2d` | Source | Signed simplex noise output as a field, used to drive flows and displacements rather than shown directly. |
 | Voronoi 2D | `node.voronoi_2d` | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
 
@@ -325,7 +325,7 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | — | `node.rotate_vec2_90` | Map | Rotates a 2D vector field by 90 degrees. The fixed-angle older version of Rotate Vector. |
 | Rotate Vector | `node.rotate_vec2_by_angle` | Map | Rotates a 2D vector field by an angle, turning every arrow in a flow or gradient field by the same amount. |
 | Sample Volume 2D | `node.sample_volume_2d` | Filter | Takes a flat slice through a 3D volume to get a normal 2D image. The way to look inside a fluid or density field. |
-| Scanline Jitter Field | `node.scanline_jitter_field` | Source | Outputs a random horizontal offset per row, the displacement behind VHS tearing and horizontal glitch. Feed it into Remap. |
+| Scanline Jitter Field | `node.scanline_jitter_field` | Source | Per-row horizontal offset for sideways glitch. Tear = gated VHS jolt; Slide = smooth organic per-band drift. Set Bands for chunky strips, feed it into Remap. |
 | Sine Wave (projected) | `node.sin_term` | Map | Mixes a coordinate field into a moving sine wave in one step, the core ingredient of plasma and interference patterns. |
 | Slope Displace | `node.slope_displace` | Filter | Pushes pixels along the slope of an embossed version of the image, an emboss-driven warp for liquid and paint looks. |
 | Texture Advect | `node.texture_advect` | Filter | Drags a texture along a velocity field, carrying the pixels with the flow. The transport step in a fluid simulation. |
@@ -342,7 +342,7 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | — | `node.perlin_noise_2d` | — | — |
 | — | `node.simplex_noise_2d` | — | — |
 
-### Effect & generator presets (44)
+### Effect & generator presets (45)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -357,6 +357,7 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | `ComputeStrangeAttractor` | Strange Attractor | generator | Procedural | 11 |
 | `ConcentricTunnel` | Concentric Tunnel | generator | Procedural | 6 |
 | `DepthOfField` | Depth of Field | effect | Filmic | 8 |
+| `DigitalDrift` | Digital Drift | effect | Filmic | 4 |
 | `DigitalPlants` | Digital Plants | generator | Procedural | 14 |
 | `Dither` | Dither | effect | Color | 2 |
 | `Duocylinder` | Duocylinder | generator | Procedural | 11 |

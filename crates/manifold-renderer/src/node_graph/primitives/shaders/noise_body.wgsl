@@ -111,9 +111,32 @@ fn snoise_2d(v_in: vec2<f32>) -> f32 {
     return 130.0 * dot(m, g);
 }
 
+// ---------------- Value noise (Latent Space website mosh field) ----------------
+// Smooth bilinear-interpolated hash grid. hash constants 123.34/456.21/45.32 are
+// the field's fingerprint — output is already in [0,1].
+fn value_hash(p_in: vec2<f32>) -> f32 {
+    var p = fract(p_in * vec2<f32>(123.34, 456.21));
+    p = p + dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+fn value_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let uu = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(value_hash(i),                       value_hash(i + vec2<f32>(1.0, 0.0)), uu.x),
+        mix(value_hash(i + vec2<f32>(0.0, 1.0)), value_hash(i + vec2<f32>(1.0, 1.0)), uu.x),
+        uu.y
+    );
+}
+
 fn base_noise(p: vec2<f32>, noise_type: u32) -> f32 {
     if noise_type == 1u {
         return snoise_2d(p);
+    }
+    if noise_type == 3u {
+        return value_noise(p);
     }
     return perlin2(p);
 }
@@ -148,6 +171,9 @@ fn body(uv: vec2<f32>, dims: vec2<f32>, noise_type: u32, scale: f32, offset_x: f
     var v: f32;
     if noise_type == 1u {
         v = 0.5 * (raw + 1.0);
+    } else if noise_type == 3u {
+        // Value noise already lands in [0,1]; octave-averaging keeps it there.
+        v = clamp(raw, 0.0, 1.0);
     } else {
         v = clamp(0.5 + raw * 0.7071067811865475, 0.0, 1.0);
     }

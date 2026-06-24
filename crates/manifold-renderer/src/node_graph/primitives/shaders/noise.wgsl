@@ -15,6 +15,9 @@
 //   noise_type 2 = Random : per-pixel wang_hash on quantised UV. R channel
 //                           only, GB=0 (matches node.hash_noise_field_2d).
 //                           Octaves do not apply.
+//   noise_type 3 = Value  : smooth bilinear hash-grid value noise (123.34/
+//                           456.21/45.32 hash). Already [0,1], clamp remap,
+//                           RGB. Drives the Latent Space website mosh field.
 //
 // Output rgba16float. wang_hash is shared by the Perlin gradient table and the
 // Random branch (identical hash in both originals).
@@ -142,9 +145,32 @@ fn snoise_2d(v_in: vec2<f32>) -> f32 {
     return 130.0 * dot(m, g);
 }
 
+// ---------------- Value noise (Latent Space website mosh field) ----------------
+// Smooth bilinear-interpolated hash grid. hash constants 123.34/456.21/45.32 are
+// the field's fingerprint — output is already in [0,1].
+fn value_hash(p_in: vec2<f32>) -> f32 {
+    var p = fract(p_in * vec2<f32>(123.34, 456.21));
+    p = p + dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+fn value_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let uu = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(value_hash(i),                       value_hash(i + vec2<f32>(1.0, 0.0)), uu.x),
+        mix(value_hash(i + vec2<f32>(0.0, 1.0)), value_hash(i + vec2<f32>(1.0, 1.0)), uu.x),
+        uu.y
+    );
+}
+
 fn base_noise(p: vec2<f32>) -> f32 {
     if u.noise_type == 1 {
         return snoise_2d(p);
+    }
+    if u.noise_type == 3 {
+        return value_noise(p);
     }
     return perlin2(p);
 }
@@ -190,6 +216,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if u.noise_type == 1 {
         // Simplex: remap [-1, 1] -> [0, 1], unclamped (matches original).
         v = 0.5 * (raw + 1.0);
+    } else if u.noise_type == 3 {
+        // Value noise already lands in [0,1]; octave-averaging keeps it there.
+        v = clamp(raw, 0.0, 1.0);
     } else {
         // Perlin / fBM: raw range ~[-0.707, 0.707], scaled then remapped+clamped.
         v = clamp(0.5 + raw * 0.7071067811865475, 0.0, 1.0);

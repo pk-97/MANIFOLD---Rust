@@ -24,13 +24,23 @@ struct ScanlineJitterUniforms {
     amount: f32,
     scanline: f32,
     speed: f32,
+    motion: i32,
+    bands: f32,
     time: f32,
+    _pad0: f32,
+    _pad1: f32,
 }
+
+/// `motion` selector values. Index into the `motion` enum param and the
+/// shader's `motion` uniform. `Tear` (default) is the byte-identical legacy
+/// VHS jolt; `Slide` is the smooth continuous per-band value-noise drift
+/// (the Latent Space website mosh slide).
+pub const SCANLINE_MOTION: &[&str] = &["Tear", "Slide"];
 
 crate::primitive! {
     name: ScanlineJitterField,
     type_id: "node.scanline_jitter_field",
-    purpose: "Generator for a per-row random horizontal-offset field (the VHS / horizontal-tearing building block). Hashes each scanline row (animated by time) and emits `offset` (R = signed horizontal UV shift per row, gated by `scanline` so only a fraction of rows tear). Feed `offset` into node.remap (Relative mode) — alone or summed with node.block_displace_field's offset via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
+    purpose: "Generator for a per-row horizontal-offset field. `motion` picks the character: Tear (default) hashes each scanline row with a sine-hash on quantised time and gates by `scanline` so only a fraction of rows JOLT (the VHS / horizontal-tearing building block); Slide drives every band with smooth value noise on continuous time for an organic, ungated drift (the Latent Space website mosh slide). `bands` sets the band count (0 = one band per pixel row; e.g. 36 for chunky strips). Emits `offset` (R = signed horizontal UV shift per row/band, G=B=0, A=1). Feed `offset` into node.remap (Relative mode) — alone or summed with node.block_displace_field's offset via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
     inputs: {
         amount: ScalarF32 optional,
         speed: ScalarF32 optional,
@@ -64,6 +74,22 @@ crate::primitive! {
             range: Some((0.1, 10.0)),
             enum_values: &[],
         },
+        ParamDef {
+            name: "motion",
+            label: "Motion",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, (SCANLINE_MOTION.len() - 1) as f32)),
+            enum_values: SCANLINE_MOTION,
+        },
+        ParamDef {
+            name: "bands",
+            label: "Bands",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 256.0)),
+            enum_values: &[],
+        },
         // Backing param for the `time` input (port-shadow); run() packs the
         // resolved FrameTime/wired value, so the default below is never live.
         ParamDef {
@@ -75,13 +101,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "offset.r is a signed horizontal shift in UV units (~±0.08 at amount=1), gated by step(1 - scanline*amount*0.3, row_hash) so `scanline` controls how many rows tear and `amount` scales both the count and the magnitude. Sum it with node.block_displace_field's offset via node.mix(Add), then node.remap(mode=Relative, wrap=Clamp). G/B are 0 so a relative remap leaves the vertical axis untouched.",
-    examples: ["preset.effect.glitch"],
+    composition_notes: "Tear mode: offset.r is a signed horizontal shift in UV units (~±0.08 at amount=1), gated by step(1 - scanline*amount*0.3, row_hash) so `scanline` controls how many rows tear and `amount` scales both the count and the magnitude. Slide mode: offset.r = (value_noise(band, time*speed*0.065) - 0.5) * amount * 0.05 — ungated, every band drifts smoothly; band = floor(uv.y*bands) (bands=0 → per pixel row). speed=2 reproduces the website's 0.13 time scale; `scanline` is ignored. Sum the offset with node.block_displace_field's offset via node.mix(Add), then node.remap(mode=Relative, wrap=Clamp). G/B are 0 so a relative remap leaves the vertical axis untouched.",
+    examples: ["preset.effect.glitch", "preset.effect.digital_drift"],
     picker: { label: "Scanline Jitter Field", category: Atom },
-    summary: "Outputs a random horizontal offset per row, the displacement behind VHS tearing and horizontal glitch. Feed it into Remap.",
+    summary: "Per-row horizontal offset for sideways glitch. Tear = gated VHS jolt; Slide = smooth organic per-band drift. Set Bands for chunky strips, feed it into Remap.",
     category: FieldsAndCoordinates,
     role: Source,
-    aliases: ["scanline jitter", "vhs", "tearing", "glitch"],
+    aliases: ["scanline jitter", "vhs", "tearing", "glitch", "slide", "drift", "mosh", "datamosh"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/scanline_jitter_field_body.wgsl"),
 }
@@ -100,6 +126,15 @@ impl Primitive for ScanlineJitterField {
         let amount = scalar_or_param("amount", 0.0);
         let scanline = scalar_or_param("scanline", 0.3);
         let speed = scalar_or_param("speed", 2.0);
+        let motion = match ctx.params.get("motion") {
+            Some(ParamValue::Enum(n)) => *n as i32,
+            Some(ParamValue::Float(f)) => *f as i32,
+            _ => 0,
+        };
+        let bands = match ctx.params.get("bands") {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.0,
+        };
         let time = match ctx.inputs.scalar("time") {
             Some(ParamValue::Float(f)) => f,
             _ => ctx.time.seconds.0 as f32,
@@ -129,7 +164,11 @@ impl Primitive for ScanlineJitterField {
             amount,
             scanline,
             speed,
+            motion,
+            bands,
             time,
+            _pad0: 0.0,
+            _pad1: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(

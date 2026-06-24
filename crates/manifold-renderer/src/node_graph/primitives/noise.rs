@@ -40,12 +40,12 @@ struct NoiseUniforms {
 
 /// Type selector values. Index into the `type` enum param and the shader's
 /// `noise_type` uniform.
-pub const NOISE_TYPES: &[&str] = &["Perlin", "Simplex", "Random"];
+pub const NOISE_TYPES: &[&str] = &["Perlin", "Simplex", "Random", "Value"];
 
 crate::primitive! {
     name: Noise,
     type_id: "node.noise",
-    purpose: "Pure generator. Unified 2D procedural noise: `type` selects Perlin (gradient noise, square-grid lobes), Simplex (cleaner gradient noise, fewer directional artifacts), or Random (per-pixel wang_hash white noise). `octaves` (Detail) stacks frequencies into fBM for Perlin/Simplex (octaves=1 is single-octave; >1 sums lacunarity/persistence-scaled octaves). Output remapped to [0, 1]. Perlin/Simplex broadcast to RGB (A=1); Random writes R only (G=B=0), matching the legacy hash field. Merges and replaces node.perlin_noise_2d / node.simplex_noise_2d / node.fbm_2d / node.hash_noise_field_2d (those type-IDs alias here).",
+    purpose: "Pure generator. Unified 2D procedural noise: `type` selects Perlin (gradient noise, square-grid lobes), Simplex (cleaner gradient noise, fewer directional artifacts), Random (per-pixel wang_hash white noise), or Value (smooth interpolated hash-grid noise — soft, slightly blobby; the classic `fract(sin)`-free value-noise with the 123.34/456.21/45.32 hash, matching the Latent Space website mosh field). `octaves` (Detail) stacks frequencies into fBM for Perlin/Simplex/Value (octaves=1 is single-octave; >1 sums lacunarity/persistence-scaled octaves). Output remapped to [0, 1]. Perlin/Simplex/Value broadcast to RGB (A=1); Random writes R only (G=B=0), matching the legacy hash field. Merges and replaces node.perlin_noise_2d / node.simplex_noise_2d / node.fbm_2d / node.hash_noise_field_2d (those type-IDs alias here).",
     inputs: {
         scale: ScalarF32 optional,
         offset_x: ScalarF32 optional,
@@ -112,13 +112,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Type picks the base function: Perlin (square-grid lobes), Simplex (cleaner, fewer directional artifacts), Random (uncorrelated per-pixel hash for grain / dither / LIC ink — writes R only, G=B=0). Detail (octaves) stacks frequencies into fBM for Perlin/Simplex — Detail 1 is single-octave, raise toward 8 for richer fractal texture. Lacunarity (frequency step per octave) and Persistence (amplitude falloff) shape the fractal spectrum; classic pink fBM is lacunarity 2.0 + persistence 0.5. Detail / Lacunarity / Persistence are ignored by Random. scale / offset_x / offset_y are port-shadow inputs: wire an LFO into offset to animate. Output is grayscale pre-remapped to [0, 1]; chain node.scale_offset_texture (a=2, b=-1) to recover signed noise. Legacy IDs alias here: perlin_noise_2d (Perlin, Detail 1), fbm_2d (Perlin, Detail 4), simplex_noise_2d (Simplex), hash_noise_field_2d (Random).",
+    composition_notes: "Type picks the base function: Perlin (square-grid lobes), Simplex (cleaner, fewer directional artifacts), Random (uncorrelated per-pixel hash for grain / dither / LIC ink — writes R only, G=B=0), Value (smooth bilinear-interpolated hash grid — soft, slightly blobby, already in [0,1]; the value-noise that drives the website mosh's per-band and domain-warp displacement). Detail (octaves) stacks frequencies into fBM for Perlin/Simplex/Value — Detail 1 is single-octave, raise toward 8 for richer fractal texture. Lacunarity (frequency step per octave) and Persistence (amplitude falloff) shape the fractal spectrum; classic pink fBM is lacunarity 2.0 + persistence 0.5. Detail / Lacunarity / Persistence are ignored by Random. scale / offset_x / offset_y are port-shadow inputs: wire an LFO into offset to animate. Output is grayscale pre-remapped to [0, 1]; chain node.scale_offset_texture (a=2, b=-1) to recover signed noise. Legacy IDs alias here: perlin_noise_2d (Perlin, Detail 1), fbm_2d (Perlin, Detail 4), simplex_noise_2d (Simplex), hash_noise_field_2d (Random).",
     examples: [],
     picker: { label: "Noise", category: Atom },
-    summary: "Procedural noise in one node. Pick the Type, set the Scale, and raise Detail to stack octaves into rich fractal noise. Perlin and Simplex are smooth and organic for clouds, terrain, and slow fields; Random is per-pixel grain for film and dither.",
+    summary: "Procedural noise in one node. Pick the Type, set the Scale, and raise Detail to stack octaves into rich fractal noise. Perlin, Simplex, and Value are smooth and organic for clouds, terrain, and slow fields; Random is per-pixel grain for film and dither.",
     category: Noise,
     role: Source,
-    aliases: ["noise", "perlin", "simplex", "fbm", "fractal", "fractal noise", "white noise", "random", "hash", "clouds", "turbulence", "Noise TOP"],
+    aliases: ["noise", "perlin", "simplex", "value", "value noise", "fbm", "fractal", "fractal noise", "white noise", "random", "hash", "clouds", "turbulence", "Noise TOP"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/noise_body.wgsl"),
     extra_fields: {

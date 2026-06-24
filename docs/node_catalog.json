@@ -5637,13 +5637,14 @@
           "enum_values": [
             "Perlin",
             "Simplex",
-            "Random"
+            "Random",
+            "Value"
           ],
           "label": "Type",
           "name": "type",
           "range": [
             "0",
-            "2"
+            "3"
           ],
           "type": "enum"
         },
@@ -7540,13 +7541,14 @@
           "enum_values": [
             "Perlin",
             "Simplex",
-            "Random"
+            "Random",
+            "Value"
           ],
           "label": "Type",
           "name": "type",
           "range": [
             "0",
-            "2"
+            "3"
           ],
           "type": "enum"
         },
@@ -9982,6 +9984,8 @@
         "noise",
         "perlin",
         "simplex",
+        "value",
+        "value noise",
         "fbm",
         "fractal",
         "fractal noise",
@@ -10024,13 +10028,14 @@
           "enum_values": [
             "Perlin",
             "Simplex",
-            "Random"
+            "Random",
+            "Value"
           ],
           "label": "Type",
           "name": "type",
           "range": [
             "0",
-            "2"
+            "3"
           ],
           "tooltip": "Which kind of noise. Perlin and Simplex are both smooth and organic, with Simplex showing fewer grid-aligned streaks. Random is uncorrelated per-pixel grain for film and dither.",
           "type": "enum"
@@ -10102,10 +10107,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Pure generator. Unified 2D procedural noise: `type` selects Perlin (gradient noise, square-grid lobes), Simplex (cleaner gradient noise, fewer directional artifacts), or Random (per-pixel wang_hash white noise). `octaves` (Detail) stacks frequencies into fBM for Perlin/Simplex (octaves=1 is single-octave; >1 sums lacunarity/persistence-scaled octaves). Output remapped to [0, 1]. Perlin/Simplex broadcast to RGB (A=1); Random writes R only (G=B=0), matching the legacy hash field. Merges and replaces node.perlin_noise_2d / node.simplex_noise_2d / node.fbm_2d / node.hash_noise_field_2d (those type-IDs alias here).",
+      "purpose": "Pure generator. Unified 2D procedural noise: `type` selects Perlin (gradient noise, square-grid lobes), Simplex (cleaner gradient noise, fewer directional artifacts), Random (per-pixel wang_hash white noise), or Value (smooth interpolated hash-grid noise — soft, slightly blobby; the classic `fract(sin)`-free value-noise with the 123.34/456.21/45.32 hash, matching the Latent Space website mosh field). `octaves` (Detail) stacks frequencies into fBM for Perlin/Simplex/Value (octaves=1 is single-octave; >1 sums lacunarity/persistence-scaled octaves). Output remapped to [0, 1]. Perlin/Simplex/Value broadcast to RGB (A=1); Random writes R only (G=B=0), matching the legacy hash field. Merges and replaces node.perlin_noise_2d / node.simplex_noise_2d / node.fbm_2d / node.hash_noise_field_2d (those type-IDs alias here).",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Procedural noise in one node. Pick the Type, set the Scale, and raise Detail to stack octaves into rich fractal noise. Perlin and Simplex are smooth and organic for clouds, terrain, and slow fields; Random is per-pixel grain for film and dither.",
+      "summary": "Procedural noise in one node. Pick the Type, set the Scale, and raise Detail to stack octaves into rich fractal noise. Perlin, Simplex, and Value are smooth and organic for clouds, terrain, and slow fields; Random is per-pixel grain for film and dither.",
       "type_id": "node.noise"
     },
     {
@@ -10717,13 +10722,14 @@
           "enum_values": [
             "Perlin",
             "Simplex",
-            "Random"
+            "Random",
+            "Value"
           ],
           "label": "Type",
           "name": "type",
           "range": [
             "0",
-            "2"
+            "3"
           ],
           "type": "enum"
         },
@@ -13336,11 +13342,16 @@
         "scanline jitter",
         "vhs",
         "tearing",
-        "glitch"
+        "glitch",
+        "slide",
+        "drift",
+        "mosh",
+        "datamosh"
       ],
       "category": "Fields & Coordinates",
       "examples": [
-        "preset.effect.glitch"
+        "preset.effect.glitch",
+        "preset.effect.digital_drift"
       ],
       "inputs": [
         {
@@ -13402,6 +13413,30 @@
         },
         {
           "default": "0",
+          "enum_values": [
+            "Tear",
+            "Slide"
+          ],
+          "label": "Motion",
+          "name": "motion",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "label": "Bands",
+          "name": "bands",
+          "range": [
+            "0",
+            "256"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "0",
           "label": "Time",
           "name": "time",
           "range": [
@@ -13411,10 +13446,10 @@
           "type": "float"
         }
       ],
-      "purpose": "Generator for a per-row random horizontal-offset field (the VHS / horizontal-tearing building block). Hashes each scanline row (animated by time) and emits `offset` (R = signed horizontal UV shift per row, gated by `scanline` so only a fraction of rows tear). Feed `offset` into node.remap (Relative mode) — alone or summed with node.block_displace_field's offset via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
+      "purpose": "Generator for a per-row horizontal-offset field. `motion` picks the character: Tear (default) hashes each scanline row with a sine-hash on quantised time and gates by `scanline` so only a fraction of rows JOLT (the VHS / horizontal-tearing building block); Slide drives every band with smooth value noise on continuous time for an organic, ungated drift (the Latent Space website mosh slide). `bands` sets the band count (0 = one band per pixel row; e.g. 36 for chunky strips). Emits `offset` (R = signed horizontal UV shift per row/band, G=B=0, A=1). Feed `offset` into node.remap (Relative mode) — alone or summed with node.block_displace_field's offset via node.mix(Add). `amount`/`speed` port-shadow their params; `time` is wired or read from FrameTime.seconds.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Outputs a random horizontal offset per row, the displacement behind VHS tearing and horizontal glitch. Feed it into Remap.",
+      "summary": "Per-row horizontal offset for sideways glitch. Tear = gated VHS jolt; Slide = smooth organic per-band drift. Set Bands for chunky strips, feed it into Remap.",
       "type_id": "node.scanline_jitter_field"
     },
     {
@@ -14084,13 +14119,14 @@
           "enum_values": [
             "Perlin",
             "Simplex",
-            "Random"
+            "Random",
+            "Value"
           ],
           "label": "Type",
           "name": "type",
           "range": [
             "0",
-            "2"
+            "3"
           ],
           "type": "enum"
         },
@@ -16362,7 +16398,7 @@
       "type_id": "system.source"
     }
   ],
-  "preset_count": 44,
+  "preset_count": 45,
   "presets": [
     {
       "category": "Stylize",
@@ -16950,6 +16986,43 @@
           "max": "2",
           "min": "0",
           "name": "Quality"
+        }
+      ]
+    },
+    {
+      "category": "Filmic",
+      "id": "DigitalDrift",
+      "is_line_based": false,
+      "kind": "effect",
+      "name": "Digital Drift",
+      "params": [
+        {
+          "default": "1",
+          "id": "amount",
+          "max": "1",
+          "min": "0",
+          "name": "Drift"
+        },
+        {
+          "default": "2",
+          "id": "speed",
+          "max": "10",
+          "min": "0.1",
+          "name": "Speed"
+        },
+        {
+          "default": "36",
+          "id": "bands",
+          "max": "128",
+          "min": "0",
+          "name": "Bands"
+        },
+        {
+          "default": "0.008",
+          "id": "rgb_shift",
+          "max": "0.03",
+          "min": "0",
+          "name": "RGB Shift"
         }
       ]
     },
