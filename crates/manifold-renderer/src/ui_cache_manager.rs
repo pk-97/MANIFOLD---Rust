@@ -2,7 +2,7 @@ use manifold_gpu::{
     GpuDevice, GpuLoadAction, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
-use manifold_ui::node::Rect;
+use manifold_ui::node::{NodeId, Rect};
 use manifold_ui::tree::UITree;
 
 use crate::ui_renderer::UIRenderer;
@@ -55,6 +55,21 @@ pub struct UICacheManager {
     // True when the entire atlas needs clearing (resize, full rebuild).
     needs_clear: bool,
 
+    // Per-panel signature of the sub-regions as last rendered into the atlas:
+    // (start, end, bounds-of-first-node). The incremental Load path
+    // (`render_sub_region` with LoadOp::Load) is only correct while each
+    // sub-region keeps the SAME extent it had when last rendered — Load preserves
+    // whatever pixels lie outside the redrawn nodes, so a region that shrank,
+    // grew, or moved would leave stale pixels (ghosting, or a dark gap where the
+    // section background no longer reaches). A structural change already
+    // invalidates the whole panel (`invalidate_all` → full, self-clearing render),
+    // so in practice extents are stable here; this signature makes that an
+    // *enforced* invariant rather than an implicit one. If an extent ever differs
+    // on an incremental frame, `render_dirty_panels` falls back to a full panel
+    // render (whose opaque background repaints the whole region) and a debug build
+    // asserts. One slot per panel; only the inspector populates it today.
+    last_sub_regions: [Vec<(usize, usize, Rect)>; PANEL_SLOT_COUNT],
+
     format: GpuTextureFormat,
     scale_factor: f64,
 }
@@ -69,6 +84,7 @@ impl UICacheManager {
             atlas_logical_h: 0,
             panel_valid: [false; PANEL_SLOT_COUNT],
             needs_clear: true,
+            last_sub_regions: std::array::from_fn(|_| Vec::new()),
             format,
             scale_factor,
         }
@@ -188,8 +204,14 @@ impl UICacheManager {
             }
 
             // ── Sub-region incremental path (doesn't count against budget) ──
+            // Sound only while every sub-region keeps the extent it had when last
+            // rendered (see `last_sub_regions`). `extents_unchanged` enforces that:
+            // if a region shrank / grew / moved, the Load-preserved pixels outside
+            // the redrawn nodes would be stale, so we drop to the full, self-
+            // clearing panel render below instead.
             if self.panel_valid[idx]
                 && let Some(ref subs) = info.sub_regions
+                && Self::extents_unchanged(&self.last_sub_regions[idx], subs, tree)
             {
                 let dirty: Vec<&(usize, usize)> = subs
                     .iter()
@@ -217,6 +239,9 @@ impl UICacheManager {
             }
 
             // ── Full panel render ──
+            // The panel's first node is its opaque, full-rect background, so a full
+            // render is self-clearing under LoadOp::Load — no atlas clear needed,
+            // and any pre-existing ghost in the region is painted over.
             ui_renderer.render_tree_range(tree, info.node_start, info.node_end);
             if self.prepare_and_draw(device, ui_renderer) {
                 self.panel_valid[idx] = true;
@@ -224,10 +249,53 @@ impl UICacheManager {
             } else {
                 self.panel_valid[idx] = true;
             }
+            // Record the sub-region extents this full render established, so the
+            // next incremental frame can confirm nothing moved before trusting Load.
+            self.last_sub_regions[idx] = Self::sub_region_sig(info.sub_regions.as_deref(), tree);
             rendered_ranges.push((info.node_start, info.node_end));
         }
 
         (rendered, rendered_ranges)
+    }
+
+    /// Signature of a panel's sub-regions: each `(start, end, bounds-of-first-node)`.
+    /// The first node of a sound sub-region is its opaque frame, so its bounds are
+    /// the region's extent — what the incremental Load path must not let drift.
+    fn sub_region_sig(
+        subs: Option<&[(usize, usize)]>,
+        tree: &UITree,
+    ) -> Vec<(usize, usize, Rect)> {
+        subs.unwrap_or(&[])
+            .iter()
+            .map(|&(s, e)| (s, e, tree.get_bounds(NodeId(s as u32))))
+            .collect()
+    }
+
+    /// Whether `subs` matches `last` region-for-region (same ranges and same
+    /// first-node bounds). A mismatch means a sub-region's extent changed since
+    /// the panel was last fully rendered, so the incremental Load path is no longer
+    /// safe and the caller falls back to a full render. Extents are expected to be
+    /// stable here (structural changes invalidate the whole panel), so a mismatch
+    /// is logged: it flags an in-place mutation path that moved/resized cached
+    /// nodes without invalidating. Non-fatal — the fallback is correct — so it
+    /// stays a log, never a panic, on the live render path.
+    fn extents_unchanged(
+        last: &[(usize, usize, Rect)],
+        subs: &[(usize, usize)],
+        tree: &UITree,
+    ) -> bool {
+        let matches = last.len() == subs.len()
+            && last.iter().zip(subs.iter()).all(|(&(ls, le, lb), &(s, e))| {
+                ls == s && le == e && lb == tree.get_bounds(NodeId(s as u32))
+            });
+        if !matches {
+            log::debug!(
+                "UI cache: sub-region extent changed on an incremental frame — \
+                 falling back to a full panel render (correct, slightly slower). An \
+                 in-place mutation moved/resized cached nodes without invalidating."
+            );
+        }
+        matches
     }
 
     /// Prepare UIRenderer and draw into the atlas. Returns true if content was drawn.
@@ -251,5 +319,56 @@ impl UICacheManager {
         ui_renderer.render(&mut enc, atlas, GpuLoadAction::Load);
         enc.commit();
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_ui::node::UIStyle;
+
+    /// Two sub-regions: nodes [0,2) and [2,3). Returns the tree and the partition.
+    fn tree_with_subregions() -> (UITree, Vec<(usize, usize)>) {
+        let mut tree = UITree::new();
+        // Sub-region 0 — first node is the opaque frame at (0,0,100,50).
+        tree.add_panel(None, 0.0, 0.0, 100.0, 50.0, UIStyle::default());
+        tree.add_panel(None, 10.0, 10.0, 20.0, 20.0, UIStyle::default());
+        // Sub-region 1 — first node frame at (0,60,100,40).
+        tree.add_panel(None, 0.0, 60.0, 100.0, 40.0, UIStyle::default());
+        (tree, vec![(0, 2), (2, 3)])
+    }
+
+    #[test]
+    fn extents_unchanged_when_bounds_stable() {
+        let (tree, subs) = tree_with_subregions();
+        let sig = UICacheManager::sub_region_sig(Some(&subs), &tree);
+        // In-place content change (no bounds change) is the incremental fast path.
+        assert!(UICacheManager::extents_unchanged(&sig, &subs, &tree));
+    }
+
+    #[test]
+    fn extent_change_forces_fallback() {
+        let (mut tree, subs) = tree_with_subregions();
+        let sig = UICacheManager::sub_region_sig(Some(&subs), &tree);
+        // A sub-region's first node grows — Load would leave stale pixels below it,
+        // so the guard must report the extent changed (caller falls back to full).
+        tree.set_bounds(NodeId(2), Rect::new(0.0, 60.0, 100.0, 80.0));
+        assert!(!UICacheManager::extents_unchanged(&sig, &subs, &tree));
+    }
+
+    #[test]
+    fn partition_change_forces_fallback() {
+        let (tree, subs) = tree_with_subregions();
+        let sig = UICacheManager::sub_region_sig(Some(&subs), &tree);
+        // A different sub-region partition (count / ranges differ) is never safe to
+        // trust against an older signature.
+        let repartitioned = vec![(0, 3)];
+        assert!(!UICacheManager::extents_unchanged(&sig, &repartitioned, &tree));
+    }
+
+    #[test]
+    fn no_subregions_signature_is_empty() {
+        let (tree, _) = tree_with_subregions();
+        assert!(UICacheManager::sub_region_sig(None, &tree).is_empty());
     }
 }
