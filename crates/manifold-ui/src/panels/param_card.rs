@@ -3206,6 +3206,27 @@ mod tests {
         assert!(panel.mapping_chevron_rect(&tree, "radius").is_none());
     }
 
+    #[test]
+    fn mapping_chevron_is_hit_at_its_own_center() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.set_context(CardContext::Author);
+        panel.configure(&effect_config_with_mappable());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
+
+        let chevron = panel.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
+        let rect = panel
+            .mapping_chevron_rect(&tree, "strength")
+            .expect("chevron rect");
+        let center = Vec2::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
+        let hit = tree.hit_test(center);
+        assert_eq!(
+            hit,
+            Some(chevron),
+            "hit_test at the chevron center must resolve to the chevron, got {hit:?}"
+        );
+    }
+
     /// Generator config with the second param marked mappable — generators are
     /// remappable too, so the Author-context mapping chevron must appear, same
     /// as effects (the unified surface).

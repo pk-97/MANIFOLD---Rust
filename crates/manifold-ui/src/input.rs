@@ -490,7 +490,26 @@ impl UIInputSystem {
                             node_id: uid,
                             pos: screen_pos,
                         });
-                    } else if hit_id == self.pressed_id {
+                    } else if let Some(live) = hit_id
+                        && Some(live.index()) == self.pressed_id.map(|p| p.index())
+                    {
+                        // A click is press+release on the same node. Match by node
+                        // INDEX, not full `NodeId` equality, and emit the LIVE
+                        // release id (`live`) rather than the press id (`uid`).
+                        //
+                        // The graph editor rebuilds its UITree from scratch every
+                        // frame, minting a fresh generation per node. So by release
+                        // `pressed_id` carries an older generation than the live
+                        // tree: exact `hit_id == pressed_id` never holds there and
+                        // no click would ever fire inside the editor. The index is
+                        // stable across the (deterministic) rebuild, so it still
+                        // identifies "same node"; emitting `live` (current
+                        // generation) also lets the click match the freshly-rebuilt
+                        // panel node ids downstream — a stale `uid` matches nothing.
+                        // Generational safety is unaffected: this only decides click
+                        // identity (inherently positional, like the double-click
+                        // below) and never mutates through a stale id.
+                        let uid = live;
                         self.pending_events.push(UIEvent::Click {
                             node_id: uid,
                             pos: screen_pos,
@@ -634,6 +653,53 @@ mod tests {
         if let UIEvent::Click { node_id, .. } = clicks[0] {
             assert_eq!(node_id.index(), 1); // button id
         }
+    }
+
+    /// Regression: a press+release must still register as a click when the tree
+    /// is rebuilt from scratch between the two (the graph editor clears + rebuilds
+    /// its UITree every frame, so the same node carries a fresh NodeId generation
+    /// by release). Pre-fix, the `hit_id == pressed_id` exact-NodeId check failed
+    /// across the generation bump and no click ever fired inside the editor.
+    #[test]
+    fn click_survives_tree_rebuild_between_press_and_release() {
+        let (mut tree, mut input) = setup();
+
+        // Press on the button (captures its current-generation id).
+        input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Down, 0.0);
+
+        // Rebuild the tree from scratch — same structure, fresh generations. The
+        // button lands at the same index (1) but is a different NodeId now.
+        tree.clear();
+        let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, UIStyle::default());
+        let button = tree.add_button(
+            Some(root),
+            50.0,
+            50.0,
+            100.0,
+            30.0,
+            UIStyle::default(),
+            "Click me",
+        );
+
+        // Release over the same spot.
+        input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Up, 0.0);
+
+        let events = input.drain_events();
+        let click = events
+            .iter()
+            .find_map(|e| match e {
+                UIEvent::Click { node_id, .. } => Some(*node_id),
+                _ => None,
+            })
+            .expect("a click must fire even though the tree was rebuilt mid-press");
+        // The click must carry the LIVE (rebuilt) id, not the stale press id, so
+        // downstream id-matching against the rebuilt panel still resolves.
+        assert_eq!(click, button, "click must carry the live rebuilt node id");
+        assert_ne!(
+            tree.get_bounds(click),
+            Rect::ZERO,
+            "live id resolves in the rebuilt tree (a stale id would be inert → ZERO)"
+        );
     }
 
     #[test]
