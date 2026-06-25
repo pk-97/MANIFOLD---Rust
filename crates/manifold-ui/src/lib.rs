@@ -17,7 +17,6 @@ pub mod graph_edit;
 pub mod graph_view;
 pub mod hit;
 pub mod input;
-pub mod inspector_layout;
 pub mod intent;
 pub mod interaction_overlay;
 pub mod layout;
