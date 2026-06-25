@@ -107,6 +107,21 @@ pub struct DragSnapshot {
     pub layer_index: usize,
 }
 
+// ── TrimOriginal ────────────────────────────────────────────────
+// Per-clip pre-trim geometry captured at grab time. A trim drag fans the
+// grabbed clip's edge delta over one of these per selected clip, then
+// records each into a single undo batch on drag end.
+
+#[derive(Debug, Clone)]
+struct TrimOriginal {
+    clip_id: ClipId,
+    start_beat: Beats,
+    duration_beats: Beats,
+    in_point: Seconds,
+    is_generator: bool,
+    is_looping: bool,
+}
+
 // ── InteractionOverlay ──────────────────────────────────────────
 // Unity InteractionOverlay lines 17-73.
 
@@ -133,10 +148,14 @@ pub struct InteractionOverlay {
     drag_start_beat: Beats,
     drag_offset_beats: Beats, // offset from the anchor clip's start to the mouse beat
 
-    // Trim originals, captured at grab time — preserved for the undo command.
+    // Trim originals for the GRABBED clip, captured at grab time — these drive
+    // the snap context and the shared edge delta.
     trim_original_start_beat: Beats,
     trim_original_duration_beats: Beats,
     trim_original_in_point: Seconds, // video source offset
+    // Pre-trim geometry for EVERY selected clip — the trim delta fans over
+    // these, and each changed clip is recorded into the undo batch on drag end.
+    trim_originals: Vec<TrimOriginal>,
 
     // Current modifier state — set by app before each event.
     // Unity reads Keyboard.current inline; Rust stores latest modifiers here.
@@ -164,6 +183,7 @@ impl InteractionOverlay {
             trim_original_start_beat: Beats::ZERO,
             trim_original_duration_beats: Beats::ZERO,
             trim_original_in_point: Seconds::ZERO,
+            trim_originals: Vec::with_capacity(8),
             modifiers: Modifiers::NONE,
         }
     }
@@ -198,6 +218,29 @@ impl InteractionOverlay {
         self.trim_original_start_beat = clip.start_beat;
         self.trim_original_duration_beats = clip.duration_beats;
         self.trim_original_in_point = clip.in_point;
+    }
+
+    /// Capture pre-trim geometry for every selected clip, so a trim drag fans
+    /// the grabbed clip's edge delta over the whole selection and records one
+    /// batched undo entry. Locked clips are skipped. The `on_begin_drag` select
+    /// guard ensures the grabbed clip is in the selection before this runs.
+    fn capture_trim_selection(&mut self, ui_state: &UIState, host: &dyn TimelineEditingHost) {
+        self.trim_originals.clear();
+        for id in ui_state.get_selected_clip_ids() {
+            if let Some(clip) = host.find_clip_by_id(&id) {
+                if clip.is_locked {
+                    continue;
+                }
+                self.trim_originals.push(TrimOriginal {
+                    clip_id: id.clone(),
+                    start_beat: clip.start_beat,
+                    duration_beats: clip.duration_beats,
+                    in_point: clip.in_point,
+                    is_generator: clip.is_generator,
+                    is_looping: clip.is_looping,
+                });
+            }
+        }
     }
 
     // ────────────────────────────────────────────────────────────
@@ -441,6 +484,7 @@ impl InteractionOverlay {
                 if let Some(clip) = host.find_clip_by_id(&hit.clip_id) {
                     self.begin_trim(&clip);
                 }
+                self.capture_trim_selection(ui_state, host);
             }
             // Unity lines 311-320: trim right
             HitRegion::TrimRight => {
@@ -453,6 +497,7 @@ impl InteractionOverlay {
                 if let Some(clip) = host.find_clip_by_id(&hit.clip_id) {
                     self.begin_trim(&clip);
                 }
+                self.capture_trim_selection(ui_state, host);
             }
             // Unity lines 322-324: body → move drag
             HitRegion::Body => {
@@ -551,24 +596,35 @@ impl InteractionOverlay {
                 host.enforce_non_overlap(&snapshot.clip_id, &self.drag_snapshot_clip_ids);
             }
         } else if self.drag_mode == DragMode::TrimLeft || self.drag_mode == DragMode::TrimRight {
-            // Unity lines 390-401: record trim command
-            if let Some(ref trim_id) = self.trim_clip_id
-                && let Some(clip) = host.find_clip_by_id(trim_id)
-            {
-                host.record_trim(
-                    trim_id,
-                    self.trim_original_start_beat,
-                    clip.start_beat,
-                    self.trim_original_duration_beats,
-                    clip.duration_beats,
-                    self.trim_original_in_point,
-                    clip.in_point,
-                );
+            // Unity lines 390-401: record a trim command for every selected clip
+            // that actually changed, each with its own pre/post geometry.
+            for orig in &self.trim_originals {
+                if let Some(clip) = host.find_clip_by_id(&orig.clip_id) {
+                    let start_changed =
+                        (clip.start_beat - orig.start_beat).abs() >= Beats(0.0001);
+                    let dur_changed =
+                        (clip.duration_beats - orig.duration_beats).abs() >= Beats(0.0001);
+                    if start_changed || dur_changed {
+                        host.record_trim(
+                            &orig.clip_id,
+                            orig.start_beat,
+                            clip.start_beat,
+                            orig.duration_beats,
+                            clip.duration_beats,
+                            orig.in_point,
+                            clip.in_point,
+                        );
+                    }
+                }
             }
 
-            // Unity lines 417-421: enforce non-overlap on trimmed clip
-            if let Some(ref trim_id) = self.trim_clip_id {
-                host.enforce_non_overlap(trim_id, &HashSet::new());
+            // Unity lines 417-421: enforce non-overlap on every trimmed clip,
+            // ignoring the trimmed set itself so co-selected clips don't shove
+            // each other (mirrors the move path's drag_snapshot_clip_ids).
+            let trimmed_ids: HashSet<ClipId> =
+                self.trim_originals.iter().map(|o| o.clip_id.clone()).collect();
+            for id in &trimmed_ids {
+                host.enforce_non_overlap(id, &trimmed_ids);
             }
         }
 
@@ -576,7 +632,7 @@ impl InteractionOverlay {
         let desc = if ended_move {
             "Move clips"
         } else {
-            "Edit clip"
+            "Trim clips"
         };
         host.commit_command_batch(desc);
 
@@ -586,6 +642,7 @@ impl InteractionOverlay {
         self.drag_snapshot_clip_ids.clear();
         self.drag_anchor_clip_id = None;
         self.trim_clip_id = None;
+        self.trim_originals.clear();
 
         // Unity lines 444-445
         self.drag_layer_blocked = false;
@@ -707,32 +764,34 @@ impl InteractionOverlay {
             None => return,
         };
 
-        let original_end = self.trim_original_start_beat + self.trim_original_duration_beats;
         let min_duration = Beats(0.25); // 1/16 note minimum (Unity line 544)
+        let spb = host.get_seconds_per_beat() as f64;
 
-        // Get the clip's actual layer for snap context
+        // Snap context comes from the grabbed clip; the resulting edge delta is
+        // shared by every selected clip (each then clamps individually).
         let clip_layer = host.find_clip_by_id(&trim_id).map_or(0, |c| c.layer_index);
         let snapped =
             viewport.magnetic_snap(mouse_beat, clip_layer, std::slice::from_ref(&trim_id));
+        let raw_delta = snapped - self.trim_original_start_beat;
 
-        // Unity lines 548-551: video clips clamp to original start, generators extend freely
-        let clip = host.find_clip_by_id(&trim_id);
-        let is_generator = clip.as_ref().is_some_and(|c| c.is_generator);
-        let new_start = if is_generator {
-            snapped
-        } else {
-            snapped.max(self.trim_original_start_beat)
-        };
-        let new_start = new_start.min(original_end - min_duration);
+        for orig in &self.trim_originals {
+            let original_end = orig.start_beat + orig.duration_beats;
+            // Video clips clamp to their own original start (in_point can't go
+            // negative); generators extend left freely. (Unity lines 548-551.)
+            let mut new_start = orig.start_beat + raw_delta;
+            if !orig.is_generator {
+                new_start = new_start.max(orig.start_beat);
+            }
+            new_start = new_start.min(original_end - min_duration);
 
-        let beat_delta = new_start - self.trim_original_start_beat;
-        let new_duration = original_end - new_start;
-        let new_in_point = (self.trim_original_in_point
-            + Seconds(beat_delta.0 * host.get_seconds_per_beat() as f64))
-        .max(Seconds::ZERO);
+            let beat_delta = new_start - orig.start_beat;
+            let new_duration = original_end - new_start;
+            let new_in_point =
+                (orig.in_point + Seconds(beat_delta.0 * spb)).max(Seconds::ZERO);
 
-        // Unity lines 554-557: direct mutation during drag
-        host.set_clip_trim(&trim_id, new_start, new_duration, new_in_point);
+            // Unity lines 554-557: direct mutation during drag
+            host.set_clip_trim(&orig.clip_id, new_start, new_duration, new_in_point);
+        }
         host.invalidate_all_layer_bitmaps();
     }
 
@@ -750,32 +809,32 @@ impl InteractionOverlay {
 
         let min_duration = Beats(0.25); // Unity line 566
 
-        let clip = host.find_clip_by_id(&trim_id);
-        let start_beat = clip.as_ref().map_or(Beats::ZERO, |c| c.start_beat);
+        // Snap context from the grabbed clip; the edge delta fans over the
+        // whole selection (each clip clamps individually).
+        let clip_layer = host.find_clip_by_id(&trim_id).map_or(0, |c| c.layer_index);
+        let snapped =
+            viewport.magnetic_snap(mouse_beat, clip_layer, std::slice::from_ref(&trim_id));
+        let grabbed_original_end =
+            self.trim_original_start_beat + self.trim_original_duration_beats;
+        let raw_delta = snapped - grabbed_original_end;
 
-        let snapped = viewport.magnetic_snap(
-            mouse_beat,
-            clip.as_ref().map_or(0, |c| c.layer_index),
-            std::slice::from_ref(&trim_id),
-        );
+        for orig in &self.trim_originals {
+            let new_end = (orig.start_beat + orig.duration_beats + raw_delta)
+                .max(orig.start_beat + min_duration);
+            let mut new_duration = new_end - orig.start_beat;
 
-        let new_end = snapped.max(start_beat + min_duration);
-        let mut new_duration = new_end - start_beat;
-
-        // Unity lines 573-578: clamp to video source length when not looping
-        if let Some(ref c) = clip
-            && !c.is_looping
-            && !c.is_generator
-        {
-            let max_dur = host.get_max_duration_beats(&trim_id);
-            if max_dur > Beats::ZERO {
-                new_duration = new_duration.min(max_dur);
+            // Unity lines 573-578: clamp to video source length when not looping
+            // (generators extend freely). in_point is unchanged by a right trim.
+            if !orig.is_looping && !orig.is_generator {
+                let max_dur = host.get_max_duration_beats(&orig.clip_id);
+                if max_dur > Beats::ZERO {
+                    new_duration = new_duration.min(max_dur);
+                }
             }
-        }
 
-        // Unity line 580: trimClip.DurationBeats = newDurationBeats
-        let in_point = clip.as_ref().map_or(Seconds::ZERO, |c| c.in_point);
-        host.set_clip_trim(&trim_id, start_beat, new_duration, in_point);
+            // Unity line 580: trimClip.DurationBeats = newDurationBeats
+            host.set_clip_trim(&orig.clip_id, orig.start_beat, new_duration, orig.in_point);
+        }
         host.invalidate_all_layer_bitmaps();
     }
 
