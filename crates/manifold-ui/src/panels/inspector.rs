@@ -2770,4 +2770,73 @@ mod tests {
         assert!(panel.is_dragging());
         assert!(panel.dragging_scrollbar);
     }
+
+    /// After a Master→Layer scope switch, a node in the live layer effect's range
+    /// must route to that effect — never to a stale MasterEffect — because the
+    /// inactive master card's range was reset to empty (Stage 2 truthfulness, and
+    /// a generation-stamped id (Stage 4) wouldn't match a reused slot anyway).
+    #[test]
+    fn scope_switch_routes_to_active_scope_not_stale() {
+        use super::super::param_card::ParamCardKind;
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = inspector_layout();
+
+        // Master active, one master effect.
+        panel.configure_master_effects(&[mk_config(ParamCardKind::Effect, "MasterFX", 2)]);
+        panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        tree.clear();
+        panel.build(&mut tree, &layout);
+        assert!(panel.master_effects[0].node_count() > 0);
+
+        // Switch to Layer with a layer effect; the master effect is not built.
+        panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "LayerFX", 2)]);
+        panel.configure_tabs(
+            &[InspectorTab::Layer, InspectorTab::Master],
+            InspectorTab::Layer,
+        );
+        tree.clear();
+        panel.build(&mut tree, &layout);
+
+        // The inactive master effect reports not-built (empty range)…
+        assert_eq!(panel.master_effects[0].node_count(), 0);
+        // …and a node in the live layer effect routes to LayerEffect.
+        let lc = &panel.layer_effects[0];
+        assert!(lc.node_count() > 0);
+        let probe = lc.first_node();
+        let target = panel.find_target_for_node(tree.id_at(probe));
+        assert!(
+            matches!(target, Some(PressedTarget::LayerEffect(0))),
+            "live layer node must route to LayerEffect, got {target:?}"
+        );
+    }
+
+    /// The macro bank is a global control, so it pins to the very top of the
+    /// inspector — above the per-scope tab strip and the scrollable columns.
+    #[test]
+    fn macros_panel_sits_above_the_tab_strip() {
+        let mut tree = UITree::new();
+        let mut panel = InspectorCompositePanel::new();
+        let layout = inspector_layout();
+        panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
+        panel.build(&mut tree, &layout);
+
+        let insp = layout.inspector();
+        let macros_first = panel.macros_panel().first_node();
+        assert_ne!(macros_first, usize::MAX, "macros always builds");
+        let macros_y = tree.get_bounds(tree.id_at(macros_first)).y;
+
+        // Pinned to the inspector top, and above where the columns (and the tab
+        // strip between) begin.
+        assert!(
+            macros_y <= insp.y + 2.0,
+            "macros pinned to inspector top: {macros_y} vs {}",
+            insp.y
+        );
+        assert!(
+            panel.columns_y > macros_y,
+            "columns/tabs sit below the macros strip: columns_y={} macros_y={macros_y}",
+            panel.columns_y
+        );
+    }
 }

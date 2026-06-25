@@ -3108,6 +3108,44 @@ mod tests {
         assert!(panel.node_count > 0);
     }
 
+    /// After `clear_nodes` (the inspector resetting an inactive scope's card),
+    /// every id-keyed method must no-op — even with its real cached ids — so a
+    /// card that didn't build this frame can't resolve or mutate by indices the
+    /// active scope now owns. This is the self-inert half of range truthfulness.
+    #[test]
+    fn cleared_card_is_inert_to_id_methods() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let value_cell = panel.slider_ids[0].as_ref().unwrap().value_text;
+        let drag_icon = panel.drag_icon_id.unwrap();
+        let border = panel.border_id.unwrap();
+
+        // While live: the value cell opens a type-in and the drag icon is known.
+        assert!(panel.value_cell_typein(value_cell, &tree).is_some());
+        assert!(panel.is_drag_handle(drag_icon));
+
+        panel.clear_nodes();
+        assert_eq!(panel.node_count(), 0);
+
+        // Not live → every id-keyed method no-ops, even though the cached ids
+        // still point at real (live-in-tree) nodes.
+        assert!(panel.value_cell_typein(value_cell, &tree).is_none());
+        assert!(panel.driver_period_typein(value_cell, &tree).is_none());
+        assert!(!panel.is_drag_handle(drag_icon));
+
+        // update_selection_visual must not repaint when the card isn't live.
+        let before = tree.get_node(border).style.bg_color;
+        panel.update_selection_visual(&mut tree, true);
+        assert_eq!(
+            tree.get_node(border).style.bg_color,
+            before,
+            "a non-live card must not repaint its border"
+        );
+    }
+
     /// Config with the second param marked mappable (a user-tail binding).
     fn effect_config_with_mappable() -> ParamCardConfig {
         let mut c = effect_config();
