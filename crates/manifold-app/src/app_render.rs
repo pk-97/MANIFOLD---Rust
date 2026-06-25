@@ -2443,22 +2443,20 @@ impl Application {
             self.scroll_dirty.visual = true;
         }
 
-        // Content-building modal overlays (effect/generator/node browser, Ableton
-        // picker, dropdown) build their cells into the shared UI tree and draw via
-        // the separate overlay pass. Closing one only flips `is_open`; the nodes
-        // and the stale `overlay_draw` range survive until a *truncating* rebuild
-        // runs. The normal close paths set `overlay_dirty` (→ scroll rebuild),
-        // but some don't — e.g. the direct `close()` on a perform-mode toggle —
-        // leaving the cells composited on top of the cached offscreen as ghost
-        // text. Force a full rebuild on the open→closed edge so this can't leak,
-        // regardless of how the overlay closed.
-        let modal_open_now = self.ws.ui_root.browser_popup.is_open()
-            || self.ws.ui_root.ableton_picker.is_open()
-            || self.ws.ui_root.dropdown.is_open();
-        if self.modal_overlay_was_open && !modal_open_now {
-            self.needs_rebuild = true;
+        // Overlays (dropdown, browser/generator picker, Ableton picker, Audio
+        // Setup) build their nodes into the shared tree and are recorded into
+        // `overlay_draw` by `build_overlays`. Opening one already flags
+        // `overlay_dirty`; closing one only flips `is_open`, and the programmatic
+        // `close()` paths (e.g. entering perform mode) don't route through the
+        // event-driven flag — so the closed overlay's nodes and its stale
+        // `overlay_draw` range would survive as ghost text. The driver owns the
+        // invariant instead: it snapshots the open-set at each build and, when the
+        // live set differs (open OR close, by any path), feeds the established
+        // visual-rebuild path — which re-records the overlay region and recomposites
+        // the offscreen. One detection point, every close site covered.
+        if self.ws.ui_root.detect_overlay_open_change() {
+            self.scroll_dirty.visual = true;
         }
-        self.modal_overlay_was_open = modal_open_now;
 
         let scroll_dirty = self.scroll_dirty;
         self.scroll_dirty.clear();

@@ -301,6 +301,17 @@ pub struct UIRoot {
     /// Tree index where the overlay region begins (after all scroll panels).
     /// The waveform/stem-lane overlay render uses this as its upper bound.
     pub overlay_region_start: usize,
+    /// Open-state of every overlay (one bit per `OverlayId::Z_ORDER` slot) as of
+    /// the last `build_overlays`. The driver compares this against the live
+    /// open-set each frame ([`detect_overlay_open_change`]); any difference — an
+    /// open OR a close, including programmatic `close()` paths that never route
+    /// through the event-driven `overlay_dirty` flag — schedules a rebuild of the
+    /// overlay region. This makes "the overlay region matches the open-set" an
+    /// invariant the driver owns, so no individual close site has to remember to
+    /// dirty the tree (the leaked-ghost-node bug class).
+    ///
+    /// [`detect_overlay_open_change`]: UIRoot::detect_overlay_open_change
+    overlay_open_snapshot: u8,
 }
 
 impl UIRoot {
@@ -371,6 +382,7 @@ impl UIRoot {
             ableton_rediscovery_needed: false,
             overlay_draw: Vec::new(),
             overlay_region_start: 0,
+            overlay_open_snapshot: 0,
         }
     }
 
@@ -704,6 +716,41 @@ impl UIRoot {
         }
     }
 
+    /// Whether the overlay for `id` is currently open. Immutable mirror of
+    /// `overlay_mut(id).is_open()` — the exhaustive match keeps it in lockstep
+    /// with the driver registry.
+    fn overlay_is_open(&self, id: OverlayId) -> bool {
+        match id {
+            OverlayId::PerfHud => self.perf_hud.is_open(),
+            OverlayId::Dropdown => self.dropdown.is_open(),
+            OverlayId::AudioSetup => self.audio_setup_panel.is_open(),
+            OverlayId::BrowserPopup => self.browser_popup.is_open(),
+            OverlayId::AbletonPicker => self.ableton_picker.is_open(),
+        }
+    }
+
+    /// Live open-set as a bitmask, bit `i` = `OverlayId::Z_ORDER[i]` is open.
+    /// Five overlays today, so a `u8` has room to spare.
+    fn current_overlay_open_mask(&self) -> u8 {
+        let mut mask = 0u8;
+        for (i, id) in OverlayId::Z_ORDER.iter().enumerate() {
+            if self.overlay_is_open(*id) {
+                mask |= 1 << i;
+            }
+        }
+        mask
+    }
+
+    /// True if the live overlay open-set differs from what `build_overlays` last
+    /// recorded — i.e. an overlay opened or closed (event-driven OR programmatic)
+    /// and the overlay region in the tree is now stale. The app calls this once
+    /// per frame and, on `true`, schedules a visual rebuild so the overlay region
+    /// is re-recorded into `overlay_draw` and the offscreen recomposites. Read
+    /// only; the snapshot updates when `build_overlays` actually runs.
+    pub fn detect_overlay_open_change(&self) -> bool {
+        self.built && self.current_overlay_open_mask() != self.overlay_open_snapshot
+    }
+
     /// Build every open overlay into the tree, bottom→top, recording each one's
     /// node range for the draw pass. A modal that requests a dim background gets
     /// a full-screen scrim node first (and a click on it dismisses the modal,
@@ -753,6 +800,9 @@ impl UIRoot {
         self.tree = tree;
         self.overlay_region_start = region_start;
         self.overlay_draw = ranges;
+        // The tree's overlay region now matches the live open-set — record it so
+        // `detect_overlay_open_change` only fires on the next genuine open/close.
+        self.overlay_open_snapshot = self.current_overlay_open_mask();
     }
 
     /// Route one event to the open overlays, top→bottom. Returns true if an
