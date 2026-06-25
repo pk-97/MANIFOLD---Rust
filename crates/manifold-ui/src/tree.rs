@@ -31,6 +31,26 @@ pub struct UITree {
     /// reserved "no live node" stamp ([`NodeId::PLACEHOLDER`]), so it is never
     /// minted.
     gen_counter: u32,
+    /// Durable [`WidgetId`] per slot, parallel to `nodes`. Unlike the generational
+    /// `NodeId`, a node's `WidgetId` is the *same on every rebuild* as long as the
+    /// build is structurally stable, so it survives the editor's per-frame
+    /// clear+rebuild. Derived from the parent's `WidgetId` mixed with a stable
+    /// sibling salt (the sibling index, or an explicit key). Used for hierarchy
+    /// (a child salts off its parent's id) and for [`widget_of`](UITree::widget_of).
+    widget_ids: Vec<WidgetId>,
+    /// Per-slot count of children added so far, parallel to `nodes`. The auto
+    /// sibling salt for the next child of a node — so siblings get 0, 1, 2, … in
+    /// build order, deterministically reproduced on rebuild.
+    child_counts: Vec<u32>,
+    /// Count of root-level (parentless) nodes added so far — the auto salt source
+    /// for roots, mirroring `child_counts` for a virtual root parent.
+    root_count: u32,
+    /// Reverse index: durable [`WidgetId`] → its live [`NodeId`] in the *current*
+    /// build, for the interactive nodes only (the ones the input system can target
+    /// for press / hover / focus). Rebuilt alongside the tree, so a lookup always
+    /// returns a live id. This is how the input system resolves an identity it has
+    /// held across frames back to a node it can act on.
+    widget_to_node: ahash::AHashMap<WidgetId, NodeId>,
     count: usize,
     has_dirty: bool,
     /// Monotonic counter bumped on every *structural* change (add_node, clear,
@@ -61,6 +81,10 @@ impl UITree {
             last_child: Vec::with_capacity(INITIAL_CAPACITY),
             generations: Vec::with_capacity(INITIAL_CAPACITY),
             gen_counter: 1,
+            widget_ids: Vec::with_capacity(INITIAL_CAPACITY),
+            child_counts: Vec::with_capacity(INITIAL_CAPACITY),
+            root_count: 0,
+            widget_to_node: ahash::AHashMap::with_capacity(INITIAL_CAPACITY),
             count: 0,
             has_dirty: false,
             structure_version: 0,
@@ -121,6 +145,51 @@ impl UITree {
         text: Option<&str>,
         extra_flags: UIFlags,
     ) -> NodeId {
+        self.mint(parent_id, bounds, node_type, style, text, extra_flags, None)
+    }
+
+    /// Like [`add_node`](UITree::add_node) but pins this node's durable
+    /// [`WidgetId`] to an explicit `key` instead of its sibling index. Use it for
+    /// identity-bearing interactive nodes whose position among siblings can shift
+    /// between rebuilds (e.g. a row control when an earlier row grows a drawer) —
+    /// the key keeps the node's identity stable regardless of order. Keys only
+    /// need to be unique among siblings of the same parent.
+    pub fn add_node_keyed(
+        &mut self,
+        parent_id: Option<NodeId>,
+        bounds: Rect,
+        node_type: UINodeType,
+        style: UIStyle,
+        text: Option<&str>,
+        extra_flags: UIFlags,
+        key: u64,
+    ) -> NodeId {
+        self.mint(
+            parent_id,
+            bounds,
+            node_type,
+            style,
+            text,
+            extra_flags,
+            Some(key),
+        )
+    }
+
+    /// High bit set on an explicit-key salt so it can never collide with an auto
+    /// sibling-index salt (sibling indices are small, well under 2^63).
+    const EXPLICIT_KEY_FLAG: u64 = 1 << 63;
+
+    #[allow(clippy::too_many_arguments)]
+    fn mint(
+        &mut self,
+        parent_id: Option<NodeId>,
+        bounds: Rect,
+        node_type: UINodeType,
+        style: UIStyle,
+        text: Option<&str>,
+        extra_flags: UIFlags,
+        key: Option<u64>,
+    ) -> NodeId {
         // Mint a fresh generation for this slot. `gen_counter` never yields 0
         // (reserved for PLACEHOLDER); skip it on the wrap.
         let generation = self.gen_counter;
@@ -129,6 +198,31 @@ impl UITree {
             self.gen_counter = 1;
         }
         let id = NodeId::from_parts(self.count as u32, generation);
+
+        // Durable WidgetId: the parent's id mixed with a stable salt. An explicit
+        // key (namespaced by EXPLICIT_KEY_FLAG) overrides the sibling index, so the
+        // same logical widget resolves to the same WidgetId across rebuilds.
+        let parent_widget = match parent_id {
+            Some(p) => self.widget_ids[p.index()],
+            None => WidgetId::ROOT,
+        };
+        let salt = match key {
+            Some(k) => Self::EXPLICIT_KEY_FLAG | k,
+            None => match parent_id {
+                Some(p) => {
+                    let pi = p.index();
+                    let s = self.child_counts[pi] as u64;
+                    self.child_counts[pi] += 1;
+                    s
+                }
+                None => {
+                    let s = self.root_count as u64;
+                    self.root_count += 1;
+                    s
+                }
+            },
+        };
+        let widget_id = parent_widget.with(salt);
 
         let node = UINode {
             id,
@@ -148,6 +242,21 @@ impl UITree {
         self.next_sibling.push(None);
         self.last_child.push(None);
         self.generations.push(generation);
+        self.widget_ids.push(widget_id);
+        self.child_counts.push(0);
+
+        // Only interactive nodes are ever the target of press / hover / focus, so
+        // only they need a reverse lookup. Keeping the map interactive-only also
+        // makes a collision meaningful — two interactive widgets sharing an id is a
+        // real bug (a duplicate explicit key), caught here in debug.
+        if extra_flags.contains(UIFlags::INTERACTIVE) {
+            let prev = self.widget_to_node.insert(widget_id, id);
+            debug_assert!(
+                prev.is_none(),
+                "two interactive nodes share WidgetId {widget_id:?} — duplicate explicit key \
+                 among siblings, or a sibling-salt collision"
+            );
+        }
 
         self.link_child(id, parent_id);
         self.count += 1;
@@ -663,6 +772,29 @@ impl UITree {
         self.parent_index[id.index()]
     }
 
+    // ── Durable widget identity ─────────────────────────────────────
+
+    /// The durable [`WidgetId`] of `id`, or [`WidgetId::NONE`] for a stale id.
+    /// Stable across rebuilds, so the input system can capture it at press and
+    /// recognise the same widget at release even after the tree was rebuilt.
+    pub fn widget_of(&self, id: NodeId) -> WidgetId {
+        if !self.is_live(id) {
+            return WidgetId::NONE;
+        }
+        self.widget_ids[id.index()]
+    }
+
+    /// The live [`NodeId`] that carries `widget` in the *current* build, if any
+    /// interactive node does. This is how a held `WidgetId` (press / hover /
+    /// focus, captured in an earlier frame) resolves back to a node the input
+    /// system can emit against or mutate — always a fresh, live id.
+    pub fn node_for_widget(&self, widget: WidgetId) -> Option<NodeId> {
+        if widget == WidgetId::NONE {
+            return None;
+        }
+        self.widget_to_node.get(&widget).copied()
+    }
+
     // ── Clear ───────────────────────────────────────────────────────
 
     pub fn clear(&mut self) {
@@ -675,6 +807,11 @@ impl UITree {
         // after this clear never collide with ids from before it (the slots are
         // reused from index 0, but with fresh, higher generations).
         self.generations.clear();
+        self.widget_ids.clear();
+        self.child_counts.clear();
+        self.root_count = 0;
+        // Retain the map's capacity — the editor clears+refills it every frame.
+        self.widget_to_node.clear();
         self.count = 0;
         self.has_dirty = false;
         self.structure_version = self.structure_version.wrapping_add(1);
@@ -692,6 +829,14 @@ impl UITree {
         if from_index >= self.count {
             return;
         }
+        // Drop the reverse-lookup entries for the interactive nodes being removed,
+        // before their rows go. Surviving nodes (< from_index) keep their entries
+        // and their still-live ids untouched.
+        for i in from_index..self.count {
+            if self.nodes[i].flags.contains(UIFlags::INTERACTIVE) {
+                self.widget_to_node.remove(&self.widget_ids[i]);
+            }
+        }
         self.nodes.truncate(from_index);
         self.parent_index.truncate(from_index);
         self.first_child.truncate(from_index);
@@ -702,6 +847,16 @@ impl UITree {
         // tail (e.g. a panel that didn't re-capture after a partial rebuild) no
         // longer validate.
         self.generations.truncate(from_index);
+        self.widget_ids.truncate(from_index);
+        self.child_counts.truncate(from_index);
+        // Surviving parents keep their child_counts (a partial rebuild's safety
+        // invariant guarantees their children all survived), so the rebuilt tail
+        // re-salts correctly. Only `root_count` needs recomputing — the rebuilt
+        // tail's roots must continue the surviving roots' salt sequence.
+        self.root_count = self.parent_index[..from_index]
+            .iter()
+            .filter(|p| p.is_none())
+            .count() as u32;
         self.count = from_index;
         self.has_dirty = true;
         self.structure_version = self.structure_version.wrapping_add(1);
@@ -1038,5 +1193,108 @@ mod tests {
         assert_eq!(tree.id_at(1), b);
         // Out of range → placeholder (never live).
         assert_eq!(tree.id_at(99), NodeId::PLACEHOLDER);
+    }
+
+    // ── WidgetId (durable identity) ──────────────────────────────────
+
+    /// The same build produces the same WidgetIds — the property the editor's
+    /// per-frame clear+rebuild relies on. NodeIds differ (fresh generations);
+    /// WidgetIds match.
+    fn build_sample(tree: &mut UITree) -> (NodeId, NodeId) {
+        let root = tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
+        let btn = tree.add_button(Some(root), 10.0, 10.0, 20.0, 20.0, default_style(), "x");
+        (root, btn)
+    }
+
+    #[test]
+    fn widget_id_is_stable_across_clear_and_rebuild() {
+        let mut tree = UITree::new();
+        let (_, btn1) = build_sample(&mut tree);
+        let w1 = tree.widget_of(btn1);
+
+        tree.clear();
+        let (_, btn2) = build_sample(&mut tree);
+        let w2 = tree.widget_of(btn2);
+
+        assert_ne!(btn1, btn2, "NodeId gets a fresh generation after rebuild");
+        assert_eq!(w1, w2, "WidgetId is the same logical widget across rebuild");
+        assert_ne!(w1, WidgetId::NONE);
+    }
+
+    #[test]
+    fn node_for_widget_resolves_to_the_live_id() {
+        let mut tree = UITree::new();
+        let (_, btn) = build_sample(&mut tree);
+        let w = tree.widget_of(btn);
+        assert_eq!(tree.node_for_widget(w), Some(btn));
+
+        // After a rebuild the widget resolves to the NEW live id, not the stale one.
+        tree.clear();
+        let (_, btn2) = build_sample(&mut tree);
+        assert_eq!(tree.node_for_widget(w), Some(btn2));
+        assert!(!tree.is_live(btn), "the pre-rebuild id is stale");
+    }
+
+    #[test]
+    fn widget_of_stale_id_is_none() {
+        let mut tree = UITree::new();
+        let (_, btn) = build_sample(&mut tree);
+        tree.clear();
+        assert_eq!(tree.widget_of(btn), WidgetId::NONE);
+    }
+
+    #[test]
+    fn only_interactive_nodes_are_resolvable() {
+        let mut tree = UITree::new();
+        let panel = tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
+        // A non-interactive panel has a WidgetId (for hierarchy) but is not in the
+        // reverse map — input never targets it.
+        let w = tree.widget_of(panel);
+        assert_ne!(w, WidgetId::NONE);
+        assert_eq!(tree.node_for_widget(w), None);
+    }
+
+    #[test]
+    fn explicit_key_survives_sibling_reordering() {
+        // Build A: one keyed button, then an auto button after it.
+        let mut tree = UITree::new();
+        let root = tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
+        let keyed_a = tree.add_node_keyed(
+            Some(root),
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            UINodeType::Button,
+            default_style(),
+            Some("k"),
+            UIFlags::INTERACTIVE,
+            42,
+        );
+        let auto_a = tree.add_button(Some(root), 0.0, 20.0, 10.0, 10.0, default_style(), "a");
+        let keyed_w_a = tree.widget_of(keyed_a);
+        let auto_w_a = tree.widget_of(auto_a);
+
+        // Build B: insert a NEW sibling before both, shifting sibling indices.
+        tree.clear();
+        let root = tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
+        let _inserted =
+            tree.add_button(Some(root), 0.0, 0.0, 10.0, 10.0, default_style(), "new");
+        let keyed_b = tree.add_node_keyed(
+            Some(root),
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            UINodeType::Button,
+            default_style(),
+            Some("k"),
+            UIFlags::INTERACTIVE,
+            42,
+        );
+        let auto_b = tree.add_button(Some(root), 0.0, 20.0, 10.0, 10.0, default_style(), "a");
+
+        // The keyed widget keeps its identity; the auto one (now a later sibling)
+        // does not. This is exactly why identity-bearing controls take a key.
+        assert_eq!(tree.widget_of(keyed_b), keyed_w_a, "explicit key is reorder-stable");
+        assert_ne!(
+            tree.widget_of(auto_b),
+            auto_w_a,
+            "auto sibling-index identity shifts when an earlier sibling is inserted"
+        );
     }
 }

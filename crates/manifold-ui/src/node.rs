@@ -265,6 +265,65 @@ impl NodeId {
     }
 }
 
+/// A *durable* widget identity — stable across tree rebuilds, unlike [`NodeId`].
+///
+/// `NodeId` is a transient per-frame handle: generational, correct for rendering
+/// and mutation within a build, but an id minted in one build does not validate
+/// against a later build (that is the whole point — it makes stale ids inert).
+/// The graph editor rebuilds its entire tree every frame, so any id held *across*
+/// frames — the input system's pressed / hovered / focused targets — goes stale
+/// immediately. Comparing a held `NodeId` to a freshly-built one then always
+/// fails, which is the bug class this type removes.
+///
+/// `WidgetId` is derived from a node's place in the build: the parent's
+/// `WidgetId` mixed with a per-sibling *salt*. So the **same logical widget gets
+/// the same `WidgetId` on every rebuild** as long as the build is structurally
+/// stable — which the editor's deterministic per-frame rebuild always is.
+/// Identity-bearing widgets can override the auto salt with an explicit key (the
+/// `*_keyed` builders), so their identity also survives sibling reordering (e.g.
+/// arming a modulator on one row must not renumber another row's controls).
+///
+/// The input system tracks interaction by `WidgetId` and resolves to the live
+/// `NodeId` only at the moment it emits an event. So it never depends on whether
+/// the tree it serves is dirty-tracked (the timeline) or rebuilt every frame (the
+/// editor) — both satisfy one neutral identity contract. See
+/// `docs/INPUT_IDENTITY_UNIFICATION.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WidgetId(u64);
+
+impl WidgetId {
+    /// Seed for root-level widgets. Non-zero so a real node never derives to
+    /// [`WidgetId::NONE`] in practice.
+    pub const ROOT: WidgetId = WidgetId(0x9E37_79B9_7F4A_7C15);
+
+    /// The "no widget" sentinel — a node that carries no durable identity (or a
+    /// resolution miss). Never produced by [`with`](WidgetId::with) from a real
+    /// seed in practice.
+    pub const NONE: WidgetId = WidgetId(0);
+
+    /// Derive a child id by mixing this id with `salt` (a stable sibling
+    /// discriminator: the sibling index for auto ids, or an explicit key). The
+    /// salt is mixed through a splitmix64 finalizer, so sibling 0 / 1 / 2 land far
+    /// apart and a deep path never degenerates into clustering.
+    #[inline]
+    pub(crate) fn with(self, salt: u64) -> WidgetId {
+        let mut z = self
+            .0
+            .wrapping_add(salt)
+            .wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        WidgetId(z ^ (z >> 31))
+    }
+
+    /// The raw 64-bit value — for debugging / stable serialization only. Identity
+    /// comparisons should use `WidgetId` directly.
+    #[inline]
+    pub fn raw(self) -> u64 {
+        self.0
+    }
+}
+
 // ── Node types ──────────────────────────────────────────────────────
 
 /// Node type — determines default rendering behavior.
