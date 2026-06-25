@@ -38,21 +38,11 @@ pub struct ViewportClip {
     pub warped_secs_per_beat: f32,
 }
 
-/// Which part of a clip was hit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HitRegion {
-    Body,
-    TrimLeft,
-    TrimRight,
-}
-
-/// Result of a clip hit-test in the viewport.
-#[derive(Debug, Clone)]
-pub struct ClipHitResult {
-    pub clip_id: ClipId,
-    pub layer_index: usize,
-    pub region: HitRegion,
-}
+// `HitRegion` and `ClipHitResult` live once in `crate::clip_hit_tester` — the
+// single hit-tester both the hover and the click/drag paths use — and are
+// re-exported from this module via `viewport.rs`. They were duplicated here,
+// which let the two hit-test paths silently diverge (fixed- vs proportional-width
+// trim handles, group-layer skip on one path only).
 
 /// Region-based selection in the timeline.
 #[derive(Debug, Clone, Copy)]

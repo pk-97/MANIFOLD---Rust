@@ -13,7 +13,11 @@ use manifold_foundation::{Beats, ClipId, LayerId, MarkerId};
 // ── Layout constants ────────────────────────────────────────────
 
 const RULER_HEIGHT: f32 = color::RULER_HEIGHT;
-const CLIP_VERTICAL_PAD: f32 = 12.0;
+// One source for the clip vertical inset: the hover hit-tester, the click/drag
+// hit-tester (via `app.rs` → `color::CLIP_VERTICAL_PAD`), and the renderer all read
+// this. A second independent `= 12.0` here is exactly how the two hit-test paths
+// drifted before — keep it aliased so they can't.
+const CLIP_VERTICAL_PAD: f32 = color::CLIP_VERTICAL_PAD;
 
 const RULER_FONT_SIZE: u16 = color::FONT_SMALL;
 const RULER_TICK_W: f32 = 1.0;
@@ -32,7 +36,11 @@ mod interaction;
 mod model;
 mod render;
 
-pub use model::{ClipHitResult, HitRegion, SelectionRegion, TrackInfo, ViewportClip};
+// One hit-result type for the whole timeline: defined in `clip_hit_tester` (the
+// shared hit-tester) and surfaced here so viewport consumers and the click/drag
+// overlay name the same type.
+pub use crate::clip_hit_tester::{ClipHitResult, HitRegion};
+pub use model::{SelectionRegion, TrackInfo, ViewportClip};
 use coordinate::GridSubdivision;
 use model::{CollapsedGroupBitmap, MarkerNodeGroup, TrackBgGroup};
 
@@ -980,6 +988,99 @@ mod tests {
         assert_eq!(
             panel.hit_test_marker_flag(Vec2::new(cx + 200.0, cy)),
             None
+        );
+    }
+
+    #[test]
+    fn hit_test_clip_delegates_to_shared_hit_tester() {
+        // Hover now routes through the same `ClipHitTester` the click/drag path uses,
+        // so the two agree on trim zones. This checks the coordinate wiring (screen Y →
+        // scroll-adjusted track-content Y, screen X → beat) lands the right region.
+        let mut panel = TimelineViewportPanel::new();
+        panel.tracks_rect = Rect::new(0.0, 100.0, 1000.0, 600.0);
+        panel.set_zoom(100.0); // 100 px/beat
+        panel.set_tracks(vec![TrackInfo::default(), TrackInfo::default()]);
+        panel.set_clips(vec![ViewportClip {
+            clip_id: "c1".into(),
+            layer_index: 0,
+            start_beat: Beats::from_f32(0.0),
+            duration_beats: Beats(4.0), // 400px wide → 8px proportional trim handles
+            name: String::new(),
+            color: color::CLIP_NORMAL,
+            is_muted: false,
+            is_locked: false,
+            is_generator: false,
+            is_audio: false,
+            waveform: None,
+            in_point_seconds: 0.0,
+            warped_secs_per_beat: 0.0,
+        }]);
+        panel.mapper.set_layout(&[140.0, 140.0]); // two 140px layers
+
+        // Screen Y inside layer-0's clip body band (content-y 70, pad is 12).
+        let body_y = panel.tracks_rect.y + 70.0;
+
+        let body = panel
+            .hit_test_clip(Vec2::new(panel.beat_to_pixel(Beats::from_f32(2.0)), body_y))
+            .expect("body hit");
+        assert_eq!(body.clip_id, "c1");
+        assert_eq!(body.region, HitRegion::Body);
+
+        // 2px into a 400px clip → inside the 8px proportional trim handle.
+        let trim = panel
+            .hit_test_clip(Vec2::new(panel.beat_to_pixel(Beats::from_f32(0.02)), body_y))
+            .expect("trim-left hit");
+        assert_eq!(trim.region, HitRegion::TrimLeft);
+
+        // With vertical scroll, the content-space conversion must add scroll_y_px —
+        // exactly as the click/drag path does — or hover and click disagree again.
+        // Set the field directly (set_scroll would clamp to 0 here).
+        panel.scroll_y_px = 60.0;
+        let scrolled = panel
+            .hit_test_clip(Vec2::new(
+                panel.beat_to_pixel(Beats::from_f32(2.0)),
+                panel.tracks_rect.y + 10.0, // +10 screen, +60 scroll → content-y 70
+            ))
+            .expect("body hit under scroll");
+        assert_eq!(scrolled.clip_id, "c1");
+        assert_eq!(scrolled.region, HitRegion::Body);
+    }
+
+    #[test]
+    fn hit_test_clip_skips_group_layers() {
+        // Regression for the divergence bug: the old hover hit-tester did NOT skip
+        // group layers, so a clip on a group track would hover even though the
+        // click/drag path ignored it. Now both skip groups.
+        let mut panel = TimelineViewportPanel::new();
+        panel.tracks_rect = Rect::new(0.0, 100.0, 1000.0, 600.0);
+        panel.set_zoom(100.0);
+        panel.set_tracks(vec![TrackInfo {
+            is_group: true,
+            ..Default::default()
+        }]);
+        panel.set_clips(vec![ViewportClip {
+            clip_id: "g1".into(),
+            layer_index: 0,
+            start_beat: Beats::from_f32(0.0),
+            duration_beats: Beats(4.0),
+            name: String::new(),
+            color: color::CLIP_NORMAL,
+            is_muted: false,
+            is_locked: false,
+            is_generator: false,
+            is_audio: false,
+            waveform: None,
+            in_point_seconds: 0.0,
+            warped_secs_per_beat: 0.0,
+        }]);
+        panel.mapper.set_layout(&[140.0]);
+
+        let body_y = panel.tracks_rect.y + 70.0;
+        assert!(
+            panel
+                .hit_test_clip(Vec2::new(panel.beat_to_pixel(Beats::from_f32(2.0)), body_y))
+                .is_none(),
+            "a clip on a group layer must not be hit — group layers are skipped",
         );
     }
 

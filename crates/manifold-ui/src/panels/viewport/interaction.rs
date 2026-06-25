@@ -3,6 +3,7 @@
 //! `interaction_overlay.rs`.) See `docs/TIMELINE_API_DESIGN.md` §3.6.
 
 use super::*;
+use crate::clip_hit_tester::ClipHitTester;
 
 impl TimelineViewportPanel {
     /// Hit-test a point against marker flags in the ruler area.
@@ -20,59 +21,30 @@ impl TimelineViewportPanel {
 
     /// Hit-test a screen position against all clips.
     /// Returns the topmost clip hit and which region was hit (body, trim left, trim right).
+    ///
+    /// Delegates to the single canonical [`ClipHitTester::hit_test`] — the same
+    /// hit-tester the click/drag path uses (`InteractionOverlay::hit_test_at`) — so
+    /// hover and click agree on trim zones *and* group-layer skipping. This used to
+    /// be a divergent copy with fixed-width trim handles and no group skip, which
+    /// meant a clip edge could hover-as-body but grab-as-trim. Coordinate handling
+    /// mirrors `hit_test_at`: pointer Y is converted into scroll-adjusted
+    /// track-content space.
     pub fn hit_test_clip(&self, pos: Vec2) -> Option<ClipHitResult> {
         if !self.tracks_rect.contains(pos) {
             return None;
         }
 
-        let layer_index = self.layer_at_y(pos.y)?;
         let beat = self.pixel_to_beat(pos.x).as_f32();
+        let y_in_track_content = (pos.y - self.tracks_rect.y) + self.scroll_y_px();
 
-        // Reject clicks in vertical padding — only the padded clip rect is interactive.
-        let track_y = self.track_y(layer_index);
-        let track_h = self.track_height(layer_index);
-        let clip_top = track_y + CLIP_VERTICAL_PAD;
-        let clip_bottom = track_y + track_h - CLIP_VERTICAL_PAD;
-        if pos.y < clip_top || pos.y > clip_bottom {
-            return None;
-        }
-
-        // Iterate clips on this layer in reverse order (topmost/last wins)
-        let layer_clips = self
-            .clips_by_layer
-            .get(layer_index)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
-        for clip in layer_clips.iter().rev() {
-            let clip_start_f32 = clip.start_beat.as_f32();
-            let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
-            if beat < clip_start_f32 || beat >= clip_end {
-                continue;
-            }
-
-            let clip_width_px = clip.duration_beats.as_f32() * self.mapper.pixels_per_beat();
-            let local_px = (beat - clip_start_f32) * self.mapper.pixels_per_beat();
-
-            let region = if clip_width_px > color::TRIM_HANDLE_MIN_CLIP_WIDTH_PX
-                && local_px < color::TRIM_HANDLE_THRESHOLD_PX
-            {
-                HitRegion::TrimLeft
-            } else if clip_width_px > color::TRIM_HANDLE_MIN_CLIP_WIDTH_PX
-                && local_px > clip_width_px - color::TRIM_HANDLE_THRESHOLD_PX
-            {
-                HitRegion::TrimRight
-            } else {
-                HitRegion::Body
-            };
-
-            return Some(ClipHitResult {
-                clip_id: clip.clip_id.clone(),
-                layer_index,
-                region,
-            });
-        }
-
-        None
+        ClipHitTester::hit_test(
+            beat,
+            y_in_track_content,
+            CLIP_VERTICAL_PAD,
+            &self.mapper,
+            |i| self.clips_for_layer(i),
+            |i| self.is_group_layer(i),
+        )
     }
 
     /// Called every frame (or on CursorMoved) with the current cursor position
