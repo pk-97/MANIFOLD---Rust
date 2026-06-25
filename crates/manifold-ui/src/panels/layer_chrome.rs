@@ -78,6 +78,14 @@ impl LayerChromePanel {
     pub fn node_count(&self) -> usize {
         self.node_count
     }
+    /// Reset to "not built": empties the stored node range so consumers that gate
+    /// on `node_count() > 0` skip this section when the inspector doesn't build it
+    /// this frame (an inactive scope). Keeps `(first_node, node_count)` honest
+    /// about the current tree — no stale range aliasing the active scope.
+    pub fn clear_nodes(&mut self) {
+        self.first_node = usize::MAX;
+        self.node_count = 0;
+    }
     pub fn is_dragging(&self) -> bool {
         self.opacity.is_dragging()
     }

@@ -479,13 +479,11 @@ impl InspectorCompositePanel {
     /// effect cards, gen params. Used by the cache manager to detect which
     /// parts of the inspector changed and only re-render those.
     ///
-    /// Only the *active* scope's sub-panels are reported. A sub-panel whose
-    /// section wasn't built this frame (the inactive scope) still holds the
-    /// node range from the last frame it WAS built — feeding those stale
-    /// indices to the incremental cache would point it at whatever nodes now
-    /// occupy them (the active scope's content). Gating on the same
-    /// `*_visible` flags that `find_target_for_node` uses keeps every consumer
-    /// of these ranges honest about what was actually built.
+    /// Every sub-panel is offered, but only the ones that built nodes this frame
+    /// contribute a range: an inactive scope was reset to an empty range in
+    /// `build`, and `push` drops `(usize::MAX, 0)` — so the cache is fed exactly
+    /// what was actually built. No `*_visible()` gate; the node range is the
+    /// single source of truth for "live this frame".
     pub fn sub_region_ranges(&self) -> Vec<(usize, usize)> {
         let mut ranges =
             Vec::with_capacity(4 + self.master_effects.len() + self.layer_effects.len() + 1);
@@ -494,42 +492,35 @@ impl InspectorCompositePanel {
                 ranges.push((first, first + count));
             }
         };
-        // Macros always builds (it sits above both columns every frame).
         push(
             &mut ranges,
             self.macros_panel.first_node(),
             self.macros_panel.node_count(),
         );
-        if self.master_visible() {
-            push(
-                &mut ranges,
-                self.master_chrome.first_node(),
-                self.master_chrome.node_count(),
-            );
-            for card in &self.master_effects {
-                push(&mut ranges, card.first_node(), card.node_count());
-            }
+        push(
+            &mut ranges,
+            self.master_chrome.first_node(),
+            self.master_chrome.node_count(),
+        );
+        for card in &self.master_effects {
+            push(&mut ranges, card.first_node(), card.node_count());
         }
-        if self.layer_visible() {
-            push(
-                &mut ranges,
-                self.layer_chrome.first_node(),
-                self.layer_chrome.node_count(),
-            );
-            if let Some(ref gp) = self.gen_params {
-                push(&mut ranges, gp.first_node(), gp.node_count());
-            }
-            for card in &self.layer_effects {
-                push(&mut ranges, card.first_node(), card.node_count());
-            }
+        push(
+            &mut ranges,
+            self.layer_chrome.first_node(),
+            self.layer_chrome.node_count(),
+        );
+        if let Some(ref gp) = self.gen_params {
+            push(&mut ranges, gp.first_node(), gp.node_count());
         }
-        if self.clip_visible() {
-            push(
-                &mut ranges,
-                self.clip_chrome.first_node(),
-                self.clip_chrome.node_count(),
-            );
+        for card in &self.layer_effects {
+            push(&mut ranges, card.first_node(), card.node_count());
         }
+        push(
+            &mut ranges,
+            self.clip_chrome.first_node(),
+            self.clip_chrome.node_count(),
+        );
         ranges
     }
 
@@ -1053,23 +1044,22 @@ impl InspectorCompositePanel {
     /// visible cards and return its type-in action (empty if it isn't a value
     /// cell). Enum/toggle params are filtered out by the card itself.
     fn route_value_typein(&self, node_id: NodeId, tree: &UITree) -> Vec<PanelAction> {
-        if self.master_visible() {
-            for card in &self.master_effects {
-                if let Some(a) = card.value_cell_typein(node_id, tree) {
-                    return vec![a];
-                }
-            }
-        }
-        if self.layer_visible() {
-            if let Some(gp) = self.gen_params.as_ref()
-                && let Some(a) = gp.value_cell_typein(node_id, tree)
-            {
+        // No scope gate: a card that didn't build this frame is not live and its
+        // `value_cell_typein` returns None, so only the active scope's cards can
+        // match. The card's liveness is the single source of truth.
+        for card in &self.master_effects {
+            if let Some(a) = card.value_cell_typein(node_id, tree) {
                 return vec![a];
             }
-            for card in &self.layer_effects {
-                if let Some(a) = card.value_cell_typein(node_id, tree) {
-                    return vec![a];
-                }
+        }
+        if let Some(gp) = self.gen_params.as_ref()
+            && let Some(a) = gp.value_cell_typein(node_id, tree)
+        {
+            return vec![a];
+        }
+        for card in &self.layer_effects {
+            if let Some(a) = card.value_cell_typein(node_id, tree) {
+                return vec![a];
             }
         }
         Vec::new()
@@ -1078,23 +1068,21 @@ impl InspectorCompositePanel {
     /// Resolve a clicked node to a driver Free-period field across the visible
     /// cards and return its type-in action (empty if it isn't a Free field).
     fn route_driver_period_typein(&self, node_id: NodeId, tree: &UITree) -> Vec<PanelAction> {
-        if self.master_visible() {
-            for card in &self.master_effects {
-                if let Some(a) = card.driver_period_typein(node_id, tree) {
-                    return vec![a];
-                }
-            }
-        }
-        if self.layer_visible() {
-            if let Some(gp) = self.gen_params.as_ref()
-                && let Some(a) = gp.driver_period_typein(node_id, tree)
-            {
+        // No scope gate — a non-live card's `driver_period_typein` returns None
+        // (see `route_value_typein`).
+        for card in &self.master_effects {
+            if let Some(a) = card.driver_period_typein(node_id, tree) {
                 return vec![a];
             }
-            for card in &self.layer_effects {
-                if let Some(a) = card.driver_period_typein(node_id, tree) {
-                    return vec![a];
-                }
+        }
+        if let Some(gp) = self.gen_params.as_ref()
+            && let Some(a) = gp.driver_period_typein(node_id, tree)
+        {
+            return vec![a];
+        }
+        for card in &self.layer_effects {
+            if let Some(a) = card.driver_period_typein(node_id, tree) {
+                return vec![a];
             }
         }
         Vec::new()
@@ -1116,53 +1104,53 @@ impl InspectorCompositePanel {
             return Some(PressedTarget::Scrollbar);
         }
 
+        // Every section below is matched purely by its node range. Only the
+        // active scope built nodes this frame; the rest were reset to empty
+        // ranges in `build`, and `in_range` is false for an empty range — so no
+        // `*_visible()` gate is needed and an inactive scope can't match a live
+        // index. The node range is the single source of truth.
+
         // Master section
-        if self.master_visible() {
-            if in_range(
-                idx,
-                self.master_chrome.first_node(),
-                self.master_chrome.node_count(),
-            ) {
-                return Some(PressedTarget::MasterChrome);
-            }
-            for (i, card) in self.master_effects.iter().enumerate() {
-                if in_range(idx, card.first_node(), card.node_count()) {
-                    return Some(PressedTarget::MasterEffect(i));
-                }
+        if in_range(
+            idx,
+            self.master_chrome.first_node(),
+            self.master_chrome.node_count(),
+        ) {
+            return Some(PressedTarget::MasterChrome);
+        }
+        for (i, card) in self.master_effects.iter().enumerate() {
+            if in_range(idx, card.first_node(), card.node_count()) {
+                return Some(PressedTarget::MasterEffect(i));
             }
         }
 
-        // Layer section. The generator card lives here (built, sized, and
-        // range-registered under `layer_visible`), so it must be hit-tested
-        // here too — not under the clip section, which is a different tab.
-        if self.layer_visible() {
-            if in_range(
-                idx,
-                self.layer_chrome.first_node(),
-                self.layer_chrome.node_count(),
-            ) {
-                return Some(PressedTarget::LayerChrome);
-            }
-            if let Some(ref gp) = self.gen_params
-                && in_range(idx, gp.first_node(), gp.node_count())
-            {
-                return Some(PressedTarget::GenParam);
-            }
-            for (i, card) in self.layer_effects.iter().enumerate() {
-                if in_range(idx, card.first_node(), card.node_count()) {
-                    return Some(PressedTarget::LayerEffect(i));
-                }
+        // Layer section. The generator card lives here (built and range-registered
+        // alongside the layer chrome), so it is hit-tested here — not under the
+        // clip section, which is a different scope.
+        if in_range(
+            idx,
+            self.layer_chrome.first_node(),
+            self.layer_chrome.node_count(),
+        ) {
+            return Some(PressedTarget::LayerChrome);
+        }
+        if let Some(ref gp) = self.gen_params
+            && in_range(idx, gp.first_node(), gp.node_count())
+        {
+            return Some(PressedTarget::GenParam);
+        }
+        for (i, card) in self.layer_effects.iter().enumerate() {
+            if in_range(idx, card.first_node(), card.node_count()) {
+                return Some(PressedTarget::LayerEffect(i));
             }
         }
 
         // Clip section
-        if self.clip_visible()
-            && in_range(
-                idx,
-                self.clip_chrome.first_node(),
-                self.clip_chrome.node_count(),
-            )
-        {
+        if in_range(
+            idx,
+            self.clip_chrome.first_node(),
+            self.clip_chrome.node_count(),
+        ) {
             return Some(PressedTarget::ClipChrome);
         }
 
@@ -1513,29 +1501,26 @@ impl InspectorCompositePanel {
     /// Find which card's drag handle matches the given node_id.
     /// Returns (tab, card_index_in_vec, effect_index, effect_name).
     fn find_drag_handle(&self, node_id: NodeId) -> Option<(InspectorTab, usize, usize, String)> {
-        if self.master_visible() {
-            for (i, card) in self.master_effects.iter().enumerate() {
-                // ParamCardPanel::is_drag_handle still takes raw u32 (not yet converted).
-                if card.is_drag_handle(node_id) {
-                    return Some((
-                        InspectorTab::Master,
-                        i,
-                        card.effect_index(),
-                        card.effect_name().to_string(),
-                    ));
-                }
+        // No scope gate: `is_drag_handle` is false on a non-live card, so only the
+        // active scope's cards can match (the node range is the source of truth).
+        for (i, card) in self.master_effects.iter().enumerate() {
+            if card.is_drag_handle(node_id) {
+                return Some((
+                    InspectorTab::Master,
+                    i,
+                    card.effect_index(),
+                    card.effect_name().to_string(),
+                ));
             }
         }
-        if self.layer_visible() {
-            for (i, card) in self.layer_effects.iter().enumerate() {
-                if card.is_drag_handle(node_id) {
-                    return Some((
-                        InspectorTab::Layer,
-                        i,
-                        card.effect_index(),
-                        card.effect_name().to_string(),
-                    ));
-                }
+        for (i, card) in self.layer_effects.iter().enumerate() {
+            if card.is_drag_handle(node_id) {
+                return Some((
+                    InspectorTab::Layer,
+                    i,
+                    card.effect_index(),
+                    card.effect_name().to_string(),
+                ));
             }
         }
         None
@@ -1783,6 +1768,30 @@ impl Panel for InspectorCompositePanel {
         self.add_master_effect_btn = None;
         self.add_layer_effect_btn = None;
 
+        // Range truthfulness (the single invariant the rest of this panel leans
+        // on): a sub-panel's (first_node, node_count) must describe what it built
+        // THIS frame. Only the active scope's sections build below, so reset every
+        // section's range up front — a section left un-built then honestly reports
+        // an empty range. `node_count() > 0` ("live this frame") becomes the one
+        // signal every consumer keys off (hit routing, intents, type-in, the
+        // sub-region cache, selection visuals), so an inactive scope can never
+        // alias the active scope's node indices. This is what makes the tab system
+        // safe by construction instead of by a `*_visible()` guard repeated at
+        // every read site. Runs before the zero-width early-return so a collapsed
+        // inspector also leaves no stale ranges.
+        self.master_chrome.clear_nodes();
+        self.layer_chrome.clear_nodes();
+        self.clip_chrome.clear_nodes();
+        if let Some(gp) = self.gen_params.as_mut() {
+            gp.clear_nodes();
+        }
+        for card in &mut self.master_effects {
+            card.clear_nodes();
+        }
+        for card in &mut self.layer_effects {
+            card.clear_nodes();
+        }
+
         let rect = layout.inspector();
         if rect.width <= 0.0 {
             return;
@@ -1962,9 +1971,10 @@ impl Panel for InspectorCompositePanel {
                     tree,
                     Rect::new(inner_x, clip_top + SECTION_CARD_PAD, inner_w, chrome_h),
                 );
-            } else {
-                self.clip_chrome.clear_nodes();
             }
+            // No `else` to clear the clip range: the up-front reset already left it
+            // empty, so an un-built clip section reports not-live without a second
+            // bookkeeping site.
         }
         self.layer_scroll.reparent_content(tree, right_start);
         self.layer_scroll
@@ -2051,26 +2061,27 @@ impl Panel for InspectorCompositePanel {
     /// matching. (clip_chrome has no right-click affordance, so nothing to
     /// register.) See `docs/NODE_INTENT_DISPATCH.md`.
     fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
-        // Only the active scope's sub-panels were built this frame; the inactive
-        // scope's cards hold stale node ids that now belong to the active
-        // content, so registering their intents would bind right-clicks on live
-        // nodes to phantom targets. Gate on the same `*_visible` SSOT the rest of
-        // the panel uses. Macros always builds.
+        // Only the active scope built nodes this frame; an inactive scope's cards
+        // hold stale ids that now belong to the active content, so registering
+        // their intents would bind right-clicks on live nodes to phantom targets.
+        // Liveness is the node range: param cards self-guard (a non-live card's
+        // `register_intents` no-ops), and the chrome sections are gated on
+        // `node_count() > 0` here — one signal, the same the rest of the panel uses.
         self.macros_panel.register_intents(intents);
-        if self.master_visible() {
+        if self.master_chrome.node_count() > 0 {
             self.master_chrome.register_intents(intents);
-            for card in &self.master_effects {
-                card.register_intents(intents);
-            }
         }
-        if self.layer_visible() {
+        for card in &self.master_effects {
+            card.register_intents(intents);
+        }
+        if self.layer_chrome.node_count() > 0 {
             self.layer_chrome.register_intents(intents);
-            if let Some(gp) = self.gen_params.as_ref() {
-                gp.register_intents(intents);
-            }
-            for card in &self.layer_effects {
-                card.register_intents(intents);
-            }
+        }
+        if let Some(gp) = self.gen_params.as_ref() {
+            gp.register_intents(intents);
+        }
+        for card in &self.layer_effects {
+            card.register_intents(intents);
         }
     }
 
@@ -2301,12 +2312,14 @@ mod tests {
         }
     }
 
-    /// Regression: switching scope leaves the inactive section's chrome panels
-    /// holding a node range from the frame they were last built. Those ranges
-    /// now overlap the active scope's nodes, so `sub_region_ranges()` /
-    /// `register_intents()` must NOT report them — they're gated on `*_visible`.
-    /// Before the gate, the stale master_chrome range leaked into the cache's
-    /// incremental list and the intent registry (phantom right-click targets).
+    /// Range truthfulness: switching scope must reset the inactive section's
+    /// node range to empty, not leave it pointing at the frame it was last built.
+    /// `build` clears every section up front, so an un-built scope reports
+    /// `first_node == usize::MAX` / `node_count == 0` — and `sub_region_ranges()`
+    /// (and every other range consumer) then naturally excludes it without a
+    /// `*_visible()` gate. Before this, the stale master_chrome range overlapped
+    /// the active scope's nodes and leaked into the cache's incremental list and
+    /// the intent registry (phantom right-click targets).
     #[test]
     fn subregions_exclude_inactive_scope_after_scope_switch() {
         use super::super::param_card::ParamCardKind;
@@ -2323,12 +2336,13 @@ mod tests {
         panel.configure_tabs(&[InspectorTab::Master], InspectorTab::Master);
         tree.clear();
         panel.build(&mut tree, &layout);
-        let master_chrome_first = panel.master_chrome.first_node();
-        let master_chrome_count = panel.master_chrome.node_count();
-        assert!(master_chrome_count > 0, "master chrome should have built");
+        assert!(
+            panel.master_chrome.node_count() > 0,
+            "master chrome should have built"
+        );
 
-        // Frame 2: layer active (gen + layer effect). Master chrome is NOT rebuilt,
-        // so its first_node/node_count are now stale and overlap layer content.
+        // Frame 2: layer active (gen + layer effect). Master chrome is NOT built,
+        // so the up-front reset must leave its range empty (not stale).
         panel.configure_layer_effects(&[mk_config(ParamCardKind::Effect, "LayerFX", 2)]);
         let mut text_gen = mk_config(ParamCardKind::Generator, "Text", 3);
         text_gen.string_params = vec![super::super::param_card::ParamCardStringInfo {
@@ -2345,13 +2359,21 @@ mod tests {
         tree.clear();
         panel.build(&mut tree, &layout);
 
-        // The master chrome's range is unchanged (stale) — proves the precondition.
-        assert_eq!(panel.master_chrome.first_node(), master_chrome_first);
-        assert_eq!(panel.master_chrome.node_count(), master_chrome_count);
-        let stale = (master_chrome_first, master_chrome_first + master_chrome_count);
+        // The inactive master chrome reports a reset (empty) range — the stale
+        // range can no longer exist to be confused for live layer nodes.
+        assert_eq!(
+            panel.master_chrome.first_node(),
+            usize::MAX,
+            "inactive scope must reset first_node to the not-built sentinel"
+        );
+        assert_eq!(
+            panel.master_chrome.node_count(),
+            0,
+            "inactive scope must report zero nodes"
+        );
 
-        // The gen card IS covered (active scope), and the stale master range is NOT
-        // reported (it would point the incremental cache at live layer nodes).
+        // The gen card IS covered (active scope), and no sub-region overlaps the
+        // (now empty) master section — nothing points the cache at live layer nodes.
         let genp = panel.gen_params.as_ref().unwrap();
         let gen_range = (genp.first_node(), genp.first_node() + genp.node_count());
         let subs = panel.sub_region_ranges();
@@ -2359,9 +2381,10 @@ mod tests {
             subs.iter().any(|&(s, e)| s <= gen_range.0 && gen_range.1 <= e),
             "gen card must be covered: gen={gen_range:?} subs={subs:?}"
         );
+        // Every reported range is a real, live (non-empty) range.
         assert!(
-            !subs.contains(&stale),
-            "stale master_chrome range {stale:?} must not leak into sub_region_ranges: {subs:?}"
+            subs.iter().all(|&(s, e)| s != usize::MAX && e > s),
+            "no empty/sentinel ranges may be reported: {subs:?}"
         );
     }
 

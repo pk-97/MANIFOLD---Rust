@@ -659,6 +659,9 @@ impl ParamCardPanel {
     /// `None` for non-value-cell nodes and for enum params (`value_labels` use the
     /// dropdown, not text). Toggle/trigger rows carry no slider, so never match.
     pub fn value_cell_typein(&self, node_id: NodeId, tree: &UITree) -> Option<PanelAction> {
+        if !self.is_live() {
+            return None;
+        }
         for (pi, slot) in self.slider_ids.iter().enumerate() {
             let Some(ids) = slot else { continue };
             if ids.value_text != node_id {
@@ -687,6 +690,9 @@ impl ParamCardPanel {
     /// otherwise. The Free field is a type-in trigger like a value cell, so it
     /// routes here (tree-aware) rather than through `handle_click`.
     pub fn driver_period_typein(&self, node_id: NodeId, tree: &UITree) -> Option<PanelAction> {
+        if !self.is_live() {
+            return None;
+        }
         let pi = crate::panels::param_slider_shared::driver_free_field_index(
             node_id,
             &self.driver_config_ids,
@@ -713,6 +719,25 @@ impl ParamCardPanel {
     }
     pub fn node_count(&self) -> usize {
         self.node_count
+    }
+    /// Reset this card to "not built": the stored node range becomes empty, so
+    /// [`is_live`](Self::is_live) reports false and every method that resolves or
+    /// mutates by a cached node id no-ops. The inspector calls this on the cards
+    /// of the inactive scope before each build — a scope it doesn't build this
+    /// frame must not keep a range (or live id-handlers) aliasing the active
+    /// scope's node indices.
+    pub fn clear_nodes(&mut self) {
+        self.first_node = usize::MAX;
+        self.node_count = 0;
+    }
+    /// Whether this card built nodes this frame. Every cached node id (border,
+    /// sliders, drag icon, drawer fields) is only valid while live; after
+    /// [`clear_nodes`](Self::clear_nodes) those ids point at indices the active
+    /// scope now occupies, so id-keyed methods must refuse to act on a non-live
+    /// card. This is the single signal for that — keyed off the node range, the
+    /// one fact the build pass keeps truthful.
+    fn is_live(&self) -> bool {
+        self.node_count > 0
     }
     pub fn is_dragging(&self) -> bool {
         self.drag.is_dragging()
@@ -767,6 +792,9 @@ impl ParamCardPanel {
 
     /// Update the border color without a full rebuild (selection highlight).
     pub fn update_selection_visual(&mut self, tree: &mut UITree, selected: bool) {
+        if !self.is_live() {
+            return;
+        }
         if selected == self.is_selected {
             return;
         }
@@ -795,11 +823,14 @@ impl ParamCardPanel {
 
     /// Whether `node_id` is this card's drag handle (effect kind only).
     pub fn is_drag_handle(&self, node_id: NodeId) -> bool {
-        self.drag_icon_id == Some(node_id)
+        self.is_live() && self.drag_icon_id == Some(node_id)
     }
 
     /// Dim/undim the card border during a reorder drag (effect kind).
     pub fn set_drag_dimmed(&self, tree: &mut UITree, dim: bool) {
+        if !self.is_live() {
+            return;
+        }
         if let Some(border_id) = self.border_id {
             let bg_color = if dim {
                 Color32::new(46, 46, 49, 100) // dimmed border
@@ -2921,6 +2952,9 @@ impl ParamCardPanel {
     /// cell, row gaps, padding — folds up to the card context menu instead of
     /// being silently swallowed. See `docs/NODE_INTENT_DISPATCH.md`.
     pub fn register_intents(&self, intents: &mut crate::intent::IntentRegistry) {
+        if !self.is_live() {
+            return;
+        }
         use crate::intent::Gesture::RightClick;
 
         let target = match self.kind {

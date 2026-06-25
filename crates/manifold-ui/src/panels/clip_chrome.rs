@@ -191,6 +191,7 @@ impl ClipChromePanel {
         self.has_clip
     }
     pub fn clear_nodes(&mut self) {
+        self.first_node = usize::MAX;
         self.node_count = 0;
     }
     pub fn is_dragging(&self) -> bool {
