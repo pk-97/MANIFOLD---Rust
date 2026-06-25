@@ -1537,6 +1537,7 @@ impl ParamCardPanel {
                 label_width,
                 self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                 !self.compact,
+                author.then_some((i as u64) << 8),
             );
             self.slider_ids[i] = row.slider;
             self.row_catcher_ids[i] = Some(row.row_catcher);
@@ -1559,7 +1560,10 @@ impl ParamCardPanel {
             if author && info.mappable {
                 let ch_x = x + PADDING + (w - PADDING * 2.0) - MAP_CHEVRON_W;
                 let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
-                self.mapping_chevron_ids[i] = Some(tree.add_button(
+                // Keyed by (row | chevron role): the chevron's identity must not
+                // shift when an earlier row arms a modulator and inserts drawer
+                // nodes ahead of it. See `docs/INPUT_IDENTITY_UNIFICATION.md`.
+                self.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
                     Some(parent),
                     ch_x,
                     ch_y,
@@ -1576,6 +1580,7 @@ impl ParamCardPanel {
                         ..UIStyle::default()
                     },
                     "\u{203A}", // ›
+                    ((i as u64) << 8) | ROW_ROLE_CHEVRON,
                 ));
             }
             cy = row.new_cy;
@@ -1675,15 +1680,28 @@ impl ParamCardPanel {
                     } else {
                         (if on { "ON" } else { "OFF" }, toggle_btn_style(on))
                     };
-                    let button_id = tree.add_button(
-                        None,
-                        toggle_btn_x,
-                        cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5,
-                        TOGGLE_BTN_W,
-                        TOGGLE_BTN_H,
-                        button_style,
-                        button_text,
-                    );
+                    let toggle_y = cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5;
+                    let button_id = match author.then_some(((i as u64) << 8) | ROW_ROLE_TOGGLE) {
+                        Some(key) => tree.add_button_keyed(
+                            None,
+                            toggle_btn_x,
+                            toggle_y,
+                            TOGGLE_BTN_W,
+                            TOGGLE_BTN_H,
+                            button_style,
+                            button_text,
+                            key,
+                        ),
+                        None => tree.add_button(
+                            None,
+                            toggle_btn_x,
+                            toggle_y,
+                            TOGGLE_BTN_W,
+                            TOGGLE_BTN_H,
+                            button_style,
+                            button_text,
+                        ),
+                    };
 
                     // Make toggle label interactive for click-to-copy OSC address
                     if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some() {
@@ -1718,6 +1736,7 @@ impl ParamCardPanel {
                         label_width,
                         self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver),
                         !self.compact,
+                        author.then_some((i as u64) << 8),
                     );
                     self.slider_ids[i] = row.slider;
                     self.row_catcher_ids[i] = Some(row.row_catcher);
@@ -1740,7 +1759,7 @@ impl ParamCardPanel {
                     if author && info.mappable {
                         let ch_x = cx + content_w - MAP_CHEVRON_W;
                         let ch_y = row_y + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
-                        self.mapping_chevron_ids[i] = Some(tree.add_button(
+                        self.mapping_chevron_ids[i] = Some(tree.add_button_keyed(
                             None,
                             ch_x,
                             ch_y,
@@ -1757,6 +1776,7 @@ impl ParamCardPanel {
                                 ..UIStyle::default()
                             },
                             "\u{203A}", // ›
+                            ((i as u64) << 8) | ROW_ROLE_CHEVRON,
                         ));
                     }
                     cy = row.new_cy;
@@ -3204,6 +3224,38 @@ mod tests {
         // The chevron also has a resolvable anchor rect by binding id.
         assert!(panel.mapping_chevron_rect(&tree, "strength").is_some());
         assert!(panel.mapping_chevron_rect(&tree, "radius").is_none());
+    }
+
+    /// Phase 3: the editor chevron is keyed by (row | role), so its durable
+    /// WidgetId must not move when an EARLIER row arms a modulator — which inserts
+    /// drawer + track-overlay nodes ahead of it and shifts every later sibling.
+    /// An auto-salted node would renumber; the keyed chevron does not.
+    #[test]
+    fn editor_chevron_identity_survives_earlier_row_arming_a_mod() {
+        let build_with_driver0 = |driver0: bool| {
+            let mut tree = UITree::new();
+            let mut c = effect_config_with_mappable(); // param[1] is mappable
+            c.driver_active = vec![driver0, false];
+            let mut panel = ParamCardPanel::new();
+            panel.set_context(CardContext::Author);
+            panel.configure(&c);
+            panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 300.0));
+            let chevron = panel.mapping_chevron_ids[1].expect("row 1 mappable → chevron");
+            (tree.widget_of(chevron), tree.count())
+        };
+
+        let (w_plain, n_plain) = build_with_driver0(false);
+        let (w_armed, n_armed) = build_with_driver0(true);
+
+        assert!(
+            n_armed > n_plain,
+            "arming row 0's driver must add drawer/overlay nodes (a real sibling shift)"
+        );
+        assert_eq!(
+            w_plain, w_armed,
+            "keyed chevron identity must be stable despite the earlier row's structural change"
+        );
+        assert_ne!(w_plain, WidgetId::NONE);
     }
 
     #[test]

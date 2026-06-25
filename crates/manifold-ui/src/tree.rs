@@ -321,6 +321,32 @@ impl UITree {
         )
     }
 
+    /// Add an interactive button whose durable [`WidgetId`] is pinned to an
+    /// explicit `key` (see [`add_node_keyed`](UITree::add_node_keyed)) — for
+    /// controls whose sibling position can shift between rebuilds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_button_keyed(
+        &mut self,
+        parent_id: Option<NodeId>,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        style: UIStyle,
+        text: &str,
+        key: u64,
+    ) -> NodeId {
+        self.add_node_keyed(
+            parent_id,
+            Rect::new(x, y, w, h),
+            UINodeType::Button,
+            style,
+            Some(text),
+            UIFlags::INTERACTIVE,
+            key,
+        )
+    }
+
     /// Add a text label. Takes explicit width (fixes Unity's width=0 bug).
     #[allow(clippy::too_many_arguments)]
     pub fn add_label(

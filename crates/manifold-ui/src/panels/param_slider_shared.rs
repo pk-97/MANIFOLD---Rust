@@ -1274,6 +1274,38 @@ fn build_mod_tab_strip(
 /// inner content width the drawers span. Node creation order is identical to
 /// the prior inline code, so first-node/node-count bookkeeping is preserved.
 #[allow(clippy::too_many_arguments)]
+// Per-row interactive-control roles, mixed into a row's key base to give each
+// control a stable, reorder-proof WidgetId. Values only need to be unique within
+// one row; the row base (`param_index << 8`) separates rows. Shared with the
+// editor card, which keys its chevron / toggle the same way.
+pub(crate) const ROW_ROLE_ENV: u64 = 1;
+pub(crate) const ROW_ROLE_DRV: u64 = 2;
+pub(crate) const ROW_ROLE_AUDIO: u64 = 3;
+pub(crate) const ROW_ROLE_CHEVRON: u64 = 4;
+pub(crate) const ROW_ROLE_TOGGLE: u64 = 5;
+
+/// Add a row arm button: explicitly keyed (`base | role`) when a row key base is
+/// supplied (editor card), else auto-salted by sibling index (perform inspector,
+/// unchanged).
+#[allow(clippy::too_many_arguments)]
+fn add_row_button(
+    tree: &mut UITree,
+    parent: Option<NodeId>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    style: UIStyle,
+    text: &str,
+    row_key_base: Option<u64>,
+    role: u64,
+) -> NodeId {
+    match row_key_base {
+        Some(base) => tree.add_button_keyed(parent, x, y, w, h, style, text, base | role),
+        None => tree.add_button(parent, x, y, w, h, style, text),
+    }
+}
+
 pub(crate) fn build_param_row(
     tree: &mut UITree,
     parent: Option<NodeId>,
@@ -1298,6 +1330,13 @@ pub(crate) fn build_param_row(
     // — the row, arm buttons, and slider track overlays still show, so mods stay
     // armed and their live ranges remain visible; only the settings are hidden.
     show_drawer: bool,
+    // When `Some(base)`, the row's interactive arm buttons take an explicit,
+    // reorder-stable WidgetId (`base | ROW_ROLE_*`) instead of an auto sibling
+    // salt — so arming a modulator on an earlier row (which inserts drawer nodes
+    // and shifts every later sibling) can't renumber this row's controls. The
+    // editor card (Author context) passes `Some(param_index << 8)`; the perform
+    // inspector passes `None` and is unchanged. See `docs/INPUT_IDENTITY_UNIFICATION.md`.
+    row_key_base: Option<u64>,
 ) -> ParamRowIds {
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.
@@ -1421,7 +1460,8 @@ pub(crate) fn build_param_row(
     let btn_y = cy + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
     if build_env_button {
         let env_active = mod_state.envelope_expanded.get(i).copied().unwrap_or(false);
-        ids.envelope_btn = Some(tree.add_button(
+        ids.envelope_btn = Some(add_row_button(
+            tree,
             parent,
             btn_x,
             btn_y,
@@ -1429,6 +1469,8 @@ pub(crate) fn build_param_row(
             DE_BUTTON_SIZE,
             de_btn_style(env_active, color::ENVELOPE_ACTIVE_C32),
             "T", // Trigger
+            row_key_base,
+            ROW_ROLE_ENV,
         ));
     }
     let drv_active = mod_state.driver_expanded.get(i).copied().unwrap_or(false);
@@ -1448,7 +1490,8 @@ pub(crate) fn build_param_row(
         .unwrap_or(0)
         .clamp(0, WAVEFORM_COUNT as i32 - 1) as u32;
     let lfo_icon = char::from_u32(0xE000 + lfo_wave).unwrap().to_string();
-    ids.driver_btn = tree.add_button(
+    ids.driver_btn = add_row_button(
+        tree,
         parent,
         drv_btn_x,
         btn_y,
@@ -1456,12 +1499,15 @@ pub(crate) fn build_param_row(
         DE_BUTTON_SIZE,
         de_btn_style(drv_active, color::DRIVER_ACTIVE_C32),
         &lfo_icon,
+        row_key_base,
+        ROW_ROLE_DRV,
     );
 
     // Audio-modulation button — third in the lane, right of the driver button.
     let audio_active = mod_state.audio_active.get(i).copied().unwrap_or(false);
     let audio_btn_x = drv_btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP;
-    ids.audio_btn = tree.add_button(
+    ids.audio_btn = add_row_button(
+        tree,
         parent,
         audio_btn_x,
         btn_y,
@@ -1469,6 +1515,8 @@ pub(crate) fn build_param_row(
         DE_BUTTON_SIZE,
         de_btn_style(audio_active, AUDIO_MOD_ACTIVE_C32),
         "A",
+        row_key_base,
+        ROW_ROLE_AUDIO,
     );
 
     cy += ROW_HEIGHT + ROW_SPACING;
