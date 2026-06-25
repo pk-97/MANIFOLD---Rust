@@ -255,7 +255,7 @@ pub fn build(
         height,
         UIStyle {
             bg_color: crate::color::CONFIG_BG_C32,
-            corner_radius: 2.0,
+            corner_radius: crate::color::SMALL_RADIUS,
             ..UIStyle::default()
         },
     );

@@ -510,7 +510,7 @@ impl DropdownPanel {
                     bg_color: swatch_color,
                     hover_bg_color: color::lighten(swatch_color, 40),
                     pressed_bg_color: color::darken(swatch_color, 20),
-                    corner_radius: 2.0,
+                    corner_radius: color::SMALL_RADIUS,
                     border_width: 1.0,
                     border_color: Color32::new(0, 0, 0, 80),
                     ..UIStyle::default()

@@ -210,7 +210,7 @@ pub fn reset_button() -> View {
 /// Per-source colouring (driver teal / envelope orange / audio green) is a
 /// Phase 5 detail; this is the binary armed/idle glance.
 pub fn mod_badge(armed: bool) -> View {
-    View::panel().fixed(6.0, 6.0).radius(3.0).bg(if armed {
+    View::panel().fixed(6.0, 6.0).radius(color::BUTTON_RADIUS).bg(if armed {
         color::ACCENT_BLUE_C32
     } else {
         color::STATUS_DOT_INACTIVE

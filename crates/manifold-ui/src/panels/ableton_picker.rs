@@ -268,7 +268,7 @@ impl AbletonPickerPopup {
             ph,
             UIStyle {
                 bg_color: BG_BORDER,
-                corner_radius: 8.0,
+                corner_radius: color::POPUP_RADIUS,
                 ..UIStyle::default()
             },
         );
@@ -282,7 +282,7 @@ impl AbletonPickerPopup {
             ph - BORDER * 2.0,
             UIStyle {
                 bg_color: BG_INNER,
-                corner_radius: 7.0,
+                corner_radius: color::POPUP_RADIUS,
                 ..UIStyle::default()
             },
         );
@@ -301,7 +301,7 @@ impl AbletonPickerPopup {
             HEADER_H + PADDING,
             UIStyle {
                 bg_color: HEADER_BG,
-                corner_radius: 7.0,
+                corner_radius: color::POPUP_RADIUS,
                 ..UIStyle::default()
             },
         );
@@ -413,7 +413,7 @@ impl AbletonPickerPopup {
                         text_color: TEXT_TRACK,
                         font_size: color::FONT_LABEL,
                         text_align: TextAlign::Left,
-                        corner_radius: 3.0,
+                        corner_radius: color::BUTTON_RADIUS,
                         ..UIStyle::default()
                     },
                     &format!("  {}", track.track_name),
@@ -511,7 +511,7 @@ impl AbletonPickerPopup {
                                 text_color: TEXT_MACRO,
                                 font_size: color::FONT_LABEL,
                                 text_align: TextAlign::Left,
-                                corner_radius: 3.0,
+                                corner_radius: color::BUTTON_RADIUS,
                                 ..UIStyle::default()
                             },
                             &format!("  {}", mac.name),

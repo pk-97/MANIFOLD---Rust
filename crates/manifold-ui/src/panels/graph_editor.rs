@@ -686,7 +686,7 @@ impl GraphEditorPanel {
                     text_color: color::TEXT_WHITE_C32,
                     font_size: FONT_SIZE,
                     text_align: TextAlign::Center,
-                    corner_radius: 3.0,
+                    corner_radius: color::BUTTON_RADIUS,
                     border_color: color::TEXT_DIMMED_C32,
                     border_width: 1.0,
                     ..UIStyle::default()
@@ -836,7 +836,7 @@ impl GraphEditorPanel {
                         text_color: color::TEXT_WHITE_C32,
                         font_size: FONT_SIZE,
                         text_align: TextAlign::Right,
-                        corner_radius: 3.0,
+                        corner_radius: color::BUTTON_RADIUS,
                         border_color: color::TEXT_DIMMED_C32,
                         border_width: 1.0,
                         ..UIStyle::default()
@@ -980,7 +980,7 @@ impl GraphEditorPanel {
                 ROW_H - 6.0,
                 UIStyle {
                     bg_color: Color32::new(to_u8(v[0]), to_u8(v[1]), to_u8(v[2]), 255),
-                    corner_radius: 3.0,
+                    corner_radius: color::BUTTON_RADIUS,
                     border_color: color::TEXT_DIMMED_C32,
                     border_width: 1.0,
                     ..UIStyle::default()
@@ -1020,7 +1020,7 @@ impl GraphEditorPanel {
                     text_color: color::TEXT_WHITE_C32,
                     font_size: FONT_SIZE,
                     text_align: TextAlign::Right,
-                    corner_radius: 3.0,
+                    corner_radius: color::BUTTON_RADIUS,
                     border_color: color::TEXT_DIMMED_C32,
                     border_width: 1.0,
                     ..UIStyle::default()
@@ -1121,7 +1121,7 @@ impl GraphEditorPanel {
                     text_color: color::TEXT_WHITE_C32,
                     font_size: FONT_SIZE,
                     text_align: TextAlign::Right,
-                    corner_radius: 3.0,
+                    corner_radius: color::BUTTON_RADIUS,
                     ..UIStyle::default()
                 },
                 &value_str,
@@ -1151,7 +1151,7 @@ impl GraphEditorPanel {
                     text_color: color::TEXT_WHITE_C32,
                     font_size: FONT_SIZE,
                     text_align: TextAlign::Center,
-                    corner_radius: 3.0,
+                    corner_radius: color::BUTTON_RADIUS,
                     border_color: color::TEXT_DIMMED_C32,
                     border_width: 1.0,
                     ..UIStyle::default()
@@ -1225,7 +1225,7 @@ impl GraphEditorPanel {
                         text_color: color::TEXT_WHITE_C32,
                         font_size: FONT_SIZE,
                         text_align: TextAlign::Center,
-                        corner_radius: 2.0,
+                        corner_radius: color::SMALL_RADIUS,
                         ..UIStyle::default()
                     },
                     &fmt_table_cell(v),
@@ -1874,7 +1874,7 @@ fn checkbox_style(checked: bool, supported: bool) -> UIStyle {
         text_color: color::TEXT_WHITE_C32,
         font_size: HEADER_FONT_SIZE,
         text_align: TextAlign::Center,
-        corner_radius: 4.0,
+        corner_radius: color::BUTTON_RADIUS,
         // Brighter border than CARD_BORDER_C32 so the checkbox edge
         // reads against the inactive-button gray.
         border_color: color::TEXT_DIMMED_C32,

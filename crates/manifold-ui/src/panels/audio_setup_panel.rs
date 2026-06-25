@@ -529,7 +529,7 @@ impl AudioSetupPanel {
                 bg_color: Color32::new(19, 19, 22, 250),
                 border_color: Color32::new(48, 48, 52, 255),
                 border_width: 1.0,
-                corner_radius: 6.0,
+                corner_radius: color::POPUP_RADIUS,
                 ..UIStyle::default()
             })
             .interactive()
@@ -642,7 +642,7 @@ impl AudioSetupPanel {
                 UIStyle {
                     bg_color: super::audio_send_color(&send.id),
                     hover_bg_color: super::audio_send_color(&send.id),
-                    corner_radius: 2.0,
+                    corner_radius: color::SMALL_RADIUS,
                     ..UIStyle::default()
                 },
                 "",
@@ -933,7 +933,7 @@ impl AudioSetupPanel {
                     bg_color: Color32::new(10, 10, 12, 255),
                     border_color: Color32::new(48, 48, 52, 255),
                     border_width: 1.0,
-                    corner_radius: 3.0,
+                    corner_radius: color::BUTTON_RADIUS,
                     ..UIStyle::default()
                 },
             );
@@ -1021,7 +1021,7 @@ impl AudioSetupPanel {
                         // Visibly lighter than the black scope so the empty part
                         // of the bar reads as a scale, not just background.
                         bg_color: Color32::new(54, 54, 62, 255),
-                        corner_radius: 1.0,
+                        corner_radius: color::HAIRLINE_RADIUS,
                         ..UIStyle::default()
                     },
                 );
@@ -1031,7 +1031,7 @@ impl AudioSetupPanel {
                     0.0,
                     0.0,
                     0.0,
-                    UIStyle { bg_color: band_color(band), corner_radius: 1.0, ..UIStyle::default() },
+                    UIStyle { bg_color: band_color(band), corner_radius: color::HAIRLINE_RADIUS, ..UIStyle::default() },
                 );
                 *slot = (Some(track), Some(fill), Some(label));
             }
@@ -1818,7 +1818,7 @@ fn btn_style(active: bool) -> UIStyle {
         pressed_bg_color: Color32::new(28, 28, 32, 255),
         text_color: Color32::new(210, 210, 216, 255),
         font_size: BTN_FONT,
-        corner_radius: 2.0,
+        corner_radius: color::SMALL_RADIUS,
         text_align: TextAlign::Center,
         ..UIStyle::default()
     }
@@ -1849,7 +1849,7 @@ fn trigger_swatch_style(row: usize, enabled: bool) -> UIStyle {
         pressed_bg_color: Color32::new(30, 30, 34, 255),
         border_color: Color32::new(70, 70, 78, 255),
         border_width: 1.0,
-        corner_radius: 3.0,
+        corner_radius: color::BUTTON_RADIUS,
         ..UIStyle::default()
     }
 }
@@ -1863,7 +1863,7 @@ fn label_button_style() -> UIStyle {
         text_color: Color32::new(214, 214, 220, 255),
         font_size: color::FONT_LABEL,
         text_align: TextAlign::Left,
-        corner_radius: 2.0,
+        corner_radius: color::SMALL_RADIUS,
         ..UIStyle::default()
     }
 }
@@ -1878,7 +1878,7 @@ fn dropdown_trigger_style() -> UIStyle {
         text_color: Color32::new(214, 214, 220, 255),
         border_color: Color32::new(58, 58, 64, 255),
         border_width: 1.0,
-        corner_radius: 3.0,
+        corner_radius: color::BUTTON_RADIUS,
         font_size: BTN_FONT,
         text_align: TextAlign::Center,
         ..UIStyle::default()

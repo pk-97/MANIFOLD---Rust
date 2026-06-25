@@ -16,12 +16,12 @@ use crate::tree::UITree;
 
 // ── Layout constants (from HeaderLayout.cs) ────────────────────────
 
-const INSET: f32 = 8.0;
-const GROUP_Y_PAD: f32 = 5.0;
-const GROUP_SPACING: f32 = 5.0;
+const INSET: f32 = color::SPACE_M;
+const GROUP_Y_PAD: f32 = color::SPACE_S; // §14.4: 5 → 4
+const GROUP_SPACING: f32 = color::SPACE_S; // §14.4: 5 → 4
 
 const PROJECT_NAME_W: f32 = 200.0;
-const SPACER: f32 = 8.0;
+const SPACER: f32 = color::SPACE_M;
 const IMPORT_STATUS_W: f32 = 180.0;
 const PROGRESS_BAR_W: f32 = 140.0;
 const PROGRESS_BAR_H: f32 = 10.0;
@@ -143,7 +143,7 @@ impl HeaderPanel {
                     .w(Sizing::Fixed(fill_w))
                     .fill_h()
                     .bg(PROGRESS_FILL)
-                    .radius(1.0)
+                    .radius(color::HAIRLINE_RADIUS)
                     .visible(visible),
             );
 

@@ -676,6 +676,11 @@ pub const BUTTON_RADIUS: f32 = 3.0;
 pub const CARD_RADIUS: f32 = 5.0;
 pub const SMALL_RADIUS: f32 = 2.0;
 pub const POPUP_RADIUS: f32 = 6.0;
+// The §14.2-rule-6 hairline exception, realised as a token instead of scattered
+// `1.0` literals: thin bars, tracks, fills, and ≤6px overlay handles that read
+// crisper left near-square (slider track, progress fill, drop indicator, the
+// trim/target/scale bars). A named token so the guard (§16) stays at zero.
+pub const HAIRLINE_RADIUS: f32 = 1.0;
 
 // ── Font sizes ──────────────────────────────────────────────────────
 // Semantic scale — all panel font sizes should reference these.
@@ -698,7 +703,7 @@ pub const SCROLL_SENSITIVITY: f32 = 1.0;
 pub const BITMAP_SCROLL_SPEED: f32 = 12.5;
 
 // ── Layer control panel layout ──────────────────────────────────────
-pub const LAYER_CTRL_PADDING: f32 = 5.0;
+pub const LAYER_CTRL_PADDING: f32 = SPACE_S; // §14.4: 5 → 4, onto the scale
 pub const LAYER_CTRL_CHEVRON_WIDTH: f32 = 18.0;
 pub const LAYER_CTRL_DRAG_HANDLE_WIDTH: f32 = 18.0;
 pub const LAYER_CTRL_NAME_ROW_HEIGHT: f32 = 18.0;

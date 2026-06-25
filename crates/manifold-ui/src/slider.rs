@@ -225,7 +225,7 @@ impl BitmapSlider {
             UINodeType::Panel,
             UIStyle {
                 bg_color: colors.thumb,
-                corner_radius: 1.0,
+                corner_radius: color::HAIRLINE_RADIUS,
                 ..UIStyle::default()
             },
             None,

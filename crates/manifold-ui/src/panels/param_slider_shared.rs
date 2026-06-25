@@ -18,13 +18,16 @@ pub use crate::types::AbletonMappingStatus;
 // ── Shared layout constants ─────────────────────────────────────
 
 pub(crate) const ROW_HEIGHT: f32 = 20.0;
-pub(crate) const ROW_SPACING: f32 = 4.0;
+pub(crate) const ROW_SPACING: f32 = color::SPACE_S;
+// Card inner inset. Collapsing 6 → the canonical `SPACE_M` 8 cascades into
+// `slider_w` / `label_width` / the header trailing-x math, so it lands in the
+// structural inset-unification step (§14.5 C), not the mechanical snap.
 pub(crate) const PADDING: f32 = 6.0;
-pub(crate) const GAP: f32 = 4.0;
+pub(crate) const GAP: f32 = color::SPACE_S;
 pub(crate) const FONT_SIZE: u16 = color::FONT_BODY;
 
 pub(crate) const DE_BUTTON_SIZE: f32 = 20.0;
-pub(crate) const DE_BUTTON_GAP: f32 = 2.0;
+pub(crate) const DE_BUTTON_GAP: f32 = color::SPACE_XS;
 
 /// Per-row modulation config tabs. The T/∿/A arm buttons stay on the row (one-
 /// click arm); when two or more configs are active they share ONE drawer with a
@@ -525,7 +528,7 @@ pub(crate) fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
             ),
             text_color: color::TEXT_WHITE_C32,
             font_size: color::FONT_CAPTION,
-            corner_radius: 2.0,
+            corner_radius: color::SMALL_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
@@ -536,7 +539,7 @@ pub(crate) fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
             pressed_bg_color: color::DRIVER_INACTIVE_PRESS_C32,
             text_color: color::TEXT_DIMMED_C32,
             font_size: color::FONT_CAPTION,
-            corner_radius: 2.0,
+            corner_radius: color::SMALL_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
@@ -553,7 +556,7 @@ pub(crate) fn config_btn_style(active: bool, font_size: u16) -> UIStyle {
             pressed_bg_color: color::DRIVER_ACTIVE_PRESS_C32,
             text_color: color::TEXT_WHITE_C32,
             font_size,
-            corner_radius: 1.0,
+            corner_radius: color::SMALL_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
@@ -564,7 +567,7 @@ pub(crate) fn config_btn_style(active: bool, font_size: u16) -> UIStyle {
             pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
             text_color: color::TEXT_DIMMED_C32,
             font_size,
-            corner_radius: 1.0,
+            corner_radius: color::SMALL_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
@@ -594,7 +597,7 @@ pub(crate) fn config_btn_style_colored(
             ),
             text_color: color::TEXT_WHITE_C32,
             font_size,
-            corner_radius: 1.0,
+            corner_radius: color::SMALL_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
@@ -605,7 +608,7 @@ pub(crate) fn config_btn_style_colored(
             pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
             text_color: color::TEXT_DIMMED_C32,
             font_size,
-            corner_radius: 1.0,
+            corner_radius: color::SMALL_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
@@ -802,7 +805,7 @@ pub(crate) fn build_envelope_target(
         UIStyle {
             bg_color: color::ENVELOPE_ACTIVE_C32,
             hover_bg_color: color::TARGET_BAR_HOVER_C32,
-            corner_radius: 1.0,
+            corner_radius: color::HAIRLINE_RADIUS,
             ..UIStyle::default()
         },
         "",
@@ -889,7 +892,7 @@ pub(crate) fn build_trim_handles(
         UIStyle {
             bg_color: color::DRIVER_ACTIVE_C32,
             hover_bg_color: color::TRIM_BAR_HOVER_C32,
-            corner_radius: 1.0,
+            corner_radius: color::HAIRLINE_RADIUS,
             ..UIStyle::default()
         },
         "",
@@ -905,7 +908,7 @@ pub(crate) fn build_trim_handles(
         UIStyle {
             bg_color: color::DRIVER_ACTIVE_C32,
             hover_bg_color: color::TRIM_BAR_HOVER_C32,
-            corner_radius: 1.0,
+            corner_radius: color::HAIRLINE_RADIUS,
             ..UIStyle::default()
         },
         "",
@@ -956,7 +959,7 @@ pub(crate) fn build_trim_handles_explicit(
         UIStyle {
             bg_color: bar_color,
             hover_bg_color: bar_hover,
-            corner_radius: 1.0,
+            corner_radius: color::HAIRLINE_RADIUS,
             ..UIStyle::default()
         },
         "",
@@ -972,7 +975,7 @@ pub(crate) fn build_trim_handles_explicit(
         UIStyle {
             bg_color: bar_color,
             hover_bg_color: bar_hover,
-            corner_radius: 1.0,
+            corner_radius: color::HAIRLINE_RADIUS,
             ..UIStyle::default()
         },
         "",

@@ -220,7 +220,7 @@ pub struct ParamCardConfig {
 // (effect: drag-handle + ABL/ENV/DRV/MOD badges + ON/OFF toggle; generator:
 // Change button) carries its own kind-specific widths.
 
-const HEADER_HEIGHT: f32 = 27.5;
+const HEADER_HEIGHT: f32 = 28.0; // §14.3: 27.5 → 28, one card-header rhythm
 const BORDER_W: f32 = 1.0;
 // Card corner = the design-token card radius (Phase 3). Radius is purely
 // visual — it doesn't move any laid rect, so the golden header-layout tests
@@ -1010,7 +1010,7 @@ impl ParamCardPanel {
             pressed_bg_color: color::SLIDER_TRACK_PRESSED_C32,
             text_color: color::TEXT_DIMMED_C32,
             font_size: FONT_SIZE,
-            corner_radius: 2.0,
+            corner_radius: color::SMALL_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         };
@@ -1583,7 +1583,7 @@ impl ParamCardPanel {
                         text_color: color::CHEVRON_COLOR,
                         font_size: FONT_SIZE,
                         text_align: TextAlign::Center,
-                        corner_radius: 2.0,
+                        corner_radius: color::SMALL_RADIUS,
                         ..UIStyle::default()
                     },
                     "\u{203A}", // ›
@@ -1779,7 +1779,7 @@ impl ParamCardPanel {
                                 text_color: color::CHEVRON_COLOR,
                                 font_size: FONT_SIZE,
                                 text_align: TextAlign::Center,
-                                corner_radius: 2.0,
+                                corner_radius: color::SMALL_RADIUS,
                                 ..UIStyle::default()
                             },
                             "\u{203A}", // ›
@@ -1808,7 +1808,7 @@ impl ParamCardPanel {
                         text_color: color::TEXT_WHITE_C32,
                         font_size: FONT_SIZE,
                         text_align: TextAlign::Left,
-                        corner_radius: 2.0,
+                        corner_radius: color::SMALL_RADIUS,
                         ..UIStyle::default()
                     },
                     &display,

@@ -28,7 +28,7 @@ const SCROLLBAR_STYLE: ScrollbarStyle = ScrollbarStyle {
     track_color: color::SCROLLBAR_TRACK_C32,
     thumb_color: color::SCROLLBAR_THUMB_C32,
     thumb_hover_color: color::SCROLLBAR_THUMB_HOVER_C32,
-    corner_radius: 2.0,
+    corner_radius: color::SMALL_RADIUS,
 };
 
 const ADD_EFFECT_BTN_H: f32 = 26.0;
@@ -82,7 +82,7 @@ fn add_effect_button_view() -> View {
             bg_color: ADD_EFFECT_BTN_BG,
             hover_bg_color: ADD_EFFECT_BTN_HOVER,
             text_color: ADD_EFFECT_BTN_TEXT,
-            corner_radius: 4.0,
+            corner_radius: color::BUTTON_RADIUS,
             text_align: TextAlign::Center,
             font_size: color::FONT_LABEL,
             ..UIStyle::default()
@@ -360,7 +360,7 @@ impl InspectorCompositePanel {
                     },
                     font_size: TAB_FONT_SIZE,
                     text_align: TextAlign::Center,
-                    corner_radius: 3.0,
+                    corner_radius: color::BUTTON_RADIUS,
                     ..UIStyle::default()
                 },
                 Self::tab_label(*tab),
@@ -1329,7 +1329,7 @@ impl InspectorCompositePanel {
                     text_color: DRAG_GHOST_TEXT,
                     font_size: DRAG_GHOST_FONT_SIZE,
                     text_align: TextAlign::Center,
-                    corner_radius: 4.0,
+                    corner_radius: color::CARD_RADIUS,
                     ..UIStyle::default()
                 },
             ));
@@ -1341,7 +1341,7 @@ impl InspectorCompositePanel {
                 DRAG_INDICATOR_H,
                 UIStyle {
                     bg_color: DRAG_INDICATOR_COLOR,
-                    corner_radius: 1.0,
+                    corner_radius: color::HAIRLINE_RADIUS,
                     ..UIStyle::default()
                 },
             ));

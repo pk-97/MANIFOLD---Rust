@@ -471,8 +471,9 @@ the renderer is custom.
 
 ## 14. Padding & layout rules — the sub-element grid 📏
 
-**Status:** spec (Phase A). The rules below are the SSOT for every spatial constant in
-the UI. Captured 2026-06-25.
+**Status:** A (freeze) done; **B (spacing snap) + B′ (radius snap) shipped 2026-06-25**
+(Phase 3, automated). C/D/E/F remain. The rules below are the SSOT for every spatial
+constant in the UI.
 
 ### 14.1 The problem (grounded)
 The scale was locked in Phase 3 (§4.2) but **the layout code never consumed it.** A parallel
@@ -566,10 +567,17 @@ in §4–§7). It removes the drift: same insets, same columns, same radii. That
 ### 14.5 Build order
 
 - **A — Spec & freeze (this section).** ✅ no code; the maps above are the freeze.
-- **B — Spacing snap (mechanical, low-risk).** Apply 14.3/14.4 *except* the inset-ownership
-  change. Snapping values that don't move horizontal alignment. Eyeball.
-- **B′ — Radius snap (sibling of B).** Every raw `corner_radius` literal + local radius token →
-  the four tokens (rule 6). Mechanical.
+- **B — Spacing snap (mechanical, low-risk).** ✅ 2026-06-25. Tokenised the §14.3/§14.4 spacing
+  constants onto `SPACE_*` (`inspector_layout`, `param_slider_shared`, `header`, `transport`,
+  `footer`, `layer_header`); value changes: section-header 22→24, content/clip V-pad + chrome gaps
+  6/5/3 → 4, card header 27.5→28. Deferred the two alignment-moving cases: `CLIP_PADDING_H` (→C)
+  and the `EFFECT_CONTAINER_SPACING`/`CARD_BOTTOM_MARGIN` gap pair (→E). All golden-layout oracles
+  green.
+- **B′ — Radius snap (sibling of B).** ✅ 2026-06-25. All 53 raw `corner_radius`/`.radius()`
+  literals → radius tokens; local copies (`SECTION_RADIUS`, `LH_BTN_RADIUS`) aliased/inlined. Added
+  `HAIRLINE_RADIUS` (1px) as the named rule-6 hairline exception for thin bars/tracks/fills. One
+  survivor: a `// design-token-exempt:` circular status dot. **§16 RADIUS_BASELINE lowered 53 → 0
+  — the radius guard is now absolute.**
 - **C — Unify the inset (structural, risky).** One owner = card @ 8; container H pad → 0.
   Recompute `slider_w` / `label_width` / header trailing-x. Verify all three label columns share
   one x.
@@ -667,8 +675,9 @@ fail today. So it's a **ratchet** keyed on per-category baselines (high-water ma
 - count **rises above** baseline → fail (new drift — use a token or exempt it);
 - count **drops below** baseline → fail (a cleanup landed — *lower the baseline* to lock it in).
 
-So the number can only go down. **Baselines at Phase 2: `COLOR_BASELINE = 145`, `RADIUS_BASELINE = 53`.**
-§14 B′ drives the radius count toward 0; §15 drives the colour count down. The classifier (detection
+So the number can only go down. **Baselines: `COLOR_BASELINE = 145` (still grandfathered, pending
+§15); `RADIUS_BASELINE = 0` (Phase 3 B′ tokenised all 53 — the radius guard is now absolute).**
+§15 drives the colour count down next. The classifier (detection
 + exempt) is unit-tested directly (`classifier_detects_and_exempts`), so the guard's own logic is
 trusted, not just the baseline. Spacing-literal enforcement (§16.2 stretch) is deferred — noisier to
 detect; revisit after §14's spacing snap lands.

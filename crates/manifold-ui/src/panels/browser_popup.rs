@@ -413,7 +413,7 @@ impl BrowserPopupPanel {
             ph,
             UIStyle {
                 bg_color: BG_BORDER,
-                corner_radius: 8.0,
+                corner_radius: color::POPUP_RADIUS,
                 ..UIStyle::default()
             },
         );
@@ -427,7 +427,7 @@ impl BrowserPopupPanel {
             ph - BORDER * 2.0,
             UIStyle {
                 bg_color: BG_INNER,
-                corner_radius: 7.0,
+                corner_radius: color::POPUP_RADIUS,
                 ..UIStyle::default()
             },
         );
@@ -446,7 +446,7 @@ impl BrowserPopupPanel {
             UIStyle {
                 bg_color: SEARCH_BG,
                 hover_bg_color: SEARCH_HOVER,
-                corner_radius: 4.0,
+                corner_radius: color::BUTTON_RADIUS,
                 font_size: SEARCH_FONT,
                 text_color: SEARCH_TEXT,
                 ..UIStyle::default()
@@ -562,7 +562,7 @@ impl BrowserPopupPanel {
                     CELL_HEIGHT,
                     UIStyle {
                         bg_color: accent_color,
-                        corner_radius: 2.0,
+                        corner_radius: color::SMALL_RADIUS,
                         ..UIStyle::default()
                     },
                 );
@@ -614,7 +614,7 @@ impl BrowserPopupPanel {
                 UIStyle {
                     bg_color: PASTE_BG,
                     hover_bg_color: PASTE_HOVER,
-                    corner_radius: 4.0,
+                    corner_radius: color::BUTTON_RADIUS,
                     font_size: CELL_FONT,
                     text_color: color::ACCENT_BLUE,
                     ..UIStyle::default()

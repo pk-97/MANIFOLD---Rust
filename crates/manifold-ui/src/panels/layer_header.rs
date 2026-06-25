@@ -56,7 +56,7 @@ const INSERT_LINE_H: f32 = 2.0;
 const NAME_FONT: u16 = color::FONT_LABEL;
 const SMALL_FONT: u16 = color::FONT_SMALL;
 const BTN_FONT: u16 = color::FONT_BODY;
-const LH_BTN_RADIUS: f32 = 2.0;
+const LH_BTN_RADIUS: f32 = color::SMALL_RADIUS; // §14.4: local copy → token alias
 
 // ── Style helpers ───────────────────────────────────────────────────
 
@@ -844,7 +844,7 @@ impl LayerHeaderPanel {
     /// recording-control buttons in the spacer above the layer rows. The rows
     /// themselves stay imperative (a scroll body of dragged per-layer widgets).
     fn top_chrome_view(&self) -> View {
-        const REC_PAD: f32 = 6.0;
+        const REC_PAD: f32 = color::SPACE_S; // §14.4: 6 → 4
         const REC_BTN_H: f32 = 22.0;
         const REC_LABEL_H: f32 = 16.0;
         View::panel()

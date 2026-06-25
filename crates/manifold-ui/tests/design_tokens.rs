@@ -21,10 +21,16 @@ use std::path::{Path, PathBuf};
 
 // ── Baselines (high-water marks; lower these as phases clean up) ──────
 //
-// Captured 2026-06-25 after Phase 1. `color.rs` (the token home) and `node.rs`
-// (the `Color32` type + its own `WHITE`/`BLACK` consts) are excluded from the scan.
+// `color.rs` (the token home) and `node.rs` (the `Color32` type + its own
+// `WHITE`/`BLACK` consts) are excluded from the scan.
+//
+// RADIUS hit zero in Phase 3 (§14.5 B′): every raw `corner_radius`/`.radius()`
+// literal now references a radius token (`BUTTON`/`CARD`/`SMALL`/`POPUP`/
+// `HAIRLINE_RADIUS`). The one survivor is a `// design-token-exempt:` circular
+// status dot. From here the radius guard is absolute — any raw literal fails.
+// COLOR is still grandfathered pending the §15 ramp.
 const COLOR_BASELINE: usize = 145;
-const RADIUS_BASELINE: usize = 53;
+const RADIUS_BASELINE: usize = 0;
 
 #[test]
 fn no_new_raw_color_literals() {
@@ -49,16 +55,16 @@ fn no_new_raw_color_literals() {
 #[test]
 fn no_new_raw_radius_literals() {
     let counts = scan();
-    assert!(
-        counts.radius <= RADIUS_BASELINE,
-        "Raw `corner_radius:`/`.radius(` literal count rose to {} (baseline {RADIUS_BASELINE}). \
-         Use a `color::*_RADIUS` token, or `// design-token-exempt: <reason>`.",
-        counts.radius,
-    );
+    // Radius is fully tokenised (baseline 0), so a single equality catches both
+    // directions: a new raw literal pushes the count up; an intentional further
+    // cleanup that somehow lowered it would also trip (there's nothing left to
+    // clean, so that can't happen — the message covers the realistic case).
     assert_eq!(
         counts.radius, RADIUS_BASELINE,
-        "Raw radius-literal count dropped to {} — lower RADIUS_BASELINE to {} to ratchet it in.",
-        counts.radius, counts.radius,
+        "Raw `corner_radius:`/`.radius(` literal count is {} (baseline {RADIUS_BASELINE}). \
+         Radius is fully tokenised — use a `color::*_RADIUS` token, or add \
+         `// design-token-exempt: <reason>` for a genuine one-off (e.g. a circular dot).",
+        counts.radius,
     );
 }
 

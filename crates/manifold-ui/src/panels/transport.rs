@@ -15,12 +15,12 @@ use crate::tree::UITree;
 
 // ── Layout constants (from TransportLayout.cs) ─────────────────────
 
-const INSET: f32 = 8.0;
-const GROUP_Y_PAD: f32 = 4.0;
-const ITEM_SPACING: f32 = 5.0;
-const SECTION_SPACER: f32 = 8.0;
-const RIGHT_SPACING: f32 = 4.0;
-const CENTER_SPACER: f32 = 12.0;
+const INSET: f32 = color::SPACE_M;
+const GROUP_Y_PAD: f32 = color::SPACE_S;
+const ITEM_SPACING: f32 = color::SPACE_S; // §14.4: 5 → 4
+const SECTION_SPACER: f32 = color::SPACE_M;
+const RIGHT_SPACING: f32 = color::SPACE_S;
+const CENTER_SPACER: f32 = color::SPACE_L;
 
 const DIVIDER_W: f32 = 1.0;
 const DIVIDER_V_INSET: f32 = 7.0;
@@ -94,7 +94,7 @@ fn button_style(bg: Color32) -> UIStyle {
 fn dot_style(c: Color32) -> UIStyle {
     UIStyle {
         bg_color: c,
-        corner_radius: 4.0,
+        corner_radius: 4.0, // design-token-exempt: circular 8px status dot (radius = half size)
         ..UIStyle::default()
     }
 }

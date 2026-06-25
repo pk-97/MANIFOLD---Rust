@@ -16,9 +16,9 @@ use crate::types::TonemapCurve;
 
 // ── Layout constants (from FooterLayout.cs) ────────────────────────
 
-const PAD: f32 = 8.0;
-const ELEM_Y_PAD: f32 = 3.0;
-const LABEL_GAP: f32 = 4.0;
+const PAD: f32 = color::SPACE_M;
+const ELEM_Y_PAD: f32 = color::SPACE_S; // §14.4: 3 → 4
+const LABEL_GAP: f32 = color::SPACE_S;
 const SECTION_SPACER: f32 = 18.0;
 
 const QUANTIZE_LABEL_W: f32 = 20.0;

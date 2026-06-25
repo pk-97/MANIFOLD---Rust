@@ -39,7 +39,6 @@ const FONT_SIZE: u16 = color::FONT_BODY;
 
 const SECTION_BORDER: Color32 = Color32::new(50, 50, 54, 255);
 const SECTION_BG: Color32 = Color32::new(22, 22, 23, 255);
-const SECTION_RADIUS: f32 = 4.0;
 
 const KEY_CHEVRON: u64 = 1;
 const KEY_SLIDER_BASE: u64 = 10;
@@ -227,7 +226,7 @@ impl MacrosPanel {
         let mut inner = View::column(0.0)
             .fill()
             .bg(SECTION_BG)
-            .radius(SECTION_RADIUS - 1.0)
+            .radius(color::BUTTON_RADIUS)
             .pad(Pad {
                 l: PAD_H - 1.0,
                 t: PAD_TOP - 1.0,
@@ -271,7 +270,7 @@ impl MacrosPanel {
         View::panel()
             .fill()
             .bg(SECTION_BORDER)
-            .radius(SECTION_RADIUS)
+            .radius(color::CARD_RADIUS)
             .pad(Pad::all(1.0))
             .child(inner)
     }
