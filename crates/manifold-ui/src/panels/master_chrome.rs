@@ -20,7 +20,7 @@ use crate::tree::UITree;
 
 // ── Layout constants (from MasterChromeBitmapPanel.cs) ───────────
 
-const HEADER_ROW_H: f32 = 27.5;
+const HEADER_ROW_H: f32 = color::HEADER_ROW_HEIGHT; // §14.2 rule 5: one header height (was 27.5)
 const EXIT_PATH_ROW_H: f32 = 27.5;
 const SLIDER_ROW_H: f32 = 22.5;
 const DIVIDER_H: f32 = 1.0;

@@ -14,7 +14,7 @@ use crate::tree::UITree;
 
 // ── Layout constants (from LayerChromeBitmapPanel.cs) ─────────────
 
-const HEADER_ROW_H: f32 = 27.5;
+const HEADER_ROW_H: f32 = color::HEADER_ROW_HEIGHT; // §14.2 rule 5: one header height (was 27.5)
 const DIVIDER_H: f32 = 1.0;
 const PAD_H: f32 = color::SECTION_CONTENT_INSET; // §14.5 C: align with card param-label column
 const PAD_V: f32 = 2.0;

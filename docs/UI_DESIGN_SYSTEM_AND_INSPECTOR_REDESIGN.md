@@ -471,9 +471,11 @@ the renderer is custom.
 
 ## 14. Padding & layout rules — the sub-element grid 📏
 
-**Status:** A (freeze) done; **B (spacing snap) + B′ (radius snap) shipped 2026-06-25**
-(Phase 3, automated). C/D/E/F remain. The rules below are the SSOT for every spatial
-constant in the UI.
+**Status:** **A–F all shipped 2026-06-25 (Phase 3, automated).** Spacing + radii snapped to
+the scale, the inspector inset unified to one column, the right gutter shared, the inter-card
+gap single-owned, and the header rhythm unified — each verified by tests (a layout-geometry
+column-alignment test replaced the running-app eyeball gate). The rules below are the SSOT for
+every spatial constant in the UI.
 
 ### 14.1 The problem (grounded)
 The scale was locked in Phase 3 (§4.2) but **the layout code never consumed it.** A parallel
@@ -594,24 +596,28 @@ in §4–§7). It removes the drift: same insets, same columns, same radii. That
   `HAIRLINE_RADIUS` (1px) as the named rule-6 hairline exception for thin bars/tracks/fills. One
   survivor: a `// design-token-exempt:` circular status dot. **§16 RADIUS_BASELINE lowered 53 → 0
   — the radius guard is now absolute.**
-- **C — Unify the inset (structural, risky). → Phase 4 (paired with `section_header`).** The real
-  move (see §14.3 correction) is coupled: `inspector.rs::SECTION_INSET`→0 **and** `param_card::PADDING`
-  →`SPACE_M` **and** the `master`/`layer`/`clip` chrome header insets, re-aligned together so the
-  card param label, chrome header label, and section content share one x. `slider_w`/`label_width`/
-  `cog_x` cascade from `PADDING` for free. Not safely fragmentable — `PADDING`→8 alone *worsens* the
-  nest. Verify with a layout-geometry test on node bounds (no GPU).
-- **D — Shared right column. → Phase 4.** One gutter width; right-align row value+icons **and**
-  header controls to the same x. Needs the `section_header` template (Phase 4) to exist first.
-- **E — Row rhythm + gaps.** One row height + 3 gap tokens (4/8/12). Includes the deferred
-  `EFFECT_CONTAINER_SPACING`/`CARD_BOTTOM_MARGIN` gap-ownership pair (move together: container owns
-  the inter-card gap, `CARD_BOTTOM_MARGIN`→0).
-- **F — Roll across variety + eyeball.** Many-param effect, enums, string params, generator
-  (purple), macros, clip, master, chrome. Fix edge cases, no new design.
-
-> **Phase 3 stopped after B + B′** (the mechanical, alignment-preserving snap — "padding grid +
-> radius snap"). C/D are re-scoped onto Phase 4's `section_header` (the §2.5 audit found the §14.3
-> inspector map aimed at dead code, and C/D are a coupled unit that rides on the header template).
-> E/F follow once the inset is unified.
+- **C — Unify the inset.** ✅ 2026-06-25. The §14.3 map pointed at dead code; the live stagger was
+  border-less chrome content (`PAD_H` 2) vs bordered card param labels (`BORDER 1 + PADDING 6` = 7),
+  three different left edges. New token `color::SECTION_CONTENT_INSET` (`SPACE_M + 1px` border
+  compensation) is the one column; `param_card::PADDING` 6→`SPACE_M` (card owns the canonical inset,
+  `slider_w`/`label_width`/`cog_x` cascade from it); `master`/`layer`/`clip` chrome `PAD_H` 2→
+  `SECTION_CONTENT_INSET`. **Not** the §14.3-literal `SECTION_INSET`→0 — that erases the visible
+  section-card frame; keeping the frame and aligning *content* to one column is the right call. New
+  test `param_label_column_aligns_to_section_inset` pins it on node bounds (no GPU). Visible change:
+  chrome controls shift right ~7px to meet the card label column.
+- **D — Shared right column.** ✅ 2026-06-25. The generator header padded `r: 0` (trailing controls
+  flush to the inner edge) while the effect header and the param rows' value/mod-icon lane already
+  right-align to `inner_right - PADDING`. Gave the gen header `r: PADDING` → one shared right gutter.
+  Golden oracle re-frozen to the gutter position. (The cross-panel header-*title* x-alignment, a
+  bigger restyle of every chrome header, is the only piece left for a future `section_header` pass.)
+- **E — Row rhythm + gaps.** ✅ 2026-06-25. Inter-card gap single-owned: `CARD_BOTTOM_MARGIN` 6→0,
+  `inspector::SECTION_GAP` 6→`SPACE_M` (was 6+6=12, now one 8). One header height: new token
+  `color::HEADER_ROW_HEIGHT` (28) wired into the card header and the master/layer chrome headers
+  (was a 27.5-vs-28 half-pixel split). `SECTION_CARD_RADIUS` 4→`CARD_RADIUS` (rule 6). Content row
+  (24) and the 18/22.5 second tier kept (rule 5 tolerates a documented second tier).
+- **F — Roll across variety.** ✅ 2026-06-25. 419 manifold-ui lib tests (which build every panel
+  variety — effect/gen cards, master/layer/clip chrome, macros) + the geometry test + the token
+  ratchet + workspace build, all green. clippy `-D warnings` clean.
 
 Each structural phase ends: `cargo clippy --workspace -- -D warnings` + `cargo test -p manifold-ui
 --lib` + the layout-geometry alignment test (replaces the old "Peter's running-app eyeball" gate —

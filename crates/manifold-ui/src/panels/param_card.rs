@@ -220,13 +220,15 @@ pub struct ParamCardConfig {
 // (effect: drag-handle + ABL/ENV/DRV/MOD badges + ON/OFF toggle; generator:
 // Change button) carries its own kind-specific widths.
 
-const HEADER_HEIGHT: f32 = 28.0; // §14.3: 27.5 → 28, one card-header rhythm
+const HEADER_HEIGHT: f32 = color::HEADER_ROW_HEIGHT; // §14.2 rule 5: one header height
 const BORDER_W: f32 = 1.0;
 // Card corner = the design-token card radius (Phase 3). Radius is purely
 // visual — it doesn't move any laid rect, so the golden header-layout tests
 // are unaffected.
 const CORNER_RADIUS: f32 = color::CARD_RADIUS;
-const CARD_BOTTOM_MARGIN: f32 = 6.0;
+// §14.5 E — the inter-card gap is owned by the container (`inspector::SECTION_GAP`),
+// not split between margin + gap. Zero here; the card reports just its frame height.
+const CARD_BOTTOM_MARGIN: f32 = 0.0;
 const CHEVRON_W: f32 = 18.0;
 const COG_W: f32 = 18.0;
 /// Width of the right-edge mapping-drawer chevron lane (Author context). Rows
@@ -1037,7 +1039,10 @@ impl ParamCardPanel {
             .radius(CORNER_RADIUS - BORDER_W)
             .interactive()
             .inert()
-            .pad(Pad { l: PADDING, t: 0.0, r: 0.0, b: 0.0 })
+            // §14.5 D — one right gutter: trailing controls right-align to
+            // `inner_right - PADDING`, same as the effect header and the param
+            // rows' value/mod-icon lane (was r: 0, flush to the inner edge).
+            .pad(Pad { l: PADDING, t: 0.0, r: PADDING, b: 0.0 })
             .cross_align(Align::Center)
             .key(KEY_HEADER_BG)
             .child(
@@ -3617,7 +3622,9 @@ mod tests {
         let inner_x = rect.x + BORDER_W;
         let inner_y = rect.y + BORDER_W;
         let inner_w = rect.width - BORDER_W * 2.0;
-        let chevron_x = inner_x + inner_w - CHEVRON_W;
+        // §14.5 D — trailing controls right-align to the shared `inner_right - PADDING`
+        // gutter (was flush to the inner edge).
+        let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
         let cog_x = chevron_x - COG_W;
         let change_x = cog_x - CHANGE_BTN_W - GAP;
 

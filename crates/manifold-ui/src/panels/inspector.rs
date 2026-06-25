@@ -16,8 +16,10 @@ use manifold_foundation::LayerId;
 use std::collections::HashSet;
 
 // ── Layout constants ────────────────────────────────────────────
-const SECTION_GAP: f32 = 6.0;
-const SECTION_CARD_RADIUS: f32 = 4.0;
+// §14.5 E — the container owns the inter-card gap (one owner): the canonical
+// `SPACE_M`, paired with `param_card::CARD_BOTTOM_MARGIN` → 0 (was 6 + 6 = 12).
+const SECTION_GAP: f32 = color::SPACE_M;
+const SECTION_CARD_RADIUS: f32 = color::CARD_RADIUS; // §14.2 rule 6: section cards = CARD_RADIUS
 const SECTION_CARD_PAD: f32 = 6.0;
 const SECTION_CARD_BG: Color32 = Color32::new(22, 22, 23, 255);
 const SECTION_CARD_BORDER: Color32 = Color32::new(50, 50, 54, 255);

@@ -676,6 +676,11 @@ pub const SPACE_XXL: f32 = 24.0;
 // column with the cards' param labels instead of staggering 2px-vs-7px.
 pub const SECTION_CONTENT_INSET: f32 = SPACE_M + 1.0;
 
+// The one card / section header-row height (§14.2 rule 5). Param cards and the
+// master / layer chrome headers all reference this so they share one rhythm
+// (was a 27.5-vs-28 half-pixel split).
+pub const HEADER_ROW_HEIGHT: f32 = 28.0;
+
 // ── Corner radii ────────────────────────────────────────────────────
 // Small + consistent: ~3px controls, ~5px cards. Softens the hard
 // rectangles without going consumer-app bubbly.
