@@ -633,7 +633,7 @@ state still also changes fill/icon.
 
 ## 16. Enforcing the system — the systemic root ⚙️
 
-**Status:** spec. **Highest-leverage item in this whole doc.**
+**Status:** BUILT (2026-06-25, Phase 2). **Highest-leverage item in this whole doc.**
 
 Tokens exist (§4) and still drift (§14, §15) because **nothing stops a raw literal.** That's why
 the cleanup sections have to exist — and why they re-drift in weeks without a guard. A design
@@ -654,6 +654,24 @@ A `manifold-ui` unit test that walks `src/**` and **fails** on:
 Cheap, deterministic, runs in the existing `cargo test -p manifold-ui --lib`. An allowlist
 comment (`// design-token-exempt: <reason>`) covers the rare honest exception (e.g. the ≤6px
 hairline bars in §14.2 rule 6). Once green, the system is *enforced*, not aspirational.
+
+### 16.3 Built — the ratchet (Phase 2, 2026-06-25)
+[`crates/manifold-ui/tests/design_tokens.rs`](../crates/manifold-ui/tests/design_tokens.rs)
+(`cargo test -p manifold-ui --test design_tokens`). It scans `src/**` (excluding `color.rs` and
+`node.rs`, the token/type homes) and counts two categories: raw `Color32::new(` and raw
+`corner_radius:`/`.radius(` *numeric* literals (a `color::` token or computed expression starts with
+a letter, so it isn't flagged). `// design-token-exempt: <reason>` on a line clears it.
+
+Because colour (§15) and radii (§14 B′) aren't cleaned yet, a hard "zero raw literals" rule would
+fail today. So it's a **ratchet** keyed on per-category baselines (high-water marks):
+- count **rises above** baseline → fail (new drift — use a token or exempt it);
+- count **drops below** baseline → fail (a cleanup landed — *lower the baseline* to lock it in).
+
+So the number can only go down. **Baselines at Phase 2: `COLOR_BASELINE = 145`, `RADIUS_BASELINE = 53`.**
+§14 B′ drives the radius count toward 0; §15 drives the colour count down. The classifier (detection
++ exempt) is unit-tested directly (`classifier_detects_and_exempts`), so the guard's own logic is
+trusted, not just the baseline. Spacing-literal enforcement (§16.2 stretch) is deferred — noisier to
+detect; revisit after §14's spacing snap lands.
 
 ---
 
