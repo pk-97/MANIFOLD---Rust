@@ -2135,11 +2135,11 @@ mod tests {
         chrome::materialize(&mut tree, &section_card_view(), rect);
 
         assert_eq!(tree.count() as u32, before + 2, "border + inner-bg panels");
-        let border = tree.get_node(NodeId(before));
+        let border = tree.get_node(tree.id_at(before as usize));
         assert!(close(border.bounds, rect), "border at the card rect");
         assert_eq!(border.style.bg_color, SECTION_CARD_BORDER);
         assert_eq!(border.style.corner_radius, SECTION_CARD_RADIUS);
-        let bg = tree.get_node(NodeId(before + 1));
+        let bg = tree.get_node(tree.id_at(before as usize + 1));
         assert!(
             close(bg.bounds, Rect::new(11.0, 21.0, 198.0, 98.0)),
             "inner bg inset 1px: {:?}",
@@ -2428,7 +2428,7 @@ mod tests {
         assert!(count > 0, "gen card should have built nodes");
 
         for i in first..first + count {
-            let target = panel.find_target_for_node(NodeId(i as u32));
+            let target = panel.find_target_for_node(tree.id_at(i));
             assert!(
                 matches!(target, Some(PressedTarget::GenParam)),
                 "gen-card node {i} must route to GenParam on the Layer tab, got {target:?}",
@@ -2528,7 +2528,7 @@ mod tests {
         // visited (these are the nodes the GPU would draw).
         let mut missed = Vec::new();
         for i in start..end {
-            let n = tree.get_node(NodeId(i as u32));
+            let n = tree.get_node(tree.id_at(i));
             let drawable = n.flags.contains(UIFlags::VISIBLE)
                 && n.bounds.width > 0.0
                 && n.bounds.height > 0.0;
@@ -2627,7 +2627,7 @@ mod tests {
 
         // A scroll node's y before scrolling.
         let probe = panel.layer_chrome.first_node();
-        let y_before = tree.get_node(NodeId(probe as u32)).bounds.y;
+        let y_before = tree.get_node(tree.id_at(probe)).bounds.y;
         let off_before = panel.layer_scroll.scroll_offset();
 
         // Scroll down (negative wheel delta raises the offset). Cursor anywhere
@@ -2638,7 +2638,7 @@ mod tests {
 
         let off_after = panel.layer_scroll.scroll_offset();
         assert!(off_after > off_before, "offset should rise scrolling down");
-        let y_after = tree.get_node(NodeId(probe as u32)).bounds.y;
+        let y_after = tree.get_node(tree.id_at(probe)).bounds.y;
         // Content moved up by exactly the offset delta.
         assert!(
             ((y_after - y_before) - -(off_after - off_before)).abs() < 0.01,
@@ -2650,7 +2650,10 @@ mod tests {
         // A full rebuild at the new offset lands the same node at the same y —
         // in-place and rebuild agree, so no jump when the next rebuild lands.
         panel.build(&mut tree, &layout);
-        let y_rebuilt = tree.get_node(NodeId(panel.layer_chrome.first_node() as u32)).bounds.y;
+        let y_rebuilt = tree
+            .get_node(tree.id_at(panel.layer_chrome.first_node()))
+            .bounds
+            .y;
         assert!(
             (y_rebuilt - y_after).abs() < 0.01,
             "rebuild y {y_rebuilt} must match in-place y {y_after}"
@@ -2682,7 +2685,7 @@ mod tests {
         assert!(panel.layer_scroll.max_scroll() > 0.0, "needs scrollable content");
 
         let probe = panel.layer_chrome.first_node();
-        let y_before = tree.get_node(NodeId(probe as u32)).bounds.y;
+        let y_before = tree.get_node(tree.id_at(probe)).bounds.y;
 
         // Begin a scrollbar drag on the layer thumb, then drag toward the bottom.
         let thumb = panel.layer_scroll.thumb_id().unwrap();
@@ -2695,7 +2698,7 @@ mod tests {
             panel.take_scrolled_in_place(),
             "scrollbar drag must raise the in-place signal"
         );
-        let y_after = tree.get_node(NodeId(probe as u32)).bounds.y;
+        let y_after = tree.get_node(tree.id_at(probe)).bounds.y;
         assert!(
             y_after < y_before - 1.0,
             "content must move up when dragging the thumb down (before={y_before}, after={y_after})"
@@ -2725,8 +2728,7 @@ mod tests {
         // The master chrome's chevron button should route to MasterChrome
         let first = panel.master_chrome.first_node();
         if panel.master_chrome.node_count() > 0 {
-            // first_node() is a usize node-index range start (not yet converted).
-            let target = panel.find_target_for_node(NodeId(first as u32));
+            let target = panel.find_target_for_node(tree.id_at(first));
             assert!(matches!(target, Some(PressedTarget::MasterChrome)));
         }
     }
@@ -2740,9 +2742,8 @@ mod tests {
 
         // Find the master chrome's chevron button and simulate click
         // We can test via route_click
-        // first_node() is a usize node-index range start (not yet converted).
         let actions = panel.route_click(
-            NodeId(panel.master_chrome.first_node() as u32 + 1),
+            tree.id_at(panel.master_chrome.first_node() + 1),
             Modifiers::NONE,
         );
         // Node at first_node+1 is the chevron button in master chrome build order

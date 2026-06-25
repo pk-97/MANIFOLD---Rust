@@ -360,7 +360,7 @@ mod tests {
     /// Every Button node in the tree, as (bounds, text), sorted left-to-right.
     fn buttons(tree: &UITree) -> Vec<(Rect, String)> {
         let mut v: Vec<(Rect, String)> = (0..tree.count())
-            .map(|i| tree.get_node(NodeId(i as u32)))
+            .map(|i| tree.get_node(tree.id_at(i)))
             .filter(|n| n.node_type == UINodeType::Button)
             .map(|n| (n.bounds, n.text.clone().unwrap_or_default()))
             .collect();

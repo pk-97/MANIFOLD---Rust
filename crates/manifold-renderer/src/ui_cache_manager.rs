@@ -2,7 +2,7 @@ use manifold_gpu::{
     GpuDevice, GpuLoadAction, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
-use manifold_ui::node::{NodeId, Rect};
+use manifold_ui::node::Rect;
 use manifold_ui::tree::UITree;
 
 use crate::ui_renderer::UIRenderer;
@@ -267,7 +267,7 @@ impl UICacheManager {
     ) -> Vec<(usize, usize, Rect)> {
         subs.unwrap_or(&[])
             .iter()
-            .map(|&(s, e)| (s, e, tree.get_bounds(NodeId(s as u32))))
+            .map(|&(s, e)| (s, e, tree.get_bounds(tree.id_at(s))))
             .collect()
     }
 
@@ -286,7 +286,7 @@ impl UICacheManager {
     ) -> bool {
         let matches = last.len() == subs.len()
             && last.iter().zip(subs.iter()).all(|(&(ls, le, lb), &(s, e))| {
-                ls == s && le == e && lb == tree.get_bounds(NodeId(s as u32))
+                ls == s && le == e && lb == tree.get_bounds(tree.id_at(s))
             });
         if !matches {
             log::debug!(
@@ -352,7 +352,7 @@ mod tests {
         let sig = UICacheManager::sub_region_sig(Some(&subs), &tree);
         // A sub-region's first node grows — Load would leave stale pixels below it,
         // so the guard must report the extent changed (caller falls back to full).
-        tree.set_bounds(NodeId(2), Rect::new(0.0, 60.0, 100.0, 80.0));
+        tree.set_bounds(tree.id_at(2), Rect::new(0.0, 60.0, 100.0, 80.0));
         assert!(!UICacheManager::extents_unchanged(&sig, &subs, &tree));
     }
 

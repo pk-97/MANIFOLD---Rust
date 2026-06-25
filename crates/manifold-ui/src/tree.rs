@@ -22,6 +22,15 @@ pub struct UITree {
     first_child: Vec<Option<NodeId>>,
     next_sibling: Vec<Option<NodeId>>,
     last_child: Vec<Option<NodeId>>,
+    /// Generation stamp per slot, parallel to `nodes`. Bumped from `gen_counter`
+    /// each time a slot is minted, so a slot reused after truncate/clear+rebuild
+    /// carries a fresh generation and ids minted against the old occupant no
+    /// longer validate. See [`NodeId`].
+    generations: Vec<u32>,
+    /// Monotonic source of generation stamps. Starts at 1 — generation 0 is the
+    /// reserved "no live node" stamp ([`NodeId::PLACEHOLDER`]), so it is never
+    /// minted.
+    gen_counter: u32,
     count: usize,
     has_dirty: bool,
     /// Monotonic counter bumped on every *structural* change (add_node, clear,
@@ -50,6 +59,8 @@ impl UITree {
             first_child: Vec::with_capacity(INITIAL_CAPACITY),
             next_sibling: Vec::with_capacity(INITIAL_CAPACITY),
             last_child: Vec::with_capacity(INITIAL_CAPACITY),
+            generations: Vec::with_capacity(INITIAL_CAPACITY),
+            gen_counter: 1,
             count: 0,
             has_dirty: false,
             structure_version: 0,
@@ -110,7 +121,14 @@ impl UITree {
         text: Option<&str>,
         extra_flags: UIFlags,
     ) -> NodeId {
-        let id = NodeId(self.count as u32);
+        // Mint a fresh generation for this slot. `gen_counter` never yields 0
+        // (reserved for PLACEHOLDER); skip it on the wrap.
+        let generation = self.gen_counter;
+        self.gen_counter = self.gen_counter.wrapping_add(1);
+        if self.gen_counter == 0 {
+            self.gen_counter = 1;
+        }
+        let id = NodeId::from_parts(self.count as u32, generation);
 
         let node = UINode {
             id,
@@ -129,6 +147,7 @@ impl UITree {
         self.first_child.push(None);
         self.next_sibling.push(None);
         self.last_child.push(None);
+        self.generations.push(generation);
 
         self.link_child(id, parent_id);
         self.count += 1;
@@ -237,16 +256,51 @@ impl UITree {
 
     // ── Node access (O(1)) ──────────────────────────────────────────
 
+    /// The current id for a slot index — index plus the slot's live generation.
+    /// The way external code (and internal index-based passes) turn a raw index
+    /// into a validatable id. Returns [`NodeId::PLACEHOLDER`] for an out-of-range
+    /// index, so the result never matches a live node.
+    #[inline]
+    pub fn id_at(&self, index: usize) -> NodeId {
+        match self.generations.get(index) {
+            Some(&generation) => NodeId::from_parts(index as u32, generation),
+            None => NodeId::PLACEHOLDER,
+        }
+    }
+
+    /// Whether `id` refers to a live node: its index is in range AND the slot's
+    /// generation matches. A stale id (slot reused since the id was minted) fails
+    /// here, which is what turns every accessor below into a safe no-op for it.
+    #[inline]
+    pub fn is_live(&self, id: NodeId) -> bool {
+        let idx = id.index();
+        idx < self.count && self.generations[idx] == id.generation()
+    }
+
     pub fn get_node(&self, id: NodeId) -> &UINode {
+        debug_assert!(
+            self.is_live(id),
+            "get_node on a stale/invalid NodeId (index {} gen {}) — re-capture the \
+             id after a rebuild",
+            id.index(),
+            id.generation()
+        );
         &self.nodes[id.index()]
     }
 
     pub fn get_node_mut(&mut self, id: NodeId) -> &mut UINode {
+        debug_assert!(
+            self.is_live(id),
+            "get_node_mut on a stale/invalid NodeId (index {} gen {}) — re-capture \
+             the id after a rebuild",
+            id.index(),
+            id.generation()
+        );
         &mut self.nodes[id.index()]
     }
 
     pub fn get_bounds(&self, id: NodeId) -> Rect {
-        if id.index() >= self.count {
+        if !self.is_live(id) {
             return Rect::ZERO;
         }
         self.nodes[id.index()].bounds
@@ -271,7 +325,7 @@ impl UITree {
         for i in from_index..end {
             if self.parent_index[i].is_none() {
                 self.parent_index[i] = Some(new_parent);
-                self.link_child(NodeId(i as u32), Some(new_parent));
+                self.link_child(self.id_at(i), Some(new_parent));
             }
         }
     }
@@ -280,10 +334,10 @@ impl UITree {
     /// Uses the existing first_child / next_sibling linked list — no allocation.
     /// Nesting depth is bounded by tree depth (max ~2 in practice).
     pub fn offset_node_and_children(&mut self, id: NodeId, dy: f32) {
-        let idx = id.index();
-        if idx >= self.count {
+        if !self.is_live(id) {
             return;
         }
+        let idx = id.index();
         self.nodes[idx].bounds.y += dy;
         self.nodes[idx].flags |= UIFlags::DIRTY;
         self.has_dirty = true;
@@ -298,10 +352,10 @@ impl UITree {
     // ── Mutation (O(1), marks dirty) ────────────────────────────────
 
     pub fn set_bounds(&mut self, id: NodeId, bounds: Rect) {
-        let idx = id.index();
-        if idx >= self.count {
+        if !self.is_live(id) {
             return;
         }
+        let idx = id.index();
         if self.nodes[idx].bounds == bounds {
             return;
         }
@@ -311,10 +365,10 @@ impl UITree {
     }
 
     pub fn set_style(&mut self, id: NodeId, style: UIStyle) {
-        let idx = id.index();
-        if idx >= self.count {
+        if !self.is_live(id) {
             return;
         }
+        let idx = id.index();
         if self.nodes[idx].style == style {
             return;
         }
@@ -324,10 +378,10 @@ impl UITree {
     }
 
     pub fn set_text(&mut self, id: NodeId, text: &str) {
-        let idx = id.index();
-        if idx >= self.count {
+        if !self.is_live(id) {
             return;
         }
+        let idx = id.index();
         if self.nodes[idx].text.as_deref() == Some(text) {
             return;
         }
@@ -337,10 +391,10 @@ impl UITree {
     }
 
     pub fn set_flag(&mut self, id: NodeId, flag: UIFlags) {
-        let idx = id.index();
-        if idx >= self.count {
+        if !self.is_live(id) {
             return;
         }
+        let idx = id.index();
         if self.nodes[idx].flags.contains(flag) {
             return;
         }
@@ -349,10 +403,10 @@ impl UITree {
     }
 
     pub fn clear_flag(&mut self, id: NodeId, flag: UIFlags) {
-        let idx = id.index();
-        if idx >= self.count {
+        if !self.is_live(id) {
             return;
         }
+        let idx = id.index();
         if !self.nodes[idx].flags.intersects(flag) {
             return;
         }
@@ -362,11 +416,10 @@ impl UITree {
     }
 
     pub fn has_flag(&self, id: NodeId, flag: UIFlags) -> bool {
-        let idx = id.index();
-        if idx >= self.count {
+        if !self.is_live(id) {
             return false;
         }
-        self.nodes[idx].flags.contains(flag)
+        self.nodes[id.index()].flags.contains(flag)
     }
 
     pub fn set_visible(&mut self, id: NodeId, visible: bool) {
@@ -602,13 +655,12 @@ impl UITree {
         }
     }
 
-    /// Get the parent of a node, or `None` for a root / out-of-range id.
+    /// Get the parent of a node, or `None` for a root / stale / out-of-range id.
     pub fn parent_of(&self, id: NodeId) -> Option<NodeId> {
-        let idx = id.index();
-        if idx >= self.count {
+        if !self.is_live(id) {
             return None;
         }
-        self.parent_index[idx]
+        self.parent_index[id.index()]
     }
 
     // ── Clear ───────────────────────────────────────────────────────
@@ -619,6 +671,10 @@ impl UITree {
         self.first_child.clear();
         self.next_sibling.clear();
         self.last_child.clear();
+        // Drop the slot generations but keep `gen_counter` climbing, so ids minted
+        // after this clear never collide with ids from before it (the slots are
+        // reused from index 0, but with fresh, higher generations).
+        self.generations.clear();
         self.count = 0;
         self.has_dirty = false;
         self.structure_version = self.structure_version.wrapping_add(1);
@@ -641,6 +697,11 @@ impl UITree {
         self.first_child.truncate(from_index);
         self.next_sibling.truncate(from_index);
         self.last_child.truncate(from_index);
+        // Drop the truncated slots' generations; `gen_counter` keeps climbing, so
+        // the rebuilt tail gets fresh generations and ids minted against the old
+        // tail (e.g. a panel that didn't re-capture after a partial rebuild) no
+        // longer validate.
+        self.generations.truncate(from_index);
         self.count = from_index;
         self.has_dirty = true;
         self.structure_version = self.structure_version.wrapping_add(1);
@@ -674,11 +735,11 @@ mod tests {
         assert_eq!(tree.count(), 0);
 
         let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
-        assert_eq!(root, NodeId(0));
+        assert_eq!(root.index(), 0);
         assert_eq!(tree.count(), 1);
 
         let child = tree.add_button(Some(root), 10.0, 10.0, 100.0, 30.0, default_style(), "OK");
-        assert_eq!(child, NodeId(1));
+        assert_eq!(child.index(), 1);
         assert_eq!(tree.count(), 2);
     }
 
@@ -697,10 +758,10 @@ mod tests {
     #[test]
     fn hit_test_topmost() {
         let mut tree = UITree::new();
-        let _root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
-        // Two overlapping buttons — second (id=2) is on top
-        let _btn1 = tree.add_button(Some(NodeId(0)), 50.0, 50.0, 100.0, 30.0, default_style(), "A");
-        let btn2 = tree.add_button(Some(NodeId(0)), 50.0, 50.0, 100.0, 30.0, default_style(), "B");
+        let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
+        // Two overlapping buttons — second is on top
+        let _btn1 = tree.add_button(Some(root), 50.0, 50.0, 100.0, 30.0, default_style(), "A");
+        let btn2 = tree.add_button(Some(root), 50.0, 50.0, 100.0, 30.0, default_style(), "B");
 
         let hit = tree.hit_test(Vec2::new(60.0, 60.0));
         assert_eq!(hit, Some(btn2));
@@ -734,8 +795,8 @@ mod tests {
     #[test]
     fn hit_test_miss() {
         let mut tree = UITree::new();
-        let _root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
-        let _btn = tree.add_button(Some(NodeId(0)), 50.0, 50.0, 100.0, 30.0, default_style(), "A");
+        let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
+        let _btn = tree.add_button(Some(root), 50.0, 50.0, 100.0, 30.0, default_style(), "A");
 
         let hit = tree.hit_test(Vec2::new(200.0, 200.0));
         assert_eq!(hit, None);
@@ -744,8 +805,8 @@ mod tests {
     #[test]
     fn hit_test_respects_disabled() {
         let mut tree = UITree::new();
-        let _root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
-        let btn = tree.add_button(Some(NodeId(0)), 50.0, 50.0, 100.0, 30.0, default_style(), "A");
+        let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, default_style());
+        let btn = tree.add_button(Some(root), 50.0, 50.0, 100.0, 30.0, default_style(), "A");
         tree.set_flag(btn, UIFlags::DISABLED);
 
         let hit = tree.hit_test(Vec2::new(60.0, 60.0));
@@ -803,7 +864,8 @@ mod tests {
             }
         });
 
-        assert_eq!(order, vec![NodeId(0), NodeId(1), NodeId(2)]); // DFS pre-order
+        let indices: Vec<usize> = order.iter().map(|n| n.index()).collect();
+        assert_eq!(indices, vec![0, 1, 2]); // DFS pre-order
     }
 
     #[test]
@@ -817,9 +879,9 @@ mod tests {
         assert_eq!(tree.count(), 0);
         assert!(!tree.has_dirty());
 
-        // Can re-add after clear
+        // Can re-add after clear — indices restart from 0 (generation differs)
         let id = tree.add_panel(None, 0.0, 0.0, 100.0, 100.0, default_style());
-        assert_eq!(id, NodeId(0)); // IDs restart from 0
+        assert_eq!(id.index(), 0);
     }
 
     #[test]
@@ -831,9 +893,9 @@ mod tests {
 
         tree.offset_nodes(1, 2, 100.0);
 
-        assert_eq!(tree.get_bounds(NodeId(0)).y, 0.0);
-        assert_eq!(tree.get_bounds(NodeId(1)).y, 120.0);
-        assert_eq!(tree.get_bounds(NodeId(2)).y, 140.0);
+        assert_eq!(tree.get_bounds(tree.id_at(0)).y, 0.0);
+        assert_eq!(tree.get_bounds(tree.id_at(1)).y, 120.0);
+        assert_eq!(tree.get_bounds(tree.id_at(2)).y, 140.0);
     }
 
     #[test]
@@ -845,8 +907,8 @@ mod tests {
         let boundary = tree.count(); // = 2
 
         // Panel B: root + child
-        let _b_root = tree.add_panel(None, 0.0, 50.0, 100.0, 50.0, default_style());
-        let _b_child = tree.add_label(Some(NodeId(2)), 10.0, 60.0, 80.0, 20.0, "B", default_style());
+        let b_root = tree.add_panel(None, 0.0, 50.0, 100.0, 50.0, default_style());
+        let _b_child = tree.add_label(Some(b_root), 10.0, 60.0, 80.0, 20.0, "B", default_style());
         assert_eq!(tree.count(), 4);
 
         // Truncate at panel B boundary
@@ -855,12 +917,12 @@ mod tests {
         assert!(tree.has_dirty());
 
         // Panel A nodes intact
-        assert_eq!(tree.get_bounds(NodeId(0)).y, 0.0);
-        assert_eq!(tree.get_node(NodeId(1)).text.as_deref(), Some("A"));
+        assert_eq!(tree.get_bounds(tree.id_at(0)).y, 0.0);
+        assert_eq!(tree.get_node(tree.id_at(1)).text.as_deref(), Some("A"));
 
-        // Can re-add after truncation — IDs continue from truncation point
+        // Can re-add after truncation — indices continue from the truncation point
         let new_id = tree.add_panel(None, 0.0, 100.0, 100.0, 50.0, default_style());
-        assert_eq!(new_id, NodeId(2));
+        assert_eq!(new_id.index(), 2);
         assert_eq!(tree.count(), 3);
     }
 
@@ -915,5 +977,66 @@ mod tests {
 
         assert!((tree.get_bounds(a).y - 110.0).abs() < 0.001);
         assert!((tree.get_bounds(b).y - 40.0).abs() < 0.001); // unchanged
+    }
+
+    // ── Generational NodeId ──────────────────────────────────────────
+
+    #[test]
+    fn placeholder_is_never_live() {
+        let mut tree = UITree::new();
+        assert!(!tree.is_live(NodeId::PLACEHOLDER));
+        tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
+        // Even with a node at index 0, the placeholder (generation 0) doesn't match.
+        assert!(!tree.is_live(NodeId::PLACEHOLDER));
+    }
+
+    #[test]
+    fn ids_at_same_index_differ_by_generation_across_clear() {
+        let mut tree = UITree::new();
+        let before = tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
+        tree.clear();
+        let after = tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
+        assert_eq!(before.index(), after.index(), "both reuse slot 0");
+        assert_ne!(before, after, "but the generation must differ");
+        assert!(!tree.is_live(before), "the pre-clear id is stale");
+        assert!(tree.is_live(after));
+    }
+
+    #[test]
+    fn stale_id_after_truncate_is_inert() {
+        let mut tree = UITree::new();
+        let keep = tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
+        let boundary = tree.count();
+        let doomed = tree.add_label(None, 0.0, 20.0, 10.0, 10.0, "old", default_style());
+
+        tree.truncate_from(boundary);
+        // The slot is reused by a different node.
+        let reused = tree.add_label(None, 0.0, 20.0, 10.0, 10.0, "new", default_style());
+        assert_eq!(doomed.index(), reused.index(), "slot reused");
+
+        // Reads through the stale id are inert — never the new occupant.
+        assert!(!tree.is_live(doomed));
+        assert_eq!(tree.get_bounds(doomed), Rect::ZERO);
+        assert!(!tree.has_flag(doomed, UIFlags::VISIBLE));
+
+        // Writes through the stale id are no-ops — the new occupant is untouched.
+        tree.set_text(doomed, "hijacked");
+        assert_eq!(tree.get_node(reused).text.as_deref(), Some("new"));
+        tree.set_bounds(doomed, Rect::new(99.0, 99.0, 1.0, 1.0));
+        assert_eq!(tree.get_bounds(reused).y, 20.0);
+
+        // The untouched earlier node still validates.
+        assert!(tree.is_live(keep));
+    }
+
+    #[test]
+    fn id_at_returns_the_live_id() {
+        let mut tree = UITree::new();
+        let a = tree.add_panel(None, 0.0, 0.0, 10.0, 10.0, default_style());
+        let b = tree.add_panel(None, 0.0, 10.0, 10.0, 10.0, default_style());
+        assert_eq!(tree.id_at(0), a);
+        assert_eq!(tree.id_at(1), b);
+        // Out of range → placeholder (never live).
+        assert_eq!(tree.id_at(99), NodeId::PLACEHOLDER);
     }
 }

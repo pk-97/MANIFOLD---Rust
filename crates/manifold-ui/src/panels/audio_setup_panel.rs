@@ -227,15 +227,15 @@ struct TriggerRowIds {
 impl Default for TriggerRowIds {
     fn default() -> Self {
         Self {
-            enable: NodeId(0),
-            sens_minus: NodeId(0),
-            sens_plus: NodeId(0),
-            len_minus: NodeId(0),
-            len_plus: NodeId(0),
-            layer: NodeId(0),
-            meter_track: NodeId(0),
-            meter_fill: NodeId(0),
-            thresh_tick: NodeId(0),
+            enable: NodeId::PLACEHOLDER,
+            sens_minus: NodeId::PLACEHOLDER,
+            sens_plus: NodeId::PLACEHOLDER,
+            len_minus: NodeId::PLACEHOLDER,
+            len_plus: NodeId::PLACEHOLDER,
+            layer: NodeId::PLACEHOLDER,
+            meter_track: NodeId::PLACEHOLDER,
+            meter_fill: NodeId::PLACEHOLDER,
+            thresh_tick: NodeId::PLACEHOLDER,
             meter_x: 0.0,
             meter_y: 0.0,
             meter_w: 0.0,
@@ -277,15 +277,15 @@ struct SendRowIds {
 impl Default for SendRowIds {
     fn default() -> Self {
         Self {
-            swatch: NodeId(0),
-            label: NodeId(0),
-            source: NodeId(0),
-            ch_dropdown: NodeId(0),
-            gain_minus: NodeId(0),
-            gain_plus: NodeId(0),
-            stereo: NodeId(0),
-            delete: NodeId(0),
-            meter_fill: NodeId(0),
+            swatch: NodeId::PLACEHOLDER,
+            label: NodeId::PLACEHOLDER,
+            source: NodeId::PLACEHOLDER,
+            ch_dropdown: NodeId::PLACEHOLDER,
+            gain_minus: NodeId::PLACEHOLDER,
+            gain_plus: NodeId::PLACEHOLDER,
+            stereo: NodeId::PLACEHOLDER,
+            delete: NodeId::PLACEHOLDER,
+            meter_fill: NodeId::PLACEHOLDER,
             meter_x: 0.0,
             meter_y: 0.0,
             meter_w: 0.0,
@@ -372,12 +372,12 @@ impl Default for AudioSetupPanel {
             panel_w: 0.0,
             scope_h: 0.0,
             host: ChromeHost::new(),
-            // Set by `build`; `NodeId(0)` is a pre-build placeholder, never a hit
-            // target before the panel is built (matches `slider.rs`).
-            bg_id: NodeId(0),
-            close_id: NodeId(0),
-            device_dropdown_id: NodeId(0),
-            add_send_id: NodeId(0),
+            // Set by `build`; `NodeId::PLACEHOLDER` is a pre-build placeholder,
+            // never a hit target before the panel is built (matches `slider.rs`).
+            bg_id: NodeId::PLACEHOLDER,
+            close_id: NodeId::PLACEHOLDER,
+            device_dropdown_id: NodeId::PLACEHOLDER,
+            add_send_id: NodeId::PLACEHOLDER,
             send_ids: Vec::new(),
             scope_readout_label: None,
             floor_minus_id: None,
@@ -572,8 +572,11 @@ impl AudioSetupPanel {
         // built imperatively into `bg_id`.
         let chrome = self.chrome_view();
         self.host.build(tree, &chrome, Rect::new(x, y, self.panel_w, body_h));
-        self.bg_id = self.host.node_id_for_key(KEY_BG).unwrap_or(NodeId(0));
-        self.close_id = self.host.node_id_for_key(KEY_CLOSE).unwrap_or(NodeId(0));
+        self.bg_id = self.host.node_id_for_key(KEY_BG).unwrap_or(NodeId::PLACEHOLDER);
+        self.close_id = self
+            .host
+            .node_id_for_key(KEY_CLOSE)
+            .unwrap_or(NodeId::PLACEHOLDER);
 
         let inner_x = x + PAD;
         let inner_w = self.panel_w - PAD * 2.0;
@@ -2092,7 +2095,7 @@ mod tests {
         let mut tree = UITree::new();
         let resp = p.on_event(
             &UIEvent::KeyDown {
-                node_id: NodeId(0),
+                node_id: NodeId::PLACEHOLDER,
                 key: Key::Escape,
                 modifiers: crate::input::Modifiers::default(),
             },

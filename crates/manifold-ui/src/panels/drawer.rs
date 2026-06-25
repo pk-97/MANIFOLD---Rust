@@ -460,7 +460,7 @@ mod tests {
         let rev_node = ids.button_ids[18];
         assert_eq!(ids.resolve_button(rev_node), Some(18));
         // An unrelated id resolves to nothing.
-        assert_eq!(ids.resolve_button(NodeId(999_999)), None);
+        assert_eq!(ids.resolve_button(NodeId::PLACEHOLDER), None);
     }
 
     #[test]

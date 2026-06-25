@@ -610,9 +610,9 @@ mod tests {
     fn setup() -> (UITree, UIInputSystem) {
         let mut tree = UITree::new();
         // Root panel
-        tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, UIStyle::default());
+        let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, UIStyle::default());
         // Button at (50,50) size 100x30
-        tree.add_button(Some(NodeId(0)), 50.0, 50.0, 100.0, 30.0, UIStyle::default(), "Click me");
+        tree.add_button(Some(root), 50.0, 50.0, 100.0, 30.0, UIStyle::default(), "Click me");
         (tree, UIInputSystem::new())
     }
 
@@ -632,7 +632,7 @@ mod tests {
             .collect();
         assert_eq!(clicks.len(), 1);
         if let UIEvent::Click { node_id, .. } = clicks[0] {
-            assert_eq!(*node_id, NodeId(1)); // button id
+            assert_eq!(node_id.index(), 1); // button id
         }
     }
 
@@ -730,7 +730,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, UIEvent::HoverEnter { node_id: NodeId(1), .. }))
+                .any(|e| matches!(e, UIEvent::HoverEnter { node_id, .. } if node_id.index() == 1))
         );
 
         // Move off button
@@ -739,7 +739,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, UIEvent::HoverExit { node_id: NodeId(1) }))
+                .any(|e| matches!(e, UIEvent::HoverExit { node_id } if node_id.index() == 1))
         );
     }
 
@@ -752,7 +752,7 @@ mod tests {
         input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Up, 0.0);
         input.drain_events();
 
-        assert_eq!(input.focused_id(), Some(NodeId(1)));
+        assert_eq!(input.focused_id().map(|n| n.index()), Some(1));
 
         // Send key
         input.process_key(Key::Space, Modifiers::default());
@@ -761,10 +761,10 @@ mod tests {
         assert!(matches!(
             events[0],
             UIEvent::KeyDown {
-                node_id: NodeId(1),
+                node_id,
                 key: Key::Space,
                 ..
-            }
+            } if node_id.index() == 1
         ));
     }
 
@@ -784,7 +784,9 @@ mod tests {
         input.process_right_click(&tree, Vec2::new(60.0, 60.0));
         let events = input.drain_events();
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], UIEvent::RightClick { node_id: Some(NodeId(1)), .. }));
+        assert!(
+            matches!(events[0], UIEvent::RightClick { node_id: Some(n), .. } if n.index() == 1)
+        );
     }
 
     #[test]

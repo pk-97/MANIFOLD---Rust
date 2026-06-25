@@ -120,10 +120,10 @@ impl BitmapSlider {
         // any read; label stays None unless a label is actually built.
         let mut ids = SliderNodeIds {
             label: None,
-            track: NodeId(0),
-            fill: NodeId(0),
-            thumb: NodeId(0),
-            value_text: NodeId(0),
+            track: NodeId::PLACEHOLDER,
+            fill: NodeId::PLACEHOLDER,
+            thumb: NodeId::PLACEHOLDER,
+            value_text: NodeId::PLACEHOLDER,
             track_rect: Rect::ZERO,
             default_normalized: normalized_value,
         };
@@ -541,20 +541,20 @@ mod tests {
         );
 
         assert!(ids.label.is_some());
-        assert!(ids.track > NodeId(0));
-        assert!(ids.fill > NodeId(0));
-        assert!(ids.thumb > NodeId(0));
-        assert!(ids.value_text > NodeId(0));
+        assert!(ids.track != NodeId::PLACEHOLDER);
+        assert!(ids.fill != NodeId::PLACEHOLDER);
+        assert!(ids.thumb != NodeId::PLACEHOLDER);
+        assert!(ids.value_text != NodeId::PLACEHOLDER);
     }
 
     #[test]
     fn slider_without_label() {
         let mut tree = UITree::new();
-        tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
 
         let ids = BitmapSlider::build(
             &mut tree,
-            Some(NodeId(0)),
+            Some(root),
             Rect::new(0.0, 0.0, 400.0, 20.0),
             None,
             0.5,
@@ -590,11 +590,11 @@ mod tests {
     #[test]
     fn update_value() {
         let mut tree = UITree::new();
-        tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
+        let root = tree.add_panel(None, 0.0, 0.0, 400.0, 20.0, UIStyle::default());
 
         let ids = BitmapSlider::build(
             &mut tree,
-            Some(NodeId(0)),
+            Some(root),
             Rect::new(0.0, 0.0, 400.0, 20.0),
             Some("Test"),
             0.5,

@@ -304,7 +304,7 @@ mod tests {
     fn to_node_anchors_below_node() {
         let node = Rect::new(100.0, 200.0, 50.0, 20.0);
         let r = compute_overlay_rect(
-            &Anchor::ToNode(NodeId(7)),
+            &Anchor::ToNode(NodeId::from_parts(7, 1)),
             Vec2::new(40.0, 30.0),
             screen(),
             Some(node),

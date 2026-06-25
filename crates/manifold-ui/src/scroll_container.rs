@@ -122,7 +122,7 @@ impl ScrollContainer {
             return false;
         }
         for i in self.content_start..self.content_end {
-            let id = NodeId(i as u32);
+            let id = tree.id_at(i);
             let mut b = tree.get_bounds(id);
             b.y += delta_y;
             tree.set_bounds(id, b);

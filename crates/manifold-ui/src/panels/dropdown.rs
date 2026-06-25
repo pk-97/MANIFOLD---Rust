@@ -873,7 +873,7 @@ mod tests {
 
         // Click on a node that isn't ours (simulate with a dummy node id).
         let event = UIEvent::Click {
-            node_id: NodeId(999),
+            node_id: NodeId::PLACEHOLDER,
             pos: Vec2::new(500.0, 500.0),
             modifiers: crate::input::Modifiers::default(),
         };
@@ -892,7 +892,7 @@ mod tests {
         dd.open_context(items, Vec2::new(100.0, 200.0), &mut tree);
 
         let event = UIEvent::KeyDown {
-            node_id: NodeId(0),
+            node_id: NodeId::PLACEHOLDER,
             key: crate::input::Key::Escape,
             modifiers: crate::input::Modifiers {
                 shift: false,
@@ -1072,7 +1072,7 @@ mod tests {
         let mut dd = DropdownPanel::new();
 
         let event = UIEvent::Click {
-            node_id: NodeId(0),
+            node_id: NodeId::PLACEHOLDER,
             pos: Vec2::new(10.0, 10.0),
             modifiers: crate::input::Modifiers::default(),
         };

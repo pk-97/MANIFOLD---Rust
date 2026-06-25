@@ -221,11 +221,11 @@ impl WaveformLanePanel {
     /// Build UITree nodes for interactive elements (overlay + buttons).
     /// Called from UIRoot after viewport.build() so wf_rect is available.
     pub fn build_nodes(&mut self, tree: &mut UITree, screen_rect: Rect) {
-        self.first_node = Some(NodeId(tree.count() as u32));
-
         // Transparent scrub/drag overlay covering entire waveform area.
         // This is the hit-test target that makes the input system generate events.
         // Unity: DragOverlay (transparent Image, raycastTarget=true).
+        // It's the first node built, so it anchors `first_node` (with the live
+        // generation the tree minted — never a raw, generation-less index).
         self.overlay_id = Some(tree.add_button(
             None,
             screen_rect.x,
@@ -238,6 +238,7 @@ impl WaveformLanePanel {
             },
             "",
         ));
+        self.first_node = self.overlay_id;
 
         // Remove button (top-right). Unity: anchoredPosition(-4, -2), 20×16.
         let remove_x = screen_rect.x + screen_rect.width - REMOVE_BTN_MARGIN_RIGHT - REMOVE_BTN_W;

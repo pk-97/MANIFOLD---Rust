@@ -350,8 +350,8 @@ mod tests {
 
         assert_eq!(host.first_node(), 1);
         assert_eq!(host.node_count(), 3); // column, label, button
-        assert_eq!(host.node_id(0), Some(NodeId(1)));
-        assert_eq!(host.node_id(2), Some(NodeId(3)));
+        assert_eq!(host.node_id(0).map(|n| n.index()), Some(1));
+        assert_eq!(host.node_id(2).map(|n| n.index()), Some(3));
         assert_eq!(t.count(), 4);
     }
 

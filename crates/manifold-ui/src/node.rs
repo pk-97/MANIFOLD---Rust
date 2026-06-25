@@ -213,20 +213,55 @@ impl Default for Color32 {
 
 // ── Node identity ────────────────────────────────────────────────────
 
-/// Stable identity of a node in [`crate::tree::UITree`].
+/// Stable identity of a node in [`crate::tree::UITree`] — an array index plus a
+/// generation.
 ///
-/// Invariant: `NodeId(i)` indexes `UITree.nodes[i]` — the id equals the array
-/// position (see [`UINode`]). `Option<NodeId>` is the one "no node" type; it
-/// replaces the former `-1` (`i32`), `u32::MAX`, and `usize::MAX` sentinels that
-/// used to stand in for "none" across the tree, input, and dispatch layers.
+/// The `index` locates the node in the tree's SoA storage; the `generation`
+/// stamps *which* node has lived at that slot. The tree bumps a counter on every
+/// node it mints, so a slot reused after a `truncate_from`/`clear`+rebuild gets a
+/// fresh generation. An id minted against the old occupant therefore no longer
+/// matches the slot's current generation, and the tree's accessors treat it as
+/// "no such node" (read → zero/false/None, write → no-op) instead of silently
+/// touching whatever node now sits at that index. This is the storage-layer
+/// backstop for the stale-id bug class: a panel that keeps an id across a rebuild
+/// and forgets to re-capture it can no longer mutate the wrong node.
+///
+/// Generation `0` is reserved: the tree never mints it (its counter starts at 1),
+/// so any id with generation 0 — including [`NodeId::PLACEHOLDER`] — never matches
+/// a live node. That makes a stray placeholder safe by construction.
+///
+/// `Option<NodeId>` remains the one "no node" type for fields; `PLACEHOLDER` is
+/// only for the rare non-`Option` slot that needs an inert default.
+///
+/// Layout: `index` in the low 32 bits, `generation` in the high 32 bits of one
+/// `u64`, so the id stays a cheap `Copy` scalar with derived `Eq`/`Hash`/`Ord`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NodeId(pub u32);
+pub struct NodeId(u64);
 
 impl NodeId {
+    /// An id that matches no live node (generation 0 is never minted). For the
+    /// rare non-`Option` field that needs an inert default; prefer `Option<NodeId>`.
+    pub const PLACEHOLDER: NodeId = NodeId(0);
+
+    /// Mint an id from its parts. Crate-private: only [`crate::tree::UITree`]
+    /// assigns generations, so ids can't be forged elsewhere (external code that
+    /// needs an id for an index goes through [`crate::tree::UITree::id_at`]).
+    #[inline]
+    pub(crate) const fn from_parts(index: u32, generation: u32) -> Self {
+        NodeId(((generation as u64) << 32) | index as u64)
+    }
+
     /// Array index of this node in the tree's SoA storage.
     #[inline]
     pub fn index(self) -> usize {
-        self.0 as usize
+        (self.0 & 0xFFFF_FFFF) as usize
+    }
+
+    /// Generation stamp — which occupant of the slot this id refers to. `0` means
+    /// "no live node" (placeholder / never minted).
+    #[inline]
+    pub fn generation(self) -> u32 {
+        (self.0 >> 32) as u32
     }
 }
 

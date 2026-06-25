@@ -1074,7 +1074,7 @@ mod tests {
         let ruler_pos = Vec2::new(panel.ruler_rect.x + 100.0, panel.ruler_rect.y + 5.0);
         let actions = panel.handle_event(
             &UIEvent::Click {
-                node_id: NodeId(0),
+                node_id: NodeId::PLACEHOLDER,
                 pos: ruler_pos,
                 modifiers: Modifiers::default(),
             },
@@ -1097,7 +1097,7 @@ mod tests {
         let tracks_pos = Vec2::new(panel.tracks_rect.x + 100.0, panel.tracks_rect.y + 50.0);
         let actions = panel.handle_event(
             &UIEvent::Click {
-                node_id: NodeId(0),
+                node_id: NodeId::PLACEHOLDER,
                 pos: tracks_pos,
                 modifiers: Modifiers::default(),
             },
@@ -1121,7 +1121,7 @@ mod tests {
         let tracks_pos = Vec2::new(panel.tracks_rect.x + 100.0, panel.tracks_rect.y + 50.0);
         let actions = panel.handle_event(
             &UIEvent::Click {
-                node_id: NodeId(0),
+                node_id: NodeId::PLACEHOLDER,
                 pos: tracks_pos,
                 modifiers: Modifiers {
                     shift: true,

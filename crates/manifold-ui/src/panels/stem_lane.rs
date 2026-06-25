@@ -210,7 +210,6 @@ impl StemLaneGroupPanel {
     /// Build UITree nodes for interactive elements (overlays + buttons + labels).
     /// Called from UIRoot after viewport.build() so screen_rect is available.
     pub fn build_nodes(&mut self, tree: &mut UITree, screen_rect: Rect) {
-        self.first_node = Some(NodeId(tree.count() as u32));
         let lane_h = color::STEM_LANE_HEIGHT;
 
         #[allow(clippy::needless_range_loop)] // index used for lane_nodes[] and positioning
@@ -230,6 +229,11 @@ impl StemLaneGroupPanel {
                 },
                 "",
             ));
+            // The first lane's overlay is the first node built, so it anchors
+            // first_node with the tree-minted generation (not a raw index).
+            if i == 0 {
+                self.first_node = self.lane_nodes[0].overlay_id;
+            }
 
             // Stem name label (top-left header area).
             // Unity: fontSize=9, MiddleLeft, color=(0.65, 0.65, 0.65).

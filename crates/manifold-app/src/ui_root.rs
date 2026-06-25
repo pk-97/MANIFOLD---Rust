@@ -896,7 +896,7 @@ impl UIRoot {
     /// through to selection clearing when only the HUD is up.
     pub fn escape_overlays(&mut self) -> bool {
         let event = UIEvent::KeyDown {
-            node_id: NodeId(0),
+            node_id: NodeId::PLACEHOLDER,
             key: Key::Escape,
             modifiers: Modifiers::default(),
         };

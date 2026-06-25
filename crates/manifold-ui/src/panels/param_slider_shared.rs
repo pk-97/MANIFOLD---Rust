@@ -1301,7 +1301,7 @@ pub(crate) fn build_param_row(
 ) -> ParamRowIds {
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.
-        row_catcher: NodeId(0),
+        row_catcher: NodeId::PLACEHOLDER,
         slider: None,
         trim: None,
         audio_trim: None,
@@ -1309,8 +1309,8 @@ pub(crate) fn build_param_row(
         ableton_trim: None,
         envelope_btn: None,
         // Overwritten with the real driver/audio buttons below.
-        driver_btn: NodeId(0),
-        audio_btn: NodeId(0),
+        driver_btn: NodeId::PLACEHOLDER,
+        audio_btn: NodeId::PLACEHOLDER,
         envelope_config: None,
         driver_config: None,
         ableton_config: None,

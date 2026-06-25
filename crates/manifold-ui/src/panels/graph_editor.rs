@@ -2246,7 +2246,7 @@ mod tests {
             "a Float value cell edits by drag — it must register no click intent"
         );
         assert!(
-            reg.resolve(&tree, Some(NodeId(99999)), Gesture::Click)
+            reg.resolve(&tree, Some(NodeId::PLACEHOLDER), Gesture::Click)
                 .is_none(),
             "an unrelated node folds up to nothing"
         );
@@ -2267,7 +2267,7 @@ mod tests {
         );
         panel.build(&mut tree, viewport());
         // Random unrelated node id.
-        assert!(click(&panel, &tree,NodeId(99999)).is_empty());
+        assert!(click(&panel, &tree, NodeId::PLACEHOLDER).is_empty());
     }
 
     /// Post-unification: the graph editor is one surface for both
