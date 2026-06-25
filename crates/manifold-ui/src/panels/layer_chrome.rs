@@ -16,7 +16,7 @@ use crate::tree::UITree;
 
 const HEADER_ROW_H: f32 = 27.5;
 const DIVIDER_H: f32 = 1.0;
-const PAD_H: f32 = 2.0;
+const PAD_H: f32 = color::SECTION_CONTENT_INSET; // §14.5 C: align with card param-label column
 const PAD_V: f32 = 2.0;
 const GAP: f32 = 4.0;
 const CHEVRON_W: f32 = 18.0;

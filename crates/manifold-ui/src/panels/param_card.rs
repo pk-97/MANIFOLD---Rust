@@ -3562,6 +3562,46 @@ mod tests {
         assert!(close(cog, Rect::new(cog_x, elem_y, COG_W, 16.0)), "cog {cog:?}");
     }
 
+    #[test]
+    fn param_label_column_aligns_to_section_inset() {
+        // §14.2 rule 1 / §14.5 C — one inset. The effect card and generator card
+        // land their first param label on the SAME left column, and that column is
+        // the canonical `SECTION_CONTENT_INSET` (= card 1px border + SPACE_M). The
+        // border-less chrome panels set `PAD_H = SECTION_CONTENT_INSET`, so they
+        // share this column by construction; pinning the card side here guards the
+        // whole alignment (it trips if PADDING drifts off SPACE_M or the border
+        // changes).
+        let label_x = |cfg: &ParamCardConfig| -> f32 {
+            let mut tree = UITree::new();
+            let mut panel = ParamCardPanel::new();
+            panel.configure(cfg);
+            panel.set_collapsed(false);
+            panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 400.0));
+            panel
+                .slider_ids
+                .iter()
+                .flatten()
+                .find_map(|s| s.label)
+                .map(|id| tree.get_bounds(id).x)
+                .expect("a built param label")
+        };
+        let ex = label_x(&effect_config());
+        let gx = label_x(&gen_config());
+        assert!(
+            (ex - gx).abs() < 0.01,
+            "effect + gen param labels share one column: {ex} vs {gx}"
+        );
+        assert!(
+            (ex - color::SECTION_CONTENT_INSET).abs() < 0.01,
+            "param label sits at the canonical section inset: {ex} vs {}",
+            color::SECTION_CONTENT_INSET
+        );
+        assert!(
+            (color::SECTION_CONTENT_INSET - (BORDER_W + PADDING)).abs() < 0.01,
+            "card content inset = 1px frame border + PADDING (SPACE_M)"
+        );
+    }
+
     // ── Generator-card fixtures + tests ───────────────────────────
 
     #[test]

@@ -19,10 +19,12 @@ pub use crate::types::AbletonMappingStatus;
 
 pub(crate) const ROW_HEIGHT: f32 = 20.0;
 pub(crate) const ROW_SPACING: f32 = color::SPACE_S;
-// Card inner inset. Collapsing 6 → the canonical `SPACE_M` 8 cascades into
-// `slider_w` / `label_width` / the header trailing-x math, so it lands in the
-// structural inset-unification step (§14.5 C), not the mechanical snap.
-pub(crate) const PADDING: f32 = 6.0;
+// Card inner inset (§14.5 C). The canonical `SPACE_M`: with the card's 1px frame
+// border that puts param-label content at `BORDER_W + SPACE_M` =
+// `color::SECTION_CONTENT_INSET`, the one column the border-less chrome panels
+// align to. `slider_w` / `label_width` / the header trailing-x all derive from
+// this, so they cascade.
+pub(crate) const PADDING: f32 = color::SPACE_M;
 pub(crate) const GAP: f32 = color::SPACE_S;
 pub(crate) const FONT_SIZE: u16 = color::FONT_BODY;
 

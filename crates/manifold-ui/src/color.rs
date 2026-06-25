@@ -669,6 +669,13 @@ pub const SPACE_L: f32 = 12.0;
 pub const SPACE_XL: f32 = 16.0;
 pub const SPACE_XXL: f32 = 24.0;
 
+// The single left edge every inspector section-content row aligns to (§14.2
+// rule 1), measured from the card/chrome rect. A bordered param card reaches it
+// as `1px frame border + SPACE_M`; the border-less chrome panels (master / layer
+// / clip) use it directly as their horizontal pad, so chrome controls share one
+// column with the cards' param labels instead of staggering 2px-vs-7px.
+pub const SECTION_CONTENT_INSET: f32 = SPACE_M + 1.0;
+
 // ── Corner radii ────────────────────────────────────────────────────
 // Small + consistent: ~3px controls, ~5px cards. Softens the hard
 // rectangles without going consumer-app bubbly.
