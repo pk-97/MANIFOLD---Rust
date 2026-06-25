@@ -150,20 +150,30 @@ pub(super) fn dispatch_editing(
         }
         PanelAction::ContextDeleteClip(clip_id) => {
             let clip_id = ClipId::new(clip_id.as_str());
-            {
-                let commands = EditingService::delete_clips(
-                    project,
-                    std::slice::from_ref(&clip_id),
-                    None,
-                    0.0,
+            // If the right-clicked clip is part of a multi-selection, delete every
+            // selected clip in one undo step; otherwise just this clip. Mirrors the
+            // selection-aware shape of ContextDuplicateLayer.
+            let target_ids: Vec<ClipId> = if selection.selected_clip_ids.contains(&clip_id) {
+                selection.selected_clip_ids.iter().cloned().collect()
+            } else {
+                vec![clip_id.clone()]
+            };
+            let spb = 60.0 / project.settings.bpm.0.max(1.0);
+            let commands = EditingService::delete_clips(project, &target_ids, None, spb);
+            if !commands.is_empty() {
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::ExecuteBatch(commands, "Delete clips".to_string()),
                 );
-                if !commands.is_empty() {
-                    for c in commands {
-                        ContentCommand::send(content_tx, ContentCommand::Execute(c));
-                    }
-                }
             }
-            selection.selected_clip_ids.remove(&clip_id);
+            for id in &target_ids {
+                selection.selected_clip_ids.remove(id);
+            }
+            if let Some(pid) = selection.primary_selected_clip_id.clone()
+                && target_ids.contains(&pid)
+            {
+                selection.primary_selected_clip_id = None;
+            }
             DispatchResult::structural()
         }
         PanelAction::ContextDuplicateClip(clip_id) => {
