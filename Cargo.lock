@@ -2067,6 +2067,7 @@ dependencies = [
  "inventory",
  "log",
  "manifold-core",
+ "manifold-foundation",
  "manifold-gpu",
  "manifold-native",
  "manifold-playback",

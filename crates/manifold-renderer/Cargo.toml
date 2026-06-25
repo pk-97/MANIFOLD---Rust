@@ -34,6 +34,8 @@ core-foundation = "0.9"
 # Serializes GPU tests on the shared Metal device (see `test_device`). Reentrant
 # so a single test may acquire it more than once without deadlocking.
 parking_lot = { workspace = true }
+# Phase -1 headless UI harness spike: ParamCardConfig needs an EffectId.
+manifold-foundation = { path = "../manifold-foundation" }
 
 [[bin]]
 name = "check-presets"

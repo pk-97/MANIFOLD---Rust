@@ -469,6 +469,503 @@ the renderer is custom.
 
 ---
 
+## 14. Padding & layout rules — the sub-element grid 📏
+
+**Status:** spec (Phase A). The rules below are the SSOT for every spatial constant in
+the UI. Captured 2026-06-25.
+
+### 14.1 The problem (grounded)
+The scale was locked in Phase 3 (§4.2) but **the layout code never consumed it.** A parallel
+set of hand-picked magic numbers lives in the panel files, most of them *off* the 4px grid.
+Same disease for radius (§4.3 tokens exist; raw `corner_radius: 1.0/2.0/4.0/7.0/8.0` literals
+scattered everywhere). The visible symptoms in the inspector:
+
+- **Insets nest, so columns stagger.** A section label starts at `CONTENT_PADDING_H` 8; an
+  effect-card param label starts at `8 (section) + 6 (card PADDING) = 14`; a clip label at 10.
+  So "Amount" / "Zoom" don't share a left column with "Bloom" / "Position X" — off by 6px.
+- **No fixed right column.** Row value+`T/∿/A` icons right-align within a card, but section-header
+  trailing controls (Change, ON, chevron, cog) right-align to a *different* edge.
+- **Four row-band heights** — `HEADER_HEIGHT` 27.5 / content 24 (20+4) / section header 22 /
+  small row 18 → uneven striping.
+- **Off-scale repeat offenders:** `5` (`GROUP_Y_PAD`, `ITEM_SPACING`, `LAYER_CTRL_PADDING`),
+  `3` (`EFFECT_CONTAINER_SPACING`, `ELEM_Y_PAD`), `6` (`PADDING`, `CARD_BOTTOM_MARGIN`,
+  `CONTENT_PADDING_V`).
+
+This pass does **not** make the UI prettier in a taste sense (colour / hierarchy / density live
+in §4–§7). It removes the drift: same insets, same columns, same radii. That's the win.
+
+### 14.2 The eight rules
+
+1. **One inset, one owner.** Horizontal inset = **8 (`SPACE_M`)**, owned by the card.
+   Section/clip containers contribute **zero** horizontal padding. Insets never nest — a bare
+   section header and an effect-card param label start at the *same* x.
+2. **Every spatial constant snaps to the scale.** `SPACE_XS 2 / S 4 / M 8 / L 12 / XL 16 /
+   XXL 24` is the SSOT. No constant lives off it (vertical row heights are the one tolerated
+   exception — see rule 5).
+3. **One affordance grid.** The inspector row is fixed columns:
+   `[inset 8][label][slider flex][value][mod-icon lane][inset 8]`. The value+icon gutter is one
+   fixed width, and section-header trailing controls right-align to the **same** gutter x.
+   (Resolve's right column, §9 — made literal.)
+4. **Three vertical gaps, max.** In-card row spacing **4**; between cards **8**; between major
+   sections **12**. One owner per gap — `CARD_BOTTOM_MARGIN` → 0, the container owns the
+   inter-card gap.
+5. **One row rhythm.** Content row **24** (20 + 4). Card header **28**. Section header **24**.
+   Small/macro rows are a documented second tier (18) — heights are about visual rhythm, not the
+   horizontal grid, so fewer-distinct-values is the rule, not strict mult-of-4.
+6. **Radius = four tokens.** Controls/buttons **`BUTTON_RADIUS` 3**; cards/sections
+   **`CARD_RADIUS` 5**; chips/dots/small handles **`SMALL_RADIUS` 2**; popups **`POPUP_RADIUS` 6**.
+   No raw literals. (Sub-pixel-thin overlay bars ≤6px wide may keep `1.0` as a documented hairline
+   exception — eyeball call.)
+7. **Hit target ≠ draw width** (carry-over from §11). Snapping draw sizes never shrinks a grab
+   zone below the Fitts floor.
+8. **Tokens, not local copies.** Per-file constants (`LH_BTN_RADIUS`, `SECTION_RADIUS`,
+   `CELL_RADIUS`, `LAYER_CTRL_PADDING`, …) become thin aliases onto the global tokens, or are
+   deleted. One edit shifts every surface.
+
+### 14.3 Constant → token map (inspector — the pain)
+
+| File · const | Now | → Target | Note |
+|---|---|---|---|
+| `inspector_layout` · `CONTENT_PADDING_H` | 8 | `SPACE_M` 8 | the canonical inset |
+| `inspector_layout` · `CONTENT_PADDING_V` | 6 | `SPACE_S` 4 | |
+| `inspector_layout` · `CONTENT_SPACING` | 4 | `SPACE_S` 4 | ✓ |
+| `inspector_layout` · `CLIP_PADDING_H` | 10 | `SPACE_M` 8 | unify to inset |
+| `inspector_layout` · `CLIP_PADDING_V` | 8 | `SPACE_M` 8 | ✓ |
+| `inspector_layout` · `CLIP_SPACING` | 6 | `SPACE_S` 4 | |
+| `inspector_layout` · `EFFECT_CONTAINER_SPACING` | 3 | `SPACE_M` 8 | owns inter-card gap |
+| `inspector_layout` · `SECTION_HEADER_HEIGHT` | 22 | 24 | row rhythm (eyeball) |
+| `param_slider_shared` · `PADDING` | 6 | `SPACE_M` 8 | card inner inset |
+| `param_slider_shared` · `GAP` | 4 | `SPACE_S` 4 | ✓ |
+| `param_slider_shared` · `ROW_SPACING` | 4 | `SPACE_S` 4 | ✓ |
+| `param_slider_shared` · `DE_BUTTON_GAP` | 2 | `SPACE_XS` 2 | ✓ |
+| `param_slider_shared` · `corner_radius` 1.0/2.0 | 1/2 | `SMALL_RADIUS` 2 | hairline exception ok |
+| `param_card` · `HEADER_HEIGHT` | 27.5 | 28 | |
+| `param_card` · `CARD_BOTTOM_MARGIN` | 6 | 0 | gap owned by container |
+| `param_card` · `CHEVRON_W` / `COG_W` | 18 | 16 or 20 | pick one (eyeball) |
+| `param_card` · `corner_radius` 2.0 | 2 | `SMALL_RADIUS` 2 | dots/chips ✓ |
+
+> Recomputing `PADDING` cascades into `slider_w`, `label_width`, and the header trailing-x math
+> (`cog_x`/`chevron_x`/`toggle_x`) in `param_card`. That's Phase C, the one risky step.
+
+### 14.4 Constant → token map (chrome — second pass)
+
+| File · const | Now | → Target |
+|---|---|---|
+| `header` · `GROUP_Y_PAD`, `GROUP_SPACING` | 5 | `SPACE_S` 4 |
+| `transport` · `ITEM_SPACING` | 5 | `SPACE_S` 4 |
+| `transport` · `GROUP_Y_PAD`, `RIGHT_SPACING` | 4 | `SPACE_S` 4 ✓ |
+| `footer` · `ELEM_Y_PAD` | 3 | `SPACE_S` 4 |
+| `footer` · `PAD` | 8 | `SPACE_M` 8 ✓ |
+| `layer_header` · `PAD` (`LAYER_CTRL_PADDING`) | 5 | `SPACE_S` 4 |
+| `layer_header` · `REC_PAD` | 6 | `SPACE_S` 4 |
+| `layer_header` · `LH_BTN_RADIUS` | 2 | `SMALL_RADIUS` 2 (alias) |
+| `macros_panel` · `SECTION_RADIUS` | 4 | `CARD_RADIUS` 5 (and `-1.0` → `BUTTON_RADIUS` 3) |
+| `browser_popup` · `corner_radius` 8/7 | 8/7 | `POPUP_RADIUS` 6 |
+| `browser_popup` · `corner_radius` 4/2 | 4/2 | `BUTTON_RADIUS` 3 / `SMALL_RADIUS` 2 |
+
+### 14.5 Build order
+
+- **A — Spec & freeze (this section).** ✅ no code; the maps above are the freeze.
+- **B — Spacing snap (mechanical, low-risk).** Apply 14.3/14.4 *except* the inset-ownership
+  change. Snapping values that don't move horizontal alignment. Eyeball.
+- **B′ — Radius snap (sibling of B).** Every raw `corner_radius` literal + local radius token →
+  the four tokens (rule 6). Mechanical.
+- **C — Unify the inset (structural, risky).** One owner = card @ 8; container H pad → 0.
+  Recompute `slider_w` / `label_width` / header trailing-x. Verify all three label columns share
+  one x.
+- **D — Shared right column.** One gutter width; right-align row value+icons **and** header
+  controls to the same x.
+- **E — Row rhythm + gaps.** One row height + 3 gap tokens (4/8/12).
+- **F — Roll across variety + eyeball.** Many-param effect, enums, string params, generator
+  (purple), macros, clip, master, chrome. Fix edge cases, no new design.
+
+Each phase ends: `cargo clippy --workspace -- -D warnings` + `cargo test -p manifold-ui --lib` +
+Peter's running-app eyeball (custom renderer — can't screenshot in-session).
+
+### 14.6 Out of scope
+- The floating **"Bloom" / "Highlight Boost"** text seen over the Text-section rows is a
+  *rendering-overlap bug*, not a padding issue (same family as the macros-panel overlap fix).
+  Separate ticket.
+
+---
+
+## 15. Semantic colour ramp 🎨
+
+**Status:** spec. The grey ramp (§4.1) fixed the *neutrals*. The *chromatic* state colours never
+got the same treatment — they're the same pre-ramp muddle, one hue-step lower.
+
+### 15.1 The problem (grounded in `color.rs`)
+State colours are hand-picked per spot, so each hue has many near-identical copies:
+- **~7 reds** — `PLAYHEAD_RED` 217,64,56 · `STOP_RED` 128,51,51 · `RECORD_RED` 107,38,38 ·
+  `RECORD_ACTIVE` 209,46,46 · `EXPORT_ACTIVE` 184,56,56 · `BPM_CLEAR_ACTIVE` 133,51,51 ·
+  `MUTED_COLOR` **255,0,0** (pure red, off any sane ramp).
+- **~7 greens** (`PLAY_GREEN`/`PLAY_ACTIVE`/`STATUS_DOT_GREEN`/`SAVE_FLASH_GREEN`/
+  `BPM_RESET_ACTIVE`/`MONITOR_ACTIVE`/`SYNC_ACTIVE`), **~4 ambers**, **~3 oranges**.
+- So "active red" is a different red in every widget. On a dark stage under coloured wash,
+  inconsistent hue + brightness washes out — this is a *live-performance* legibility bug, not
+  just untidiness.
+
+### 15.2 The fix — one ramp per role-hue, three steps each
+Define **idle · base · active** for each hue once; map roles onto hues. The point isn't *fewer*
+colours — it's *one definition per hue*, so the same red means the same thing everywhere.
+
+| Hue | idle | base | active | Roles |
+|---|---|---|---|---|
+| **RED** | 107,38,38 | 184,56,56 | 217,64,56 | record · stop · destructive · mute-warn |
+| **GREEN** | 51,107,61 | 64,158,89 | 64,184,82 | play · monitor · confirm · save |
+| **AMBER** | 156,128,40 | 204,166,38 | 217,191,64 | warn · solo · paused |
+| **ORANGE** | 140,82,30 | 199,102,56 | 209,115,56 | envelope mod · mute-active · status |
+| **BLUE** | 77,122,199 | 89,148,235 | 120,170,245 | accent · selection · active control |
+| **CYAN** | 40,120,140 | 20,166,191 | 64,200,224 | driver/LFO mod · link/sync |
+| **PURPLE** | 90,72,120 | 115,115,191 | 150,130,210 | generator identity / gen-card tint |
+
+Values are a starting point — **tune on the running app** (the warm trio red/amber/orange must
+stay distinguishable when mute/solo sit adjacent). Mute and envelope can *share* orange because
+they never collide in one widget; the rule is consistent steps, not artificial collapse.
+
+Collapses ~25 hand-picked constants → 7 hues × 3 steps. The old names persist as thin aliases
+onto the ramp (same approach as the grey re-point in Phase 3), so call sites don't churn.
+
+§11 still holds: **shape + colour, never colour alone** — the ramp makes hue consistent; armed
+state still also changes fill/icon.
+
+---
+
+## 16. Enforcing the system — the systemic root ⚙️
+
+**Status:** spec. **Highest-leverage item in this whole doc.**
+
+Tokens exist (§4) and still drift (§14, §15) because **nothing stops a raw literal.** That's why
+the cleanup sections have to exist — and why they re-drift in weeks without a guard. A design
+*system* makes violations fail CI; right now they're only discouraged. This is the difference
+between a cleanup and a system.
+
+### 16.1 The rule
+**All colours and radii are defined in `color.rs`; call sites reference tokens only.** No raw
+`Color32::new(` and no raw `corner_radius:`/`radius(` float literals anywhere outside the token
+module. Spacing constants reference `SPACE_*`.
+
+### 16.2 The guard
+A `manifold-ui` unit test that walks `src/**` and **fails** on:
+- `Color32::new(` outside `color.rs`,
+- `corner_radius: <float>` / `.radius(<float>)` outside `color.rs`,
+- (stretch) numeric spacing literals in layout structs not traceable to `SPACE_*`.
+
+Cheap, deterministic, runs in the existing `cargo test -p manifold-ui --lib`. An allowlist
+comment (`// design-token-exempt: <reason>`) covers the rare honest exception (e.g. the ≤6px
+hairline bars in §14.2 rule 6). Once green, the system is *enforced*, not aspirational.
+
+---
+
+## 17. Elevation & separation 🪟
+
+**Status:** spec. The UI is flat fills + a muddle of **5 near-identical border greys**
+(`CARD_BORDER` 46 · `CARD_BORDER_C32` 55 · `RACK_BORDER` 56 · `DROPDOWN_BORDER` 58 ·
+`GEN_CARD_BORDER_C32` 58 purple-tinted). Floating things — dropdown, browser popup, mod drawer —
+read as *glued* to the panel; there's no language that says "this is above."
+
+**Fix — a 2-level elevation language:**
+- **Flat (in-panel):** the §4.1 fill ramp only, no border. Cards/sections separate by fill level,
+  as already decided (§4.4 "grouping = fill level, not boxes").
+- **Raised (floating):** one **`BORDER`** hairline token (collapse the 5 greys → one, ≈ `DIVIDER`
+  56) **plus a single soft drop-shadow** under popovers/dropdowns/drawers. One shadow step, not a
+  Material-style ramp — just enough to lift off the panel.
+
+Keep it subtle: a live tool in a dark room shouldn't glow. Borders/shadow are for *floating*
+elements only; in-panel grouping stays fill-level.
+
+---
+
+## 18. Apply the component kit everywhere 🧩
+
+**Status:** spec (closes the §5 / Phase 5–6 loop). The typed kit exists but is only applied to
+the param card. Every other surface — chrome bars (transport/header/footer), layer-header
+buttons, dropdowns, dialogs — still hand-rolls its own button/toggle/styling. §10's own warning:
+a **half-standardised** system is *worse than before* (forced relearning).
+
+**Rule:** no bespoke button / toggle / dropdown / segmented styling. Every instance is a kit
+component on the §4 tokens + §15 ramp. Audit each panel; replace one-offs; delete the local style
+helpers (`*_btn_style` in `param_slider_shared`, per-file `LH_BTN_*`, etc.). After this, the kit —
+not the panels — owns how a control looks.
+
+---
+
+## 19. Layout hierarchy & micro-motion 🎬
+
+**Status:** spec. Two gaps the grid (§14) doesn't address.
+
+- **Flat hierarchy.** Every card is equal visual weight; the object you're *editing* isn't
+  emphasised and the rest doesn't recede. SOTA inspectors lift the focused section (fill +1,
+  subtle accent edge) and dim the rest. Pairs with collapse-by-default (§6).
+- **Micro-motion (restrained).** No feedback on press / arm / collapse / value-commit. At 60fps in
+  the custom renderer this is cheap — and for a *live* tool the SOTA call is restraint: a fast
+  button-press flash, an arm-state pulse, a collapse ease. **No** decorative animation (distracting
+  on stage). Motion confirms an action; it never idles.
+- **Undesigned states.** Empty (no effects), error (load failure), loading (export/decode) likely
+  have no considered treatment. Define them once.
+
+---
+
+## 20. Roadmap — system to SOTA
+
+§14–§19 in leverage order. §16 (enforcement) underwrites all the cleanup — do it early so the
+rest can't re-drift.
+
+| # | Work | Kind | Risk |
+|---|---|---|---|
+| §16 | Token-enforcement guard | systemic | low |
+| §14 | Padding / layout grid | cleanup | C is structural |
+| §15 | Semantic colour ramp | cleanup | low (aliases) |
+| §17 | Elevation / separation | additive | low |
+| §18 | Apply component kit everywhere | coverage | medium (broad) |
+| §19 | Hierarchy + micro-motion | additive | medium |
+
+**Honest caveat:** §14–§18 get the *system* to SOTA-grade — consistent, enforced, complete. They
+do **not** guarantee the *look* is best-in-class; that's a taste/tuning pass (the ramp values, the
+hierarchy emphasis, the shadow weight) settled only by eyeballing the running app. The system can
+be perfect and still look ordinary — these fix the system; taste is the layer on top.
+
+---
+
+## 21. Duplication audit 🔁
+
+**Status:** spec (from a 2026-06-25 targeted scan of `manifold-ui/src`). The §14/§15/§18 cleanups
+are all instances of **one root pattern**, found everywhere once you look:
+
+> **A shared primitive exists, but only some call sites use it. The rest reimplement it.**
+
+Sliders prove the codebase *can* do this right — there is one slider engine and every panel routes
+through it. Buttons, headers, popups, and some drag handlers just never followed that example.
+
+### 21.1 Reimplemented (fix these)
+
+| Domain | Shared home | Reimplemented by | Severity |
+|---|---|---|---|
+| **Buttons / toggles** | `chrome/components.rs` (the kit) | `transport`, `header`, `footer`, `layer_header` — own draw + style | **HIGH** |
+| **Card / section header row** | *none — should be one template (§6.1)* | `master_chrome` `header_row`, `param_card` `effect_header_row`, `clip_chrome` `section_label`, `macros_panel` | **HIGH** |
+| **Popup chrome** | `overlay.rs` (positioning only) | `dropdown`, `browser_popup`, `ableton_picker` — own border / radius / shadow / item rows | MED |
+| **State colours** | `color.rs` | ~25 hand-picked reds/greens/ambers (§15) | MED |
+| **Radii / spacing** | `color.rs` tokens | raw literals (§14) | MED |
+| **Widget drag** | `slider.rs::SliderDragState` | `macros_panel::handle_drag`, `layer_header` gain-drag — own drag math | MED |
+| **Word-wrap** | *none* | `graph_canvas/model::wrap_text` **and** `graph_editor::wrap_words` (two copies) | LOW |
+| **Rect-contains-point** | `node.rs::contains` / `hit.rs` | `mapping_popover::point_in` + inline `x>=…&&…` checks | LOW |
+
+### 21.2 Good citizens (already shared — don't touch)
+- **Sliders** — `slider.rs` + `SliderSpec`; every panel routes through it. The model to copy.
+- **Text measurement** — one `TextMeasure` trait via `tree.rs`; `truncate_with_ellipsis` shared.
+- **Tree hit-test** — `tree.rs::hit_test` is the one widget hit path.
+- **1D range contains** — `hit.rs`. **Low-level drag detection** — `input.rs`.
+- **Timeline clip hit/drag** (`clip_hit_tester`, `interaction_overlay`) — legitimately its own
+  domain, not duplication.
+
+### 21.3 The fix is the same as §16 + §18
+There's no new pattern to invent — every row above is "lift/keep one primitive, migrate the call
+sites, delete the copies":
+- **HIGH** — finish the kit migration (§18) and build the **one** card-header template (§6.1),
+  used by master / layer / clip / effect / macros.
+- **MED** — give popups one shared chrome (border + §17 shadow + item row); route `macros` and
+  `layer_header` drag through `SliderDragState`; the colour/radii/spacing ones are §14/§15.
+- **LOW** — merge the two word-wrap fns; one `point_in_rect` helper.
+- The §16 guard catches the literal-level ones (colour, radius) automatically once on.
+
+### 21.4 Limits of this scan
+Targeted at widgets / popups / headers / drag / text / hit-test. **Not** audited: icon rendering,
+event-dispatch wiring, per-panel sync paths, the graph-canvas internals. A full pass would cover
+those.
+
+---
+
+## 22. Full duplication audit — 5-agent pass 🔬
+
+**Status:** complete (2026-06-25). Five parallel agents, one per crate slice, read every file in
+`manifold-ui/src` (924k tokens, 118 tool calls). This **supersedes §21** (the preliminary scan) —
+§21's findings all confirmed, plus much more. One finding is a **live correctness bug**, not tidiness.
+
+### 22.1 Headline: a real bug, not just duplication ⚠️
+**Two clip hit-testers disagree.** *Confirmed by direct read.*
+- Hover / cursor → `viewport/interaction.rs::hit_test_clip` (called `app.rs:801`, `interaction.rs:89`)
+  uses **fixed-width** trim handles (`TRIM_HANDLE_THRESHOLD_PX`, gated by `TRIM_HANDLE_MIN_CLIP_WIDTH_PX`).
+- Click / drag → `clip_hit_tester.rs::ClipHitTester::hit_test` (via `interaction_overlay.rs:1109`)
+  uses **proportional** handles (`MAX_TRIM_HANDLE_PX 8 .min(width*0.15)`), **and** skips group layers.
+
+Effect on stage: a clip edge can **hover-as-body but grab-as-trim** (and the hover path mis-handles
+group layers). The two diverged because `HitRegion`/`ClipHitResult` are **defined twice**
+(`clip_hit_tester.rs:16-30` *and* `viewport/model.rs:42-55`) — the type wall hid that they're one op.
+**Fix:** delete `hit_test_clip`'s bespoke math; route it through `ClipHitTester::hit_test` like
+`hit_test_at` does. Delete the duplicate types; `viewport.rs` re-exports the hit-tester's.
+`marker_flag_rect` (draw==hit, unit-tested) is the model to copy.
+
+### 22.2 The recurring families (a shared primitive exists; call sites bypass it)
+This is the *whole* disease, now fully enumerated. Sliders, `TextMeasure`, `transform::Axis`,
+`CoordinateMapper::layer_height` prove the codebase *can* do this right — these didn't.
+
+| Family | Shared home | Bypassed by | Sev |
+|---|---|---|---|
+| **Colour lighten/darken** | *none — add `Color32::lighten/darken` to color.rs* | identical `fn lighten/darken` in `clip_chrome`, `layer_header`, `transport`; inline +40 marker (`render.rs` ×2), +30/+15 (`bitmap_painter`), +40 swatch (`dropdown`) — **~7 copies** | MED |
+| **Buttons / toggles** | `chrome/components.rs` kit | `transport`, `header`, `footer`, `audio_setup_panel` (own `*_btn_style`); inspector chevrons (`macros`/`master`/`layer`/`param_card`); LED toggle (`master_chrome`), loop toggle (`clip_chrome`) | HIGH |
+| **Card/section header row** | *none — add `components::section_header`* | `master_chrome`, `layer_chrome`, `macros_panel`, `clip_chrome` (label-only), `param_card` (×2 w/ extra furniture) | MED |
+| **Drag lifecycle** | `drag.rs::DragController<T>` (its own doc lists the 5 machines it replaces) | `macros_panel` (`i32 = -1` sentinel), `layer_header` (redundant `active_gain_drag` beside `SliderDragState`), `audio_setup` band-divider | MED |
+| **Hit-test (half-open interval)** | `hit::Span` | `view.rs:30`, `cursor_nav.rs:121`, graph-canvas (`mapping_popover`, `hit.rs`, `interaction.rs` — inclusive `<=`, a latent edge-bug), + the clip hit-tester (§22.1) | MED |
+| **Popup shell** (backdrop+border+inner+radius) | *none — add `popup_shell()` + tokens* | `browser_popup`, `ableton_picker`, `dropdown`, `audio_setup` — `BG_BORDER/BG_INNER` consts **already drifted** (19,19,**22** vs 19,19,**20**) | HIGH |
+| **Popup edge-clamp** | `overlay::compute_overlay_rect` | `dropdown`, `browser_popup`, `ableton_picker` (SelfManaged → opt out of the shared clamp) | LOW |
+| **Char-width estimate** | `text::TextMeasure` | `dropdown` (×7.0), `browser_popup` (×0.6), `graph render` (×0.55) — three magic factors | LOW |
+| **Compact float fmt** | *none — add `fmt_trimmed`* | `mapping_popover`, `graph_editor` (×2), + `fmt_opacity`/`fmt_macro`/`fmt_value` scattered | LOW |
+| **Angle/Freq value fmt** | *none* | canvas `model.rs:369` vs `graph_editor.rs:1798` — duplicated **per** mirror enum (`ParamSnapshotKind` vs `GraphEditorParamKind`) | MED |
+| **Raw colour literals** | `color.rs` tokens | `stem_lane`, `waveform_lane` write `(255,255,255)`, `(173,173,179)` etc. that *equal* existing tokens | LOW |
+
+### 22.3 Build-vs-update desync (a distinct, dangerous class)
+The in-place update discipline created **parallel walks that must stay in lockstep or silently desync**:
+- **Ruler ticks/labels** built in `render.rs::build_ruler` **and** re-derived in
+  `try_update_horizontal_scroll` (which itself walks twice — count then update). Comment admits
+  *"same logic as build_ruler."* **HIGH** — scroll silently diverges from a fresh build.
+- **Grid subdivision + bar_skip ladder** in `coordinate.rs` **and** re-derived in
+  `bitmap_renderer.rs::paint_grid_lines` (*"matches GridOverlay exactly"*). **MED** — painted grid
+  drifts from ruler ticks. Fix: hoist `bar_skip_for(px)` / `subdivisions_for(ppb)` to one grid module.
+
+### 22.4 Also found (smaller, real)
+- `audio_setup` builds the same `[-] value [+]` stepper **4×**; `reposition_trim_bars` reimplemented in
+  `macros_panel`; bezier sample-loop copied (`draw_wire`/`draw_ghost_wire`); BPM button style ×3
+  (`clip_chrome`); mute/solo style identical modulo one colour; hamburger 3-bar handle ×2; word-wrap ×2
+  (`wrap_text`/`wrap_words`); waveform draw-clamp ×3 (redundant with the painter's own clamp).
+- **Root cause behind two of these:** `graph_canvas::Rect` is a *separate* struct from `node::Rect`, so
+  `Rect::contains` (via `hit::Span`) can't be reused on the canvas → inline `point_in` ×3.
+
+### 22.5 Good citizens — already shared, do NOT touch
+Sliders (`SliderDragState`); `TextMeasure`; `transform::Axis` (canvas + timeline); `CoordinateMapper`
+(`layer_height` = "the single rule", tested); `waveform_renderer` + `draw_waveform` + `bitmap_painter`
+primitives; `hit::Span` + `node::Rect::contains`; the `chrome` View/Host/components stack;
+`drawer` DrawerSpec; `intent` registry; `scroll_container`; `overlay::compute_overlay_rect`;
+`marker_flag_rect` (draw==hit). The primitives are good — the bypasses are the bug.
+
+### 22.6 Fix order
+1. **§22.1 clip hit-test bug** — it's a live bug; fix first (route through `ClipHitTester`, unify the types).
+2. **`Color32::lighten/darken`** — ~7 copies, trivial, and the §16 guard then enforces it.
+3. **§16 guard** — turns the literal-level families (colour, radius, button styles) into CI failures.
+4. **Buttons kit (§18)** + **`section_header`** — the two HIGH structural ones.
+5. **Build-vs-update desync (§22.3)** — extract the shared ruler/grid iterators.
+6. The MED/LOW dedups as the relevant files are touched.
+
+---
+
+## 23. Headless render + interaction harness (Phase -1) 📸
+
+**Status:** spec. Build this **first** — it removes ~80% of the "Peter must look" gating that
+otherwise blocks every visual phase (§14, §17, §18). The renderer is custom, so this is the only
+way I can self-verify visual/interaction changes without a running window.
+
+### 23.1 Why it works
+The app is **event-driven**: input → state change → tree rebuild → render. Both ends are reachable
+without a window:
+- The UI rasters into a **CPU pixel buffer** (`bitmap_renderer.rs`: `pixel_buffer: Vec<Color32>`).
+- Text goes through the **real** rasterizer (`ui.draw_text` → `manifold_renderer::text_rasterizer::TextRasterizer`,
+  CoreText). The harness reuses it, so fonts / metrics / AA **match the live app by construction** — we
+  reimplement nothing.
+- Input is a state machine (`input.rs::UIInputSystem`, `UIEvent`); clicks resolve via
+  `tree.rs::hit_test(pos)` → the `intent.rs` registry. Synthetic events drive the same path winit does.
+
+### 23.2 What it does
+1. **Render-to-PNG.** Build a UI state, render one frame through the real renderer, write a PNG.
+   I can `Read` PNGs → I see what I changed.
+2. **Interaction injection.** Feed a synthetic mouse down/up at a coordinate into the real input
+   entrypoint → `hit_test` → intent dispatch → state mutation → rebuild. No window, no mouse.
+3. **Two assertion layers:**
+   - **Tree assertions** (deterministic, no pixels, CI-able) — after an action, query the in-memory
+     tree: node exists, rect is where expected, **nothing overlaps**, label column x matches. Catches
+     alignment/overlap better than eyeballing.
+   - **PNG snapshot** — for what the tree can't show (colour, text, AA). Golden-image diff on regression.
+
+### 23.3 Reference test — chevron → drawer
+1. Build inspector + collapsed effect card → render PNG #1.
+2. Query tree → find chevron node (by `KEY_CHEVRON`), take its center.
+3. Inject down+up at that point.
+4. Step the app (process event → rebuild).
+5. Render PNG #2.
+6. Assert: drawer node now present, positioned below the row, no overlap; `Read` PNG #2 to confirm it drew.
+
+Multi-step (drag a slider) = a list of `(event, pos, time)` steps, snapshot at the end.
+
+### 23.4 Seams to confirm in the spike
+1. **Painter CPU vs GPU — RESOLVED (doesn't block).** Headless works either way: the GPU parity
+   harness already spins up a real `GpuDevice::new()` windowless in `cargo test` and reads textures
+   back to CPU. CPU path → read `pixel_buffer` directly; GPU path → `readback()`. Needs a Metal device
+   present (always true on Peter's Mac; only a no-GPU CI container would care).
+2. **Winit-less input.** `window_input.rs` does the winit→action translation, but it's typed in winit
+   (`MouseButton`/`ElementState`). The clean seam is one level lower: panels consume `UIEvent`
+   (`input.rs::UIInputSystem`). The spike builds a thin driver that synthesizes `UIEvent`s at a
+   coordinate (mirroring `window_input`'s mapping, minus winit). Confirm that layer is reachable
+   without a `Window`/`Workspace`.
+3. **Injectable clock.** Time-based behaviour (double-click window, drag threshold) must take a passed-in
+   timestamp, not wall-clock, so sequences are deterministic.
+
+### 23.5 Accuracy & limits (honest)
+- **Accurate:** yes for correctness — same renderer, same rasterizer, same layout. It does **not**
+  replace Peter's eye for **taste** (does the colour feel pro, §8/§9 hierarchy) — only for correctness
+  (aligned, no overlap, rendered, drawer opened).
+- **Scope:** the UI chrome (panels, inspector, popups, timeline). The **video viewport** is GPU/Metal
+  (manifold-renderer, IOSurface) — a different offscreen path, not covered by this harness.
+
+### 23.6 Payoff against the 11 phases
+- Visual phases (§14 grid, §17 elevation, §18 kit) flip from "Peter-gated each iteration" → "I
+  self-check via snapshot + tree assertions; Peter signs off once at the end."
+- Pairs with the §16 token guard: **guard catches bad tokens, snapshots catch bad layout, tree
+  assertions catch bad structure.** Together they make the per-phase automation (§ build order) safe.
+
+### 23.7 Existing infra — reuse, don't rebuild (inventoried 2026-06-25)
+Peter's instinct was right: the GPU/node side already solved the hard half. Phase -1 is **~40% new,
+60% reuse.**
+
+**Reuse (already exists):**
+- **Headless Metal device** — `GpuDevice::new()` runs windowless in `cargo test`
+  ([`tests/parity/harness.rs`](../crates/manifold-renderer/tests/parity/harness.rs)). The whole
+  "can we even render with no window" question is already answered yes.
+- **Texture → CPU readback** — two impls: the harness `readback()` and
+  [`gpu_readback.rs`](../crates/manifold-renderer/src/gpu_readback.rs) (`ReadbackRequest::submit/try_read`).
+- **PNG encode** — `image` 0.25 (png feature) in `manifold-media`; `RgbaImage::save()` already
+  round-trips PNGs in `image_renderer.rs` tests. (`png 0.18` also in `manifold-app`.)
+- **Golden compare** — `assert_bytewise_equal` + the deterministic-fixture / fixed-`ctx` pattern.
+
+**Build new (the genuinely missing 40%):**
+- A **UI render entrypoint** that builds a `UITree` for a given state and renders one frame to a
+  buffer/texture (the GPU parity harness renders an *effect graph*, not the UI tree — that's the gap).
+- A **headless input driver** (synthesize `UIEvent`s at a coordinate + injectable clock; §23.4.2/3).
+- **Glue**: tree-assertion helpers (find node by key, rect, overlap) + snapshot save/diff.
+
+**Caveat (Peter's "don't get misled into old infra"):** reuse the harness *bones* (device, readback,
+fixtures, compare) — **not** its `run_legacy` / `EffectChain` path, which is the dead Phase-4a legacy
+side. The bones are current; the legacy effect path is not.
+
+### 23.8 Spike result — PROVEN (2026-06-25) ✅
+All three seams confirmed by a working test:
+[`crates/manifold-renderer/tests/headless_ui_spike.rs`](../crates/manifold-renderer/tests/headless_ui_spike.rs)
+(`cargo test -p manifold-renderer --test headless_ui_spike`). Compiled first try, runs in ~2.5s.
+
+What it does, fully headless (no winit Window):
+1. `GpuDevice::new()` + `UIRenderer::new(&device, Rgba8Unorm)`.
+2. Build a `ParamCardPanel` (effect "Blur", collapsed) into a `UITree`, render to a `RenderTarget`,
+   readback → **PNG #1 (collapsed)** — header only.
+3. Inject `process_pointer(Down)` + `(Up)` at the chevron's center → `drain_events()` yields a
+   `UIEvent::Click` on the chevron → `panel.handle_click()` returns **`EffectCollapseToggle(0)`**
+   (asserted). The synthetic click really resolves and dispatches.
+4. Apply the toggle (`set_collapsed(false)` — the bridge's write, replayed), rebuild, render →
+   **PNG #2 (expanded)**: chevron flips ▶→▼, two real param rows (Radius/Strength sliders, values,
+   T/∿/A) appear. 54,888 bytes differ — asserted.
+
+Text is real CoreText, sliders/layout/glyphs are the production renderer. Confirms: **render path,
+input injection, and the build→click→re-render loop all work with zero window.**
+
+**Two small production additions the harness needed (clean, kept):**
+- `ParamCardPanel::chevron_node_id() -> Option<NodeId>` — a public accessor for the keyed chevron
+  (mirrors the already-public `mapping_chevron_rect`), so a harness can target it without guessing
+  pixels.
+- `manifold-foundation` as a **dev-dependency** of `manifold-renderer` (the card config needs an
+  `EffectId`).
+
+**Remaining to turn the spike into the harness:** generalize beyond one card (arbitrary panels /
+the full `InspectorCompositePanel`), add tree-assertion helpers (find-by-key, rect, overlap), and a
+golden-snapshot save/diff. The hard unknowns are now all answered.
+
+---
+
 ## Sources (complaint research)
 - Ableton — [UI needs an overhaul](https://forum.ableton.com/viewtopic.php?t=225454),
   [text too small](https://forum.ableton.com/viewtopic.php?t=204754)

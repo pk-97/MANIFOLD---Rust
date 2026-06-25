@@ -748,6 +748,13 @@ impl ParamCardPanel {
     pub fn set_collapsed(&mut self, collapsed: bool) {
         self.is_collapsed = collapsed;
     }
+    /// The header collapse-chevron node id, resolved during `build` (`None`
+    /// before the first build). Exposed for headless test / automation
+    /// harnesses that drive a synthetic click at the chevron and verify the
+    /// collapse toggle — mirrors the already-public `mapping_chevron_rect`.
+    pub fn chevron_node_id(&self) -> Option<NodeId> {
+        self.chevron_btn_id
+    }
     pub fn state_mut(&mut self) -> &mut ParamCardState {
         &mut self.state
     }
