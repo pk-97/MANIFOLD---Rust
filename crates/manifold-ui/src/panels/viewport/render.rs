@@ -730,12 +730,7 @@ impl TimelineViewportPanel {
             let is_selected = self.selected_marker_ids.contains(&marker.id);
 
             let flag_color = if is_selected {
-                Color32::new(
-                    mc.r.saturating_add(40),
-                    mc.g.saturating_add(40),
-                    mc.b.saturating_add(40),
-                    255,
-                )
+                color::lighten(mc, 40)
             } else {
                 mc
             };
@@ -1076,12 +1071,7 @@ impl TimelineViewportPanel {
             tree.set_visible(group.flag_id, in_view);
             if in_view {
                 let flag_color = if is_selected {
-                    Color32::new(
-                        mc.r.saturating_add(40),
-                        mc.g.saturating_add(40),
-                        mc.b.saturating_add(40),
-                        255,
-                    )
+                    color::lighten(mc, 40)
                 } else {
                     mc
                 };

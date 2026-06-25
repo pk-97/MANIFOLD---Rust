@@ -118,7 +118,9 @@ pub fn navigate_cursor(
 fn find_clip_at(clips: &[NavClipInfo], beat: f32, layer: usize) -> Option<&NavClipInfo> {
     clips
         .iter()
-        .find(|c| c.layer_index == layer && c.start_beat <= beat && c.end_beat > beat)
+        .find(|c| {
+            c.layer_index == layer && crate::hit::Span::new(c.start_beat, c.end_beat).contains(beat)
+        })
 }
 
 /// Find the next visible layer in the given direction, skipping zero-height layers.

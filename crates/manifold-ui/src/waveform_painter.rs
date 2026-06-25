@@ -13,6 +13,15 @@ use crate::color;
 use crate::node::Color32;
 use crate::waveform_renderer::WaveformLevel;
 
+/// The on-screen pixel X range `[x_start, x_end)` a waveform occupies, clamped to
+/// the buffer. `left_px` is the (scroll-adjusted) left edge in content space.
+/// Shared by the waveform lane and the stem lanes, which computed it identically.
+pub fn visible_x_range(left_px: f32, width_px: f32, buf_w: i32) -> (i32, i32) {
+    let draw_left = left_px as i32;
+    let draw_right = ((left_px + width_px) as i32).min(buf_w);
+    (draw_left.max(0), draw_right.min(buf_w))
+}
+
 /// Draw a visible region of a waveform into a pixel buffer.
 ///
 /// This replaces Unity's tile-based rendering (WaveformRenderer lines 72-149

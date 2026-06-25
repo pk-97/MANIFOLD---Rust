@@ -111,8 +111,7 @@ fn fmt_table_cell(v: f32) -> String {
     if v == v.trunc() && v.abs() < 1.0e6 {
         format!("{}", v as i64)
     } else {
-        let s = format!("{v:.3}");
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
+        crate::fmt::fmt_trimmed(v, 3)
     }
 }
 
@@ -1296,7 +1295,10 @@ impl GraphEditorPanel {
         // "What it does", wrapped, capped at 4 lines.
         if !insp.description.is_empty() {
             let max_chars = ((w / 6.5).floor() as usize).max(8);
-            for line in wrap_words(&insp.description, max_chars).into_iter().take(4) {
+            for line in crate::graph_canvas::wrap_text(&insp.description, max_chars)
+                .into_iter()
+                .take(4)
+            {
                 tree.add_label(
                     bg_id,
                     x,
@@ -1846,27 +1848,6 @@ fn format_inner_param_value(p: &GraphEditorParam) -> String {
     }
 }
 
-/// Greedy word-wrap to a character budget per line. Approximate (assumes a
-/// roughly fixed glyph width) — fine for the inspector's short description.
-fn wrap_words(text: &str, max_chars: usize) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    for word in text.split_whitespace() {
-        if cur.is_empty() {
-            cur.push_str(word);
-        } else if cur.chars().count() + 1 + word.chars().count() <= max_chars {
-            cur.push(' ');
-            cur.push_str(word);
-        } else {
-            lines.push(std::mem::take(&mut cur));
-            cur.push_str(word);
-        }
-    }
-    if !cur.is_empty() {
-        lines.push(cur);
-    }
-    lines
-}
 
 /// Format a live scalar value compactly: integers without decimals, otherwise
 /// up to 3 places with trailing zeros trimmed.
@@ -1874,8 +1855,7 @@ fn fmt_value(v: f32) -> String {
     if v.is_finite() && (v - v.round()).abs() < 1e-4 && v.abs() < 1e6 {
         format!("{:.0}", v)
     } else {
-        let s = format!("{v:.3}");
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
+        crate::fmt::fmt_trimmed(v, 3)
     }
 }
 

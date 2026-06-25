@@ -406,11 +406,11 @@ impl StemLaneGroupPanel {
                 if stem_width > 0.0
                     && let Some(level) = lane.renderer.select_level_for_zoom(stem_width, 1.0)
                 {
-                    let draw_left = (waveform_x - self.scroll_offset_x) as i32;
-                    let draw_right =
-                        ((waveform_x + stem_width - self.scroll_offset_x) as i32).min(buf_w as i32);
-                    let x_start = draw_left.max(0);
-                    let x_end = draw_right.min(buf_w as i32);
+                    let (x_start, x_end) = waveform_painter::visible_x_range(
+                        waveform_x - self.scroll_offset_x,
+                        stem_width,
+                        buf_w as i32,
+                    );
 
                     if x_end > x_start {
                         waveform_painter::draw_waveform(
@@ -514,7 +514,7 @@ fn mute_btn_style(active: bool) -> UIStyle {
         bg_color: bg,
         hover_bg_color: bg, // manual color control, no hover transition
         pressed_bg_color: bg,
-        text_color: Color32::new(255, 255, 255, 255),
+        text_color: color::TEXT_WHITE_C32,
         font_size: color::FONT_SMALL,
         corner_radius: color::BUTTON_RADIUS,
         text_align: TextAlign::Center,
@@ -533,7 +533,7 @@ fn solo_btn_style(active: bool) -> UIStyle {
         bg_color: bg,
         hover_bg_color: bg,
         pressed_bg_color: bg,
-        text_color: Color32::new(255, 255, 255, 255),
+        text_color: color::TEXT_WHITE_C32,
         font_size: color::FONT_SMALL,
         corner_radius: color::BUTTON_RADIUS,
         text_align: TextAlign::Center,

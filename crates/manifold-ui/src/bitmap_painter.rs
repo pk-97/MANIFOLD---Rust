@@ -255,19 +255,9 @@ pub fn get_clip_color(
 
     // Exact layer color with lighten/darken for state (matches layer header)
     let base = if is_selected {
-        Color32::new(
-            layer_color.r.saturating_add(30),
-            layer_color.g.saturating_add(30),
-            layer_color.b.saturating_add(30),
-            255,
-        )
+        color::lighten(layer_color, 30)
     } else if is_hovered {
-        Color32::new(
-            layer_color.r.saturating_add(15),
-            layer_color.g.saturating_add(15),
-            layer_color.b.saturating_add(15),
-            255,
-        )
+        color::lighten(layer_color, 15)
     } else {
         Color32::new(layer_color.r, layer_color.g, layer_color.b, 255)
     };

@@ -11,6 +11,7 @@ pub mod cursors;
 pub mod drag;
 pub mod draw;
 pub mod driver_waveform_icons;
+pub mod fmt;
 pub mod graph_canvas;
 pub mod graph_edit;
 pub mod graph_view;

@@ -7,7 +7,7 @@
 
 use super::{Panel, PanelAction};
 use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View};
-use crate::color;
+use crate::color::{self, darken, lighten};
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
@@ -66,24 +66,6 @@ const STATUS_FONT: u16 = color::FONT_BODY;
 const KEY_BPM_FIELD: u64 = 1;
 
 // ── Style helpers ──────────────────────────────────────────────────
-
-fn lighten(c: Color32, amount: u8) -> Color32 {
-    Color32::new(
-        c.r.saturating_add(amount),
-        c.g.saturating_add(amount),
-        c.b.saturating_add(amount),
-        c.a,
-    )
-}
-
-fn darken(c: Color32, amount: u8) -> Color32 {
-    Color32::new(
-        c.r.saturating_sub(amount),
-        c.g.saturating_sub(amount),
-        c.b.saturating_sub(amount),
-        c.a,
-    )
-}
 
 fn button_style(bg: Color32) -> UIStyle {
     let is_active = bg != color::BUTTON_INACTIVE_C32;

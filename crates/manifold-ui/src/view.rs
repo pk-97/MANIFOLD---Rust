@@ -27,7 +27,9 @@ pub struct SelectionRegion {
 
 impl SelectionRegion {
     pub fn contains_beat(&self, beat: Beats) -> bool {
-        beat >= self.start_beat && beat < self.end_beat
+        // Half-open [start, end) via the shared interval primitive.
+        crate::hit::Span::new(self.start_beat.as_f32(), self.end_beat.as_f32())
+            .contains(beat.as_f32())
     }
 
     /// Whether a layer is in this region (HashSet lookup by stable id).

@@ -8,6 +8,31 @@ use crate::node::Color32;
 pub const TEXT_ON_DARK: Color32 = Color32::new(230, 230, 230, 255);
 pub const TEXT_ON_BRIGHT: Color32 = Color32::new(0, 0, 0, 255);
 
+// ── Colour brightness helpers ──────────────────────────────────────
+// The single home for the "brighten/darken a colour for hover/selected/pressed"
+// idiom. It was hand-rolled identically in clip/layer/transport chrome and inlined
+// in the marker, swatch, and clip-bitmap paths.
+
+/// Lighten by adding `amount` to each RGB channel (saturating); alpha unchanged.
+pub fn lighten(c: Color32, amount: u8) -> Color32 {
+    Color32::new(
+        c.r.saturating_add(amount),
+        c.g.saturating_add(amount),
+        c.b.saturating_add(amount),
+        c.a,
+    )
+}
+
+/// Darken by subtracting `amount` from each RGB channel (saturating); alpha unchanged.
+pub fn darken(c: Color32, amount: u8) -> Color32 {
+    Color32::new(
+        c.r.saturating_sub(amount),
+        c.g.saturating_sub(amount),
+        c.b.saturating_sub(amount),
+        c.a,
+    )
+}
+
 pub fn contrast_text_color(bg: Color32) -> Color32 {
     let r = bg.r as f32 / 255.0;
     let g = bg.g as f32 / 255.0;

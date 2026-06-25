@@ -508,18 +508,8 @@ impl DropdownPanel {
 
                 let swatch_style = UIStyle {
                     bg_color: swatch_color,
-                    hover_bg_color: Color32::new(
-                        swatch_color.r.saturating_add(40),
-                        swatch_color.g.saturating_add(40),
-                        swatch_color.b.saturating_add(40),
-                        255,
-                    ),
-                    pressed_bg_color: Color32::new(
-                        swatch_color.r.saturating_sub(20),
-                        swatch_color.g.saturating_sub(20),
-                        swatch_color.b.saturating_sub(20),
-                        255,
-                    ),
+                    hover_bg_color: color::lighten(swatch_color, 40),
+                    pressed_bg_color: color::darken(swatch_color, 20),
                     corner_radius: 2.0,
                     border_width: 1.0,
                     border_color: Color32::new(0, 0, 0, 80),

@@ -1,6 +1,6 @@
 use super::{Panel, PanelAction};
 use crate::chrome::{ChromeHost, Pad, Sizing, View};
-use crate::color;
+use crate::color::{self, darken, lighten};
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
@@ -59,24 +59,6 @@ const BTN_FONT: u16 = color::FONT_BODY;
 const LH_BTN_RADIUS: f32 = 2.0;
 
 // ── Style helpers ───────────────────────────────────────────────────
-
-fn lighten(c: Color32, amount: u8) -> Color32 {
-    Color32::new(
-        c.r.saturating_add(amount),
-        c.g.saturating_add(amount),
-        c.b.saturating_add(amount),
-        c.a,
-    )
-}
-
-fn darken(c: Color32, amount: u8) -> Color32 {
-    Color32::new(
-        c.r.saturating_sub(amount),
-        c.g.saturating_sub(amount),
-        c.b.saturating_sub(amount),
-        c.a,
-    )
-}
 
 fn mute_style(muted: bool) -> UIStyle {
     let bg = if muted {

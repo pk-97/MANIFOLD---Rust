@@ -94,8 +94,7 @@ fn trim_num(v: f32) -> String {
     if v.fract() == 0.0 {
         return format!("{}", v as i64);
     }
-    let s = format!("{v:.2}");
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
+    crate::fmt::fmt_trimmed(v, 2)
 }
 
 /// Format a scale/offset value for the popover field, picking a precision

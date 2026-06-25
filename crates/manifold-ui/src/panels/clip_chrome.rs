@@ -42,7 +42,9 @@ const FONT_SIZE: u16 = color::FONT_BODY;
 const NAME_FONT_SIZE: u16 = color::FONT_SUBHEADING;
 const SMALL_FONT_SIZE: u16 = color::FONT_LABEL;
 
-use crate::color::{BPM_BTN_COLOR, BPM_BTN_HOVER, GEN_TYPE_COLOR, LOOP_OFF_COLOR, LOOP_ON_COLOR};
+use crate::color::{
+    BPM_BTN_COLOR, BPM_BTN_HOVER, GEN_TYPE_COLOR, LOOP_OFF_COLOR, LOOP_ON_COLOR, darken, lighten,
+};
 
 // Stable keys.
 const KEY_BPM: u64 = 1;
@@ -845,26 +847,6 @@ impl Default for ClipChromePanel {
     fn default() -> Self {
         Self::new()
     }
-}
-
-// ── Helpers ──────────────────────────────────────────────────────
-
-fn lighten(c: Color32, amount: u8) -> Color32 {
-    Color32::new(
-        c.r.saturating_add(amount),
-        c.g.saturating_add(amount),
-        c.b.saturating_add(amount),
-        c.a,
-    )
-}
-
-fn darken(c: Color32, amount: u8) -> Color32 {
-    Color32::new(
-        c.r.saturating_sub(amount),
-        c.g.saturating_sub(amount),
-        c.b.saturating_sub(amount),
-        c.a,
-    )
 }
 
 #[cfg(test)]
