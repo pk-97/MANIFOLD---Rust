@@ -3502,6 +3502,15 @@ impl Application {
             ws.ui_root.browser_popup.build(&mut ws.ui_root.tree);
         }
 
+        // The editor rebuilt its whole tree above, clearing every node's flags.
+        // Re-apply HOVERED / PRESSED from the input system's durable widget state
+        // so interaction visuals (button hover/press) persist across the per-frame
+        // rebuild instead of flickering off until the next pointer move.
+        {
+            let ui_root = &mut ws.ui_root;
+            ui_root.input.apply_interaction_flags(&mut ui_root.tree);
+        }
+
         // A pending jump-to-node centres now that `set_snapshot` has laid the
         // canvas out for this frame's scope (no-op until the target is present).
         if let Some(canvas) = self.graph_canvas.as_mut() {

@@ -944,7 +944,7 @@ impl UIRoot {
 
     /// Process a key event from winit.
     pub fn key_event(&mut self, key: Key, modifiers: Modifiers) {
-        self.input.process_key(key, modifiers);
+        self.input.process_key(&self.tree, key, modifiers);
     }
 
     /// Open a dropdown anchored below a trigger rect.

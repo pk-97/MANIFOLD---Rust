@@ -337,9 +337,16 @@ impl UIEvent {
 /// - Drag detection (4px threshold)
 /// - Hover enter/exit tracking
 pub struct UIInputSystem {
-    hovered_id: Option<NodeId>,
-    pressed_id: Option<NodeId>,
-    focused_id: Option<NodeId>,
+    // Interaction targets are tracked by durable WidgetId, NOT NodeId. A NodeId
+    // captured at press goes stale the moment the tree is rebuilt (the editor
+    // rebuilds every frame); a WidgetId names the same logical widget across
+    // rebuilds. Each is resolved to a live NodeId only when an event is emitted or
+    // a flag is set. This is what lets one input system serve both the
+    // dirty-tracked timeline and the immediate-mode editor. See
+    // `docs/INPUT_IDENTITY_UNIFICATION.md`.
+    hovered_widget: Option<WidgetId>,
+    pressed_widget: Option<WidgetId>,
+    focused_widget: Option<WidgetId>,
     press_origin: Vec2,
     last_drag_pos: Vec2,
     is_dragging: bool,
@@ -361,9 +368,9 @@ const DOUBLE_CLICK_TIME: f32 = crate::color::DOUBLE_CLICK_TIME_SEC;
 impl UIInputSystem {
     pub fn new() -> Self {
         Self {
-            hovered_id: None,
-            pressed_id: None,
-            focused_id: None,
+            hovered_widget: None,
+            pressed_widget: None,
+            focused_widget: None,
             press_origin: Vec2::ZERO,
             last_drag_pos: Vec2::ZERO,
             is_dragging: false,
@@ -374,20 +381,47 @@ impl UIInputSystem {
         }
     }
 
-    pub fn hovered_id(&self) -> Option<NodeId> {
-        self.hovered_id
+    /// The durable identity of the hovered / pressed / focused widget (stable
+    /// across rebuilds). Resolve to a live node with [`UITree::node_for_widget`]
+    /// or the `*_node` helpers below.
+    pub fn hovered_widget(&self) -> Option<WidgetId> {
+        self.hovered_widget
+    }
+    pub fn pressed_widget(&self) -> Option<WidgetId> {
+        self.pressed_widget
+    }
+    pub fn focused_widget(&self) -> Option<WidgetId> {
+        self.focused_widget
     }
 
-    pub fn pressed_id(&self) -> Option<NodeId> {
-        self.pressed_id
+    /// The live [`NodeId`] currently carrying the hovered / pressed / focused
+    /// widget in `tree`, if any. `None` once that widget leaves the build.
+    pub fn hovered_node(&self, tree: &UITree) -> Option<NodeId> {
+        self.hovered_widget.and_then(|w| tree.node_for_widget(w))
     }
-
-    pub fn focused_id(&self) -> Option<NodeId> {
-        self.focused_id
+    pub fn pressed_node(&self, tree: &UITree) -> Option<NodeId> {
+        self.pressed_widget.and_then(|w| tree.node_for_widget(w))
+    }
+    pub fn focused_node(&self, tree: &UITree) -> Option<NodeId> {
+        self.focused_widget.and_then(|w| tree.node_for_widget(w))
     }
 
     pub fn is_dragging(&self) -> bool {
         self.is_dragging
+    }
+
+    /// Re-apply HOVERED / PRESSED flags to the live nodes carrying the currently
+    /// hovered / pressed widgets. Call after a tree rebuild that clears node
+    /// flags (the editor rebuilds every frame) so interaction visuals survive the
+    /// rebuild instead of flickering off until the next pointer move. A no-op when
+    /// the widgets no longer resolve.
+    pub fn apply_interaction_flags(&self, tree: &mut UITree) {
+        if let Some(n) = self.hovered_node(tree) {
+            tree.set_flag(n, UIFlags::HOVERED);
+        }
+        if let Some(n) = self.pressed_node(tree) {
+            tree.set_flag(n, UIFlags::PRESSED);
+        }
     }
 
     /// Drain all pending events. Call this once per frame after processing input.
@@ -404,13 +438,13 @@ impl UIInputSystem {
     /// Only clears hovered_id — pressed_id and is_dragging are preserved so
     /// an in-progress drag survives a tree rebuild (matches Unity IsDragging pin).
     pub fn invalidate_hover(&mut self) {
-        self.hovered_id = None;
-        // Do NOT clear pressed_id or is_dragging here.
+        self.hovered_widget = None;
+        // Do NOT clear pressed_widget or is_dragging here.
     }
 
     /// Clear keyboard focus.
     pub fn clear_focus(&mut self) {
-        self.focused_id = None;
+        self.focused_widget = None;
     }
 
     /// Update modifier state (called by app on ModifiersChanged).
@@ -433,98 +467,101 @@ impl UIInputSystem {
         time: f32,
     ) {
         let hit_id = tree.hit_test(screen_pos);
+        // The durable identity of whatever is under the cursor right now. hit_test
+        // only returns interactive nodes, which are exactly the ones in the widget
+        // map, so this is `Some(widget)` for any hit.
+        let hit_widget = hit_id.map(|n| tree.widget_of(n));
 
         match action {
             PointerAction::Down => {
-                self.pressed_id = hit_id;
+                self.pressed_widget = hit_widget;
                 self.press_origin = screen_pos;
                 self.last_drag_pos = screen_pos;
                 self.is_dragging = false;
 
                 if let Some(uid) = hit_id {
                     tree.set_flag(uid, UIFlags::PRESSED);
-                    self.focused_id = Some(uid);
+                    self.focused_widget = hit_widget;
                     self.pending_events.push(UIEvent::PointerDown {
                         node_id: uid,
                         pos: screen_pos,
                         modifiers: self.modifiers,
                     });
                 } else {
-                    self.focused_id = None;
+                    self.focused_widget = None;
                 }
             }
 
             PointerAction::Move => {
                 self.update_hover(tree, hit_id, screen_pos);
 
-                if let Some(pid) = self.pressed_id {
+                if let Some(pw) = self.pressed_widget {
                     if !self.is_dragging {
                         let dist = screen_pos.distance(self.press_origin);
                         if dist >= DRAG_THRESHOLD {
                             self.is_dragging = true;
-                            self.pending_events.push(UIEvent::DragBegin {
-                                node_id: pid,
-                                pos: screen_pos,
-                                origin: self.press_origin,
-                                modifiers: self.modifiers,
-                            });
+                            // Resolve the pressed widget to its live node now. If it
+                            // left the build, there is no target — drop the event but
+                            // keep the drag state so Up still tidies up.
+                            if let Some(n) = tree.node_for_widget(pw) {
+                                self.pending_events.push(UIEvent::DragBegin {
+                                    node_id: n,
+                                    pos: screen_pos,
+                                    origin: self.press_origin,
+                                    modifiers: self.modifiers,
+                                });
+                            }
                         }
                     } else {
                         let delta = screen_pos - self.last_drag_pos;
                         self.last_drag_pos = screen_pos;
-                        self.pending_events.push(UIEvent::Drag {
-                            node_id: pid,
-                            pos: screen_pos,
-                            delta,
-                        });
+                        if let Some(n) = tree.node_for_widget(pw) {
+                            self.pending_events.push(UIEvent::Drag {
+                                node_id: n,
+                                pos: screen_pos,
+                                delta,
+                            });
+                        }
                     }
                 }
             }
 
             PointerAction::Up => {
-                if let Some(uid) = self.pressed_id {
-                    tree.clear_flag(uid, UIFlags::PRESSED);
+                if let Some(pw) = self.pressed_widget {
+                    // Clear PRESSED on whatever live node carries the pressed widget.
+                    if let Some(n) = tree.node_for_widget(pw) {
+                        tree.clear_flag(n, UIFlags::PRESSED);
+                    }
 
                     if self.is_dragging {
-                        self.pending_events.push(UIEvent::DragEnd {
-                            node_id: uid,
-                            pos: screen_pos,
-                        });
-                    } else if let Some(live) = hit_id
-                        && Some(live.index()) == self.pressed_id.map(|p| p.index())
+                        if let Some(n) = tree.node_for_widget(pw) {
+                            self.pending_events.push(UIEvent::DragEnd {
+                                node_id: n,
+                                pos: screen_pos,
+                            });
+                        }
+                    } else if hit_widget == Some(pw)
+                        && let Some(live) = hit_id
                     {
-                        // A click is press+release on the same node. Match by node
-                        // INDEX, not full `NodeId` equality, and emit the LIVE
-                        // release id (`live`) rather than the press id (`uid`).
-                        //
-                        // The graph editor rebuilds its UITree from scratch every
-                        // frame, minting a fresh generation per node. So by release
-                        // `pressed_id` carries an older generation than the live
-                        // tree: exact `hit_id == pressed_id` never holds there and
-                        // no click would ever fire inside the editor. The index is
-                        // stable across the (deterministic) rebuild, so it still
-                        // identifies "same node"; emitting `live` (current
-                        // generation) also lets the click match the freshly-rebuilt
-                        // panel node ids downstream — a stale `uid` matches nothing.
-                        // Generational safety is unaffected: this only decides click
-                        // identity (inherently positional, like the double-click
-                        // below) and never mutates through a stale id.
-                        let uid = live;
+                        // A click is press+release on the same WIDGET. WidgetId is
+                        // stable across rebuilds, so this holds even when the editor
+                        // rebuilt the tree between press and release (where an exact
+                        // NodeId compare always failed → no click ever fired inside
+                        // the editor). `live` is the current node carrying that
+                        // widget, so the emitted id matches the freshly-built panel
+                        // nodes downstream.
                         self.pending_events.push(UIEvent::Click {
-                            node_id: uid,
+                            node_id: live,
                             pos: screen_pos,
                             modifiers: self.modifiers,
                         });
 
                         // Double-click detection — position-based (matches OS behavior).
-                        // Node IDs can change between clicks due to structural tree
-                        // rebuilds (e.g. inspect_layer), so we use position proximity
-                        // like macOS/Windows do natively.
                         if time - self.last_click_time < DOUBLE_CLICK_TIME
                             && screen_pos.distance(self.last_click_pos) < DRAG_THRESHOLD
                         {
                             self.pending_events.push(UIEvent::DoubleClick {
-                                node_id: uid,
+                                node_id: live,
                                 pos: screen_pos,
                                 modifiers: self.modifiers,
                             });
@@ -537,12 +574,14 @@ impl UIInputSystem {
                         }
                     }
 
-                    self.pending_events.push(UIEvent::PointerUp {
-                        node_id: uid,
-                        pos: screen_pos,
-                    });
+                    if let Some(n) = tree.node_for_widget(pw) {
+                        self.pending_events.push(UIEvent::PointerUp {
+                            node_id: n,
+                            pos: screen_pos,
+                        });
+                    }
                 }
-                self.pressed_id = None;
+                self.pressed_widget = None;
                 self.is_dragging = false;
             }
         }
@@ -575,11 +614,12 @@ impl UIInputSystem {
         });
     }
 
-    /// Process a key press on the currently focused node.
-    pub fn process_key(&mut self, key: Key, modifiers: Modifiers) {
-        if let Some(fid) = self.focused_id {
+    /// Process a key press on the currently focused node. `tree` resolves the
+    /// focused widget to the live node carried in the `KeyDown` event.
+    pub fn process_key(&mut self, tree: &UITree, key: Key, modifiers: Modifiers) {
+        if let Some(node_id) = self.focused_node(tree) {
             self.pending_events.push(UIEvent::KeyDown {
-                node_id: fid,
+                node_id,
                 key,
                 modifiers,
             });
@@ -587,31 +627,33 @@ impl UIInputSystem {
     }
 
     fn update_hover(&mut self, tree: &mut UITree, hit_id: Option<NodeId>, pos: Vec2) {
-        if hit_id == self.hovered_id {
+        let hit_widget = hit_id.map(|n| tree.widget_of(n));
+        // Compare by durable identity, not NodeId. Pre-WidgetId this compared
+        // stored-vs-fresh NodeId, so under the editor's per-frame rebuild the
+        // stored id was always stale → hover "changed" every frame → a HoverExit +
+        // HoverEnter pair fired every frame even with the cursor still. WidgetId is
+        // stable, so a still cursor over the same widget is correctly a no-op.
+        if hit_widget == self.hovered_widget {
             return;
         }
 
-        // Clear old hover (guard: id may be stale after tree rebuild)
-        if let Some(old_id) = self.hovered_id
-            && old_id.index() < tree.count()
+        // Clear the old hover on its current live node, if it is still in the build.
+        if let Some(old_w) = self.hovered_widget
+            && let Some(old_n) = tree.node_for_widget(old_w)
         {
-            tree.clear_flag(old_id, UIFlags::HOVERED);
+            tree.clear_flag(old_n, UIFlags::HOVERED);
             self.pending_events
-                .push(UIEvent::HoverExit { node_id: old_id });
+                .push(UIEvent::HoverExit { node_id: old_n });
         }
 
-        self.hovered_id = hit_id;
+        self.hovered_widget = hit_widget;
 
-        if let Some(new_id) = self.hovered_id {
-            if new_id.index() < tree.count() {
-                tree.set_flag(new_id, UIFlags::HOVERED);
-                self.pending_events.push(UIEvent::HoverEnter {
-                    node_id: new_id,
-                    pos,
-                });
-            } else {
-                self.hovered_id = None;
-            }
+        if let Some(new_n) = hit_id {
+            tree.set_flag(new_n, UIFlags::HOVERED);
+            self.pending_events.push(UIEvent::HoverEnter {
+                node_id: new_n,
+                pos,
+            });
         }
     }
 }
@@ -699,6 +741,68 @@ mod tests {
             tree.get_bounds(click),
             Rect::ZERO,
             "live id resolves in the rebuilt tree (a stale id would be inert → ZERO)"
+        );
+    }
+
+    /// Rebuild the sample tree in place (same structure, fresh generations) —
+    /// models the editor's per-frame clear+rebuild.
+    fn rebuild(tree: &mut UITree) {
+        tree.clear();
+        let root = tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, UIStyle::default());
+        tree.add_button(Some(root), 50.0, 50.0, 100.0, 30.0, UIStyle::default(), "Click me");
+    }
+
+    /// Regression: a drag's events must keep flowing with a LIVE node id across a
+    /// rebuild between press and move (editor-style). Pre-WidgetId, DragBegin/Drag
+    /// carried the stale press id.
+    #[test]
+    fn drag_survives_tree_rebuild() {
+        let (mut tree, mut input) = setup();
+        input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Down, 0.0);
+        rebuild(&mut tree);
+        // Move past threshold after the rebuild.
+        input.process_pointer(&mut tree, Vec2::new(70.0, 60.0), PointerAction::Move, 0.0);
+
+        let begin = input
+            .drain_events()
+            .into_iter()
+            .find_map(|e| match e {
+                UIEvent::DragBegin { node_id, .. } => Some(node_id),
+                _ => None,
+            })
+            .expect("DragBegin must fire after a rebuild");
+        assert_ne!(
+            tree.get_bounds(begin),
+            Rect::ZERO,
+            "DragBegin must carry the live rebuilt node id, not the stale press id"
+        );
+    }
+
+    /// Regression: hovering still over the same widget must NOT churn events when
+    /// the tree is rebuilt every frame. Pre-WidgetId the stored hover NodeId went
+    /// stale each rebuild, so a HoverExit+HoverEnter pair fired every frame even
+    /// with the cursor motionless — the "2 events/frame" the editor logs showed.
+    #[test]
+    fn hover_does_not_churn_across_rebuild() {
+        let (mut tree, mut input) = setup();
+        // Settle hover on the button.
+        input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Move, 0.0);
+        input.drain_events();
+
+        // Rebuild, then a Move at the SAME position (cursor didn't really move).
+        rebuild(&mut tree);
+        input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Move, 0.0);
+
+        let hover_events: Vec<_> = input
+            .drain_events()
+            .into_iter()
+            .filter(|e| {
+                matches!(e, UIEvent::HoverEnter { .. } | UIEvent::HoverExit { .. })
+            })
+            .collect();
+        assert!(
+            hover_events.is_empty(),
+            "still cursor over the same widget must not churn hover across a rebuild, got {hover_events:?}"
         );
     }
 
@@ -818,10 +922,10 @@ mod tests {
         input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Up, 0.0);
         input.drain_events();
 
-        assert_eq!(input.focused_id().map(|n| n.index()), Some(1));
+        assert_eq!(input.focused_node(&tree).map(|n| n.index()), Some(1));
 
         // Send key
-        input.process_key(Key::Space, Modifiers::default());
+        input.process_key(&tree, Key::Space, Modifiers::default());
         let events = input.drain_events();
         assert_eq!(events.len(), 1);
         assert!(matches!(
@@ -836,9 +940,9 @@ mod tests {
 
     #[test]
     fn no_key_without_focus() {
-        let (_tree, mut input) = setup();
+        let (tree, mut input) = setup();
 
-        input.process_key(Key::Space, Modifiers::default());
+        input.process_key(&tree, Key::Space, Modifiers::default());
         let events = input.drain_events();
         assert!(events.is_empty());
     }
