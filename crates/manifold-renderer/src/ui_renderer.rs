@@ -68,6 +68,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let radius = in.rect_params.z;
     let border_w = in.rect_params.w;
 
+    // Soft drop-shadow: a shadow quad is grown by `blur` on every side and
+    // flagged by a negative border width (= -blur). The element's rounded rect
+    // sits inset by `blur` at the quad centre; alpha falls from color.a at the
+    // element edge to 0 over `blur` px outside it. Branch BEFORE the fast path
+    // (a negative border_w would otherwise be swallowed by `border_w <= 0`).
+    if border_w < 0.0 {
+        let blur = -border_w;
+        let pixel = in.uv * vec2<f32>(rect_w, rect_h);
+        let center = vec2<f32>(rect_w, rect_h) * 0.5;
+        let half_size = max(center - vec2<f32>(blur) - vec2<f32>(radius), vec2<f32>(0.0));
+        let d = length(max(abs(pixel - center) - half_size, vec2<f32>(0.0))) - radius;
+        let a = in.color.a * (1.0 - smoothstep(0.0, blur, max(d, 0.0)));
+        if a <= 0.0 {
+            discard;
+        }
+        return vec4<f32>(in.color.rgb, a);
+    }
+
     // If no corner radius, just output solid color (fast path)
     if radius <= 0.0 && border_w <= 0.0 {
         return in.color;
@@ -458,6 +476,38 @@ impl UIRenderer {
             corner_radius,
             border_width,
             border_color: border_color.into().0,
+        });
+    }
+
+    /// Queue a soft drop-shadow for a rounded element (§17 elevation). The
+    /// shadow quad is the element rect grown by `blur` on every side; the
+    /// element's rounded rect sits inset at the centre and alpha falls from
+    /// `color.a` at its edge to 0 over `blur` px. Encoded as a negative border
+    /// width so it needs no extra vertex attribute. Draw it BEFORE (under) the
+    /// element, offset slightly for a directional drop. Floating surfaces only
+    /// — keep the colour dark and the alpha low (a lift, not a glow).
+    pub fn draw_shadow(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        corner_radius: f32,
+        blur: f32,
+        color: impl Into<LinearColor>,
+    ) {
+        if blur <= 0.0 {
+            return;
+        }
+        self.rect_commands.push(RectCommand {
+            x: x - blur,
+            y: y - blur,
+            w: w + 2.0 * blur,
+            h: h + 2.0 * blur,
+            color: color.into().0,
+            corner_radius,
+            border_width: -blur,
+            border_color: [0.0; 4],
         });
     }
 

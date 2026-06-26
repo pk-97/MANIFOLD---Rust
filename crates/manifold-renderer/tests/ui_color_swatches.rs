@@ -113,6 +113,42 @@ fn color_ramp_contact_sheet() {
     eprintln!("colour contact sheet → {png}");
 }
 
+/// Renders a floating surface with and without the §17 soft shadow, so the
+/// "lift" can be eyeballed headlessly.
+#[test]
+fn shadow_demo() {
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/shadow_demo.png");
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_1);
+
+    // Left — a floating surface WITHOUT a shadow (flat, glued to the panel).
+    ui.draw_text(60.0, 40.0, "no shadow", 13.0, color::TEXT_NORMAL);
+    ui.draw_bordered_rect(60.0, 70.0, 220.0, 150.0, color::BG_2, 6.0, 1.0, color::BORDER);
+
+    // Right — the same surface WITH the soft drop-shadow under it (lifts off).
+    ui.draw_text(380.0, 40.0, "soft shadow (\u{00a7}17)", 13.0, color::TEXT_NORMAL);
+    ui.draw_shadow(383.0, 75.0, 220.0, 150.0, 6.0, 16.0, Color32::new(0, 0, 0, 150));
+    ui.draw_bordered_rect(380.0, 70.0, 220.0, 150.0, color::BG_2, 6.0, 1.0, color::BORDER);
+
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "shadow demo produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "shadow-demo");
+    {
+        let mut enc = device.create_encoder("shadow-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("shadow demo → {png}");
+}
+
 fn draw_column(ui: &mut UIRenderer, x: f32, y0: f32, rows: &[(&str, Color32)]) {
     for (i, (label, c)) in rows.iter().enumerate() {
         let y = y0 + i as f32 * ROW_H;
