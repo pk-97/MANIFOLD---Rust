@@ -738,15 +738,25 @@ elements only; in-panel grouping stays fill-level.
 
 ## 18. Apply the component kit everywhere 🧩
 
-**Status:** spec (closes the §5 / Phase 5–6 loop). The typed kit exists but is only applied to
-the param card. Every other surface — chrome bars (transport/header/footer), layer-header
-buttons, dropdowns, dialogs — still hand-rolls its own button/toggle/styling. §10's own warning:
-a **half-standardised** system is *worse than before* (forced relearning).
+**Status:** chrome bars DONE (2026-06-26); popups + dialogs remain. Added **`state_button`** — the
+standalone latching/momentary button (on = filled semantic hue + lighten(30)/darken(20) hover/press;
+off = neutral `BUTTON_DIM` chip), the generalisation of `toggle` (the accent special-case). The
+button mechanic had been copy-pasted six times across the chrome (transport `button_style`, the
+layer-card `mute/solo/led/analysis` quartet, header `action/zoom`); it now lives once in the kit.
+**Migrated:** footer, transport, layer-card mixer (carve-out hues unchanged), header (and fixed a
+within-bar 59-vs-71 neutral-grey split). Each verified by a headless render in `ui_color_swatches.rs`.
+**Remaining:** the three popups (`dropdown`/`browser_popup`/`ableton_picker`) onto a shared
+`popup_shell`; the param card's `*_btn_style` one-offs in `param_slider_shared`.
 
 **Rule:** no bespoke button / toggle / dropdown / segmented styling. Every instance is a kit
 component on the §4 tokens + §15 ramp. Audit each panel; replace one-offs; delete the local style
 helpers (`*_btn_style` in `param_slider_shared`, per-file `LH_BTN_*`, etc.). After this, the kit —
 not the panels — owns how a control looks.
+
+**Two neutral greys, by background tier (intentional, not drift):** `button_secondary` sits at
+`BG_3` (42) for controls on the *lighter* inspector/dialog cards; `state_button` off sits at
+`BUTTON_DIM` (71) for standalone chips on the *dark* chrome bars + colour-card mixer. Value-relative
+depth — a control is one step off *its own* background, so the two tiers carry two chips.
 
 ---
 
@@ -775,9 +785,9 @@ rest can't re-drift.
 |---|---|---|---|
 | §16 | Token-enforcement guard | systemic | low |
 | §14 | Padding / layout grid | cleanup | C is structural |
-| §15 | Semantic colour ramp | cleanup | low (aliases) |
-| §17 | Elevation / separation | additive | low |
-| §18 | Apply component kit everywhere | coverage | medium (broad) |
+| §15 | Semantic colour ramp ✅ | cleanup | low (aliases) |
+| §17 | Elevation / separation ✅ | additive | low |
+| §18 | Apply component kit everywhere ◑ (chrome bars done; popups left) | coverage | medium (broad) |
 | §19 | Hierarchy + micro-motion | additive | medium |
 | §24 | Timeline visual upgrade (clips) | additive + structural | clips→GPU is the gate |
 

@@ -93,13 +93,15 @@ enforced, complete. They do **not** guarantee the *look* is best-in-class; that'
 
 **Why:** one grammar. A half-standardised UI is *worse* than none (§10 — forced relearning).
 
+**Status (2026-06-26): chrome bars DONE; popups remain.** Added [`state_button`](../crates/manifold-ui/src/chrome/components.rs) — the standalone latching/momentary button (on = filled semantic hue + lighten(30)/darken(20); off = neutral `BUTTON_DIM` chip), the generalisation of `toggle` (accent special-case). The button mechanic was copy-pasted six times across the chrome; now centralised. Migrated: **footer** (button_secondary/segment), **transport** (`button_style` → kit; neutral buttons unified to the `BUTTON_DIM` chip), **layer-card mixer** (`mute/solo/led/analysis` → one `state_btn` shim on the carve-out hues, zero visual change), **header** (zoom + Audio/Perform/Monitor → one neutral chip, fixed a within-bar 59-vs-71 split). Each verified by a headless render in [`ui_color_swatches.rs`](../crates/manifold-renderer/tests/ui_color_swatches.rs). **Remaining:** the three popups onto a shared `popup_shell`.
+
 | | |
 |---|---|
-| **Current** | The kit ([chrome/components.rs](../crates/manifold-ui/src/chrome/components.rs): toggle/button/icon_button/segment/dropdown_trigger/reset/mod_badge) is **only used by the param card**. Chrome bars hand-roll their own styles: `transport.rs` (own `btn` + `n(bg)`), `header.rs` (`action_n`/`zoom_n`), `footer.rs` (`footer_n`/`active_n`), `layer_header.rs` (`mute_n`/`solo_n`/`led_n`/`small_n`). |
-| **Changes** | Migrate transport / header / footer / layer_header buttons+toggles onto the kit; **delete** the bespoke `*_n` style fns. Route any leftover drag through `SliderDragState`. Popups (`dropdown`/`browser_popup`/`ableton_picker`) onto one shared `popup_shell` (§22.2). Colours from §15, depth from §17. |
-| **Files** | `transport.rs`, `header.rs`, `footer.rs`, `layer_header.rs`, the three popups; delete local style helpers. |
+| **Current** | The kit ([chrome/components.rs](../crates/manifold-ui/src/chrome/components.rs): toggle/**state_button**/button/icon_button/segment/dropdown_trigger/reset/mod_badge) now owns every **chrome-bar** button. Popups (`dropdown`/`browser_popup`/`ableton_picker`) still hand-roll their shells. |
+| **Changes** | ✅ transport / header / footer / layer_header buttons+toggles onto the kit; bespoke `*_style` fns deleted or collapsed to thin font/radius shims. ⬜ Popups onto one shared `popup_shell` (§22.2), colours from §15, depth from §17. |
+| **Files** | ✅ `transport.rs`, `header.rs`, `footer.rs`, `layer_header.rs`. ⬜ the three popups. |
 | **Verify** | Harness snapshot per panel (panel-by-panel, one atomic cutover each); ratchet catches stray literals; tree assertions for layout. |
-| **Done** | No bespoke button/toggle/dropdown styling; the kit owns the look; local helpers gone. |
+| **Done** | No bespoke button/toggle/dropdown styling; the kit owns the look; local helpers gone. **Chrome buttons there; popups pending.** |
 | **Risk** | Medium (broad). Mitigate by going panel-by-panel with a snapshot gate each. |
 
 ---
