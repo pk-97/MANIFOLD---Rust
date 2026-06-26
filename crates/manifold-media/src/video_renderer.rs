@@ -85,6 +85,11 @@ pub struct VideoRenderer {
     height: u32,
     format: GpuTextureFormat,
     active_clips: AHashMap<ClipId, ActiveVideoClip>,
+    /// §24 5c P2b video posters: PARKED video clips decoded one-shot for a timeline
+    /// thumbnail. Reuses `ActiveVideoClip` but is NEVER advanced by `update` and
+    /// NEVER composited (separate from `active_clips`) — it just holds the single
+    /// decoded poster frame. Decode results route here too (`clip_state_mut`).
+    poster_clips: AHashMap<ClipId, ActiveVideoClip>,
     scheduler: DecodeScheduler,
     available_rts: Vec<VideoRenderTarget>,
     video_library: Option<VideoLibrary>,
@@ -121,6 +126,7 @@ impl VideoRenderer {
             height,
             format,
             active_clips: AHashMap::new(),
+            poster_clips: AHashMap::new(),
             scheduler,
             available_rts,
             video_library: None,
@@ -151,6 +157,129 @@ impl VideoRenderer {
                 None
             }
         })
+    }
+
+    /// A clip's decode state from the active OR poster map. Async decode results
+    /// (Opened/Prepared/FrameReady/Seeked/Error) route through this so a one-shot
+    /// poster decode lands its frame the same way an active clip does. Poster
+    /// decodes use a PREFIXED key ([`Self::poster_key`]) so a poster and its active
+    /// clip are fully independent — a result for `clip_id` X (active) and one for
+    /// `<prefix>X` (poster) route to different maps and different decoder handles,
+    /// so an in-flight poster decode can NEVER write into an active clip's texture.
+    fn clip_state_mut(&mut self, clip_id: &str) -> Option<&mut ActiveVideoClip> {
+        if let Some(c) = self.active_clips.get_mut(clip_id) {
+            return Some(c);
+        }
+        self.poster_clips.get_mut(clip_id)
+    }
+
+    /// The isolated decoder/map key for a clip's poster. The `\u{1}` delimiters
+    /// can't appear in a real clip id, so a poster never collides with its active
+    /// clip's decode jobs or render target.
+    fn poster_key(clip_id: &str) -> String {
+        format!("\u{1}poster\u{1}{clip_id}")
+    }
+
+    /// §24 5c P2b: request a one-shot POSTER decode for a PARKED video clip — its
+    /// first frame, into an isolated render target that is NEVER composited (so a
+    /// parked clip never appears in the live output). Idempotent: a clip that's
+    /// active or already posted is skipped. The frame arrives asynchronously; read
+    /// it via [`Self::poster_texture`] once ready. `video_clip_id` resolves the file
+    /// path via the loaded library. Returns true if a poster was submitted/exists.
+    pub fn request_clip_poster(&mut self, clip_id: &str, video_clip_id: &str) -> bool {
+        let key = Self::poster_key(clip_id);
+        if self.active_clips.contains_key(clip_id) || self.poster_clips.contains_key(key.as_str()) {
+            return true;
+        }
+        let (path, duration) = {
+            let Some(ref library) = self.video_library else {
+                return false;
+            };
+            let Some(vc) = library.find_clip_by_id(video_clip_id) else {
+                return false;
+            };
+            (vc.file_path.clone(), vc.duration)
+        };
+        let rt = self.acquire_rt();
+        self.poster_clips.insert(
+            ClipId::new(&key),
+            ActiveVideoClip {
+                video_clip_id: video_clip_id.to_string(),
+                render_target: rt,
+                playing: false,
+                ready: false,
+                has_frame: false,
+                playback_time: 0.0,
+                media_length: duration,
+                frame_rate: 30.0,
+                looping: false,
+                playback_rate: 1.0,
+                decode_pending: true,
+                pending_seek_time: None,
+                time_accumulator: 0.0,
+            },
+        );
+        // Decode jobs use the prefixed key — an isolated decoder handle, distinct
+        // from this clip's active-playback decoder.
+        self.scheduler.submit(DecodeJob::Open {
+            clip_id: key.clone(),
+            path,
+        });
+        self.scheduler.submit(DecodeJob::Prepare { clip_id: key });
+        true
+    }
+
+    /// Whether a poster decode has been requested for this clip (pending or ready).
+    pub fn has_poster(&self, clip_id: &str) -> bool {
+        self.poster_clips
+            .contains_key(Self::poster_key(clip_id).as_str())
+    }
+
+    /// The decoded poster texture for a parked video clip, once its frame is ready.
+    pub fn poster_texture(&self, clip_id: &str) -> Option<&GpuTexture> {
+        self.poster_clips
+            .get(Self::poster_key(clip_id).as_str())
+            .and_then(|c| {
+                if c.has_frame {
+                    Some(&c.render_target.texture)
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Drop poster decodes for clips that are no longer a visible *parked* clip —
+    /// not in `keep`, OR now active (the active decoder owns playback; the poster is
+    /// redundant). Returns each render target to the pool and closes the isolated
+    /// poster decoder so no decoder/file handle leaks. `keep` is raw clip ids;
+    /// poster keys are prefixed, so we strip the prefix to compare.
+    pub fn evict_posters(&mut self, keep: &[ClipId]) {
+        if self.poster_clips.is_empty() {
+            return;
+        }
+        let drop_keys: Vec<String> = self
+            .poster_clips
+            .keys()
+            .filter(|k| {
+                match k.as_str().strip_prefix("\u{1}poster\u{1}") {
+                    Some(raw) => {
+                        let visible = keep.iter().any(|c| c.as_str() == raw);
+                        let active = self.active_clips.contains_key(raw);
+                        !visible || active
+                    }
+                    None => true, // malformed key — drop it
+                }
+            })
+            .map(|k| k.as_str().to_string())
+            .collect();
+        for key in &drop_keys {
+            if let Some(clip) = self.poster_clips.remove(key.as_str()) {
+                self.release_rt(clip.render_target);
+                // Close the isolated poster decoder so its file handle is freed.
+                self.scheduler
+                    .submit(DecodeJob::Close { clip_id: key.clone() });
+            }
+        }
     }
 
     /// Submit pre-warm requests for clips near the playhead.
@@ -261,13 +390,13 @@ impl VideoRenderer {
                     frame_rate,
                     ..
                 } => {
-                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
+                    if let Some(clip) = self.clip_state_mut(clip_id.as_str()) {
                         clip.media_length = duration;
                         clip.frame_rate = frame_rate.max(1.0);
                     }
                 }
                 DecodeResultStatus::Prepared { handle_ptr } => {
-                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
+                    if let Some(clip) = self.clip_state_mut(clip_id.as_str()) {
                         clip.ready = true;
                         clip.decode_pending = false;
                         if unsafe { Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target) }
@@ -280,7 +409,7 @@ impl VideoRenderer {
                     frame_time,
                     handle_ptr,
                 } => {
-                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
+                    if let Some(clip) = self.clip_state_mut(clip_id.as_str()) {
                         clip.playback_time = frame_time;
                         clip.decode_pending = false;
                         if unsafe { Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target) }
@@ -307,7 +436,7 @@ impl VideoRenderer {
                     frame_time,
                     handle_ptr,
                 } => {
-                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
+                    if let Some(clip) = self.clip_state_mut(clip_id.as_str()) {
                         clip.playback_time = frame_time;
                         clip.decode_pending = false;
                         clip.time_accumulator = 0.0;
@@ -320,7 +449,7 @@ impl VideoRenderer {
                 DecodeResultStatus::WarmReady { .. } => {}
                 DecodeResultStatus::Error(msg) => {
                     log::error!("[VideoRenderer] Error for {clip_id}: {msg}");
-                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
+                    if let Some(clip) = self.clip_state_mut(clip_id.as_str()) {
                         clip.decode_pending = false;
                     }
                 }
@@ -420,6 +549,16 @@ impl ClipRenderer for VideoRenderer {
             if let Some(clip) = self.active_clips.remove(clip_id.as_str()) {
                 self.scheduler.submit(DecodeJob::Close {
                     clip_id: clip_id.to_string(),
+                });
+                self.release_rt(clip.render_target);
+            }
+        }
+        // Also tear down poster decodes (§24 5c) — same Close + RT-release as active.
+        let poster_keys: Vec<ClipId> = self.poster_clips.keys().cloned().collect();
+        for key in &poster_keys {
+            if let Some(clip) = self.poster_clips.remove(key.as_str()) {
+                self.scheduler.submit(DecodeJob::Close {
+                    clip_id: key.to_string(),
                 });
                 self.release_rt(clip.render_target);
             }
@@ -603,6 +742,19 @@ impl ClipRenderer for VideoRenderer {
             clip.render_target = VideoRenderTarget::new(device, w, h, fmt, self.rt_counter);
             self.rt_counter += 1;
             clip.has_frame = false;
+        }
+
+        // Posters (§24 5c) hold old-size RTs; drop them (+ close their decoders) so
+        // they re-decode at the new size on the next request. Their RTs just drop
+        // (the pool was reset above).
+        if !self.poster_clips.is_empty() {
+            let poster_keys: Vec<ClipId> = self.poster_clips.keys().cloned().collect();
+            for key in &poster_keys {
+                self.scheduler.submit(DecodeJob::Close {
+                    clip_id: key.to_string(),
+                });
+            }
+            self.poster_clips.clear();
         }
     }
 

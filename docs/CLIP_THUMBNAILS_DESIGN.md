@@ -125,11 +125,30 @@ irrelevant to the UI — both are just a cell in the same atlas.
   becomes: compositor post-fx > live raw (`get_clip_texture`) > cold-start
   (`thumb_texture`). `find_parked_generator_clip` locates the clip; `clip_atlas`'s
   `contains` skips already-celled clips.
-- **P2b (video posters) — NOT BUILT.** Parked VIDEO clips need an off-playback
-  seek+decode through `decode_scheduler` (async — the frame arrives a later frame),
-  which is a distinct async sub-project. Video clips already thumbnail when they
-  play (P1), so the gap is only parked, never-played video. Recommended after the
-  generator paths are eyeballed working.
+- **P2b (video posters) — SHIPPED.** A parked video clip shows a poster (its first
+  decoded frame) via an ISOLATED async decode. `VideoRenderer::request_clip_poster`
+  registers the clip in a SEPARATE `poster_clips` map (never composited, never
+  advanced by `pre_render`'s playback loop), acquires a render target, and submits
+  Open+Prepare decode jobs. The async results route via `clip_state_mut` (active
+  first, then poster) in `process_decode_results`; once decoded, `poster_texture(id)`
+  returns the frame. Snapshot source order: compositor post-fx > live
+  `get_clip_texture` > generator cold-start `thumb_texture` > video `poster_texture`.
+  - **Isolation is by a PREFIXED key (`\u{1}poster\u{1}<id>` — the critical fix from
+    review).** A poster's decoder handle, `poster_clips` entry, and render target all
+    live under the prefixed key, so they are FULLY independent of the same clip's
+    active-playback decoder/entry. Even if a clip is parked-then-played, an in-flight
+    poster decode result (keyed by the prefix) can NEVER land in the active clip's
+    texture — without this, a poster frame could overwrite the live frame and a
+    parked clip's data would reach the live output. No `start_clip` change needed.
+  - **Lifecycle:** `evict_posters` drops a poster when its clip leaves the visible
+    set OR becomes active (closes the isolated decoder + returns the RT). `resize`
+    drops all posters (they re-decode at the new size). `release_all` tears posters
+    down (Close + RT release) alongside active clips. The content thread requests ≤1
+    new poster/frame (skip if the clip has a cell, a live frame, or `has_poster`).
+  - Poster = the first frame (Prepare), not a seek to a representative time — a
+    reasonable default; a representative-frame seek is future polish. A poster that
+    permanently fails to decode shows body colour (no retry loop) and is reclaimed
+    when its clip leaves view.
 
 ## Cost
 
@@ -166,11 +185,22 @@ content-thread path:
   NOT restructure to publish the layout atomically inside the bridge — it would
   diverge from the node-atlas pattern for no visible benefit.
 
-## Honest gaps
+## Status + honest gaps
+
+**All phases shipped.** Every generator clip shows its content (live / with-effects /
+cold-start default-look), and every video clip shows its content (live frame /
+parked poster). Remaining items are *polish*, not gaps:
 
 - A thumbnail is a **still**; animated/audio-reactive content is frozen at snapshot
   time. By design — a live mini-render per clip is not affordable at timeline scale.
-- Until P2, an unplayed clip in a freshly-loaded project shows body colour until it
-  first plays (or is hovered/previewed). P2 closes this.
+- A **cold-start generator** thumbnail is the generator's DEFAULT look (base params,
+  no modulation / override-graph / warm-up — none are computed off the playhead); the
+  live snapshot replaces it the moment the clip plays. A **video poster** is the
+  clip's FIRST frame, not a seek to a representative time. Both are reasonable
+  defaults; representative-frame / modulated cold-start renders are future polish.
 - Atlas cell count caps simultaneous thumbnails; past it, distant clips show body
   colour. Sized so it's rare at working zoom.
+- The cross-thread visual (IOSurface handoff) is **not headless-verifiable** — it
+  needs eyeballing on the running app. Everything else (UI blit, cache logic, the
+  content-thread paths) is verified by headless PNG / unit tests / adversarial review
+  / the workspace sweep.

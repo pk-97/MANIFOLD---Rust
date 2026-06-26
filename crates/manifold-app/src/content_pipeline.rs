@@ -201,6 +201,27 @@ fn find_parked_generator_clip<'a>(
     None
 }
 
+/// §24 5c P2b: locate a PARKED video clip by id — returns its `video_clip_id`
+/// (the file reference), for a one-shot poster decode. `None` if not found or not
+/// a video clip.
+#[cfg(target_os = "macos")]
+fn find_parked_video_clip<'a>(
+    layers: &'a [manifold_core::layer::Layer],
+    clip_id: &str,
+) -> Option<&'a str> {
+    for layer in layers {
+        if !layer.is_video() {
+            continue;
+        }
+        for clip in &layer.clips {
+            if clip.id.as_str() == clip_id && !clip.video_clip_id.is_empty() {
+                return Some(&clip.video_clip_id);
+            }
+        }
+    }
+    None
+}
+
 /// Snapshot live clip output into the PERSISTENT clip-thumbnail atlas (§24 5c)
 /// and copy it to the rotating write surface. `sources` maps each *active* clip
 /// (under the playhead this frame) to its just-rendered source texture. A clip is
@@ -1666,6 +1687,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Drop thumbnail instances for clips no longer visible.
                     gen_r.evict_thumb_gens(&self.clip_atlas_visible);
                 }
+
+                // P2b: request one-shot POSTER decodes for parked VIDEO clips (no
+                // cell, no live frame, not already requested). Idempotent + async —
+                // the decoded frame is picked up by `poster_texture` a later frame.
+                // Bounded so we don't flood the decode scheduler. Never composited.
+                if let Some(vid_r) = renderers
+                    .iter_mut()
+                    .find_map(|r| r.as_any_mut().downcast_mut::<VideoRenderer>())
+                {
+                    let mut vbudget = MAX_COLD_START_PER_FRAME;
+                    for cid in &self.clip_atlas_visible {
+                        if vbudget == 0 {
+                            break;
+                        }
+                        let cid_str = cid.as_str();
+                        if self.clip_atlas_cache.contains(cid)
+                            || vid_r.get_clip_texture(cid_str).is_some()
+                            || vid_r.has_poster(cid_str)
+                        {
+                            continue;
+                        }
+                        if let Some(video_clip_id) = find_parked_video_clip(layers, cid_str)
+                            && vid_r.request_clip_poster(cid_str, video_clip_id)
+                        {
+                            vbudget -= 1;
+                        }
+                    }
+                    vid_r.evict_posters(&self.clip_atlas_visible);
+                }
             }
 
             // Source per visible clip (built by iterating the visible set, NOT
@@ -1691,10 +1741,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         }
                     }
                     #[cfg(target_os = "macos")]
-                    if let Some(v) = r.as_any().downcast_ref::<VideoRenderer>()
-                        && let Some(t) = v.get_clip_texture(cid_str)
-                    {
-                        return Some(t);
+                    if let Some(v) = r.as_any().downcast_ref::<VideoRenderer>() {
+                        if let Some(t) = v.get_clip_texture(cid_str) {
+                            return Some(t);
+                        }
+                        if let Some(t) = v.poster_texture(cid_str) {
+                            return Some(t);
+                        }
                     }
                     #[cfg(target_os = "macos")]
                     if let Some(i) = r
