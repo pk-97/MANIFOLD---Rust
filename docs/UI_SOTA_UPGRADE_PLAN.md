@@ -173,12 +173,16 @@ per-layer CPU clip bitmap is gone end to end.
   review of the cutover, workspace sweep + clippy. The *look* itself is a Phase-6 eye pass on the
   running app — not claimed done here.
 
-**5c — Thumbnail pipeline.** Generator previews first (reuse the authoring-time
-[`preview_request`](../crates/manifold-renderer/src/layer_compositor.rs#L471) scaffolding → cache a
-small per-clip texture); then **video poster frames** (new: extract a representative decoded frame →
-downscale → cache per clip → upload → sample; invalidate on trim/source change). Audio waveform is
-already in-clip via 5b. Follow `clip_content_gpu`'s per-`ClipId` texture-pool + content-fingerprint
-pattern (drawn in the same 4b′ slot, over the body) — thumbnails are the same shape of problem.
+**5c — Thumbnail pipeline. ✅ DONE.** Generator/video clips show their content on the timeline.
+Full design + the cross-thread architecture: [docs/CLIP_THUMBNAILS_DESIGN.md](CLIP_THUMBNAILS_DESIGN.md).
+Snapshot-on-play into a shared content→UI atlas (IOSurface triple-buffer, cloned from the node-thumbnail
+atlas), blitted into the clip body in the 4b″ slot (rounded-mask, centre-cropped). Phases shipped:
+**P1** transport + live snapshot (`08790b43`); **P2a** with-effects source — `LayerCompositor::clip_post_fx_texture`
+(`32386ad3`); **P2c** generator cold-start — parked clips render an isolated default-look thumbnail
+(`5a1efc61`); **P2b** video posters — parked clips decode an isolated poster frame, prefix-keyed so it
+can never corrupt the live decode (`b663291c`). Source order per clip: compositor post-fx > live >
+generator cold-start > video poster. Each phase carried an adversarial multi-agent review. Remaining is
+polish (representative-frame video seek; modulated/override cold-start) and the running-app eye pass.
 
 **5d — One header grammar + type badges.** Collapse the four `coordinate_mapper::layer_height`
 grammars (140/48/62/70) into one with height presets (collapsed/normal/tall) applied the same way to
@@ -214,7 +218,7 @@ emphasis weight, shadow weight, spacing rhythm, badge glyphs. **Done = Peter sig
 3 Kit ─────┤  coverage — one grammar everywhere
 4 Hierarchy┘  polish
 
-5 Timeline   structural spine: 5a gradient ✅ → 5b clips→GPU ✅ → 5c thumbnails → 5d headers → 5e nav
+5 Timeline   structural spine: 5a gradient ✅ → 5b clips→GPU ✅ → 5c thumbnails ✅ → 5d headers → 5e nav
 6 Taste      final tuning pass on the running app
 ```
 
