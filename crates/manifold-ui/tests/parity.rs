@@ -66,8 +66,9 @@ fn color_play_active() {
 
 #[test]
 fn color_stop_red() {
-    // Stop: #803333
-    assert_eq!(color::STOP_RED, Color32::new(128, 51, 51, 255));
+    // §15 ramp re-point: STOP_RED now aliases RED_BASE (#B83838), no longer the
+    // Unity #803333. Tracks the ramp, not Unity, for state colours.
+    assert_eq!(color::STOP_RED, Color32::new(184, 56, 56, 255));
 }
 
 #[test]
@@ -78,14 +79,16 @@ fn color_record_inactive() {
 
 #[test]
 fn color_record_active() {
-    // Record active: #D12E2E
-    assert_eq!(color::RECORD_ACTIVE, Color32::new(209, 46, 46, 255));
+    // §15 ramp re-point: RECORD_ACTIVE now aliases RED_ACTIVE (#D94038), no
+    // longer the Unity #D12E2E.
+    assert_eq!(color::RECORD_ACTIVE, Color32::new(217, 64, 56, 255));
 }
 
 #[test]
 fn color_paused_yellow() {
-    // Paused: #D1A626
-    assert_eq!(color::PAUSED_YELLOW, Color32::new(209, 166, 38, 255));
+    // §15 ramp re-point: PAUSED_YELLOW now aliases AMBER_BASE (#CCA626), no
+    // longer the Unity #D1A626.
+    assert_eq!(color::PAUSED_YELLOW, Color32::new(204, 166, 38, 255));
 }
 
 #[test]
