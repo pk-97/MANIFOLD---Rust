@@ -309,6 +309,16 @@ pub(crate) struct LayerOutput {
 // field on LayerCompositor makes the struct non-Send without this impl.
 unsafe impl Send for LayerOutput {}
 
+/// §24 5c with-effects thumbnails: a single-clip layer's post-effect output,
+/// keyed by clip id. Raw pointer for the same frame-lifetime reason as
+/// `LayerOutput` (see its safety note).
+pub(crate) struct ClipPostFx {
+    clip_id: String,
+    texture: *const GpuTexture,
+}
+// Safety: same as LayerOutput — content-thread-only, frame-lived target.
+unsafe impl Send for ClipPostFx {}
+
 impl LayerOutput {
     fn texture(&self) -> &GpuTexture {
         // Safety: pointer is valid for the frame duration (see struct doc).
@@ -389,6 +399,13 @@ pub struct LayerCompositor {
     /// Cleared and populated each frame by generate_layers / composite_parallel
     /// to avoid per-frame heap allocation.
     layer_outputs_scratch: Vec<LayerOutput>,
+    /// §24 5c with-effects thumbnails: `clip_id → that layer's post-effect output
+    /// texture`, populated only for SINGLE-clip layers (where the layer output IS
+    /// that clip's full look — generator/video + layer effects). Multi-clip layers
+    /// can't isolate one clip, so they're absent and the thumbnail uses the raw
+    /// clip texture. Raw pointers valid for the frame (like `LayerOutput`); read
+    /// only on the content thread, same frame. Cleared each `generate_layers`.
+    clip_post_fx_scratch: Vec<ClipPostFx>,
     /// Shared event for async compute synchronization.
     /// Layer command buffers signal this with incrementing values;
     /// compositor command buffer waits for the final value.
@@ -553,6 +570,7 @@ impl LayerCompositor {
             tonemap: TonemapPipeline::new(device, width, height),
             led_tap: None,
             layer_outputs_scratch: Vec::new(),
+            clip_post_fx_scratch: Vec::new(),
             #[cfg(target_os = "macos")]
             async_event: None,
             #[cfg(target_os = "macos")]
@@ -977,6 +995,7 @@ impl LayerCompositor {
         }
 
         self.layer_outputs_scratch.clear();
+        self.clip_post_fx_scratch.clear();
 
         // Split-borrow: take disjoint &muts so safe `get_mut` on
         // each map can coexist with `self.blend.blend_pass` /
@@ -1126,6 +1145,14 @@ impl LayerCompositor {
                     layer_index: layer_idx,
                     blit_to_led: layer_desc.is_some_and(|ld| ld.blit_to_led),
                 });
+                // §24 5c: for a SINGLE-clip layer, this post-effect output IS that
+                // clip's full look — expose it for a with-effects thumbnail.
+                if group.len() == 1 {
+                    self.clip_post_fx_scratch.push(ClipPostFx {
+                        clip_id: group[0].clip_id.to_string(),
+                        texture: effective_layer_tex,
+                    });
+                }
             }
         }
     }
@@ -1931,6 +1958,19 @@ impl LayerCompositor {
 }
 
 impl Compositor for LayerCompositor {
+    /// §24 5c with-effects thumbnails — the post-effect output for a sole-clip
+    /// layer (that clip's full look). `None` for multi-clip layers; valid only for
+    /// the frame just rendered. See the trait default for the contract.
+    fn clip_post_fx_texture(&self, clip_id: &str) -> Option<&GpuTexture> {
+        self.clip_post_fx_scratch
+            .iter()
+            .find(|c| c.clip_id == clip_id)
+            // SAFETY: same invariant as `LayerOutput.texture` — a raw pointer to a
+            // frame-lived clip/layer render target, dereferenced on the content
+            // thread within the same frame it was produced.
+            .map(|c| unsafe { &*c.texture })
+    }
+
     /// Set (or clear) the authoring-time node-output preview request. Cheap;
     /// applied to every screen chain by `apply_preview_targets` each frame.
     fn set_preview_request(&mut self, request: Option<(EffectId, Option<NodeId>)>) {

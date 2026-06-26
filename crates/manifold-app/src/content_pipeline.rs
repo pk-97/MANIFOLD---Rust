@@ -1495,39 +1495,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // as base layer. This ordering is required by generate_layers' consecutive-run grouping.
         clip_descs.sort_unstable_by(|a, b| b.layer_index.cmp(&a.layer_index));
 
-        // ── Clip thumbnail atlas snapshot (§24 5c) ──────────────────
-        // Snapshot each visible active clip's just-rendered source texture into the
-        // persistent atlas, then copy to the rotating write surface. Runs on the
-        // compositor encoder BEFORE the compositor block borrows it, and before
-        // `frame` borrows `self`. Skipped in export / when the timeline isn't
-        // showing thumbnails. Disjoint field borrows let this coexist with the
-        // `native_device` (= `&self.native_device`) binding held for the frame.
-        #[cfg(target_os = "macos")]
-        let clip_atlas_published = if !export_mode && !self.clip_atlas_visible.is_empty() {
-            let sources: AHashMap<&str, &manifold_gpu::GpuTexture> =
-                clip_descs.iter().map(|d| (d.clip_id, d.texture)).collect();
-            let write_idx = self.write_surface_index;
-            fill_clip_atlas(
-                native_device,
-                &mut native_enc,
-                &sources,
-                self.clip_atlas_textures[write_idx].as_ref(),
-                self.preview_pipeline.as_ref(),
-                self.preview_sampler.as_ref(),
-                &self.clip_atlas_visible,
-                &mut self.clip_atlas_cache,
-                &mut self.clip_atlas_last_snapshot,
-                &mut self.clip_atlas_frame,
-                &mut self.clip_atlas_propagate,
-                &mut self.clip_atlas_persistent,
-                &mut self.last_clip_atlas_layout,
-            )
-        } else {
-            false
-        };
-        #[cfg(not(target_os = "macos"))]
-        let clip_atlas_published = false;
-
         let layer_descs: Vec<CompositeLayerDescriptor> = layers
             .iter()
             // Audio layers produce no visual output and must not enter the
@@ -1615,6 +1582,45 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             let _compositor_tex = self.compositor.render(&mut gpu_comp, &frame);
         }
+
+        // ── Clip thumbnail atlas snapshot (§24 5c) ──────────────────
+        // AFTER the compositor render so we can prefer each clip's POST-EFFECT
+        // output (with-effects thumbnail). `frame` is no longer borrowing `self`
+        // here, and `native_enc` is free again (its compositor wrapper dropped), so
+        // the snapshot's disjoint field borrows coexist with the `native_device`
+        // (= `&self.native_device`) binding. Single-clip-layer clips use the
+        // compositor's post-fx output; everything else uses the raw clip texture
+        // (`clip_descs`). Skipped in export / when no timeline thumbnails are shown.
+        #[cfg(target_os = "macos")]
+        let clip_atlas_published = if !export_mode && !self.clip_atlas_visible.is_empty() {
+            let sources: AHashMap<&str, &manifold_gpu::GpuTexture> = clip_descs
+                .iter()
+                .map(|d| {
+                    let tex = self.compositor.clip_post_fx_texture(d.clip_id).unwrap_or(d.texture);
+                    (d.clip_id, tex)
+                })
+                .collect();
+            let write_idx = self.write_surface_index;
+            fill_clip_atlas(
+                native_device,
+                &mut native_enc,
+                &sources,
+                self.clip_atlas_textures[write_idx].as_ref(),
+                self.preview_pipeline.as_ref(),
+                self.preview_sampler.as_ref(),
+                &self.clip_atlas_visible,
+                &mut self.clip_atlas_cache,
+                &mut self.clip_atlas_last_snapshot,
+                &mut self.clip_atlas_frame,
+                &mut self.clip_atlas_propagate,
+                &mut self.clip_atlas_persistent,
+                &mut self.last_clip_atlas_layout,
+            )
+        } else {
+            false
+        };
+        #[cfg(not(target_os = "macos"))]
+        let clip_atlas_published = false;
 
         // Upscale (render-res → output-res), direct present, and workspace preview.
         // MetalFX preferred; FSR 1.0 as fallback; direct blit when scale = 1.0.

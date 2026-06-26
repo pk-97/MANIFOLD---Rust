@@ -143,6 +143,16 @@ pub trait Compositor: Send {
     /// The final compositor output texture (post-tonemap, post-effects).
     fn output_texture(&self) -> &manifold_gpu::GpuTexture;
 
+    /// §24 5c with-effects clip thumbnails: the post-effect output texture for
+    /// `clip_id` when it is the SOLE clip on its layer (so the layer output is that
+    /// clip's full look — generator/video + layer effects). `None` for multi-clip
+    /// layers (a clip can't be isolated) and for compositors without per-layer
+    /// effects; the caller then falls back to the raw clip texture. Valid only for
+    /// the frame just rendered. Default `None`.
+    fn clip_post_fx_texture(&self, _clip_id: &str) -> Option<&manifold_gpu::GpuTexture> {
+        None
+    }
+
     /// Set (or clear) the authoring-time node-output preview request:
     /// `(watched effect, optional selected node)`. The chain holding the
     /// watched effect preserves the selected node's output texture for the

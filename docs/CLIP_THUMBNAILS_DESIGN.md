@@ -99,16 +99,28 @@ irrelevant to the UI — both are just a cell in the same atlas.
 
 ## Phases
 
-- **P1 (foundation, this pass):** clip atlas + bridge; content-side snapshot of live
+- **P1 (foundation) — SHIPPED.** clip atlas + bridge; content-side snapshot of live
   generator **and** video clip output into cells; `SetClipAtlasVisible` + layout;
-  UI blit. Delivers truthful thumbnails for every clip the operator has played. This
-  is a complete, shippable system for a rehearsed show.
-- **P2 (cold-start fill):** a bounded on-demand standalone render for visible clips
-  with no snapshot yet (generators: render at clip-start with a few warm-up frames;
-  the queue caps cost). Closes the "never played" gap.
-- **P3 (video poster polish):** choose a *representative* video frame (not just the
-  first) — e.g. a fixed fraction into the clip — by a one-shot off-thread seek+decode
-  through `decode_scheduler`, cached as the poster.
+  UI blit. Truthful thumbnails for every clip the operator has played — a complete,
+  shippable system for a rehearsed show. (Source: RAW clip output.)
+- **P2a (with-effects) — SHIPPED.** The snapshot prefers each clip's POST-EFFECT
+  output. `LayerCompositor` exposes `clip_post_fx_texture(clip_id)` — the per-layer
+  output for a SINGLE-clip layer (that clip's full look: generator/video + layer
+  effects). The snapshot pass moved to AFTER the compositor render so the post-fx
+  textures exist; multi-clip layers fall back to the raw clip texture (a clip can't
+  be isolated there). For a clip with no effects, raw == post-fx, so most clips are
+  unchanged.
+- **P2b/P2c (cold-start + video posters) — NOT BUILT; require a new capability.**
+  Both need rendering/decoding a **parked** clip (not under the playhead) at a
+  representative time. The live pipeline never produces that: `GeneratorRenderer`
+  renders only `active_clips` (a parked clip has no generator instance / merged
+  string-params / context), and `VideoRenderer`/`decode_scheduler` decode only the
+  active clip's current frame. A "render/decode clip X at time T off the live set"
+  path is a substantial sub-project (instance lifecycle, warm-up frames for stateful
+  sims, async decode for non-active clips). Its value is narrow — in a rehearsed
+  show clips get played and P1 captures them; only never-touched clips in a fresh
+  project lack a thumbnail. **Recommended as its own focused effort, after P1/P2a are
+  eyeballed working on the running app.**
 
 ## Cost
 
