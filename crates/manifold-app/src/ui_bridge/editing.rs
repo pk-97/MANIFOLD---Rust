@@ -202,29 +202,30 @@ pub(super) fn dispatch_editing(
             }
             DispatchResult::structural()
         }
-        PanelAction::ContextPasteAtTrack(beat, _layer) => {
-            let _snapped = ui.viewport.snap_to_grid(Beats::from_f32(*beat));
+        PanelAction::ContextPasteAtTrack(beat, layer) => {
+            // Paste the clip clipboard at the clicked beat/layer — same content-thread
+            // PasteClips path as Cmd+V (EditingService owns the clipboard).
+            let snapped = ui.viewport.snap_to_grid(Beats::from_f32(*beat));
+            let (tx, rx) = std::sync::mpsc::channel();
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::PasteClips {
+                    target_beat: snapped,
+                    target_layer: *layer as i32,
+                    result_tx: tx,
+                },
+            );
+            // Brief wait for the pasted IDs so we can select them (matches the
+            // keyboard paste in input_host::paste_clips).
+            if let Ok(pasted_ids) = rx.recv_timeout(std::time::Duration::from_millis(100))
+                && !pasted_ids.is_empty()
             {
-                let _spb = 60.0 / project.settings.bpm.0;
-                // TODO: browser paste not yet wired
-                let result = manifold_editing::service::PasteResult {
-                    commands: Vec::new(),
-                    pasted_clip_ids: Vec::new(),
-                    skip_reason: None,
-                    skipped_count: 0,
-                };
-                if !result.commands.is_empty() {
-                    for c in result.commands {
-                        ContentCommand::send(content_tx, ContentCommand::Execute(c));
-                    }
-                    selection.selected_clip_ids.clear();
-                    for id in result.pasted_clip_ids {
-                        selection.selected_clip_ids.insert(id);
-                    }
-                    selection.primary_selected_clip_id =
-                        selection.selected_clip_ids.iter().next().cloned();
-                    selection.selection_version += 1;
+                selection.selected_clip_ids.clear();
+                for id in &pasted_ids {
+                    selection.selected_clip_ids.insert(id.clone());
                 }
+                selection.primary_selected_clip_id = pasted_ids.first().cloned();
+                selection.selection_version += 1;
             }
             DispatchResult::structural()
         }
@@ -327,9 +328,27 @@ pub(super) fn dispatch_editing(
 
         // Context menu items — not yet wired to subsystems
         PanelAction::ContextPasteAtLayer(layer_idx) => {
-            // TODO: Wire to EditingService.Paste when clipboard is ported
-            log::warn!("Paste at layer {} — not yet implemented", layer_idx);
-            DispatchResult::handled()
+            // Paste at the current playhead beat on the right-clicked layer.
+            let (tx, rx) = std::sync::mpsc::channel();
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::PasteClips {
+                    target_beat: content_state.current_beat,
+                    target_layer: *layer_idx as i32,
+                    result_tx: tx,
+                },
+            );
+            if let Ok(pasted_ids) = rx.recv_timeout(std::time::Duration::from_millis(100))
+                && !pasted_ids.is_empty()
+            {
+                selection.selected_clip_ids.clear();
+                for id in &pasted_ids {
+                    selection.selected_clip_ids.insert(id.clone());
+                }
+                selection.primary_selected_clip_id = pasted_ids.first().cloned();
+                selection.selection_version += 1;
+            }
+            DispatchResult::structural()
         }
         PanelAction::ContextImportMidi(layer_idx) => {
             // Open file dialog for MIDI import
