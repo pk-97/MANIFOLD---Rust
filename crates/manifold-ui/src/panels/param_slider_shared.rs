@@ -516,18 +516,11 @@ pub(crate) fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
     if active {
         UIStyle {
             bg_color: active_color,
-            hover_bg_color: Color32::new(
-                active_color.r.saturating_add(20),
-                active_color.g.saturating_add(20),
-                active_color.b.saturating_add(20),
-                active_color.a,
-            ),
-            pressed_bg_color: Color32::new(
-                active_color.r.saturating_sub(10),
-                active_color.g.saturating_sub(10),
-                active_color.b.saturating_sub(10),
-                active_color.a,
-            ),
+            // +20 / -10 around the source hue — a gentler touch than the chrome
+            // state_button's 30/20, tuned for the denser card. Same lighten/darken
+            // helper, no raw literal.
+            hover_bg_color: color::lighten(active_color, 20),
+            pressed_bg_color: color::darken(active_color, 10),
             text_color: color::TEXT_WHITE_C32,
             font_size: color::FONT_CAPTION,
             corner_radius: color::SMALL_RADIUS,
@@ -585,18 +578,9 @@ pub(crate) fn config_btn_style_colored(
     if active {
         UIStyle {
             bg_color: active_color,
-            hover_bg_color: Color32::new(
-                active_color.r.saturating_add(20),
-                active_color.g.saturating_add(20),
-                active_color.b.saturating_add(20),
-                active_color.a,
-            ),
-            pressed_bg_color: Color32::new(
-                active_color.r.saturating_sub(10),
-                active_color.g.saturating_sub(10),
-                active_color.b.saturating_sub(10),
-                active_color.a,
-            ),
+            // Same +20 / -10 card touch as `de_btn_style`; shared helper, no literal.
+            hover_bg_color: color::lighten(active_color, 20),
+            pressed_bg_color: color::darken(active_color, 10),
             text_color: color::TEXT_WHITE_C32,
             font_size,
             corner_radius: color::SMALL_RADIUS,
