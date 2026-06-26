@@ -434,8 +434,10 @@ mod tests {
 
     #[test]
     fn color_override_roundtrips_when_set() {
-        let mut clip = TimelineClip::default();
-        clip.color_override = Some(crate::color::Color::new(0.2, 0.4, 0.6, 1.0));
+        let clip = TimelineClip {
+            color_override: Some(crate::color::Color::new(0.2, 0.4, 0.6, 1.0)),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&clip).unwrap();
         assert!(json.contains("colorOverride"));
         let back: TimelineClip = serde_json::from_str(&json).unwrap();

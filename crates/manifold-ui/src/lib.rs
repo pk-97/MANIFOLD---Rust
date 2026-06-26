@@ -38,7 +38,7 @@ pub mod waveform_painter;
 pub mod waveform_renderer;
 pub mod widget_layout;
 
-pub use bitmap_renderer::{BitmapRepaintState, LayerBitmapRenderer};
+pub use bitmap_renderer::LayerBitmapRenderer;
 pub use coordinate_mapper::CoordinateMapper;
 pub use draw::{Depth, Painter};
 pub use graph_canvas::{GraphCanvas, MappingPopover};

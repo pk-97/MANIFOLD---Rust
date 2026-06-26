@@ -2694,61 +2694,18 @@ impl Application {
             }
         }
 
-        // 6b. Repaint dirty layer bitmaps (CPU pixel painting).
-        // Build BitmapRepaintState from current selection/hover.
-        {
-            let hovered = self
-                .ws
-                .ui_root
-                .viewport
-                .hovered_clip_id()
-                .map(|s| s.to_string());
-            let sel_region = self.ws.ui_root.viewport.selection_region_ref().cloned();
-            let has_region = sel_region.is_some();
-            // A marquee region (no individual clip set) highlights the clips it
-            // covers. A region derived from a clip selection
-            // (set_region_from_clip_bounds) keeps the set non-empty — leave its
-            // per-clip styling to the set so the bounding box doesn't over-light
-            // clips that fall between the selected ones.
-            let region_selects_clips = has_region && self.selection.selected_clip_ids.is_empty();
-            let insert_cursor_beat = self.ws.ui_root.viewport.insert_cursor_beat().as_f32();
-            let insert_layer = self
-                .selection
-                .insert_cursor_layer_id
-                .as_ref()
-                .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-            let has_insert = self.selection.has_insert_cursor();
-            let ppb = self.ws.ui_root.viewport.pixels_per_beat();
-            let sel_ver = self.selection.selection_version;
+        // 6b. Repaint dirty layer GRID bitmaps. Clip bodies/content + the region /
+        // cursor / marker overlays are all GPU now (§24 5b), so the grid is a pure
+        // function of the viewport and needs no selection/hover state here.
+        self.ws.ui_root.viewport.repaint_dirty_layers();
 
-            let marker_lines = self.ws.ui_root.viewport.marker_line_data();
-            let state = manifold_ui::BitmapRepaintState {
-                selection_version: sel_ver,
-                is_selected: &|id: &str| self.selection.is_selected(id),
-                hovered_clip_id: hovered.as_deref(),
-                has_region,
-                region: sel_region.as_ref(),
-                region_selects_clips,
-                has_insert_cursor: has_insert,
-                insert_cursor_beat,
-                insert_cursor_layer: insert_layer,
-                pixels_per_beat: ppb,
-                markers: &marker_lines,
-            };
-            self.ws.ui_root.viewport.repaint_dirty_layers(&state);
-        }
-
-        // 6c. Upload dirty layer textures to GPU. Each dirty layer yields two
-        // buffers: the bg (grid) → the bg instance, drawn before the clip pass;
-        // the front (waveform/overlays) → the front instance, drawn after it.
-        if let (Some(gpu), Some(bitmap_gpu), Some(front_gpu)) = (
-            &self.gpu,
-            &mut self.layer_bitmap_gpu,
-            &mut self.layer_bitmap_front_gpu,
-        ) {
-            for (layer_idx, bg, front, tw, th) in self.ws.ui_root.viewport.dirty_layer_iter() {
-                bitmap_gpu.upload_layer(&gpu.device, layer_idx, bg, tw as u32, th as u32);
-                front_gpu.upload_layer(&gpu.device, layer_idx, front, tw as u32, th as u32);
+        // 6c. Upload dirty layer GRID textures + the lane/stem/overview/group
+        // panel bitmaps to the single layer-bitmap instance (§24 5b — the per-layer
+        // "front" buffer is gone; waveforms are per-clip GPU textures, overlays are
+        // GPU rects). Grid uses per-layer indices; panels use 1000/1001/1002/2000+.
+        if let (Some(gpu), Some(bitmap_gpu)) = (&self.gpu, &mut self.layer_bitmap_gpu) {
+            for (layer_idx, pixels, tw, th) in self.ws.ui_root.viewport.dirty_layer_iter() {
+                bitmap_gpu.upload_layer(&gpu.device, layer_idx, pixels, tw as u32, th as u32);
             }
 
             // 6d. Repaint + upload waveform lane if dirty
@@ -2763,7 +2720,7 @@ impl Application {
                     wf.repaint(wf_rect.width as usize);
                     // Upload after repaint
                     if wf.buffer_width > 0 && wf.buffer_height > 0 && !wf.pixel_buffer.is_empty() {
-                        front_gpu.upload_layer(
+                        bitmap_gpu.upload_layer(
                             &gpu.device,
                             1000,
                             &wf.pixel_buffer,
@@ -2789,7 +2746,7 @@ impl Application {
                             && sl.buffer_height > 0
                             && !sl.pixel_buffer.is_empty()
                         {
-                            front_gpu.upload_layer(
+                            bitmap_gpu.upload_layer(
                                 &gpu.device,
                                 1001,
                                 &sl.pixel_buffer,
@@ -2804,14 +2761,14 @@ impl Application {
             // 6f. Repaint + upload overview strip bitmap
             self.ws.ui_root.viewport.repaint_overview();
             if let Some((pixels, tw, th)) = self.ws.ui_root.viewport.overview_bitmap() {
-                front_gpu.upload_layer(&gpu.device, 1002, pixels, tw as u32, th as u32);
+                bitmap_gpu.upload_layer(&gpu.device, 1002, pixels, tw as u32, th as u32);
             }
 
             // 6g. Repaint + upload collapsed group bitmaps
             self.ws.ui_root.viewport.repaint_collapsed_groups();
             for (track_idx, pixels, tw, th) in self.ws.ui_root.viewport.dirty_collapsed_group_iter()
             {
-                front_gpu.upload_layer(
+                bitmap_gpu.upload_layer(
                     &gpu.device,
                     2000 + track_idx,
                     pixels,
@@ -4001,14 +3958,16 @@ impl Application {
             }
         }
 
-        // ── Pass 4: timeline tracks, in three z-ordered sub-passes (§24 5b) ──
-        // The per-layer rects (one screen rect per visible layer track) are shared
-        // by the bg and front bitmaps; the lane / stem / overview / group rects
-        // only ride the front pass.
+        // ── Pass 4: timeline tracks, in z-ordered sub-passes (§24 5b) ──
+        //   4a  grid bitmaps (per layer)              — under the clips
+        //   4b  GPU clip bodies (rounded, gradient, lift)
+        //   4b' GPU per-clip waveform textures        — inside the audio bodies
+        //   4c  lane / stem / overview / group bitmaps — separate regions
+        //   5   GPU overlays (region / cursor / markers) + clip names
         let layer_rects = self.ws.ui_root.viewport.layer_bitmap_rects();
 
-        // Pass 4a: Background per-layer bitmaps (grid + top separator), under the
-        // clip bodies — opaque bodies occlude the grid, it shows through the gaps.
+        // Pass 4a: Per-layer grid bitmaps (grid + top separator), under the clip
+        // bodies — opaque bodies occlude the grid, it shows through the gaps.
         if let Some(bg_gpu) = self.layer_bitmap_gpu.as_mut()
             && !layer_rects.is_empty()
         {
@@ -4074,11 +4033,32 @@ impl Application {
             }
         }
 
-        // Pass 4c: Front per-layer bitmaps (waveform + region + cursor + markers)
-        // plus the lane / stem / overview / collapsed-group bitmaps, over the clip
-        // bodies.
-        if let Some(front_gpu) = self.layer_bitmap_front_gpu.as_mut() {
-            let mut rects = layer_rects;
+        // Pass 4b': Per-clip waveform textures, painted INSIDE the audio-clip
+        // bodies (§24 5b). Reuses the visible-clip list resolved in 4b; only audio
+        // clips with a decoded waveform cost anything, and a still timeline
+        // re-uploads nothing (textures are cached per clip).
+        if let Some(content_gpu) = self.clip_content_gpu.as_mut()
+            && !self.clip_rect_scratch.is_empty()
+        {
+            let tracks = self.ws.ui_root.viewport.get_tracks_rect();
+            content_gpu.render(
+                &gpu.device,
+                &mut encoder,
+                offscreen,
+                logical_w,
+                logical_h,
+                scale as f32,
+                tracks,
+                &self.clip_rect_scratch,
+            );
+        }
+
+        // Pass 4c: The lane / stem / overview / collapsed-group panel bitmaps.
+        // These are separate regions (below / beside the tracks, or collapsed group
+        // rows that carry no clips), so their z-order vs the clips is moot — they
+        // ride the same single layer-bitmap instance as the grid, indices 1000+.
+        if let Some(bitmap_gpu) = self.layer_bitmap_gpu.as_mut() {
+            let mut rects: Vec<(usize, manifold_ui::node::Rect)> = Vec::new();
 
             let wf_rect = self.ws.ui_root.viewport.waveform_lane_rect();
             if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
@@ -4101,7 +4081,7 @@ impl Application {
             rects.extend(self.ws.ui_root.viewport.collapsed_group_rects());
 
             if !rects.is_empty() {
-                front_gpu.render_layers(
+                bitmap_gpu.render_layers(
                     &gpu.device,
                     &mut encoder,
                     offscreen,
@@ -4112,11 +4092,48 @@ impl Application {
             }
         }
 
+        // Timeline overlays (region highlight / insert cursor / beat markers) as
+        // GPU rects (§24 5b — no longer baked into a per-layer bitmap). Resolved
+        // here while `self` is free, then drawn inside the Pass 5 UIRenderer cycle
+        // under the clip names. The insert cursor's layer comes from the app's
+        // selection (it owns the resolved layer id).
+        let overlay_tracks = self.ws.ui_root.viewport.get_tracks_rect();
+        let insert_layer = self
+            .selection
+            .insert_cursor_layer_id
+            .as_ref()
+            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+        let timeline_overlays = self.ws.ui_root.viewport.timeline_overlays(
+            insert_layer,
+            self.selection.has_insert_cursor(),
+            &mut self.timeline_marker_scratch,
+        );
+
         // Pass 5: Overlay UI (playhead, HUD, dropdowns, text). Its own cycle —
         // begin_frame here resets the text pool that the Pass 4b clip cycle did
         // not touch, isolating the two prepare/render cycles cleanly.
         if let Some(ui) = &mut self.ui_renderer {
             ui.begin_frame();
+
+            // Region / cursor / markers, scissored to the tracks rect, UNDER the
+            // clip names (bottom→top: region, cursor, markers — matches the old
+            // bitmap paint order). All sit on top of the clip bodies + waveforms.
+            ui.push_immediate_clip(
+                overlay_tracks.x,
+                overlay_tracks.y,
+                overlay_tracks.width,
+                overlay_tracks.height,
+            );
+            if let Some((r, c)) = timeline_overlays.region {
+                ui.draw_rect(r.x, r.y, r.width, r.height, c.to_f32());
+            }
+            if let Some((r, c)) = timeline_overlays.cursor {
+                ui.draw_rect(r.x, r.y, r.width, r.height, c.to_f32());
+            }
+            for (x, c) in &self.timeline_marker_scratch {
+                ui.draw_rect(*x, overlay_tracks.y, 1.0, overlay_tracks.height, c.to_f32());
+            }
+            ui.pop_immediate_clip();
 
             // Clip name labels (§24 5b) — on top of the bodies + waveforms, at
             // BASE depth (under the dropdown/modal overlays). Reuses the visible

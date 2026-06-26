@@ -1,79 +1,45 @@
-//! Per-layer bitmap renderer with dirty-checking. Manages a CPU pixel buffer
-//! and paints all clips as colored rectangles into it.
+//! Per-layer **grid** bitmap renderer with dirty-checking. Manages one CPU pixel
+//! buffer holding the timeline grid lines (+ the layer-0 top separator) for a
+//! single layer track.
 //!
-//! Mechanical translation of `Assets/Scripts/UI/Timeline/LayerBitmapRenderer.cs`.
+//! Since §24 5b the clip *bodies* are GPU rounded rects (`manifold-renderer::
+//! clip_draw`), their *content* (audio waveforms) is per-clip GPU textures
+//! (`clip_content_gpu`), and the timeline overlays (region highlight, insert
+//! cursor, markers) are GPU rects emitted in the overlay pass. So this buffer
+//! carries only the grid — a dense, full-width layer drawn UNDER the clip bodies,
+//! showing through the gaps between them. Grid geometry is a pure function of the
+//! viewport (scroll / zoom / width / time-sig), independent of selection, hover,
+//! clip data, or mute — the dirty check is correspondingly small.
+//!
 //! GPU texture management lives in `manifold-renderer::layer_bitmap_gpu`.
 
-use crate::bitmap_painter::{self, INSERT_CURSOR_COLOR, REGION_HIGHLIGHT_COLOR};
 use crate::color;
 use crate::node::Color32;
-use crate::panels::viewport::{SelectionRegion, ViewportClip};
-#[cfg(test)]
-use manifold_foundation::{Beats, ClipId};
+use crate::panels::viewport::SelectionRegion;
 
 // ── Constants (Unity LayerBitmapRenderer lines 47-48) ──
 
 const MAX_TEXTURE_WIDTH: usize = 8192; // doubled from 4096 for 2x HiDPI headroom
 const MIN_TEXTURE_WIDTH: usize = 4;
 
-/// Minimum pixel width for a clip to be rendered (Unity UIConstants.MinClipRenderPx = 1).
-const MIN_CLIP_RENDER_PX: i32 = 1;
-
-/// Insert cursor width in logical pixels (Unity UIConstants.InsertCursorWidthPx = 2).
-const INSERT_CURSOR_WIDTH_PX: i32 = 2;
-
-/// Per-layer state passed to `repaint()` describing the current UI selection/hover state.
-/// Avoids passing the full UIState struct across crate boundaries.
-pub struct BitmapRepaintState<'a> {
-    pub selection_version: u64,
-    pub is_selected: &'a dyn Fn(&str) -> bool,
-    pub hovered_clip_id: Option<&'a str>,
-    pub has_region: bool,
-    pub region: Option<&'a SelectionRegion>,
-    /// True when the active region IS the selection — a marquee with no
-    /// individual clip set — so clips overlapping its beat/layer span render as
-    /// selected. False when the region is a bounding box derived from an
-    /// existing clip selection (`set_region_from_clip_bounds`); per-clip styling
-    /// then stays driven by the clip set, not the box.
-    pub region_selects_clips: bool,
-    pub has_insert_cursor: bool,
-    pub insert_cursor_beat: f32,
-    pub insert_cursor_layer: Option<usize>,
-    pub pixels_per_beat: f32,
-    /// Timeline marker positions (beat, color with alpha) for painting vertical lines.
-    pub markers: &'a [(f32, Color32)],
-}
-
-/// Manages a single CPU pixel buffer for one layer track.
-/// Paints all clips as colored rectangles into a viewport-sized bitmap.
-/// Replaces per-clip UITree nodes entirely.
+/// Manages a single CPU pixel buffer for one layer track's grid lines.
+/// Drawn as a full-width quad UNDER the GPU clip bodies.
 pub struct LayerBitmapRenderer {
     layer_index: usize,
 
-    // Two CPU pixel buffers, split by z-order around the GPU clip bodies (§24 5b):
-    //  • `pixel_buffer_bg`    — grid lines + the layer-0 top separator. Drawn
-    //    BEFORE the GPU clip pass, so opaque clip bodies occlude the grid.
-    //  • `pixel_buffer_front` — waveforms + region highlight + insert cursor +
-    //    markers. Drawn AFTER the clip pass, so they sit on top of the bodies.
-    // Clip fills/borders no longer live here at all — they are GPU rounded rects.
-    pixel_buffer_bg: Vec<Color32>,
-    pixel_buffer_front: Vec<Color32>,
+    // One CPU pixel buffer: grid lines + the layer-0 top separator. Drawn BEFORE
+    // the GPU clip pass, so opaque clip bodies occlude it and it shows through the
+    // gaps. Clip bodies, waveforms, and overlays are all GPU now.
+    pixel_buffer: Vec<Color32>,
     tex_w: usize,
     tex_h: usize,
 
-    // Dirty-checking state (6 conditions, Unity lines 33-45)
+    // Dirty-checking state. The grid depends only on the viewport + time-sig, so
+    // this is just the viewport fingerprint plus an explicit force.
     last_min_beat: f32,
     last_max_beat: f32,
     last_viewport_width: f32,
-    last_selection_version: u64,
-    last_clip_fingerprint: i32,
-    last_had_selected_clips: bool,
-    last_had_region_on_this_layer: bool,
-    last_had_insert_cursor: bool,
-    last_hover_on_this_layer: bool,
-    last_hovered_clip_id: Option<String>,
-    last_muted_state: bool,
-    last_marker_count: usize,
+    last_time_sig: u32,
     force_dirty: bool,
 
     // Repaint result flag
@@ -82,39 +48,23 @@ pub struct LayerBitmapRenderer {
     // Configuration
     render_scale: f32,
     track_height: f32,
-    clip_vertical_padding: f32,
 }
 
 impl LayerBitmapRenderer {
-    pub fn new(
-        layer_index: usize,
-        render_scale: f32,
-        track_height: f32,
-        clip_vertical_padding: f32,
-    ) -> Self {
+    pub fn new(layer_index: usize, render_scale: f32, track_height: f32) -> Self {
         Self {
             layer_index,
-            pixel_buffer_bg: Vec::new(),
-            pixel_buffer_front: Vec::new(),
+            pixel_buffer: Vec::new(),
             tex_w: 0,
             tex_h: 0,
             last_min_beat: f32::NAN,
             last_max_beat: f32::NAN,
             last_viewport_width: 0.0,
-            last_selection_version: u64::MAX,
-            last_clip_fingerprint: 0,
-            last_had_selected_clips: false,
-            last_had_region_on_this_layer: false,
-            last_had_insert_cursor: false,
-            last_hover_on_this_layer: false,
-            last_hovered_clip_id: None,
-            last_muted_state: false,
-            last_marker_count: 0,
+            last_time_sig: 0,
             force_dirty: true,
             was_dirty: false,
             render_scale,
             track_height,
-            clip_vertical_padding,
         }
     }
 
@@ -127,16 +77,10 @@ impl LayerBitmapRenderer {
         self.layer_index
     }
 
-    /// Background buffer (grid + top separator) — uploaded to the bg texture,
-    /// drawn before the GPU clip pass.
-    pub fn pixels_bg(&self) -> &[Color32] {
-        &self.pixel_buffer_bg
-    }
-
-    /// Front buffer (waveform + region + cursor + markers) — uploaded to the
-    /// front texture, drawn after the GPU clip pass.
-    pub fn pixels_front(&self) -> &[Color32] {
-        &self.pixel_buffer_front
+    /// The grid buffer — uploaded to the layer texture, drawn before the GPU
+    /// clip pass.
+    pub fn pixels(&self) -> &[Color32] {
+        &self.pixel_buffer
     }
 
     pub fn tex_w(&self) -> usize {
@@ -168,19 +112,15 @@ impl LayerBitmapRenderer {
         }
     }
 
-    /// Repaint the layer bitmap if anything has changed.
+    /// Repaint the grid bitmap if the viewport changed.
     /// Returns true if the texture was actually repainted.
-    ///
-    /// Mechanical translation of Unity `LayerBitmapRenderer.Repaint()` (lines 91-272).
     pub fn repaint(
         &mut self,
-        clips: &[ViewportClip],
         viewport_min_beat: f32,
         viewport_max_beat: f32,
         viewport_width_px: f32,
-        is_muted: bool,
         time_sig_numerator: u32,
-        state: &BitmapRepaintState,
+        pixels_per_beat: f32,
     ) -> bool {
         self.was_dirty = false;
 
@@ -195,129 +135,42 @@ impl LayerBitmapRenderer {
             .min(MAX_TEXTURE_WIDTH as f32) as usize;
         let tex_h = (self.track_height * self.render_scale).round().max(2.0) as usize;
 
-        // ── 6-condition dirty check (Unity lines 99-178) ──
-
-        // 1. Viewport change
+        // ── Dirty check ── The grid is a pure function of the viewport + time-sig.
         let viewport_dirty = !approx_eq(self.last_min_beat, viewport_min_beat)
             || !approx_eq(self.last_max_beat, viewport_max_beat)
             || !approx_eq(self.last_viewport_width, viewport_width_px);
+        let timesig_dirty = time_sig_numerator != self.last_time_sig;
 
-        // 2. Selection change (only evaluates on global version bump)
-        let mut sel_dirty = false;
-        if state.selection_version != self.last_selection_version {
-            self.last_selection_version = state.selection_version;
-
-            let mut has_selection = false;
-            for clip in clips {
-                if (state.is_selected)(&clip.clip_id) {
-                    has_selection = true;
-                    break;
-                }
-            }
-
-            // Region overlay spans specific layers
-            let region_on_this_layer = if state.has_region {
-                if let Some(region) = state.region {
-                    self.layer_index >= region.start_layer && self.layer_index <= region.end_layer
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-
-            // Insert cursor is per-layer
-            let has_cursor =
-                state.has_insert_cursor && state.insert_cursor_layer == Some(self.layer_index);
-
-            sel_dirty = has_selection
-                || self.last_had_selected_clips
-                || region_on_this_layer
-                || self.last_had_region_on_this_layer
-                || has_cursor
-                || self.last_had_insert_cursor;
-            self.last_had_selected_clips = has_selection;
-            self.last_had_region_on_this_layer = region_on_this_layer;
-            self.last_had_insert_cursor = has_cursor;
-        }
-
-        // 3. Hover change (only evaluates on hoveredClipId change)
-        let mut hover_dirty = false;
-        let hov_id = state.hovered_clip_id;
-        let last_hov = self.last_hovered_clip_id.as_deref();
-        if last_hov != hov_id {
-            self.last_hovered_clip_id = hov_id.map(String::from);
-
-            let mut hover_on_this_layer = false;
-            if let Some(hid) = hov_id {
-                for clip in clips {
-                    if clip.clip_id == hid {
-                        hover_on_this_layer = true;
-                        break;
-                    }
-                }
-            }
-            hover_dirty = hover_on_this_layer || self.last_hover_on_this_layer;
-            self.last_hover_on_this_layer = hover_on_this_layer;
-        }
-
-        // 4. Clip data fingerprint
-        let clip_fp = compute_clip_fingerprint(clips, viewport_min_beat, viewport_max_beat);
-        let clip_data_dirty = self.last_clip_fingerprint != clip_fp;
-
-        // 5. Mute state
-        let mute_dirty = is_muted != self.last_muted_state;
-
-        // 6. Marker count change (positions repaint via viewport_dirty)
-        let marker_dirty = state.markers.len() != self.last_marker_count;
-        self.last_marker_count = state.markers.len();
-
-        // 7. Force dirty (explicit invalidation)
-        if !self.force_dirty
-            && !viewport_dirty
-            && !sel_dirty
-            && !hover_dirty
-            && !clip_data_dirty
-            && !mute_dirty
-            && !marker_dirty
-        {
+        if !self.force_dirty && !viewport_dirty && !timesig_dirty {
             return false;
         }
 
-        let ppb = state.pixels_per_beat;
+        let ppb = pixels_per_beat;
         let scaled_ppb = ppb * self.render_scale;
 
-        // Detect scroll-only change (no zoom, no height change, no non-viewport dirty).
+        // Detect scroll-only change (same zoom + width + time-sig, no force).
         let zoom_same = approx_eq(self.last_viewport_width, viewport_width_px)
             && approx_eq(
                 self.last_max_beat - self.last_min_beat,
                 viewport_max_beat - viewport_min_beat,
             );
-        let scroll_only = viewport_dirty
-            && zoom_same
-            && !sel_dirty
-            && !hover_dirty
-            && !clip_data_dirty
-            && !mute_dirty
-            && !self.force_dirty;
+        let scroll_only = viewport_dirty && zoom_same && !timesig_dirty && !self.force_dirty;
 
         // Update cached state
         let old_min_beat = self.last_min_beat;
         self.last_min_beat = viewport_min_beat;
         self.last_max_beat = viewport_max_beat;
         self.last_viewport_width = viewport_width_px;
-        self.last_clip_fingerprint = clip_fp;
-        self.last_muted_state = is_muted;
+        self.last_time_sig = time_sig_numerator;
         self.force_dirty = false;
 
         // Resize buffer if needed (Unity EnsureTexture, lines 427-444)
         self.ensure_buffer(tex_w, tex_h);
 
-        // ── Pixel-shift scroll optimization (applied to BOTH buffers) ──
-        // When only the scroll position changed (no zoom, clips, etc.), shift the
-        // existing pixel data and only repaint the newly-exposed strip. Keeps
-        // auto-scroll upload bandwidth low — the bg (grid) buffer is full-width
-        // and dense, so this still pays even with clips off the bitmap.
+        // ── Pixel-shift scroll optimization ──
+        // When only the scroll position changed, shift the existing pixel data and
+        // repaint just the newly-exposed strip. The grid is full-width and dense,
+        // so this keeps 4K auto-scroll upload bandwidth low.
         let mut strip_x: Option<(usize, usize)> = None; // (start_col, width) of dirty strip
         if scroll_only && self.tex_w == tex_w && self.tex_h == tex_h {
             let delta_beats = viewport_min_beat - old_min_beat;
@@ -325,8 +178,7 @@ impl LayerBitmapRenderer {
             let abs_delta = delta_px.unsigned_abs() as usize;
 
             if abs_delta > 0 && abs_delta < tex_w {
-                shift_buffer(&mut self.pixel_buffer_bg, tex_w, tex_h, delta_px, abs_delta);
-                shift_buffer(&mut self.pixel_buffer_front, tex_w, tex_h, delta_px, abs_delta);
+                shift_buffer(&mut self.pixel_buffer, tex_w, tex_h, delta_px, abs_delta);
                 strip_x = Some(if delta_px > 0 {
                     (tex_w - abs_delta, abs_delta)
                 } else {
@@ -335,12 +187,9 @@ impl LayerBitmapRenderer {
             }
         }
 
-        // Full clear of both buffers when we didn't pixel-shift.
+        // Full clear when we didn't pixel-shift.
         if strip_x.is_none() {
-            for p in self.pixel_buffer_bg.iter_mut() {
-                *p = Color32::TRANSPARENT;
-            }
-            for p in self.pixel_buffer_front.iter_mut() {
+            for p in self.pixel_buffer.iter_mut() {
                 *p = Color32::TRANSPARENT;
             }
         }
@@ -351,11 +200,10 @@ impl LayerBitmapRenderer {
             None => (0, tex_w),
         };
 
-        // ── Background buffer: grid lines, then the layer-0 top separator ──
-        // Grid sits BEHIND the GPU clip bodies (opaque bodies occlude it; it shows
-        // through the gaps), so it lives in the bg buffer drawn before the clip pass.
+        // Grid lines, then the layer-0 top separator. The grid sits BEHIND the GPU
+        // clip bodies (opaque bodies occlude it; it shows through the gaps).
         paint_grid_lines(
-            &mut self.pixel_buffer_bg,
+            &mut self.pixel_buffer,
             tex_w,
             tex_h,
             viewport_min_beat,
@@ -372,155 +220,8 @@ impl LayerBitmapRenderer {
             for y in 0..sep_h.min(tex_h) {
                 let row = y * tex_w;
                 for x in paint_x0..paint_x1 {
-                    self.pixel_buffer_bg[row + x] = color::SEPARATOR_COLOR;
+                    self.pixel_buffer[row + x] = color::SEPARATOR_COLOR;
                 }
-            }
-        }
-
-        // ── Front buffer: per-clip waveforms ──
-        // Clip bodies/borders are now GPU rounded rects; only the waveform stays a
-        // bitmap (rich per-pixel spectral data), painted into the front buffer so
-        // it lands ON TOP of the clip body. The clip iteration is kept solely to
-        // position waveforms; non-audio clips contribute nothing here.
-        let pad_px = (tex_h as f32 * self.clip_vertical_padding / self.track_height).round() as i32;
-        let clip_y = pad_px;
-        let clip_h = tex_h as i32 - pad_px * 2;
-        for clip in clips {
-            if !clip.is_audio {
-                continue;
-            }
-            let renderer = match clip.waveform.as_ref() {
-                Some(r) => r,
-                None => continue,
-            };
-            let clip_start_f32 = clip.start_beat.as_f32();
-            let end_beat = clip_start_f32 + clip.duration_beats.as_f32();
-            if end_beat <= viewport_min_beat || clip_start_f32 >= viewport_max_beat {
-                continue;
-            }
-            let (x, w) = match compute_clip_pixel_rect(
-                clip_start_f32,
-                end_beat,
-                viewport_min_beat,
-                scaled_ppb,
-                tex_w,
-            ) {
-                Some(v) => v,
-                None => continue,
-            };
-            if (x + w) <= paint_x0 as i32 || x >= paint_x1 as i32 {
-                continue;
-            }
-
-            // The waveform maps across the clip's FULL pixel rect (which may run
-            // off-screen left/right); only visible columns paint, so it stays
-            // locked to the audio as you zoom/scroll. No-op until decode finishes.
-            let full_x = (clip_start_f32 - viewport_min_beat) * scaled_ppb;
-            let full_w = clip.duration_beats.as_f32() * scaled_ppb;
-            // The clip is a window onto the file (Ableton model): show the source
-            // slice [in_point, in_point + win_secs] rather than the whole file
-            // squashed into the clip rect. Trim changes the window length; warp
-            // changes win_secs (the scale).
-            let file_secs = renderer.clip_duration_seconds();
-            let win_secs = clip.duration_beats.as_f32() * clip.warped_secs_per_beat;
-            let (src_start, src_end) = if file_secs > 0.0 {
-                (
-                    (clip.in_point_seconds / file_secs).clamp(0.0, 1.0),
-                    ((clip.in_point_seconds + win_secs) / file_secs).clamp(0.0, 1.0),
-                )
-            } else {
-                (0.0, 1.0)
-            };
-            let frac = (src_end - src_start).max(1e-4);
-            // Pick the MIP at the resolution the *whole* file would occupy if the
-            // visible window were stretched to full_w, so a zoomed-in trim doesn't
-            // get a too-coarse level. scaled_ppb already folds in render_scale.
-            if let Some(level) = renderer.select_level_for_zoom(full_w / frac, 1.0) {
-                // Cover the full visible clip rect, not the scroll-exposed strip —
-                // the pixel-shift moves the existing waveform, and clamping to the
-                // strip would let nothing repaint the shifted-in region.
-                let x_start = x.max(0);
-                let x_end = (x + w).min(tex_w as i32);
-                crate::waveform_painter::draw_waveform(
-                    &mut self.pixel_buffer_front,
-                    tex_w,
-                    tex_h,
-                    level,
-                    x_start,
-                    x_end,
-                    clip_y,
-                    clip_h,
-                    full_x,
-                    full_w,
-                    src_start,
-                    src_end,
-                );
-            }
-        }
-
-        // Region highlight, insert cursor, markers — overlays that sit ON TOP of
-        // the clip bodies, so they live in the front buffer.
-        if state.has_region
-            && let Some(region) = state.region
-            && self.layer_index >= region.start_layer
-            && self.layer_index <= region.end_layer
-        {
-            let region_start_px = (region.start_beat.as_f32() - viewport_min_beat) * scaled_ppb;
-            let region_end_px = (region.end_beat.as_f32() - viewport_min_beat) * scaled_ppb;
-            let rx = region_start_px.round().max(0.0) as i32;
-            let rx1 = region_end_px.round().min(tex_w as f32) as i32;
-            let rw = rx1 - rx;
-            if rw > 0 {
-                bitmap_painter::fill_rect(
-                    &mut self.pixel_buffer_front,
-                    tex_w,
-                    tex_h,
-                    rx,
-                    0,
-                    rw,
-                    tex_h as i32,
-                    REGION_HIGHLIGHT_COLOR,
-                );
-            }
-        }
-
-        if state.has_insert_cursor && state.insert_cursor_layer == Some(self.layer_index) {
-            let cursor_px = (state.insert_cursor_beat - viewport_min_beat) * scaled_ppb;
-            let cx = cursor_px.round() as i32;
-            let cursor_w = (INSERT_CURSOR_WIDTH_PX as f32 * self.render_scale)
-                .round()
-                .max(1.0) as i32;
-            if cx >= 0 && cx < tex_w as i32 {
-                bitmap_painter::fill_rect(
-                    &mut self.pixel_buffer_front,
-                    tex_w,
-                    tex_h,
-                    cx,
-                    0,
-                    cursor_w,
-                    tex_h as i32,
-                    INSERT_CURSOR_COLOR,
-                );
-            }
-        }
-
-        let marker_w = (1.0_f32 * self.render_scale).round().max(1.0) as i32;
-        for &(beat, color) in state.markers {
-            if beat < viewport_min_beat || beat > viewport_max_beat {
-                continue;
-            }
-            let mx = ((beat - viewport_min_beat) * scaled_ppb).round() as i32;
-            if mx >= paint_x0 as i32 && mx < paint_x1 as i32 {
-                bitmap_painter::fill_rect(
-                    &mut self.pixel_buffer_front,
-                    tex_w,
-                    tex_h,
-                    mx,
-                    0,
-                    marker_w,
-                    tex_h as i32,
-                    color,
-                );
             }
         }
 
@@ -528,20 +229,15 @@ impl LayerBitmapRenderer {
         true
     }
 
-    /// Resize both pixel buffers if needed (Unity EnsureTexture, lines 427-444).
+    /// Resize the pixel buffer if needed (Unity EnsureTexture, lines 427-444).
     fn ensure_buffer(&mut self, w: usize, h: usize) {
         let pixel_count = w * h;
-        if self.tex_w == w
-            && self.tex_h == h
-            && self.pixel_buffer_bg.len() == pixel_count
-            && self.pixel_buffer_front.len() == pixel_count
-        {
+        if self.tex_w == w && self.tex_h == h && self.pixel_buffer.len() == pixel_count {
             return;
         }
         self.tex_w = w;
         self.tex_h = h;
-        self.pixel_buffer_bg.resize(pixel_count, Color32::TRANSPARENT);
-        self.pixel_buffer_front.resize(pixel_count, Color32::TRANSPARENT);
+        self.pixel_buffer.resize(pixel_count, Color32::TRANSPARENT);
     }
 }
 
@@ -563,58 +259,6 @@ fn shift_buffer(buffer: &mut [Color32], tex_w: usize, tex_h: usize, delta_px: i3
                 buffer[row + x] = Color32::TRANSPARENT;
             }
         }
-    }
-}
-
-/// Lightweight fingerprint of visible clip state for this layer.
-/// Changes when clips are added, removed, moved, resized, muted, or locked.
-/// Unity: LayerBitmapRenderer.ComputeClipFingerprint (lines 331-344).
-fn compute_clip_fingerprint(clips: &[ViewportClip], min_beat: f32, max_beat: f32) -> i32 {
-    let mut hash = clips.len() as i32;
-    for clip in clips {
-        let start_f32 = clip.start_beat.as_f32();
-        let end = start_f32 + clip.duration_beats.as_f32();
-        if end <= min_beat || start_f32 >= max_beat {
-            continue;
-        }
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(start_f32.to_bits() as i32);
-        hash = hash.wrapping_mul(31).wrapping_add(end.to_bits() as i32);
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(if clip.is_muted { 1 } else { 0 });
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(if clip.is_locked { 1 } else { 0 });
-        // Waveform presence: flips once when the background decode finishes, so
-        // the clip repaints to show its waveform (then stays cached → no churn).
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(if clip.waveform.is_some() { 1 } else { 0 });
-    }
-    hash
-}
-
-/// Compute the pixel X and width of a clip in the bitmap buffer.
-/// Returns None if the clip is too narrow to render.
-/// Unity: LayerBitmapRenderer.ComputeClipPixelRect (lines 297-308).
-fn compute_clip_pixel_rect(
-    start_beat: f32,
-    end_beat: f32,
-    viewport_min_beat: f32,
-    scaled_ppb: f32,
-    tex_w: usize,
-) -> Option<(i32, i32)> {
-    let start_px = (start_beat - viewport_min_beat) * scaled_ppb;
-    let end_px = (end_beat - viewport_min_beat) * scaled_ppb;
-    let x = start_px.round().max(0.0) as i32;
-    let x1 = end_px.round().min(tex_w as f32) as i32;
-    let w = x1 - x;
-    if w >= MIN_CLIP_RENDER_PX {
-        Some((x, w))
-    } else {
-        None
     }
 }
 
@@ -767,40 +411,7 @@ pub fn clip_overlaps_region(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn make_clip(id: &str, start: f32, dur: f32) -> ViewportClip {
-        ViewportClip {
-            clip_id: ClipId::new(id),
-            layer_index: 0,
-            start_beat: Beats::from_f32(start),
-            duration_beats: Beats::from_f32(dur),
-            name: String::new(),
-            color: color::CLIP_NORMAL,
-            is_muted: false,
-            is_locked: false,
-            is_generator: false,
-            is_audio: false,
-            waveform: None,
-            in_point_seconds: 0.0,
-            warped_secs_per_beat: 0.0,
-        }
-    }
-
-    fn make_state<'a>(sel_ver: u64) -> BitmapRepaintState<'a> {
-        BitmapRepaintState {
-            selection_version: sel_ver,
-            is_selected: &|_| false,
-            hovered_clip_id: None,
-            has_region: false,
-            region: None,
-            region_selects_clips: false,
-            has_insert_cursor: false,
-            insert_cursor_beat: 0.0,
-            insert_cursor_layer: None,
-            pixels_per_beat: 100.0,
-            markers: &[],
-        }
-    }
+    use manifold_foundation::Beats;
 
     #[test]
     fn clip_overlaps_region_matches_get_clips_in_region_semantics() {
@@ -830,140 +441,47 @@ mod tests {
 
     #[test]
     fn dirty_check_skip_when_unchanged() {
-        let mut renderer = LayerBitmapRenderer::new(0, 1.0, 100.0, 12.0);
-        let clips = vec![make_clip("a", 0.0, 4.0)];
-        let state = make_state(1);
+        let mut renderer = LayerBitmapRenderer::new(0, 1.0, 100.0);
 
         // First call: force_dirty → always repaints
-        assert!(renderer.repaint(&clips, 0.0, 16.0, 800.0, false, 4, &state));
+        assert!(renderer.repaint(0.0, 16.0, 800.0, 4, 100.0));
 
-        // Second call with same state → should skip
-        assert!(!renderer.repaint(&clips, 0.0, 16.0, 800.0, false, 4, &state));
+        // Second call with the same viewport → should skip
+        assert!(!renderer.repaint(0.0, 16.0, 800.0, 4, 100.0));
     }
 
     #[test]
     fn dirty_check_triggers_on_viewport_change() {
-        let mut renderer = LayerBitmapRenderer::new(0, 1.0, 100.0, 12.0);
-        let clips = vec![make_clip("a", 0.0, 4.0)];
-        let state = make_state(1);
+        let mut renderer = LayerBitmapRenderer::new(0, 1.0, 100.0);
 
-        renderer.repaint(&clips, 0.0, 16.0, 800.0, false, 4, &state);
+        renderer.repaint(0.0, 16.0, 800.0, 4, 100.0);
 
         // Change viewport scroll → should repaint
-        assert!(renderer.repaint(&clips, 1.0, 17.0, 800.0, false, 4, &state));
+        assert!(renderer.repaint(1.0, 17.0, 800.0, 4, 100.0));
     }
 
     #[test]
-    fn dirty_check_triggers_on_selection_change() {
-        let mut renderer = LayerBitmapRenderer::new(0, 1.0, 100.0, 12.0);
-        let clips = vec![make_clip("a", 0.0, 4.0)];
-        let state1 = make_state(1);
+    fn dirty_check_triggers_on_time_sig_change() {
+        let mut renderer = LayerBitmapRenderer::new(0, 1.0, 100.0);
 
-        renderer.repaint(&clips, 0.0, 16.0, 800.0, false, 4, &state1);
+        renderer.repaint(0.0, 16.0, 800.0, 4, 100.0);
 
-        // Bump selection version with a selected clip → should repaint
-        let state2 = BitmapRepaintState {
-            selection_version: 2,
-            is_selected: &|id| id == "a",
-            ..make_state(2)
-        };
-        assert!(renderer.repaint(&clips, 0.0, 16.0, 800.0, false, 4, &state2));
-    }
-
-    #[test]
-    fn dirty_check_triggers_on_hover_change() {
-        let mut renderer = LayerBitmapRenderer::new(0, 1.0, 100.0, 12.0);
-        let clips = vec![make_clip("a", 0.0, 4.0)];
-        let state = make_state(1);
-
-        renderer.repaint(&clips, 0.0, 16.0, 800.0, false, 4, &state);
-
-        // Hover a clip on this layer → should repaint
-        let state2 = BitmapRepaintState {
-            hovered_clip_id: Some("a"),
-            ..make_state(1)
-        };
-        assert!(renderer.repaint(&clips, 0.0, 16.0, 800.0, false, 4, &state2));
-    }
-
-    #[test]
-    fn dirty_check_triggers_on_mute_change() {
-        let mut renderer = LayerBitmapRenderer::new(0, 1.0, 100.0, 12.0);
-        let clips = vec![make_clip("a", 0.0, 4.0)];
-        let state = make_state(1);
-
-        renderer.repaint(&clips, 0.0, 16.0, 800.0, false, 4, &state);
-
-        // Toggle mute → should repaint
-        assert!(renderer.repaint(&clips, 0.0, 16.0, 800.0, true, 4, &state));
-    }
-
-    #[test]
-    fn dirty_check_triggers_on_clip_data_change() {
-        let mut renderer = LayerBitmapRenderer::new(0, 1.0, 100.0, 12.0);
-        let clips1 = vec![make_clip("a", 0.0, 4.0)];
-        let state = make_state(1);
-
-        renderer.repaint(&clips1, 0.0, 16.0, 800.0, false, 4, &state);
-
-        // Add a clip → fingerprint changes → should repaint
-        let clips2 = vec![make_clip("a", 0.0, 4.0), make_clip("b", 4.0, 4.0)];
-        assert!(renderer.repaint(&clips2, 0.0, 16.0, 800.0, false, 4, &state));
-    }
-
-    #[test]
-    fn fingerprint_stable_same_data() {
-        let clips = vec![make_clip("a", 0.0, 4.0), make_clip("b", 8.0, 2.0)];
-        let fp1 = compute_clip_fingerprint(&clips, 0.0, 16.0);
-        let fp2 = compute_clip_fingerprint(&clips, 0.0, 16.0);
-        assert_eq!(fp1, fp2);
-    }
-
-    #[test]
-    fn fingerprint_changes_on_move() {
-        let clips1 = vec![make_clip("a", 0.0, 4.0)];
-        let clips2 = vec![make_clip("a", 1.0, 4.0)];
-        let fp1 = compute_clip_fingerprint(&clips1, 0.0, 16.0);
-        let fp2 = compute_clip_fingerprint(&clips2, 0.0, 16.0);
-        assert_ne!(fp1, fp2);
+        // Same viewport but a new time signature → grid spacing changes → repaint.
+        assert!(renderer.repaint(0.0, 16.0, 800.0, 3, 100.0));
     }
 
     #[test]
     fn texture_size_clamped() {
-        let mut renderer = LayerBitmapRenderer::new(0, 1.0, 100.0, 12.0);
-        let clips = vec![];
-        let state = make_state(1);
+        let mut renderer = LayerBitmapRenderer::new(0, 1.0, 100.0);
 
         // Very narrow viewport → clamped to MIN_TEXTURE_WIDTH
-        renderer.repaint(&clips, 0.0, 1.0, 2.0, false, 4, &state);
+        renderer.repaint(0.0, 1.0, 2.0, 4, 100.0);
         assert!(renderer.tex_w() >= MIN_TEXTURE_WIDTH);
 
         // Very wide viewport → clamped to MAX_TEXTURE_WIDTH
         renderer.invalidate();
-        renderer.repaint(&clips, 0.0, 1.0, 10000.0, false, 4, &state);
+        renderer.repaint(0.0, 1.0, 10000.0, 4, 100.0);
         assert!(renderer.tex_w() <= MAX_TEXTURE_WIDTH);
-    }
-
-    #[test]
-    fn clip_pixel_rect_basic() {
-        let result = compute_clip_pixel_rect(2.0, 6.0, 0.0, 100.0, 1000);
-        assert_eq!(result, Some((200, 400)));
-    }
-
-    #[test]
-    fn clip_pixel_rect_clamps_to_bounds() {
-        // Clip starts before viewport
-        let result = compute_clip_pixel_rect(-2.0, 2.0, 0.0, 100.0, 1000);
-        assert!(result.is_some());
-        let (x, _w) = result.unwrap();
-        assert_eq!(x, 0); // clamped to 0
-    }
-
-    #[test]
-    fn clip_pixel_rect_too_narrow() {
-        // Clip is < 1px wide at this zoom
-        let result = compute_clip_pixel_rect(0.0, 0.001, 0.0, 10.0, 1000);
-        assert!(result.is_none());
     }
 
     #[test]

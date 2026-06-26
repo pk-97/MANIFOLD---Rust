@@ -193,7 +193,7 @@ mod tests {
             layer_index: layer,
             start_beat: Beats::from_f32(start),
             duration_beats: Beats::from_f32(duration),
-            name: String::new(),
+            name: "".into(),
             color: Color32::new(100, 100, 100, 255),
             is_muted: false,
             is_locked: false,

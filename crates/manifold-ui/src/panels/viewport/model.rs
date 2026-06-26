@@ -16,7 +16,9 @@ pub struct ViewportClip {
     pub layer_index: usize,
     pub start_beat: Beats,
     pub duration_beats: Beats,
-    pub name: String,
+    /// `Arc<str>` (not `String`) so attaching the name to a `ClipScreenRect` each
+    /// frame in `visible_clip_rects` is a refcount bump, not a heap allocation.
+    pub name: std::sync::Arc<str>,
     pub color: Color32,
     pub is_muted: bool,
     pub is_locked: bool,
@@ -52,12 +54,25 @@ pub struct ClipScreenRect {
     /// Effective base colour (per-clip override resolved into `ViewportClip.color`).
     pub base_color: Color32,
     /// Display name, drawn as the clip's label strip in the overlay pass.
-    pub name: String,
+    /// `Arc<str>` shared from `ViewportClip` — cloned per frame as a refcount bump.
+    pub name: std::sync::Arc<str>,
     pub start_beat: Beats,
     pub end_beat: Beats,
     pub is_muted: bool,
     pub is_locked: bool,
     pub is_generator: bool,
+    /// Audio-layer clip — carries the waveform the GPU clip-content pass paints
+    /// inside the body. Non-audio clips leave the waveform fields inert.
+    pub is_audio: bool,
+    /// Shared zoom-aware waveform renderer for the source file (`None` until the
+    /// background decode finishes). Cloning is a refcount bump, not a copy.
+    pub waveform: Option<std::sync::Arc<crate::waveform_renderer::WaveformRenderer>>,
+    /// Audio only: source-file offset (seconds) where this clip starts — the left
+    /// edge of the waveform window. Mirrors `ViewportClip::in_point_seconds`.
+    pub in_point_seconds: f32,
+    /// Audio only: warped source-seconds per beat. `× duration` gives the source
+    /// window length (the waveform scale is set by warp, not trim).
+    pub warped_secs_per_beat: f32,
 }
 
 // `HitRegion` and `ClipHitResult` live once in `crate::clip_hit_tester` — the
@@ -65,6 +80,22 @@ pub struct ClipScreenRect {
 // re-exported from this module via `viewport.rs`. They were duplicated here,
 // which let the two hit-test paths silently diverge (fixed- vs proportional-width
 // trim handles, group-layer skip on one path only).
+
+/// Screen-space geometry for the timeline overlays drawn on top of the clip
+/// bodies + waveforms (§24 5b GPU rects, no longer baked into a bitmap). The
+/// caller scissors to the tracks rect and draws these under the clip names.
+/// `Copy` + allocation-free: the beat markers (variable count) are written into a
+/// caller-owned scratch `Vec` instead of being boxed in here, so resolving the
+/// overlays each frame allocates nothing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TimelineOverlays {
+    /// Marquee / region highlight: a translucent fill `(rect, colour)` over the
+    /// contiguous selected beat × layer span. `None` when there is no region.
+    pub region: Option<(Rect, Color32)>,
+    /// Insert cursor: a thin vertical bar `(rect, colour)` on its target layer
+    /// row. `None` when the cursor is inactive or has no resolved layer.
+    pub cursor: Option<(Rect, Color32)>,
+}
 
 /// Region-based selection in the timeline.
 #[derive(Debug, Clone, Copy)]

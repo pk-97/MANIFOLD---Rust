@@ -18,6 +18,8 @@ const RULER_HEIGHT: f32 = color::RULER_HEIGHT;
 // this. A second independent `= 12.0` here is exactly how the two hit-test paths
 // drifted before — keep it aliased so they can't.
 const CLIP_VERTICAL_PAD: f32 = color::CLIP_VERTICAL_PAD;
+/// Insert-cursor bar width in logical pixels (Unity UIConstants.InsertCursorWidthPx).
+const INSERT_CURSOR_WIDTH: f32 = 2.0;
 
 const RULER_FONT_SIZE: u16 = color::FONT_SMALL;
 const RULER_TICK_W: f32 = 1.0;
@@ -40,7 +42,7 @@ mod render;
 // shared hit-tester) and surfaced here so viewport consumers and the click/drag
 // overlay name the same type.
 pub use crate::clip_hit_tester::{ClipHitResult, HitRegion};
-pub use model::{ClipScreenRect, SelectionRegion, TrackInfo, ViewportClip};
+pub use model::{ClipScreenRect, SelectionRegion, TimelineOverlays, TrackInfo, ViewportClip};
 use coordinate::GridSubdivision;
 use model::{CollapsedGroupBitmap, MarkerNodeGroup, TrackBgGroup};
 
@@ -323,7 +325,6 @@ impl TimelineViewportPanel {
                         i,
                         self.render_scale,
                         height,
-                        CLIP_VERTICAL_PAD,
                     )));
             }
         }
@@ -435,49 +436,33 @@ impl TimelineViewportPanel {
         self.insert_cursor_beat
     }
 
-    /// Repaint all dirty layer bitmaps (CPU pixel painting).
-    /// Call once per frame before GPU upload.
-    pub fn repaint_dirty_layers(&mut self, state: &crate::bitmap_renderer::BitmapRepaintState) {
+    /// Repaint all dirty layer grid bitmaps. Call once per frame before GPU
+    /// upload. The grid is a pure function of the viewport (scroll / zoom / width
+    /// / time-sig), so this takes no selection/clip state — clip bodies, content,
+    /// and overlays are all GPU now.
+    pub fn repaint_dirty_layers(&mut self) {
         let (min_beat, max_beat) = self.visible_beat_range();
         let viewport_width_px = self.tracks_rect.width;
         let time_sig = self.beats_per_bar;
+        let ppb = self.mapper.pixels_per_beat();
 
-        for (i, renderer_opt) in self.bitmap_renderers.iter_mut().enumerate() {
-            if let Some(renderer) = renderer_opt {
-                let clips = if i < self.clips_by_layer.len() {
-                    &self.clips_by_layer[i]
-                } else {
-                    &[] as &[ViewportClip]
-                };
-                let is_muted = i < self.tracks.len() && self.tracks[i].is_muted;
-                renderer.repaint(
-                    clips,
-                    min_beat,
-                    max_beat,
-                    viewport_width_px,
-                    is_muted,
-                    time_sig,
-                    state,
-                );
-            }
+        for renderer in self.bitmap_renderers.iter_mut().flatten() {
+            renderer.repaint(min_beat, max_beat, viewport_width_px, time_sig, ppb);
         }
     }
 
-    /// Iterate layer bitmaps that were repainted (for GPU upload).
-    /// Yields `(layer_index, bg_pixels, front_pixels, tex_w, tex_h)` for dirty
-    /// layers — the bg buffer (grid) draws before the GPU clip pass, the front
-    /// buffer (waveform + overlays) after it.
+    /// Iterate layer grid bitmaps that were repainted (for GPU upload).
+    /// Yields `(layer_index, pixels, tex_w, tex_h)` for dirty layers.
     pub fn dirty_layer_iter(
         &self,
-    ) -> impl Iterator<Item = (usize, &[crate::node::Color32], &[crate::node::Color32], usize, usize)>
-    {
+    ) -> impl Iterator<Item = (usize, &[crate::node::Color32], usize, usize)> {
         self.bitmap_renderers
             .iter()
             .enumerate()
             .filter_map(|(i, opt)| {
                 opt.as_ref().and_then(|r| {
                     if r.was_dirty() && r.tex_w() > 0 && r.tex_h() > 0 {
-                        Some((i, r.pixels_bg(), r.pixels_front(), r.tex_w(), r.tex_h()))
+                        Some((i, r.pixels(), r.tex_w(), r.tex_h()))
                     } else {
                         None
                     }
@@ -558,9 +543,77 @@ impl TimelineViewportPanel {
                     is_muted: clip.is_muted,
                     is_locked: clip.is_locked,
                     is_generator: clip.is_generator,
+                    is_audio: clip.is_audio,
+                    waveform: clip.waveform.clone(),
+                    in_point_seconds: clip.in_point_seconds,
+                    warped_secs_per_beat: clip.warped_secs_per_beat,
                 });
             }
         }
+    }
+
+    /// Screen-space geometry for the timeline overlays that sit ON TOP of the
+    /// clip bodies + waveforms: the marquee/region highlight, the insert cursor,
+    /// and the beat markers. Since §24 5b these are GPU rects emitted in the
+    /// overlay pass rather than baked into a per-layer bitmap. The caller scissors
+    /// to the tracks rect and draws them under the clip names. `insert_cursor_layer`
+    /// + `has_insert` come from the app (it owns the resolved cursor layer).
+    pub fn timeline_overlays(
+        &self,
+        insert_cursor_layer: Option<usize>,
+        has_insert: bool,
+        markers_out: &mut Vec<(f32, Color32)>,
+    ) -> TimelineOverlays {
+        let (min_beat, max_beat) = self.visible_beat_range();
+
+        // Region / marquee highlight: one translucent rect over the contiguous
+        // beat × layer span (mirrors the per-layer bitmap fill, unioned).
+        let region = self.selection_region.and_then(|r| {
+            if r.end_layer >= self.tracks.len() {
+                return None;
+            }
+            let x0 = self.beat_to_pixel(r.start_beat);
+            let x1 = self.beat_to_pixel(r.end_beat);
+            let y0 = self.track_y(r.start_layer);
+            let y1 = self.track_y(r.end_layer) + self.track_height(r.end_layer);
+            if x1 <= x0 || y1 <= y0 {
+                return None;
+            }
+            Some((
+                Rect::new(x0, y0, x1 - x0, y1 - y0),
+                color::ACCENT_BLUE_SELECTION,
+            ))
+        });
+
+        // Insert cursor: a thin vertical bar on its target layer's row.
+        let cursor = if has_insert {
+            insert_cursor_layer.and_then(|layer| {
+                if layer >= self.tracks.len() {
+                    return None;
+                }
+                let x = self.beat_to_pixel(self.insert_cursor_beat);
+                let y = self.track_y(layer);
+                let h = self.track_height(layer);
+                if h <= 0.0 {
+                    return None;
+                }
+                Some((Rect::new(x, y, INSERT_CURSOR_WIDTH, h), color::INSERT_CURSOR_BLUE))
+            })
+        } else {
+            None
+        };
+
+        // Beat markers: full-height vertical lines, culled to the visible range.
+        // Written into the caller's reusable scratch so this allocates nothing.
+        markers_out.clear();
+        for &(beat, color) in &self.marker_line_cache {
+            if beat < min_beat || beat > max_beat {
+                continue;
+            }
+            markers_out.push((self.beat_to_pixel(Beats::from_f32(beat)), color));
+        }
+
+        TimelineOverlays { region, cursor }
     }
 
     pub fn set_zoom(&mut self, pixels_per_beat: f32) {
@@ -1059,7 +1112,7 @@ mod tests {
             layer_index: 0,
             start_beat: Beats::from_f32(0.0),
             duration_beats: Beats(4.0), // 400px wide → 8px proportional trim handles
-            name: String::new(),
+            name: "".into(),
             color: color::CLIP_NORMAL,
             is_muted: false,
             is_locked: false,
@@ -1117,7 +1170,7 @@ mod tests {
             layer_index: 0,
             start_beat: Beats::from_f32(0.0),
             duration_beats: Beats(4.0),
-            name: String::new(),
+            name: "".into(),
             color: color::CLIP_NORMAL,
             is_muted: false,
             is_locked: false,

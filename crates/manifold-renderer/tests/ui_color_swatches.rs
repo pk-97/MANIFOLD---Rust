@@ -511,12 +511,16 @@ fn clip_body_sheet() {
             layer_index: 0,
             rect: c.rect,
             base_color: c.base_color,
-            name: names[i].to_string(),
+            name: names[i].into(),
             start_beat: manifold_foundation::Beats::ZERO,
             end_beat: manifold_foundation::Beats::ONE,
             is_muted: false,
             is_locked: false,
             is_generator: false,
+            is_audio: false,
+            waveform: None,
+            in_point_seconds: 0.0,
+            warped_secs_per_beat: 0.0,
         });
     }
 
@@ -547,6 +551,105 @@ fn clip_body_sheet() {
     image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
         .unwrap_or_else(|e| panic!("save {png}: {e}"));
     eprintln!("clip body sheet → {png}");
+}
+
+/// Renders audio-clip bodies with their waveform painted INSIDE the body via the
+/// per-clip GPU content path (§24 5b) — so the in-clip waveform (spectral colour,
+/// rounded-corner inset, sitting on the gradient body) can be eyeballed headlessly.
+/// Covers a wide clip, a narrow clip, and a selected clip.
+#[test]
+fn clip_waveform_sheet() {
+    use manifold_renderer::clip_content_gpu::ClipContentGpu;
+    use manifold_renderer::clip_draw::{emit_clips, ClipBody};
+    use manifold_ui::node::Rect;
+    use manifold_ui::panels::viewport::ClipScreenRect;
+    use manifold_ui::waveform_renderer::WaveformRenderer;
+    use std::sync::Arc;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let mut content = ClipContentGpu::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/clip_waveform_sheet.png");
+
+    // One second of a loud-ish sine sweep → visible, spectrally-varied bars.
+    let samples: Vec<f32> = (0..44_100)
+        .map(|i| (i as f32 / (8.0 + i as f32 / 4000.0)).sin() * 0.85)
+        .collect();
+    let mut wr = WaveformRenderer::new();
+    wr.set_audio_data(&samples, 1, 44_100);
+    assert!(wr.is_ready(), "synthetic waveform should be ready");
+    let wf = Arc::new(wr);
+
+    // (label, x, y, w, selected)
+    let cases: &[(&str, f32, f32, f32, bool)] = &[
+        ("wide audio clip", 24.0, 60.0, 380.0, false),
+        ("narrow", 430.0, 60.0, 90.0, false),
+        ("selected audio clip", 24.0, 180.0, 380.0, true),
+    ];
+    let tracks = Rect::new(0.0, 40.0, W as f32, H as f32 - 40.0);
+    let ch = 88.0;
+
+    let mut bodies = Vec::new();
+    let mut clips = Vec::new();
+    for (i, &(_, x, y, w, sel)) in cases.iter().enumerate() {
+        let rect = Rect::new(x, y, w, ch);
+        bodies.push(ClipBody {
+            rect,
+            base_color: color::CLIP_NORMAL,
+            selected: sel,
+            hovered: false,
+            muted: false,
+            locked: false,
+            generator: false,
+        });
+        clips.push(ClipScreenRect {
+            clip_id: manifold_foundation::ClipId::new(format!("a{i}")),
+            layer_index: 0,
+            rect,
+            base_color: color::CLIP_NORMAL,
+            name: "".into(),
+            start_beat: manifold_foundation::Beats::ZERO,
+            end_beat: manifold_foundation::Beats::from_f32(4.0),
+            is_muted: false,
+            is_locked: false,
+            is_generator: false,
+            is_audio: true,
+            waveform: Some(wf.clone()),
+            in_point_seconds: 0.0,
+            // 4 beats × 0.25 s/beat = 1.0 s → whole file maps across the clip.
+            warped_secs_per_beat: 0.25,
+        });
+    }
+
+    // Bodies first (Clear), then the per-clip waveform textures on top (Load).
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_0);
+    ui.draw_text(24.0, 14.0, "GPU IN-CLIP WAVEFORMS (\u{00a7}24 5b)", 13.0, color::TEXT_NORMAL);
+    emit_clips(&mut ui, &bodies);
+    for (i, &(label, x, y, ..)) in cases.iter().enumerate() {
+        let _ = i;
+        ui.draw_text(x, y - 16.0, label, 11.0, color::TEXT_DIMMED);
+    }
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "clip waveform sheet produced no body draws");
+
+    let target = RenderTarget::new(&device, W, H, FORMAT, "clip-waveform-sheet");
+    {
+        let mut enc = device.create_encoder("clip-waveform-bodies");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    {
+        let mut enc = device.create_encoder("clip-waveform-content");
+        content.render(&device, &mut enc, &target.texture, W, H, 1.0, tracks, &clips);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("clip waveform sheet → {png}");
 }
 
 fn draw_column(ui: &mut UIRenderer, x: f32, y0: f32, rows: &[(&str, Color32)]) {

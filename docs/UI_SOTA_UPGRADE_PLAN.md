@@ -134,38 +134,51 @@ body in the shared rect shader (`ui_renderer.rs`: `UIVertex` grew `color2` + `gr
 `color`→`color2` along `grad.xy`, every existing draw stays gradient-off). Plumbing only — nothing
 calls it yet, so zero visual change. Verified headless (`gradient_demo`). Benefits chrome *and* clips.
 
-**5b — Clips → GPU SDF quads. ✅ DONE (2026-06-26).** Clips are no longer baked into the per-layer
-bitmap; they render as GPU SDF rounded rects through the shared rect pipeline.
-- **Renderer:** [`clip_draw.rs`](../crates/manifold-renderer/src/clip_draw.rs) — `emit_clips` (lift
+**5b — Clips → GPU. ✅ DONE (2026-06-26).** Clips render entirely on the GPU now: rounded SDF body,
+the waveform painted INSIDE the body as a per-clip texture, and the timeline overlays as GPU rects. The
+per-layer CPU clip bitmap is gone end to end.
+- **Bodies:** [`clip_draw.rs`](../crates/manifold-renderer/src/clip_draw.rs) — `emit_clips` (lift
   shadow on select → rounded gradient body → border, two-phase so a selected clip's shadow sits under
   every neighbour) and `emit_clip_names` (overlay text, luminance-picked contrast, scissor-clipped;
   ellipsis is a Phase-6 polish — currently a hard cut). Styling lives in design tokens (`CLIP_RADIUS`,
   `CLIP_GRADIENT_LIGHTEN`, `CLIP_SHADOW*`, `CLIP_BORDER_*`, `CLIP_LABEL_*`) so the look is one-line
   tunable in the Phase-6 eye pass.
-- **Pass model (`app_render.rs`):** the per-layer bitmap split into two buffers
-  ([`bitmap_renderer.rs`](../crates/manifold-ui/src/bitmap_renderer.rs)) — **bg** (grid + top separator)
-  drawn before the clip pass, **front** (waveform + region + cursor + markers) after — with the GPU clip
-  cycle (own `UIRenderer` prepare/render) between them, and names in the Pass-5 overlay. Two
-  `LayerBitmapGpu` instances (bg / front). `draw_clip` + its clip-fill consts/tests retired.
+- **In-clip waveform:** [`clip_content_gpu.rs`](../crates/manifold-renderer/src/clip_content_gpu.rs) —
+  a per-`ClipId` texture pool. Each visible audio clip's waveform is rasterised into its own texture by
+  the *unchanged* `waveform_painter::draw_waveform` (same spectral colour / MIP / Ableton trim-warp
+  source-window math), uploaded, and drawn as a quad spanning the full clip width inside the body. The
+  waveform's own vertical padding keeps bars clear of the rounded corners (no horizontal inset needed),
+  and a clip's texture depends only on trim/warp/zoom — **not scroll** — so a fully-visible clip is a
+  cache hit while scrolling (zero re-raster / re-upload; a still timeline uploads nothing). Pool entries
+  for clips that leave the visible set are evicted each frame (O(pool) via a seen-set), bounding memory.
+- **Pass model (`app_render.rs`):** 4a per-layer grid bitmap (under) → 4b GPU clip bodies → 4b′ per-clip
+  waveform textures → 4c lane/stem/overview/group panel bitmaps → Pass 5 GPU overlays (region / cursor /
+  markers) then clip names. The per-layer **"front" buffer is deleted**: the single
+  [`bitmap_renderer.rs`](../crates/manifold-ui/src/bitmap_renderer.rs) buffer now holds only the grid
+  (a pure function of the viewport — its dirty-check collapsed from 6 conditions to viewport/time-sig/
+  force), region/cursor/markers are GPU rects via `viewport::timeline_overlays`, and there is **one**
+  `LayerBitmapGpu` (was two) carrying both the grid and the lane/stem/overview/group panels.
 - **Geometry:** [`viewport::visible_clip_rects`](../crates/manifold-ui/src/panels/viewport.rs) rebuilds
   on-screen clip rects each frame from the same `beat_to_pixel`/`track_y`/`CLIP_VERTICAL_PAD` the
-  hit-tester uses, so the drawn body and the clickable region can't drift.
+  hit-tester uses, so the drawn body and the clickable region can't drift. Clip `name` is `Arc<str>`
+  (shared with `ClipScreenRect`) and overlay markers fill a reusable scratch — no per-frame heap on the
+  render hot path.
 - **Model:** `TimelineClip.color_override: Option<Color>` (skip-serialize when `None`; old projects
   round-trip — unit-tested) resolved into `ViewportClip.color` at the core↔UI boundary; `get_clip_color`
   state logic unchanged.
-- **Deviations from the original sketch (both deliberate, for the live show):** the bitmap was *split*,
-  not replaced (waveform stays a bitmap — rich per-pixel data — so audio clips never regressed); and the
-  **pixel-shift scroll optimisation was KEPT, not retired** — at 4K×~53 layers the bg-grid upload
-  bandwidth on auto-scroll still pays for it, and auto-scroll is the live-performance case.
-- **Verify:** headless `clip_body_sheet` (bodies + names + states), serde round-trip unit tests, the
-  29 bitmap dirty-check tests, workspace sweep + clippy. The *look* itself is a Phase-6 eye pass on the
+- **Kept (deliberate):** the grid bitmap's **pixel-shift scroll optimisation** — at 4K×~53 layers the
+  grid is dense + full-width, so the auto-scroll upload bandwidth still pays for it.
+- **Verify:** headless `clip_body_sheet` (bodies + names + states) + `clip_waveform_sheet` (in-clip
+  waveform), serde round-trip unit tests, bitmap grid dirty-check tests, an adversarial multi-agent
+  review of the cutover, workspace sweep + clippy. The *look* itself is a Phase-6 eye pass on the
   running app — not claimed done here.
 
 **5c — Thumbnail pipeline.** Generator previews first (reuse the authoring-time
 [`preview_request`](../crates/manifold-renderer/src/layer_compositor.rs#L471) scaffolding → cache a
 small per-clip texture); then **video poster frames** (new: extract a representative decoded frame →
-downscale → cache per clip → upload → sample; invalidate on trim/source change). Audio waveform
-already exists ([waveform_renderer.rs](../crates/manifold-ui/src/waveform_renderer.rs)).
+downscale → cache per clip → upload → sample; invalidate on trim/source change). Audio waveform is
+already in-clip via 5b. Follow `clip_content_gpu`'s per-`ClipId` texture-pool + content-fingerprint
+pattern (drawn in the same 4b′ slot, over the body) — thumbnails are the same shape of problem.
 
 **5d — One header grammar + type badges.** Collapse the four `coordinate_mapper::layer_height`
 grammars (140/48/62/70) into one with height presets (collapsed/normal/tall) applied the same way to
