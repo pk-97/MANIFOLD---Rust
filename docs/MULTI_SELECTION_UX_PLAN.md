@@ -1,7 +1,10 @@
 # Multi-Selection UX — Implementation Plan
 
-> Status: planned, not started. Raised 2026-06-24, planned 2026-06-26.
-> Memory pointer: `project_multi_selection_ux`.
+> Status (updated 2026-06-26): **Phase 2 SHIPPED** — structural ops fan out + batch
+> (`51c1fe89`: batched delete + collapse/expand fan-out), plus **group-trim** beyond the plan
+> (`ec83271f`: drag one selected clip's edge, trim them all). **Phase 1 (mixed-value inspector)
+> NOT started** — no `is_mixed` flag in `param_card`/`state_sync` yet; it remains the real deliverable.
+> Raised 2026-06-24, planned 2026-06-26. Memory pointer: `project_multi_selection_ux`.
 
 Selection state stays where it already lives — the multi-capable `HashSet` channels in `manifold-ui`'s `UIState` for clips/layers/markers, and the per-tab `HashSet<EffectId>` already inside `InspectorCompositePanel`. We add no new selection container and no new shared state; we extend the existing sets and drive every bulk edit through the **already-built** `CompositeCommand` → `EditingService::execute_batch` → `ContentCommand::ExecuteBatch` path (one undo step, one cache/OSC refresh). Mixed-value inspector cells render Ableton-style dashes by adding an `is_mixed` flag that rides the existing per-slot `sync_values` dirty-check; the edit path fans a single `(ParamId, value)` over the resolved selection set on the UI side, building one unit command per object.
 

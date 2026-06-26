@@ -779,6 +779,7 @@ rest can't re-drift.
 | §17 | Elevation / separation | additive | low |
 | §18 | Apply component kit everywhere | coverage | medium (broad) |
 | §19 | Hierarchy + micro-motion | additive | medium |
+| §24 | Timeline visual upgrade (clips) | additive + structural | clips→GPU is the gate |
 
 **Honest caveat:** §14–§18 get the *system* to SOTA-grade — consistent, enforced, complete. They
 do **not** guarantee the *look* is best-in-class; that's a taste/tuning pass (the ramp values, the
@@ -842,6 +843,11 @@ those.
 §21's findings all confirmed, plus much more. One finding is a **live correctness bug**, not tidiness.
 
 ### 22.1 Headline: a real bug, not just duplication ⚠️
+> **✅ FIXED 2026-06-26 (`da7811f7`).** Hover now routes through the canonical
+> `ClipHitTester::hit_test` ([viewport/interaction.rs:32](../crates/manifold-ui/src/panels/viewport/interaction.rs#L32));
+> duplicate types removed; tests `hit_test_clip_delegates_to_shared_hit_tester` +
+> `hit_test_clip_skips_group_layers` pin it. The original finding kept below for the record.
+
 **Two clip hit-testers disagree.** *Confirmed by direct read.*
 - Hover / cursor → `viewport/interaction.rs::hit_test_clip` (called `app.rs:801`, `interaction.rs:89`)
   uses **fixed-width** trim handles (`TRIM_HANDLE_THRESHOLD_PX`, gated by `TRIM_HANDLE_MIN_CLIP_WIDTH_PX`).
@@ -898,8 +904,8 @@ primitives; `hit::Span` + `node::Rect::contains`; the `chrome` View/Host/compone
 `marker_flag_rect` (draw==hit). The primitives are good — the bypasses are the bug.
 
 ### 22.6 Fix order
-1. **§22.1 clip hit-test bug** — it's a live bug; fix first (route through `ClipHitTester`, unify the types).
-2. **`Color32::lighten/darken`** — ~7 copies, trivial, and the §16 guard then enforces it.
+1. **§22.1 clip hit-test bug** — ✅ DONE (`da7811f7`): routed through `ClipHitTester`, types unified.
+2. **`Color32::lighten/darken`** — ✅ DONE (`e8b92e90`, Phase 1 dedups): one home in `color.rs`, ~7 copies gone.
 3. **§16 guard** — turns the literal-level families (colour, radius, button styles) into CI failures.
 4. **Buttons kit (§18)** + **`section_header`** — the two HIGH structural ones.
 5. **Build-vs-update desync (§22.3)** — extract the shared ruler/grid iterators.
@@ -1023,6 +1029,98 @@ input injection, and the build→click→re-render loop all work with zero windo
 **Remaining to turn the spike into the harness:** generalize beyond one card (arbitrary panels /
 the full `InspectorCompositePanel`), add tree-assertion helpers (find-by-key, rect, overlap), and a
 golden-snapshot save/diff. The hard unknowns are now all answered.
+
+---
+
+## 24. Timeline visual upgrade — the clips 🎞️
+
+**Status:** spec (captured 2026-06-26 from a mockup-driven session). **Not covered by §1–§23** —
+this whole doc has been the *inspector + chrome*; the timeline lanes were never in scope. The
+clip *hit/drag* domain is correctly its own thing (§22.5) and the two hit-testers were already
+unified (`da7811f7`), so this chapter is **purely visual** — it adds nothing to hit-testing.
+
+The mockups that drove it (neutral chrome, colour = identity, value-based depth, readable clips)
+live in the session scratchpad — direction only, not the spec (§12: prototype in-renderer).
+
+### 24.1 The problem (grounded in code)
+The timeline is the most-played surface and it tells you almost nothing:
+- **Clips are featureless bars.** [`bitmap_painter::draw_clip`](../crates/manifold-ui/src/bitmap_painter.rs)
+  fills a rect + 1px borders. **No label** (names exist in the model, never drawn), **no preview**.
+- **Clip colour == layer colour.** [`get_clip_color`](../crates/manifold-ui/src/bitmap_painter.rs#L244)
+  uses the exact layer colour for every clip, so clips in a track fuse into one continuous smear —
+  you can't see where one ends and the next begins.
+- **Only audio has a preview** — [`waveform_renderer`](../crates/manifold-ui/src/waveform_renderer.rs)
+  (good, keep it). Video clips and generators draw as solid colour.
+- **Four track-height grammars** — `TRACK_HEIGHT` 140 / `COLLAPSED` 48 / `COLLAPSED_GEN` 62 /
+  `COLLAPSED_GROUP` 70 in `coordinate_mapper::layer_height`. Headers restructure by type instead of
+  badging it.
+- **Two cursors** — playhead (red) and insert cursor (blue), both drawn, competing for "where am I."
+- **Nav gaps** — button-only zoom (10 fixed levels), horizontal scroll with **no scrollbar thumb**.
+
+### 24.2 Why the clips look flat — the rendering path
+Clips are **CPU-painted into per-layer pixel buffers and blitted as flat quads**:
+`bitmap_painter` → [`layer_bitmap_gpu::upload_layer`](../crates/manifold-renderer/src/layer_bitmap_gpu.rs#L165)
+(`Rgba8UnormSrgb`) → `render_layers` draws them as textured quads. That path has **no rounded
+corners, no gradient, no shadow, no image blit — by construction.**
+
+Meanwhile the **GPU UITree path already has the hard primitive**:
+[`draw_rounded_rect`](../crates/manifold-renderer/src/ui_renderer.rs#L418) is an SDF rounded-rect
+with AA, scissor-depth layers, and CoreText text. The inspector/chrome use it; the clips don't.
+**That gap is the whole reason the timeline looks flat.** What the GPU path is *missing* for the
+full look: a **gradient fill** (no `gradient` in `ui_renderer.rs` today) and the **one soft shadow**
+§17 already wants.
+
+### 24.3 The upgrades (what the mockups showed)
+- **A — Readable clips.** Name strip at the top of every clip, a real boundary, a content-preview
+  area below. **Clip colour becomes independent of layer** — defaults to the track colour, can be
+  overridden per clip. (New: clips need an optional colour-override field; today there's none.)
+- **B — Content previews.**
+  - *Audio* — done (`waveform_renderer`).
+  - *Generator* — scaffolding exists:
+    [`preview_request`](../crates/manifold-renderer/src/layer_compositor.rs#L471) is an
+    authoring-time node-output preview (editor), **not** wired to timeline clips. Reuse the
+    render-to-texture, cache a small preview per generator clip.
+  - *Video* — **no infrastructure today.** New: extract a representative decoded frame → downscale →
+    cache per clip → upload → sample in the clip quad. The heaviest piece.
+- **C — One header grammar + type badges.** Collapse the four height grammars into one with a few
+  height presets (collapsed / normal / tall) applied the same way to every type; push type into a
+  badge (video / text / generator / group / audio) via icon glyph slots (the renderer's PUA glyph
+  system, the one the LFO arm button already uses).
+- **D — One clear "now."** Resolve playhead vs insert-cursor so the playback position is
+  unmissable — the rule that matters most live.
+- **E — Navigation.** Scroll-to-zoom, a draggable scrollbar thumb. (Minimap = optional, §24.6.)
+
+### 24.4 The gating move — clips onto the GPU SDF pipeline
+Migrate clip drawing off the CPU bitmap onto the **same GPU SDF pipeline the chrome already uses.**
+Then rounded body, name strip, gradient body, lift-on-select, and a thumbnail texture-slot all come
+from primitives that exist or are added once in §24.5(1).
+
+It's also a **perf win at show scale** (a real project is 2928 clips, `project_typical_project_scale`):
+GPU instanced quads drop the per-frame CPU paint entirely and retire the pixel-shift scroll
+optimisation that only exists *because* CPU painting is expensive.
+
+### 24.5 Build order (depends on §15 + §17)
+1. **Gradient primitive** in the shared GPU rect shader (`ui_renderer.rs` `RectCommand` +
+   fragment). Pairs with §17's single shadow term. Small, contained, benefits chrome too.
+2. **Clips → GPU SDF quads** — rounded body, name strip, gradient body, lift-on-select. Verify via
+   the §23 headless harness (node-bounds assertions + PNG snapshot), not Peter-gated per iteration.
+3. **Thumbnail pipeline** — generator previews first (scaffolding exists), then video poster frames
+   (new). Cache per clip; invalidate on trim / source change.
+4. **One-grammar headers + type badges** — collapse the four heights; type → icon badge.
+5. **Playhead/insert-cursor clarity + nav** (scroll-zoom, scrollbar thumb).
+
+### 24.6 Out of scope / not now
+- **A dedicated perform-mode timeline** (bigger targets, stripped chrome, "what's playing now").
+  There *is* a Perform button; whether perform gets its own timeline treatment vs one shared surface
+  is an **open design fork** — decide before investing past §24.5(2).
+- **Minimap / arrangement overview** — optional; revisit if jump-around-live still feels slow after E.
+- **Clip hit/drag** — already its own unified domain (§22.5, `da7811f7`); untouched here.
+
+### 24.7 Dependencies on the rest of the doc
+- **§15 (colour ramp)** — clip colours desaturate onto identity hues; chrome stays neutral.
+- **§17 (elevation)** — the one shadow term is shared between floating popups and clip lift.
+- **§19 (hierarchy)** — focused-track emphasis is the timeline echo of focused-card emphasis.
+- **§23 (headless harness)** — the verifier for every step here.
 
 ---
 
