@@ -21,6 +21,11 @@ struct UIVertex {
     /// [rect_w, rect_h, corner_radius, border_width]
     rect_params: [f32; 4],
     border_color: [f32; 4],
+    /// Gradient end colour. Ignored unless `grad.z` (enable) is set.
+    color2: [f32; 4],
+    /// [dir_x, dir_y, enable, _]. Linear gradient `color`→`color2` along the
+    /// unit direction in uv space; `enable <= 0.5` → flat `color`.
+    grad: [f32; 4],
 }
 
 const UI_SHADER: &str = r#"
@@ -30,6 +35,8 @@ struct VertexInput {
     @location(2) color: vec4<f32>,
     @location(3) rect_params: vec4<f32>,
     @location(4) border_color: vec4<f32>,
+    @location(5) color2: vec4<f32>,
+    @location(6) grad: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -38,6 +45,8 @@ struct VertexOutput {
     @location(1) color: vec4<f32>,
     @location(2) rect_params: vec4<f32>,
     @location(3) border_color: vec4<f32>,
+    @location(4) color2: vec4<f32>,
+    @location(5) grad: vec4<f32>,
 };
 
 struct Globals {
@@ -58,6 +67,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.color = in.color;
     out.rect_params = in.rect_params;
     out.border_color = in.border_color;
+    out.color2 = in.color2;
+    out.grad = in.grad;
     return out;
 }
 
@@ -86,9 +97,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(in.color.rgb, a);
     }
 
-    // If no corner radius, just output solid color (fast path)
+    // Body fill: flat `color`, or a linear gradient color→color2 along the unit
+    // direction `grad.xy` (in uv space) when `grad.z` is set. The gradient
+    // primitive (`draw_gradient_rect`); border + shadow paths never use it.
+    var fill = in.color;
+    if in.grad.z > 0.5 {
+        let t = clamp(dot(in.uv - vec2<f32>(0.5), in.grad.xy) + 0.5, 0.0, 1.0);
+        fill = mix(in.color, in.color2, t);
+    }
+
+    // If no corner radius, just output the body fill (fast path)
     if radius <= 0.0 && border_w <= 0.0 {
-        return in.color;
+        return fill;
     }
 
     // SDF rounded rectangle
@@ -114,7 +134,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    return vec4<f32>(in.color.rgb, in.color.a * alpha);
+    return vec4<f32>(fill.rgb, fill.a * alpha);
 }
 "#;
 
@@ -167,7 +187,14 @@ struct RectCommand {
     corner_radius: f32,
     border_width: f32,
     border_color: [f32; 4],
+    /// Gradient end colour + `[dir_x, dir_y, enable, _]`. `grad` all-zero (the
+    /// `NO_GRAD` default on every solid command) → flat `color`.
+    color2: [f32; 4],
+    grad: [f32; 4],
 }
+
+/// `grad` value for a solid (non-gradient) rect: enable channel is 0.
+const NO_GRAD: [f32; 4] = [0.0; 4];
 
 /// A solid-coloured line drawn as an oriented quad. Piggybacks on the
 /// rect pipeline by emitting four rotated corner positions with
@@ -294,7 +321,7 @@ impl UIRenderer {
             alpha_operation: GpuBlendOp::Add,
         };
         let layout = GpuVertexLayout {
-            stride: std::mem::size_of::<UIVertex>() as u32, // 64 bytes
+            stride: std::mem::size_of::<UIVertex>() as u32, // 96 bytes
             attributes: vec![
                 GpuVertexAttribute {
                     format: GpuVertexFormat::Float32x2,
@@ -320,6 +347,16 @@ impl UIRenderer {
                     format: GpuVertexFormat::Float32x4,
                     offset: 48,
                     shader_location: 4,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 64,
+                    shader_location: 5,
+                },
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x4,
+                    offset: 80,
+                    shader_location: 6,
                 },
             ],
         };
@@ -429,6 +466,8 @@ impl UIRenderer {
             corner_radius: 0.0,
             border_width: 0.0,
             border_color: [0.0; 4],
+            color2: [0.0; 4],
+            grad: NO_GRAD,
         });
     }
 
@@ -451,6 +490,39 @@ impl UIRenderer {
             corner_radius,
             border_width: 0.0,
             border_color: [0.0; 4],
+            color2: [0.0; 4],
+            grad: NO_GRAD,
+        });
+    }
+
+    /// Queue a rounded rectangle with a linear-gradient body from `start` to
+    /// `end`, interpolated along the unit direction `dir` in the rect's UV space
+    /// (`[0.0, 1.0]` = top→bottom, `[1.0, 0.0]` = left→right). The shared
+    /// primitive behind gradient card/clip bodies (§24 5a); border + shadow paths
+    /// are unaffected. `corner_radius: 0.0` gives a flat (non-rounded) gradient.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_gradient_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        corner_radius: f32,
+        start: impl Into<LinearColor>,
+        end: impl Into<LinearColor>,
+        dir: [f32; 2],
+    ) {
+        self.rect_commands.push(RectCommand {
+            x,
+            y,
+            w,
+            h,
+            color: start.into().0,
+            corner_radius,
+            border_width: 0.0,
+            border_color: [0.0; 4],
+            color2: end.into().0,
+            grad: [dir[0], dir[1], 1.0, 0.0],
         });
     }
 
@@ -476,6 +548,8 @@ impl UIRenderer {
             corner_radius,
             border_width,
             border_color: border_color.into().0,
+            color2: [0.0; 4],
+            grad: NO_GRAD,
         });
     }
 
@@ -508,6 +582,8 @@ impl UIRenderer {
             corner_radius,
             border_width: -blur,
             border_color: [0.0; 4],
+            color2: [0.0; 4],
+            grad: NO_GRAD,
         });
     }
 
@@ -734,6 +810,8 @@ impl UIRenderer {
                     corner_radius: style.corner_radius,
                     border_width: style.border_width,
                     border_color: style.border_color.to_f32(),
+                    color2: [0.0; 4],
+                    grad: NO_GRAD,
                 });
             } else if style.corner_radius > 0.0 {
                 self.rect_commands.push(RectCommand {
@@ -745,6 +823,8 @@ impl UIRenderer {
                     corner_radius: style.corner_radius,
                     border_width: 0.0,
                     border_color: [0.0; 4],
+                    color2: [0.0; 4],
+                    grad: NO_GRAD,
                 });
             } else {
                 self.rect_commands.push(RectCommand {
@@ -756,6 +836,8 @@ impl UIRenderer {
                     corner_radius: 0.0,
                     border_width: 0.0,
                     border_color: [0.0; 4],
+                    color2: [0.0; 4],
+                    grad: NO_GRAD,
                 });
             }
         } else if style.border_width > 0.0 && style.border_color.a > 0 {
@@ -769,6 +851,8 @@ impl UIRenderer {
                 corner_radius: style.corner_radius,
                 border_width: style.border_width,
                 border_color: style.border_color.to_f32(),
+                color2: [0.0; 4],
+                grad: NO_GRAD,
             });
         }
 
@@ -954,6 +1038,8 @@ impl UIRenderer {
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
+                color2: cmd.color2,
+                grad: cmd.grad,
             });
             self.vertices.push(UIVertex {
                 position: [x1, y0],
@@ -961,6 +1047,8 @@ impl UIRenderer {
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
+                color2: cmd.color2,
+                grad: cmd.grad,
             });
             self.vertices.push(UIVertex {
                 position: [x1, y1],
@@ -968,6 +1056,8 @@ impl UIRenderer {
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
+                color2: cmd.color2,
+                grad: cmd.grad,
             });
             self.vertices.push(UIVertex {
                 position: [x0, y1],
@@ -975,6 +1065,8 @@ impl UIRenderer {
                 color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
+                color2: cmd.color2,
+                grad: cmd.grad,
             });
 
             self.indices
@@ -1024,6 +1116,8 @@ impl UIRenderer {
                     color: cmd.color,
                     rect_params: zero_params,
                     border_color: zero_border,
+                    color2: cmd.color,
+                    grad: zero_params,
                 });
                 self.vertices.push(UIVertex {
                     position: [cmd.x1 + nx, cmd.y1 + ny],
@@ -1031,6 +1125,8 @@ impl UIRenderer {
                     color: cmd.color,
                     rect_params: zero_params,
                     border_color: zero_border,
+                    color2: cmd.color,
+                    grad: zero_params,
                 });
                 self.vertices.push(UIVertex {
                     position: [cmd.x1 - nx, cmd.y1 - ny],
@@ -1038,6 +1134,8 @@ impl UIRenderer {
                     color: cmd.color,
                     rect_params: zero_params,
                     border_color: zero_border,
+                    color2: cmd.color,
+                    grad: zero_params,
                 });
                 self.vertices.push(UIVertex {
                     position: [cmd.x0 - nx, cmd.y0 - ny],
@@ -1045,6 +1143,8 @@ impl UIRenderer {
                     color: cmd.color,
                     rect_params: zero_params,
                     border_color: zero_border,
+                    color2: cmd.color,
+                    grad: zero_params,
                 });
                 let idx_offset = (self.indices.len() * std::mem::size_of::<u32>()) as u64;
                 self.indices

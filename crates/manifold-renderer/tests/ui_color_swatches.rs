@@ -394,6 +394,53 @@ fn shadow_demo() {
     eprintln!("shadow demo → {png}");
 }
 
+/// Renders the §24 5a gradient primitive: a flat control rect, then vertical /
+/// horizontal / rounded gradient rects, so the new `draw_gradient_rect` and the
+/// shared-shader change can be eyeballed (and flat rects confirmed unregressed).
+#[test]
+fn gradient_demo() {
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/gradient_demo.png");
+
+    let top = Color32::new(90, 130, 210, 255);
+    let bot = Color32::new(30, 44, 80, 255);
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_1);
+
+    // Flat control (no gradient) — must look exactly as before the vertex change.
+    ui.draw_text(40.0, 30.0, "flat", 13.0, color::TEXT_NORMAL);
+    ui.draw_rect(40.0, 54.0, 160.0, 90.0, top);
+
+    // Vertical gradient top→bottom.
+    ui.draw_text(230.0, 30.0, "vertical", 13.0, color::TEXT_NORMAL);
+    ui.draw_gradient_rect(230.0, 54.0, 160.0, 90.0, 0.0, top, bot, [0.0, 1.0]);
+
+    // Horizontal gradient left→right.
+    ui.draw_text(420.0, 30.0, "horizontal", 13.0, color::TEXT_NORMAL);
+    ui.draw_gradient_rect(420.0, 54.0, 160.0, 90.0, 0.0, top, bot, [1.0, 0.0]);
+
+    // Rounded vertical gradient (clip/card body look).
+    ui.draw_text(40.0, 180.0, "rounded + vertical (clip body)", 13.0, color::TEXT_NORMAL);
+    ui.draw_gradient_rect(40.0, 204.0, 360.0, 70.0, color::CARD_RADIUS, top, bot, [0.0, 1.0]);
+
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "gradient demo produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "gradient-demo");
+    {
+        let mut enc = device.create_encoder("gradient-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("gradient demo → {png}");
+}
+
 fn draw_column(ui: &mut UIRenderer, x: f32, y0: f32, rows: &[(&str, Color32)]) {
     for (i, (label, c)) in rows.iter().enumerate() {
         let y = y0 + i as f32 * ROW_H;
