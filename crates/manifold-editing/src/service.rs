@@ -754,6 +754,30 @@ impl EditingService {
         commands
     }
 
+    /// Build a command that drops a copy of `src_clip_id` at `target_beat` on
+    /// `target_layer` — the opt/alt-drag-duplicate primitive. The clone keeps all
+    /// of the source clip's data (generator, effects, in_point, …) with a fresh
+    /// id. `AddClipCommand` enforces non-overlap internally. Returns None if the
+    /// source clip or target layer is missing.
+    pub fn duplicate_clip_to(
+        project: &Project,
+        src_clip_id: &ClipId,
+        target_beat: Beats,
+        target_layer: usize,
+        spb: f32,
+    ) -> Option<Box<dyn Command>> {
+        let src = project
+            .timeline
+            .layers
+            .iter()
+            .flat_map(|l| l.clips.iter())
+            .find(|c| c.id == *src_clip_id)?;
+        let target_layer_id = project.timeline.layers.get(target_layer)?.layer_id.clone();
+        let mut new_clip = src.clone_with_new_id();
+        new_clip.start_beat = target_beat;
+        Some(Box::new(AddClipCommand::new(new_clip, target_layer_id, spb)))
+    }
+
     // ─── Delete ───
 
     /// Delete selected clips.

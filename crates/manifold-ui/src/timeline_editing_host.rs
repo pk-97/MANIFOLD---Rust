@@ -208,6 +208,11 @@ pub trait TimelineEditingHost {
         new_in_point: Seconds,
     );
 
+    /// Drop a copy of `src_clip_id` at `target_beat` on `target_layer` into the
+    /// CURRENT command batch (committed with the move on commit_command_batch),
+    /// so an opt/alt-drag duplicate is one undo entry alongside the move.
+    fn duplicate_clip_to(&mut self, src_clip_id: &str, target_beat: Beats, target_layer: usize);
+
     /// Commit the current command batch as a single undo entry.
     fn commit_command_batch(&mut self, description: &str);
 

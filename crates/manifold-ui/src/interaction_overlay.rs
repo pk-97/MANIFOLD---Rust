@@ -140,6 +140,9 @@ pub struct InteractionOverlay {
     drag_selection_max_layer: usize,
     trim_clip_id: Option<ClipId>,
     drag_layer_blocked: bool,
+    // Alt/Opt held at move-drag start → on release, leave a copy of each moved
+    // clip at its original position (opt-drag duplicate).
+    duplicate_on_release: bool,
     region_drag_start_beat: Beats,
     region_drag_start_layer: usize,
 
@@ -176,6 +179,7 @@ impl InteractionOverlay {
             drag_selection_max_layer: 0,
             trim_clip_id: None,
             drag_layer_blocked: false,
+            duplicate_on_release: false,
             region_drag_start_beat: Beats::ZERO,
             region_drag_start_layer: 0,
             drag_start_beat: Beats::ZERO,
@@ -501,6 +505,8 @@ impl InteractionOverlay {
             }
             // Unity lines 322-324: body → move drag
             HitRegion::Body => {
+                // Alt/Opt-drag duplicates: remembered now, acted on at release.
+                self.duplicate_on_release = self.modifiers.alt;
                 self.begin_move_drag(
                     &hit.clip_id,
                     hit.layer_index,
@@ -587,6 +593,16 @@ impl InteractionOverlay {
                             snapshot.layer_index,
                             clip.layer_index,
                         );
+                        // Opt/Alt-drag: drop a copy back at the original position
+                        // so the moved clip reads as the duplicate. Added to the
+                        // same batch → one undo entry with the move.
+                        if self.duplicate_on_release {
+                            host.duplicate_clip_to(
+                                &snapshot.clip_id,
+                                snapshot.start_beat,
+                                snapshot.layer_index,
+                            );
+                        }
                     }
                 }
             }
@@ -630,7 +646,11 @@ impl InteractionOverlay {
 
         // Unity lines 436-441: commit as composite command
         let desc = if ended_move {
-            "Move clips"
+            if self.duplicate_on_release {
+                "Duplicate clips"
+            } else {
+                "Move clips"
+            }
         } else {
             "Trim clips"
         };
@@ -643,6 +663,7 @@ impl InteractionOverlay {
         self.drag_anchor_clip_id = None;
         self.trim_clip_id = None;
         self.trim_originals.clear();
+        self.duplicate_on_release = false;
 
         // Unity lines 444-445
         self.drag_layer_blocked = false;

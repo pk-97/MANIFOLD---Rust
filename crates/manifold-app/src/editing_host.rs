@@ -523,6 +523,22 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         self.command_batch.push(Box::new(cmd));
     }
 
+    fn duplicate_clip_to(&mut self, src_clip_id: &str, target_beat: Beats, target_layer: usize) {
+        let project = &mut *self.project;
+        let spb = 60.0 / project.settings.bpm.0.max(1.0);
+        let src_id = ClipId::new(src_clip_id);
+        if let Some(mut cmd) =
+            EditingService::duplicate_clip_to(project, &src_id, target_beat, target_layer, spb)
+        {
+            // Apply to the local mirror now (the copy appears immediately) and
+            // push into the batch so it commits as part of the move's one undo
+            // entry and reaches the content thread via ExecuteBatch.
+            cmd.execute(project);
+            self.command_batch.push(cmd);
+        }
+        *self.needs_structural_sync = true;
+    }
+
     fn commit_command_batch(&mut self, description: &str) {
         // Unity lines 428-434: prepend pre-drag split commands so
         // CompositeCommand.Undo() reverses them AFTER undoing the move.
