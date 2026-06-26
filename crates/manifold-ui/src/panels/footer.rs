@@ -6,7 +6,7 @@
 //! See `docs/CHROME_API_DESIGN.md`.
 
 use super::{Panel, PanelAction};
-use crate::chrome::{ChromeHost, Pad, Reconcile, Sizing, View};
+use crate::chrome::{ChromeHost, Pad, Reconcile, Sizing, View, components};
 use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
@@ -33,12 +33,6 @@ const TONEMAP_BTN_GAP: f32 = 2.0;
 const FPS_LABEL_W: f32 = 32.0;
 const FPS_FIELD_W: f32 = 46.0;
 const RIGHT_GUTTER: f32 = 10.0;
-
-// ── Panel-specific colors ──────────────────────────────────────────
-
-const FOOTER_BTN_HOVER: Color32 = color::FOOTER_BTN_HOVER;
-const FOOTER_BTN_PRESSED: Color32 = color::FOOTER_BTN_PRESSED;
-const FOOTER_SCALE_ACTIVE: Color32 = color::HEADER_BUTTON_ACTIVE;
 
 const FOOTER_FONT: u16 = color::FONT_LABEL;
 
@@ -113,28 +107,23 @@ impl FooterPanel {
 
     // ── Styles ──────────────────────────────────────────────────────
 
+    /// §18: the look now comes from the component kit; the footer only overrides
+    /// the compact footer font. A plain (non-state) action button → secondary.
     fn footer_button_style() -> UIStyle {
         UIStyle {
-            bg_color: color::BUTTON_INACTIVE_C32,
-            hover_bg_color: FOOTER_BTN_HOVER,
-            pressed_bg_color: FOOTER_BTN_PRESSED,
-            text_color: color::TEXT_PRIMARY_C32,
             font_size: FOOTER_FONT,
-            corner_radius: color::SMALL_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
+            ..components::button_secondary_style()
         }
     }
 
-    /// Footer button with an active-state background (render scale / tonemap).
+    /// A mutually-exclusive footer selector (render scale / tonemap): a kit
+    /// segment cell — the selected one raises onto the control level, the rest
+    /// sit at panel level. §18: kit owns the look (was a bespoke blue-when-active;
+    /// grey-raised keeps the one accent for genuine focus, per §15's "sparingly").
     fn active_button_style(active: bool) -> UIStyle {
         UIStyle {
-            bg_color: if active {
-                FOOTER_SCALE_ACTIVE
-            } else {
-                color::BUTTON_INACTIVE_C32
-            },
-            ..Self::footer_button_style()
+            font_size: FOOTER_FONT,
+            ..components::segment_style(active)
         }
     }
 

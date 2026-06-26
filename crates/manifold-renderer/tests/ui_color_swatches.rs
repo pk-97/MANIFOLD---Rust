@@ -113,6 +113,45 @@ fn color_ramp_contact_sheet() {
     eprintln!("colour contact sheet → {png}");
 }
 
+/// Renders the footer chrome bar after the §18 kit migration, so the new
+/// neutral/segment button look (grey-raised active vs the old blue) can be seen.
+#[test]
+fn footer_demo() {
+    use manifold_ui::layout::ScreenLayout;
+    use manifold_ui::panels::Panel;
+    use manifold_ui::panels::footer::FooterPanel;
+    use manifold_ui::UITree;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/footer_demo.png");
+
+    let mut footer = FooterPanel::new();
+    footer.set_selection_info("Layers: 5   |   Clips: 5");
+    footer.set_render_scale(0.75); // 75% is the active scale segment
+    let layout = ScreenLayout::new(W as f32, H as f32);
+    let mut tree = UITree::new();
+    footer.build(&mut tree, &layout);
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_0);
+    ui.render_tree(&tree, None);
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "footer produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "footer-demo");
+    {
+        let mut enc = device.create_encoder("footer-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("footer demo → {png}");
+}
+
 /// Renders a floating surface with and without the §17 soft shadow, so the
 /// "lift" can be eyeballed headlessly.
 #[test]
