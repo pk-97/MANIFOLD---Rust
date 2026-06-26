@@ -745,8 +745,12 @@ button mechanic had been copy-pasted six times across the chrome (transport `but
 layer-card `mute/solo/led/analysis` quartet, header `action/zoom`); it now lives once in the kit.
 **Migrated:** footer, transport, layer-card mixer (carve-out hues unchanged), header (and fixed a
 within-bar 59-vs-71 neutral-grey split). Each verified by a headless render in `ui_color_swatches.rs`.
-**Remaining:** the three popups (`dropdown`/`browser_popup`/`ableton_picker`) onto a shared
-`popup_shell`; the param card's `*_btn_style` one-offs in `param_slider_shared`.
+**Popups DONE** too: one shared `panels::popup_shell` (scrim + a single rounded 1px-bordered
+container) now backs all three (`dropdown`/`browser_popup`/`ableton_picker`) — the pickers' fake
+outer+inner border pair collapsed to a real border, three scrim dims → `PopupStyle::DROPDOWN`/`MODAL`,
+per-file `BG_BORDER`/`BG_INNER` hoisted to `MODAL_*` tokens (ratchet 145 → 139). The §17 overlay loop
+already lifts every popup, so the shell carries no shadow of its own.
+**Remaining:** only the param card's `*_btn_style` one-offs in `param_slider_shared`.
 
 **Rule:** no bespoke button / toggle / dropdown / segmented styling. Every instance is a kit
 component on the §4 tokens + §15 ramp. Audit each panel; replace one-offs; delete the local style
@@ -787,7 +791,7 @@ rest can't re-drift.
 | §14 | Padding / layout grid | cleanup | C is structural |
 | §15 | Semantic colour ramp ✅ | cleanup | low (aliases) |
 | §17 | Elevation / separation ✅ | additive | low |
-| §18 | Apply component kit everywhere ◑ (chrome bars done; popups left) | coverage | medium (broad) |
+| §18 | Apply component kit everywhere ✅ (chrome + popups; param-card one-offs left) | coverage | medium (broad) |
 | §19 | Hierarchy + micro-motion | additive | medium |
 | §24 | Timeline visual upgrade (clips) | additive + structural | clips→GPU is the gate |
 
