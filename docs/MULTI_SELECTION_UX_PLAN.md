@@ -62,9 +62,28 @@ Apply the `len==1` short-circuit convention (editing_host.rs:541) so a single-ob
 
 ---
 
+## Phase 3 — Timeline interaction fundamentals
+
+**Goal:** Close the remaining gaps in basic multi-clip timeline editing so it matches Ableton/Bitwig muscle memory. Independent of Phase 1; can ship before it.
+
+**Already solid (do not touch):** click / shift-range / cmd-toggle / marquee-drag / Cmd+A / Escape-clear; group **move** (drag any selected clip → all move, snapped, cross-layer, non-overlap, one undo, interaction_overlay.rs:528-552); group **delete / duplicate / nudge**; the mousedown rule (interaction_overlay.rs:855 — mousedown on a selected clip keeps the group for the drag, on an unselected clip collapses to it).
+
+**The gaps, in priority order:**
+1. ~~**Group-trim (mouse drag).**~~ **DONE (commit ec83271f).** Captures pre-trim geometry for every selected clip (`capture_trim_selection` → `trim_originals`), derives one raw edge delta from the grabbed clip, applies it to each clip clamped individually, records one trim per changed clip as a "Trim clips" composite. Single-clip path byte-identical to before. Needs a hands-on confirmation of the multi-clip drag in the running app (mouse interaction, not unit-testable without a full mock host).
+2. ~~**Marquee highlight.**~~ **DONE.** Shipped a render-side fix, NOT the originally-planned `box_select` wiring. The bitmap renderer (`bitmap_renderer.rs`) now styles a clip as selected when `region_selects_clips` (set in `app_render.rs` = `has_region && selected_clip_ids.is_empty()`, i.e. a true marquee) and the clip passes `clip_overlaps_region` — a half-open overlap + inclusive-layer-range test identical to `EditingService::get_clips_in_region`. No second selection representation is materialized; the lazy resolver stays the single source of selection truth. `box_select` (`clip_hit_tester.rs:136`) remains **unused** — candidate for deletion, not wiring. Unit test `clip_overlaps_region_matches_get_clips_in_region_semantics` locks the boundary semantics.
+   - **Known residual (pre-existing, not from this change):** for a region *derived* from a clip selection (cmd-click A and C skipping B → bounding box A..C, set `{A,C}`), the op resolver branches on `has_region` alone, so an op acts on `{A,B,C}` while the highlight shows only `{A,C}`. Render and ops disagree in the derived-region case. To close later: make ops act on the set when the set is non-empty, OR highlight the full box. Track on the multi-selection thread.
+3. **Copy / paste of a selection.** Paste is a stubbed TODO (`ContextPasteAtTrack`, editing.rs; "browser paste not yet wired"). Cut/duplicate work; paste doesn't. (Clipboard work, partly separate from selection.)
+4. **Opt/Alt-drag to duplicate.** Hold-Alt-and-drag drops a copy — core DAW muscle memory, not present.
+
+**Decision, not necessarily a fix:** click-without-drag on a clip that's part of a multi-selection currently does NOT collapse to that clip (Ableton collapses on mouse-up). Decide whether to match Ableton.
+
+**Done looks like:** drag one selected clip's edge → all selected clips trim by the same delta, each clamped, one undo; the marquee box highlights clips as you draw it.
+
+---
+
 ## Deferred / not a phase
 
-- **Marquee materializing a clip set.** `box_select` (`clip_hit_tester.rs:136`) is written, unit-tested, group-skipping, and has **no production caller**. Structural ops already work on a marquee via the lazy region resolver (`input_host.rs::get_selected_clip_ids` → `get_clips_in_region`), so the only gap is the visual/inspector lag where boxed clips aren't highlighted until an op runs. Wire `box_select` into `update_region_drag` only if that lag is felt on stage.
+- **Higher-level DAW features** raised and parked: timeline automation envelopes (wanted, but folded into a later multi-selection pass), clip fades/crossfades, insert/delete time (ripple), relative/spread multi-edit (Bitwig operators), consolidate/render-to-clip, follow actions (deferred to a future "Session mode"). Nail the fundamentals (Phases 1–3) first.
 
 ---
 

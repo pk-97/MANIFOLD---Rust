@@ -30,6 +30,12 @@ pub struct BitmapRepaintState<'a> {
     pub hovered_clip_id: Option<&'a str>,
     pub has_region: bool,
     pub region: Option<&'a SelectionRegion>,
+    /// True when the active region IS the selection — a marquee with no
+    /// individual clip set — so clips overlapping its beat/layer span render as
+    /// selected. False when the region is a bounding box derived from an
+    /// existing clip selection (`set_region_from_clip_bounds`); per-clip styling
+    /// then stays driven by the clip set, not the box.
+    pub region_selects_clips: bool,
     pub has_insert_cursor: bool,
     pub insert_cursor_beat: f32,
     pub insert_cursor_layer: Option<usize>,
@@ -404,8 +410,18 @@ impl LayerBitmapRenderer {
                 continue;
             }
 
-            // Visual state
-            let is_selected = (state.is_selected)(&clip.clip_id);
+            // Visual state. When the region IS the selection (region_selects_clips:
+            // a marquee with an empty clip set), style every clip overlapping its
+            // beat/layer span as selected. The overlap test mirrors
+            // EditingService::get_clips_in_region, which is the exact set ops
+            // resolve for an empty-set region — so the marquee highlight is WYSIWYG.
+            // (For a region derived from a clip set, region_selects_clips is false
+            // and styling stays driven by the set.)
+            let in_marquee = state.region_selects_clips
+                && state
+                    .region
+                    .is_some_and(|r| clip_overlaps_region(r, self.layer_index, clip_start_f32, end_beat));
+            let is_selected = (state.is_selected)(&clip.clip_id) || in_marquee;
             let is_hovered = state.hovered_clip_id == Some(clip.clip_id.as_str());
             let clip_muted = is_muted || clip.is_muted;
             let is_locked = clip.is_locked;
@@ -753,6 +769,23 @@ fn approx_eq(a: f32, b: f32) -> bool {
     (a - b).abs() < 0.0001
 }
 
+/// Whether a clip at `layer_index` spanning `[clip_start, clip_end)` falls inside
+/// `region`. Mirrors `EditingService::get_clips_in_region` exactly: inclusive
+/// layer range `[start_layer, end_layer]` and half-open beat overlap
+/// (`clip_start < region.end && clip_end > region.start`). Keeping this identical
+/// is what makes the marquee highlight WYSIWYG with what an op resolves.
+fn clip_overlaps_region(
+    region: &SelectionRegion,
+    layer_index: usize,
+    clip_start: f32,
+    clip_end: f32,
+) -> bool {
+    layer_index >= region.start_layer
+        && layer_index <= region.end_layer
+        && clip_start < region.end_beat.as_f32()
+        && clip_end > region.start_beat.as_f32()
+}
+
 // ── Tests ──
 
 #[cfg(test)]
@@ -784,12 +817,39 @@ mod tests {
             hovered_clip_id: None,
             has_region: false,
             region: None,
+            region_selects_clips: false,
             has_insert_cursor: false,
             insert_cursor_beat: 0.0,
             insert_cursor_layer: None,
             pixels_per_beat: 100.0,
             markers: &[],
         }
+    }
+
+    #[test]
+    fn clip_overlaps_region_matches_get_clips_in_region_semantics() {
+        // Region [4,8) beats over layers 1..=3 — same bounds form as
+        // EditingService::get_clips_in_region.
+        let region = SelectionRegion {
+            start_beat: Beats(4.0),
+            end_beat: Beats(8.0),
+            start_layer: 1,
+            end_layer: 3,
+        };
+        // Inside: layer in range, beats overlap.
+        assert!(clip_overlaps_region(&region, 2, 6.0, 7.0));
+        // Half-open end: a clip starting exactly at end_beat is excluded.
+        assert!(!clip_overlaps_region(&region, 2, 8.0, 12.0));
+        // Half-open start: a clip ending exactly at start_beat is excluded.
+        assert!(!clip_overlaps_region(&region, 2, 0.0, 4.0));
+        // A clip ending just past start_beat is included.
+        assert!(clip_overlaps_region(&region, 2, 3.0, 4.5));
+        // Layer range inclusive at both ends.
+        assert!(clip_overlaps_region(&region, 1, 6.0, 7.0));
+        assert!(clip_overlaps_region(&region, 3, 6.0, 7.0));
+        // Outside the layer range is excluded.
+        assert!(!clip_overlaps_region(&region, 0, 6.0, 7.0));
+        assert!(!clip_overlaps_region(&region, 4, 6.0, 7.0));
     }
 
     #[test]

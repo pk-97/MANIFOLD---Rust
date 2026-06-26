@@ -2705,6 +2705,12 @@ impl Application {
                 .map(|s| s.to_string());
             let sel_region = self.ws.ui_root.viewport.selection_region_ref().cloned();
             let has_region = sel_region.is_some();
+            // A marquee region (no individual clip set) highlights the clips it
+            // covers. A region derived from a clip selection
+            // (set_region_from_clip_bounds) keeps the set non-empty — leave its
+            // per-clip styling to the set so the bounding box doesn't over-light
+            // clips that fall between the selected ones.
+            let region_selects_clips = has_region && self.selection.selected_clip_ids.is_empty();
             let insert_cursor_beat = self.ws.ui_root.viewport.insert_cursor_beat().as_f32();
             let insert_layer = self
                 .selection
@@ -2722,6 +2728,7 @@ impl Application {
                 hovered_clip_id: hovered.as_deref(),
                 has_region,
                 region: sel_region.as_ref(),
+                region_selects_clips,
                 has_insert_cursor: has_insert,
                 insert_cursor_beat,
                 insert_cursor_layer: insert_layer,
