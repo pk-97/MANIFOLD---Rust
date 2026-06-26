@@ -129,8 +129,10 @@ confirms actions.
 > **DECISION GATE before 5b:** perform-mode timeline — own treatment vs one shared surface? This
 > changes what "done" means for the clip/header work. Settle with Peter first.
 
-**5a — Gradient primitive.** Add a linear gradient fill to the shared GPU rect shader
-(`ui_renderer.rs` `RectCommand` + fragment). Benefits chrome *and* clips. Small, contained.
+**5a — Gradient primitive. ✅ DONE (2026-06-26).** `UIRenderer::draw_gradient_rect` + a linear-gradient
+body in the shared rect shader (`ui_renderer.rs`: `UIVertex` grew `color2` + `grad`; fragment mixes
+`color`→`color2` along `grad.xy`, every existing draw stays gradient-off). Plumbing only — nothing
+calls it yet, so zero visual change. Verified headless (`gradient_demo`). Benefits chrome *and* clips.
 
 **5b — Clips → GPU SDF quads** *(the gate)*.
 - Current: [`bitmap_painter::draw_clip`](../crates/manifold-ui/src/bitmap_painter.rs) CPU-paints →
