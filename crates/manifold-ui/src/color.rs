@@ -89,6 +89,42 @@ pub const BG_3_PRESSED: Color32 = Color32::new(36, 36, 39, 255);
 pub const DIVIDER: Color32 = Color32::new(56, 56, 60, 255);
 pub const GROOVE: Color32 = Color32::new(12, 12, 14, 255);
 
+// ── Semantic colour ramp (§15) ──────────────────────────────────────
+// One definition per role-hue, three steps each (idle · base · active).
+// The state colours below ALIAS onto these, so the same red/green/amber
+// means the same thing in every widget — the chromatic counterpart to the
+// grey ramp. On a dark stage under coloured wash, inconsistent hue+
+// brightness washes out; consistent steps read.
+//
+// Deliberately NOT folded onto this ramp (they must stay distinct on a
+// single widget, or are an identity palette): the modulation indicators
+// (DRIVER cyan / ENVELOPE orange / AUDIO green / ABL purple — co-drawn on
+// one slider), the sync-source colours (LINK / MIDI / Ableton), the marker
+// and layer-colour palettes, and the M/S/L/A layer quartet. §15:
+// "consistent steps, not artificial collapse." Values are the §15.2 table —
+// tune on the running app (the warm trio red/amber/orange must stay apart).
+pub const RED_IDLE: Color32 = Color32::new(107, 38, 38, 255);
+pub const RED_BASE: Color32 = Color32::new(184, 56, 56, 255);
+pub const RED_ACTIVE: Color32 = Color32::new(217, 64, 56, 255);
+pub const GREEN_IDLE: Color32 = Color32::new(51, 107, 61, 255);
+pub const GREEN_BASE: Color32 = Color32::new(64, 158, 89, 255);
+pub const GREEN_ACTIVE: Color32 = Color32::new(64, 184, 82, 255);
+pub const AMBER_IDLE: Color32 = Color32::new(156, 128, 40, 255);
+pub const AMBER_BASE: Color32 = Color32::new(204, 166, 38, 255);
+pub const AMBER_ACTIVE: Color32 = Color32::new(217, 191, 64, 255);
+pub const ORANGE_IDLE: Color32 = Color32::new(140, 82, 30, 255);
+pub const ORANGE_BASE: Color32 = Color32::new(199, 102, 56, 255);
+pub const ORANGE_ACTIVE: Color32 = Color32::new(209, 115, 56, 255);
+pub const BLUE_IDLE: Color32 = Color32::new(77, 122, 199, 255);
+pub const BLUE_BASE: Color32 = Color32::new(89, 148, 235, 255);
+pub const BLUE_ACTIVE: Color32 = Color32::new(120, 170, 245, 255);
+pub const CYAN_IDLE: Color32 = Color32::new(40, 120, 140, 255);
+pub const CYAN_BASE: Color32 = Color32::new(20, 166, 191, 255);
+pub const CYAN_ACTIVE: Color32 = Color32::new(64, 200, 224, 255);
+pub const PURPLE_IDLE: Color32 = Color32::new(90, 72, 120, 255);
+pub const PURPLE_BASE: Color32 = Color32::new(115, 115, 191, 255);
+pub const PURPLE_ACTIVE: Color32 = Color32::new(150, 130, 210, 255);
+
 // All UI color constants ported from UIConstants.cs.
 //
 // PALETTE: "Studio"
@@ -124,11 +160,11 @@ pub const OVERLAY_BG: Color32 = Color32::new(13, 13, 14, 237); // BG_0 @ a237
 pub const HUD_BG: Color32 = Color32::new(10, 10, 11, 255); // HUD (below void)
 
 // ── Accent colors ─────────────────────────────────────────────────
-pub const ACCENT_BLUE: Color32 = Color32::new(89, 148, 235, 255);
+pub const ACCENT_BLUE: Color32 = BLUE_BASE;
 pub const ACCENT_BLUE_SLIDER: Color32 = Color32::new(89, 148, 235, 204);
 pub const ACCENT_BLUE_DIM: Color32 = Color32::new(77, 122, 199, 64);
 pub const ACCENT_BLUE_SELECTION: Color32 = Color32::new(89, 148, 235, 102);
-pub const PLAYHEAD_RED: Color32 = Color32::new(217, 64, 56, 255);
+pub const PLAYHEAD_RED: Color32 = RED_ACTIVE;
 pub const INSERT_CURSOR_BLUE: Color32 = Color32::new(89, 148, 242, 230);
 pub const PROGRESS_FILL_BLUE: Color32 = Color32::new(89, 173, 235, 255);
 
@@ -170,7 +206,7 @@ pub const GEN_TYPE_LABEL: Color32 = Color32::new(140, 179, 242, 255);
 
 // ── Group layer structural colors ───────────────────────────────────
 pub const COLLAPSED_GROUP_OVERLAY_BG: Color32 = Color32::new(20, 20, 28, 255);
-pub const DEFAULT_GROUP_ACCENT: Color32 = Color32::new(115, 115, 191, 255);
+pub const DEFAULT_GROUP_ACCENT: Color32 = PURPLE_BASE;
 pub const GROUP_BOTTOM_BORDER: Color32 = Color32::new(97, 97, 148, 153);
 
 // ── Text colors ─────────────────────────────────────────────────────
@@ -183,27 +219,27 @@ pub const TEXT_NEAR_WHITE: Color32 = Color32::new(209, 209, 214, 255);
 pub const DROPDOWN_INACTIVE_TEXT: Color32 = Color32::new(173, 173, 179, 255);
 
 // ── Status colors ───────────────────────────────────────────────────
-pub const STATUS_GOOD: Color32 = Color32::new(89, 191, 115, 255);
-pub const STATUS_WARNING: Color32 = Color32::new(217, 184, 77, 255);
-pub const STATUS_BAD: Color32 = Color32::new(209, 89, 82, 255);
+pub const STATUS_GOOD: Color32 = GREEN_ACTIVE;
+pub const STATUS_WARNING: Color32 = AMBER_ACTIVE;
+pub const STATUS_BAD: Color32 = RED_ACTIVE;
 pub const STATUS_NEUTRAL: Color32 = Color32::new(184, 184, 189, 255);
-pub const STATUS_ACTIVE: Color32 = Color32::new(209, 115, 56, 255);
+pub const STATUS_ACTIVE: Color32 = ORANGE_ACTIVE;
 pub const STATUS_OFF: Color32 = Color32::new(89, 89, 94, 255);
 pub const STATUS_DOT_INACTIVE: Color32 = Color32::new(64, 64, 69, 255);
-pub const STATUS_DOT_GREEN: Color32 = Color32::new(64, 179, 77, 255);
-pub const STATUS_DOT_YELLOW: Color32 = Color32::new(204, 166, 38, 255);
+pub const STATUS_DOT_GREEN: Color32 = GREEN_ACTIVE;
+pub const STATUS_DOT_YELLOW: Color32 = AMBER_BASE;
 
 // ── Transport colors ────────────────────────────────────────────────
-pub const PLAY_GREEN: Color32 = Color32::new(56, 115, 66, 255);
-pub const PLAY_ACTIVE: Color32 = Color32::new(64, 184, 82, 255);
-pub const PAUSED_YELLOW: Color32 = Color32::new(209, 166, 38, 255);
-pub const STOP_RED: Color32 = Color32::new(128, 51, 51, 255);
-pub const RECORD_RED: Color32 = Color32::new(107, 38, 38, 255);
-pub const RECORD_ACTIVE: Color32 = Color32::new(209, 46, 46, 255);
-pub const SAVE_FLASH_GREEN: Color32 = Color32::new(64, 158, 89, 255);
+pub const PLAY_GREEN: Color32 = GREEN_IDLE;
+pub const PLAY_ACTIVE: Color32 = GREEN_ACTIVE;
+pub const PAUSED_YELLOW: Color32 = AMBER_BASE;
+pub const STOP_RED: Color32 = RED_BASE;
+pub const RECORD_RED: Color32 = RED_IDLE;
+pub const RECORD_ACTIVE: Color32 = RED_ACTIVE;
+pub const SAVE_FLASH_GREEN: Color32 = GREEN_BASE;
 pub const TRANSPORT_FIELD_BG: Color32 = Color32::new(40, 40, 42, 255);
-pub const BPM_RESET_ACTIVE: Color32 = Color32::new(51, 107, 61, 255);
-pub const BPM_CLEAR_ACTIVE: Color32 = Color32::new(133, 51, 51, 255);
+pub const BPM_RESET_ACTIVE: Color32 = GREEN_IDLE;
+pub const BPM_CLEAR_ACTIVE: Color32 = RED_BASE;
 pub const MIDI_POPUP_ACTIVE: Color32 = Color32::new(89, 46, 89, 255);
 
 // ── Sync source colors ──────────────────────────────────────────────
@@ -246,7 +282,7 @@ pub const EFFECT_DRAG_INDICATOR_UNGROUP: Color32 = Color32::new(209, 128, 56, 25
 pub const EFFECT_DRAG_INDICATOR_REGROUP: Color32 = Color32::new(77, 158, 97, 255);
 
 // ── Selection ───────────────────────────────────────────────────────
-pub const SELECTED_BORDER: Color32 = Color32::new(89, 148, 235, 255);
+pub const SELECTED_BORDER: Color32 = BLUE_BASE;
 
 // ── Trim handles (viewport clip edges) ─────────────────────────────
 pub const TRIM_HANDLE_COLOR: Color32 = Color32::new(255, 255, 255, 51);
@@ -383,12 +419,12 @@ pub const TEMPO_LINE: Color32 = Color32::new(64, 199, 199, 166);
 pub const TEMPO_POINT: Color32 = Color32::new(230, 230, 235, 242);
 
 // ── Monitor / Export ────────────────────────────────────────────────
-pub const MONITOR_ACTIVE: Color32 = Color32::new(51, 115, 71, 255);
-pub const EXPORT_ACTIVE: Color32 = Color32::new(184, 56, 56, 255);
+pub const MONITOR_ACTIVE: Color32 = GREEN_IDLE;
+pub const EXPORT_ACTIVE: Color32 = RED_BASE;
 
 // ── Mute/Solo buttons ───────────────────────────────────────────────
-pub const MUTE_BTN_ACTIVE: Color32 = Color32::new(199, 102, 56, 255);
-pub const SOLO_BTN_ACTIVE: Color32 = Color32::new(217, 191, 64, 255);
+pub const MUTE_BTN_ACTIVE: Color32 = ORANGE_BASE;
+pub const SOLO_BTN_ACTIVE: Color32 = AMBER_ACTIVE;
 pub const MUTE_SOLO_BTN_INACTIVE: Color32 = Color32::new(64, 64, 69, 255);
 
 // ── Ruler ───────────────────────────────────────────────────────────
@@ -416,7 +452,7 @@ pub const EXIT_PATH_PRESSED: Color32 = Color32::new(40, 40, 43, 255);
 pub const OVERVIEW_BG: Color32 = Color32::new(15, 15, 17, 255);
 pub const OVERVIEW_VIEWPORT: Color32 = Color32::new(89, 148, 235, 120);
 pub const OVERVIEW_VIEWPORT_BORDER: Color32 = Color32::new(120, 170, 245, 200);
-pub const OVERVIEW_PLAYHEAD: Color32 = Color32::new(217, 64, 56, 255);
+pub const OVERVIEW_PLAYHEAD: Color32 = RED_ACTIVE;
 pub const EXPORT_MARKER_COLOR: Color32 = Color32::new(77, 141, 235, 255);
 pub const EXPORT_RANGE_HIGHLIGHT: Color32 = Color32::new(77, 140, 235, 31);
 
