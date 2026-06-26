@@ -95,6 +95,13 @@ pub const GROOVE: Color32 = Color32::new(12, 12, 14, 255);
 // (The purple-tinted generator-card border stays its own identity tint.)
 pub const BORDER: Color32 = Color32::new(56, 56, 60, 255);
 
+// ── Elevation shadow (§17) ──────────────────────────────────────────
+// One soft step under FLOATING surfaces only (dropdowns, popovers, modals).
+// A lift, not a glow: dark + low alpha. In-panel grouping stays fill-level.
+pub const SHADOW: Color32 = Color32::new(0, 0, 0, 110);
+pub const SHADOW_BLUR: f32 = 18.0;
+pub const SHADOW_OFFSET_Y: f32 = 4.0;
+
 // ── Semantic colour ramp (§15) ──────────────────────────────────────
 // One definition per role-hue, three steps each (idle · base · active).
 // The state colours below ALIAS onto these, so the same red/green/amber
