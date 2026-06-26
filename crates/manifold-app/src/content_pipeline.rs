@@ -180,6 +180,27 @@ fn atlas_cell_full(i: usize) -> (f32, f32, f32, f32) {
     )
 }
 
+/// §24 5c cold-start: locate a PARKED generator clip by id — its layer (must be a
+/// generator), clip index, and clip-start `(time, beat)` for a thumbnail render.
+/// `None` if not found or the layer isn't a generator (video posters are separate).
+#[cfg(target_os = "macos")]
+fn find_parked_generator_clip<'a>(
+    layers: &'a [manifold_core::layer::Layer],
+    clip_id: &str,
+) -> Option<(&'a manifold_core::layer::Layer, u32, f64, f64)> {
+    for layer in layers {
+        if layer.gen_params().is_none() {
+            continue;
+        }
+        for (ci, clip) in layer.clips.iter().enumerate() {
+            if clip.id.as_str() == clip_id {
+                return Some((layer, ci as u32, 0.0, clip.start_beat.as_f32() as f64));
+            }
+        }
+    }
+    None
+}
+
 /// Snapshot live clip output into the PERSISTENT clip-thumbnail atlas (§24 5c)
 /// and copy it to the rotating write surface. `sources` maps each *active* clip
 /// (under the playhead this frame) to its just-rendered source texture. A clip is
@@ -1593,13 +1614,102 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // (`clip_descs`). Skipped in export / when no timeline thumbnails are shown.
         #[cfg(target_os = "macos")]
         let clip_atlas_published = if !export_mode && !self.clip_atlas_visible.is_empty() {
-            let sources: AHashMap<&str, &manifold_gpu::GpuTexture> = clip_descs
-                .iter()
-                .map(|d| {
-                    let tex = self.compositor.clip_post_fx_texture(d.clip_id).unwrap_or(d.texture);
-                    (d.clip_id, tex)
-                })
-                .collect();
+            // Cold-start (§24 5c P2c): render up to K PARKED generator clips'
+            // thumbnails — visible clips with no live source this frame and no atlas
+            // cell yet. Their default look (base params, no modulation/override/warm-
+            // up) fills the gap until the clip first plays (then the live snapshot
+            // replaces it). Bounded — instance creation is the cost; fills gradually.
+            {
+                const MAX_COLD_START_PER_FRAME: usize = 1;
+                let mut budget = MAX_COLD_START_PER_FRAME;
+                // Generators render through the renderer's GpuEncoder wrapper; wrap
+                // native_enc for the thumbnail dispatches (dropped before the fill
+                // reads the thumb textures on native_enc).
+                let mut gpu_cold = if let Some(pool) = texture_pool {
+                    GpuEncoder::with_pool(&mut native_enc, native_device, pool)
+                } else {
+                    GpuEncoder::new(&mut native_enc, native_device)
+                };
+                if let Some(gen_r) = renderers
+                    .iter_mut()
+                    .find_map(|r| r.as_any_mut().downcast_mut::<GeneratorRenderer>())
+                {
+                    for cid in &self.clip_atlas_visible {
+                        if budget == 0 {
+                            break;
+                        }
+                        let cid_str = cid.as_str();
+                        // Skip clips that already have a cell, or are live (an
+                        // active generator clip renders its own texture this frame —
+                        // checked via gen_r, not clip_descs, which borrows renderers).
+                        if self.clip_atlas_cache.contains(cid)
+                            || gen_r.get_clip_texture(cid_str).is_some()
+                        {
+                            continue;
+                        }
+                        if let Some((layer, clip_index, time, beat)) =
+                            find_parked_generator_clip(layers, cid_str)
+                            && gen_r
+                                .render_clip_thumbnail(
+                                    &mut gpu_cold,
+                                    cid_str,
+                                    layer,
+                                    clip_index,
+                                    time,
+                                    beat,
+                                )
+                                .is_some()
+                        {
+                            budget -= 1;
+                        }
+                    }
+                    // Drop thumbnail instances for clips no longer visible.
+                    gen_r.evict_thumb_gens(&self.clip_atlas_visible);
+                }
+            }
+
+            // Source per visible clip (built by iterating the visible set, NOT
+            // clip_descs — clip_descs holds immutable borrows of `renderers` that
+            // would block the cold-start's `&mut renderers`). Preference:
+            //   1. compositor post-effect output (with-effects, single-clip layer),
+            //   2. the live raw clip texture (active generator / video / image),
+            //   3. the cold-start thumbnail (parked generator).
+            let mut sources: AHashMap<&str, &manifold_gpu::GpuTexture> = AHashMap::new();
+            for cid in &self.clip_atlas_visible {
+                let cid_str = cid.as_str();
+                if let Some(t) = self.compositor.clip_post_fx_texture(cid_str) {
+                    sources.insert(cid_str, t);
+                    continue;
+                }
+                let live = renderers.iter().find_map(|r| {
+                    if let Some(g) = r.as_any().downcast_ref::<GeneratorRenderer>() {
+                        if let Some(t) = g.get_clip_texture(cid_str) {
+                            return Some(t);
+                        }
+                        if let Some(t) = g.thumb_texture(cid_str) {
+                            return Some(t);
+                        }
+                    }
+                    #[cfg(target_os = "macos")]
+                    if let Some(v) = r.as_any().downcast_ref::<VideoRenderer>()
+                        && let Some(t) = v.get_clip_texture(cid_str)
+                    {
+                        return Some(t);
+                    }
+                    #[cfg(target_os = "macos")]
+                    if let Some(i) = r
+                        .as_any()
+                        .downcast_ref::<manifold_media::image_renderer::ImageRenderer>()
+                        && let Some(t) = i.get_clip_texture(cid_str)
+                    {
+                        return Some(t);
+                    }
+                    None
+                });
+                if let Some(t) = live {
+                    sources.insert(cid_str, t);
+                }
+            }
             let write_idx = self.write_surface_index;
             fill_clip_atlas(
                 native_device,

@@ -110,17 +110,26 @@ irrelevant to the UI — both are just a cell in the same atlas.
   textures exist; multi-clip layers fall back to the raw clip texture (a clip can't
   be isolated there). For a clip with no effects, raw == post-fx, so most clips are
   unchanged.
-- **P2b/P2c (cold-start + video posters) — NOT BUILT; require a new capability.**
-  Both need rendering/decoding a **parked** clip (not under the playhead) at a
-  representative time. The live pipeline never produces that: `GeneratorRenderer`
-  renders only `active_clips` (a parked clip has no generator instance / merged
-  string-params / context), and `VideoRenderer`/`decode_scheduler` decode only the
-  active clip's current frame. A "render/decode clip X at time T off the live set"
-  path is a substantial sub-project (instance lifecycle, warm-up frames for stateful
-  sims, async decode for non-active clips). Its value is narrow — in a rehearsed
-  show clips get played and P1 captures them; only never-touched clips in a fresh
-  project lack a thumbnail. **Recommended as its own focused effort, after P1/P2a are
-  eyeballed working on the running app.**
+- **P2c (cold-start, GENERATORS) — SHIPPED.** A parked generator clip (no live
+  source, no atlas cell) is rendered into an ISOLATED thumbnail instance:
+  `GeneratorRenderer::render_clip_thumbnail` creates a `ThumbGen` (a separate
+  `Box<PresetRuntime>` + a 256×144 `RenderTarget`, pooled by `ClipId`, NOT the live
+  per-layer `layer_generators` — so a parked-clip thumbnail can never corrupt an
+  active clip's state on the same layer). It renders the clip's authored/base params
+  (`gp.param_values`) at `time=0`, `beat=clip.start_beat`, `anim_progress=0` — NO
+  modulation / override-graph / warm-up (none of which are computed off the
+  playhead), so the thumbnail is the generator's *default* look; the live snapshot
+  replaces it the moment the clip plays. The content thread renders ≤1 such
+  thumbnail/frame (instance creation is the cost; fills in gradually), evicts
+  instances for non-visible clips (`evict_thumb_gens`), and the snapshot source
+  becomes: compositor post-fx > live raw (`get_clip_texture`) > cold-start
+  (`thumb_texture`). `find_parked_generator_clip` locates the clip; `clip_atlas`'s
+  `contains` skips already-celled clips.
+- **P2b (video posters) — NOT BUILT.** Parked VIDEO clips need an off-playback
+  seek+decode through `decode_scheduler` (async — the frame arrives a later frame),
+  which is a distinct async sub-project. Video clips already thumbnail when they
+  play (P1), so the gap is only parked, never-played video. Recommended after the
+  generator paths are eyeballed working.
 
 ## Cost
 

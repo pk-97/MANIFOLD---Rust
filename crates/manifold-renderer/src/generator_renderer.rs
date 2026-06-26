@@ -79,6 +79,21 @@ struct LayerGeneratorState {
 /// needs internal downscaling for performance (e.g. raymarching, fluid sim),
 /// it does so inside its own `render()` by allocating and managing its own
 /// reduced-resolution intermediate textures — the runtime doesn't model it.
+/// Thumbnail-resolution dimensions for the §24 5c cold-start render (an atlas
+/// cell). Tiny, so a parked-clip thumbnail render is cheap.
+const THUMB_W: u32 = 256;
+const THUMB_H: u32 = 144;
+
+/// §24 5c cold-start: an ISOLATED generator instance + small render target for one
+/// PARKED clip's thumbnail. Separate from the live per-layer `layer_generators` so
+/// rendering a parked clip's thumbnail can never disturb an active clip's state on
+/// the same layer.
+struct ThumbGen {
+    runtime: Box<PresetRuntime>,
+    rt: RenderTarget,
+    gen_type: PresetTypeId,
+}
+
 pub struct GeneratorRenderer {
     /// Cached pointer to GpuDevice owned by ContentPipeline (same thread, same lifetime).
     device_ptr: *const GpuDevice,
@@ -88,6 +103,8 @@ pub struct GeneratorRenderer {
     registry: GeneratorRegistry,
     active_clips: AHashMap<ClipId, ActiveClip>,
     layer_generators: AHashMap<LayerId, LayerGeneratorState>,
+    /// §24 5c cold-start thumbnail instances, keyed by clip id (parked clips).
+    thumb_gens: AHashMap<ClipId, ThumbGen>,
     available_rts: Vec<RenderTarget>,
     /// Pre-allocated scratch buffer for render iteration (avoids per-frame alloc).
     render_scratch: Vec<ClipId>,
@@ -139,6 +156,7 @@ impl GeneratorRenderer {
             format,
             registry,
             active_clips: AHashMap::with_capacity(16),
+            thumb_gens: AHashMap::new(),
             layer_generators: AHashMap::with_capacity(8),
             available_rts,
             render_scratch: Vec::with_capacity(16),
@@ -827,6 +845,109 @@ impl GeneratorRenderer {
     /// Number of active clips.
     pub fn active_count(&self) -> usize {
         self.active_clips.len()
+    }
+
+    /// §24 5c cold-start: render a PARKED generator clip's thumbnail into an
+    /// ISOLATED thumbnail-resolution target and return it. Shows the generator's
+    /// default look at `time`/`beat` with the clip's authored (base) params —
+    /// NOT modulation, override-graph edits, or warm-up state, none of which are
+    /// computed off the playhead. The live look replaces it the moment the clip
+    /// plays (the P1 snapshot). Uses a separate generator instance per clip so it
+    /// can never disturb an active clip's state on the same layer. Cheap (tiny
+    /// target); the caller bounds how many per frame. Returns `None` if the layer
+    /// has no generator params.
+    pub fn render_clip_thumbnail(
+        &mut self,
+        gpu: &mut GpuEncoder,
+        clip_id: &str,
+        layer: &Layer,
+        clip_index: u32,
+        time: f64,
+        beat: f64,
+    ) -> Option<&manifold_gpu::GpuTexture> {
+        let gp = layer.gen_params()?;
+        let gen_type = gp.generator_type().clone();
+
+        let needs_create = self
+            .thumb_gens
+            .get(clip_id)
+            .is_none_or(|t| t.gen_type != gen_type);
+        if needs_create {
+            let runtime = self.registry.create_with_override(
+                self.device(),
+                &gen_type,
+                None,
+                THUMB_W,
+                THUMB_H,
+                false,
+            )?;
+            let rt = RenderTarget::new(
+                self.device(),
+                THUMB_W,
+                THUMB_H,
+                self.format,
+                "Generator Thumbnail RT",
+            );
+            self.thumb_gens.insert(
+                ClipId::new(clip_id),
+                ThumbGen {
+                    runtime,
+                    rt,
+                    gen_type: gen_type.clone(),
+                },
+            );
+        }
+
+        let mut params = [0.0f32; MAX_GEN_PARAMS];
+        let param_count = gp.param_values.len().min(MAX_GEN_PARAMS) as u32;
+        for (i, val) in gp.param_values.iter().take(MAX_GEN_PARAMS).enumerate() {
+            params[i] = val.value;
+        }
+        let ctx = PresetContext {
+            time,
+            beat,
+            dt: 1.0 / 60.0,
+            width: THUMB_W,
+            height: THUMB_H,
+            output_width: THUMB_W,
+            output_height: THUMB_H,
+            aspect: THUMB_W as f32 / THUMB_H as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: 0,
+            anim_progress: 0.0,
+            trigger_count: 0,
+            params,
+            param_count,
+        };
+
+        let string_params = layer
+            .clips
+            .get(clip_index as usize)
+            .and_then(|c| c.string_params.as_ref());
+
+        let t = self.thumb_gens.get_mut(clip_id)?;
+        t.runtime.set_string_params(string_params);
+        gpu.clear_texture(&t.rt.texture, 0.0, 0.0, 0.0, 0.0);
+        t.runtime.render(gpu, &t.rt.texture, &ctx);
+        Some(&t.rt.texture)
+    }
+
+    /// The cold-start thumbnail texture for `clip_id`, if one has been rendered.
+    /// Separate from `render_clip_thumbnail` so the caller can render several
+    /// (each a `&mut self` call) and then collect their textures by shared borrow.
+    pub fn thumb_texture(&self, clip_id: &str) -> Option<&manifold_gpu::GpuTexture> {
+        self.thumb_gens.get(clip_id).map(|t| &t.rt.texture)
+    }
+
+    /// Drop cold-start thumbnail instances for clips no longer requested, bounding
+    /// memory (each holds a generator instance + a small render target). Takes the
+    /// visible clip slice directly — no per-frame set allocation; `thumb_gens` holds
+    /// at most a handful of entries, so the linear `contains` is negligible.
+    pub fn evict_thumb_gens(&mut self, keep: &[ClipId]) {
+        if self.thumb_gens.len() != keep.len() {
+            self.thumb_gens.retain(|k, _| keep.contains(k));
+        }
     }
 }
 

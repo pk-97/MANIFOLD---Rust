@@ -66,9 +66,8 @@ impl ClipAtlasCache {
         Some(cell)
     }
 
-    /// Is this clip already holding a cell? (Used by the cache's own tests; kept
-    /// as documented API for the on-demand fill in Phase 2.)
-    #[allow(dead_code)]
+    /// Is this clip already holding a cell? (Used by the cold-start pass to skip
+    /// clips that already have a thumbnail.)
     pub fn contains(&self, clip: &ClipId) -> bool {
         self.cell_of.contains_key(clip)
     }
