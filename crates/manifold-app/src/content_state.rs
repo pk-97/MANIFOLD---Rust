@@ -195,6 +195,10 @@ pub struct ContentState {
     /// this frame. The editor canvas maps each visible node to its atlas cell to
     /// blit the thumbnail. Empty unless the editor enabled the atlas.
     pub node_atlas_layout: Vec<(manifold_core::NodeId, u32)>,
+    /// `(clip_id, atlas_cell_index)` for the timeline clip-thumbnail atlas (§24
+    /// 5c). The timeline maps each visible generator/video clip to its atlas cell
+    /// to blit the thumbnail. Empty when no clips currently hold a thumbnail.
+    pub clip_atlas_layout: Vec<(manifold_core::ClipId, u32)>,
 }
 
 /// Lightweight snapshot of modulated param values.
@@ -443,6 +447,7 @@ impl Default for ContentState {
             node_preview_info: None,
             live_node_params: Vec::new(),
             node_atlas_layout: Vec::new(),
+            clip_atlas_layout: Vec::new(),
         }
     }
 }

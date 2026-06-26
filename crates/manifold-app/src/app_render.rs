@@ -4053,6 +4053,103 @@ impl Application {
             );
         }
 
+        // Tell the content thread which clips want a thumbnail (non-audio,
+        // wide enough), deduped so a stable view sends nothing. The content thread
+        // snapshots those clips' live output into the shared atlas.
+        {
+            const MIN_THUMB_W: f32 = 24.0;
+            let thumb_clips: Vec<manifold_core::ClipId> = self
+                .clip_rect_scratch
+                .iter()
+                .filter(|cr| !cr.is_audio && cr.rect.width >= MIN_THUMB_W)
+                .map(|cr| cr.clip_id.clone())
+                .collect();
+            if thumb_clips != self.last_clip_atlas_visible_sent {
+                self.send_content_cmd(
+                    crate::content_command::ContentCommand::SetClipAtlasVisible(thumb_clips.clone()),
+                );
+                self.last_clip_atlas_visible_sent = thumb_clips;
+            }
+        }
+
+        // Pass 4b″: Clip thumbnails (§24 5c) — blit each visible generator/video
+        // clip's atlas cell (published by the content thread) into its body, after
+        // the waveform pass (audio clips draw waveforms, others draw thumbnails),
+        // centre-cropped to the body aspect and masked to the rounded shape.
+        #[cfg(target_os = "macos")]
+        if !self.clip_rect_scratch.is_empty()
+            && !self.content_state.clip_atlas_layout.is_empty()
+        {
+            let front = self
+                .clip_atlas_texture_bridge
+                .as_ref()
+                .map(|b| b.front_index() as usize);
+            if let Some(front) = front
+                && let Some(atlas) = self.ui_clip_atlas_textures.get(front).and_then(|t| t.as_ref())
+            {
+                let cell_of: ahash::AHashMap<&str, u32> = self
+                    .content_state
+                    .clip_atlas_layout
+                    .iter()
+                    .map(|(c, cell)| (c.as_str(), *cell))
+                    .collect();
+                let cell_aspect =
+                    crate::content_pipeline::ATLAS_CELL_W as f32 / crate::content_pipeline::ATLAS_CELL_H as f32;
+                let inv = 1.0 / crate::content_pipeline::ATLAS_GRID as f32;
+                self.clip_thumb_quad_scratch.clear();
+                for cr in &self.clip_rect_scratch {
+                    // Match the SetClipAtlasVisible filter so a clip too narrow to
+                    // have requested a cell never draws one (a stale layout could
+                    // still list it from when it was wider).
+                    if cr.is_audio || cr.rect.width < 24.0 {
+                        continue;
+                    }
+                    let Some(&cell) = cell_of.get(cr.clip_id.as_str()) else {
+                        continue;
+                    };
+                    let gx = (cell % crate::content_pipeline::ATLAS_GRID) as f32;
+                    let gy = (cell / crate::content_pipeline::ATLAS_GRID) as f32;
+                    let (u0, v0) = (gx * inv, gy * inv);
+                    let (u1, v1) = (u0 + inv, v0 + inv);
+                    // Centre-crop the 16:9 cell to the (wide, short) clip body aspect.
+                    let body_aspect = (cr.rect.width / cr.rect.height.max(1.0)).max(0.01);
+                    let (uu0, vv0, uu1, vv1) = if body_aspect >= cell_aspect {
+                        let f = cell_aspect / body_aspect; // crop height
+                        let vc = (v0 + v1) * 0.5;
+                        let h = (v1 - v0) * f * 0.5;
+                        (u0, vc - h, u1, vc + h)
+                    } else {
+                        let f = body_aspect / cell_aspect; // crop width
+                        let uc = (u0 + u1) * 0.5;
+                        let w = (u1 - u0) * f * 0.5;
+                        (uc - w, v0, uc + w, v1)
+                    };
+                    self.clip_thumb_quad_scratch.push(
+                        manifold_renderer::clip_thumb_gpu::ThumbQuad {
+                            rect: cr.rect,
+                            radius: manifold_ui::color::CLIP_RADIUS,
+                            uv_min: [uu0, vv0],
+                            uv_max: [uu1, vv1],
+                        },
+                    );
+                }
+                if !self.clip_thumb_quad_scratch.is_empty()
+                    && let Some(thumb) = self.clip_thumb_gpu.as_mut()
+                {
+                    thumb.render(
+                        &gpu.device,
+                        &mut encoder,
+                        offscreen,
+                        logical_w,
+                        logical_h,
+                        scale as f32,
+                        atlas,
+                        &self.clip_thumb_quad_scratch,
+                    );
+                }
+            }
+        }
+
         // Pass 4c: The lane / stem / overview / collapsed-group panel bitmaps.
         // These are separate regions (below / beside the tracks, or collapsed group
         // rows that carry no clips), so their z-order vs the clips is moot — they

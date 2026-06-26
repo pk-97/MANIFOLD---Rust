@@ -232,6 +232,20 @@ pub struct Application {
     /// `SetNodeAtlasVisible` command so it sends only when the visible scope
     /// (or topology) changes, not every frame. Empty = atlas off / editor closed.
     pub(crate) last_atlas_visible_sent: Vec<manifold_core::NodeId>,
+    /// IOSurface bridge + UI-side textures for the clip-thumbnail atlas (§24 5c).
+    #[cfg(target_os = "macos")]
+    pub(crate) clip_atlas_texture_bridge:
+        Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    #[cfg(target_os = "macos")]
+    pub(crate) ui_clip_atlas_textures:
+        [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    /// Last clip-thumbnail visible set sent — dedups `SetClipAtlasVisible`.
+    pub(crate) last_clip_atlas_visible_sent: Vec<manifold_core::ClipId>,
+    /// Blits clip-thumbnail atlas cells into clip bodies (§24 5c), 4b′ slot.
+    pub(crate) clip_thumb_gpu: Option<manifold_renderer::clip_thumb_gpu::ClipThumbGpu>,
+    /// Reused per-frame scratch for the thumbnail quad list — no per-frame heap on
+    /// the render hot path.
+    pub(crate) clip_thumb_quad_scratch: Vec<manifold_renderer::clip_thumb_gpu::ThumbQuad>,
     pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     /// Audio Setup spectrogram waterfall renderer + its target texture, created
@@ -566,6 +580,13 @@ impl Application {
             #[cfg(target_os = "macos")]
             ui_node_atlas_textures: [None, None, None],
             last_atlas_visible_sent: Vec::new(),
+            #[cfg(target_os = "macos")]
+            clip_atlas_texture_bridge: None,
+            #[cfg(target_os = "macos")]
+            ui_clip_atlas_textures: [None, None, None],
+            last_clip_atlas_visible_sent: Vec::new(),
+            clip_thumb_gpu: None,
+            clip_thumb_quad_scratch: Vec::new(),
             blit_pipeline: None,
             blit_sampler: None,
             spectrogram: None,
@@ -1908,6 +1929,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 &native_device,
                 manifold_gpu::GpuTextureFormat::Bgra8Unorm,
             ));
+            self.clip_thumb_gpu = Some(manifold_renderer::clip_thumb_gpu::ClipThumbGpu::new(
+                &native_device,
+                manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+            ));
 
             self.scale_factor = scale;
 
@@ -1983,6 +2008,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 });
                 self.ui_node_atlas_textures = atlas_textures.map(Some);
                 self.node_atlas_texture_bridge = Some(Arc::clone(&atlas_bridge));
+
+                // Clip-thumbnail atlas bridge (§24 5c) — same cell-grid geometry,
+                // independent lifecycle (always-on in the timeline vs editor-only).
+                let clip_atlas_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(
+                    crate::content_pipeline::ATLAS_W,
+                    crate::content_pipeline::ATLAS_H,
+                ));
+                let clip_atlas_textures: [manifold_gpu::GpuTexture;
+                    crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
+                    clip_atlas_bridge.import_texture_native(&gpu.device, i)
+                });
+                self.ui_clip_atlas_textures = clip_atlas_textures.map(Some);
+                self.clip_atlas_texture_bridge = Some(Arc::clone(&clip_atlas_bridge));
             }
 
             // Create native Metal device BEFORE renderers so they can build native pipelines.
@@ -2078,6 +2116,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     crate::shared_texture::SURFACE_COUNT] =
                     std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
                 content_pipeline.set_node_atlas_textures(atlas_textures, Arc::clone(bridge));
+            }
+            // Content-side import of the clip-thumbnail atlas IOSurfaces (§24 5c).
+            #[cfg(target_os = "macos")]
+            if let Some(ref bridge) = self.clip_atlas_texture_bridge {
+                let native_dev = content_pipeline.native_device().unwrap();
+                let clip_atlas_textures: [manifold_gpu::GpuTexture;
+                    crate::shared_texture::SURFACE_COUNT] =
+                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
+                content_pipeline.set_clip_atlas_textures(clip_atlas_textures, Arc::clone(bridge));
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());
 
@@ -2754,6 +2801,7 @@ impl Drop for Application {
         }
         self.layer_bitmap_gpu = None;
         self.clip_content_gpu = None;
+        self.clip_thumb_gpu = None;
         self.ui_renderer = None;
         self.blit_pipeline = None;
         self.blit_sampler = None;

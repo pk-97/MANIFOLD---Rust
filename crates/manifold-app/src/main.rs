@@ -6,6 +6,7 @@ mod app_lifecycle;
 mod app_render;
 mod audio_mod_runtime;
 mod audio_waveform_cache;
+mod clip_atlas;
 mod content_command;
 mod content_commands;
 mod content_export;

@@ -78,6 +78,9 @@ impl ContentThread {
             ContentCommand::SetNodeAtlasVisible(nodes) => {
                 self.content_pipeline.set_node_atlas_visible(nodes);
             }
+            ContentCommand::SetClipAtlasVisible(clips) => {
+                self.content_pipeline.set_clip_atlas_visible(clips);
+            }
             ContentCommand::DumpGraphOutputs => {
                 if let Some(manifold_core::GraphTarget::Effect(effect_id)) =
                     self.watched_graph_target.clone()

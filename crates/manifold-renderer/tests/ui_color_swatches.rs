@@ -652,6 +652,117 @@ fn clip_waveform_sheet() {
     eprintln!("clip waveform sheet → {png}");
 }
 
+/// Renders clip thumbnails (§24 5c): blits cells of a synthetic content→UI atlas
+/// into clip bodies via `ClipThumbGpu`, masked to the rounded clip shape. Verifies
+/// the WGSL→Metal pipeline compiles and that the thumbnail fills the body with
+/// rounded corners (no square nibs over the round clip).
+#[test]
+fn clip_thumbnail_sheet() {
+    use manifold_renderer::clip_thumb_gpu::{ClipThumbGpu, ThumbQuad};
+    use manifold_ui::node::Rect;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let mut thumb = ClipThumbGpu::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/clip_thumbnail_sheet.png");
+
+    // Synthetic 2×2-cell atlas (256×256). Each cell gets a distinct, clearly-an-image
+    // pattern so a thumbnail is obviously not a solid fill.
+    const AW: u32 = 256;
+    const AH: u32 = 256;
+    let mut atlas_px = vec![Color32::TRANSPARENT; (AW * AH) as usize];
+    for y in 0..AH {
+        for x in 0..AW {
+            let (cx, cy) = (x / 128, y / 128); // which cell
+            let fx = (x % 128) as f32 / 128.0;
+            let fy = (y % 128) as f32 / 128.0;
+            let c = match (cx, cy) {
+                (0, 0) => Color32::new((fx * 255.0) as u8, (fy * 255.0) as u8, 200, 255), // gradient
+                (1, 0) => Color32::new(230, (fx * 255.0) as u8, 40, 255),                 // orange ramp
+                (0, 1) => Color32::new(40, 200, (fy * 255.0) as u8, 255),                 // teal ramp
+                _ => {
+                    let on = ((x / 16 + y / 16) % 2) == 0; // checker
+                    if on { Color32::new(235, 235, 240, 255) } else { Color32::new(30, 30, 36, 255) }
+                }
+            };
+            atlas_px[(y * AW + x) as usize] = c;
+        }
+    }
+    let atlas = device.create_texture(&manifold_gpu::GpuTextureDesc {
+        width: AW,
+        height: AH,
+        depth: 1,
+        format: GpuTextureFormat::Rgba8UnormSrgb,
+        dimension: manifold_gpu::GpuTextureDimension::D2,
+        usage: manifold_gpu::GpuTextureUsage::SHADER_READ | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
+        label: "test atlas",
+        mip_levels: 1,
+    });
+    let bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(atlas_px.as_ptr() as *const u8, atlas_px.len() * 4) };
+    device.upload_texture(&atlas, bytes);
+
+    // One clip per atlas cell, plus a small clip, all rounded (radius 4).
+    let ch = 80.0;
+    let cells = [
+        ("gradient", [0.0, 0.0], [0.5, 0.5]),
+        ("orange", [0.5, 0.0], [1.0, 0.5]),
+        ("teal", [0.0, 0.5], [0.5, 1.0]),
+        ("checker", [0.5, 0.5], [1.0, 1.0]),
+    ];
+    let mut quads = Vec::new();
+    for (i, (_, uv_min, uv_max)) in cells.iter().enumerate() {
+        let col = i % 2;
+        let row = i / 2;
+        let x = 24.0 + col as f32 * 320.0;
+        let y = 60.0 + row as f32 * 110.0;
+        quads.push(ThumbQuad {
+            rect: Rect::new(x, y, 280.0, ch),
+            radius: 4.0,
+            uv_min: *uv_min,
+            uv_max: *uv_max,
+        });
+    }
+    // A small clip to confirm radius clamps gracefully.
+    quads.push(ThumbQuad {
+        rect: Rect::new(24.0, 290.0, 40.0, ch),
+        radius: 4.0,
+        uv_min: [0.0, 0.0],
+        uv_max: [0.5, 0.5],
+    });
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_0);
+    ui.draw_text(24.0, 14.0, "GPU CLIP THUMBNAILS (\u{00a7}24 5c)", 13.0, color::TEXT_NORMAL);
+    for (i, (label, ..)) in cells.iter().enumerate() {
+        let col = i % 2;
+        let row = i / 2;
+        let x = 24.0 + col as f32 * 320.0;
+        let y = 60.0 + row as f32 * 110.0;
+        ui.draw_text(x, y - 16.0, label, 11.0, color::TEXT_DIMMED);
+    }
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "thumbnail sheet produced no bg draws");
+
+    let target = RenderTarget::new(&device, W, H, FORMAT, "clip-thumbnail-sheet");
+    {
+        let mut enc = device.create_encoder("clip-thumb-bg");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    {
+        let mut enc = device.create_encoder("clip-thumb-cells");
+        thumb.render(&device, &mut enc, &target.texture, W, H, 1.0, &atlas, &quads);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("clip thumbnail sheet → {png}");
+}
+
 fn draw_column(ui: &mut UIRenderer, x: f32, y0: f32, rows: &[(&str, Color32)]) {
     for (i, (label, c)) in rows.iter().enumerate() {
         let y = y0 + i as f32 * ROW_H;

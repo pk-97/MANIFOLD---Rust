@@ -287,6 +287,13 @@ pub enum ContentCommand {
     /// live show pays nothing.
     SetNodeAtlasVisible(Vec<manifold_core::NodeId>),
 
+    /// The set of clips that currently want a timeline thumbnail (§24 5c) —
+    /// on-screen generator/video clips wide enough to read. Sent by the UI when
+    /// the visible-thumbnail scope changes (scroll/zoom/edit), deduped so a stable
+    /// view costs nothing. The content thread keeps/refreshes those clips' atlas
+    /// cells and evicts the rest. Empty = no timeline visible / nothing to show.
+    SetClipAtlasVisible(Vec<manifold_core::ClipId>),
+
     /// Dump every node output of the currently-watched effect to a temp folder
     /// as 16-bit linear PNGs + a manifest, for visual inspection. One-shot;
     /// the content thread picks the output directory and logs it. No-op unless

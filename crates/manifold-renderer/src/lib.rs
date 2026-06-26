@@ -2,6 +2,7 @@ pub mod background_worker;
 pub mod chain_dispatch;
 pub mod clip_content_gpu;
 pub mod clip_draw;
+pub mod clip_thumb_gpu;
 pub mod compositor;
 pub mod effect;
 pub mod effects;

@@ -1,9 +1,10 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
 
+use ahash::AHashMap;
 use manifold_core::effects::{EffectGroup, PresetInstance};
 use manifold_core::types::BlendMode;
-use manifold_core::{EffectId, LayerId, NodeId};
+use manifold_core::{ClipId, EffectId, LayerId, NodeId};
 #[cfg(target_os = "macos")]
 use manifold_media::video_renderer::VideoRenderer;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
@@ -165,6 +166,161 @@ pub fn atlas_cell_viewport(i: usize, src_w: u32, src_h: u32) -> (f32, f32, f32, 
     )
 }
 
+/// Full-cell viewport for atlas cell `i` (no letterbox). Clip thumbnails fill the
+/// whole cell with the source (≈ project aspect ≈ the 16:9 cell), and the UI
+/// centre-crops to each clip's body aspect — the DAW thumbnail look, no bars.
+fn atlas_cell_full(i: usize) -> (f32, f32, f32, f32) {
+    let gx = (i as u32 % ATLAS_GRID) as f32;
+    let gy = (i as u32 / ATLAS_GRID) as f32;
+    (
+        gx * ATLAS_CELL_W as f32,
+        gy * ATLAS_CELL_H as f32,
+        ATLAS_CELL_W as f32,
+        ATLAS_CELL_H as f32,
+    )
+}
+
+/// Snapshot live clip output into the PERSISTENT clip-thumbnail atlas (§24 5c)
+/// and copy it to the rotating write surface. `sources` maps each *active* clip
+/// (under the playhead this frame) to its just-rendered source texture. A clip is
+/// (re)snapshot when it first appears or after `REFRESH_INTERVAL` frames, at most
+/// `MAX_SNAPSHOTS_PER_FRAME` per frame, so cold thumbnails fill in gradually and
+/// the live frame budget is never threatened. Cells persist after a clip leaves
+/// the playhead (a parked clip keeps its thumbnail). A change is propagated across
+/// all `SURFACE_COUNT` rotating slots over the following frames. Returns true when
+/// the write surface changed this frame (so the caller publishes the atlas bridge).
+///
+/// A free function (not a `&mut self` method) so the caller can pass the persistent
+/// atlas / cache / layout as disjoint field borrows alongside the `&self.native_device`
+/// binding that `render()` holds for the whole frame.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn fill_clip_atlas(
+    native_device: &manifold_gpu::GpuDevice,
+    enc: &mut manifold_gpu::GpuEncoder,
+    sources: &AHashMap<&str, &manifold_gpu::GpuTexture>,
+    write_tex: Option<&manifold_gpu::GpuTexture>,
+    raw: Option<&manifold_gpu::GpuRenderPipeline>,
+    sampler: Option<&manifold_gpu::GpuSampler>,
+    visible: &[ClipId],
+    cache: &mut crate::clip_atlas::ClipAtlasCache,
+    last_snapshot: &mut AHashMap<ClipId, u64>,
+    frame_counter: &mut u64,
+    propagate: &mut u8,
+    persistent: &mut Option<manifold_gpu::GpuTexture>,
+    layout_out: &mut Vec<(ClipId, u32)>,
+) -> bool {
+    const MAX_SNAPSHOTS_PER_FRAME: usize = 4;
+    const REFRESH_INTERVAL: u64 = 90; // ~1.5 s at 60 fps
+
+    let (Some(write_tex), Some(raw), Some(sampler)) = (write_tex, raw, sampler) else {
+        return false;
+    };
+
+    *frame_counter = frame_counter.wrapping_add(1);
+    let frame = *frame_counter;
+
+    // Lazily create the content-owned persistent atlas (Rgba16Float, render target
+    // + sampled — matches the IOSurface format).
+    if persistent.is_none() {
+        let tex = native_device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: ATLAS_W,
+            height: ATLAS_H,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+                | manifold_gpu::GpuTextureUsage::SHADER_READ,
+            label: "Clip Thumbnail Atlas (persistent)",
+            mip_levels: 1,
+        });
+        // Metal does NOT zero-initialise textures — clear the atlas to transparent
+        // so unwritten cells (and first-snapshot Loads) never show garbage VRAM.
+        enc.clear_texture(&tex, 0.0, 0.0, 0.0, 0.0);
+        *persistent = Some(tex);
+        // Force-propagate the cleared atlas to ALL rotating write surfaces over the
+        // next frames, so the UI never samples an uninitialised IOSurface before
+        // the first real snapshot lands.
+        *propagate = crate::shared_texture::SURFACE_COUNT as u8;
+    }
+
+    // ── Phase 1: allocate cells + pick this frame's snapshots ──
+    cache.begin_frame(visible);
+    let mut to_blit: Vec<(u32, &manifold_gpu::GpuTexture)> = Vec::new();
+    let mut budget = MAX_SNAPSHOTS_PER_FRAME;
+    for cid in visible {
+        let Some(&tex) = sources.get(cid.as_str()) else {
+            // Inactive clip: keeps its cached cell (persisted), or no thumbnail yet.
+            continue;
+        };
+        let due = match last_snapshot.get(cid) {
+            None => true,
+            Some(&last) => frame.wrapping_sub(last) >= REFRESH_INTERVAL,
+        };
+        if !due {
+            continue;
+        }
+        if budget == 0 {
+            break;
+        }
+        if let Some(cell) = cache.get_or_alloc(cid) {
+            last_snapshot.insert(cid.clone(), frame);
+            to_blit.push((cell, tex));
+            budget -= 1;
+        }
+    }
+    // `cell_of` only changes when a cell is (re)allocated/evicted, which happens
+    // exclusively during the snapshots above — so rebuild the published layout only
+    // then, not every frame.
+    let dirty = !to_blit.is_empty();
+    if dirty {
+        *layout_out = cache.layout();
+    }
+
+    // On a change, propagate the persistent atlas across all rotating slots.
+    let should_copy = if dirty {
+        *propagate = (crate::shared_texture::SURFACE_COUNT - 1) as u8;
+        true
+    } else if *propagate > 0 {
+        *propagate -= 1;
+        true
+    } else {
+        false
+    };
+    if !should_copy {
+        return false;
+    }
+
+    // ── Phase 2: GPU blits ──
+    let persistent_tex = persistent.as_ref().expect("persistent atlas just created");
+    for (cell, tex) in &to_blit {
+        enc.draw_fullscreen_viewport(
+            raw,
+            persistent_tex,
+            &[
+                manifold_gpu::GpuBinding::Texture { binding: 0, texture: tex },
+                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler },
+            ],
+            atlas_cell_full(*cell as usize),
+            manifold_gpu::GpuLoadAction::Load,
+            "Clip Thumbnail Atlas Cell",
+        );
+    }
+    // Full copy persistent → rotating write surface (one blit).
+    enc.draw_fullscreen(
+        raw,
+        write_tex,
+        &[
+            manifold_gpu::GpuBinding::Texture { binding: 0, texture: persistent_tex },
+            manifold_gpu::GpuBinding::Sampler { binding: 1, sampler },
+        ],
+        true,
+        true,
+        "Clip Thumbnail Atlas Publish",
+    );
+    true
+}
+
 /// The PlaybackEngine (which owns GeneratorRenderer) is borrowed for each frame.
 ///
 /// On macOS, uses native Metal encoding via manifold-gpu.
@@ -262,6 +418,35 @@ pub struct ContentPipeline {
     /// the UI knows which atlas cell holds each node's thumbnail. Empty when the
     /// atlas is off or nothing was captured.
     last_node_atlas_layout: Vec<(NodeId, u32)>,
+
+    // ── Clip thumbnail atlas (§24 5c) ──────────────────────────────
+    /// Clips that currently want a timeline thumbnail (sent by the UI, deduped).
+    /// Empty = no timeline visible, so the whole snapshot path is skipped.
+    clip_atlas_visible: Vec<manifold_core::ClipId>,
+    /// Triple-buffered IOSurface textures the UI samples (one per surface slot).
+    #[cfg(target_os = "macos")]
+    clip_atlas_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    /// IOSurface bridge for the clip-atlas path.
+    #[cfg(target_os = "macos")]
+    clip_atlas_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    /// Content-owned PERSISTENT atlas. Unlike the node atlas (rebuilt every frame
+    /// from the live dump), clip cells persist after a clip goes off the playhead,
+    /// so the persistent texture is the source of truth and is copied to the
+    /// rotating write surface each frame it changes (lazily created, Rgba16Float).
+    #[cfg(target_os = "macos")]
+    clip_atlas_persistent: Option<manifold_gpu::GpuTexture>,
+    /// ClipId→cell allocation + LRU eviction.
+    clip_atlas_cache: crate::clip_atlas::ClipAtlasCache,
+    /// Frame each clip's cell was last (re)snapshot, for rate-limited refresh.
+    clip_atlas_last_snapshot: AHashMap<manifold_core::ClipId, u64>,
+    /// Monotonic fill-frame counter (refresh cadence + propagation window).
+    clip_atlas_frame: u64,
+    /// Frames left to keep copying the persistent atlas to the rotating write
+    /// surface after a change, so all `SURFACE_COUNT` slots converge. 0 = idle.
+    clip_atlas_propagate: u8,
+    /// Published `(clip_id, cell)` layout for the UI.
+    last_clip_atlas_layout: Vec<(manifold_core::ClipId, u32)>,
+
     /// Per-surface signal values — tracks the GpuEvent signal value from the last
     /// frame that wrote to each surface. Before writing to surface S, we wait for
     /// surface_signal_values[S] to complete (the frame that last used it).
@@ -420,6 +605,18 @@ impl ContentPipeline {
             #[cfg(target_os = "macos")]
             node_atlas_bridge: None,
             last_node_atlas_layout: Vec::new(),
+            clip_atlas_visible: Vec::new(),
+            #[cfg(target_os = "macos")]
+            clip_atlas_textures: [None, None, None],
+            #[cfg(target_os = "macos")]
+            clip_atlas_bridge: None,
+            #[cfg(target_os = "macos")]
+            clip_atlas_persistent: None,
+            clip_atlas_cache: crate::clip_atlas::ClipAtlasCache::new(ATLAS_CELLS as u32),
+            clip_atlas_last_snapshot: AHashMap::new(),
+            clip_atlas_frame: 0,
+            clip_atlas_propagate: 0,
+            last_clip_atlas_layout: Vec::new(),
             #[cfg(target_os = "macos")]
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             last_fence_wait_ms: 0.0,
@@ -902,6 +1099,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         &self.last_node_atlas_layout
     }
 
+    /// Install the IOSurface textures + bridge for the clip-thumbnail atlas (§24 5c).
+    #[cfg(target_os = "macos")]
+    pub fn set_clip_atlas_textures(
+        &mut self,
+        textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT],
+        bridge: Arc<crate::shared_texture::SharedTextureBridge>,
+    ) {
+        self.clip_atlas_textures = textures.map(Some);
+        self.clip_atlas_bridge = Some(bridge);
+    }
+
+    /// Set the clips that currently want a timeline thumbnail (deduped by the UI).
+    /// Empty = no timeline visible, so the snapshot path is skipped entirely.
+    pub fn set_clip_atlas_visible(&mut self, visible: Vec<ClipId>) {
+        self.clip_atlas_visible = visible;
+    }
+
+    /// The `(clip_id, cell_index)` layout for the clip-thumbnail atlas.
+    pub fn clip_atlas_layout(&self) -> &[(ClipId, u32)] {
+        &self.last_clip_atlas_layout
+    }
+
+
     /// Request a one-shot dump of every output of `effect_id` to `dir` on the
     /// next render (the watched effect's node outputs, read back to disk as
     /// 16-bit PNGs + a manifest).
@@ -1275,6 +1495,39 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // as base layer. This ordering is required by generate_layers' consecutive-run grouping.
         clip_descs.sort_unstable_by(|a, b| b.layer_index.cmp(&a.layer_index));
 
+        // ── Clip thumbnail atlas snapshot (§24 5c) ──────────────────
+        // Snapshot each visible active clip's just-rendered source texture into the
+        // persistent atlas, then copy to the rotating write surface. Runs on the
+        // compositor encoder BEFORE the compositor block borrows it, and before
+        // `frame` borrows `self`. Skipped in export / when the timeline isn't
+        // showing thumbnails. Disjoint field borrows let this coexist with the
+        // `native_device` (= `&self.native_device`) binding held for the frame.
+        #[cfg(target_os = "macos")]
+        let clip_atlas_published = if !export_mode && !self.clip_atlas_visible.is_empty() {
+            let sources: AHashMap<&str, &manifold_gpu::GpuTexture> =
+                clip_descs.iter().map(|d| (d.clip_id, d.texture)).collect();
+            let write_idx = self.write_surface_index;
+            fill_clip_atlas(
+                native_device,
+                &mut native_enc,
+                &sources,
+                self.clip_atlas_textures[write_idx].as_ref(),
+                self.preview_pipeline.as_ref(),
+                self.preview_sampler.as_ref(),
+                &self.clip_atlas_visible,
+                &mut self.clip_atlas_cache,
+                &mut self.clip_atlas_last_snapshot,
+                &mut self.clip_atlas_frame,
+                &mut self.clip_atlas_propagate,
+                &mut self.clip_atlas_persistent,
+                &mut self.last_clip_atlas_layout,
+            )
+        } else {
+            false
+        };
+        #[cfg(not(target_os = "macos"))]
+        let clip_atlas_published = false;
+
         let layer_descs: Vec<CompositeLayerDescriptor> = layers
             .iter()
             // Audio layers produce no visual output and must not enter the
@@ -1602,6 +1855,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             } else {
                 None
             };
+            // Publish the clip-thumbnail atlas only on frames the snapshot pass
+            // wrote the rotating surface (a cell changed, or propagation in flight).
+            let clip_atlas = if clip_atlas_published {
+                self.clip_atlas_bridge.clone()
+            } else {
+                None
+            };
             native_enc.add_completed_handler(move || {
                 if let Some(ref b) = preview {
                     b.publish_front(write_idx);
@@ -1610,6 +1870,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     b.publish_front(write_idx);
                 }
                 if let Some(ref b) = node_atlas {
+                    b.publish_front(write_idx);
+                }
+                if let Some(ref b) = clip_atlas {
                     b.publish_front(write_idx);
                 }
                 // Signal recording thread that the GPU blit is complete.
