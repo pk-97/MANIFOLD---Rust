@@ -194,6 +194,44 @@ fn transport_demo() {
     eprintln!("transport demo → {png}");
 }
 
+/// Renders the header bar after the §18 migration, so the unified neutral chip
+/// (zoom −/+ and Audio/Perform/Monitor now share transport's BUTTON_DIM chip —
+/// the action buttons moved off the old 59-grey) can be eyeballed in situ.
+#[test]
+fn header_demo() {
+    use manifold_ui::layout::ScreenLayout;
+    use manifold_ui::panels::Panel;
+    use manifold_ui::panels::header::HeaderPanel;
+    use manifold_ui::UITree;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/header_demo.png");
+
+    let mut header = HeaderPanel::new();
+    let layout = ScreenLayout::new(1920.0, H as f32);
+    let mut tree = UITree::new();
+    header.build(&mut tree, &layout);
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, 1920.0, H as f32, color::BG_0);
+    ui.render_tree(&tree, None);
+    let drew = ui.prepare(&device, 1920, H, 1.0);
+    assert!(drew, "header produced no draw commands");
+    let target = RenderTarget::new(&device, 1920, H, FORMAT, "header-demo");
+    {
+        let mut enc = device.create_encoder("header-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback_w(&device, &target.texture, 1920, H);
+    image::save_buffer(&png, &bytes, 1920, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("header demo → {png}");
+}
+
 /// Renders the §18 `state_button` kit output directly: each hue (the M/S/L/A
 /// identity quartet + the transport ramp aliases) in OFF (neutral chip) and ON
 /// (filled) state, sitting on a layer-colour strip and on the dark bar, so the

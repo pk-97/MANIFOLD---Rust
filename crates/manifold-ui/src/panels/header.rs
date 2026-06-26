@@ -7,7 +7,7 @@
 //! integration pattern and `docs/CHROME_API_DESIGN.md`.
 
 use super::{Panel, PanelAction};
-use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View};
+use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View, components};
 use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
@@ -37,9 +37,6 @@ const TIME_DISPLAY_W: f32 = 260.0;
 
 // ── Panel-specific colors ──────────────────────────────────────────
 
-const BUTTON_DIM: Color32 = color::HEADER_BUTTON_DIM;
-const BUTTON_HOVER_H: Color32 = color::HEADER_BUTTON_HOVER;
-const BUTTON_PRESSED_H: Color32 = color::HEADER_BUTTON_PRESSED;
 const PROGRESS_FILL: Color32 = color::HEADER_PROGRESS_FILL;
 
 const PROGRESS_RADIUS: f32 = 2.0;
@@ -95,29 +92,21 @@ impl HeaderPanel {
 
     // ── Styles ──────────────────────────────────────────────────────
 
+    // Audio / Perform / Monitor and the zoom −/+ are all neutral chrome chips —
+    // no state colour — so they share the kit's off-state chip (the same
+    // `BUTTON_DIM` 71-grey as the transport bar and layer-card mixer), differing
+    // only in font. One neutral chip across every top chrome bar.
     fn action_button_style() -> UIStyle {
         UIStyle {
-            bg_color: color::BUTTON_INACTIVE_C32,
-            hover_bg_color: BUTTON_HOVER_H,
-            pressed_bg_color: BUTTON_PRESSED_H,
-            text_color: color::TEXT_WHITE_C32,
             font_size: color::FONT_HEADING,
-            corner_radius: color::BUTTON_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
+            ..components::state_button_style(color::BUTTON_DIM, false)
         }
     }
 
     fn zoom_button_style() -> UIStyle {
         UIStyle {
-            bg_color: BUTTON_DIM,
-            hover_bg_color: BUTTON_HOVER_H,
-            pressed_bg_color: BUTTON_PRESSED_H,
-            text_color: color::TEXT_WHITE_C32,
             font_size: color::FONT_TITLE,
-            corner_radius: color::BUTTON_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
+            ..components::state_button_style(color::BUTTON_DIM, false)
         }
     }
 
