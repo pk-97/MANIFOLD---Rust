@@ -11,6 +11,7 @@
 use crate::types::{AbletonDeviceIdentity, AbletonMacroAddress, is_default_macro_name};
 
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
+use super::popup_shell;
 use crate::color;
 use crate::input::{Key, UIEvent};
 use crate::node::*;
@@ -33,8 +34,6 @@ const MIN_POPUP_H: f32 = 120.0;
 
 // ── Colors ────────────────────────────────────────────────────────
 
-const BG_BORDER: Color32 = Color32::new(48, 48, 52, 255);
-const BG_INNER: Color32 = Color32::new(19, 19, 20, 250);
 const HEADER_BG: Color32 = Color32::new(28, 28, 30, 255);
 const TRACK_NORMAL: Color32 = Color32::new(36, 36, 38, 255);
 const TRACK_HOVER: Color32 = Color32::new(51, 51, 56, 255);
@@ -245,47 +244,15 @@ impl AbletonPickerPopup {
         let pw = POPUP_W;
         let ph = self.popup_h;
 
-        // Fullscreen backdrop — catches clicks outside to dismiss.
-        self.backdrop_id = Some(tree.add_button(
-            None,
-            0.0,
-            0.0,
-            self.screen_w,
-            self.screen_h,
-            UIStyle {
-                bg_color: Color32::new(0, 0, 0, 60),
-                ..UIStyle::default()
-            },
-            "",
-        ));
-
-        // Outer border
-        tree.add_panel(
-            None,
-            px,
-            py,
-            pw,
-            ph,
-            UIStyle {
-                bg_color: BG_BORDER,
-                corner_radius: color::POPUP_RADIUS,
-                ..UIStyle::default()
-            },
+        // Scrim + modal container via the shared shell (§17 lifts it with a
+        // soft shadow; the header + columns are added on top as siblings).
+        let shell = popup_shell::build(
+            tree,
+            (self.screen_w, self.screen_h),
+            Rect::new(px, py, pw, ph),
+            &popup_shell::PopupStyle::MODAL,
         );
-
-        // Inner background
-        tree.add_panel(
-            None,
-            px + BORDER,
-            py + BORDER,
-            pw - BORDER * 2.0,
-            ph - BORDER * 2.0,
-            UIStyle {
-                bg_color: BG_INNER,
-                corner_radius: color::POPUP_RADIUS,
-                ..UIStyle::default()
-            },
-        );
+        self.backdrop_id = Some(shell.backdrop);
 
         let content_x = px + BORDER + PADDING;
         let content_y = py + BORDER + PADDING;

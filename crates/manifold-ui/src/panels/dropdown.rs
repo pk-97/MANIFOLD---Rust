@@ -11,6 +11,7 @@
 //! 4. The dropdown auto-dismisses on selection or click-outside.
 
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
+use super::popup_shell;
 use super::PanelAction;
 use crate::color;
 use crate::input::UIEvent;
@@ -342,37 +343,16 @@ impl DropdownPanel {
 
         let bounds = self.container_bounds;
 
-        // Fullscreen interactive backdrop — catches clicks outside the dropdown
-        // so they dismiss instead of passing through to panels behind it.
-        let backdrop_style = UIStyle {
-            bg_color: color::DROPDOWN_SCRIM, // nearly invisible
-            ..UIStyle::default()
-        };
-        self.backdrop_id = Some(tree.add_node(
-            None,
-            Rect::new(0.0, 0.0, self.screen_width, self.screen_height),
-            UINodeType::Button,
-            backdrop_style,
-            None,
-            UIFlags::INTERACTIVE | UIFlags::VISIBLE,
-        ));
-
-        // Root container with border + shadow bg.
-        let container_style = UIStyle {
-            bg_color: color::DROPDOWN_BG,
-            border_color: color::DROPDOWN_BORDER,
-            corner_radius: color::POPUP_RADIUS,
-            border_width: 1.0,
-            ..UIStyle::default()
-        };
-        self.root_id = Some(tree.add_panel(
-            None,
-            bounds.x,
-            bounds.y,
-            bounds.width,
-            bounds.height,
-            container_style,
-        ));
+        // Scrim + bordered container via the shared shell. The §17 overlay loop
+        // lifts the container with a soft drop-shadow (it skips the scrim).
+        let shell = popup_shell::build(
+            tree,
+            (self.screen_width, self.screen_height),
+            bounds,
+            &popup_shell::PopupStyle::DROPDOWN,
+        );
+        self.backdrop_id = Some(shell.backdrop);
+        self.root_id = Some(shell.container);
 
         // Build items — positions offset by scroll. Items outside the
         // viewport are created but hidden to preserve stable item_ids indices.

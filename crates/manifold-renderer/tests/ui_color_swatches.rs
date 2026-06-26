@@ -294,6 +294,70 @@ fn state_button_sheet() {
     eprintln!("state button sheet → {png}");
 }
 
+/// Renders the browser popup after the §18 shared-shell migration, so the modal
+/// container (now ONE rounded 1px-bordered panel via `popup_shell`, replacing the
+/// old outer+inner fake-border pair) can be eyeballed. The §17 drop-shadow is
+/// app-composited, so it does not appear here — this checks the container + cells.
+#[test]
+fn browser_popup_demo() {
+    use manifold_ui::node::Vec2;
+    use manifold_ui::panels::browser_popup::{
+        BrowserPopupMode, BrowserPopupPanel, BrowserPopupRequest,
+    };
+    use manifold_ui::panels::InspectorTab;
+    use manifold_ui::UITree;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/browser_popup_demo.png");
+
+    let names: Vec<String> = ["Blur", "Glitch", "Edge Stretch", "Feedback", "Chroma", "Pixelate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let cats: Vec<String> = names.iter().map(|_| "Stylize".to_string()).collect();
+    let type_ids: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
+
+    let mut popup = BrowserPopupPanel::new();
+    popup.set_screen_size(W as f32, H as f32);
+    popup.open(BrowserPopupRequest {
+        mode: BrowserPopupMode::Effect,
+        tab: InspectorTab::Layer,
+        layer_id: None,
+        item_names: names,
+        item_categories: cats,
+        category_names: vec!["Stylize".to_string()],
+        item_type_ids: type_ids,
+        item_search: None,
+        spawn_graph_pos: None,
+        paste_count: 0,
+        screen_anchor: Vec2::new(30.0, 40.0),
+    });
+
+    let mut tree = UITree::new();
+    popup.build(&mut tree);
+
+    ui.begin_frame();
+    // A lighter fill so the dark modal + its 1px border stand out (the popup's
+    // own scrim then dims this, as in the app).
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_3);
+    ui.render_tree(&tree, None);
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "browser popup produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "browser-popup-demo");
+    {
+        let mut enc = device.create_encoder("browser-popup-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("browser popup demo → {png}");
+}
+
 /// Renders a floating surface with and without the §17 soft shadow, so the
 /// "lift" can be eyeballed headlessly.
 #[test]

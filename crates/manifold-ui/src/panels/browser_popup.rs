@@ -8,6 +8,7 @@
 use super::InspectorTab;
 use super::PanelAction;
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
+use super::popup_shell;
 use crate::color;
 use crate::input::{Key, UIEvent};
 use crate::node::Color32;
@@ -39,8 +40,6 @@ const ACCENT_BAR_W: f32 = 3.0;
 
 // ── Colors ──
 
-const BG_BORDER: Color32 = Color32::new(48, 48, 52, 255);
-const BG_INNER: Color32 = Color32::new(19, 19, 20, 250);
 const SEARCH_BG: Color32 = Color32::new(31, 31, 32, 255);
 const SEARCH_TEXT: Color32 = Color32::new(168, 168, 172, 255);
 const CELL_NORMAL: Color32 = Color32::new(36, 36, 38, 255);
@@ -390,47 +389,15 @@ impl BrowserPopupPanel {
         let pw = POPUP_WIDTH;
         let ph = self.total_height;
 
-        // Fullscreen backdrop (dismiss on click outside)
-        self.backdrop_id = Some(tree.add_button(
-            None,
-            0.0,
-            0.0,
-            self.screen_w,
-            self.screen_h,
-            UIStyle {
-                bg_color: Color32::new(0, 0, 0, 80),
-                ..UIStyle::default()
-            },
-            "",
-        ));
-
-        // Outer border
-        tree.add_panel(
-            None,
-            px,
-            py,
-            pw,
-            ph,
-            UIStyle {
-                bg_color: BG_BORDER,
-                corner_radius: color::POPUP_RADIUS,
-                ..UIStyle::default()
-            },
+        // Scrim + modal container via the shared shell (§17 lifts it with a
+        // soft shadow; search bar / chips / grid are added on top as siblings).
+        let shell = popup_shell::build(
+            tree,
+            (self.screen_w, self.screen_h),
+            Rect::new(px, py, pw, ph),
+            &popup_shell::PopupStyle::MODAL,
         );
-
-        // Inner background
-        tree.add_panel(
-            None,
-            px + BORDER,
-            py + BORDER,
-            pw - BORDER * 2.0,
-            ph - BORDER * 2.0,
-            UIStyle {
-                bg_color: BG_INNER,
-                corner_radius: color::POPUP_RADIUS,
-                ..UIStyle::default()
-            },
-        );
+        self.backdrop_id = Some(shell.backdrop);
 
         let cx = px + BORDER + PADDING;
         let content_w = pw - BORDER * 2.0 - PADDING * 2.0;

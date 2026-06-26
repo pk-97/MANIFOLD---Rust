@@ -629,8 +629,16 @@ pub const LAYER_CHEVRON_PRESSED: Color32 = Color32::new(255, 255, 255, 8);
 pub const CLIP_LABEL_BG: Color32 = Color32::new(20, 20, 22, 255);
 pub const CLIP_LABEL_BG_HOVER: Color32 = Color32::new(20, 20, 22, 220);
 
-// Dropdown panel
+// Dropdown panel (lightweight popup — barely dims; see `panels::popup_shell`).
 pub const DROPDOWN_SCRIM: Color32 = Color32::new(0, 0, 0, 1);
+
+// Modal popup shell (Ableton picker / browser) — a darker well behind a dimming
+// scrim, so the modal pulls focus off the rest of the screen. Hoisted from the
+// per-file `BG_BORDER`/`BG_INNER` + inline scrim literals the two pickers each
+// carried; one definition now, consumed via `PopupStyle::MODAL`.
+pub const MODAL_SCRIM: Color32 = Color32::new(0, 0, 0, 80);
+pub const MODAL_BG: Color32 = Color32::new(19, 19, 20, 250);
+pub const MODAL_BORDER: Color32 = Color32::new(48, 48, 52, 255);
 
 // ── Interaction thresholds ──────────────────────────────────────────
 pub const DRAG_THRESHOLD_PX: f32 = 4.0;
