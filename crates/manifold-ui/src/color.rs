@@ -88,6 +88,12 @@ pub const BG_3_PRESSED: Color32 = Color32::new(36, 36, 39, 255);
 //             timeline + layer panel (reads as void showing through).
 pub const DIVIDER: Color32 = Color32::new(56, 56, 60, 255);
 pub const GROOVE: Color32 = Color32::new(12, 12, 14, 255);
+// One element-outline hairline. §17: was 5 near-duplicate greys (RACK 56 /
+// CARD 46 / CARD_C32 55 / DROPDOWN 58); collapsed to one. In-panel grouping
+// should lean on fill level (the BG ramp), not boxes — this is the subtle
+// edge for surfaces that still want an outline + the floating-element border.
+// (The purple-tinted generator-card border stays its own identity tint.)
+pub const BORDER: Color32 = Color32::new(56, 56, 60, 255);
 
 // ── Semantic colour ramp (§15) ──────────────────────────────────────
 // One definition per role-hue, three steps each (idle · base · active).
@@ -262,9 +268,9 @@ pub const LED_COLOR: Color32 = Color32::new(0, 200, 80, 255);
 pub const ANALYSIS_COLOR: Color32 = Color32::new(0, 178, 170, 255);
 
 // ── Effect rack ─────────────────────────────────────────────────────
-pub const RACK_BORDER: Color32 = Color32::new(56, 56, 61, 255);
+pub const RACK_BORDER: Color32 = BORDER;
 pub const RACK_BG: Color32 = BG_2;
-pub const CARD_BORDER: Color32 = Color32::new(46, 46, 49, 255);
+pub const CARD_BORDER: Color32 = BORDER;
 pub const RACK_HANDLE_BG: Color32 = Color32::new(37, 37, 43, 255);
 pub const RACK_HANDLE_TEXT: Color32 = Color32::new(122, 128, 158, 255);
 pub const EFFECT_HEADER_NAME: Color32 = Color32::new(184, 199, 235, 255);
@@ -433,7 +439,7 @@ pub const RULER_BG: Color32 = Color32::new(102, 102, 102, 255);
 // ── Dropdown item states ────────────────────────────────────────────
 pub const DROPDOWN_ITEM_SELECTED: Color32 = Color32::new(45, 65, 95, 255);
 pub const DROPDOWN_CHECK_COLOR: Color32 = Color32::new(100, 180, 255, 255);
-pub const DROPDOWN_BORDER: Color32 = Color32::new(58, 58, 62, 255);
+pub const DROPDOWN_BORDER: Color32 = BORDER;
 
 // ── Clip chrome ─────────────────────────────────────────────────────
 pub const LOOP_ON_COLOR: Color32 = Color32::new(50, 100, 180, 255);
@@ -564,7 +570,7 @@ pub const MOD_HEADER_BG_C32: Color32 = Color32::new(70, 30, 50, 255);
 
 // ── Bitmap Effect Card ──────────────────────────────────────────────
 pub const EFFECT_CARD_INNER_BG_C32: Color32 = BG_0; // dark well, recessed in the card
-pub const CARD_BORDER_C32: Color32 = Color32::new(55, 55, 60, 255);
+pub const CARD_BORDER_C32: Color32 = BORDER;
 pub const DRAG_HANDLE_BG_C32: Color32 = Color32::new(38, 38, 42, 255);
 pub const DRAG_HANDLE_HOVER_BG_C32: Color32 = Color32::new(52, 52, 56, 255);
 
