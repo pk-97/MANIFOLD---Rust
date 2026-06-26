@@ -1,5 +1,6 @@
 pub mod background_worker;
 pub mod chain_dispatch;
+pub mod clip_draw;
 pub mod compositor;
 pub mod effect;
 pub mod effects;

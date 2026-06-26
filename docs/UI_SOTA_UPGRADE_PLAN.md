@@ -126,23 +126,40 @@ confirms actions.
 
 **Why:** the biggest perceived lift (readable clips) and the only real rendering-architecture move.
 
-> **DECISION GATE before 5b:** perform-mode timeline — own treatment vs one shared surface? This
-> changes what "done" means for the clip/header work. Settle with Peter first.
+> **Dead gate (removed):** the old "perform-mode timeline treatment" gate was invalid — perform mode
+> does not display clips. Do not raise it again.
 
 **5a — Gradient primitive. ✅ DONE (2026-06-26).** `UIRenderer::draw_gradient_rect` + a linear-gradient
 body in the shared rect shader (`ui_renderer.rs`: `UIVertex` grew `color2` + `grad`; fragment mixes
 `color`→`color2` along `grad.xy`, every existing draw stays gradient-off). Plumbing only — nothing
 calls it yet, so zero visual change. Verified headless (`gradient_demo`). Benefits chrome *and* clips.
 
-**5b — Clips → GPU SDF quads** *(the gate)*.
-- Current: [`bitmap_painter::draw_clip`](../crates/manifold-ui/src/bitmap_painter.rs) CPU-paints →
-  [`layer_bitmap_gpu::upload_layer`](../crates/manifold-renderer/src/layer_bitmap_gpu.rs#L165) →
-  flat quad. No rounded/gradient/shadow/blit by construction.
-- Change: draw clips through the GPU SDF rect pipeline ([`draw_rounded_rect`](../crates/manifold-renderer/src/ui_renderer.rs#L418))
-  — rounded body, **name strip** (CoreText, clipped+ellipsised), gradient body, **lift-on-select**.
-  Add a **clip colour-override field** (model + serialization; default = layer colour; old projects
-  round-trip). Retire the CPU pixel-shift scroll optimisation (no longer needed).
-- Perf: GPU instanced quads drop per-frame CPU paint — a **win** at 2928 clips (`project_typical_project_scale`).
+**5b — Clips → GPU SDF quads. ✅ DONE (2026-06-26).** Clips are no longer baked into the per-layer
+bitmap; they render as GPU SDF rounded rects through the shared rect pipeline.
+- **Renderer:** [`clip_draw.rs`](../crates/manifold-renderer/src/clip_draw.rs) — `emit_clips` (lift
+  shadow on select → rounded gradient body → border, two-phase so a selected clip's shadow sits under
+  every neighbour) and `emit_clip_names` (overlay text, luminance-picked contrast, scissor-clipped;
+  ellipsis is a Phase-6 polish — currently a hard cut). Styling lives in design tokens (`CLIP_RADIUS`,
+  `CLIP_GRADIENT_LIGHTEN`, `CLIP_SHADOW*`, `CLIP_BORDER_*`, `CLIP_LABEL_*`) so the look is one-line
+  tunable in the Phase-6 eye pass.
+- **Pass model (`app_render.rs`):** the per-layer bitmap split into two buffers
+  ([`bitmap_renderer.rs`](../crates/manifold-ui/src/bitmap_renderer.rs)) — **bg** (grid + top separator)
+  drawn before the clip pass, **front** (waveform + region + cursor + markers) after — with the GPU clip
+  cycle (own `UIRenderer` prepare/render) between them, and names in the Pass-5 overlay. Two
+  `LayerBitmapGpu` instances (bg / front). `draw_clip` + its clip-fill consts/tests retired.
+- **Geometry:** [`viewport::visible_clip_rects`](../crates/manifold-ui/src/panels/viewport.rs) rebuilds
+  on-screen clip rects each frame from the same `beat_to_pixel`/`track_y`/`CLIP_VERTICAL_PAD` the
+  hit-tester uses, so the drawn body and the clickable region can't drift.
+- **Model:** `TimelineClip.color_override: Option<Color>` (skip-serialize when `None`; old projects
+  round-trip — unit-tested) resolved into `ViewportClip.color` at the core↔UI boundary; `get_clip_color`
+  state logic unchanged.
+- **Deviations from the original sketch (both deliberate, for the live show):** the bitmap was *split*,
+  not replaced (waveform stays a bitmap — rich per-pixel data — so audio clips never regressed); and the
+  **pixel-shift scroll optimisation was KEPT, not retired** — at 4K×~53 layers the bg-grid upload
+  bandwidth on auto-scroll still pays for it, and auto-scroll is the live-performance case.
+- **Verify:** headless `clip_body_sheet` (bodies + names + states), serde round-trip unit tests, the
+  29 bitmap dirty-check tests, workspace sweep + clippy. The *look* itself is a Phase-6 eye pass on the
+  running app — not claimed done here.
 
 **5c — Thumbnail pipeline.** Generator previews first (reuse the authoring-time
 [`preview_request`](../crates/manifold-renderer/src/layer_compositor.rs#L471) scaffolding → cache a
@@ -184,23 +201,20 @@ emphasis weight, shadow weight, spacing rhythm, badge glyphs. **Done = Peter sig
 3 Kit ─────┤  coverage — one grammar everywhere
 4 Hierarchy┘  polish
 
-   ── decision gate: perform-mode fork ──
-
-5 Timeline   structural spine: 5a gradient → 5b clips→GPU → 5c thumbnails → 5d headers → 5e nav
+5 Timeline   structural spine: 5a gradient ✅ → 5b clips→GPU ✅ → 5c thumbnails → 5d headers → 5e nav
 6 Taste      final tuning pass on the running app
 ```
 
 - **Tokens/coverage (1–4) before structural (5):** they lift the *whole* UI on infra you already
   shipped, are all harness-verifiable, and are low-to-medium risk. Do them first for fast, safe wins.
-- **Timeline (5) last among the build phases:** it's the heavy structural lift and it's gated on the
-  perform-mode design fork. The gradient primitive (5a) it needs also benefits 2–4 if pulled earlier.
+- **Timeline (5) last among the build phases:** it's the heavy structural lift. 5a/5b are done; 5c–5e
+  remain.
 - **§16 guard runs throughout** so nothing re-drifts as we go.
 
 ## 10. Decision gates (need Peter)
 
-1. **Perform-mode timeline** — own treatment vs one shared surface. Gates 5b+.
-2. **Clip colour-override** — confirm the model field + serialization migration (default = layer
-   colour, skip-serialize when default, round-trip the canonical fixture).
+1. **Clip colour-override** — ✅ shipped in 5b (`TimelineClip.color_override: Option<Color>`,
+   skip-serialize when `None`, round-trip unit-tested). No open gate.
 
 ## 11. Acceptance — "SOTA looks like"
 

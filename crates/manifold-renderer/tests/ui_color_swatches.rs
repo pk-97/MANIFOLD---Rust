@@ -441,6 +441,114 @@ fn gradient_demo() {
     eprintln!("gradient demo → {png}");
 }
 
+/// Renders GPU clip bodies (§24 5b) across their states — normal / selected /
+/// hovered / muted / locked, video + generator — on the dark tracks background,
+/// so the rounded gradient body, the normal vs selected border, and the
+/// lift-on-select shadow can be eyeballed before the in-app cutover. This is the
+/// treatment in isolation; the look itself is tuned in the Phase-6 eye pass.
+#[test]
+fn clip_body_sheet() {
+    use manifold_renderer::clip_draw::{emit_clips, ClipBody};
+    use manifold_ui::node::Rect;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/clip_body_sheet.png");
+
+    let video = color::CLIP_NORMAL;
+    let gen_c = color::CLIP_GEN_NORMAL;
+    let cw = 140.0;
+    let ch = 44.0;
+    let gap = 14.0;
+
+    // (label, base_color, selected, hovered, muted, locked, generator)
+    let cases: &[(&str, Color32, bool, bool, bool, bool, bool)] = &[
+        ("normal", video, false, false, false, false, false),
+        ("selected", video, true, false, false, false, false),
+        ("hovered", video, false, true, false, false, false),
+        ("muted", video, false, false, true, false, false),
+        ("locked", video, false, false, false, true, false),
+        ("gen normal", gen_c, false, false, false, false, true),
+        ("gen selected", gen_c, true, false, false, false, true),
+    ];
+
+    let mut clips = Vec::new();
+    for (i, &(_, base, sel, hov, mut_, lock, g)) in cases.iter().enumerate() {
+        let row = i / 4;
+        let coln = i % 4;
+        let x = 24.0 + coln as f32 * (cw + gap);
+        let y = 64.0 + row as f32 * (ch + 44.0);
+        clips.push(ClipBody {
+            rect: Rect::new(x, y, cw, ch),
+            base_color: base,
+            selected: sel,
+            hovered: hov,
+            muted: mut_,
+            locked: lock,
+            generator: g,
+        });
+    }
+
+    // Build matching ClipScreenRects so the name labels render through the real
+    // emitter (dark-on-light / light-on-dark by body luminance, scissor-clipped).
+    use manifold_renderer::clip_draw::emit_clip_names;
+    use manifold_ui::panels::viewport::ClipScreenRect;
+    let names = [
+        "TEXT BOT L",
+        "FLOWERS",
+        "a-very-long-clip-name-that-clips",
+        "DRUMS.wav",
+        "locked",
+        "Tesseract",
+        "NestedCubes",
+    ];
+    let mut name_rects = Vec::new();
+    for (i, c) in clips.iter().enumerate() {
+        name_rects.push(ClipScreenRect {
+            clip_id: manifold_foundation::ClipId::new(format!("c{i}")),
+            layer_index: 0,
+            rect: c.rect,
+            base_color: c.base_color,
+            name: names[i].to_string(),
+            start_beat: manifold_foundation::Beats::ZERO,
+            end_beat: manifold_foundation::Beats::ONE,
+            is_muted: false,
+            is_locked: false,
+            is_generator: false,
+        });
+    }
+
+    ui.begin_frame();
+    // Dark tracks background so the bodies sit on the real timeline tone.
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_0);
+    ui.draw_text(24.0, 14.0, "GPU CLIP BODIES + NAMES (\u{00a7}24 5b)", 13.0, color::TEXT_NORMAL);
+    emit_clips(&mut ui, &clips);
+    emit_clip_names(&mut ui, &name_rects);
+    // State labels above each clip.
+    for (i, &(label, ..)) in cases.iter().enumerate() {
+        let row = i / 4;
+        let coln = i % 4;
+        let x = 24.0 + coln as f32 * (cw + gap);
+        let y = 64.0 + row as f32 * (ch + 44.0);
+        ui.draw_text(x, y - 16.0, label, 11.0, color::TEXT_DIMMED);
+    }
+
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "clip body sheet produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "clip-body-sheet");
+    {
+        let mut enc = device.create_encoder("clip-body-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("clip body sheet → {png}");
+}
+
 fn draw_column(ui: &mut UIRenderer, x: f32, y0: f32, rows: &[(&str, Color32)]) {
     for (i, (label, c)) in rows.iter().enumerate() {
         let y = y0 + i as f32 * ROW_H;

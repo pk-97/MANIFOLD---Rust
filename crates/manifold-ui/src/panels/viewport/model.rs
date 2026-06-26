@@ -38,6 +38,28 @@ pub struct ViewportClip {
     pub warped_secs_per_beat: f32,
 }
 
+/// A visible clip resolved to its on-screen rectangle and the style inputs the
+/// GPU clip emitter needs (§24 5b). The viewport produces these every frame from
+/// the same geometry the hit-tester uses, so the drawn body and the clickable
+/// region cannot disagree. Selection / hover / marquee are resolved by the
+/// caller (it owns the selection state); this carries only what the viewport
+/// knows: geometry, the effective base colour, and the per-clip flags.
+#[derive(Debug, Clone)]
+pub struct ClipScreenRect {
+    pub clip_id: ClipId,
+    pub layer_index: usize,
+    pub rect: Rect,
+    /// Effective base colour (per-clip override resolved into `ViewportClip.color`).
+    pub base_color: Color32,
+    /// Display name, drawn as the clip's label strip in the overlay pass.
+    pub name: String,
+    pub start_beat: Beats,
+    pub end_beat: Beats,
+    pub is_muted: bool,
+    pub is_locked: bool,
+    pub is_generator: bool,
+}
+
 // `HitRegion` and `ClipHitResult` live once in `crate::clip_hit_tester` — the
 // single hit-tester both the hover and the click/drag paths use — and are
 // re-exported from this module via `viewport.rs`. They were duplicated here,

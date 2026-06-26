@@ -50,8 +50,14 @@ pub struct BitmapRepaintState<'a> {
 pub struct LayerBitmapRenderer {
     layer_index: usize,
 
-    // Pixel buffer (CPU side)
-    pixel_buffer: Vec<Color32>,
+    // Two CPU pixel buffers, split by z-order around the GPU clip bodies (§24 5b):
+    //  • `pixel_buffer_bg`    — grid lines + the layer-0 top separator. Drawn
+    //    BEFORE the GPU clip pass, so opaque clip bodies occlude the grid.
+    //  • `pixel_buffer_front` — waveforms + region highlight + insert cursor +
+    //    markers. Drawn AFTER the clip pass, so they sit on top of the bodies.
+    // Clip fills/borders no longer live here at all — they are GPU rounded rects.
+    pixel_buffer_bg: Vec<Color32>,
+    pixel_buffer_front: Vec<Color32>,
     tex_w: usize,
     tex_h: usize,
 
@@ -88,7 +94,8 @@ impl LayerBitmapRenderer {
     ) -> Self {
         Self {
             layer_index,
-            pixel_buffer: Vec::new(),
+            pixel_buffer_bg: Vec::new(),
+            pixel_buffer_front: Vec::new(),
             tex_w: 0,
             tex_h: 0,
             last_min_beat: f32::NAN,
@@ -120,8 +127,16 @@ impl LayerBitmapRenderer {
         self.layer_index
     }
 
-    pub fn pixels(&self) -> &[Color32] {
-        &self.pixel_buffer
+    /// Background buffer (grid + top separator) — uploaded to the bg texture,
+    /// drawn before the GPU clip pass.
+    pub fn pixels_bg(&self) -> &[Color32] {
+        &self.pixel_buffer_bg
+    }
+
+    /// Front buffer (waveform + region + cursor + markers) — uploaded to the
+    /// front texture, drawn after the GPU clip pass.
+    pub fn pixels_front(&self) -> &[Color32] {
+        &self.pixel_buffer_front
     }
 
     pub fn tex_w(&self) -> usize {
@@ -298,10 +313,11 @@ impl LayerBitmapRenderer {
         // Resize buffer if needed (Unity EnsureTexture, lines 427-444)
         self.ensure_buffer(tex_w, tex_h);
 
-        // ── Pixel-shift scroll optimization ──
-        // When only the scroll position changed (no zoom, selection, clips, etc.),
-        // shift the existing pixel data and only repaint the newly-exposed strip.
-        // Reduces bandwidth from ~7.5MB to ~2MB per layer on auto-scroll.
+        // ── Pixel-shift scroll optimization (applied to BOTH buffers) ──
+        // When only the scroll position changed (no zoom, clips, etc.), shift the
+        // existing pixel data and only repaint the newly-exposed strip. Keeps
+        // auto-scroll upload bandwidth low — the bg (grid) buffer is full-width
+        // and dense, so this still pays even with clips off the bitmap.
         let mut strip_x: Option<(usize, usize)> = None; // (start_col, width) of dirty strip
         if scroll_only && self.tex_w == tex_w && self.tex_h == tex_h {
             let delta_beats = viewport_min_beat - old_min_beat;
@@ -309,38 +325,22 @@ impl LayerBitmapRenderer {
             let abs_delta = delta_px.unsigned_abs() as usize;
 
             if abs_delta > 0 && abs_delta < tex_w {
-                // Shift rows in-place.
-                for y in 0..tex_h {
-                    let row = y * tex_w;
-                    if delta_px > 0 {
-                        // Scrolled right: shift left, expose right strip.
-                        self.pixel_buffer
-                            .copy_within(row + abs_delta..row + tex_w, row);
-                        // Clear exposed strip at right.
-                        for x in (tex_w - abs_delta)..tex_w {
-                            self.pixel_buffer[row + x] = Color32::TRANSPARENT;
-                        }
-                    } else {
-                        // Scrolled left: shift right, expose left strip.
-                        self.pixel_buffer
-                            .copy_within(row..row + tex_w - abs_delta, row + abs_delta);
-                        // Clear exposed strip at left.
-                        for x in 0..abs_delta {
-                            self.pixel_buffer[row + x] = Color32::TRANSPARENT;
-                        }
-                    }
-                }
-                if delta_px > 0 {
-                    strip_x = Some((tex_w - abs_delta, abs_delta));
+                shift_buffer(&mut self.pixel_buffer_bg, tex_w, tex_h, delta_px, abs_delta);
+                shift_buffer(&mut self.pixel_buffer_front, tex_w, tex_h, delta_px, abs_delta);
+                strip_x = Some(if delta_px > 0 {
+                    (tex_w - abs_delta, abs_delta)
                 } else {
-                    strip_x = Some((0, abs_delta));
-                }
+                    (0, abs_delta)
+                });
             }
         }
 
-        // Full clear if we didn't pixel-shift (or shift covered entire width).
+        // Full clear of both buffers when we didn't pixel-shift.
         if strip_x.is_none() {
-            for p in self.pixel_buffer.iter_mut() {
+            for p in self.pixel_buffer_bg.iter_mut() {
+                *p = Color32::TRANSPARENT;
+            }
+            for p in self.pixel_buffer_front.iter_mut() {
                 *p = Color32::TRANSPARENT;
             }
         }
@@ -351,9 +351,11 @@ impl LayerBitmapRenderer {
             None => (0, tex_w),
         };
 
-        // Paint grid lines BEFORE clips — only in the paint range.
+        // ── Background buffer: grid lines, then the layer-0 top separator ──
+        // Grid sits BEHIND the GPU clip bodies (opaque bodies occlude it; it shows
+        // through the gaps), so it lives in the bg buffer drawn before the clip pass.
         paint_grid_lines(
-            &mut self.pixel_buffer,
+            &mut self.pixel_buffer_bg,
             tex_w,
             tex_h,
             viewport_min_beat,
@@ -363,10 +365,6 @@ impl LayerBitmapRenderer {
             paint_x0,
             paint_x1,
         );
-
-        // Top separator: paint a horizontal line at Y=0 for the first layer
-        // (matching the bottom separators between tracks). Painted into the bitmap
-        // because bitmaps render on top of UITree panel nodes in a later GPU pass.
         if self.layer_index == 0 {
             let sep_h = (color::TRACK_SEPARATOR_HEIGHT * self.render_scale)
                 .round()
@@ -374,26 +372,32 @@ impl LayerBitmapRenderer {
             for y in 0..sep_h.min(tex_h) {
                 let row = y * tex_w;
                 for x in paint_x0..paint_x1 {
-                    self.pixel_buffer[row + x] = color::SEPARATOR_COLOR;
+                    self.pixel_buffer_bg[row + x] = color::SEPARATOR_COLOR;
                 }
             }
         }
 
-        // Clip vertical inset (Unity lines 204-207)
+        // ── Front buffer: per-clip waveforms ──
+        // Clip bodies/borders are now GPU rounded rects; only the waveform stays a
+        // bitmap (rich per-pixel spectral data), painted into the front buffer so
+        // it lands ON TOP of the clip body. The clip iteration is kept solely to
+        // position waveforms; non-audio clips contribute nothing here.
         let pad_px = (tex_h as f32 * self.clip_vertical_padding / self.track_height).round() as i32;
         let clip_y = pad_px;
         let clip_h = tex_h as i32 - pad_px * 2;
-
-        // Paint clips on top of grid (Unity lines 210-232)
-        // On pixel-shift, only repaint clips that overlap the exposed strip.
         for clip in clips {
+            if !clip.is_audio {
+                continue;
+            }
+            let renderer = match clip.waveform.as_ref() {
+                Some(r) => r,
+                None => continue,
+            };
             let clip_start_f32 = clip.start_beat.as_f32();
             let end_beat = clip_start_f32 + clip.duration_beats.as_f32();
             if end_beat <= viewport_min_beat || clip_start_f32 >= viewport_max_beat {
                 continue;
             }
-
-            // Compute pixel rect (Unity ComputeClipPixelRect, lines 297-308)
             let (x, w) = match compute_clip_pixel_rect(
                 clip_start_f32,
                 end_beat,
@@ -404,111 +408,58 @@ impl LayerBitmapRenderer {
                 Some(v) => v,
                 None => continue,
             };
-
-            // Skip clips entirely outside the paint range
             if (x + w) <= paint_x0 as i32 || x >= paint_x1 as i32 {
                 continue;
             }
 
-            // Visual state. When the region IS the selection (region_selects_clips:
-            // a marquee with an empty clip set), style every clip overlapping its
-            // beat/layer span as selected. The overlap test mirrors
-            // EditingService::get_clips_in_region, which is the exact set ops
-            // resolve for an empty-set region — so the marquee highlight is WYSIWYG.
-            // (For a region derived from a clip set, region_selects_clips is false
-            // and styling stays driven by the set.)
-            let in_marquee = state.region_selects_clips
-                && state
-                    .region
-                    .is_some_and(|r| clip_overlaps_region(r, self.layer_index, clip_start_f32, end_beat));
-            let is_selected = (state.is_selected)(&clip.clip_id) || in_marquee;
-            let is_hovered = state.hovered_clip_id == Some(clip.clip_id.as_str());
-            let clip_muted = is_muted || clip.is_muted;
-            let is_locked = clip.is_locked;
-            let is_generator = clip.is_generator;
-
-            let bg = bitmap_painter::get_clip_color(
-                is_selected,
-                is_hovered,
-                clip_muted,
-                is_locked,
-                is_generator,
-                clip.color,
-            );
-            let show_trim_hints = is_selected || is_hovered;
-            bitmap_painter::draw_clip(
-                &mut self.pixel_buffer,
-                tex_w,
-                tex_h,
-                x,
-                clip_y,
-                w,
-                clip_h,
-                bg,
-                is_selected,
-                show_trim_hints,
-                self.render_scale,
-            );
-
-            // Audio-layer clips paint their waveform inside the rect (over the
-            // clip fill), using the same MIP + spectral-color engine as the
-            // audio-import lanes. The waveform is mapped across the clip's FULL
-            // pixel rect (which may run off-screen left/right) and only the
-            // visible columns are painted — so it stays locked to the audio as
-            // you zoom/scroll instead of squashing into the clamped on-screen
-            // rect. No-op until the file is decoded in the background.
-            if clip.is_audio
-                && let Some(renderer) = clip.waveform.as_ref()
-            {
-                let full_x = (clip_start_f32 - viewport_min_beat) * scaled_ppb;
-                let full_w = clip.duration_beats.as_f32() * scaled_ppb;
-                // The clip is a window onto the file (Ableton model): show the
-                // source slice [in_point, in_point + win_secs] rather than the
-                // whole file squashed into the clip rect. Trim changes the window
-                // length; warp changes win_secs (the scale).
-                let file_secs = renderer.clip_duration_seconds();
-                let win_secs = clip.duration_beats.as_f32() * clip.warped_secs_per_beat;
-                let (src_start, src_end) = if file_secs > 0.0 {
-                    (
-                        (clip.in_point_seconds / file_secs).clamp(0.0, 1.0),
-                        ((clip.in_point_seconds + win_secs) / file_secs).clamp(0.0, 1.0),
-                    )
-                } else {
-                    (0.0, 1.0)
-                };
-                let frac = (src_end - src_start).max(1e-4);
-                // Pick the MIP at the resolution the *whole* file would occupy if
-                // the visible window were stretched to full_w, so a zoomed-in trim
-                // doesn't get a too-coarse level. scaled_ppb already folds in
-                // render_scale, so pass 1.0 to avoid double-scaling.
-                if let Some(level) = renderer.select_level_for_zoom(full_w / frac, 1.0) {
-                    // Cover the SAME span draw_clip just filled (the full visible
-                    // clip rect), not the scroll-exposed strip. draw_clip repaints
-                    // the whole rect over the pixel-shifted buffer, so clamping the
-                    // waveform to the strip would let the fill erase the shifted
-                    // waveform everywhere outside that strip — the waveform wiping
-                    // away as you scroll horizontally.
-                    let x_start = x.max(0);
-                    let x_end = (x + w).min(tex_w as i32);
-                    crate::waveform_painter::draw_waveform(
-                        &mut self.pixel_buffer,
-                        tex_w,
-                        tex_h,
-                        level,
-                        x_start,
-                        x_end,
-                        clip_y,
-                        clip_h,
-                        full_x,
-                        full_w,
-                        src_start,
-                        src_end,
-                    );
-                }
+            // The waveform maps across the clip's FULL pixel rect (which may run
+            // off-screen left/right); only visible columns paint, so it stays
+            // locked to the audio as you zoom/scroll. No-op until decode finishes.
+            let full_x = (clip_start_f32 - viewport_min_beat) * scaled_ppb;
+            let full_w = clip.duration_beats.as_f32() * scaled_ppb;
+            // The clip is a window onto the file (Ableton model): show the source
+            // slice [in_point, in_point + win_secs] rather than the whole file
+            // squashed into the clip rect. Trim changes the window length; warp
+            // changes win_secs (the scale).
+            let file_secs = renderer.clip_duration_seconds();
+            let win_secs = clip.duration_beats.as_f32() * clip.warped_secs_per_beat;
+            let (src_start, src_end) = if file_secs > 0.0 {
+                (
+                    (clip.in_point_seconds / file_secs).clamp(0.0, 1.0),
+                    ((clip.in_point_seconds + win_secs) / file_secs).clamp(0.0, 1.0),
+                )
+            } else {
+                (0.0, 1.0)
+            };
+            let frac = (src_end - src_start).max(1e-4);
+            // Pick the MIP at the resolution the *whole* file would occupy if the
+            // visible window were stretched to full_w, so a zoomed-in trim doesn't
+            // get a too-coarse level. scaled_ppb already folds in render_scale.
+            if let Some(level) = renderer.select_level_for_zoom(full_w / frac, 1.0) {
+                // Cover the full visible clip rect, not the scroll-exposed strip —
+                // the pixel-shift moves the existing waveform, and clamping to the
+                // strip would let nothing repaint the shifted-in region.
+                let x_start = x.max(0);
+                let x_end = (x + w).min(tex_w as i32);
+                crate::waveform_painter::draw_waveform(
+                    &mut self.pixel_buffer_front,
+                    tex_w,
+                    tex_h,
+                    level,
+                    x_start,
+                    x_end,
+                    clip_y,
+                    clip_h,
+                    full_x,
+                    full_w,
+                    src_start,
+                    src_end,
+                );
             }
         }
 
-        // Paint region highlight ON TOP of clips (Unity lines 234-249)
+        // Region highlight, insert cursor, markers — overlays that sit ON TOP of
+        // the clip bodies, so they live in the front buffer.
         if state.has_region
             && let Some(region) = state.region
             && self.layer_index >= region.start_layer
@@ -521,7 +472,7 @@ impl LayerBitmapRenderer {
             let rw = rx1 - rx;
             if rw > 0 {
                 bitmap_painter::fill_rect(
-                    &mut self.pixel_buffer,
+                    &mut self.pixel_buffer_front,
                     tex_w,
                     tex_h,
                     rx,
@@ -533,7 +484,6 @@ impl LayerBitmapRenderer {
             }
         }
 
-        // Paint insert cursor line on the active layer only (Unity lines 251-260)
         if state.has_insert_cursor && state.insert_cursor_layer == Some(self.layer_index) {
             let cursor_px = (state.insert_cursor_beat - viewport_min_beat) * scaled_ppb;
             let cx = cursor_px.round() as i32;
@@ -542,7 +492,7 @@ impl LayerBitmapRenderer {
                 .max(1.0) as i32;
             if cx >= 0 && cx < tex_w as i32 {
                 bitmap_painter::fill_rect(
-                    &mut self.pixel_buffer,
+                    &mut self.pixel_buffer_front,
                     tex_w,
                     tex_h,
                     cx,
@@ -554,7 +504,6 @@ impl LayerBitmapRenderer {
             }
         }
 
-        // Paint timeline marker vertical lines
         let marker_w = (1.0_f32 * self.render_scale).round().max(1.0) as i32;
         for &(beat, color) in state.markers {
             if beat < viewport_min_beat || beat > viewport_max_beat {
@@ -563,7 +512,7 @@ impl LayerBitmapRenderer {
             let mx = ((beat - viewport_min_beat) * scaled_ppb).round() as i32;
             if mx >= paint_x0 as i32 && mx < paint_x1 as i32 {
                 bitmap_painter::fill_rect(
-                    &mut self.pixel_buffer,
+                    &mut self.pixel_buffer_front,
                     tex_w,
                     tex_h,
                     mx,
@@ -579,15 +528,41 @@ impl LayerBitmapRenderer {
         true
     }
 
-    /// Resize pixel buffer if needed (Unity EnsureTexture, lines 427-444).
+    /// Resize both pixel buffers if needed (Unity EnsureTexture, lines 427-444).
     fn ensure_buffer(&mut self, w: usize, h: usize) {
-        if self.tex_w == w && self.tex_h == h && self.pixel_buffer.len() == w * h {
+        let pixel_count = w * h;
+        if self.tex_w == w
+            && self.tex_h == h
+            && self.pixel_buffer_bg.len() == pixel_count
+            && self.pixel_buffer_front.len() == pixel_count
+        {
             return;
         }
         self.tex_w = w;
         self.tex_h = h;
-        let pixel_count = w * h;
-        self.pixel_buffer.resize(pixel_count, Color32::TRANSPARENT);
+        self.pixel_buffer_bg.resize(pixel_count, Color32::TRANSPARENT);
+        self.pixel_buffer_front.resize(pixel_count, Color32::TRANSPARENT);
+    }
+}
+
+/// Horizontal pixel-shift of one buffer for the scroll optimization: move rows
+/// by `delta_px` (positive = scrolled right → shift left, expose the right
+/// strip; negative = the mirror) and clear the newly-exposed strip. `abs_delta`
+/// is `|delta_px|` and is assumed `0 < abs_delta < tex_w`.
+fn shift_buffer(buffer: &mut [Color32], tex_w: usize, tex_h: usize, delta_px: i32, abs_delta: usize) {
+    for y in 0..tex_h {
+        let row = y * tex_w;
+        if delta_px > 0 {
+            buffer.copy_within(row + abs_delta..row + tex_w, row);
+            for x in (tex_w - abs_delta)..tex_w {
+                buffer[row + x] = Color32::TRANSPARENT;
+            }
+        } else {
+            buffer.copy_within(row..row + tex_w - abs_delta, row + abs_delta);
+            for x in 0..abs_delta {
+                buffer[row + x] = Color32::TRANSPARENT;
+            }
+        }
     }
 }
 
@@ -773,8 +748,9 @@ fn approx_eq(a: f32, b: f32) -> bool {
 /// `region`. Mirrors `EditingService::get_clips_in_region` exactly: inclusive
 /// layer range `[start_layer, end_layer]` and half-open beat overlap
 /// (`clip_start < region.end && clip_end > region.start`). Keeping this identical
-/// is what makes the marquee highlight WYSIWYG with what an op resolves.
-fn clip_overlaps_region(
+/// is what makes the marquee highlight WYSIWYG with what an op resolves. Public
+/// so the GPU clip emitter (app_render) styles marquee-covered clips identically.
+pub fn clip_overlaps_region(
     region: &SelectionRegion,
     layer_index: usize,
     clip_start: f32,

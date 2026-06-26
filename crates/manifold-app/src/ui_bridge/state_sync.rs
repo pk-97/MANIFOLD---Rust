@@ -941,12 +941,7 @@ pub fn sync_project_data(
                 let is_gen = layer.layer_type == LayerType::Generator;
                 let name = clip_display_name(layer, clip);
                 use manifold_ui::panels::viewport::ViewportClip;
-                let clip_color = manifold_ui::node::Color32::from_f32(
-                    layer.layer_color.r,
-                    layer.layer_color.g,
-                    layer.layer_color.b,
-                    1.0,
-                );
+                let clip_color = clip_base_color(layer, clip, 1.0);
                 viewport_clips.push(ViewportClip {
                     clip_id: clip.id.clone(),
                     layer_index: i,
@@ -1009,6 +1004,19 @@ fn clip_display_name(
     }
 }
 
+/// Effective base colour for a clip: its per-clip `color_override` if set,
+/// otherwise the owning layer's colour. Alpha is supplied by the caller — the
+/// two clip-sync paths use different clip alphas. Shared so both resolve the
+/// override identically.
+fn clip_base_color(
+    layer: &manifold_core::layer::Layer,
+    clip: &manifold_core::clip::TimelineClip,
+    alpha: f32,
+) -> manifold_ui::node::Color32 {
+    let c = clip.color_override.unwrap_or(layer.layer_color);
+    manifold_ui::node::Color32::from_f32(c.r, c.g, c.b, alpha)
+}
+
 /// Lightweight per-frame clip position sync.
 /// Refreshes viewport.clips_by_layer from the live project model so that
 /// drag mutations (clip move, trim) are visible in the bitmap renderer.
@@ -1022,12 +1030,7 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
         let is_gen = layer.layer_type == LayerType::Generator;
         for clip in &layer.clips {
             let name = clip_display_name(layer, clip);
-            let clip_color = manifold_ui::node::Color32::from_f32(
-                layer.layer_color.r,
-                layer.layer_color.g,
-                layer.layer_color.b,
-                0.86,
-            );
+            let clip_color = clip_base_color(layer, clip, 0.86);
             viewport_clips.push(ViewportClip {
                 clip_id: clip.id.clone(),
                 layer_index: i,

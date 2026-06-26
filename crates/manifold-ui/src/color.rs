@@ -217,6 +217,39 @@ pub const CLIP_GEN_SELECTED: Color32 = Color32::new(102, 140, 224, 255);
 pub const CLIP_GEN_HOVER: Color32 = Color32::new(77, 97, 153, 255);
 pub const GEN_TYPE_LABEL: Color32 = Color32::new(140, 179, 242, 255);
 
+// ── GPU clip body styling (§24 5b) ──────────────────────────────────
+// Clips render as GPU SDF rounded rects (body gradient + border + lift). These
+// are the *default* values — the look is tuned by eye on the running app in the
+// Phase-6 taste pass, not fixed here. Keep them in one place so that tuning is a
+// one-line edit, never a renderer change.
+//
+/// Corner radius of a clip body. Subtle — a tile, not a pill.
+pub const CLIP_RADIUS: f32 = 4.0;
+/// Border on a normal (unselected) clip. Low-alpha dark edge so adjacent clips
+/// read as distinct tiles without the old blue-on-every-clip busyness.
+pub const CLIP_BORDER_NORMAL: Color32 = Color32::new(12, 12, 14, 140);
+pub const CLIP_BORDER_NORMAL_WIDTH: f32 = 1.0;
+/// Border on the selected clip — the accent blue, thicker, plus the lift below.
+pub const CLIP_BORDER_SELECTED: Color32 = SELECTED_BORDER;
+pub const CLIP_BORDER_SELECTED_WIDTH: f32 = 2.0;
+/// Vertical body gradient: the top edge is lightened by this many 0-255 steps
+/// over the base colour, fading to the base at the bottom. Gives the body a
+/// soft top-lit roundness. 0 = flat.
+pub const CLIP_GRADIENT_LIGHTEN: u8 = 14;
+/// Soft drop-shadow under the *selected* clip (lift-on-select, §17). Subtler
+/// than the overlay-panel shadow — a clip rises a little, it doesn't float.
+pub const CLIP_SHADOW: Color32 = Color32::new(0, 0, 0, 90);
+pub const CLIP_SHADOW_BLUR: f32 = 6.0;
+pub const CLIP_SHADOW_OFFSET_Y: f32 = 2.0;
+/// Clip name label: dark text on a light body, light text on a dark one (chosen
+/// by body luminance so the label reads on any layer colour). Min width below
+/// which the label is dropped (too narrow to be legible).
+pub const CLIP_LABEL_ON_LIGHT: Color32 = Color32::new(18, 18, 20, 235);
+pub const CLIP_LABEL_ON_DARK: Color32 = Color32::new(238, 238, 242, 235);
+pub const CLIP_LABEL_MIN_WIDTH: f32 = 30.0;
+/// Left inset of the label inside the clip body.
+pub const CLIP_LABEL_PAD_X: f32 = 6.0;
+
 // ── Group layer structural colors ───────────────────────────────────
 pub const COLLAPSED_GROUP_OVERLAY_BG: Color32 = Color32::new(20, 20, 28, 255);
 pub const DEFAULT_GROUP_ACCENT: Color32 = PURPLE_BASE;

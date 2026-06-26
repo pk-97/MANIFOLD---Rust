@@ -40,7 +40,7 @@ mod render;
 // shared hit-tester) and surfaced here so viewport consumers and the click/drag
 // overlay name the same type.
 pub use crate::clip_hit_tester::{ClipHitResult, HitRegion};
-pub use model::{SelectionRegion, TrackInfo, ViewportClip};
+pub use model::{ClipScreenRect, SelectionRegion, TrackInfo, ViewportClip};
 use coordinate::GridSubdivision;
 use model::{CollapsedGroupBitmap, MarkerNodeGroup, TrackBgGroup};
 
@@ -464,17 +464,20 @@ impl TimelineViewportPanel {
     }
 
     /// Iterate layer bitmaps that were repainted (for GPU upload).
-    /// Yields (layer_index, pixels, tex_w, tex_h) for dirty layers.
+    /// Yields `(layer_index, bg_pixels, front_pixels, tex_w, tex_h)` for dirty
+    /// layers — the bg buffer (grid) draws before the GPU clip pass, the front
+    /// buffer (waveform + overlays) after it.
     pub fn dirty_layer_iter(
         &self,
-    ) -> impl Iterator<Item = (usize, &[crate::node::Color32], usize, usize)> {
+    ) -> impl Iterator<Item = (usize, &[crate::node::Color32], &[crate::node::Color32], usize, usize)>
+    {
         self.bitmap_renderers
             .iter()
             .enumerate()
             .filter_map(|(i, opt)| {
                 opt.as_ref().and_then(|r| {
                     if r.was_dirty() && r.tex_w() > 0 && r.tex_h() > 0 {
-                        Some((i, r.pixels(), r.tex_w(), r.tex_h()))
+                        Some((i, r.pixels_bg(), r.pixels_front(), r.tex_w(), r.tex_h()))
                     } else {
                         None
                     }
@@ -507,6 +510,57 @@ impl TimelineViewportPanel {
             }
         }
         rects
+    }
+
+    /// On-screen clip rectangles for the GPU clip pass (§24 5b), rebuilt every
+    /// frame into `out`. Mirrors `layer_bitmap_rects`' visibility cull and the
+    /// hit-tester's geometry (same `beat_to_pixel` / `track_y` + `CLIP_VERTICAL_PAD`),
+    /// so the drawn body and the clickable region can't disagree. Group layers are
+    /// skipped — collapsed groups draw their own summary bitmap and expanded group
+    /// rows carry no clips. Selection / hover / marquee are resolved by the caller.
+    pub fn visible_clip_rects(&self, out: &mut Vec<ClipScreenRect>) {
+        out.clear();
+        let tx0 = self.tracks_rect.x;
+        let tx1 = self.tracks_rect.x + self.tracks_rect.width;
+        let ty0 = self.tracks_rect.y;
+        let ty1 = self.tracks_rect.y + self.tracks_rect.height;
+        for (i, renderer_opt) in self.bitmap_renderers.iter().enumerate() {
+            if renderer_opt.is_none() || self.is_group_layer(i) {
+                continue;
+            }
+            let track_y = self.track_y(i);
+            let track_h = self.track_height(i);
+            // Same visibility cull as layer_bitmap_rects.
+            if track_h <= 0.0 || track_y + track_h < ty0 || track_y > ty1 {
+                continue;
+            }
+            let clip_top = track_y + CLIP_VERTICAL_PAD;
+            let clip_h = track_h - CLIP_VERTICAL_PAD * 2.0;
+            if clip_h <= 0.0 {
+                continue;
+            }
+            for clip in self.clips_for_layer(i) {
+                let x = self.beat_to_pixel(clip.start_beat);
+                let w = self.beat_duration_to_width(clip.duration_beats.as_f32());
+                // Sub-pixel clips and clips fully outside the tracks rect are
+                // skipped; the GPU scissor clamps partials at the edges.
+                if w < 1.0 || x + w < tx0 || x > tx1 {
+                    continue;
+                }
+                out.push(ClipScreenRect {
+                    clip_id: clip.clip_id.clone(),
+                    layer_index: i,
+                    rect: Rect::new(x, clip_top, w, clip_h),
+                    base_color: clip.color,
+                    name: clip.name.clone(),
+                    start_beat: clip.start_beat,
+                    end_beat: clip.start_beat + clip.duration_beats,
+                    is_muted: clip.is_muted,
+                    is_locked: clip.is_locked,
+                    is_generator: clip.is_generator,
+                });
+            }
+        }
     }
 
     pub fn set_zoom(&mut self, pixels_per_beat: f32) {

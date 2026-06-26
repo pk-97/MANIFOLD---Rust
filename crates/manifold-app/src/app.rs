@@ -277,7 +277,19 @@ pub struct Application {
     pub(crate) thumb_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
+    /// Background per-layer bitmaps (grid + top separator) — drawn BEFORE the GPU
+    /// clip pass so opaque clip bodies occlude the grid.
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
+    /// Front per-layer bitmaps (waveform + region + cursor + markers) plus the
+    /// lane / stem / overview / collapsed-group bitmaps — drawn AFTER the GPU clip
+    /// pass so they sit on top of the clip bodies (§24 5b).
+    pub(crate) layer_bitmap_front_gpu:
+        Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
+    /// Reused per-frame scratch for the GPU clip pass — visible clip rects from
+    /// the viewport, and the resolved draw list. Kept on the struct so the clip
+    /// pass allocates nothing on the render hot path.
+    pub(crate) clip_rect_scratch: Vec<manifold_ui::panels::viewport::ClipScreenRect>,
+    pub(crate) clip_body_scratch: Vec<manifold_renderer::clip_draw::ClipBody>,
     pub(crate) scale_factor: f64,
     /// True while a display retarget is in flight — skip all potentially-
     /// blocking surface operations (next_drawable, commit_and_wait_scheduled)
@@ -566,6 +578,9 @@ impl Application {
             ui_renderer: None,
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
+            layer_bitmap_front_gpu: None,
+            clip_rect_scratch: Vec::new(),
+            clip_body_scratch: Vec::new(),
             scale_factor: 1.0,
             display_retarget_pending: false,
             display_retarget_deadline: None,
@@ -1875,11 +1890,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 scale,
             ));
 
-            // Create layer bitmap GPU
+            // Create layer bitmap GPU — bg (grid) + front (waveform/overlays),
+            // drawn either side of the GPU clip pass (§24 5b).
             self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(
                 &native_device,
                 manifold_gpu::GpuTextureFormat::Bgra8Unorm,
             ));
+            self.layer_bitmap_front_gpu =
+                Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(
+                    &native_device,
+                    manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+                ));
 
             self.scale_factor = scale;
 
@@ -2725,6 +2746,7 @@ impl Drop for Application {
             self.ui_preview_textures = [None, None, None];
         }
         self.layer_bitmap_gpu = None;
+        self.layer_bitmap_front_gpu = None;
         self.ui_renderer = None;
         self.blit_pipeline = None;
         self.blit_sampler = None;

@@ -65,6 +65,13 @@ pub struct TimelineClip {
     #[serde(default)]
     pub is_muted: bool,
 
+    /// Per-clip colour override. `None` (the default) means the clip draws in its
+    /// owning layer's colour — the historical behaviour, so old projects round-trip
+    /// untouched. `Some(c)` lets a clip carry its own identity colour independent of
+    /// the layer. Skipped on serialize when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_override: Option<crate::color::Color>,
+
     // ── Legacy fields (deserialized from old projects, never written back) ──
     #[serde(default, skip_serializing)]
     pub layer_id: crate::id::LayerId,
@@ -337,6 +344,7 @@ impl Default for TimelineClip {
             recorded_bpm: 0.0,
             is_locked: false,
             is_muted: false,
+            color_override: None,
             invert_colors: false,
             generator_type: crate::preset_type_id::PresetTypeId::NONE,
             translate_x: 0.0,
@@ -409,6 +417,29 @@ mod tests {
         let mut clip = TimelineClip::default();
         clip.set_in_point(Seconds(-2.0));
         assert_eq!(clip.in_point, Seconds(0.0));
+    }
+
+    #[test]
+    fn color_override_defaults_none_and_is_skipped_when_unset() {
+        // Default = layer colour (None), and an unset override never appears in
+        // the JSON — old projects round-trip byte-for-byte on this field.
+        let clip = TimelineClip::default();
+        assert_eq!(clip.color_override, None);
+        let json = serde_json::to_string(&clip).unwrap();
+        assert!(
+            !json.contains("colorOverride"),
+            "unset override must be skipped on serialize, got: {json}"
+        );
+    }
+
+    #[test]
+    fn color_override_roundtrips_when_set() {
+        let mut clip = TimelineClip::default();
+        clip.color_override = Some(crate::color::Color::new(0.2, 0.4, 0.6, 1.0));
+        let json = serde_json::to_string(&clip).unwrap();
+        assert!(json.contains("colorOverride"));
+        let back: TimelineClip = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.color_override, clip.color_override);
     }
 
     #[test]

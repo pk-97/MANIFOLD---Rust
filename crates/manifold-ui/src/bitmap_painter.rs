@@ -6,12 +6,10 @@
 use crate::color;
 use crate::node::Color32;
 
-// ── Color constants (from Unity LayerBitmapPainter lines 15-21) ──
-
-const BORDER_NORMAL: Color32 = color::ACCENT_BLUE;
-const BORDER_SELECTED: Color32 = color::SELECTED_BORDER;
-const TRIM_HINT_COLOR: Color32 = color::ACCENT_BLUE_DIM;
-const CLIP_SEPARATOR: Color32 = color::CLIP_SEPARATOR;
+// ── Color constants ──
+// Clip fills/borders/separators/trim-hints moved to the GPU clip pass (§24 5b,
+// `manifold_renderer::clip_draw`); their constants left with them. Region
+// highlight + insert cursor are still bitmap-painted (front buffer).
 
 pub const REGION_HIGHLIGHT_COLOR: Color32 = color::ACCENT_BLUE_SELECTION;
 pub const INSERT_CURSOR_COLOR: Color32 = color::INSERT_CURSOR_BLUE;
@@ -115,129 +113,6 @@ pub fn draw_border(
     );
 }
 
-
-/// Draw a single clip rectangle with background, separator, borders, and trim hints.
-/// Unity: LayerBitmapPainter.DrawClip (lines 52-92).
-///
-/// Rendering order:
-/// 1. FillRect background
-/// 2. 1px dark separator at left edge (if w >= s(4, scale))
-/// 3. Top/bottom border always
-/// 4. Left/right border only if w >= s(12, scale)
-/// 5. Trim hints (s(6, scale) px) if show_trim_hints
-pub fn draw_clip(
-    buffer: &mut [Color32],
-    tex_w: usize,
-    tex_h: usize,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    bg_color: Color32,
-    is_selected: bool,
-    show_trim_hints: bool,
-    render_scale: f32,
-) {
-    if w <= 0 || h <= 0 {
-        return;
-    }
-
-    let border_thickness = if is_selected {
-        s(2, render_scale)
-    } else {
-        s(1, render_scale)
-    };
-    let border_color = if is_selected {
-        BORDER_SELECTED
-    } else {
-        BORDER_NORMAL
-    };
-
-    // 1. Background fill
-    fill_rect(buffer, tex_w, tex_h, x, y, w, h, bg_color);
-
-    // 2. 1px dark separator at left edge — distinguishes adjacent clips at low zoom
-    // (Ableton-style). Only drawn when clip is wide enough that separator is subtle.
-    let sep_w = s(1, render_scale);
-    if w >= s(4, render_scale) {
-        fill_rect(buffer, tex_w, tex_h, x, y, sep_w, h, CLIP_SEPARATOR);
-    }
-
-    // 3. Always draw top/bottom borders — consistent horizontal edges,
-    // eliminates "caterpillar" ribbing at low zoom.
-    fill_rect(
-        buffer,
-        tex_w,
-        tex_h,
-        x,
-        y,
-        w,
-        border_thickness,
-        border_color,
-    );
-    fill_rect(
-        buffer,
-        tex_w,
-        tex_h,
-        x,
-        y + h - border_thickness,
-        w,
-        border_thickness,
-        border_color,
-    );
-
-    // 4. Left/right borders only on clips wide enough that borders don't dominate.
-    // s(12) keeps narrow clips clean at low zoom while showing edges at high zoom.
-    if w >= s(12, render_scale) {
-        fill_rect(
-            buffer,
-            tex_w,
-            tex_h,
-            x,
-            y,
-            border_thickness,
-            h,
-            border_color,
-        );
-        fill_rect(
-            buffer,
-            tex_w,
-            tex_h,
-            x + w - border_thickness,
-            y,
-            border_thickness,
-            h,
-            border_color,
-        );
-
-        // 5. Trim hints inside borders
-        if show_trim_hints {
-            let trim_w = s(6, render_scale).min((w - border_thickness * 2) / 4);
-            if trim_w > 0 {
-                fill_rect(
-                    buffer,
-                    tex_w,
-                    tex_h,
-                    x + border_thickness,
-                    y + border_thickness,
-                    trim_w,
-                    h - border_thickness * 2,
-                    TRIM_HINT_COLOR,
-                );
-                fill_rect(
-                    buffer,
-                    tex_w,
-                    tex_h,
-                    x + w - border_thickness - trim_w,
-                    y + border_thickness,
-                    trim_w,
-                    h - border_thickness * 2,
-                    TRIM_HINT_COLOR,
-                );
-            }
-        }
-    }
-}
 
 /// Get the background color for a clip based on its visual state.
 /// Uses the exact layer color. Selected/hovered lighten, locked dims.
@@ -357,50 +232,6 @@ mod tests {
         assert_eq!(s(1, 1.0), 1);
         assert_eq!(s(1, 2.0), 2);
         assert_eq!(s(6, 2.0), 12);
-    }
-
-    #[test]
-    fn draw_clip_zero_size_noop() {
-        let mut buf = vec![Color32::TRANSPARENT; 4];
-        draw_clip(
-            &mut buf,
-            2,
-            2,
-            0,
-            0,
-            0,
-            2,
-            Color32::new(255, 0, 0, 255),
-            false,
-            false,
-            1.0,
-        );
-        // Should not have painted anything
-        assert_eq!(buf[0], Color32::TRANSPARENT);
-    }
-
-    #[test]
-    fn draw_clip_narrow_no_side_borders() {
-        // Clip width 8 < s(12,1)=12 → no left/right borders, no trim hints
-        let mut buf = vec![Color32::TRANSPARENT; 20 * 10];
-        let bg = Color32::new(173, 168, 163, 255);
-        draw_clip(&mut buf, 20, 10, 2, 1, 8, 8, bg, false, true, 1.0);
-        // Should have painted background + separator + top/bottom border
-        // but NOT left/right border or trim hints.
-        // Separator is at (x=2, y=1..9) but border overwrites row y=1 (top border).
-        // Check separator in a non-border row (y=2, border thickness=1).
-        assert_eq!(buf[2 * 20 + 2], CLIP_SEPARATOR); // separator below top border
-    }
-
-    #[test]
-    fn draw_clip_wide_has_side_borders() {
-        // Clip width 20 >= s(12,1)=12 → has left/right borders
-        let mut buf = vec![Color32::TRANSPARENT; 30 * 10];
-        let bg = Color32::new(173, 168, 163, 255);
-        draw_clip(&mut buf, 30, 10, 2, 1, 20, 8, bg, true, false, 1.0);
-        // Selected border thickness = s(2,1)=2
-        // Left border at x=2, should be BORDER_SELECTED
-        assert_eq!(buf[30 + 2], BORDER_SELECTED);
     }
 
     #[test]

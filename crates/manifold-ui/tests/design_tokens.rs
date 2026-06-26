@@ -28,8 +28,9 @@ use std::path::{Path, PathBuf};
 // literal now references a radius token (`BUTTON`/`CARD`/`SMALL`/`POPUP`/
 // `HAIRLINE_RADIUS`). The one survivor is a `// design-token-exempt:` circular
 // status dot. From here the radius guard is absolute — any raw literal fails.
-// COLOR is still grandfathered pending the §15 ramp.
-const COLOR_BASELINE: usize = 135;
+// COLOR is still grandfathered pending the §15 ramp. (135→132: the §24 5b clip
+// cutover deleted `bitmap_painter::draw_clip` and its three test literals.)
+const COLOR_BASELINE: usize = 132;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]
