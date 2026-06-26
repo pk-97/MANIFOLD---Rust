@@ -152,6 +152,110 @@ fn footer_demo() {
     eprintln!("footer demo → {png}");
 }
 
+/// Renders the transport bar after the §18 `state_button` migration, so the
+/// neutral-chip lift (the always-grey NEW/OPEN/SAVE buttons moved from the old
+/// 59-grey to the shared `BUTTON_DIM` 71-chip) and the unchanged semantic
+/// PLAY=green / STOP=red / REC=red buttons can be eyeballed in situ.
+#[test]
+fn transport_demo() {
+    use manifold_ui::layout::ScreenLayout;
+    use manifold_ui::panels::Panel;
+    use manifold_ui::panels::transport::TransportPanel;
+    use manifold_ui::UITree;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/transport_demo.png");
+
+    let mut transport = TransportPanel::new();
+    transport.set_record_state(true, true); // REC armed → red
+    // 1920-wide layout so all three groups land; we crop the render to W later
+    // is unnecessary — just render the left+center which fit in W.
+    let layout = ScreenLayout::new(1920.0, H as f32);
+    let mut tree = UITree::new();
+    transport.build(&mut tree, &layout);
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, 1920.0, H as f32, color::BG_0);
+    ui.render_tree(&tree, None);
+    let drew = ui.prepare(&device, 1920, H, 1.0);
+    assert!(drew, "transport produced no draw commands");
+    let target = RenderTarget::new(&device, 1920, H, FORMAT, "transport-demo");
+    {
+        let mut enc = device.create_encoder("transport-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback_w(&device, &target.texture, 1920, H);
+    image::save_buffer(&png, &bytes, 1920, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("transport demo → {png}");
+}
+
+/// Renders the §18 `state_button` kit output directly: each hue (the M/S/L/A
+/// identity quartet + the transport ramp aliases) in OFF (neutral chip) and ON
+/// (filled) state, sitting on a layer-colour strip and on the dark bar, so the
+/// shared mechanic is visible without standing up a full panel.
+#[test]
+fn state_button_sheet() {
+    use manifold_ui::chrome::components::state_button_style;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/state_button_sheet.png");
+
+    let hues: &[(&str, Color32)] = &[
+        ("MUTE (M)", color::MUTED_COLOR),
+        ("SOLO (S)", color::SOLO_COLOR),
+        ("LED  (L)", color::LED_COLOR),
+        ("ANLY (A)", color::ANALYSIS_COLOR),
+        ("PLAY", color::PLAY_GREEN),
+        ("STOP", color::STOP_RED),
+        ("REC", color::RECORD_ACTIVE),
+        ("LINK", color::LINK_ORANGE),
+    ];
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_1);
+    ui.draw_text(14.0, 8.0, "STATE BUTTON (\u{00a7}18)  off-chip | on-fill", 13.0, color::TEXT_NORMAL);
+    // A colour strip behind the right column, to check off-chips read on a card.
+    let strip_x = 360.0;
+    ui.draw_rect(strip_x - 10.0, 28.0, 290.0, hues.len() as f32 * 30.0 + 8.0, Color32::new(80, 70, 110, 255));
+
+    for (i, (label, hue)) in hues.iter().enumerate() {
+        let y = 34.0 + i as f32 * 30.0;
+        ui.draw_text(14.0, y + 4.0, label, 12.0, color::TEXT_NORMAL);
+        // On the dark bar (left).
+        let off = state_button_style(*hue, false);
+        let on = state_button_style(*hue, true);
+        ui.draw_rect(120.0, y, 50.0, 22.0, off.bg_color);
+        ui.draw_rect(180.0, y, 50.0, 22.0, on.bg_color);
+        // On the colour strip (right) — same styles, busier background.
+        ui.draw_rect(strip_x, y, 50.0, 22.0, off.bg_color);
+        ui.draw_rect(strip_x + 60.0, y, 50.0, 22.0, on.bg_color);
+        ui.draw_rect(strip_x + 130.0, y, 50.0, 22.0, on.hover_bg_color);
+        ui.draw_rect(strip_x + 190.0, y, 50.0, 22.0, on.pressed_bg_color);
+    }
+    ui.draw_text(120.0, 34.0 + hues.len() as f32 * 30.0 + 6.0, "cols: off  on  |  off  on  hover  press", 11.0, color::TEXT_DIMMED_C32);
+
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "state button sheet produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "state-button-sheet");
+    {
+        let mut enc = device.create_encoder("state-button-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("state button sheet → {png}");
+}
+
 /// Renders a floating surface with and without the §17 soft shadow, so the
 /// "lift" can be eyeballed headlessly.
 #[test]
@@ -198,12 +302,18 @@ fn draw_column(ui: &mut UIRenderer, x: f32, y0: f32, rows: &[(&str, Color32)]) {
 
 /// Texture → CPU bytes, same pattern as the headless spike / parity harness.
 fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
-    let bytes_per_row = W * 4;
-    let total = u64::from(H * bytes_per_row);
+    readback_w(device, texture, W, H)
+}
+
+/// Width-parameterized readback (the transport demo renders at 1920 wide).
+/// `width * 4` must be 256-byte aligned (1920*4 = 7680 = 30*256).
+fn readback_w(device: &GpuDevice, texture: &GpuTexture, width: u32, height: u32) -> Vec<u8> {
+    let bytes_per_row = width * 4;
+    let total = u64::from(height * bytes_per_row);
     let buf = device.create_buffer_shared(total);
 
     let mut enc = device.create_encoder("swatch-readback");
-    enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
+    enc.copy_texture_to_buffer(texture, &buf, width, height, bytes_per_row);
     enc.commit_and_wait_completed();
 
     let ptr = buf.mapped_ptr().expect("shared readback buffer is mapped");

@@ -1,5 +1,5 @@
 use super::{Panel, PanelAction};
-use crate::chrome::{ChromeHost, Pad, Sizing, View};
+use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
 use crate::color::{self, darken, lighten};
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
@@ -60,107 +60,34 @@ const LH_BTN_RADIUS: f32 = color::SMALL_RADIUS; // §14.4: local copy → token 
 
 // ── Style helpers ───────────────────────────────────────────────────
 
+// Mute / Solo / LED / Analysis are all the same state-button mechanic — filled
+// with their identity colour when on, a neutral chip when off — so they delegate
+// to `components::state_button_style` and differ only in the carve-out hue (plus
+// this card's smaller font + tighter radius). One mechanic, four hues.
+
 fn mute_style(muted: bool) -> UIStyle {
-    let bg = if muted {
-        color::MUTED_COLOR
-    } else {
-        color::BUTTON_DIM
-    };
-    UIStyle {
-        bg_color: bg,
-        hover_bg_color: if muted {
-            lighten(color::MUTED_COLOR, 30)
-        } else {
-            color::BUTTON_HIGHLIGHTED
-        },
-        pressed_bg_color: if muted {
-            darken(color::MUTED_COLOR, 20)
-        } else {
-            color::BUTTON_PRESSED
-        },
-        text_color: color::TEXT_WHITE_C32,
-        font_size: BTN_FONT,
-        corner_radius: LH_BTN_RADIUS,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
-    }
+    state_btn(color::MUTED_COLOR, muted)
 }
 
 fn analysis_style(analysis: bool) -> UIStyle {
-    let bg = if analysis {
-        color::ANALYSIS_COLOR
-    } else {
-        color::BUTTON_DIM
-    };
-    UIStyle {
-        bg_color: bg,
-        hover_bg_color: if analysis {
-            lighten(color::ANALYSIS_COLOR, 30)
-        } else {
-            color::BUTTON_HIGHLIGHTED
-        },
-        pressed_bg_color: if analysis {
-            darken(color::ANALYSIS_COLOR, 20)
-        } else {
-            color::BUTTON_PRESSED
-        },
-        text_color: color::TEXT_WHITE_C32,
-        font_size: BTN_FONT,
-        corner_radius: LH_BTN_RADIUS,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
-    }
+    state_btn(color::ANALYSIS_COLOR, analysis)
 }
 
 fn solo_style(solo: bool) -> UIStyle {
-    let bg = if solo {
-        color::SOLO_COLOR
-    } else {
-        color::BUTTON_DIM
-    };
-    UIStyle {
-        bg_color: bg,
-        hover_bg_color: if solo {
-            lighten(color::SOLO_COLOR, 30)
-        } else {
-            color::BUTTON_HIGHLIGHTED
-        },
-        pressed_bg_color: if solo {
-            darken(color::SOLO_COLOR, 20)
-        } else {
-            color::BUTTON_PRESSED
-        },
-        text_color: color::TEXT_WHITE_C32,
-        font_size: BTN_FONT,
-        corner_radius: LH_BTN_RADIUS,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
-    }
+    state_btn(color::SOLO_COLOR, solo)
 }
 
 fn led_style(led: bool) -> UIStyle {
-    let bg = if led {
-        color::LED_COLOR
-    } else {
-        color::BUTTON_DIM
-    };
+    state_btn(color::LED_COLOR, led)
+}
+
+/// The layer-card flavour of [`components::state_button_style`]: the shared
+/// on/off mechanic with this panel's smaller font + tighter radius.
+fn state_btn(active_color: Color32, active: bool) -> UIStyle {
     UIStyle {
-        bg_color: bg,
-        hover_bg_color: if led {
-            lighten(color::LED_COLOR, 30)
-        } else {
-            color::BUTTON_HIGHLIGHTED
-        },
-        pressed_bg_color: if led {
-            darken(color::LED_COLOR, 20)
-        } else {
-            color::BUTTON_PRESSED
-        },
-        text_color: color::TEXT_WHITE_C32,
         font_size: BTN_FONT,
         corner_radius: LH_BTN_RADIUS,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
+        ..components::state_button_style(active_color, active)
     }
 }
 

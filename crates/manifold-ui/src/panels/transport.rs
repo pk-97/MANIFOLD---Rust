@@ -6,8 +6,8 @@
 //! footer/header for the integration pattern and `docs/CHROME_API_DESIGN.md`.
 
 use super::{Panel, PanelAction};
-use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View};
-use crate::color::{self, darken, lighten};
+use crate::chrome::{Align, ChromeHost, Pad, Reconcile, Sizing, View, components};
+use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
@@ -67,27 +67,15 @@ const KEY_BPM_FIELD: u64 = 1;
 
 // ── Style helpers ──────────────────────────────────────────────────
 
+// Every transport button is the same state-button mechanic: filled with its
+// semantic `bg` when active, a neutral chip when not. `BUTTON_INACTIVE_C32` is
+// the "no state colour" sentinel that selects the off chip. Delegates to the kit
+// so transport and the layer-card mixer share one look (just a larger font here).
 fn button_style(bg: Color32) -> UIStyle {
-    let is_active = bg != color::BUTTON_INACTIVE_C32;
-    let hover = if is_active {
-        lighten(bg, 30)
-    } else {
-        BUTTON_HOVER_C
-    };
-    let pressed = if is_active {
-        darken(bg, 20)
-    } else {
-        color::BUTTON_PRESSED
-    };
+    let active = bg != color::BUTTON_INACTIVE_C32;
     UIStyle {
-        bg_color: bg,
-        hover_bg_color: hover,
-        pressed_bg_color: pressed,
-        text_color: color::TEXT_WHITE_C32,
         font_size: BUTTON_FONT,
-        corner_radius: color::BUTTON_RADIUS,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
+        ..components::state_button_style(bg, active)
     }
 }
 

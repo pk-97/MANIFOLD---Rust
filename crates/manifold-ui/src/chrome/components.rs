@@ -64,6 +64,51 @@ pub fn toggle(label: impl Into<String>, on: bool) -> View {
     View::button(label).style(toggle_style(on))
 }
 
+// ── StateButton ─────────────────────────────────────────────────────
+// A standalone latching/momentary button that carries a *semantic* colour when
+// active (transport PLAY=green, REC=red; mixer Mute/Solo/LED/Analysis) and a
+// neutral raised chip when off. The active hue is the caller's — ramp aliases
+// for transport, the deliberate M/S/L/A identity quartet for the mixer (see the
+// `color` carve-outs) — so this fixes the *mechanic* in one place (on = filled
+// + `lighten(30)` hover / `darken(20)` press; off = `BUTTON_DIM` chip) without
+// dictating the hue. [`toggle`] is the special case where that hue is the accent
+// and the off-state recesses to `BG_3` instead of raising to a chip.
+//
+// Callers needing a non-default font/radius spread over it, like the footer:
+// `UIStyle { font_size: F, corner_radius: R, ..state_button_style(c, on) }`.
+
+pub fn state_button_style(active_color: Color32, active: bool) -> UIStyle {
+    if active {
+        UIStyle {
+            bg_color: active_color,
+            hover_bg_color: color::lighten(active_color, 30),
+            pressed_bg_color: color::darken(active_color, 20),
+            text_color: color::TEXT_WHITE_C32,
+            font_size: color::FONT_BODY,
+            corner_radius: color::BUTTON_RADIUS,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        }
+    } else {
+        UIStyle {
+            bg_color: color::BUTTON_DIM,
+            hover_bg_color: color::BUTTON_HIGHLIGHTED,
+            pressed_bg_color: color::BUTTON_PRESSED,
+            text_color: color::TEXT_WHITE_C32,
+            font_size: color::FONT_BODY,
+            corner_radius: color::BUTTON_RADIUS,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        }
+    }
+}
+
+/// A state button showing `label`, filled with `active_color` when `active` and
+/// a neutral chip otherwise. Size + wire it like any component.
+pub fn state_button(label: impl Into<String>, active_color: Color32, active: bool) -> View {
+    View::button(label).style(state_button_style(active_color, active))
+}
+
 // ── Button (primary / secondary) ────────────────────────────────────
 // Primary = the one bold accent action (`Change`, a dialog's confirm).
 // Secondary = neutral control grey (everything else). One accent, used
@@ -227,6 +272,17 @@ mod tests {
     fn toggle_uses_accent_when_on_and_ramp_when_off() {
         assert_eq!(toggle_style(true).bg_color, color::ACCENT_BLUE_C32);
         assert_eq!(toggle_style(false).bg_color, color::BG_3);
+    }
+
+    #[test]
+    fn state_button_fills_with_hue_when_active_and_chips_when_off() {
+        // Active fills with the caller's hue; off ignores it for a neutral chip.
+        let on = state_button_style(color::MUTED_COLOR, true);
+        assert_eq!(on.bg_color, color::MUTED_COLOR);
+        assert_eq!(on.hover_bg_color, color::lighten(color::MUTED_COLOR, 30));
+        assert_eq!(on.pressed_bg_color, color::darken(color::MUTED_COLOR, 20));
+        let off = state_button_style(color::MUTED_COLOR, false);
+        assert_eq!(off.bg_color, color::BUTTON_DIM);
     }
 
     #[test]
