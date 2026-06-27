@@ -172,6 +172,11 @@ impl ClipThumbGpu {
 
     /// Draw each quad's atlas cell into its clip body, masked to the rounded shape.
     /// All quads sample the one `atlas` texture, so it's a single batched pass.
+    ///
+    /// `tracks_rect` (logical px) scissor-clips the draw to the timeline tracks
+    /// area, exactly as the waveform pass does — so a clip whose body extends past
+    /// the viewport (scrolled off the left edge under the track headers, or under a
+    /// docked panel) never paints its thumbnail outside the timeline.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -181,6 +186,7 @@ impl ClipThumbGpu {
         screen_w: u32,
         screen_h: u32,
         scale: f32,
+        tracks_rect: Rect,
         atlas: &GpuTexture,
         quads: &[ThumbQuad],
     ) {
@@ -227,6 +233,20 @@ impl ClipThumbGpu {
         }
 
         encoder.begin_render_pass(target, GpuLoadAction::Load, "Clip Thumbnails");
+        // Scissor to the tracks rect (physical px, clamped to the target) so a clip
+        // body extending past the timeline never paints over the headers / panels.
+        let phys_w = (screen_w as f32 * scale).round().max(0.0);
+        let phys_h = (screen_h as f32 * scale).round().max(0.0);
+        let sx0 = (tracks_rect.x * scale).round().clamp(0.0, phys_w);
+        let sy0 = (tracks_rect.y * scale).round().clamp(0.0, phys_h);
+        let sx1 = ((tracks_rect.x + tracks_rect.width) * scale).round().clamp(0.0, phys_w);
+        let sy1 = ((tracks_rect.y + tracks_rect.height) * scale).round().clamp(0.0, phys_h);
+        encoder.set_scissor_rect(
+            sx0 as u32,
+            sy0 as u32,
+            (sx1 - sx0).max(0.0) as u32,
+            (sy1 - sy0).max(0.0) as u32,
+        );
         for i in 0..n {
             let vertex_offset = (i * 4 * std::mem::size_of::<ThumbVertex>()) as u64;
             encoder.draw_in_render_pass(

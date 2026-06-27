@@ -4133,6 +4133,7 @@ impl Application {
                         },
                     );
                 }
+                let tracks = self.ws.ui_root.viewport.get_tracks_rect();
                 if !self.clip_thumb_quad_scratch.is_empty()
                     && let Some(thumb) = self.clip_thumb_gpu.as_mut()
                 {
@@ -4143,6 +4144,7 @@ impl Application {
                         logical_w,
                         logical_h,
                         scale as f32,
+                        tracks,
                         atlas,
                         &self.clip_thumb_quad_scratch,
                     );

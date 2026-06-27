@@ -754,7 +754,8 @@ fn clip_thumbnail_sheet() {
     }
     {
         let mut enc = device.create_encoder("clip-thumb-cells");
-        thumb.render(&device, &mut enc, &target.texture, W, H, 1.0, &atlas, &quads);
+        let tracks = Rect::new(0.0, 0.0, W as f32, H as f32);
+        thumb.render(&device, &mut enc, &target.texture, W, H, 1.0, tracks, &atlas, &quads);
         enc.commit_and_wait_completed();
     }
     let bytes = readback(&device, &target.texture);
