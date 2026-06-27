@@ -724,15 +724,34 @@ pub const HEADER_HEIGHT: f32 = 40.0;
 // so they read as one deliberate top/bottom chrome frame (and their buttons
 // match). Locked to TRANSPORT_BAR_HEIGHT rather than a loose literal.
 pub const FOOTER_HEIGHT: f32 = TRANSPORT_BAR_HEIGHT;
+// ── Track-row height presets (§24 5d) ───────────────────────────────
+// One named tier per content density, selected by display *state* — never by
+// layer *type* (type is shown by a badge, not by restructuring the header). See
+// `coordinate_mapper::TrackHeight`.
+/// Normal: the default expanded track (clip bodies + content).
 pub const TRACK_HEIGHT: f32 = 140.0;
+/// Collapsed: a slim header strip — name + button row, no detail.
 pub const COLLAPSED_TRACK_HEIGHT: f32 = 48.0;
-pub const COLLAPSED_GEN_TRACK_HEIGHT: f32 = 62.0;
+/// Tall: a roomier track for larger previews. Reserved for a future per-layer
+/// tall mode; the preset exists so the height vocabulary is complete.
+pub const TALL_TRACK_HEIGHT: f32 = 200.0;
 pub const RULER_HEIGHT: f32 = 40.0;
 pub const LAYER_CONTROLS_WIDTH: f32 = 200.0;
 pub const PLAYHEAD_WIDTH: f32 = 2.0;
+/// Size of the playhead head marker — a downward triangle at the top of the
+/// ruler that makes the "now" position unmissable next to the insert cursor (§24 5e).
+pub const PLAYHEAD_HEAD_SIZE: f32 = 13.0;
 pub const CLIP_MIN_WIDTH: f32 = 10.0;
 pub const CLIP_VERTICAL_PAD: f32 = 12.0;
 pub const OVERVIEW_STRIP_HEIGHT: f32 = 16.0;
+// ── Timeline horizontal scrollbar (§24 5e) ──────────────────────────
+/// Height of the reserved scrollbar strip at the bottom of the timeline body.
+pub const TIMELINE_SCROLLBAR_HEIGHT: f32 = 11.0;
+/// Minimum thumb length so it stays grabbable when the content is very long.
+pub const TIMELINE_SCROLLBAR_MIN_THUMB: f32 = 32.0;
+/// Inset of the thumb within the track (top/bottom + ends) so it reads as a
+/// floating pill, not a full-height block.
+pub const TIMELINE_SCROLLBAR_THUMB_INSET: f32 = 2.0;
 // Floor wide enough that a full param row — label + slider track + value field
 // + the D/E modulation buttons — keeps its columns instead of crushing the
 // track to nothing. Below this the card is unreadable on stage.
@@ -744,8 +763,10 @@ pub const INSPECTOR_GAP: f32 = 4.0;
 
 // ── Group layout ────────────────────────────────────────────────────
 pub const GROUP_CHILD_INDENT_PX: f32 = 20.0;
-pub const COLLAPSED_GROUP_TRACK_HEIGHT: f32 = 70.0;
-pub const EXPANDED_GROUP_TRACK_HEIGHT: f32 = 70.0;
+/// A group row is a structural container header (no clip bodies of its own), so
+/// it gets one fixed height in every state — collapsed or expanded. Not a content
+/// track, so it sits outside the `TrackHeight` preset tiers.
+pub const GROUP_TRACK_HEIGHT: f32 = 70.0;
 pub const GROUP_ACCENT_BAR_WIDTH: f32 = 5.0;
 pub const GROUP_BOTTOM_BORDER_HEIGHT: f32 = 2.0;
 
@@ -803,11 +824,17 @@ pub const DEFAULT_ZOOM_INDEX: usize = 7; // 120 pixels/beat
 // ── Scroll ──────────────────────────────────────────────────────────
 pub const SCROLL_SENSITIVITY: f32 = 1.0;
 pub const BITMAP_SCROLL_SPEED: f32 = 12.5;
+/// Continuous cursor-anchored zoom (§24 5e): the zoom multiplier applied per
+/// wheel notch. Each notch scales pixels-per-beat by this factor (or its inverse
+/// when zooming out), so zoom is smooth instead of jumping between fixed levels.
+pub const ZOOM_WHEEL_STEP_PER_NOTCH: f32 = 1.18;
 
 // ── Layer control panel layout ──────────────────────────────────────
 pub const LAYER_CTRL_PADDING: f32 = SPACE_S; // §14.4: 5 → 4, onto the scale
 pub const LAYER_CTRL_CHEVRON_WIDTH: f32 = 18.0;
 pub const LAYER_CTRL_DRAG_HANDLE_WIDTH: f32 = 18.0;
+/// Square type-badge glyph in the layer name row (§24 5d).
+pub const LAYER_CTRL_TYPE_BADGE_SIZE: f32 = 13.0;
 pub const LAYER_CTRL_NAME_ROW_HEIGHT: f32 = 18.0;
 pub const LAYER_CTRL_ROW_STEP: f32 = 23.0;
 pub const LAYER_CTRL_MUTE_SOLO_BTN_WIDTH: f32 = 28.0;

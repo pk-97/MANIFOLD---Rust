@@ -150,6 +150,7 @@ pub fn dispatch(
         | PanelAction::BpmFieldClicked
         | PanelAction::Seek(_)
         | PanelAction::OverviewScrub(_)
+        | PanelAction::TimelineScrollbarH(_)
         | PanelAction::SetInsertCursor(_)
         | PanelAction::CycleClockAuthority
         | PanelAction::ToggleLink

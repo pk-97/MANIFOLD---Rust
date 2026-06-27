@@ -856,7 +856,8 @@ impl UIRenderer {
             });
         }
 
-        // Text (or icon if text starts with PUA marker U+E000..U+E005)
+        // Text (or icon if the first char is an atlas-icon codepoint — see
+        // `manifold_ui::icons::Icon`).
         #[cfg(target_os = "macos")]
         if let Some(text) = &node.text
             && !text.is_empty()
@@ -883,9 +884,8 @@ impl UIRenderer {
 
             let depth = self.current_depth();
             let first_char = text.chars().next().unwrap();
-            if ('\u{E000}'..='\u{E005}').contains(&first_char) {
+            if let Some(icon_id) = manifold_ui::icons::Icon::id_from_char(first_char) {
                 // Icon: square aspect ratio, centered in bounds
-                let icon_id = (first_char as u32 - 0xE000) as u8;
                 let pad = 2.0_f32;
                 let icon_size = (bounds.width.min(bounds.height) - pad * 2.0).max(4.0);
                 let icon_w = icon_size;
@@ -930,8 +930,9 @@ impl UIRenderer {
         }
     }
 
-    /// Queue an icon draw. `icon_id` is one of the `ICON_WAVE_*` constants.
-    #[cfg(target_os = "macos")]
+    /// Queue an atlas-icon draw. `icon_id` is a [`manifold_ui::icons::Icon`] id.
+    /// Mirrors [`Self::draw_text`]: the method exists on every target, the body is
+    /// macOS-only (the glyph atlas is CoreText-backed).
     #[allow(clippy::too_many_arguments)]
     pub fn draw_icon(
         &mut self,
@@ -943,9 +944,14 @@ impl UIRenderer {
         color: impl Into<TextColor>,
         clip_bounds: Option<[f32; 4]>,
     ) {
-        let depth = self.current_depth();
-        self.text_renderer
-            .draw_icon(icon_id, x, y, w, h, color.into().0, clip_bounds, depth);
+        #[cfg(target_os = "macos")]
+        {
+            let depth = self.current_depth();
+            self.text_renderer
+                .draw_icon(icon_id, x, y, w, h, color.into().0, clip_bounds, depth);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (icon_id, x, y, w, h, color, clip_bounds);
     }
 
     /// Text measurement using NativeTextRenderer's cached measurement.

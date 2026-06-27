@@ -87,6 +87,12 @@ pub(super) fn dispatch_transport(
                 .set_scroll(target_scroll, ui.viewport.scroll_y_px());
             DispatchResult::structural()
         }
+        PanelAction::TimelineScrollbarH(scroll_x_beats) => {
+            // Horizontal scrollbar drag/jump (§24 5e) — absolute scroll-x in beats.
+            ui.viewport
+                .set_scroll(*scroll_x_beats, ui.viewport.scroll_y_px());
+            DispatchResult::structural()
+        }
         PanelAction::SetInsertCursor(beat) => {
             // Legacy path — when no layer context available.
             // Uses set_insert_cursor_beat (non-clearing variant)
@@ -137,50 +143,22 @@ pub(super) fn dispatch_transport(
         }
 
         // ── Zoom ───────────────────────────────────────────────────
+        // The +/- buttons step one discrete zoom level, anchored on the playhead
+        // (no cursor to anchor to). `zoom_level_stepped` resolves the nearest
+        // level first, so the buttons stay sane after a continuous scroll-zoom
+        // (§24 5e); `zoom_to` is the one shared anchored-zoom path.
         PanelAction::ZoomIn => {
-            let ppb = ui.viewport.pixels_per_beat();
-            let levels = &manifold_ui::color::ZOOM_LEVELS;
-            let current_idx = levels
-                .iter()
-                .position(|&l| (l - ppb).abs() < 0.01)
-                .unwrap_or(manifold_ui::color::DEFAULT_ZOOM_INDEX);
-            let new_idx = (current_idx + 1).min(levels.len() - 1);
-            if new_idx != current_idx {
-                let new_ppb = levels[new_idx];
-                let playhead = content_state.current_beat.as_f32();
-                let tracks_x = ui.viewport.get_tracks_rect().x;
-                let viewport_w = ui.viewport.get_tracks_rect().width;
-                // Anchor on playhead: place it at the same relative screen position,
-                // clamped so the playhead pixel stays within the viewport.
-                let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));
-                let anchor_x = (playhead_px - tracks_x).clamp(0.0, viewport_w);
-                let new_scroll = playhead - anchor_x / new_ppb;
-                ui.viewport.set_zoom(new_ppb);
-                ui.viewport
-                    .set_scroll(new_scroll.max(0.0), ui.viewport.scroll_y_px());
-            }
+            let playhead = content_state.current_beat.as_f32();
+            let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));
+            let new_ppb = ui.viewport.zoom_level_stepped(1);
+            ui.viewport.zoom_to(new_ppb, playhead, playhead_px);
             DispatchResult::structural()
         }
         PanelAction::ZoomOut => {
-            let ppb = ui.viewport.pixels_per_beat();
-            let levels = &manifold_ui::color::ZOOM_LEVELS;
-            let current_idx = levels
-                .iter()
-                .position(|&l| (l - ppb).abs() < 0.01)
-                .unwrap_or(manifold_ui::color::DEFAULT_ZOOM_INDEX);
-            let new_idx = current_idx.saturating_sub(1);
-            if new_idx != current_idx {
-                let new_ppb = levels[new_idx];
-                let playhead = content_state.current_beat.as_f32();
-                let tracks_x = ui.viewport.get_tracks_rect().x;
-                let viewport_w = ui.viewport.get_tracks_rect().width;
-                let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));
-                let anchor_x = (playhead_px - tracks_x).clamp(0.0, viewport_w);
-                let new_scroll = playhead - anchor_x / new_ppb;
-                ui.viewport.set_zoom(new_ppb);
-                ui.viewport
-                    .set_scroll(new_scroll.max(0.0), ui.viewport.scroll_y_px());
-            }
+            let playhead = content_state.current_beat.as_f32();
+            let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));
+            let new_ppb = ui.viewport.zoom_level_stepped(-1);
+            ui.viewport.zoom_to(new_ppb, playhead, playhead_px);
             DispatchResult::structural()
         }
 

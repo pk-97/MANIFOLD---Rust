@@ -94,6 +94,15 @@ pub struct TimelineViewportPanel {
     viewport_clip_id: Option<NodeId>,
     // playhead: unified overlay quad in app.rs (ruler → waveform → stems → tracks)
     insert_cursor_ruler_id: Option<NodeId>,
+
+    // Horizontal scrollbar (§24 5e): a reserved strip below the tracks. The strip
+    // rect is the single source for its draw + hit geometry; the button exists
+    // only so the input system routes presses/drags here.
+    scrollbar_h_rect: Rect,
+    scrollbar_h_btn_id: Option<NodeId>,
+    /// Pointer-to-thumb-left offset captured at drag start, so the thumb tracks
+    /// the pointer 1:1 instead of snapping its left edge under the cursor.
+    scrollbar_grab_dx: f32,
     // insert_cursor_track_id: removed — painted into bitmap
     // selection_region_id: removed — painted into bitmap
 
@@ -170,6 +179,7 @@ enum ViewportDragMode {
     RulerScrub,
     OverviewScrub,
     MarkerDrag,
+    ScrollbarHDrag,
 }
 
 impl TimelineViewportPanel {
@@ -200,6 +210,9 @@ impl TimelineViewportPanel {
             ruler_bg_id: None,
             viewport_clip_id: None,
             insert_cursor_ruler_id: None,
+            scrollbar_h_rect: Rect::ZERO,
+            scrollbar_h_btn_id: None,
+            scrollbar_grab_dx: 0.0,
             export_in_beat: Beats::ZERO,
             export_out_beat: Beats::ZERO,
             export_range_enabled: false,
@@ -624,6 +637,100 @@ impl TimelineViewportPanel {
         self.mapper.set_zoom_by_index(index);
     }
 
+    /// New ppb after stepping `delta` discrete zoom levels from the nearest current
+    /// level (the +/- buttons / keyboard). See [`CoordinateMapper::zoom_level_stepped`].
+    pub fn zoom_level_stepped(&self, delta: i32) -> f32 {
+        self.mapper.zoom_level_stepped(delta)
+    }
+
+    /// New ppb after a continuous multiplicative zoom by `factor`, clamped to the
+    /// zoom range. See [`CoordinateMapper::zoom_continuous`].
+    pub fn zoom_continuous(&self, factor: f32) -> f32 {
+        self.mapper.zoom_continuous(factor)
+    }
+
+    /// Re-zoom to `new_ppb` while keeping `anchor_beat` under `anchor_screen_x`
+    /// (clamped into the tracks rect). Sets zoom + horizontal scroll atomically —
+    /// the one anchored-zoom entry point shared by scroll-wheel zoom (anchor =
+    /// cursor) and the +/- buttons / keyboard (anchor = playhead), so the anchor
+    /// maths can't drift between them (§24 5e).
+    pub fn zoom_to(&mut self, new_ppb: f32, anchor_beat: f32, anchor_screen_x: f32) {
+        let local_x =
+            (anchor_screen_x - self.tracks_rect.x).clamp(0.0, self.tracks_rect.width.max(0.0));
+        self.mapper.set_zoom(new_ppb);
+        // set_zoom clamps to a floor, so read back the applied ppb for the anchor.
+        let applied_ppb = self.mapper.pixels_per_beat();
+        let new_scroll = anchor_beat - local_x / applied_ppb;
+        self.set_scroll(new_scroll.max(0.0), self.scroll_y_px);
+    }
+
+    // ── Horizontal scrollbar (§24 5e) ────────────────────────────────
+
+    /// Total content length in beats represented by the horizontal scrollbar:
+    /// the furthest clip end, but never less than one visible window (so a short
+    /// timeline still shows a full thumb). `visible_beats` is the on-screen span.
+    fn scrollbar_content_beats(&self, visible_beats: f32) -> f32 {
+        self.max_content_beat().max(visible_beats)
+    }
+
+    /// Horizontal scrollbar geometry: `(track, thumb)` rects in screen space, or
+    /// `None` when the whole timeline fits (nothing to scroll). The single source
+    /// for both the GPU draw (app.rs) and the drag hit-test, so the drawn thumb
+    /// and the grabbable region can't drift apart.
+    pub fn scrollbar_h_layout(&self) -> Option<(Rect, Rect)> {
+        let track = self.scrollbar_h_rect;
+        let ppb = self.mapper.pixels_per_beat();
+        if track.width <= 0.0 || track.height <= 0.0 || ppb <= 0.0 {
+            return None;
+        }
+        let visible_beats = track.width / ppb;
+        let content_beats = self.scrollbar_content_beats(visible_beats);
+        let scrollable_beats = content_beats - visible_beats;
+        if scrollable_beats <= 0.001 {
+            return None; // everything fits — no scrollbar
+        }
+
+        let inset = color::TIMELINE_SCROLLBAR_THUMB_INSET;
+        let track_inner_x = track.x + inset;
+        let track_inner_w = (track.width - inset * 2.0).max(1.0);
+
+        let frac_visible = (visible_beats / content_beats).clamp(0.0, 1.0);
+        let min_thumb = color::TIMELINE_SCROLLBAR_MIN_THUMB.min(track_inner_w);
+        let thumb_w = (track_inner_w * frac_visible).max(min_thumb).min(track_inner_w);
+
+        let scroll_frac = (self.scroll_x_beats.as_f32() / scrollable_beats).clamp(0.0, 1.0);
+        let thumb_x = track_inner_x + scroll_frac * (track_inner_w - thumb_w);
+        let thumb = Rect::new(
+            thumb_x,
+            track.y + inset,
+            thumb_w,
+            (track.height - inset * 2.0).max(1.0),
+        );
+        Some((track, thumb))
+    }
+
+    /// Map a desired thumb-left screen-x to the scroll-x (beats) it represents.
+    /// Returns `None` when there is no scrollbar. Linear over the content range,
+    /// so dragging is stable regardless of the current scroll.
+    fn scrollbar_h_scroll_at(&self, thumb_left: f32) -> Option<f32> {
+        let (track, thumb) = self.scrollbar_h_layout()?;
+        let ppb = self.mapper.pixels_per_beat();
+        let visible_beats = track.width / ppb;
+        let scrollable_beats = self.scrollbar_content_beats(visible_beats) - visible_beats;
+        let inset = color::TIMELINE_SCROLLBAR_THUMB_INSET;
+        let track_inner_x = track.x + inset;
+        let track_inner_w = (track.width - inset * 2.0).max(1.0);
+        let travel = (track_inner_w - thumb.width).max(0.0001);
+        let frac = ((thumb_left - track_inner_x) / travel).clamp(0.0, 1.0);
+        Some(frac * scrollable_beats.max(0.0))
+    }
+
+    /// True while the horizontal scrollbar thumb is being dragged (app.rs uses it
+    /// to draw the thumb in its active colour).
+    pub fn scrollbar_h_dragging(&self) -> bool {
+        self.drag_mode == ViewportDragMode::ScrollbarHDrag
+    }
+
     /// Set scroll position (clamped). Returns true if the value actually changed.
     pub fn set_scroll(&mut self, scroll_x_beats: f32, scroll_y_px: f32) -> bool {
         let new_x = scroll_x_beats.max(0.0);
@@ -810,6 +917,13 @@ impl Panel for TimelineViewportPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
         self.first_node = tree.count();
 
+        // Clear the scrollbar strip up front so a build that early-returns (the
+        // timeline body or tracks width collapsed to 0 — e.g. the split dragged
+        // shut) can't leave a stale, still-grabbable scrollbar behind. The normal
+        // path overwrites this below; `Rect::ZERO` makes `scrollbar_h_layout`
+        // return `None` (no draw) and its hit-test `contains` false (no grab).
+        self.scrollbar_h_rect = Rect::ZERO;
+
         let body = layout.timeline_body();
         if body.width <= 0.0 || body.height <= 0.0 {
             self.node_count = 0;
@@ -833,6 +947,10 @@ impl Panel for TimelineViewportPanel {
         // viewport and `layer_header` read it, so the layer controls cannot drift
         // out of vertical alignment with their tracks (nothing recomputes it).
         let header_h = layout.track_header_height();
+        // Reserve a slim strip at the very bottom of the timeline body for the
+        // horizontal scrollbar (§24 5e). It sits OUTSIDE `tracks_rect`, so a drag
+        // there never reaches the clip-marquee InteractionOverlay.
+        let sb_h = color::TIMELINE_SCROLLBAR_HEIGHT;
         self.viewport_rect = Rect::new(tracks_x, body.y, tracks_w, body.height);
         self.ruler_rect = Rect::new(
             tracks_x,
@@ -844,8 +962,9 @@ impl Panel for TimelineViewportPanel {
             tracks_x,
             body.y + header_h,
             tracks_w,
-            (body.height - header_h).max(0.0),
+            (body.height - header_h - sb_h).max(0.0),
         );
+        self.scrollbar_h_rect = Rect::new(tracks_x, body.y + body.height - sb_h, tracks_w, sb_h);
 
         // Background
         self.bg_panel_id = Some(tree.add_panel(
@@ -927,6 +1046,24 @@ impl Panel for TimelineViewportPanel {
             },
             "",
         );
+
+        // Horizontal scrollbar routing button (§24 5e). Transparent — the track
+        // and thumb are drawn as GPU rects in app.rs from `scrollbar_h_layout`
+        // (one geometry source for draw + hit). The button only exists so the
+        // input system emits press/drag events over the strip; the actual routing
+        // is by rect containment in `on_timeline_event`.
+        self.scrollbar_h_btn_id = Some(tree.add_button(
+            None,
+            self.scrollbar_h_rect.x,
+            self.scrollbar_h_rect.y,
+            self.scrollbar_h_rect.width,
+            self.scrollbar_h_rect.height,
+            UIStyle {
+                bg_color: Color32::TRANSPARENT,
+                ..UIStyle::default()
+            },
+            "",
+        ));
 
         // Build track backgrounds
         self.build_track_backgrounds(tree);
@@ -1188,6 +1325,46 @@ mod tests {
                 .hit_test_clip(Vec2::new(panel.beat_to_pixel(Beats::from_f32(2.0)), body_y))
                 .is_none(),
             "a clip on a group layer must not be hit — group layers are skipped",
+        );
+    }
+
+    #[test]
+    fn zeroed_scrollbar_rect_yields_no_layout() {
+        // §24 5e-C regression: a build that early-returns (collapsed timeline)
+        // zeroes `scrollbar_h_rect`, and a zero strip must produce neither a
+        // drawable nor a grabbable scrollbar — even with overflow content.
+        let mut panel = TimelineViewportPanel::new();
+        panel.set_zoom(120.0);
+        panel.tracks_rect = Rect::new(0.0, 0.0, 1000.0, 500.0);
+        panel.set_tracks(vec![TrackInfo::default()]);
+        panel.set_clips(vec![ViewportClip {
+            clip_id: "far".into(),
+            layer_index: 0,
+            start_beat: Beats::from_f32(1000.0),
+            duration_beats: Beats(4.0),
+            name: "Far".into(),
+            color: color::CLIP_NORMAL,
+            is_muted: false,
+            is_locked: false,
+            is_generator: false,
+            is_audio: false,
+            waveform: None,
+            in_point_seconds: 0.0,
+            warped_secs_per_beat: 0.0,
+        }]);
+
+        // A real strip + overflow content → the scrollbar shows.
+        panel.scrollbar_h_rect = Rect::new(0.0, 500.0, 1000.0, 11.0);
+        assert!(
+            panel.scrollbar_h_layout().is_some(),
+            "overflow content should show a scrollbar with a real strip",
+        );
+
+        // The strip a collapsed build leaves behind (Rect::ZERO) → no scrollbar.
+        panel.scrollbar_h_rect = Rect::ZERO;
+        assert!(
+            panel.scrollbar_h_layout().is_none(),
+            "a zeroed strip must leave no drawable/grabbable scrollbar",
         );
     }
 

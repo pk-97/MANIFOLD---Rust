@@ -182,7 +182,7 @@ struct GlyphAtlas {
     /// True when new glyphs were added and GPU upload is needed.
     dirty: bool,
     /// Set when the atlas overflows and clears. Consumed by NativeTextRenderer
-    /// to re-inject waveform icons whose UV regions were destroyed by the clear.
+    /// to re-inject atlas icons whose UV regions were destroyed by the clear.
     was_cleared: bool,
 }
 
@@ -260,7 +260,7 @@ impl GlyphAtlas {
             self.shelf_height = 0;
         }
         // Atlas full — clear everything and restart (rare fallback).
-        // Sets was_cleared so NativeTextRenderer re-injects waveform icons.
+        // Sets was_cleared so NativeTextRenderer re-injects atlas icons.
         if self.shelf_y + bitmap_h > ATLAS_SIZE {
             self.pixels.fill(0);
             self.glyphs.clear();
@@ -400,7 +400,7 @@ impl GlyphAtlas {
             self.shelf_height = 0;
         }
         if self.shelf_y + h > ATLAS_SIZE {
-            // Shouldn't happen with 5 small icons, but guard anyway
+            // Shouldn't happen with a handful of small icons, but guard anyway
             self.pixels.fill(0);
             self.glyphs.clear();
             self.shelf_x = 0;
@@ -428,22 +428,16 @@ impl GlyphAtlas {
     }
 }
 
-// ─── Waveform Icon Generation ───────────────────────────────────────────────
+// ─── Atlas Icon Generation ──────────────────────────────────────────────────
 
-/// Icon IDs for the driver waveforms + UI glyphs. Exported for use by UIRenderer.
-/// Each maps to a PUA codepoint U+E000 + id; the renderer draws the atlas icon
-/// for any text whose first char falls in that range.
-pub const ICON_WAVE_SINE: u8 = 0;
-pub const ICON_WAVE_TRIANGLE: u8 = 1;
-pub const ICON_WAVE_SAWTOOTH: u8 = 2;
-pub const ICON_WAVE_SQUARE: u8 = 3;
-pub const ICON_WAVE_RANDOM: u8 = 4;
-/// Cog / gear — the "hide modulation settings" toggle (U+E005). The UI font has
-/// no ⚙ glyph (renders as tofu), so it's a procedurally-drawn atlas icon.
-pub const ICON_COG: u8 = 5;
-pub const ICON_COUNT: usize = 6;
+use manifold_ui::icons::Icon;
 
-/// Size of generated waveform icon bitmaps (physical pixels).
+/// Number of atlas-icon slots — the single id↔char contract lives in
+/// `manifold_ui::icons::Icon`, so the renderer can never disagree with the UI on
+/// which codepoint is which icon.
+const ICON_COUNT: usize = Icon::COUNT;
+
+/// Size of generated icon bitmaps (physical pixels).
 /// 64px covers 2x retina for ~22px logical buttons with clarity to spare.
 const ICON_SIZE: u32 = 64;
 const ICON_PADDING: f32 = 5.0;
@@ -453,15 +447,19 @@ const ICON_AA_WIDTH: f32 = 1.4;
 /// so peaks don't touch the icon edge.
 const ICON_V_MARGIN: f32 = 0.1;
 
-/// Generate the atlas icons: the 5 waveform SDF icons (ported from Unity
-/// DriverWaveformIcons.cs) plus the cog at [`ICON_COG`].
-fn generate_waveform_icons() -> [Vec<u8>; ICON_COUNT] {
-    std::array::from_fn(|i| {
-        if i == ICON_COG as usize {
-            generate_cog_icon()
-        } else {
-            generate_single_waveform(i)
-        }
+/// Generate every atlas icon bitmap, indexed by [`Icon`] id: the 5 waveform SDF
+/// icons (ported from Unity DriverWaveformIcons.cs), the cog, the four layer-type
+/// badges (§24 5d), and the playhead head (§24 5e). All are R8 coverage bitmaps.
+fn generate_atlas_icons() -> [Vec<u8>; ICON_COUNT] {
+    std::array::from_fn(|i| match i as u8 {
+        x if x == Icon::Cog.id() => generate_cog_icon(),
+        x if x == Icon::LayerVideo.id() => generate_play_triangle_icon(),
+        x if x == Icon::LayerGenerator.id() => generate_starburst_icon(),
+        x if x == Icon::LayerGroup.id() => generate_folder_icon(),
+        x if x == Icon::LayerAudio.id() => generate_level_bars_icon(),
+        x if x == Icon::Playhead.id() => generate_playhead_head_icon(),
+        // Waveform shapes occupy ids 0..=4 in declaration order.
+        _ => generate_single_waveform(i),
     })
 }
 
@@ -511,6 +509,111 @@ fn generate_cog_icon() -> Vec<u8> {
         }
     }
     pixels
+}
+
+// ─── Layer-type badge + playhead icons (§24 5d / 5e) ────────────────────────
+
+/// Supersample a filled shape into an R8 coverage bitmap. `inside(nx, ny)` tests
+/// whether a normalised (0..1) sample point is within the shape; 4×4 samples per
+/// texel give the antialiased edge. Shared by every solid-shape badge so each
+/// generator is just its geometry predicate.
+fn supersample_icon(inside: impl Fn(f32, f32) -> bool) -> Vec<u8> {
+    const SS: usize = 4;
+    let size = ICON_SIZE as usize;
+    let mut pixels = vec![0u8; size * size];
+    for py in 0..size {
+        for px in 0..size {
+            let mut cov = 0u32;
+            for sy in 0..SS {
+                for sx in 0..SS {
+                    let nx = (px as f32 + (sx as f32 + 0.5) / SS as f32) / size as f32;
+                    let ny = (py as f32 + (sy as f32 + 0.5) / SS as f32) / size as f32;
+                    if inside(nx, ny) {
+                        cov += 1;
+                    }
+                }
+            }
+            let coverage = cov as f32 / (SS * SS) as f32;
+            pixels[py * size + px] = (coverage * 255.0 + 0.5) as u8;
+        }
+    }
+    pixels
+}
+
+/// True when point `p` is inside triangle `a b c` (orientation-agnostic).
+fn point_in_triangle(p: (f32, f32), a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> bool {
+    let sign = |p1: (f32, f32), p2: (f32, f32), p3: (f32, f32)| {
+        (p1.0 - p3.0) * (p2.1 - p3.1) - (p2.0 - p3.0) * (p1.1 - p3.1)
+    };
+    let d1 = sign(p, a, b);
+    let d2 = sign(p, b, c);
+    let d3 = sign(p, c, a);
+    let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+    let has_pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+    !(has_neg && has_pos)
+}
+
+/// Video badge — a right-pointing play triangle (▶), the universal media mark.
+fn generate_play_triangle_icon() -> Vec<u8> {
+    let a = (0.32, 0.24);
+    let b = (0.32, 0.76);
+    let c = (0.76, 0.50);
+    supersample_icon(move |nx, ny| point_in_triangle((nx, ny), a, b, c))
+}
+
+/// Generator badge — an 8-spoke starburst (✦), reading as "procedural / generate".
+/// Distinct from the smooth sine of the waveform icons.
+fn generate_starburst_icon() -> Vec<u8> {
+    const SPOKES: usize = 8;
+    const R: f32 = 0.34;
+    const HALF_THICK: f32 = 0.052;
+    supersample_icon(|nx, ny| {
+        let mut min_dist = f32::MAX;
+        for k in 0..SPOKES {
+            let theta = k as f32 * std::f32::consts::TAU / SPOKES as f32;
+            let rim = (0.5 + R * theta.cos(), 0.5 + R * theta.sin());
+            let d = dist_to_segment(nx, ny, (0.5, 0.5), rim);
+            if d < min_dist {
+                min_dist = d;
+            }
+        }
+        min_dist <= HALF_THICK
+    })
+}
+
+/// Group badge — a folder (body + tab), the container/group mark.
+fn generate_folder_icon() -> Vec<u8> {
+    // Folder body and a small tab on its top-left.
+    let body = (0.22f32, 0.78f32, 0.38f32, 0.72f32); // x0, x1, y0, y1
+    let tab = (0.22f32, 0.46f32, 0.30f32, 0.40f32);
+    supersample_icon(move |nx, ny| {
+        let in_rect = |r: (f32, f32, f32, f32)| nx >= r.0 && nx <= r.1 && ny >= r.2 && ny <= r.3;
+        in_rect(body) || in_rect(tab)
+    })
+}
+
+/// Audio badge — three vertical level bars (an EQ/levels mark). Distinct from the
+/// sine waveform icon so a layer's audio badge can't be mistaken for an LFO shape.
+fn generate_level_bars_icon() -> Vec<u8> {
+    // (x_center, top_y) per bar; all share the same baseline. Varied heights read
+    // as a level meter.
+    const BAR_HALF_W: f32 = 0.065;
+    const BASELINE: f32 = 0.74;
+    let bars = [(0.30f32, 0.50f32), (0.50f32, 0.26f32), (0.70f32, 0.42f32)];
+    supersample_icon(move |nx, ny| {
+        bars.iter().any(|&(cx, top)| {
+            (nx - cx).abs() <= BAR_HALF_W && ny >= top && ny <= BASELINE
+        })
+    })
+}
+
+/// Playhead head — a downward triangle (▼) whose apex points at the playline,
+/// drawn at the top of the ruler so the "now" position is unmissable (§24 5e).
+fn generate_playhead_head_icon() -> Vec<u8> {
+    let a = (0.16, 0.20);
+    let b = (0.84, 0.20);
+    let c = (0.50, 0.84);
+    supersample_icon(move |nx, ny| point_in_triangle((nx, ny), a, b, c))
 }
 
 fn generate_single_waveform(idx: usize) -> Vec<u8> {
@@ -686,10 +789,10 @@ pub struct NativeTextRenderer {
     atlas: GlyphAtlas,
     pipeline: GpuRenderPipeline,
     sampler: GpuSampler,
-    /// Pre-rendered waveform icons injected into the atlas at startup.
+    /// Pre-rendered atlas icons injected into the atlas at startup.
     /// Re-injected after atlas overflow clears the pixel buffer.
     icon_infos: [Option<IconInfo>; ICON_COUNT],
-    /// Retained waveform bitmaps for re-injection after atlas clear.
+    /// Retained icon bitmaps for re-injection after atlas clear.
     icon_bitmaps: [Vec<u8>; ICON_COUNT],
 
     // Draw queues.
@@ -760,9 +863,9 @@ impl NativeTextRenderer {
             ..Default::default()
         });
 
-        // Generate and inject waveform icons into the atlas.
-        // Bitmaps are retained so they can be re-injected after atlas overflow.
-        let icon_bitmaps = generate_waveform_icons();
+        // Generate and inject atlas icons. Bitmaps are retained so they can be
+        // re-injected after an atlas overflow clears the pixel buffer.
+        let icon_bitmaps = generate_atlas_icons();
         let mut icon_infos = [None; ICON_COUNT];
         for (i, bmp) in icon_bitmaps.iter().enumerate() {
             icon_infos[i] = Some(atlas.inject_icon(bmp, ICON_SIZE, ICON_SIZE));

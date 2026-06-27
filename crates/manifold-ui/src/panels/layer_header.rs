@@ -31,6 +31,7 @@ const FOLDER_W: f32 = color::LAYER_CTRL_FOLDER_BTN_WIDTH;
 const NEW_CLIP_W: f32 = color::LAYER_CTRL_NEW_CLIP_BTN_WIDTH;
 const ADD_GEN_W: f32 = color::LAYER_CTRL_ADD_GEN_CLIP_BTN_WIDTH;
 const GEN_TYPE_H: f32 = color::LAYER_CTRL_GEN_TYPE_ROW_HEIGHT;
+const BADGE_SIZE: f32 = color::LAYER_CTRL_TYPE_BADGE_SIZE;
 // Widths for the MIDI trigger-mode toggle and per-layer device dropdown
 // packed into the existing MIDI / CH rows (no new row, preserves TRACK_HEIGHT).
 const MODE_TOGGLE_W: f32 = 32.0;
@@ -180,6 +181,23 @@ pub struct LayerInfo {
     pub color: Color32,
 }
 
+impl LayerInfo {
+    /// The type-badge icon for this layer (§24 5d). Group / audio / generator are
+    /// flagged explicitly; everything else is a video layer.
+    fn badge_icon(&self) -> crate::icons::Icon {
+        use crate::icons::Icon;
+        if self.is_group {
+            Icon::LayerGroup
+        } else if self.is_audio {
+            Icon::LayerAudio
+        } else if self.is_generator {
+            Icon::LayerGenerator
+        } else {
+            Icon::LayerVideo
+        }
+    }
+}
+
 // ── LayerControl ────────────────────────────────────────────────────
 
 /// One descriptor per addressable control the layer card can show. The card is
@@ -221,9 +239,13 @@ enum LayerControl {
     Gain,
     Send,
     Analysis,
+    /// Layer-type badge (§24 5d): a type glyph in the name row so type is read
+    /// from an icon, not from the header restructuring by type. Decoration —
+    /// non-interactive, drawn last (on top of the background).
+    TypeBadge,
 }
 
-const N_CONTROLS: usize = 28;
+const N_CONTROLS: usize = 29;
 
 impl LayerControl {
     /// All controls in declaration (build / z) order.
@@ -256,6 +278,7 @@ impl LayerControl {
         LayerControl::Gain,
         LayerControl::Send,
         LayerControl::Analysis,
+        LayerControl::TypeBadge,
     ];
 
     #[inline]
@@ -350,11 +373,18 @@ fn compute_layer_row(
         );
     }
 
-    // ── Top row: Chevron | Name | DragHandle ──
+    // ── Top row: Chevron | TypeBadge | Name | DragHandle ──
     let chevron_w = CHEVRON_W;
     d.set(C::Chevron, Rect::new(pad, y, CHEVRON_W, BTN_H));
 
-    let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
+    // Type badge (§24 5d): a square glyph between the chevron and the name,
+    // vertically centred in the name-row height. Same slot for every type — the
+    // glyph differs, the layout doesn't.
+    let badge_x = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
+    let badge_y = y + (BTN_H - BADGE_SIZE) * 0.5;
+    d.set(C::TypeBadge, Rect::new(badge_x, badge_y, BADGE_SIZE, BADGE_SIZE));
+
+    let name_left = badge_x + BADGE_SIZE + TOP_GAP;
     let handle_x = w - pad - HANDLE_W - 8.0;
     let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
     d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
@@ -362,8 +392,13 @@ fn compute_layer_row(
 
     y += ROW_STEP;
 
-    // ── Generator type row ──
-    if is_generator {
+    // ── Generator type row (expanded only) ──
+    // §24 5d: a collapsed generator is sized like every other collapsed track
+    // (the Collapsed preset, 48px) and shows its type via the name-row badge, not
+    // a dedicated row — so the subtype name only appears when there's room to
+    // expand. Adding it while collapsed is exactly what forced the old taller-by-
+    // type collapsed-generator height.
+    if is_generator && !is_collapsed {
         let gen_w = w - name_left - pad;
         d.set(C::GenType, Rect::new(name_left, y, gen_w, GEN_TYPE_H));
         y += GEN_TYPE_H;
@@ -1284,6 +1319,22 @@ impl LayerHeaderPanel {
                         chev,
                     )
                 }
+                C::TypeBadge => tree.add_label(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    // The icon char routes the renderer to the badge glyph; the
+                    // node bounds size it (square, centred). Contrast colour so it
+                    // reads on the layer-coloured background.
+                    &layer.badge_icon().text(),
+                    UIStyle {
+                        text_color: text_clr,
+                        text_align: TextAlign::Center,
+                        ..UIStyle::default()
+                    },
+                ),
                 C::Name => tree.add_button(
                     clip_parent,
                     r.x,
@@ -2241,13 +2292,16 @@ mod tests {
         }
         let chevron_w = CHEVRON_W;
         d.set(C::Chevron, Rect::new(pad, y, CHEVRON_W, BTN_H));
-        let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
+        let badge_x = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
+        let badge_y = y + (BTN_H - BADGE_SIZE) * 0.5;
+        d.set(C::TypeBadge, Rect::new(badge_x, badge_y, BADGE_SIZE, BADGE_SIZE));
+        let name_left = badge_x + BADGE_SIZE + TOP_GAP;
         let handle_x = w - pad - HANDLE_W - 8.0;
         let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
         d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
         d.set(C::DragHandle, Rect::new(handle_x, y, HANDLE_W, BTN_H));
         y += ROW_STEP;
-        if is_generator {
+        if is_generator && !is_collapsed {
             let gen_w = w - name_left - pad;
             d.set(C::GenType, Rect::new(name_left, y, gen_w, GEN_TYPE_H));
             y += GEN_TYPE_H;

@@ -426,47 +426,17 @@ impl Application {
                 }
             } else if tracks_rect.contains(pos) {
                 if self.modifiers.alt {
-                    // Alt + scroll Y → zoom (step through zoom levels)
-                    // Always anchor on the playhead, not the mouse cursor.
-                    let playhead_beat = self.content_state.current_beat.as_f32();
-                    let current_ppb = self.ws.ui_root.viewport.pixels_per_beat();
-                    let playhead_px = self
-                        .ws
-                        .ui_root
-                        .viewport
-                        .beat_to_pixel(manifold_core::Beats::from_f32(playhead_beat));
-                    let anchor_x = (playhead_px - tracks_rect.x).clamp(0.0, tracks_rect.width);
-                    let levels = &manifold_ui::color::ZOOM_LEVELS;
-                    let current_idx = levels
-                        .iter()
-                        .position(|&l| (l - current_ppb).abs() < 0.01)
-                        .unwrap_or_else(|| {
-                            levels
-                                .iter()
-                                .enumerate()
-                                .min_by(|(_, a), (_, b)| {
-                                    (*a - current_ppb)
-                                        .abs()
-                                        .partial_cmp(&(*b - current_ppb).abs())
-                                        .unwrap_or(std::cmp::Ordering::Equal)
-                                })
-                                .map(|(i, _)| i)
-                                .unwrap_or(0)
-                        });
-                    let new_idx = if dy > 0.0 {
-                        current_idx.saturating_add(1).min(levels.len() - 1)
-                    } else {
-                        current_idx.saturating_sub(1)
-                    };
-                    if new_idx != current_idx {
-                        let new_ppb = levels[new_idx];
-                        // Anchor: keep the playhead at the same screen X
-                        let new_scroll = playhead_beat - anchor_x / new_ppb;
-                        self.ws.ui_root.viewport.set_zoom(new_ppb);
-                        self.ws.ui_root.viewport.set_scroll(
-                            new_scroll.max(0.0),
-                            self.ws.ui_root.viewport.scroll_y_px(),
-                        );
+                    // Alt + scroll Y → continuous, cursor-anchored zoom (§24 5e):
+                    // smooth scaling of pixels-per-beat (not a jump between ten
+                    // fixed levels), anchored on the beat under the mouse so the
+                    // view zooms toward where you're pointing.
+                    if dy.abs() > 0.01 {
+                        let beat_at_cursor =
+                            self.ws.ui_root.viewport.pixel_to_beat(pos.x).as_f32();
+                        let exponent = dy / LINE_DELTA_PX;
+                        let factor = manifold_ui::color::ZOOM_WHEEL_STEP_PER_NOTCH.powf(exponent);
+                        let new_ppb = self.ws.ui_root.viewport.zoom_continuous(factor);
+                        self.ws.ui_root.viewport.zoom_to(new_ppb, beat_at_cursor, pos.x);
                         self.scroll_dirty.zoom = true;
                     }
                 } else if self.modifiers.shift {

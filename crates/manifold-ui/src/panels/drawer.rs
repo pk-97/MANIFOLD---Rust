@@ -499,11 +499,12 @@ mod tests {
     fn driver_row2_uniform_keeps_all_eight_equal() {
         // ".", "T", 5 waveform glyphs, "Rev" — proportional would make "Rev"
         // wider; uniform keeps them equal (the original driver row-2 rule).
+        let wave: Vec<String> = crate::icons::WAVEFORMS.iter().map(|w| w.text()).collect();
+        let mut labels: Vec<(&str, bool)> = vec![(".", false), ("T", false)];
+        labels.extend(wave.iter().map(|s| (s.as_str(), false)));
+        labels.push(("Rev", false));
         let spec = DrawerSpec {
-            rows: vec![uniform_buttons(&[
-                (".", false), ("T", false), ("\u{E000}", false), ("\u{E001}", false),
-                ("\u{E002}", false), ("\u{E003}", false), ("\u{E004}", false), ("Rev", false),
-            ])],
+            rows: vec![uniform_buttons(&labels)],
             btn_font_size: 10,
             slider_font_size: 11,
         };

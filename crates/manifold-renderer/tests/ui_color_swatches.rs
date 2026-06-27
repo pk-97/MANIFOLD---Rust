@@ -763,6 +763,167 @@ fn clip_thumbnail_sheet() {
     eprintln!("clip thumbnail sheet → {png}");
 }
 
+/// Renders every atlas icon (§24 5d/5e) — the 5 waveforms, the cog, the four
+/// layer-type badges (video play / generator starburst / group folder / audio
+/// bars), and the playhead head triangle — each on a dark tile and on a
+/// layer-colour tile (contrast-coloured, as drawn in the header), so the glyph
+/// shapes and their on-colour legibility can be eyeballed headlessly.
+#[test]
+fn icon_badge_sheet() {
+    use manifold_ui::icons::Icon;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/icon_badge_sheet.png");
+
+    let icons: &[(&str, Icon)] = &[
+        ("WaveSine", Icon::WaveSine),
+        ("WaveTriangle", Icon::WaveTriangle),
+        ("WaveSawtooth", Icon::WaveSawtooth),
+        ("WaveSquare", Icon::WaveSquare),
+        ("WaveRandom", Icon::WaveRandom),
+        ("Cog", Icon::Cog),
+        ("LayerVideo (play)", Icon::LayerVideo),
+        ("LayerGenerator (starburst)", Icon::LayerGenerator),
+        ("LayerGroup (folder)", Icon::LayerGroup),
+        ("LayerAudio (bars)", Icon::LayerAudio),
+        ("Playhead (triangle)", Icon::Playhead),
+    ];
+
+    // A layer-colour tile to check the badge's contrast colour (as in the header).
+    let layer_tile = Color32::new(120, 90, 160, 255);
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_1);
+    ui.draw_text(14.0, 8.0, "ATLAS ICONS (\u{00a7}24 5d/5e)", 13.0, color::TEXT_NORMAL);
+    ui.draw_text(14.0, 26.0, "dark tile | layer-colour tile (contrast)", 11.0, color::TEXT_DIMMED);
+
+    let tile = 34.0;
+    for (i, (label, icon)) in icons.iter().enumerate() {
+        let y = 44.0 + i as f32 * 44.0;
+        // On a dark tracks tile.
+        ui.draw_rect(14.0, y, tile, tile, color::BG_0);
+        ui.draw_icon(icon.id(), 17.0, y + 3.0, tile - 6.0, tile - 6.0, color::TEXT_WHITE_C32, None);
+        // On a layer-colour tile, contrast-coloured (how the header draws badges).
+        ui.draw_rect(58.0, y, tile, tile, layer_tile);
+        ui.draw_icon(
+            icon.id(),
+            61.0,
+            y + 3.0,
+            tile - 6.0,
+            tile - 6.0,
+            color::contrast_text_color(layer_tile),
+            None,
+        );
+        // Small badge-size sample (13px) to match the header badge.
+        ui.draw_rect(102.0, y + 10.0, 16.0, 16.0, layer_tile);
+        ui.draw_icon(
+            icon.id(),
+            103.0,
+            y + 11.0,
+            color::LAYER_CTRL_TYPE_BADGE_SIZE,
+            color::LAYER_CTRL_TYPE_BADGE_SIZE,
+            color::contrast_text_color(layer_tile),
+            None,
+        );
+        ui.draw_text(130.0, y + 10.0, label, 12.0, color::TEXT_NORMAL);
+    }
+
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "icon badge sheet produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "icon-badge-sheet");
+    {
+        let mut enc = device.create_encoder("icon-badge-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("icon badge sheet → {png}");
+}
+
+/// Renders the §24 5e "now + nav" elements in a mock timeline: the playhead (red
+/// line + downward triangle head at the ruler top) next to the blue insert cursor
+/// (single-row bar + ruler square), and the horizontal scrollbar (track + rounded
+/// thumb) in its reserved strip — so the unmissable-now treatment and the
+/// scrollbar look can be eyeballed headlessly.
+#[test]
+fn playhead_scrollbar_demo() {
+    use manifold_ui::icons::Icon;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/playhead_scrollbar_demo.png");
+
+    let ruler_y = 24.0;
+    let ruler_h = color::RULER_HEIGHT;
+    let tracks_top = ruler_y + ruler_h;
+    let sb_h = color::TIMELINE_SCROLLBAR_HEIGHT;
+    let tracks_bottom = H as f32 - sb_h;
+
+    ui.begin_frame();
+    // Tracks background + ruler band.
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_0);
+    ui.draw_rect(0.0, ruler_y, W as f32, ruler_h, color::HEADER_BG);
+    ui.draw_text(14.0, 6.0, "PLAYHEAD + INSERT CURSOR + SCROLLBAR (\u{00a7}24 5e)", 13.0, color::TEXT_NORMAL);
+
+    // Playhead — red line spanning ruler→tracks, capped by a triangle head.
+    let px = 230.0;
+    ui.draw_rect(
+        px - 1.0,
+        ruler_y,
+        color::PLAYHEAD_WIDTH,
+        tracks_bottom - ruler_y,
+        color::PLAYHEAD_RED.to_f32(),
+    );
+    let s = color::PLAYHEAD_HEAD_SIZE;
+    ui.draw_icon(Icon::Playhead.id(), px - s * 0.5, ruler_y, s, s, color::PLAYHEAD_RED, None);
+    ui.draw_text(px + 10.0, ruler_y + ruler_h + 6.0, "playhead", 11.0, color::PLAYHEAD_RED);
+
+    // Insert cursor — blue single-row bar + small ruler square (subordinate).
+    let cx = 430.0;
+    let row_y = tracks_top + 70.0;
+    ui.draw_rect(cx, row_y, 2.0, 60.0, color::INSERT_CURSOR_BLUE.to_f32());
+    let ms = color::INSERT_CURSOR_RULER_MARKER_SIZE;
+    ui.draw_rect(cx - ms * 0.5, ruler_y + ruler_h - ms, ms, ms, color::INSERT_CURSOR_BLUE.to_f32());
+    ui.draw_text(cx + 8.0, row_y, "insert cursor", 11.0, color::INSERT_CURSOR_BLUE);
+
+    // Horizontal scrollbar — track + rounded thumb (40% wide, 15% in), like the
+    // viewport's `scrollbar_h_layout`.
+    let sb_y = H as f32 - sb_h;
+    ui.draw_rect(0.0, sb_y, W as f32, sb_h, color::SCROLLBAR_TRACK_C32.to_f32());
+    let inset = color::TIMELINE_SCROLLBAR_THUMB_INSET;
+    let thumb_w = W as f32 * 0.4;
+    let thumb_x = W as f32 * 0.15;
+    let thumb_h = sb_h - inset * 2.0;
+    ui.draw_rounded_rect(
+        thumb_x,
+        sb_y + inset,
+        thumb_w,
+        thumb_h,
+        color::SCROLLBAR_THUMB_C32.to_f32(),
+        thumb_h * 0.5,
+    );
+
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "playhead/scrollbar demo produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "playhead-scrollbar-demo");
+    {
+        let mut enc = device.create_encoder("playhead-scrollbar-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("playhead scrollbar demo → {png}");
+}
+
 fn draw_column(ui: &mut UIRenderer, x: f32, y0: f32, rows: &[(&str, Color32)]) {
     for (i, (label, c)) in rows.iter().enumerate() {
         let y = y0 + i as f32 * ROW_H;

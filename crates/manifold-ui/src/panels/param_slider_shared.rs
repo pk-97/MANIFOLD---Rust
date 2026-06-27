@@ -705,11 +705,11 @@ pub(crate) fn build_driver_config(
     ];
 
     // Row 3 — Shape + polarity: 5 waveform icons then Invert. The wave glyphs are
-    // PUA markers U+E000..U+E004 (the UIRenderer draws the SDF waveform icon);
-    // both shape and Invert apply in either rate mode.
+    // atlas icons (the UIRenderer draws the SDF waveform icon); both shape and
+    // Invert apply in either rate mode.
     let mut row3_buttons: Vec<DrawerButton> = (0..WAVEFORM_COUNT)
         .map(|j| {
-            let icon_char = char::from_u32(0xE000 + j as u32).unwrap();
+            let icon_char = crate::icons::waveform_icon_char(j as i32);
             DrawerButton::new(icon_char.to_string(), j as i32 == active_wave)
         })
         .collect();
@@ -1470,15 +1470,10 @@ pub(crate) fn build_param_row(
             0.0
         };
     // LFO arm button shows the waveform icon for the driver's current shape (the
-    // UIRenderer draws U+E000..E004 as the SDF waveform icon). Defaults to sine
-    // when unset. A plain "∿" char isn't in the UI font — it renders as tofu.
-    let lfo_wave = mod_state
-        .driver_waveform_idx
-        .get(i)
-        .copied()
-        .unwrap_or(0)
-        .clamp(0, WAVEFORM_COUNT as i32 - 1) as u32;
-    let lfo_icon = char::from_u32(0xE000 + lfo_wave).unwrap().to_string();
+    // UIRenderer draws the SDF waveform atlas icon). Defaults to sine when unset.
+    // A plain "∿" char isn't in the UI font — it renders as tofu.
+    let lfo_wave = mod_state.driver_waveform_idx.get(i).copied().unwrap_or(0);
+    let lfo_icon = crate::icons::waveform_icon_char(lfo_wave).to_string();
     ids.driver_btn = add_row_button(
         tree,
         parent,

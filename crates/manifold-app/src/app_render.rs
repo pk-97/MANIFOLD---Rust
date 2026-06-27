@@ -4254,7 +4254,10 @@ impl Application {
                 ui.render_tree_range(&self.ws.ui_root.tree, start, overlay_end);
             }
 
-            // Playhead line
+            // Playhead — a red line spanning ruler + tracks, capped by a downward
+            // triangle head at the top of the ruler (§24 5e). The head is the
+            // single dominant "now" marker so it never competes with the blue
+            // insert cursor for "where am I".
             if let Some(px) = self.ws.ui_root.viewport.playhead_pixel() {
                 let ruler = self.ws.ui_root.viewport.ruler_rect();
                 let tr = self.ws.ui_root.viewport.get_tracks_rect();
@@ -4266,6 +4269,47 @@ impl Application {
                     manifold_ui::color::PLAYHEAD_WIDTH,
                     height,
                     manifold_ui::color::PLAYHEAD_RED.to_f32(),
+                );
+                let s = manifold_ui::color::PLAYHEAD_HEAD_SIZE;
+                ui.draw_icon(
+                    manifold_ui::icons::Icon::Playhead.id(),
+                    px - s * 0.5,
+                    top,
+                    s,
+                    s,
+                    manifold_ui::color::PLAYHEAD_RED,
+                    None,
+                );
+            }
+
+            // Horizontal scrollbar (§24 5e): a slim track + draggable thumb in the
+            // reserved strip below the tracks. Geometry comes from the viewport —
+            // the same source the drag hit-test uses — so the drawn thumb and the
+            // grabbable region can't drift. Drawn here as GPU rects, like the
+            // playhead. Hidden (None) when the whole timeline fits.
+            if let Some((track, thumb)) = self.ws.ui_root.viewport.scrollbar_h_layout() {
+                ui.draw_rect(
+                    track.x,
+                    track.y,
+                    track.width,
+                    track.height,
+                    manifold_ui::color::SCROLLBAR_TRACK_C32.to_f32(),
+                );
+                let active = self.ws.ui_root.viewport.scrollbar_h_dragging()
+                    || thumb.contains(self.cursor_pos);
+                let thumb_color = if active {
+                    manifold_ui::color::SCROLLBAR_THUMB_HOVER_C32
+                } else {
+                    manifold_ui::color::SCROLLBAR_THUMB_C32
+                };
+                let radius = (thumb.height * 0.5).min(thumb.width * 0.5);
+                ui.draw_rounded_rect(
+                    thumb.x,
+                    thumb.y,
+                    thumb.width,
+                    thumb.height,
+                    thumb_color.to_f32(),
+                    radius,
                 );
             }
 

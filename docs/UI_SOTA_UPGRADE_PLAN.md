@@ -184,13 +184,28 @@ can never corrupt the live decode (`b663291c`). Source order per clip: composito
 generator cold-start > video poster. Each phase carried an adversarial multi-agent review. Remaining is
 polish (representative-frame video seek; modulated/override cold-start) and the running-app eye pass.
 
-**5d — One header grammar + type badges.** Collapse the four `coordinate_mapper::layer_height`
-grammars (140/48/62/70) into one with height presets (collapsed/normal/tall) applied the same way to
-every type; push type into an **icon-glyph badge** (video/text/generator/group/audio — the PUA glyph
-system the LFO arm button uses).
+**5d — One header grammar + type badges. ✅ DONE.** The four `coordinate_mapper::layer_height` grammars
+collapsed into a `TrackHeight` preset enum (Collapsed 48 / Normal 140 / Tall 200, reserved) selected by
+display *state*, never by type; a group is a structural container row at the fixed `GROUP_TRACK_HEIGHT`
+(70), and the per-type **collapsed-generator 62** is gone — a collapsed generator is now `Collapsed` (48)
+like every other track, with its `GenType` row gated to the expanded state. Type moved into an
+**icon-glyph badge** in the layer name row (video=play / generator=starburst / group=folder / audio=bars
+— there is no Text layer type, so four badges, not five). The badge runs on a new **single icon
+vocabulary** [`manifold_ui::icons::Icon`](../crates/manifold-ui/src/icons.rs) — one id↔PUA-codepoint
+contract that the renderer's glyph atlas (`native_text::generate_atlas_icons`) and every UI emit site (LFO
+arm, mod drawer, inspector cog, layer badge) now share, replacing the bare `0xE000` literals that were
+duplicated across both crates. Verified by the `icon_badge_sheet` headless render + the frozen
+`oracle_row` layout test (updated to mirror the badge slot + the gated GenType).
 
-**5e — One clear "now" + nav.** Resolve playhead vs insert-cursor so playback position is unmissable;
-add scroll-to-zoom and a draggable scrollbar thumb.
+**5e — One clear "now" + nav. ✅ DONE.** **Playhead** gets a downward-triangle head (a new atlas icon)
+at the top of the ruler so it's the one dominant "now" marker; the blue insert cursor stays subordinate
+(single-row bar + small ruler square). **Scroll-to-zoom** is now continuous and **cursor-anchored** (Alt +
+wheel scales pixels-per-beat smoothly toward the pointer, not a jump between ten fixed levels) via one
+shared `viewport.zoom_to(new_ppb, anchor_beat, anchor_x)` entry point — the +/- buttons reuse it (anchored
+on the playhead) and resolve the nearest level first, so they stay sane after a continuous zoom. A
+**draggable horizontal scrollbar** lives in a reserved strip below the tracks (outside `tracks_rect`, so a
+scrollbar drag never starts a clip marquee); its thumb geometry is one source shared by the GPU draw and
+the drag hit-test (`scrollbar_h_layout`). Verified by `playhead_scrollbar_demo`.
 
 | | |
 |---|---|
@@ -218,14 +233,14 @@ emphasis weight, shadow weight, spacing rhythm, badge glyphs. **Done = Peter sig
 3 Kit ─────┤  coverage — one grammar everywhere
 4 Hierarchy┘  polish
 
-5 Timeline   structural spine: 5a gradient ✅ → 5b clips→GPU ✅ → 5c thumbnails ✅ → 5d headers → 5e nav
-6 Taste      final tuning pass on the running app
+5 Timeline   structural spine: 5a gradient ✅ → 5b clips→GPU ✅ → 5c thumbnails ✅ → 5d headers ✅ → 5e nav ✅
+6 Taste      final tuning pass on the running app  ← only remaining phase
 ```
 
 - **Tokens/coverage (1–4) before structural (5):** they lift the *whole* UI on infra you already
   shipped, are all harness-verifiable, and are low-to-medium risk. Do them first for fast, safe wins.
-- **Timeline (5) last among the build phases:** it's the heavy structural lift. 5a/5b are done; 5c–5e
-  remain.
+- **Timeline (5) last among the build phases:** it's the heavy structural lift. 5a–5e are all done;
+  only the Phase-6 taste pass on the running app remains.
 - **§16 guard runs throughout** so nothing re-drifts as we go.
 
 ## 10. Decision gates (need Peter)

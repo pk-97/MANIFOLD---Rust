@@ -8,9 +8,46 @@
 use crate::color;
 use crate::snap;
 use crate::transform::Axis;
-use crate::types::LayerType;
 use crate::view::UiLayer;
 use manifold_foundation::Beats;
+
+/// Track-row height presets (§24 5d). A content track is sized by one of these
+/// named tiers, chosen by its display *state* — never by its layer *type*. The
+/// type is shown by a badge in the header, not by giving a generator a taller
+/// row. Groups (container rows) and hidden children sit outside these tiers; see
+/// [`CoordinateMapper::layer_height`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackHeight {
+    /// A slim header strip — name + button row, no detail controls.
+    Collapsed,
+    /// The default expanded track (clip bodies + content).
+    Normal,
+    /// A roomier track for larger previews. Reserved for a future per-layer tall
+    /// mode; defined so the height vocabulary is complete.
+    Tall,
+}
+
+impl TrackHeight {
+    /// The preset for a content track given its collapse state.
+    #[inline]
+    pub fn for_collapsed(is_collapsed: bool) -> Self {
+        if is_collapsed {
+            TrackHeight::Collapsed
+        } else {
+            TrackHeight::Normal
+        }
+    }
+
+    /// The pixel height for this preset.
+    #[inline]
+    pub fn px(self) -> f32 {
+        match self {
+            TrackHeight::Collapsed => color::COLLAPSED_TRACK_HEIGHT,
+            TrackHeight::Normal => color::TRACK_HEIGHT,
+            TrackHeight::Tall => color::TALL_TRACK_HEIGHT,
+        }
+    }
+}
 
 pub struct CoordinateMapper {
     pixels_per_beat: f32,
@@ -114,6 +151,43 @@ impl CoordinateMapper {
         self.pixels_per_beat = new_ppb.max(1.0);
     }
 
+    /// Index of the [`color::ZOOM_LEVELS`] entry nearest the current zoom. Handles
+    /// an off-grid `pixels_per_beat` (continuous scroll-zoom leaves the zoom
+    /// between discrete levels), so the +/- buttons resume from where the view
+    /// actually is, not a stale index.
+    pub fn nearest_zoom_index(&self) -> usize {
+        let ppb = self.pixels_per_beat;
+        color::ZOOM_LEVELS
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                (**a - ppb)
+                    .abs()
+                    .partial_cmp(&(**b - ppb).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(color::DEFAULT_ZOOM_INDEX)
+    }
+
+    /// New ppb after stepping `delta` discrete zoom levels from the nearest current
+    /// level (the +/- buttons and keyboard step in fixed notches). Clamped to the
+    /// level range.
+    pub fn zoom_level_stepped(&self, delta: i32) -> f32 {
+        let n = color::ZOOM_LEVELS.len() as i32;
+        let idx = (self.nearest_zoom_index() as i32 + delta).clamp(0, n - 1) as usize;
+        color::ZOOM_LEVELS[idx]
+    }
+
+    /// New ppb after a continuous multiplicative zoom by `factor`, clamped to the
+    /// [`color::ZOOM_LEVELS`] range. Used by cursor-anchored scroll-wheel zoom so
+    /// zoom is smooth, not a jump between ten fixed steps (§24 5e).
+    pub fn zoom_continuous(&self, factor: f32) -> f32 {
+        let min = color::ZOOM_LEVELS[0];
+        let max = color::ZOOM_LEVELS[color::ZOOM_LEVELS.len() - 1];
+        (self.pixels_per_beat * factor).clamp(min, max)
+    }
+
     /// Calculate zoom level to fit timeline duration in viewport width.
     /// Unity line 109-115.
     pub fn calculate_fit_zoom(&self, timeline_beats: Beats, viewport_width: f32) -> f32 {
@@ -134,12 +208,7 @@ impl CoordinateMapper {
     /// Rebuild Y-axis layout arrays. Call once per RebuildTimeline, before BuildTrack loop.
     /// From Unity CoordinateMapper.RebuildYLayout (lines 141-181).
     ///
-    /// Height rules:
-    /// - Child of collapsed parent → 0 (hidden)
-    /// - Collapsed group → CollapsedGroupTrackHeight (70)
-    /// - Collapsed generator → CollapsedGeneratorTrackHeight (62)
-    /// - Collapsed regular → CollapsedTrackHeight (48)
-    /// - Expanded (all types) → TrackHeight (140)
+    /// Height rules — see [`CoordinateMapper::layer_height`].
     pub fn rebuild_y_layout(&mut self, layers: &[UiLayer]) {
         let count = layers.len();
         self.layer_y_offsets.resize(count, 0.0);
@@ -162,46 +231,34 @@ impl CoordinateMapper {
     /// they cannot disagree. (Previously copied verbatim in three places; see
     /// `docs/TIMELINE_API_DESIGN.md` §3.4.)
     ///
-    /// Height rules:
-    /// - Child of collapsed parent → 0 (hidden)
-    /// - Collapsed group → CollapsedGroupTrackHeight (70)
-    /// - Expanded group → ExpandedGroupTrackHeight (slim header)
-    /// - Collapsed generator → CollapsedGeneratorTrackHeight (62)
-    /// - Collapsed regular → CollapsedTrackHeight (48)
-    /// - Expanded (all other types) → TrackHeight (140)
+    /// Two structural cases, then one preset (§24 5d) — the height is chosen by
+    /// the layer's display *state*, never by its *type* (type is shown by a badge
+    /// in the header, not by giving generators a taller row):
+    /// - Child of a collapsed parent → 0 (hidden)
+    /// - Group (any state) → a fixed container-header height (it shows no clips)
+    /// - Otherwise → [`TrackHeight::Collapsed`] when collapsed, else
+    ///   [`TrackHeight::Normal`] — the same for video / generator / audio / text.
     pub fn layer_height(layers: &[UiLayer], index: usize) -> f32 {
         let layer = match layers.get(index) {
             Some(l) => l,
-            None => return color::TRACK_HEIGHT,
+            None => return TrackHeight::Normal.px(),
         };
 
+        // Hidden: a child of a collapsed parent.
         if layer.parent_layer_id.is_some() {
-            // Child layer — check parent collapsed state
             let parent = find_parent_in_list(layers, layer.parent_layer_id.as_deref());
             if parent.is_some_and(|p| p.is_collapsed) {
-                0.0 // Hidden: parent is collapsed
-            } else if layer.is_collapsed {
-                if layer.layer_type == LayerType::Generator {
-                    color::COLLAPSED_GEN_TRACK_HEIGHT
-                } else {
-                    color::COLLAPSED_TRACK_HEIGHT
-                }
-            } else {
-                color::TRACK_HEIGHT
+                return 0.0;
             }
-        } else if layer.is_group() && layer.is_collapsed {
-            color::COLLAPSED_GROUP_TRACK_HEIGHT
-        } else if layer.is_group() {
-            color::EXPANDED_GROUP_TRACK_HEIGHT
-        } else if layer.is_collapsed {
-            if layer.layer_type == LayerType::Generator {
-                color::COLLAPSED_GEN_TRACK_HEIGHT
-            } else {
-                color::COLLAPSED_TRACK_HEIGHT
-            }
-        } else {
-            color::TRACK_HEIGHT
         }
+
+        // A group is a container row, not a content track — one fixed height.
+        if layer.is_group() {
+            return color::GROUP_TRACK_HEIGHT;
+        }
+
+        // Content track: one preset, selected by collapse state alone.
+        TrackHeight::for_collapsed(layer.is_collapsed).px()
     }
 
     /// Get the cumulative Y offset for a layer (top of that layer's track row).
@@ -294,6 +351,7 @@ fn find_parent_in_list<'a>(layers: &'a [UiLayer], parent_id: Option<&str>) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::LayerType;
     use manifold_foundation::LayerId;
 
     fn make_layer(name: &str, layer_type: LayerType, _index: i32) -> UiLayer {
@@ -436,11 +494,13 @@ mod tests {
         let layers = vec![video, gen_layer, group];
         mapper.rebuild_y_layout(&layers);
 
-        // Collapsed video → 48, collapsed generator → 62, collapsed group → 70
+        // §24 5d: collapse is sized by state, not type — collapsed video AND
+        // collapsed generator are both Collapsed (48); the type is shown by a
+        // badge. A group is a container row → its fixed 70.
         assert!((mapper.get_layer_height(0) - 48.0).abs() < 0.001);
-        assert!((mapper.get_layer_height(1) - 62.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(1) - 48.0).abs() < 0.001);
         assert!((mapper.get_layer_height(2) - 70.0).abs() < 0.001);
-        assert!((mapper.total_content_height() - 180.0).abs() < 0.001);
+        assert!((mapper.total_content_height() - 166.0).abs() < 0.001);
     }
 
     #[test]
@@ -492,6 +552,31 @@ mod tests {
         assert_eq!(CoordinateMapper::layer_height(&layers, 1), 140.0); // expanded generator
         assert_eq!(CoordinateMapper::layer_height(&layers, 2), 70.0); // collapsed group
         assert_eq!(CoordinateMapper::layer_height(&layers, 3), 0.0); // hidden child
+    }
+
+    #[test]
+    fn collapsed_height_is_type_independent() {
+        // §24 5d: collapse height is identical for every content type — the badge
+        // carries type, so the header no longer restructures (and re-heights) by
+        // it. This is the regression guard for the old generator-only 62.
+        for t in [LayerType::Video, LayerType::Generator, LayerType::Audio] {
+            let mut l = make_layer("L", t, 0);
+            l.is_collapsed = true;
+            let layers = vec![l];
+            assert_eq!(
+                CoordinateMapper::layer_height(&layers, 0),
+                TrackHeight::Collapsed.px(),
+                "collapsed {t:?} must use the Collapsed preset, not a per-type height",
+            );
+        }
+    }
+
+    #[test]
+    fn track_height_presets_ordered() {
+        assert_eq!(TrackHeight::for_collapsed(true), TrackHeight::Collapsed);
+        assert_eq!(TrackHeight::for_collapsed(false), TrackHeight::Normal);
+        assert!(TrackHeight::Collapsed.px() < TrackHeight::Normal.px());
+        assert!(TrackHeight::Normal.px() < TrackHeight::Tall.px());
     }
 
     #[test]

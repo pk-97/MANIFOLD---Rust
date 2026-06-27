@@ -66,6 +66,21 @@ impl TimelineViewportPanel {
         Vec::new()
     }
 
+    /// Resolve a press in the horizontal scrollbar strip to a pan action, latching
+    /// the grab offset for the subsequent drag (§24 5e). A press on the thumb grabs
+    /// it where touched; a press on the track centres the thumb under the pointer.
+    fn scrollbar_h_press(&mut self, pos: Vec2) -> Option<PanelAction> {
+        let (_, thumb) = self.scrollbar_h_layout()?;
+        self.scrollbar_grab_dx = if thumb.contains(pos) {
+            pos.x - thumb.x
+        } else {
+            thumb.width * 0.5
+        };
+        let thumb_left = pos.x - self.scrollbar_grab_dx;
+        let sx = self.scrollbar_h_scroll_at(thumb_left)?;
+        Some(PanelAction::TimelineScrollbarH(sx))
+    }
+
     /// Route a viewport-local pointer event (the `Panel::handle_event` body).
     ///
     /// Only ruler/overview/marker interaction lives here — tracks-area clip
@@ -90,6 +105,13 @@ impl TimelineViewportPanel {
                     let raw = self.pixel_to_beat(pos.x);
                     let beat = self.scrub_snap_beat(raw, modifiers.alt);
                     return vec![PanelAction::Seek(beat.as_f32())];
+                }
+                // Horizontal scrollbar: click the track to jump (centre the thumb
+                // under the pointer), or click the thumb to no-op-then-drag.
+                if self.scrollbar_h_rect.contains(*pos)
+                    && let Some(action) = self.scrollbar_h_press(*pos)
+                {
+                    return vec![action];
                 }
                 Vec::new()
             }
@@ -127,6 +149,15 @@ impl TimelineViewportPanel {
                     let beat = self.scrub_snap_beat(raw, self.scrub_free);
                     return vec![PanelAction::Seek(beat.as_f32())];
                 }
+                // Horizontal scrollbar drag (§24 5e). Latches the grab offset so
+                // the thumb tracks the pointer 1:1.
+                if self.scrollbar_h_rect.contains(*origin) {
+                    self.drag_mode = ViewportDragMode::ScrollbarHDrag;
+                    if let Some(action) = self.scrollbar_h_press(*origin) {
+                        return vec![action];
+                    }
+                    return Vec::new();
+                }
                 Vec::new()
             }
 
@@ -156,6 +187,13 @@ impl TimelineViewportPanel {
                     let raw = self.pixel_to_beat(clamped_x);
                     let beat = self.scrub_snap_beat(raw, self.scrub_free);
                     return vec![PanelAction::Seek(beat.as_f32())];
+                }
+                if self.drag_mode == ViewportDragMode::ScrollbarHDrag {
+                    let thumb_left = pos.x - self.scrollbar_grab_dx;
+                    if let Some(sx) = self.scrollbar_h_scroll_at(thumb_left) {
+                        return vec![PanelAction::TimelineScrollbarH(sx)];
+                    }
+                    return Vec::new();
                 }
                 Vec::new()
             }
