@@ -241,8 +241,10 @@ pub const CLIP_RADIUS: f32 = 4.0;
 /// read as distinct tiles without the old blue-on-every-clip busyness.
 pub const CLIP_BORDER_NORMAL: Color32 = Color32::new(12, 12, 14, 140);
 pub const CLIP_BORDER_NORMAL_WIDTH: f32 = 1.0;
-/// Border on the selected clip — the accent blue, thicker, plus the lift below.
-pub const CLIP_BORDER_SELECTED: Color32 = SELECTED_BORDER;
+/// Border on the selected clip. §E: the bright `SELECTED_LAYER_RING` (not the
+/// accent blue) so it reads on a blue layer too — unified with the layer-header
+/// selection ring; a blue border vanished on a blue clip ("muted on muted").
+pub const CLIP_BORDER_SELECTED: Color32 = SELECTED_LAYER_RING;
 pub const CLIP_BORDER_SELECTED_WIDTH: f32 = 2.0;
 /// Vertical body gradient: the top edge is lightened by this many 0-255 steps
 /// over the base colour, fading to the base at the bottom. Gives the body a

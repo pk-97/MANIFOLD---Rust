@@ -153,8 +153,11 @@ pub fn emit_clip_names(ui: &mut UIRenderer, clips: &[ClipScreenRect]) {
             continue;
         }
         ui.push_immediate_clip(c.rect.x + pad, c.rect.y, inner_w, c.rect.height);
-        // Vertically centre the label in the clip body.
-        let ty = c.rect.y + (c.rect.height - font) * 0.5;
+        // Anchor the label to the BOTTOM of the clip (title-bottom — keeps the
+        // name out of the thumbnail/content above it; Ableton/Premiere/FCP style).
+        // Clamp so a very short clip never pushes the text above its own top.
+        let bottom_pad = 3.0;
+        let ty = (c.rect.y + c.rect.height - font - bottom_pad).max(c.rect.y);
         ui.draw_text(c.rect.x + pad, ty, &c.name, font, text_color);
         ui.pop_immediate_clip();
     }
