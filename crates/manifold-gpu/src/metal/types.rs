@@ -57,6 +57,18 @@ impl GpuTexture {
     pub fn raw_ptr(&self) -> *mut std::ffi::c_void {
         Retained::as_ptr(&self.raw) as *mut std::ffi::c_void
     }
+
+    /// Whether this texture may be bound to a shader stage (sampled).
+    ///
+    /// A render-target-only texture — created without `ShaderRead` usage —
+    /// has no shader-read view, and binding it via `setVertexTexture` /
+    /// `setFragmentTexture` makes AGX nil-deref that missing view (a hard
+    /// `EXC_BAD_ACCESS` at offset `0x78`, not a recoverable error). The
+    /// thumbnail-capture paths sample arbitrary producer outputs, so they
+    /// must check this before binding rather than trust the producer.
+    pub fn is_shader_readable(&self) -> bool {
+        unsafe { self.raw.usage() }.contains(objc2_metal::MTLTextureUsage::ShaderRead)
+    }
 }
 
 // ─── GpuBuffer ────────────────────────────────────────────────────────

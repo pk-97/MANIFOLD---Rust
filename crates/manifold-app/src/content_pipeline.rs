@@ -286,6 +286,33 @@ fn ensure_clip_atlas_persistent(
     *propagate = crate::shared_texture::SURFACE_COUNT as u8;
 }
 
+/// Guard a thumbnail-capture source texture before binding it to the downsample
+/// shader. A render-target-only producer output (no `SHADER_READ`) hard-crashes
+/// AGX in `setVertexTexture` (nil-deref at `0x78`), so the capture must refuse
+/// it — at worst a clip/node shows no thumbnail instead of taking the rig down.
+/// Logs the offending label once per process so the producer can be fixed to
+/// create its output with `SHADER_READ`. The dedup set is a process-local
+/// diagnostic, not shared app state.
+#[cfg(target_os = "macos")]
+fn thumb_source_shader_readable(label: &str, tex: &manifold_gpu::GpuTexture) -> bool {
+    if tex.is_shader_readable() {
+        return true;
+    }
+    use std::sync::{Mutex, OnceLock};
+    static WARNED: OnceLock<Mutex<ahash::AHashSet<String>>> = OnceLock::new();
+    let warned = WARNED.get_or_init(|| Mutex::new(ahash::AHashSet::new()));
+    if let Ok(mut set) = warned.lock()
+        && set.insert(label.to_string())
+    {
+        eprintln!(
+            "[thumbnail] skipping capture of '{label}': source texture is render-target-only \
+             (no SHADER_READ) and would crash setVertexTexture. Fix the producer to create its \
+             output with SHADER_READ usage."
+        );
+    }
+    false
+}
+
 #[cfg(target_os = "macos")]
 #[allow(clippy::too_many_arguments)]
 fn fill_clip_atlas(
@@ -337,6 +364,10 @@ fn fill_clip_atlas(
             // Inactive clip with no live source: keeps its cached strip (persisted).
             continue;
         };
+        // A render-target-only source can't be sampled — binding it crashes AGX.
+        if !thumb_source_shader_readable(cid.as_str(), tex) {
+            continue;
+        }
         let (target_cell, is_active) = if let Some(&cell) = cell_override.get(cid.as_str()) {
             // Parked video filmstrip: the cell its settled poster frame is for.
             // Captured once (not active) so it never churns.
@@ -1678,6 +1709,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         for (i, (name, _port, _type_id, tex)) in
                             dump.iter().enumerate().take(ATLAS_CELLS)
                         {
+                            // A render-target-only node output can't be sampled —
+                            // binding it crashes AGX. Skip its cell.
+                            if !thumb_source_shader_readable(name.as_str(), tex) {
+                                continue;
+                            }
                             gen_enc.draw_fullscreen_viewport(
                                 raw,
                                 atlas,
@@ -2357,6 +2393,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         for (i, (name, _port, _type_id, tex)) in
                             dump.iter().enumerate().take(ATLAS_CELLS)
                         {
+                            // A render-target-only node output can't be sampled —
+                            // binding it crashes AGX. Skip its cell.
+                            if !thumb_source_shader_readable(name.as_str(), tex) {
+                                continue;
+                            }
                             native_enc.draw_fullscreen_viewport(
                                 raw,
                                 atlas,
