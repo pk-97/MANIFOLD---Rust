@@ -113,6 +113,58 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Create the 4×4 box-filter downsample blit pipeline used to capture a clip's
+/// (often full-res) output into a small filmstrip cell without aliasing (§24 5c-2
+/// P5). Tap spacing is one cell footprint / 4 in UV, so for any source size the 4
+/// linear taps per axis cover the output texel's footprint instead of point-
+/// sampling it. Bindings: `0` = source texture, `1` = (linear) sampler. Render it
+/// with a viewport set to the destination cell (`draw_fullscreen_viewport`).
+pub fn create_box_downsample_pipeline(
+    device: &GpuDevice,
+    format: GpuTextureFormat,
+    cell_w: u32,
+    cell_h: u32,
+) -> GpuRenderPipeline {
+    let shader = format!(
+        r#"
+struct VertexOutput {{ @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> }};
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {{
+    var out: VertexOutput;
+    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
+    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}}
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
+    let step = vec2<f32>(1.0 / ({cw}.0 * 4.0), 1.0 / ({ch}.0 * 4.0));
+    var acc = vec4<f32>(0.0);
+    for (var j = 0; j < 4; j = j + 1) {{
+        for (var i = 0; i < 4; i = i + 1) {{
+            let off = (vec2<f32>(f32(i), f32(j)) - 1.5) * step;
+            acc = acc + textureSample(t_source, s_source, in.uv + off);
+        }}
+    }}
+    return acc * (1.0 / 16.0);
+}}
+"#,
+        cw = cell_w,
+        ch = cell_h,
+    );
+    device.create_render_pipeline(
+        &shader,
+        "vs_main",
+        "fs_main",
+        format,
+        None,
+        "Clip Thumbnail Box Downsample",
+    )
+}
+
 const VBUF_RING_SIZE: usize = 3;
 const MAX_THUMB_QUADS: usize = 512;
 

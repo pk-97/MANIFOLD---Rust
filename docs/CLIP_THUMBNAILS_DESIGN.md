@@ -383,6 +383,31 @@ flag them so we don't architect them out.
 5. **Polish:** keyframe-fast-seek native mode; hover-scrub; click-to-seek; RGBA8 bridge
    format + cell-size/pool tuning; optional dirty-cell copy.
 
+## P5 (polish) — status
+
+- **Box-filter downsample — SHIPPED.** `create_box_downsample_pipeline`
+  (manifold-renderer): a 4×4 box blit (tap spacing = one cell footprint / 4 in UV)
+  used for the capture so a full-res→cell downscale doesn't alias. Unit-tested
+  headless (`box_downsample_averages_high_frequency`).
+- **Deferred (need running-app verification or are interaction features), with
+  reasons:**
+  - **RGBA8 IOSurface atlas.** Halving atlas memory means a pixel-format change to
+    the shared `SharedTextureBridge` (the FourCC + import format) — a native detail
+    that isn't headless-verifiable and would risk a live IOSurface for a memory win
+    the Rgba16Float atlas (~76 MB, bounded) doesn't force. The persistent atlas +
+    disk cache are already RGBA8-friendly (readback/store are RGBA8), so flipping
+    the bridge later is contained.
+  - **Native keyframe-fast-seek.** Lives in the Objective-C `MetalVideoDecoderPlugin`;
+    the Rust per-bar seek already works. A cheap I-frame-only mode is a native
+    addition to verify on-device.
+  - **Hover-scrub + click-cell-to-seek.** Timeline input features that interact with
+    existing clip selection/hit-testing and can't be verified headless; the storage
+    is designed for them (the filmstrip cells *are* the hover frames) so they need no
+    new capture path.
+  - **Dirty-cell copy.** The persistent→write copy is one fullscreen blit; the
+    steady-state churn is one cell, so the marginal saving doesn't justify the added
+    complexity yet.
+
 ## What this supersedes
 
 - Single stretched cell per clip → bar-indexed filmstrip.

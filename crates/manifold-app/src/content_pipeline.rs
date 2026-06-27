@@ -298,6 +298,7 @@ fn fill_clip_atlas(
     beats_per_bar: f64,
     write_tex: Option<&manifold_gpu::GpuTexture>,
     raw: Option<&manifold_gpu::GpuRenderPipeline>,
+    downsample: Option<&manifold_gpu::GpuRenderPipeline>,
     sampler: Option<&manifold_gpu::GpuSampler>,
     visible: &[ClipId],
     cache: &mut crate::clip_atlas::ClipAtlasCache,
@@ -406,9 +407,12 @@ fn fill_clip_atlas(
 
     // ── Phase 2: GPU blits ──
     let persistent_tex = persistent.as_ref().expect("persistent atlas just created");
+    // Box-downsample the (often full-res) source into the cell; fall back to the
+    // plain blit if the downsample pipeline isn't available.
+    let cell_blit = downsample.unwrap_or(raw);
     for (cell, tex) in &to_blit {
         enc.draw_fullscreen_viewport(
-            raw,
+            cell_blit,
             persistent_tex,
             &[
                 manifold_gpu::GpuBinding::Texture { binding: 0, texture: tex },
@@ -724,6 +728,11 @@ pub struct ContentPipeline {
     /// Downscale blit used for the workspace preview texture.
     #[cfg(target_os = "macos")]
     preview_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// §24 5c-2 P5: 4×4 box-filter downsample blit for clip-thumbnail capture.
+    /// A full-res clip output (e.g. 3456px) into a 128px cell is a ~27× downscale;
+    /// a single bilinear tap aliases badly, so the capture averages a tap grid.
+    #[cfg(target_os = "macos")]
+    clip_downsample_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     /// Linear sampler for preview downscaling.
     #[cfg(target_os = "macos")]
     preview_sampler: Option<manifold_gpu::GpuSampler>,
@@ -889,6 +898,8 @@ impl ContentPipeline {
             #[cfg(target_os = "macos")]
             preview_pipeline: None,
             #[cfg(target_os = "macos")]
+            clip_downsample_pipeline: None,
+            #[cfg(target_os = "macos")]
             preview_sampler: None,
             #[cfg(target_os = "macos")]
             node_preview_scalar_pipeline: None,
@@ -962,6 +973,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             mag_filter: manifold_gpu::GpuFilterMode::Linear,
             ..Default::default()
         }));
+
+        // §24 5c-2 P5: box-filter downsample for clip-thumbnail capture (anti-alias
+        // the big full-res→cell downscale). Reusable helper (unit-tested in
+        // manifold-renderer).
+        self.clip_downsample_pipeline =
+            Some(manifold_renderer::clip_thumb_gpu::create_box_downsample_pipeline(
+                &device,
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
+                CLIP_ATLAS_CELL_W,
+                CLIP_ATLAS_CELL_H,
+            ));
+
         // Node-preview semantic encodings. Both share the fullscreen-triangle
         // vertex stage above and use NO per-frame statistics, so they're stable
         // across frames and outliers (a data-derived window flickers and
@@ -2108,6 +2131,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 beats_per_bar,
                 self.clip_atlas_textures[write_idx].as_ref(),
                 self.preview_pipeline.as_ref(),
+                self.clip_downsample_pipeline.as_ref(),
                 self.preview_sampler.as_ref(),
                 &self.clip_atlas_visible,
                 &mut self.clip_atlas_cache,

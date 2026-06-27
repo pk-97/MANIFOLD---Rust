@@ -790,6 +790,70 @@ fn clip_thumbnail_sheet() {
     eprintln!("clip thumbnail sheet → {png}");
 }
 
+#[test]
+fn box_downsample_averages_high_frequency() {
+    // The §24 5c-2 P5 capture downsample must AVERAGE a high-frequency source into
+    // a cell, not point-sample it (which would alias to an extreme). Downsample a
+    // 256×256 1px checkerboard into 64×64 and assert the centre reads mid-grey.
+    use manifold_renderer::clip_thumb_gpu::create_box_downsample_pipeline;
+
+    let device = GpuDevice::new();
+    let pipe = create_box_downsample_pipeline(&device, FORMAT, 64, 64);
+    let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+        min_filter: manifold_gpu::GpuFilterMode::Linear,
+        mag_filter: manifold_gpu::GpuFilterMode::Linear,
+        ..Default::default()
+    });
+
+    const SS: u32 = 256;
+    let mut px = vec![0u8; (SS * SS * 4) as usize];
+    for y in 0..SS {
+        for x in 0..SS {
+            let v: u8 = if (x + y) & 1 == 0 { 255 } else { 0 };
+            let i = ((y * SS + x) * 4) as usize;
+            px[i] = v;
+            px[i + 1] = v;
+            px[i + 2] = v;
+            px[i + 3] = 255;
+        }
+    }
+    let src = device.create_texture(&manifold_gpu::GpuTextureDesc {
+        width: SS,
+        height: SS,
+        depth: 1,
+        format: GpuTextureFormat::Rgba8Unorm,
+        dimension: manifold_gpu::GpuTextureDimension::D2,
+        usage: manifold_gpu::GpuTextureUsage::SHADER_READ | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
+        label: "ds-source",
+        mip_levels: 1,
+    });
+    device.upload_texture(&src, &px);
+
+    let target = RenderTarget::new(&device, 64, 64, FORMAT, "ds-target");
+    {
+        let mut enc = device.create_encoder("ds-blit");
+        enc.draw_fullscreen(
+            &pipe,
+            &target.texture,
+            &[
+                manifold_gpu::GpuBinding::Texture { binding: 0, texture: &src },
+                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: &sampler },
+            ],
+            true,
+            true,
+            "ds-blit",
+        );
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback_w(&device, &target.texture, 64, 64);
+    let i = ((32 * 64 + 32) * 4) as usize;
+    let r = bytes[i];
+    assert!(
+        (64..=192).contains(&r),
+        "box downsample of a checkerboard should read mid-grey, got {r}"
+    );
+}
+
 /// Renders every atlas icon (§24 5d/5e) — the 5 waveforms, the cog, the four
 /// layer-type badges (video play / generator starburst / group folder / audio
 /// bars), and the playhead head triangle — each on a dark tile and on a
