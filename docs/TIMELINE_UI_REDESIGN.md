@@ -256,13 +256,30 @@ focused tests each step; full workspace on the token change + shared-render chan
   and a 256×1100 texture to crop to the bottom-anchored layer-controls panel. `Read` the PNG to
   compare against `timeline-mockup.html`.
 
-### §E entry point (clips — next)
-Clips render GPU-side, NOT via the UITree: `manifold-renderer/src/clip_draw.rs` defines `ClipBody`
-and emits each as a GPU SDF rounded rect (body gradient + border + lift, §24 5b). The viewport panel
-(`crates/manifold-ui/src/panels/viewport/`) constructs the `ClipBody` list. Today the body colour is
-the neutral `CLIP_NORMAL`/`CLIP_GEN_NORMAL` grey. §E = feed the **layer colour** into `ClipBody`
-(strip/border/frame), keep the thumbnail as content, and check the title strip position (want
-bottom). The clip styling tokens (`CLIP_*` in color.rs) + `CLIP_LABEL_*` are the tuning knobs.
+### §E status (clips — mostly already done)
+Clips render GPU-side via `manifold-renderer/src/clip_draw.rs` (`ClipBody` → SDF rounded rect: body
+gradient + border + lift, §24 5b), built by the viewport panel. **Audit correction:** clips are
+ALREADY layer-coloured — `get_clip_color` (`bitmap_painter.rs`) returns the layer colour for a normal
+clip; selected = `lighten(30)` **plus** a blue `CLIP_BORDER_SELECTED` outline (a distinct signal, so
+clip selection is fine). `CLIP_NORMAL` grey is just a fallback. So §E "layer-coloured clips" needs no
+work.
+
+Remaining delta: **title position.** `emit_clip_names` currently CENTRES the label
+(`ty = rect.y + (h-font)/2`); the mockup wants it on the BOTTOM. The change is one line
+(`ty = (rect.y + rect.height - font - 3).max(rect.y)`) but it affects EVERY clip and the centred
+behaviour is deliberate — so verify it on a render first, per Peter's PNG-compare rule. The verify
+harness is heavier than the header one: it needs `ClipBody` (trivial) **and** `ClipScreenRect` for the
+names (`ClipId`, `Beats`, `Arc<str>` name, `waveform: None`, the audio fields). Build that harness or
+check on the running app before shipping the title move. Optionally re-style clip selection to match
+the new layer focus-ring. Tuning knobs: `CLIP_*` / `CLIP_LABEL_*` in color.rs.
+
+### Net assessment
+The native UI already implements most of the mockup (solid layer-coloured headers, type badges,
+layer-coloured clips, group indent/spine, resizable track heights). The mockup was largely a
+reproduction of existing behaviour plus the two real gaps that are now **shipped** (§H distinct
+selection, §C declutter). What remains: title-bottom (verify-then-ship), the routing-form relayout
+(§D, coupled with the §B tall tier), the UI-wide contrast/text tune (§A — needs Peter's eye on the
+running app), and the genuinely net-new aspect-locked thumbnail window (§F).
 
 ### Known issues (pre-existing, not from this work)
 - `tests/design_tokens.rs` guard is at **133** vs baseline **132** — an untokenized `Color32::new`
