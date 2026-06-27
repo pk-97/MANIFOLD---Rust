@@ -80,11 +80,82 @@ pub fn cell_beat_range(
     (s, e.max(s))
 }
 
+/// §F aspect-locked filmstrip windows. The atlas captures one cell per bar(-group),
+/// but drawing one image per bar squishes the frame at low zoom (a bar is a few px —
+/// the "squished slivers"). Instead, tile fixed-aspect windows across the clip
+/// (`win_w = body_height × cell_aspect`) and show ONE captured cell per window — the
+/// first candidate cell at/after the window's left edge — so each window shows a full,
+/// undistorted frame, and the cell count drawn collapses to `body_width / win_w`.
+///
+/// `cells` is each candidate cell as `(atlas_cell, on-screen start x)`, ascending by x.
+/// Pushes `(atlas_cell, x0, w)` per window into `out` (cleared first); `w` is clamped to
+/// `body_right` (a partial last window). Allocation-free apart from `out` (caller-owned
+/// scratch). At high zoom (cells ≥ `win_w` apart) it degenerates to one window per cell.
+pub fn aspect_windows(
+    cells: &[(u32, f32)],
+    body_x: f32,
+    body_right: f32,
+    win_w: f32,
+    out: &mut Vec<(u32, f32, f32)>,
+) {
+    out.clear();
+    if win_w < 1.0 {
+        return;
+    }
+    // A window may start at the very left edge; seed below it so the first cell counts.
+    let mut next_x = body_x - 1.0;
+    for &(cell, cx) in cells {
+        if cx < next_x {
+            continue; // covered by the previous window
+        }
+        let x0 = cx.max(body_x);
+        if x0 >= body_right - 0.5 {
+            break;
+        }
+        let w = win_w.min(body_right - x0);
+        if w < 0.5 {
+            break;
+        }
+        out.push((cell, x0, w));
+        next_x = x0 + win_w;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const BPB: f64 = 4.0;
+
+    #[test]
+    fn aspect_windows_collapse_slivers_at_low_zoom() {
+        // 10 bar-cells 8px apart (the low-zoom "sliver" case); body 0..80, win 40.
+        let cells: Vec<(u32, f32)> = (0..10).map(|i| (i, i as f32 * 8.0)).collect();
+        let mut out = Vec::new();
+        aspect_windows(&cells, 0.0, 80.0, 40.0, &mut out);
+        // Two clean 40px windows instead of ten slivers; each shows the cell at its edge.
+        assert_eq!(out, vec![(0, 0.0, 40.0), (5, 40.0, 40.0)]);
+    }
+
+    #[test]
+    fn aspect_windows_one_per_cell_at_high_zoom() {
+        // Cells 80px apart (> win 40) → each cell its own window.
+        let cells = [(0u32, 0.0_f32), (1, 80.0), (2, 160.0)];
+        let mut out = Vec::new();
+        aspect_windows(&cells, 0.0, 200.0, 40.0, &mut out);
+        assert_eq!(out, vec![(0, 0.0, 40.0), (1, 80.0, 40.0), (2, 160.0, 40.0)]);
+    }
+
+    #[test]
+    fn aspect_windows_clamp_partial_last_window() {
+        // Single cell, body only 25px wide → one window clamped to the body.
+        let mut out = Vec::new();
+        aspect_windows(&[(7, 0.0)], 0.0, 25.0, 40.0, &mut out);
+        assert_eq!(out, vec![(7, 0.0, 25.0)]);
+        // Degenerate win_w → no windows, never panics.
+        aspect_windows(&[(0, 0.0)], 0.0, 100.0, 0.0, &mut out);
+        assert!(out.is_empty());
+    }
 
     #[test]
     fn short_clip_one_cell_per_bar() {

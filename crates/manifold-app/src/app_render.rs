@@ -4100,6 +4100,10 @@ impl Application {
                 let inv_rows = 1.0 / crate::content_pipeline::CLIP_ATLAS_ROWS as f32;
                 let bpb = self.ws.ui_root.viewport.beats_per_bar() as f64;
                 self.clip_thumb_quad_scratch.clear();
+                // §F aspect-locked window scratch — reused across clips this frame
+                // (cleared per clip; grows once), like `strips_of` above.
+                let mut thumb_cells: Vec<(u32, f32)> = Vec::new();
+                let mut thumb_windows: Vec<(u32, f32, f32)> = Vec::new();
                 for cr in &self.clip_rect_scratch {
                     // Match the SetClipAtlasVisible filter so a clip too narrow to
                     // have requested a cell never draws one.
@@ -4116,32 +4120,38 @@ impl Application {
                     let count = crate::clip_filmstrip::cell_count(
                         crate::clip_filmstrip::clip_bar_count(dur_b, bpb),
                     );
+                    // §F: collect the captured cells with their on-screen start x,
+                    // then tile aspect-locked windows over them (one full frame per
+                    // window) instead of one squished sliver per bar.
+                    thumb_cells.clear();
                     for (&idx, &cell) in strip {
-                        // Stale layout entry (clip shortened since capture) — skip.
                         if idx >= count {
-                            continue;
+                            continue; // stale layout entry (clip shortened since capture)
                         }
-                        // This bar-cell's on-screen sub-rect, clamped to the body.
-                        let (sb, eb) =
+                        let (sb, _eb) =
                             crate::clip_filmstrip::cell_beat_range(idx, start_b, dur_b, bpb);
-                        let x0 = self.ws.ui_root.viewport.beat_f64_to_pixel(sb).max(body.x);
-                        let x1 = self
-                            .ws
-                            .ui_root
-                            .viewport
-                            .beat_f64_to_pixel(eb)
-                            .min(body_right);
-                        let w = x1 - x0;
-                        if w < 0.5 {
-                            continue; // scrolled out / sub-pixel
-                        }
+                        thumb_cells.push((cell, self.ws.ui_root.viewport.beat_f64_to_pixel(sb)));
+                    }
+                    thumb_cells.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
+                    // Window width = a project-aspect frame at the lane height, decoupled
+                    // from bar width — the §F fix for the squished low-zoom filmstrip.
+                    let win_w = body.height * cell_aspect;
+                    crate::clip_filmstrip::aspect_windows(
+                        &thumb_cells,
+                        body.x,
+                        body_right,
+                        win_w,
+                        &mut thumb_windows,
+                    );
+                    for &(cell, x0, w) in &thumb_windows {
                         let sub = manifold_ui::node::Rect::new(x0, body.y, w, body.height);
                         // Atlas cell UV in the non-square COLS×ROWS grid.
                         let gx = (cell % crate::content_pipeline::CLIP_ATLAS_COLS) as f32;
                         let gy = (cell / crate::content_pipeline::CLIP_ATLAS_COLS) as f32;
                         let (u0, v0) = (gx * inv_cols, gy * inv_rows);
                         let (u1, v1) = (u0 + inv_cols, v0 + inv_rows);
-                        // Centre-crop the 16:9 cell to this bar's on-screen aspect.
+                        // A full aspect-locked window shows the whole frame (no crop);
+                        // only a clamped partial last window is centre-cropped.
                         let sub_aspect = (w / body.height.max(1.0)).max(0.01);
                         let (uu0, vv0, uu1, vv1) = if sub_aspect >= cell_aspect {
                             let f = cell_aspect / sub_aspect; // crop height
