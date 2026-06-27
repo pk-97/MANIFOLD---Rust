@@ -323,12 +323,13 @@ fn fill_clip_atlas(
             // Inactive clip with no live source: keeps its cached strip (persisted).
             continue;
         };
-        let target_cell = match clip_beats.get(cid.as_str()) {
-            Some(&(start, dur)) if current_beat >= start && current_beat < start + dur => {
-                crate::clip_filmstrip::cell_index_at_beat(current_beat, start, dur, beats_per_bar)
-            }
+        let (target_cell, is_active) = match clip_beats.get(cid.as_str()) {
+            Some(&(start, dur)) if current_beat >= start && current_beat < start + dur => (
+                crate::clip_filmstrip::cell_index_at_beat(current_beat, start, dur, beats_per_bar),
+                true,
+            ),
             // Parked (playhead outside the clip) or unknown beats: cell 0.
-            _ => 0,
+            _ => (0, false),
         };
         let existing = cache.cell_for(cid, target_cell);
         let due = match last_snapshot.get(cid) {
@@ -336,7 +337,9 @@ fn fill_clip_atlas(
             Some(&(last_cell, last_frame)) => {
                 last_cell != target_cell
                     || existing.is_none()
-                    || frame.wrapping_sub(last_frame) >= REFRESH_INTERVAL
+                    // Throttled re-capture only of the live playhead bar; a parked
+                    // clip's still never churns.
+                    || (is_active && frame.wrapping_sub(last_frame) >= REFRESH_INTERVAL)
             }
         };
         if !due {

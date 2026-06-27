@@ -83,6 +83,10 @@ struct LayerGeneratorState {
 /// cell). Tiny, so a parked-clip thumbnail render is cheap.
 const THUMB_W: u32 = 256;
 const THUMB_H: u32 = 144;
+/// Warm-up frames for a freshly-created cold-start instance (§24 5c-2): stateful
+/// generators look empty at t=0, so we advance the runtime this many steps before
+/// the parked still is read. ~0.75 s at 60 fps; cheap on the tiny target.
+const WARMUP_FRAMES: usize = 45;
 
 /// §24 5c cold-start: an ISOLATED generator instance + small render target for one
 /// PARKED clip's thumbnail. Separate from the live per-layer `layer_generators` so
@@ -903,33 +907,45 @@ impl GeneratorRenderer {
         for (i, val) in gp.param_values.iter().take(MAX_GEN_PARAMS).enumerate() {
             params[i] = val.value;
         }
-        let ctx = PresetContext {
-            time,
-            beat,
-            dt: 1.0 / 60.0,
-            width: THUMB_W,
-            height: THUMB_H,
-            output_width: THUMB_W,
-            output_height: THUMB_H,
-            aspect: THUMB_W as f32 / THUMB_H as f32,
-            owner_key: 0,
-            is_clip_level: false,
-            frame_count: 0,
-            anim_progress: 0.0,
-            trigger_count: 0,
-            params,
-            param_count,
-        };
 
         let string_params = layer
             .clips
             .get(clip_index as usize)
             .and_then(|c| c.string_params.as_ref());
 
+        // A freshly-created instance is warmed up: stateful generators (fluid sims,
+        // feedback) need several frames before they look like anything, so a single
+        // t=0 render is the empty/uninteresting frame. We advance the runtime
+        // `WARMUP_FRAMES` steps (state accumulates in the persistent runtime) so the
+        // parked still is a developed look. Cheap — a tiny target, ≤1 new instance
+        // per frame is enforced by the caller. A later refresh continues from the
+        // warm state, so it stays warm.
+        const DT: f64 = 1.0 / 60.0;
+        let frames = if needs_create { WARMUP_FRAMES } else { 1 };
+
         let t = self.thumb_gens.get_mut(clip_id)?;
         t.runtime.set_string_params(string_params);
         gpu.clear_texture(&t.rt.texture, 0.0, 0.0, 0.0, 0.0);
-        t.runtime.render(gpu, &t.rt.texture, &ctx);
+        for f in 0..frames {
+            let ctx = PresetContext {
+                time: time + f as f64 * DT,
+                beat,
+                dt: DT as f32,
+                width: THUMB_W,
+                height: THUMB_H,
+                output_width: THUMB_W,
+                output_height: THUMB_H,
+                aspect: THUMB_W as f32 / THUMB_H as f32,
+                owner_key: 0,
+                is_clip_level: false,
+                frame_count: f as i64,
+                anim_progress: 0.0,
+                trigger_count: 0,
+                params,
+                param_count,
+            };
+            t.runtime.render(gpu, &t.rt.texture, &ctx);
+        }
         Some(&t.rt.texture)
     }
 
