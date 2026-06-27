@@ -244,3 +244,27 @@ Re-render after every change.
 **Order:** A (tokens) → **H selection ring** (biggest visible fix) → B/C/D header restyle →
 E clips → F aspect window. Render→PNG→compare against the mockup after each. Build + `clippy` +
 focused tests each step; full workspace on the token change + shared-render changes.
+
+### Progress log
+- **§H shipped** (commit 69253f5): selection = bright `SELECTED_LAYER_RING` ring + small lift,
+  replacing `lighten(30)`. Render-confirmed; the ring reads clearly on any header hue.
+- **§C shipped** (commit bb6be36): dropped `Info` (clip count) + `NewClip` + `AddGenClip` from
+  `compute_layer_row` **and** its `oracle_row` equivalence gate (kept rect-equal), widened the folder
+  path label, removed the dead width consts. `layout_matches_frozen_oracle` + 426 lib tests pass.
+- **Render harness**: `cargo test -p manifold-renderer --test timeline_header_preview` →
+  `scratchpad/native_header_baseline.png`. Uses `ScreenLayout` with `timeline_split_ratio = 0.96`
+  and a 256×1100 texture to crop to the bottom-anchored layer-controls panel. `Read` the PNG to
+  compare against `timeline-mockup.html`.
+
+### §E entry point (clips — next)
+Clips render GPU-side, NOT via the UITree: `manifold-renderer/src/clip_draw.rs` defines `ClipBody`
+and emits each as a GPU SDF rounded rect (body gradient + border + lift, §24 5b). The viewport panel
+(`crates/manifold-ui/src/panels/viewport/`) constructs the `ClipBody` list. Today the body colour is
+the neutral `CLIP_NORMAL`/`CLIP_GEN_NORMAL` grey. §E = feed the **layer colour** into `ClipBody`
+(strip/border/frame), keep the thumbnail as content, and check the title strip position (want
+bottom). The clip styling tokens (`CLIP_*` in color.rs) + `CLIP_LABEL_*` are the tuning knobs.
+
+### Known issues (pre-existing, not from this work)
+- `tests/design_tokens.rs` guard is at **133** vs baseline **132** — an untokenized `Color32::new`
+  drifted in on the `feat/multi-selection-ux` base this branch forked from. Find + tokenize it (or
+  bump the baseline if legitimate) as a separate cleanup; it is inherited, not introduced here.
