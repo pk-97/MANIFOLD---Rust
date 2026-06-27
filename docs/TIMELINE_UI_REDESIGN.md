@@ -273,6 +273,23 @@ names (`ClipId`, `Beats`, `Arc<str>` name, `waveform: None`, the audio fields). 
 check on the running app before shipping the title move. Optionally re-style clip selection to match
 the new layer focus-ring. Tuning knobs: `CLIP_*` / `CLIP_LABEL_*` in color.rs.
 
+### §F implementation findings (aspect-locked thumbnail — the one remaining net-new)
+The thumbnail tiler `manifold-renderer/src/clip_thumb_gpu.rs` already supports
+per-cell quads: `ThumbQuad { rect, body_rect, radius, uv_min, uv_max }` where `rect`
+is "one bar of the clip" and a single still passes `rect == body_rect`. So filmstrip
+tiling exists — the cells are just **bar-width** today. §F = make cell width =
+`lane_height × project_aspect` instead of bar-width, and tile across the clip.
+
+It's two-sided and content-coordinated, which is why it can't ship headless:
+1. **Render side:** the caller that builds the `&[ThumbQuad]` (the `clip→cell` layout)
+   must compute aspect-locked cell rects, tiling across `body_rect`, clamping/cropping
+   for clips narrower than one cell.
+2. **Content side:** the thumbnail ATLAS cells are captured by the content thread
+   (`clip_thumb_gpu::create_box_downsample_pipeline` downsamples into `cell_w × cell_h`);
+   the cell aspect must match the new on-screen cell aspect or the image distorts.
+3. **Verify:** needs the real atlas populated (running app), not the headless harnesses.
+Scope this as its own focused session with the app running.
+
 ### Net assessment
 The native UI already implements most of the mockup (solid layer-coloured headers, type badges,
 layer-coloured clips, group indent/spine, resizable track heights). The mockup was largely a
