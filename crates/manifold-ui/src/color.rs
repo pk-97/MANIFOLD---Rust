@@ -81,16 +81,19 @@ pub fn contrast_text_color(bg: Color32) -> Color32 {
 // ════════════════════════════════════════════════════════════════════
 
 // ── Grey ramp (elevation) ───────────────────────────────────────────
-pub const BG_0: Color32 = Color32::new(13, 13, 14, 255); // app / void
-pub const BG_1: Color32 = Color32::new(22, 22, 24, 255); // panel
-pub const BG_2: Color32 = Color32::new(31, 31, 33, 255); // card / section (on a panel)
-pub const BG_3: Color32 = Color32::new(42, 42, 45, 255); // control / input (on a section)
+// §A contrast pass: the range is spread wider (deeper void, lighter raised
+// control) so the levels read as distinct on a dark stage without the UI going
+// bright — deeper black gives raised surfaces somewhere to separate to.
+pub const BG_0: Color32 = Color32::new(9, 9, 11, 255); // app / void
+pub const BG_1: Color32 = Color32::new(23, 23, 25, 255); // panel
+pub const BG_2: Color32 = Color32::new(33, 33, 36, 255); // card / section (on a panel)
+pub const BG_3: Color32 = Color32::new(48, 48, 52, 255); // control / input (on a section)
 // Hover = one notch up, pressed = one notch down. Same deltas everywhere.
-pub const BG_1_HOVER: Color32 = Color32::new(30, 30, 32, 255);
-pub const BG_2_HOVER: Color32 = Color32::new(39, 39, 42, 255);
-pub const BG_2_PRESSED: Color32 = Color32::new(26, 26, 28, 255);
-pub const BG_3_HOVER: Color32 = Color32::new(50, 50, 54, 255);
-pub const BG_3_PRESSED: Color32 = Color32::new(36, 36, 39, 255);
+pub const BG_1_HOVER: Color32 = Color32::new(31, 31, 33, 255);
+pub const BG_2_HOVER: Color32 = Color32::new(42, 42, 45, 255);
+pub const BG_2_PRESSED: Color32 = Color32::new(28, 28, 30, 255);
+pub const BG_3_HOVER: Color32 = Color32::new(57, 57, 62, 255);
+pub const BG_3_PRESSED: Color32 = Color32::new(41, 41, 45, 255);
 
 // ── Dividers (two roles, one value each) ────────────────────────────
 // Was five near-duplicate line colours hand-picked per panel. Now:
@@ -98,14 +101,14 @@ pub const BG_3_PRESSED: Color32 = Color32::new(36, 36, 39, 255);
 //             section breaks). A line between things, not a box around them.
 //   GROOVE  — dark inset line separating stacked tracks/rows in the
 //             timeline + layer panel (reads as void showing through).
-pub const DIVIDER: Color32 = Color32::new(56, 56, 60, 255);
-pub const GROOVE: Color32 = Color32::new(12, 12, 14, 255);
+pub const DIVIDER: Color32 = Color32::new(64, 64, 68, 255); // §A: more visible
+pub const GROOVE: Color32 = Color32::new(8, 8, 10, 255); // §A: tracks the deeper void
 // One element-outline hairline. §17: was 5 near-duplicate greys (RACK 56 /
 // CARD 46 / CARD_C32 55 / DROPDOWN 58); collapsed to one. In-panel grouping
 // should lean on fill level (the BG ramp), not boxes — this is the subtle
 // edge for surfaces that still want an outline + the floating-element border.
 // (The purple-tinted generator-card border stays its own identity tint.)
-pub const BORDER: Color32 = Color32::new(56, 56, 60, 255);
+pub const BORDER: Color32 = Color32::new(64, 64, 68, 255); // §A: more visible element outline
 
 // ── Elevation shadow (§17) ──────────────────────────────────────────
 // One soft step under FLOATING surfaces only (dropdowns, popovers, modals).
@@ -270,10 +273,13 @@ pub const DEFAULT_GROUP_ACCENT: Color32 = PURPLE_BASE;
 pub const GROUP_BOTTOM_BORDER: Color32 = Color32::new(97, 97, 148, 153);
 
 // ── Text colors ─────────────────────────────────────────────────────
-pub const TEXT_NORMAL: Color32 = Color32::new(224, 224, 230, 255);
-pub const TEXT_DIMMED: Color32 = Color32::new(158, 158, 163, 255);
-pub const TEXT_SUBTLE: Color32 = Color32::new(107, 107, 112, 255);
-pub const TEXT_FAINT: Color32 = Color32::new(80, 80, 85, 255);
+// §A contrast pass: brighter at every tier so secondary/faint labels actually
+// read on the dark chrome (Peter's "faint labels you can't read"), still clearly
+// stepped below TEXT_NORMAL.
+pub const TEXT_NORMAL: Color32 = Color32::new(230, 230, 235, 255);
+pub const TEXT_DIMMED: Color32 = Color32::new(178, 178, 184, 255);
+pub const TEXT_SUBTLE: Color32 = Color32::new(130, 130, 136, 255);
+pub const TEXT_FAINT: Color32 = Color32::new(104, 104, 110, 255);
 pub const PLACEHOLDER_TEXT: Color32 = Color32::new(107, 107, 112, 153);
 pub const TEXT_NEAR_WHITE: Color32 = Color32::new(209, 209, 214, 255);
 pub const DROPDOWN_INACTIVE_TEXT: Color32 = Color32::new(173, 173, 179, 255);
@@ -566,10 +572,10 @@ pub const TRANSPARENT: Color32 = Color32::new(0, 0, 0, 0);
 pub const HOVER_OVERLAY: Color32 = Color32::new(255, 255, 255, 15);
 pub const PRESS_OVERLAY: Color32 = Color32::new(255, 255, 255, 25);
 pub const PANEL_BG_DARK: Color32 = BG_1;
-pub const TEXT_PRIMARY_C32: Color32 = Color32::new(224, 224, 230, 255);
+pub const TEXT_PRIMARY_C32: Color32 = Color32::new(230, 230, 235, 255); // §A: synced w/ TEXT_NORMAL
 pub const TEXT_WHITE_C32: Color32 = Color32::new(255, 255, 255, 255);
-pub const TEXT_LIGHT_C32: Color32 = Color32::new(220, 220, 225, 255);
-pub const TEXT_DIMMED_C32: Color32 = Color32::new(158, 158, 163, 255);
+pub const TEXT_LIGHT_C32: Color32 = Color32::new(226, 226, 231, 255); // §A
+pub const TEXT_DIMMED_C32: Color32 = Color32::new(178, 178, 184, 255); // §A: synced w/ TEXT_DIMMED
 pub const DIVIDER_C32: Color32 = DIVIDER;
 
 // ── Bitmap Slider Palette ───────────────────────────────────────────
