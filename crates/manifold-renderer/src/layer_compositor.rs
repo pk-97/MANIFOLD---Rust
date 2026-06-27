@@ -310,14 +310,16 @@ pub(crate) struct LayerOutput {
 unsafe impl Send for LayerOutput {}
 
 /// §24 5c with-effects thumbnails: a single-clip layer's post-effect output,
-/// keyed by clip id. Raw pointer for the same frame-lifetime reason as
-/// `LayerOutput` (see its safety note).
+/// keyed by clip id. Unlike `LayerOutput`, this is consumed LATER in the frame
+/// by the clip-thumbnail snapshot, by which time the layer/effect render target
+/// it came from may have been recycled. So it owns a `GpuTexture` clone (one
+/// atomic retain on the underlying Metal texture — no GPU allocation) to keep
+/// that texture alive until the snapshot reads it. A raw pointer here was the
+/// cause of a hard AGX crash when the target was freed before the blit.
 pub(crate) struct ClipPostFx {
     clip_id: String,
-    texture: *const GpuTexture,
+    texture: GpuTexture,
 }
-// Safety: same as LayerOutput — content-thread-only, frame-lived target.
-unsafe impl Send for ClipPostFx {}
 
 impl LayerOutput {
     fn texture(&self) -> &GpuTexture {
@@ -1146,11 +1148,18 @@ impl LayerCompositor {
                     blit_to_led: layer_desc.is_some_and(|ld| ld.blit_to_led),
                 });
                 // §24 5c: for a SINGLE-clip layer, this post-effect output IS that
-                // clip's full look — expose it for a with-effects thumbnail.
+                // clip's full look — expose it for a with-effects thumbnail. Clone
+                // (cheap retain) now, while the target is provably alive, so the
+                // snapshot later in the frame binds a live texture even if the pool
+                // recycled the original.
                 if group.len() == 1 {
+                    // Safety: `effective_layer_tex` was just produced this iteration
+                    // and is alive here; we clone immediately rather than store the
+                    // pointer for later deref.
+                    let texture = unsafe { (*effective_layer_tex).clone() };
                     self.clip_post_fx_scratch.push(ClipPostFx {
                         clip_id: group[0].clip_id.to_string(),
-                        texture: effective_layer_tex,
+                        texture,
                     });
                 }
             }
@@ -1965,10 +1974,9 @@ impl Compositor for LayerCompositor {
         self.clip_post_fx_scratch
             .iter()
             .find(|c| c.clip_id == clip_id)
-            // SAFETY: same invariant as `LayerOutput.texture` — a raw pointer to a
-            // frame-lived clip/layer render target, dereferenced on the content
-            // thread within the same frame it was produced.
-            .map(|c| unsafe { &*c.texture })
+            // Owns a live clone of the post-fx target (see `ClipPostFx` doc), so no
+            // raw-pointer deref and no risk of the target being recycled first.
+            .map(|c| &c.texture)
     }
 
     /// Set (or clear) the authoring-time node-output preview request. Cheap;
