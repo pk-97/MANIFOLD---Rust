@@ -93,7 +93,7 @@ enforced, complete. They do **not** guarantee the *look* is best-in-class; that'
 
 **Why:** one grammar. A half-standardised UI is *worse* than none (§10 — forced relearning).
 
-**Status (2026-06-26): chrome bars + popups DONE; only the param-card `*_btn_style` one-offs remain.** Added [`state_button`](../crates/manifold-ui/src/chrome/components.rs) — the standalone latching/momentary button (on = filled semantic hue + lighten(30)/darken(20); off = neutral `BUTTON_DIM` chip), the generalisation of `toggle` (accent special-case). The button mechanic was copy-pasted six times across the chrome; now centralised. Migrated: **footer** (button_secondary/segment), **transport** (`button_style` → kit; neutral buttons unified to the `BUTTON_DIM` chip), **layer-card mixer** (`mute/solo/led/analysis` → one `state_btn` shim on the carve-out hues, zero visual change), **header** (zoom + Audio/Perform/Monitor → one neutral chip, fixed a within-bar 59-vs-71 split). **Popups:** one shared [`panels::popup_shell`](../crates/manifold-ui/src/panels/popup_shell.rs) (scrim + a single rounded 1px-bordered container) now backs `dropdown`/`browser_popup`/`ableton_picker` — pickers' fake outer+inner border → a real border, three scrim dims → `PopupStyle::DROPDOWN`/`MODAL`, picker literals hoisted to `MODAL_*` tokens (ratchet 145 → 139). **Plumbing, not a look change** — visually near-identical, so the later visual upgrade lands in one place. Each verified by headless renders in [`ui_color_swatches.rs`](../crates/manifold-renderer/tests/ui_color_swatches.rs).
+**Status: ✅ DONE (2026-06-27).** Chrome bars + popups landed earlier; the final param-card `*_btn_style` one-offs are now on the kit too. Added a [`StateButtonSkin`](../crates/manifold-ui/src/chrome/components.rs) (CHROME / CARD_RAISED / CARD_RECESSED) so the state-button *mechanic* (active fills with the caller's hue, off sits on a neutral chip) lives in exactly one place, and `de_btn_style` / `config_btn_style` / `config_btn_style_colored` are now thin `state_button_skinned` delegations. Off-state chips + active hover are byte-identical to the old look; the lone deliberate delta is the fixed config button's *pressed* red now deriving (`darken 10`) like the colored variant already did — sub-perceptual, and it deletes the two orphaned `DRIVER_ACTIVE_HOVER/PRESS` constants. Earlier in this phase: [`state_button`](../crates/manifold-ui/src/chrome/components.rs) — the standalone latching/momentary button (on = filled semantic hue + lighten(30)/darken(20); off = neutral `BUTTON_DIM` chip), the generalisation of `toggle` (accent special-case). The button mechanic was copy-pasted six times across the chrome; now centralised. Migrated: **footer** (button_secondary/segment), **transport** (`button_style` → kit; neutral buttons unified to the `BUTTON_DIM` chip), **layer-card mixer** (`mute/solo/led/analysis` → one `state_btn` shim on the carve-out hues, zero visual change), **header** (zoom + Audio/Perform/Monitor → one neutral chip, fixed a within-bar 59-vs-71 split). **Popups:** one shared [`panels::popup_shell`](../crates/manifold-ui/src/panels/popup_shell.rs) (scrim + a single rounded 1px-bordered container) now backs `dropdown`/`browser_popup`/`ableton_picker` — pickers' fake outer+inner border → a real border, three scrim dims → `PopupStyle::DROPDOWN`/`MODAL`, picker literals hoisted to `MODAL_*` tokens (ratchet 145 → 139). **Plumbing, not a look change** — visually near-identical, so the later visual upgrade lands in one place. Each verified by headless renders in [`ui_color_swatches.rs`](../crates/manifold-renderer/tests/ui_color_swatches.rs).
 
 | | |
 |---|---|
@@ -106,19 +106,26 @@ enforced, complete. They do **not** guarantee the *look* is best-in-class; that'
 
 ---
 
-## 6. Phase 4 — Hierarchy + micro-motion (§19)
+## 6. Phase 4 — Hierarchy emphasis + functional state (§19)
 
-**Why:** SOTA inspectors emphasise the object you're editing and recede the rest; restrained motion
-confirms actions.
+**Status: ✅ DONE (2026-06-27).** All three landed: (A) the focused inspector card lifts its inner well one ramp step (`FOCUS_LIFT_STEP`) on top of the existing accent border, and the timeline's selected lane gets the *same* lift (dirty-checked in-place recolor, track index 1:1 with project layers); (B) a shared `panel_state` kit component (centered dimmed line, status-red for error) now backs the graph-editor empty state; (C) the Record button breathes red while recording, off the existing per-frame `update()` tick + an elapsed-time sine — no animation subsystem, nothing spent while stopped. The original plan's decorative motion (press flash, collapse ease, generic arm pulse) was cut as un-DAW-like. Adversarially reviewed; zero code defects found.
+
+**Why:** SOTA editors emphasise the object you're editing and recede the rest — *statically*.
+Ableton, Resolve, and Resolume are near-motionless: selection is a fill/border shift, not an
+animation. The one motion they keep is **functional** — a blink on a genuinely-pending state you
+can't otherwise see (Ableton's armed/recording button). So this phase is mostly static hierarchy;
+the only motion is a record-state pulse. **Cut from the original plan** (decorative, none of the
+reference tools do it, distracting on stage): press flash, collapse ease, a generic arm-state pulse
+on every modulated param, idle micro-motion.
 
 | | |
 |---|---|
-| **Current** | Every card equal visual weight; no feedback on press / arm / collapse / commit. |
-| **Changes** | Focused section lifts (fill +1, subtle accent edge), rest recede — pairs with collapse-by-default. Restrained micro-motion: fast press flash, arm-state pulse, collapse ease (60fps, cheap). Define empty / error / loading states once. Timeline echo: focused track gets the same emphasis. |
-| **Files** | Inspector card build + a small tween helper; timeline focused-track path. |
-| **Verify** | Harness snapshot focused vs unfocused; motion is Peter's eyeball. |
-| **Done** | The edited card/track is clearly emphasised; motion confirms actions, never idles. |
-| **Risk** | Medium — motion taste. Keep restrained; no decorative idle animation (distracting on stage). |
+| **Current** | Every card equal weight except a selected-border colour swap; the focused track has no echo; recording is a solid-red button; empty / no-selection states are hand-rolled per panel (the graph editor has its own). |
+| **Changes** | **(A) Static hierarchy** — the focused card lifts (inner fill +1 ramp step, on top of the existing accent edge), the rest sit at base so the edited card reads first; the timeline's selected track gets the same one-step lift. **(B) States once** — a shared `panel_state` kit component (one centered line: dimmed for empty / loading, status-red for error — text-only by intent, the reference DAWs place a quiet line here, not an illustration), replacing the graph-editor one-off; error / loading variants from the same builder. **(C) Functional pulse** — the record button breathes red while recording (the one Ableton-precedent motion), driven by the existing per-frame `update()` tick + an elapsed-time sine; **zero new animation subsystem**, and recording is never the idle state so it costs nothing when stopped. |
+| **Files** | `param_card.rs` (focused well via `update_selection_visual`); `viewport.rs` + `viewport/render.rs` (`track_bg_color` / `sync_active_track_lane`) with `ui_bridge/state_sync.rs` wiring (timeline lane echo); `layer_header.rs` (record pulse tick); `chrome/components.rs` (`panel_state`) with `graph_editor.rs` adopting it. |
+| **Verify** | Headless snapshot: focused vs unfocused card, focused vs unfocused track, empty state, record button mid-pulse. Pulse cadence is Peter's eyeball. |
+| **Done** | The edited card and track read first at a glance; no-selection / empty looks deliberate everywhere; recording is unmistakable. No decorative idle motion anywhere. |
+| **Risk** | Low — static emphasis is a colour shift; the lone pulse is bounded to the record state and the existing tick. |
 
 ---
 

@@ -8,6 +8,7 @@ use crate::scroll_container::ScrollContainer;
 use crate::tree::UITree;
 use manifold_foundation::LayerId;
 use crate::types::note_number_to_name;
+use std::time::Instant;
 
 // Stable keys for the host-owned top chrome (background + recording controls).
 const KEY_BG: u64 = 80_001;
@@ -58,6 +59,9 @@ const NAME_FONT: u16 = color::FONT_LABEL;
 const SMALL_FONT: u16 = color::FONT_SMALL;
 const BTN_FONT: u16 = color::FONT_BODY;
 const LH_BTN_RADIUS: f32 = color::SMALL_RADIUS; // §14.4: local copy → token alias
+/// §19 record pulse: one breathe (dim → bright → dim) per this many seconds. A
+/// calm ~1 Hz cadence — present without strobing.
+const RECORD_PULSE_PERIOD_SECS: f32 = 1.1;
 
 // ── Style helpers ───────────────────────────────────────────────────
 
@@ -133,6 +137,15 @@ fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {
         corner_radius: color::BUTTON_RADIUS,
         ..UIStyle::default()
     }
+}
+
+/// The Record button's pulsed red at `t` seconds into recording (§19): a smooth
+/// sine breathe between the dim and bright reds, one cycle per
+/// `RECORD_PULSE_PERIOD_SECS`. Pure — at `t=0` it sits at the midpoint, peaks
+/// bright a quarter-cycle in, troughs dim three-quarters in.
+fn record_pulse_color(t: f32) -> Color32 {
+    let phase = (t * std::f32::consts::TAU / RECORD_PULSE_PERIOD_SECS).sin() * 0.5 + 0.5;
+    color::mix(color::RECORD_PULSE_DIM, color::RECORD_PULSE_BRIGHT, phase)
 }
 
 // ── LayerInfo ───────────────────────────────────────────────────────
@@ -679,6 +692,9 @@ pub struct LayerHeaderPanel {
 
     // ── Live recording controls (in spacer area above layers) ──
     record_btn_id: Option<NodeId>,
+    /// When recording started — drives the §19 record-button breathe. `None`
+    /// when not recording, so the pulse costs nothing while stopped.
+    recording_since: Option<Instant>,
     audio_device_label_id: Option<NodeId>,
     recording_active: bool,
     audio_device_name: String,
@@ -725,6 +741,7 @@ impl LayerHeaderPanel {
             cached_active_layer: None,
             pending_active_layers: None,
             record_btn_id: None,
+            recording_since: None,
             audio_device_label_id: None,
             recording_active: false,
             audio_device_name: "No audio input".into(),
@@ -784,6 +801,10 @@ impl LayerHeaderPanel {
             return;
         }
         self.recording_active = active;
+        // Start/stop the §19 breathe clock. `tick_record_pulse` (per-frame) takes
+        // over the button bg while recording; clearing it here lets the static
+        // active/inactive style below stand once stopped.
+        self.recording_since = active.then(Instant::now);
         if let Some(id) = self.record_btn_id {
             tree.set_style(id, self.record_btn_style());
             let label = if active {
@@ -793,6 +814,27 @@ impl LayerHeaderPanel {
             };
             tree.set_text(id, label);
         }
+    }
+
+    /// Breathe the Record button red while recording (§19 — the one functional
+    /// motion). Driven by the per-frame `update()` tick + elapsed time, so it
+    /// needs no animation subsystem; recording is never the idle state, so the
+    /// app is already redrawing and a stopped recorder costs nothing here.
+    fn tick_record_pulse(&self, tree: &mut UITree) {
+        if !self.recording_active {
+            return;
+        }
+        let (Some(since), Some(id)) = (self.recording_since, self.record_btn_id) else {
+            return;
+        };
+        let bg = record_pulse_color(since.elapsed().as_secs_f32());
+        tree.set_style(
+            id,
+            UIStyle {
+                bg_color: bg,
+                ..self.record_btn_style()
+            },
+        );
     }
 
     pub fn set_audio_device_name(&mut self, tree: &mut UITree, name: &str) {
@@ -1915,6 +1957,10 @@ impl Panel for LayerHeaderPanel {
     }
 
     fn update(&mut self, tree: &mut UITree) {
+        // §19: breathe the Record button while recording. First, so a selection
+        // change (which early-returns below) never skips a pulse frame.
+        self.tick_record_pulse(tree);
+
         // Multi-select: apply pending active layer flags
         if let Some(flags) = self.pending_active_layers.take() {
             for (i, &active) in flags.iter().enumerate() {
@@ -2040,6 +2086,29 @@ mod tests {
         LayerInfo {
             is_group: true,
             ..make_video_layer(name, y_offset, height)
+        }
+    }
+
+    #[test]
+    fn record_pulse_breathes_between_dim_and_bright() {
+        // Midpoint at t=0 (sin 0 = 0 → phase 0.5).
+        assert_eq!(
+            record_pulse_color(0.0),
+            color::mix(color::RECORD_PULSE_DIM, color::RECORD_PULSE_BRIGHT, 0.5)
+        );
+        // Peak bright a quarter-cycle in, trough dim three-quarters in.
+        assert_eq!(
+            record_pulse_color(RECORD_PULSE_PERIOD_SECS * 0.25),
+            color::RECORD_PULSE_BRIGHT
+        );
+        assert_eq!(
+            record_pulse_color(RECORD_PULSE_PERIOD_SECS * 0.75),
+            color::RECORD_PULSE_DIM
+        );
+        // Always bounded by the two endpoints, never strobing past them.
+        for k in 0..50 {
+            let c = record_pulse_color(k as f32 * 0.05);
+            assert!(c.r >= color::RECORD_PULSE_DIM.r && c.r <= color::RECORD_PULSE_BRIGHT.r);
         }
     }
 

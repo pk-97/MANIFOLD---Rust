@@ -512,93 +512,48 @@ pub(crate) fn format_param_value(
     }
 }
 
+// The three card-button helpers below are the inspector-density applications of
+// the chrome component kit's state-button mechanic (`components::state_button`).
+// The mechanic — active fills with the caller's hue (hover/press derived), off
+// sits on a neutral chip — lives in one place; these pick the card *skin*
+// (`CARD_RAISED` raised dim chip, `CARD_RECESSED` recessed dark cell) and the
+// per-caller font. See `chrome::components::StateButtonSkin`.
+
+/// Modulation-source activation buttons (envelope / driver / audio): a raised dim
+/// chip, filled with the source hue when active.
 pub(crate) fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
-    if active {
-        UIStyle {
-            bg_color: active_color,
-            // +20 / -10 around the source hue — a gentler touch than the chrome
-            // state_button's 30/20, tuned for the denser card. Same lighten/darken
-            // helper, no raw literal.
-            hover_bg_color: color::lighten(active_color, 20),
-            pressed_bg_color: color::darken(active_color, 10),
-            text_color: color::TEXT_WHITE_C32,
-            font_size: color::FONT_CAPTION,
-            corner_radius: color::SMALL_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    } else {
-        UIStyle {
-            bg_color: color::DRIVER_INACTIVE_C32,
-            hover_bg_color: color::DRIVER_INACTIVE_HOVER_C32,
-            pressed_bg_color: color::DRIVER_INACTIVE_PRESS_C32,
-            text_color: color::TEXT_DIMMED_C32,
-            font_size: color::FONT_CAPTION,
-            corner_radius: color::SMALL_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    }
+    crate::chrome::components::state_button_skinned(
+        active_color,
+        active,
+        color::FONT_CAPTION,
+        &crate::chrome::components::StateButtonSkin::CARD_RAISED,
+    )
 }
 
-/// Style for driver config buttons (beat div, waveform, dot, triplet, reverse).
-/// `font_size` parameter allows callers to specify the font size (effect_card uses 8, gen_param uses FONT_SIZE=10).
+/// Driver config buttons (beat div, waveform, dot, triplet, reverse): a recessed
+/// option cell, filled with the driver-active teal when on. `font_size` is the
+/// caller's (effect card 8, gen param 10).
 pub(crate) fn config_btn_style(active: bool, font_size: u16) -> UIStyle {
-    if active {
-        UIStyle {
-            bg_color: color::DRIVER_ACTIVE_C32,
-            hover_bg_color: color::DRIVER_ACTIVE_HOVER_C32,
-            pressed_bg_color: color::DRIVER_ACTIVE_PRESS_C32,
-            text_color: color::TEXT_WHITE_C32,
-            font_size,
-            corner_radius: color::SMALL_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    } else {
-        UIStyle {
-            bg_color: color::CONFIG_BTN_INACTIVE_C32,
-            hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-            pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-            text_color: color::TEXT_DIMMED_C32,
-            font_size,
-            corner_radius: color::SMALL_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    }
+    crate::chrome::components::state_button_skinned(
+        color::DRIVER_ACTIVE_C32,
+        active,
+        font_size,
+        &crate::chrome::components::StateButtonSkin::CARD_RECESSED,
+    )
 }
 
-/// Like `config_btn_style` but uses a custom active color (e.g. Ableton purple).
+/// Like [`config_btn_style`] but with a custom active hue (e.g. Ableton purple).
 pub(crate) fn config_btn_style_colored(
     active: bool,
     active_color: Color32,
     font_size: u16,
 ) -> UIStyle {
-    if active {
-        UIStyle {
-            bg_color: active_color,
-            // Same +20 / -10 card touch as `de_btn_style`; shared helper, no literal.
-            hover_bg_color: color::lighten(active_color, 20),
-            pressed_bg_color: color::darken(active_color, 10),
-            text_color: color::TEXT_WHITE_C32,
-            font_size,
-            corner_radius: color::SMALL_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    } else {
-        UIStyle {
-            bg_color: color::CONFIG_BTN_INACTIVE_C32,
-            hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-            pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-            text_color: color::TEXT_DIMMED_C32,
-            font_size,
-            corner_radius: color::SMALL_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    }
+    crate::chrome::components::state_button_skinned(
+        active_color,
+        active,
+        font_size,
+        &crate::chrome::components::StateButtonSkin::CARD_RECESSED,
+    )
 }
 
 // The canonical toggle look now lives in the Phase-4 component kit; this

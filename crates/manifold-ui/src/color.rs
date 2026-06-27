@@ -33,6 +33,18 @@ pub fn darken(c: Color32, amount: u8) -> Color32 {
     )
 }
 
+/// Linear interpolation between two colours, `t` clamped to 0..1 (alpha mixed too).
+pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::new(
+        lerp(a.r, b.r),
+        lerp(a.g, b.g),
+        lerp(a.b, b.b),
+        lerp(a.a, b.a),
+    )
+}
+
 pub fn contrast_text_color(bg: Color32) -> Color32 {
     let r = bg.r as f32 / 255.0;
     let g = bg.g as f32 / 255.0;
@@ -282,6 +294,12 @@ pub const PAUSED_YELLOW: Color32 = AMBER_BASE;
 pub const STOP_RED: Color32 = RED_BASE;
 pub const RECORD_RED: Color32 = RED_IDLE;
 pub const RECORD_ACTIVE: Color32 = RED_ACTIVE;
+/// §19 record pulse: while recording, the Record button breathes between these
+/// two reds (a smooth sine, not a hard blink — the one functional motion in the
+/// UI, an Ableton-style "recording now" cue that reads on stage without
+/// strobing). They bracket the button's static active red (180,40,40).
+pub const RECORD_PULSE_DIM: Color32 = Color32::new(150, 34, 34, 255);
+pub const RECORD_PULSE_BRIGHT: Color32 = Color32::new(216, 60, 56, 255);
 pub const SAVE_FLASH_GREEN: Color32 = GREEN_BASE;
 pub const TRANSPORT_FIELD_BG: Color32 = Color32::new(40, 40, 42, 255);
 pub const BPM_RESET_ACTIVE: Color32 = GREEN_IDLE;
@@ -563,8 +581,8 @@ pub const BUTTON_INACTIVE_PRESS_C32: Color32 = Color32::new(49, 49, 51, 255);
 
 // ── Bitmap Driver / Envelope Indicators ─────────────────────────────
 pub const DRIVER_ACTIVE_C32: Color32 = Color32::new(20, 166, 191, 255);
-pub const DRIVER_ACTIVE_HOVER_C32: Color32 = Color32::new(40, 186, 211, 255);
-pub const DRIVER_ACTIVE_PRESS_C32: Color32 = Color32::new(10, 146, 171, 255);
+// (DRIVER_ACTIVE_HOVER/PRESS removed — config buttons now derive hover/press
+//  from DRIVER_ACTIVE via the state-button skin, matching the colored variant.)
 pub const DRIVER_INACTIVE_C32: Color32 = Color32::new(72, 72, 78, 255);
 pub const DRIVER_INACTIVE_HOVER_C32: Color32 = Color32::new(87, 87, 93, 255);
 pub const DRIVER_INACTIVE_PRESS_C32: Color32 = Color32::new(62, 62, 68, 255);
@@ -611,6 +629,12 @@ pub const MOD_HEADER_BG_C32: Color32 = Color32::new(70, 30, 50, 255);
 // ── Bitmap Effect Card ──────────────────────────────────────────────
 pub const EFFECT_CARD_INNER_BG_C32: Color32 = BG_0; // dark well, recessed in the card
 pub const CARD_BORDER_C32: Color32 = BORDER;
+/// §19 focus: the edited object lifts one ramp step so it reads first — the
+/// inspector card's inner well (BG_0→~BG_1) and the timeline's focused lane
+/// (BG_2→~BG_3) get the *same* lift. Hue-preserving (saturating per-channel add),
+/// so it works on the effect's neutral well and the generator's purple-tinted
+/// one alike.
+pub const FOCUS_LIFT_STEP: u8 = 9;
 pub const DRAG_HANDLE_BG_C32: Color32 = Color32::new(38, 38, 42, 255);
 pub const DRAG_HANDLE_HOVER_BG_C32: Color32 = Color32::new(52, 52, 56, 255);
 

@@ -294,6 +294,125 @@ fn state_button_sheet() {
     eprintln!("state button sheet → {png}");
 }
 
+/// §18 Phase 3: the inspector-card button skins (`CARD_RAISED` / `CARD_RECESSED`)
+/// rendered on the dark card well, so the off-chip + on-fill + hover + press read
+/// the same as the chrome `state_button` did before the kit move.
+#[test]
+fn card_button_skins_sheet() {
+    use manifold_ui::chrome::components::{state_button_skinned, StateButtonSkin};
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/card_button_skins.png");
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::EFFECT_CARD_INNER_BG_C32);
+    ui.draw_text(
+        14.0,
+        10.0,
+        "CARD BUTTON SKINS (\u{00a7}18 P3)  cols: off  on  hover  press",
+        12.0,
+        color::TEXT_NORMAL,
+    );
+
+    let rows: &[(&str, StateButtonSkin, Color32)] = &[
+        ("RAISED  env", StateButtonSkin::CARD_RAISED, color::ENVELOPE_ACTIVE_C32),
+        ("RAISED  drv", StateButtonSkin::CARD_RAISED, color::DRIVER_ACTIVE_C32),
+        ("RECESSED drv", StateButtonSkin::CARD_RECESSED, color::DRIVER_ACTIVE_C32),
+        ("RECESSED abl", StateButtonSkin::CARD_RECESSED, color::ABL_BADGE_C32),
+    ];
+    for (i, (label, skin, hue)) in rows.iter().enumerate() {
+        let y = 44.0 + i as f32 * 30.0;
+        ui.draw_text(14.0, y + 4.0, label, 11.0, color::TEXT_NORMAL);
+        let off = state_button_skinned(*hue, false, color::FONT_CAPTION, skin);
+        let on = state_button_skinned(*hue, true, color::FONT_CAPTION, skin);
+        ui.draw_rect(140.0, y, 48.0, 20.0, off.bg_color);
+        ui.draw_rect(198.0, y, 48.0, 20.0, on.bg_color);
+        ui.draw_rect(256.0, y, 48.0, 20.0, on.hover_bg_color);
+        ui.draw_rect(314.0, y, 48.0, 20.0, on.pressed_bg_color);
+    }
+
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "card button skins sheet produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "card-skins-sheet");
+    {
+        let mut enc = device.create_encoder("card-skins-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("card button skins sheet → {png}");
+}
+
+/// §19 Phase 4: the static focus lifts (card well, timeline lane), the
+/// `panel_state` empty/error/loading line colours, and the record-button breathe
+/// sampled across one cycle — all on one sheet to eyeball the hierarchy + states.
+#[test]
+fn focus_states_record_sheet() {
+    use manifold_ui::chrome::components::{panel_state_style, PanelStateKind};
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/focus_states_record.png");
+
+    ui.begin_frame();
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_1);
+    ui.draw_text(14.0, 10.0, "FOCUS + STATES + RECORD (\u{00a7}19 P4)", 12.0, color::TEXT_NORMAL);
+
+    // Card well: base vs focused (+1 ramp step), effect + generator, plus the
+    // selected accent border.
+    let cy = 44.0;
+    ui.draw_text(14.0, cy + 4.0, "card well  base | focus", 11.0, color::TEXT_DIMMED_C32);
+    ui.draw_rect(180.0, cy, 56.0, 22.0, color::EFFECT_CARD_INNER_BG_C32);
+    ui.draw_rect(238.0, cy, 56.0, 22.0, color::lighten(color::EFFECT_CARD_INNER_BG_C32, color::FOCUS_LIFT_STEP));
+    ui.draw_rect(304.0, cy, 56.0, 22.0, color::GEN_CARD_INNER_BG_C32);
+    ui.draw_rect(362.0, cy, 56.0, 22.0, color::lighten(color::GEN_CARD_INNER_BG_C32, color::FOCUS_LIFT_STEP));
+    ui.draw_rect(430.0, cy, 56.0, 22.0, color::SELECTED_BORDER);
+
+    // Timeline lane: even / odd / focused (+1 ramp step).
+    let ty = 80.0;
+    ui.draw_text(14.0, ty + 4.0, "lane  even | odd | focus", 11.0, color::TEXT_DIMMED_C32);
+    ui.draw_rect(180.0, ty, 80.0, 22.0, color::TRACK_BG);
+    ui.draw_rect(262.0, ty, 80.0, 22.0, color::TRACK_BG_ALT);
+    ui.draw_rect(344.0, ty, 80.0, 22.0, color::lighten(color::TRACK_BG, color::FOCUS_LIFT_STEP));
+
+    // panel_state message colours.
+    let sy = 120.0;
+    ui.draw_text(14.0, sy + 4.0, "panel_state:", 11.0, color::TEXT_DIMMED_C32);
+    ui.draw_text(140.0, sy + 4.0, "Empty hint", 12.0, panel_state_style(PanelStateKind::Empty).text_color);
+    ui.draw_text(280.0, sy + 4.0, "Error", 12.0, panel_state_style(PanelStateKind::Error).text_color);
+    ui.draw_text(360.0, sy + 4.0, "Loading", 12.0, panel_state_style(PanelStateKind::Loading).text_color);
+
+    // Record breathe: dim → bright across one cycle.
+    let ry = 156.0;
+    ui.draw_text(14.0, ry + 4.0, "record breathe  dim \u{2192} bright", 11.0, color::TEXT_DIMMED_C32);
+    let n = 26;
+    for k in 0..n {
+        let phase = k as f32 / (n - 1) as f32;
+        let c = color::mix(color::RECORD_PULSE_DIM, color::RECORD_PULSE_BRIGHT, phase);
+        ui.draw_rect(220.0 + k as f32 * 15.0, ry, 14.0, 22.0, c);
+    }
+
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "focus/states/record sheet produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "focus-states-sheet");
+    {
+        let mut enc = device.create_encoder("focus-states-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("focus/states/record sheet → {png}");
+}
+
 /// Renders the browser popup after the §18 shared-shell migration, so the modal
 /// container (now ONE rounded 1px-bordered panel via `popup_shell`, replacing the
 /// old outer+inner fake-border pair) can be eyeballed. The §17 drop-shadow is

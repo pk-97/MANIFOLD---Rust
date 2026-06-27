@@ -799,6 +799,21 @@ impl ParamCardPanel {
         }
     }
 
+    /// Inner-well fill for the card's current kind + focus. The selected card
+    /// lifts its well one ramp step (§19) so the edited card reads first; the
+    /// rest sit at the base recessed well.
+    fn base_inner_bg(&self) -> Color32 {
+        let base = match self.kind {
+            ParamCardKind::Effect => color::EFFECT_CARD_INNER_BG_C32,
+            ParamCardKind::Generator => color::GEN_CARD_INNER_BG_C32,
+        };
+        if self.is_selected {
+            color::lighten(base, color::FOCUS_LIFT_STEP)
+        } else {
+            base
+        }
+    }
+
     /// Update the border color without a full rebuild (selection highlight).
     pub fn update_selection_visual(&mut self, tree: &mut UITree, selected: bool) {
         if !self.is_live() {
@@ -814,6 +829,19 @@ impl ParamCardPanel {
                 UIStyle {
                     bg_color: self.base_border_color(),
                     corner_radius: CORNER_RADIUS,
+                    ..UIStyle::default()
+                },
+            );
+        }
+        // §19 focus: lift the inner well one ramp step in place, so the edited
+        // card reads first without a rebuild. The well is a static panel (no
+        // hover/press/text), so a bg+radius style is complete.
+        if let Some(inner_id) = self.inner_bg_id {
+            tree.set_style(
+                inner_id,
+                UIStyle {
+                    bg_color: self.base_inner_bg(),
+                    corner_radius: CORNER_RADIUS - BORDER_W,
                     ..UIStyle::default()
                 },
             );
@@ -1092,7 +1120,7 @@ impl ParamCardPanel {
             .child(
                 View::panel()
                     .fill()
-                    .bg(color::GEN_CARD_INNER_BG_C32)
+                    .bg(self.base_inner_bg())
                     .radius(CORNER_RADIUS - BORDER_W)
                     .interactive()
                     .inert()
@@ -1145,7 +1173,7 @@ impl ParamCardPanel {
             .child(
                 View::panel()
                     .fill()
-                    .bg(color::EFFECT_CARD_INNER_BG_C32)
+                    .bg(self.base_inner_bg())
                     .radius(CORNER_RADIUS - BORDER_W)
                     .interactive()
                     .inert()
@@ -3138,6 +3166,24 @@ mod tests {
         assert!(panel.slider_ids[0].is_some());
         assert!(panel.slider_ids[1].is_some());
         assert!(panel.node_count > 0);
+    }
+
+    #[test]
+    fn focused_effect_card_lifts_inner_well() {
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+        // Unfocused: the well sits at the base recessed colour.
+        assert_eq!(panel.base_inner_bg(), color::EFFECT_CARD_INNER_BG_C32);
+        // Focus it → the well lifts one ramp step (the same lift the timeline
+        // lane gets), so the edited card reads first.
+        panel.update_selection_visual(&mut tree, true);
+        assert_eq!(
+            panel.base_inner_bg(),
+            color::lighten(color::EFFECT_CARD_INNER_BG_C32, color::FOCUS_LIFT_STEP)
+        );
+        assert_eq!(panel.base_border_color(), color::SELECTED_BORDER);
     }
 
     /// After `clear_nodes` (the inspector resetting an inactive scope's card),

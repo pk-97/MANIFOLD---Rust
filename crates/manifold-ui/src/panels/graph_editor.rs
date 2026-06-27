@@ -642,12 +642,9 @@ impl GraphEditorPanel {
                 viewport.width - 2.0 * PADDING,
                 ROW_H,
                 "Select a node to expose its parameters.",
-                UIStyle {
-                    text_color: color::TEXT_DIMMED_C32,
-                    font_size: FONT_SIZE,
-                    text_align: TextAlign::Left,
-                    ..UIStyle::default()
-                },
+                crate::chrome::components::panel_state_style(
+                    crate::chrome::components::PanelStateKind::Empty,
+                ),
             );
             return;
         };
@@ -660,12 +657,9 @@ impl GraphEditorPanel {
                 viewport.width - 2.0 * PADDING,
                 ROW_H,
                 "This node has no stable handle.",
-                UIStyle {
-                    text_color: color::TEXT_DIMMED_C32,
-                    font_size: FONT_SIZE,
-                    text_align: TextAlign::Left,
-                    ..UIStyle::default()
-                },
+                crate::chrome::components::panel_state_style(
+                    crate::chrome::components::PanelStateKind::Empty,
+                ),
             );
             return;
         };

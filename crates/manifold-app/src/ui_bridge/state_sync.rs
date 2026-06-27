@@ -491,6 +491,9 @@ pub fn push_state(
         .and_then(|i| project.timeline.layers.get(i))
         .map(|l| l.layer_id.clone());
     ui.layer_headers.set_active_layer(active_layer_id);
+    // §19 timeline echo: the focused lane lifts in the viewport body too (track
+    // index == layer index, the `tracks` vec is built 1:1 from project layers).
+    ui.viewport.set_active_track_index(active_layer);
     {
         for (i, layer) in project.timeline.layers.iter().enumerate() {
             ui.layer_headers.set_mute_state(tree, i, layer.is_muted);

@@ -76,31 +76,111 @@ pub fn toggle(label: impl Into<String>, on: bool) -> View {
 //
 // Callers needing a non-default font/radius spread over it, like the footer:
 // `UIStyle { font_size: F, corner_radius: R, ..state_button_style(c, on) }`.
+// Denser surfaces (the inspector cards) pick a [`StateButtonSkin`] instead of
+// spreading — same mechanic, different chip + deltas.
 
-pub fn state_button_style(active_color: Color32, active: bool) -> UIStyle {
+/// The visual *skin* of a state button: density (corner radius), the active
+/// interaction deltas (how far hover lightens / press darkens the caller's hue),
+/// and the neutral off-chip. The **mechanic** is identical across skins — active
+/// fills with the caller's hue, off sits on a neutral chip — so a skin is only
+/// the handful of constants that differ between the chrome bars and the denser
+/// inspector cards. `font_size` is *not* a skin field: the card config buttons
+/// size per-caller (effect card 8, gen param 10), so it is always passed in.
+pub struct StateButtonSkin {
+    /// Hover lightens the active hue by this much (saturating per channel).
+    pub active_lighten: u8,
+    /// Press darkens the active hue by this much (saturating per channel).
+    pub active_darken: u8,
+    pub off_bg: Color32,
+    pub off_hover: Color32,
+    pub off_press: Color32,
+    pub off_text: Color32,
+    pub corner_radius: f32,
+}
+
+impl StateButtonSkin {
+    /// Chrome bars (transport / mixer / footer): a bright raised chip with white
+    /// off-text and the bold 30/20 active deltas. The default [`state_button`].
+    pub const CHROME: Self = Self {
+        active_lighten: 30,
+        active_darken: 20,
+        off_bg: color::BUTTON_DIM,
+        off_hover: color::BUTTON_HIGHLIGHTED,
+        off_press: color::BUTTON_PRESSED,
+        off_text: color::TEXT_WHITE_C32,
+        corner_radius: color::BUTTON_RADIUS,
+    };
+
+    /// Inspector card, *raised*: the modulation-source buttons (envelope /
+    /// driver / audio). A dim raised chip + dimmed off-text, with gentler 20/10
+    /// active deltas tuned for the denser card.
+    pub const CARD_RAISED: Self = Self {
+        active_lighten: 20,
+        active_darken: 10,
+        off_bg: color::DRIVER_INACTIVE_C32,
+        off_hover: color::DRIVER_INACTIVE_HOVER_C32,
+        off_press: color::DRIVER_INACTIVE_PRESS_C32,
+        off_text: color::TEXT_DIMMED_C32,
+        corner_radius: color::SMALL_RADIUS,
+    };
+
+    /// Inspector card, *recessed*: the dense config option cells (beat div,
+    /// waveform, dot, triplet, reverse). The off-chip sits *below* panel level —
+    /// a darker recessed cell — with the same gentle 20/10 active deltas.
+    pub const CARD_RECESSED: Self = Self {
+        active_lighten: 20,
+        active_darken: 10,
+        off_bg: color::CONFIG_BTN_INACTIVE_C32,
+        off_hover: color::CONFIG_BTN_HOVER_C32,
+        off_press: color::CONFIG_BTN_PRESSED_C32,
+        off_text: color::TEXT_DIMMED_C32,
+        corner_radius: color::SMALL_RADIUS,
+    };
+}
+
+/// The state-button mechanic with an explicit [`StateButtonSkin`]: active fills
+/// with `active_color` (hover/press derived from it via the skin's deltas), off
+/// sits on the skin's neutral chip. [`state_button_style`] is the `CHROME`
+/// application; the inspector-card helpers in `panels::param_slider_shared`
+/// apply `CARD_RAISED` / `CARD_RECESSED`.
+pub fn state_button_skinned(
+    active_color: Color32,
+    active: bool,
+    font_size: u16,
+    skin: &StateButtonSkin,
+) -> UIStyle {
     if active {
         UIStyle {
             bg_color: active_color,
-            hover_bg_color: color::lighten(active_color, 30),
-            pressed_bg_color: color::darken(active_color, 20),
+            hover_bg_color: color::lighten(active_color, skin.active_lighten),
+            pressed_bg_color: color::darken(active_color, skin.active_darken),
             text_color: color::TEXT_WHITE_C32,
-            font_size: color::FONT_BODY,
-            corner_radius: color::BUTTON_RADIUS,
+            font_size,
+            corner_radius: skin.corner_radius,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
     } else {
         UIStyle {
-            bg_color: color::BUTTON_DIM,
-            hover_bg_color: color::BUTTON_HIGHLIGHTED,
-            pressed_bg_color: color::BUTTON_PRESSED,
-            text_color: color::TEXT_WHITE_C32,
-            font_size: color::FONT_BODY,
-            corner_radius: color::BUTTON_RADIUS,
+            bg_color: skin.off_bg,
+            hover_bg_color: skin.off_hover,
+            pressed_bg_color: skin.off_press,
+            text_color: skin.off_text,
+            font_size,
+            corner_radius: skin.corner_radius,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
     }
+}
+
+pub fn state_button_style(active_color: Color32, active: bool) -> UIStyle {
+    state_button_skinned(
+        active_color,
+        active,
+        color::FONT_BODY,
+        &StateButtonSkin::CHROME,
+    )
 }
 
 /// A state button showing `label`, filled with `active_color` when `active` and
@@ -262,6 +342,51 @@ pub fn mod_badge(armed: bool) -> View {
     })
 }
 
+// ── Panel state (empty / error / loading) ───────────────────────────
+// One look for "there's nothing to show here": a centered line, dimmed for an
+// empty or loading panel and tinted to the status red for an error. Replaces the
+// per-panel hand-rolled "Select a …" labels so every empty / error / loading
+// state reads as deliberate rather than missing. Text-only by intent — the
+// reference DAWs (Ableton, Resolve) place a quiet line here, not an illustration.
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PanelStateKind {
+    /// Nothing selected / nothing here yet — a neutral dimmed hint.
+    Empty,
+    /// Something went wrong — the line tints to the status red.
+    Error,
+    /// Work in flight — a neutral dimmed line. No spinner: the app redraws on
+    /// completion, so restraint wins over decorative idle motion (§19).
+    Loading,
+}
+
+impl PanelStateKind {
+    fn text_color(self) -> Color32 {
+        match self {
+            PanelStateKind::Empty | PanelStateKind::Loading => color::TEXT_DIMMED_C32,
+            PanelStateKind::Error => color::STATUS_BAD,
+        }
+    }
+}
+
+/// Label style for an empty / error / loading message: one centered line, dimmed
+/// or error-tinted. Imperative callers pass this to `UITree::add_label`;
+/// declarative callers use [`panel_state`].
+pub fn panel_state_style(kind: PanelStateKind) -> UIStyle {
+    UIStyle {
+        text_color: kind.text_color(),
+        font_size: color::FONT_BODY,
+        text_align: TextAlign::Center,
+        ..UIStyle::default()
+    }
+}
+
+/// A centered empty / error / loading message line. Size + wire it (usually
+/// `.inert()`): `components::panel_state("Select a node", Empty).fill().inert()`.
+pub fn panel_state(message: impl Into<String>, kind: PanelStateKind) -> View {
+    View::label(message).style(panel_state_style(kind))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +408,70 @@ mod tests {
         assert_eq!(on.pressed_bg_color, color::darken(color::MUTED_COLOR, 20));
         let off = state_button_style(color::MUTED_COLOR, false);
         assert_eq!(off.bg_color, color::BUTTON_DIM);
+    }
+
+    #[test]
+    fn skins_share_the_mechanic_active_fills_hue_off_uses_chip() {
+        // Every skin fills with the caller's hue when active (hover/press derived
+        // by its own deltas) and falls back to its own neutral chip when off —
+        // only the constants differ, the mechanic is one.
+        for skin in [
+            &StateButtonSkin::CHROME,
+            &StateButtonSkin::CARD_RAISED,
+            &StateButtonSkin::CARD_RECESSED,
+        ] {
+            let on = state_button_skinned(color::MUTED_COLOR, true, color::FONT_BODY, skin);
+            assert_eq!(on.bg_color, color::MUTED_COLOR);
+            assert_eq!(
+                on.hover_bg_color,
+                color::lighten(color::MUTED_COLOR, skin.active_lighten)
+            );
+            assert_eq!(
+                on.pressed_bg_color,
+                color::darken(color::MUTED_COLOR, skin.active_darken)
+            );
+            let off = state_button_skinned(color::MUTED_COLOR, false, color::FONT_BODY, skin);
+            assert_eq!(off.bg_color, skin.off_bg);
+            assert_ne!(off.bg_color, color::MUTED_COLOR);
+        }
+    }
+
+    #[test]
+    fn card_raised_skin_reproduces_legacy_de_button_constants() {
+        // Parity: the modulation-source button look is unchanged by the kit move
+        // (gentle 20/10 deltas, the dim raised chip, dimmed off-text).
+        let s = &StateButtonSkin::CARD_RAISED;
+        assert_eq!((s.active_lighten, s.active_darken), (20, 10));
+        let off = state_button_skinned(color::ENVELOPE_ACTIVE_C32, false, color::FONT_CAPTION, s);
+        assert_eq!(off.bg_color, color::DRIVER_INACTIVE_C32);
+        assert_eq!(off.hover_bg_color, color::DRIVER_INACTIVE_HOVER_C32);
+        assert_eq!(off.pressed_bg_color, color::DRIVER_INACTIVE_PRESS_C32);
+        assert_eq!(off.text_color, color::TEXT_DIMMED_C32);
+        assert_eq!(off.corner_radius, color::SMALL_RADIUS);
+        let on = state_button_skinned(color::ENVELOPE_ACTIVE_C32, true, color::FONT_CAPTION, s);
+        assert_eq!(on.font_size, color::FONT_CAPTION);
+        assert_eq!(on.text_color, color::TEXT_WHITE_C32);
+    }
+
+    #[test]
+    fn card_recessed_skin_reproduces_legacy_config_off_and_active_hover() {
+        // Parity: off-chip + active hover unchanged. The active *press* is now
+        // derived (darken 10) for consistency with the colored config variant —
+        // the one deliberate, sub-perceptual delta vs the old hand-tuned constant
+        // (the old press was a non-uniform −10/−20/−20 that no `darken` reproduces).
+        let s = &StateButtonSkin::CARD_RECESSED;
+        let off = state_button_skinned(color::DRIVER_ACTIVE_C32, false, color::FONT_CAPTION, s);
+        assert_eq!(off.bg_color, color::CONFIG_BTN_INACTIVE_C32);
+        assert_eq!(off.hover_bg_color, color::CONFIG_BTN_HOVER_C32);
+        assert_eq!(off.pressed_bg_color, color::CONFIG_BTN_PRESSED_C32);
+        let on = state_button_skinned(color::DRIVER_ACTIVE_C32, true, color::FONT_CAPTION, s);
+        // Hover still equals the old DRIVER_ACTIVE_HOVER constant value…
+        assert_eq!(on.hover_bg_color, Color32::new(40, 186, 211, 255));
+        // …press is now the derived darken(10), the consistency fix.
+        assert_eq!(
+            on.pressed_bg_color,
+            color::darken(color::DRIVER_ACTIVE_C32, 10)
+        );
     }
 
     #[test]
@@ -330,5 +519,30 @@ mod tests {
     fn mod_badge_is_a_non_interactive_dot() {
         assert!(validate(&mod_badge(true)).is_empty());
         assert_eq!(mod_badge(true).kind, UINodeType::Panel);
+    }
+
+    #[test]
+    fn panel_state_dims_empty_and_loading_tints_error_and_centers() {
+        assert_eq!(
+            panel_state_style(PanelStateKind::Empty).text_color,
+            color::TEXT_DIMMED_C32
+        );
+        assert_eq!(
+            panel_state_style(PanelStateKind::Loading).text_color,
+            color::TEXT_DIMMED_C32
+        );
+        assert_eq!(
+            panel_state_style(PanelStateKind::Error).text_color,
+            color::STATUS_BAD
+        );
+        // Centered, so it reads as a deliberate placeholder, not a stray label.
+        assert_eq!(
+            panel_state_style(PanelStateKind::Empty).text_align,
+            TextAlign::Center
+        );
+        // The View carries the message and is a label.
+        let v = panel_state("Select a node", PanelStateKind::Empty);
+        assert_eq!(v.kind, UINodeType::Label);
+        assert_eq!(v.text.as_deref(), Some("Select a node"));
     }
 }

@@ -360,6 +360,28 @@ impl TimelineViewportPanel {
         rects
     }
 
+    /// Resting background colour for track lane `i`: the zebra stripe, halved
+    /// when the layer is muted, and lifted one ramp step when it is the focused
+    /// lane (§19 timeline echo — the same lift the inspector card's well gets).
+    /// The single source for both `build_track_backgrounds` and the in-place
+    /// `sync_active_track_lane` recolor.
+    pub(super) fn track_bg_color(&self, i: usize) -> Color32 {
+        let base = if i.is_multiple_of(2) {
+            color::TRACK_BG
+        } else {
+            color::TRACK_BG_ALT
+        };
+        let mut c = if self.tracks.get(i).is_some_and(|t| t.is_muted) {
+            Color32::new(base.r / 2, base.g / 2, base.b / 2, base.a)
+        } else {
+            base
+        };
+        if self.active_track_index == Some(i) {
+            c = color::lighten(c, color::FOCUS_LIFT_STEP);
+        }
+        c
+    }
+
     pub(super) fn build_track_backgrounds(&mut self, tree: &mut UITree) {
         self.track_bg_ids.clear();
         self.track_bg_groups.clear();
@@ -379,19 +401,13 @@ impl TimelineViewportPanel {
             let clamped_h = (y + h).min(tr_bottom) - clamped_y;
             let visible = clamped_h > 0.0 && y + h >= tr_top && y <= tr_bottom;
 
-            let bg_color = if i % 2 == 0 {
-                color::TRACK_BG
-            } else {
-                color::TRACK_BG_ALT
-            };
-            let mut style = UIStyle {
-                bg_color,
+            // Zebra stripe, halved when muted, lifted one ramp step when focused
+            // (§19 echo) — all owned by `track_bg_color` so build and the in-place
+            // recolor (`sync_active_track_lane`) can never drift.
+            let style = UIStyle {
+                bg_color: self.track_bg_color(i),
                 ..UIStyle::default()
             };
-            if track.is_muted {
-                style.bg_color =
-                    Color32::new(bg_color.r / 2, bg_color.g / 2, bg_color.b / 2, bg_color.a);
-            }
 
             let bg_id = tree.add_panel(
                 None,

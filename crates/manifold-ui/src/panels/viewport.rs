@@ -122,6 +122,11 @@ pub struct TimelineViewportPanel {
     // grid_line_ids: removed — grid painted into bitmap
     track_bg_ids: Vec<NodeId>,
     track_bg_groups: Vec<TrackBgGroup>,
+    /// The focused layer's track index — its lane background lifts one ramp step
+    /// (§19 timeline echo), the same focus emphasis the inspector card gets.
+    /// `cached_*` drives the dirty-checked in-place recolor on selection change.
+    active_track_index: Option<usize>,
+    cached_active_track_index: Option<usize>,
     // clip_bg_ids, clip_label_ids, clip_border_ids, clip_trim_handle_ids: removed — painted into bitmap
 
     // Node range
@@ -223,6 +228,8 @@ impl TimelineViewportPanel {
             ruler_label_ids: Vec::new(),
             track_bg_ids: Vec::new(),
             track_bg_groups: Vec::new(),
+            active_track_index: None,
+            cached_active_track_index: None,
             first_node: 0,
             node_count: 0,
             drag_mode: ViewportDragMode::None,
@@ -795,6 +802,35 @@ impl TimelineViewportPanel {
         self.hovered_clip_id = id;
     }
 
+    /// Set the focused layer's track index — its lane lifts one ramp step (§19
+    /// timeline echo). Stored now, applied in `update()` via dirty-check; `None`
+    /// clears the focus. Cheap to call every frame.
+    pub fn set_active_track_index(&mut self, index: Option<usize>) {
+        self.active_track_index = index;
+    }
+
+    /// Recolor the focused-lane highlight in place when the active layer changes,
+    /// without a track rebuild (§19 echo): the old lane drops to its resting
+    /// stripe, the new lane lifts one ramp step. Dirty-checked, so a stable
+    /// selection costs one comparison per frame.
+    fn sync_active_track_lane(&mut self, tree: &mut UITree) {
+        if self.active_track_index == self.cached_active_track_index {
+            return;
+        }
+        let changed = [self.cached_active_track_index, self.active_track_index];
+        self.cached_active_track_index = self.active_track_index;
+        for idx in changed.into_iter().flatten() {
+            let Some(&bg_id) = self.track_bg_ids.get(idx) else {
+                continue;
+            };
+            let style = UIStyle {
+                bg_color: self.track_bg_color(idx),
+                ..UIStyle::default()
+            };
+            tree.set_style(bg_id, style);
+        }
+    }
+
     pub fn set_markers(&mut self, markers: Vec<UiMarker>) {
         self.marker_line_cache = markers
             .iter()
@@ -1091,6 +1127,7 @@ impl Panel for TimelineViewportPanel {
 
     fn update(&mut self, tree: &mut UITree) {
         self.sync_insert_cursor_ruler(tree);
+        self.sync_active_track_lane(tree);
     }
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
@@ -1170,6 +1207,25 @@ mod tests {
                 warped_secs_per_beat: 0.0,
             },
         ]
+    }
+
+    #[test]
+    fn focused_lane_lifts_one_ramp_step() {
+        let mut panel = TimelineViewportPanel::new();
+        panel.set_tracks(test_tracks()); // two unmuted default tracks
+        // No focus → both lanes sit at their resting zebra stripe.
+        assert_eq!(panel.track_bg_color(0), crate::color::TRACK_BG);
+        assert_eq!(panel.track_bg_color(1), crate::color::TRACK_BG_ALT);
+        // Focus lane 0 → it lifts one ramp step; the other lane is untouched.
+        panel.set_active_track_index(Some(0));
+        assert_eq!(
+            panel.track_bg_color(0),
+            crate::color::lighten(crate::color::TRACK_BG, crate::color::FOCUS_LIFT_STEP)
+        );
+        assert_eq!(panel.track_bg_color(1), crate::color::TRACK_BG_ALT);
+        // Clearing focus returns the lane to its resting stripe.
+        panel.set_active_track_index(None);
+        assert_eq!(panel.track_bg_color(0), crate::color::TRACK_BG);
     }
 
     #[test]
