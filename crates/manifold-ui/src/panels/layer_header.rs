@@ -27,15 +27,14 @@ const BTN_H: f32 = color::LAYER_CTRL_BTN_HEIGHT;
 const SEP_H: f32 = color::LAYER_CTRL_SEPARATOR_HEIGHT;
 const RIGHT_GUTTER: f32 = color::LAYER_CTRL_RIGHT_GUTTER;
 const TOP_GAP: f32 = color::LAYER_CTRL_TOP_ROW_GAP;
-const FOLDER_W: f32 = color::LAYER_CTRL_FOLDER_BTN_WIDTH;
 const GEN_TYPE_H: f32 = color::LAYER_CTRL_GEN_TYPE_ROW_HEIGHT;
 const BADGE_SIZE: f32 = color::LAYER_CTRL_TYPE_BADGE_SIZE;
 // Widths for the MIDI trigger-mode toggle and per-layer device dropdown
 // packed into the existing MIDI / CH rows (no new row, preserves TRACK_HEIGHT).
 const MODE_TOGGLE_W: f32 = 32.0;
-const DEV_LBL_W: f32 = 24.0;
-const MIDI_LBL_W: f32 = color::LAYER_CTRL_MIDI_LABEL_WIDTH;
-const CH_LBL_W: f32 = color::LAYER_CTRL_CHANNEL_LABEL_WIDTH;
+/// §D routing form: one fixed label column for Folder/MIDI/Channel/Device so the
+/// values align in a second column (wide enough for the spelled-out labels).
+const LBL_W: f32 = 52.0;
 const ACCENT_W: f32 = color::GROUP_ACCENT_BAR_WIDTH;
 const CHILD_INDENT: f32 = color::GROUP_CHILD_INDENT_PX;
 const BORDER_H: f32 = color::GROUP_BOTTOM_BORDER_HEIGHT;
@@ -460,67 +459,37 @@ fn compute_layer_row(
         return d;
     }
 
-    // Clip-count line + "+ clip" / "+ new clip" buttons removed (old dev tools,
-    // §C timeline redesign). The group child-count summary moves to the lane.
-    if is_group {
-        // No detail controls on a group header.
-    } else if is_generator {
-        // MIDI note + trigger-mode toggle (share one row)
-        d.set(C::MidiLabel, Rect::new(pad, y, MIDI_LBL_W, BTN_H));
-        let gen_midi_x = pad + MIDI_LBL_W + 2.0;
+    // §D routing form — aligned [label | value] rows (expanded-only). A fixed
+    // label column (LBL_W) puts every value at the same x; Channel and Device get
+    // their own spelled-out rows instead of sharing one cramped line. Tight rows
+    // (BTN_H + 2) keep all four inside the track height. Groups have no routing.
+    if !is_group {
         let right_edge = w - pad - RIGHT_GUTTER;
+        let val_x = pad + LBL_W + 6.0;
+        let val_w = (right_edge - val_x).max(20.0);
         let mode_x = right_edge - MODE_TOGGLE_W;
+
+        // Folder | path value — video layers only (generators have no source folder).
+        if !is_generator {
+            d.set(C::Folder, Rect::new(pad, y, LBL_W, BTN_H));
+            d.set(C::PathLabel, Rect::new(val_x, y, val_w, BTN_H));
+            y += BTN_H + 2.0;
+        }
+        // MIDI | note input + trigger-mode toggle.
+        d.set(C::MidiLabel, Rect::new(pad, y, LBL_W, BTN_H));
         d.set(
             C::MidiInput,
-            Rect::new(gen_midi_x, y, (mode_x - 4.0 - gen_midi_x).max(10.0), BTN_H),
+            Rect::new(val_x, y, (mode_x - 4.0 - val_x).max(10.0), BTN_H),
         );
         d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
-        y += ROW_STEP;
-
-        // MIDI channel + device dropdown (share one row)
-        d.set(C::ChLabel, Rect::new(pad, y, CH_LBL_W, BTN_H));
-        let gen_ch_x = pad + CH_LBL_W + 2.0;
-        let ch_w = 44.0;
-        d.set(C::ChDropdown, Rect::new(gen_ch_x, y, ch_w, BTN_H));
-        let dev_lbl_x = gen_ch_x + ch_w + 6.0;
-        d.set(C::DevLabel, Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H));
-        let dev_x = dev_lbl_x + DEV_LBL_W + 2.0;
-        d.set(
-            C::DevDropdown,
-            Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H),
-        );
-    } else {
-        // Folder | PathLabel (folder routing; no "+ new clip" button)
-        d.set(C::Folder, Rect::new(pad, y, FOLDER_W, BTN_H));
-        let path_left = pad + FOLDER_W + 4.0;
-        let path_w = (w - pad - RIGHT_GUTTER - path_left).max(10.0);
-        d.set(C::PathLabel, Rect::new(path_left, y, path_w, BTN_H));
-        y += ROW_STEP;
-
-        // MIDI note + trigger-mode toggle (share one row)
-        d.set(C::MidiLabel, Rect::new(pad, y, MIDI_LBL_W, BTN_H));
-        let midi_x = pad + MIDI_LBL_W + 2.0;
-        let right_edge = w - pad - RIGHT_GUTTER;
-        let mode_x = right_edge - MODE_TOGGLE_W;
-        d.set(
-            C::MidiInput,
-            Rect::new(midi_x, y, (mode_x - 4.0 - midi_x).max(10.0), BTN_H),
-        );
-        d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
-        y += ROW_STEP;
-
-        // MIDI channel + device dropdown (share one row)
-        d.set(C::ChLabel, Rect::new(pad, y, CH_LBL_W, BTN_H));
-        let ch_x = pad + CH_LBL_W + 2.0;
-        let ch_w = 44.0;
-        d.set(C::ChDropdown, Rect::new(ch_x, y, ch_w, BTN_H));
-        let dev_lbl_x = ch_x + ch_w + 6.0;
-        d.set(C::DevLabel, Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H));
-        let dev_x = dev_lbl_x + DEV_LBL_W + 2.0;
-        d.set(
-            C::DevDropdown,
-            Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H),
-        );
+        y += BTN_H + 2.0;
+        // Channel | dropdown.
+        d.set(C::ChLabel, Rect::new(pad, y, LBL_W, BTN_H));
+        d.set(C::ChDropdown, Rect::new(val_x, y, val_w, BTN_H));
+        y += BTN_H + 2.0;
+        // Device | dropdown.
+        d.set(C::DevLabel, Rect::new(pad, y, LBL_W, BTN_H));
+        d.set(C::DevDropdown, Rect::new(val_x, y, val_w, BTN_H));
     }
 
     let _ = y; // suppress unused
@@ -1605,7 +1574,7 @@ impl LayerHeaderPanel {
                     r.y,
                     r.width,
                     r.height,
-                    "CH",
+                    "Channel",
                     UIStyle {
                         text_color: text_clr,
                         font_size: SMALL_FONT,
@@ -1635,7 +1604,7 @@ impl LayerHeaderPanel {
                     r.y,
                     r.width,
                     r.height,
-                    "DEV",
+                    "Device",
                     UIStyle {
                         text_color: text_clr,
                         font_size: SMALL_FONT,
@@ -2412,56 +2381,30 @@ mod tests {
             );
             return d;
         }
-        if is_group {
-        } else if is_generator {
-            d.set(C::MidiLabel, Rect::new(pad, y, MIDI_LBL_W, BTN_H));
-            let gen_midi_x = pad + MIDI_LBL_W + 2.0;
+        // §D routing form — aligned [label | value] rows (mirrors compute_layer_row
+        // rect-for-rect; the equivalence gate enforces it).
+        if !is_group {
             let right_edge = w - pad - RIGHT_GUTTER;
+            let val_x = pad + LBL_W + 6.0;
+            let val_w = (right_edge - val_x).max(20.0);
             let mode_x = right_edge - MODE_TOGGLE_W;
+            if !is_generator {
+                d.set(C::Folder, Rect::new(pad, y, LBL_W, BTN_H));
+                d.set(C::PathLabel, Rect::new(val_x, y, val_w, BTN_H));
+                y += BTN_H + 2.0;
+            }
+            d.set(C::MidiLabel, Rect::new(pad, y, LBL_W, BTN_H));
             d.set(
                 C::MidiInput,
-                Rect::new(gen_midi_x, y, (mode_x - 4.0 - gen_midi_x).max(10.0), BTN_H),
+                Rect::new(val_x, y, (mode_x - 4.0 - val_x).max(10.0), BTN_H),
             );
             d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
-            y += ROW_STEP;
-            d.set(C::ChLabel, Rect::new(pad, y, CH_LBL_W, BTN_H));
-            let gen_ch_x = pad + CH_LBL_W + 2.0;
-            let ch_w = 44.0;
-            d.set(C::ChDropdown, Rect::new(gen_ch_x, y, ch_w, BTN_H));
-            let dev_lbl_x = gen_ch_x + ch_w + 6.0;
-            d.set(C::DevLabel, Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H));
-            let dev_x = dev_lbl_x + DEV_LBL_W + 2.0;
-            d.set(
-                C::DevDropdown,
-                Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H),
-            );
-        } else {
-            d.set(C::Folder, Rect::new(pad, y, FOLDER_W, BTN_H));
-            let path_left = pad + FOLDER_W + 4.0;
-            let path_w = (w - pad - RIGHT_GUTTER - path_left).max(10.0);
-            d.set(C::PathLabel, Rect::new(path_left, y, path_w, BTN_H));
-            y += ROW_STEP;
-            d.set(C::MidiLabel, Rect::new(pad, y, MIDI_LBL_W, BTN_H));
-            let midi_x = pad + MIDI_LBL_W + 2.0;
-            let right_edge = w - pad - RIGHT_GUTTER;
-            let mode_x = right_edge - MODE_TOGGLE_W;
-            d.set(
-                C::MidiInput,
-                Rect::new(midi_x, y, (mode_x - 4.0 - midi_x).max(10.0), BTN_H),
-            );
-            d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
-            y += ROW_STEP;
-            d.set(C::ChLabel, Rect::new(pad, y, CH_LBL_W, BTN_H));
-            let ch_x = pad + CH_LBL_W + 2.0;
-            let ch_w = 44.0;
-            d.set(C::ChDropdown, Rect::new(ch_x, y, ch_w, BTN_H));
-            let dev_lbl_x = ch_x + ch_w + 6.0;
-            d.set(C::DevLabel, Rect::new(dev_lbl_x, y, DEV_LBL_W, BTN_H));
-            let dev_x = dev_lbl_x + DEV_LBL_W + 2.0;
-            d.set(
-                C::DevDropdown,
-                Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H),
-            );
+            y += BTN_H + 2.0;
+            d.set(C::ChLabel, Rect::new(pad, y, LBL_W, BTN_H));
+            d.set(C::ChDropdown, Rect::new(val_x, y, val_w, BTN_H));
+            y += BTN_H + 2.0;
+            d.set(C::DevLabel, Rect::new(pad, y, LBL_W, BTN_H));
+            d.set(C::DevDropdown, Rect::new(val_x, y, val_w, BTN_H));
         }
         let _ = y;
         d.set(
