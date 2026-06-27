@@ -139,6 +139,22 @@ pub const ATLAS_H: u32 = ATLAS_GRID * ATLAS_CELL_H;
 /// Max node thumbnails an atlas holds.
 pub const ATLAS_CELLS: usize = (ATLAS_GRID * ATLAS_GRID) as usize;
 
+/// Clip-thumbnail **filmstrip** atlas geometry (§24 5c-2), decoupled from the
+/// node atlas above. A non-square grid of small 16:9 cells; each cell holds one
+/// bar (or bar-group) of one clip's filmstrip. Cells are interchangeable — a clip
+/// holds a *list* of cell indices — so no rectangle packing is needed. Smaller
+/// cells than the node atlas because each is drawn narrow (one bar wide) and many
+/// are live at once. `32×8` × `128×72` → a `4096×576` atlas (~18.9 MB Rgba16Float
+/// per IOSurface slot); 256 cells ≈ 30 visible clips × ~8 visible bars.
+pub const CLIP_ATLAS_COLS: u32 = 32;
+pub const CLIP_ATLAS_ROWS: u32 = 8;
+pub const CLIP_ATLAS_CELL_W: u32 = 128;
+pub const CLIP_ATLAS_CELL_H: u32 = 72;
+pub const CLIP_ATLAS_W: u32 = CLIP_ATLAS_COLS * CLIP_ATLAS_CELL_W;
+pub const CLIP_ATLAS_H: u32 = CLIP_ATLAS_ROWS * CLIP_ATLAS_CELL_H;
+/// Max filmstrip cells the clip atlas holds (LRU-evicted by clip past this).
+pub const CLIP_ATLAS_CELLS: usize = (CLIP_ATLAS_COLS * CLIP_ATLAS_ROWS) as usize;
+
 /// Aspect-fit viewport `(x, y, w, h)` for atlas cell `i`, letterboxing a source
 /// of `src_w`×`src_h` inside its 16:9 cell so the thumbnail keeps the source's
 /// true aspect (the atlas is cleared transparent first, so the letterbox bars
@@ -166,17 +182,18 @@ pub fn atlas_cell_viewport(i: usize, src_w: u32, src_h: u32) -> (f32, f32, f32, 
     )
 }
 
-/// Full-cell viewport for atlas cell `i` (no letterbox). Clip thumbnails fill the
-/// whole cell with the source (≈ project aspect ≈ the 16:9 cell), and the UI
-/// centre-crops to each clip's body aspect — the DAW thumbnail look, no bars.
-fn atlas_cell_full(i: usize) -> (f32, f32, f32, f32) {
-    let gx = (i as u32 % ATLAS_GRID) as f32;
-    let gy = (i as u32 / ATLAS_GRID) as f32;
+/// Full-cell viewport for clip-atlas filmstrip cell `i` (no letterbox). A clip
+/// thumbnail fills the whole cell with the source (≈ project aspect ≈ the 16:9
+/// cell), and the UI centre-crops each cell to the bar's on-screen sub-rect — the
+/// DAW thumbnail look, no bars. Uses the non-square `CLIP_ATLAS_COLS×ROWS` grid.
+fn clip_atlas_cell_full(i: usize) -> (f32, f32, f32, f32) {
+    let gx = (i as u32 % CLIP_ATLAS_COLS) as f32;
+    let gy = (i as u32 / CLIP_ATLAS_COLS) as f32;
     (
-        gx * ATLAS_CELL_W as f32,
-        gy * ATLAS_CELL_H as f32,
-        ATLAS_CELL_W as f32,
-        ATLAS_CELL_H as f32,
+        gx * CLIP_ATLAS_CELL_W as f32,
+        gy * CLIP_ATLAS_CELL_H as f32,
+        CLIP_ATLAS_CELL_W as f32,
+        CLIP_ATLAS_CELL_H as f32,
     )
 }
 
@@ -241,18 +258,24 @@ fn fill_clip_atlas(
     native_device: &manifold_gpu::GpuDevice,
     enc: &mut manifold_gpu::GpuEncoder,
     sources: &AHashMap<&str, &manifold_gpu::GpuTexture>,
+    clip_beats: &AHashMap<&str, (f64, f64)>,
+    current_beat: f64,
+    beats_per_bar: f64,
     write_tex: Option<&manifold_gpu::GpuTexture>,
     raw: Option<&manifold_gpu::GpuRenderPipeline>,
     sampler: Option<&manifold_gpu::GpuSampler>,
     visible: &[ClipId],
     cache: &mut crate::clip_atlas::ClipAtlasCache,
-    last_snapshot: &mut AHashMap<ClipId, u64>,
+    last_snapshot: &mut AHashMap<ClipId, (u32, u64)>,
     frame_counter: &mut u64,
     propagate: &mut u8,
     persistent: &mut Option<manifold_gpu::GpuTexture>,
-    layout_out: &mut Vec<(ClipId, u32)>,
+    layout_out: &mut Vec<(ClipId, u32, u32)>,
 ) -> bool {
     const MAX_SNAPSHOTS_PER_FRAME: usize = 4;
+    // Throttled re-capture of the bar currently under the playhead, so a long bar's
+    // cell reflects mid-bar content rather than only its downbeat. Only the single
+    // playhead cell churns — the rest of the strip is static history.
     const REFRESH_INTERVAL: u64 = 90; // ~1.5 s at 60 fps
 
     let (Some(write_tex), Some(raw), Some(sampler)) = (write_tex, raw, sampler) else {
@@ -266,8 +289,8 @@ fn fill_clip_atlas(
     // + sampled — matches the IOSurface format).
     if persistent.is_none() {
         let tex = native_device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width: ATLAS_W,
-            height: ATLAS_H,
+            width: CLIP_ATLAS_W,
+            height: CLIP_ATLAS_H,
             depth: 1,
             format: manifold_gpu::GpuTextureFormat::Rgba16Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
@@ -286,18 +309,35 @@ fn fill_clip_atlas(
         *propagate = crate::shared_texture::SURFACE_COUNT as u8;
     }
 
-    // ── Phase 1: allocate cells + pick this frame's snapshots ──
+    // ── Phase 1: pick this frame's bar captures ──
+    // Each visible clip with a live source captures the filmstrip cell under the
+    // playhead (or cell 0 when parked — a representative still). A capture happens
+    // on first sight of that cell, when the playhead crosses into a new cell, or on
+    // the throttled refresh of the current cell.
     cache.begin_frame(visible);
     let mut to_blit: Vec<(u32, &manifold_gpu::GpuTexture)> = Vec::new();
     let mut budget = MAX_SNAPSHOTS_PER_FRAME;
+    let mut allocated_new = false;
     for cid in visible {
         let Some(&tex) = sources.get(cid.as_str()) else {
-            // Inactive clip: keeps its cached cell (persisted), or no thumbnail yet.
+            // Inactive clip with no live source: keeps its cached strip (persisted).
             continue;
         };
+        let target_cell = match clip_beats.get(cid.as_str()) {
+            Some(&(start, dur)) if current_beat >= start && current_beat < start + dur => {
+                crate::clip_filmstrip::cell_index_at_beat(current_beat, start, dur, beats_per_bar)
+            }
+            // Parked (playhead outside the clip) or unknown beats: cell 0.
+            _ => 0,
+        };
+        let existing = cache.cell_for(cid, target_cell);
         let due = match last_snapshot.get(cid) {
             None => true,
-            Some(&last) => frame.wrapping_sub(last) >= REFRESH_INTERVAL,
+            Some(&(last_cell, last_frame)) => {
+                last_cell != target_cell
+                    || existing.is_none()
+                    || frame.wrapping_sub(last_frame) >= REFRESH_INTERVAL
+            }
         };
         if !due {
             continue;
@@ -305,21 +345,25 @@ fn fill_clip_atlas(
         if budget == 0 {
             break;
         }
-        if let Some(cell) = cache.get_or_alloc(cid) {
-            last_snapshot.insert(cid.clone(), frame);
+        if let Some(cell) = cache.get_or_alloc(cid, target_cell) {
+            last_snapshot.insert(cid.clone(), (target_cell, frame));
             to_blit.push((cell, tex));
+            if existing.is_none() {
+                allocated_new = true; // new mapping (and any eviction it triggered)
+            }
             budget -= 1;
         }
     }
-    // `cell_of` only changes when a cell is (re)allocated/evicted, which happens
-    // exclusively during the snapshots above — so rebuild the published layout only
-    // then, not every frame.
-    let dirty = !to_blit.is_empty();
-    if dirty {
+    // The published layout changes only when a cell is (re)allocated or a clip is
+    // evicted — both happen exclusively when `allocated_new`. Re-capturing an
+    // existing cell leaves the layout untouched, so don't rebuild it then.
+    if allocated_new {
         *layout_out = cache.layout();
     }
 
-    // On a change, propagate the persistent atlas across all rotating slots.
+    // A blit this frame (new pixels in the persistent atlas) must be copied out;
+    // otherwise keep propagating an earlier change across the remaining slots.
+    let dirty = !to_blit.is_empty();
     let should_copy = if dirty {
         *propagate = (crate::shared_texture::SURFACE_COUNT - 1) as u8;
         true
@@ -343,7 +387,7 @@ fn fill_clip_atlas(
                 manifold_gpu::GpuBinding::Texture { binding: 0, texture: tex },
                 manifold_gpu::GpuBinding::Sampler { binding: 1, sampler },
             ],
-            atlas_cell_full(*cell as usize),
+            clip_atlas_cell_full(*cell as usize),
             manifold_gpu::GpuLoadAction::Load,
             "Clip Thumbnail Atlas Cell",
         );
@@ -477,17 +521,19 @@ pub struct ContentPipeline {
     /// rotating write surface each frame it changes (lazily created, Rgba16Float).
     #[cfg(target_os = "macos")]
     clip_atlas_persistent: Option<manifold_gpu::GpuTexture>,
-    /// ClipId→cell allocation + LRU eviction.
+    /// (ClipId, filmstrip cell) → atlas cell allocation + whole-clip LRU eviction.
     clip_atlas_cache: crate::clip_atlas::ClipAtlasCache,
-    /// Frame each clip's cell was last (re)snapshot, for rate-limited refresh.
-    clip_atlas_last_snapshot: AHashMap<manifold_core::ClipId, u64>,
+    /// Per clip: the filmstrip cell last captured and the frame it was captured, so
+    /// the playhead's current bar is captured on bar-crossing and refreshed at a
+    /// throttled rate while it sits in a bar.
+    clip_atlas_last_snapshot: AHashMap<manifold_core::ClipId, (u32, u64)>,
     /// Monotonic fill-frame counter (refresh cadence + propagation window).
     clip_atlas_frame: u64,
     /// Frames left to keep copying the persistent atlas to the rotating write
     /// surface after a change, so all `SURFACE_COUNT` slots converge. 0 = idle.
     clip_atlas_propagate: u8,
-    /// Published `(clip_id, cell)` layout for the UI.
-    last_clip_atlas_layout: Vec<(manifold_core::ClipId, u32)>,
+    /// Published `(clip_id, filmstrip cell, atlas cell)` layout for the UI.
+    last_clip_atlas_layout: Vec<(manifold_core::ClipId, u32, u32)>,
 
     /// Per-surface signal values — tracks the GpuEvent signal value from the last
     /// frame that wrote to each surface. Before writing to surface S, we wait for
@@ -654,7 +700,7 @@ impl ContentPipeline {
             clip_atlas_bridge: None,
             #[cfg(target_os = "macos")]
             clip_atlas_persistent: None,
-            clip_atlas_cache: crate::clip_atlas::ClipAtlasCache::new(ATLAS_CELLS as u32),
+            clip_atlas_cache: crate::clip_atlas::ClipAtlasCache::new(CLIP_ATLAS_CELLS as u32),
             clip_atlas_last_snapshot: AHashMap::new(),
             clip_atlas_frame: 0,
             clip_atlas_propagate: 0,
@@ -1158,8 +1204,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.clip_atlas_visible = visible;
     }
 
-    /// The `(clip_id, cell_index)` layout for the clip-thumbnail atlas.
-    pub fn clip_atlas_layout(&self) -> &[(ClipId, u32)] {
+    /// The `(clip_id, filmstrip cell, atlas cell)` layout for the clip filmstrip atlas.
+    pub fn clip_atlas_layout(&self) -> &[(ClipId, u32, u32)] {
         &self.last_clip_atlas_layout
     }
 
@@ -1663,7 +1709,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         // Skip clips that already have a cell, or are live (an
                         // active generator clip renders its own texture this frame —
                         // checked via gen_r, not clip_descs, which borrows renderers).
-                        if self.clip_atlas_cache.contains(cid)
+                        if self.clip_atlas_cache.contains_any(cid)
                             || gen_r.get_clip_texture(cid_str).is_some()
                         {
                             continue;
@@ -1702,7 +1748,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             break;
                         }
                         let cid_str = cid.as_str();
-                        if self.clip_atlas_cache.contains(cid)
+                        if self.clip_atlas_cache.contains_any(cid)
                             || vid_r.get_clip_texture(cid_str).is_some()
                             || vid_r.has_poster(cid_str)
                         {
@@ -1763,11 +1809,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     sources.insert(cid_str, t);
                 }
             }
+            // Filmstrip bar geometry: the start/duration (beats) of each visible
+            // clip, so the snapshot pass can map the playhead beat to the bar cell
+            // it should capture. One pass over the (small) visible set.
+            let beats_per_bar = project
+                .map(|p| p.settings.time_signature_numerator as f64)
+                .unwrap_or(4.0)
+                .max(1.0);
+            let visible_set: ahash::AHashSet<&str> =
+                self.clip_atlas_visible.iter().map(|c| c.as_str()).collect();
+            let mut clip_beats: AHashMap<&str, (f64, f64)> =
+                AHashMap::with_capacity(visible_set.len());
+            for layer in layers {
+                for clip in &layer.clips {
+                    let id = clip.id.as_str();
+                    if visible_set.contains(id) {
+                        clip_beats.insert(
+                            id,
+                            (clip.start_beat.as_f32() as f64, clip.duration_beats.as_f32() as f64),
+                        );
+                    }
+                }
+            }
             let write_idx = self.write_surface_index;
             fill_clip_atlas(
                 native_device,
                 &mut native_enc,
                 &sources,
+                &clip_beats,
+                beat_f64,
+                beats_per_bar,
                 self.clip_atlas_textures[write_idx].as_ref(),
                 self.preview_pipeline.as_ref(),
                 self.preview_sampler.as_ref(),

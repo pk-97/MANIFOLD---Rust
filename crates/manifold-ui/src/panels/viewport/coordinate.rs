@@ -30,6 +30,18 @@ impl TimelineViewportPanel {
             + self.tracks_rect.x
     }
 
+    /// Beats per bar (time-signature numerator). Exposed for filmstrip cell
+    /// geometry (one cell per bar), keeping bar math derived from the mapper.
+    pub fn beats_per_bar(&self) -> f32 {
+        self.beats_per_bar as f32
+    }
+
+    /// Beat (as `f64`) → pixel X — for callers (the clip filmstrip draw) that work
+    /// in raw beats and shouldn't have to construct a `Beats` newtype.
+    pub fn beat_f64_to_pixel(&self, beat: f64) -> f32 {
+        self.beat_to_pixel(Beats(beat))
+    }
+
     /// Convert pixel X in the tracks area to beat position.
     pub fn pixel_to_beat(&self, px: f32) -> Beats {
         Beats(

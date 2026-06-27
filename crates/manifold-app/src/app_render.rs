@@ -4087,51 +4087,83 @@ impl Application {
             if let Some(front) = front
                 && let Some(atlas) = self.ui_clip_atlas_textures.get(front).and_then(|t| t.as_ref())
             {
-                let cell_of: ahash::AHashMap<&str, u32> = self
-                    .content_state
-                    .clip_atlas_layout
-                    .iter()
-                    .map(|(c, cell)| (c.as_str(), *cell))
-                    .collect();
-                let cell_aspect =
-                    crate::content_pipeline::ATLAS_CELL_W as f32 / crate::content_pipeline::ATLAS_CELL_H as f32;
-                let inv = 1.0 / crate::content_pipeline::ATLAS_GRID as f32;
+                // clip → (filmstrip cell index → atlas cell), from the published
+                // layout. Each clip tiles its captured bar cells across its body.
+                let mut strips_of: ahash::AHashMap<&str, ahash::AHashMap<u32, u32>> =
+                    ahash::AHashMap::new();
+                for (cid, idx, cell) in &self.content_state.clip_atlas_layout {
+                    strips_of.entry(cid.as_str()).or_default().insert(*idx, *cell);
+                }
+                let cell_aspect = crate::content_pipeline::CLIP_ATLAS_CELL_W as f32
+                    / crate::content_pipeline::CLIP_ATLAS_CELL_H as f32;
+                let inv_cols = 1.0 / crate::content_pipeline::CLIP_ATLAS_COLS as f32;
+                let inv_rows = 1.0 / crate::content_pipeline::CLIP_ATLAS_ROWS as f32;
+                let bpb = self.ws.ui_root.viewport.beats_per_bar() as f64;
                 self.clip_thumb_quad_scratch.clear();
                 for cr in &self.clip_rect_scratch {
                     // Match the SetClipAtlasVisible filter so a clip too narrow to
-                    // have requested a cell never draws one (a stale layout could
-                    // still list it from when it was wider).
+                    // have requested a cell never draws one.
                     if cr.is_audio || cr.rect.width < 24.0 {
                         continue;
                     }
-                    let Some(&cell) = cell_of.get(cr.clip_id.as_str()) else {
+                    let Some(strip) = strips_of.get(cr.clip_id.as_str()) else {
                         continue;
                     };
-                    let gx = (cell % crate::content_pipeline::ATLAS_GRID) as f32;
-                    let gy = (cell / crate::content_pipeline::ATLAS_GRID) as f32;
-                    let (u0, v0) = (gx * inv, gy * inv);
-                    let (u1, v1) = (u0 + inv, v0 + inv);
-                    // Centre-crop the 16:9 cell to the (wide, short) clip body aspect.
-                    let body_aspect = (cr.rect.width / cr.rect.height.max(1.0)).max(0.01);
-                    let (uu0, vv0, uu1, vv1) = if body_aspect >= cell_aspect {
-                        let f = cell_aspect / body_aspect; // crop height
-                        let vc = (v0 + v1) * 0.5;
-                        let h = (v1 - v0) * f * 0.5;
-                        (u0, vc - h, u1, vc + h)
-                    } else {
-                        let f = body_aspect / cell_aspect; // crop width
-                        let uc = (u0 + u1) * 0.5;
-                        let w = (u1 - u0) * f * 0.5;
-                        (uc - w, v0, uc + w, v1)
-                    };
-                    self.clip_thumb_quad_scratch.push(
-                        manifold_renderer::clip_thumb_gpu::ThumbQuad {
-                            rect: cr.rect,
-                            radius: manifold_ui::color::CLIP_RADIUS,
-                            uv_min: [uu0, vv0],
-                            uv_max: [uu1, vv1],
-                        },
+                    let body = cr.rect;
+                    let body_right = body.x + body.width;
+                    let start_b = cr.start_beat.as_f32() as f64;
+                    let dur_b = (cr.end_beat - cr.start_beat).as_f32() as f64;
+                    let count = crate::clip_filmstrip::cell_count(
+                        crate::clip_filmstrip::clip_bar_count(dur_b, bpb),
                     );
+                    for (&idx, &cell) in strip {
+                        // Stale layout entry (clip shortened since capture) — skip.
+                        if idx >= count {
+                            continue;
+                        }
+                        // This bar-cell's on-screen sub-rect, clamped to the body.
+                        let (sb, eb) =
+                            crate::clip_filmstrip::cell_beat_range(idx, start_b, dur_b, bpb);
+                        let x0 = self.ws.ui_root.viewport.beat_f64_to_pixel(sb).max(body.x);
+                        let x1 = self
+                            .ws
+                            .ui_root
+                            .viewport
+                            .beat_f64_to_pixel(eb)
+                            .min(body_right);
+                        let w = x1 - x0;
+                        if w < 0.5 {
+                            continue; // scrolled out / sub-pixel
+                        }
+                        let sub = manifold_ui::node::Rect::new(x0, body.y, w, body.height);
+                        // Atlas cell UV in the non-square COLS×ROWS grid.
+                        let gx = (cell % crate::content_pipeline::CLIP_ATLAS_COLS) as f32;
+                        let gy = (cell / crate::content_pipeline::CLIP_ATLAS_COLS) as f32;
+                        let (u0, v0) = (gx * inv_cols, gy * inv_rows);
+                        let (u1, v1) = (u0 + inv_cols, v0 + inv_rows);
+                        // Centre-crop the 16:9 cell to this bar's on-screen aspect.
+                        let sub_aspect = (w / body.height.max(1.0)).max(0.01);
+                        let (uu0, vv0, uu1, vv1) = if sub_aspect >= cell_aspect {
+                            let f = cell_aspect / sub_aspect; // crop height
+                            let vc = (v0 + v1) * 0.5;
+                            let h = (v1 - v0) * f * 0.5;
+                            (u0, vc - h, u1, vc + h)
+                        } else {
+                            let f = sub_aspect / cell_aspect; // crop width
+                            let uc = (u0 + u1) * 0.5;
+                            let cw = (u1 - u0) * f * 0.5;
+                            (uc - cw, v0, uc + cw, v1)
+                        };
+                        self.clip_thumb_quad_scratch.push(
+                            manifold_renderer::clip_thumb_gpu::ThumbQuad {
+                                rect: sub,
+                                body_rect: body,
+                                radius: manifold_ui::color::CLIP_RADIUS,
+                                uv_min: [uu0, vv0],
+                                uv_max: [uu1, vv1],
+                            },
+                        );
+                    }
                 }
                 let tracks = self.ws.ui_root.viewport.get_tracks_rect();
                 if !self.clip_thumb_quad_scratch.is_empty()

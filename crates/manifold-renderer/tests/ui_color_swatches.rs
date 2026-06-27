@@ -718,20 +718,46 @@ fn clip_thumbnail_sheet() {
         let row = i / 2;
         let x = 24.0 + col as f32 * 320.0;
         let y = 60.0 + row as f32 * 110.0;
+        // Single still: geometry == body, so the whole rounded rect is one cell.
+        let r = Rect::new(x, y, 280.0, ch);
         quads.push(ThumbQuad {
-            rect: Rect::new(x, y, 280.0, ch),
+            rect: r,
+            body_rect: r,
             radius: 4.0,
             uv_min: *uv_min,
             uv_max: *uv_max,
         });
     }
     // A small clip to confirm radius clamps gracefully.
+    let small = Rect::new(24.0, 290.0, 40.0, ch);
     quads.push(ThumbQuad {
-        rect: Rect::new(24.0, 290.0, 40.0, ch),
+        rect: small,
+        body_rect: small,
         radius: 4.0,
         uv_min: [0.0, 0.0],
         uv_max: [0.5, 0.5],
     });
+
+    // A FILMSTRIP clip (§24 5c-2): four bar cells tiled across one body, each
+    // sampling a different atlas cell. All share the same `body_rect`, so the
+    // interior seams stay square and only the outer corners round.
+    let strip_body = Rect::new(24.0 + 320.0, 290.0, 280.0, ch);
+    let strip_cells = [
+        ([0.0, 0.0], [0.5, 0.5]),
+        ([0.5, 0.0], [1.0, 0.5]),
+        ([0.0, 0.5], [0.5, 1.0]),
+        ([0.5, 0.5], [1.0, 1.0]),
+    ];
+    let cell_w = strip_body.width / strip_cells.len() as f32;
+    for (i, (uv_min, uv_max)) in strip_cells.iter().enumerate() {
+        quads.push(ThumbQuad {
+            rect: Rect::new(strip_body.x + i as f32 * cell_w, strip_body.y, cell_w, ch),
+            body_rect: strip_body,
+            radius: 4.0,
+            uv_min: *uv_min,
+            uv_max: *uv_max,
+        });
+    }
 
     ui.begin_frame();
     ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_0);

@@ -2009,11 +2009,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.ui_node_atlas_textures = atlas_textures.map(Some);
                 self.node_atlas_texture_bridge = Some(Arc::clone(&atlas_bridge));
 
-                // Clip-thumbnail atlas bridge (§24 5c) — same cell-grid geometry,
-                // independent lifecycle (always-on in the timeline vs editor-only).
+                // Clip-thumbnail FILMSTRIP atlas bridge (§24 5c-2) — its own smaller
+                // cell-grid geometry (many narrow bar cells), independent lifecycle
+                // (always-on in the timeline vs editor-only).
                 let clip_atlas_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(
-                    crate::content_pipeline::ATLAS_W,
-                    crate::content_pipeline::ATLAS_H,
+                    crate::content_pipeline::CLIP_ATLAS_W,
+                    crate::content_pipeline::CLIP_ATLAS_H,
                 ));
                 let clip_atlas_textures: [manifold_gpu::GpuTexture;
                     crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {

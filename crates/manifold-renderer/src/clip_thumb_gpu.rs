@@ -23,11 +23,15 @@ use manifold_gpu::{
 };
 use manifold_ui::node::Rect;
 
-/// One thumbnail quad: the clip's body rect (logical px), the corner radius
-/// (logical px), and the atlas-cell UV sub-rect `[u0,v0,u1,v1]` to sample.
+/// One filmstrip cell quad. `rect` is the on-screen sub-rect this cell fills (one
+/// bar of the clip, logical px). `body_rect` is the *whole* clip body, used for the
+/// rounded-rect SDF mask — so interior filmstrip cells stay square and only the
+/// clip's outer corners round (a single still has `rect == body_rect`). `radius` is
+/// the corner radius (logical px); `uv_min`/`uv_max` is the atlas-cell sub-rect.
 #[derive(Clone, Copy)]
 pub struct ThumbQuad {
     pub rect: Rect,
+    pub body_rect: Rect,
     pub radius: f32,
     pub uv_min: [f32; 2],
     pub uv_max: [f32; 2],
@@ -207,10 +211,14 @@ impl ClipThumbGpu {
             }
             let (x0, y0) = (q.rect.x, q.rect.y);
             let (x1, y1) = (q.rect.x + q.rect.width, q.rect.y + q.rect.height);
-            let cx = q.rect.x + q.rect.width * 0.5;
-            let cy = q.rect.y + q.rect.height * 0.5;
-            let hw = q.rect.width * 0.5;
-            let hh = q.rect.height * 0.5;
+            // The SDF mask is the full clip body, not this cell's sub-rect, so a
+            // fragment near the clip's rounded corner is masked while interior cells
+            // stay square (their seams abut). A single-still quad passes the same
+            // rect for both, recovering the original behaviour.
+            let cx = q.body_rect.x + q.body_rect.width * 0.5;
+            let cy = q.body_rect.y + q.body_rect.height * 0.5;
+            let hw = q.body_rect.width * 0.5;
+            let hh = q.body_rect.height * 0.5;
             // Clamp the radius to half the smaller side (a tiny clip is a circle/oval).
             let r = q.radius.min(hw).min(hh).max(0.0);
             let rect = [cx, cy, hw, hh];
