@@ -347,6 +347,13 @@ pub const EFFECT_DRAG_INDICATOR_REGROUP: Color32 = Color32::new(77, 158, 97, 255
 
 // ── Selection ───────────────────────────────────────────────────────
 pub const SELECTED_BORDER: Color32 = BLUE_BASE;
+/// Selected-LAYER focus ring. A layer header's fill IS its identity colour, so
+/// selection can't be a fill: a tint (`lighten`) vanishes against the colour, and
+/// a blue ring vanishes on a blue layer. A bright near-white ring reads on every
+/// hue and pairs with a small lift — the one distinct "this layer is selected"
+/// signal on a coloured header. See `docs/TIMELINE_UI_REDESIGN.md` §H.
+pub const SELECTED_LAYER_RING: Color32 = Color32::new(232, 240, 255, 255);
+pub const SELECTED_LAYER_RING_WIDTH: f32 = 2.0;
 
 // ── Trim handles (viewport clip edges) ─────────────────────────────
 pub const TRIM_HANDLE_COLOR: Color32 = Color32::new(255, 255, 255, 51);

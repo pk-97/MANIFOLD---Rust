@@ -123,17 +123,27 @@ fn field_style() -> UIStyle {
 }
 
 fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {
+    // Selection is a bright focus RING + a small lift — not a colour fill. The
+    // header fill is the layer's identity colour, so a tint disappears against it
+    // (the old `lighten(30)` read as "muted on muted"). The ring reads on any hue.
     let bg = if selected {
-        lighten(layer_color, 30)
+        lighten(layer_color, 18)
     } else {
         layer_color
     };
     let hover = lighten(bg, 15);
     let pressed = darken(bg, 10);
+    let (border_color, border_width) = if selected {
+        (color::SELECTED_LAYER_RING, color::SELECTED_LAYER_RING_WIDTH)
+    } else {
+        (Color32::TRANSPARENT, 0.0)
+    };
     UIStyle {
         bg_color: bg,
         hover_bg_color: hover,
         pressed_bg_color: pressed,
+        border_color,
+        border_width,
         corner_radius: color::BUTTON_RADIUS,
         ..UIStyle::default()
     }
