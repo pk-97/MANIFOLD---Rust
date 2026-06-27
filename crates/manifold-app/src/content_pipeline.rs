@@ -258,7 +258,8 @@ fn fill_clip_atlas(
     native_device: &manifold_gpu::GpuDevice,
     enc: &mut manifold_gpu::GpuEncoder,
     sources: &AHashMap<&str, &manifold_gpu::GpuTexture>,
-    clip_beats: &AHashMap<&str, (f64, f64)>,
+    clip_meta: &AHashMap<&str, (f64, f64, f64)>,
+    cell_override: &AHashMap<&str, u32>,
     current_beat: f64,
     beats_per_bar: f64,
     write_tex: Option<&manifold_gpu::GpuTexture>,
@@ -323,13 +324,24 @@ fn fill_clip_atlas(
             // Inactive clip with no live source: keeps its cached strip (persisted).
             continue;
         };
-        let (target_cell, is_active) = match clip_beats.get(cid.as_str()) {
-            Some(&(start, dur)) if current_beat >= start && current_beat < start + dur => (
-                crate::clip_filmstrip::cell_index_at_beat(current_beat, start, dur, beats_per_bar),
-                true,
-            ),
-            // Parked (playhead outside the clip) or unknown beats: cell 0.
-            _ => (0, false),
+        let (target_cell, is_active) = if let Some(&cell) = cell_override.get(cid.as_str()) {
+            // Parked video filmstrip: the cell its settled poster frame is for.
+            // Captured once (not active) so it never churns.
+            (cell, false)
+        } else {
+            match clip_meta.get(cid.as_str()) {
+                Some(&(start, dur, _)) if current_beat >= start && current_beat < start + dur => (
+                    crate::clip_filmstrip::cell_index_at_beat(
+                        current_beat,
+                        start,
+                        dur,
+                        beats_per_bar,
+                    ),
+                    true,
+                ),
+                // Parked generator (playhead outside) or unknown beats: cell 0.
+                _ => (0, false),
+            }
         };
         let existing = cache.cell_for(cid, target_cell);
         let due = match last_snapshot.get(cid) {
@@ -1684,6 +1696,37 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // (`clip_descs`). Skipped in export / when no timeline thumbnails are shown.
         #[cfg(target_os = "macos")]
         let clip_atlas_published = if !export_mode && !self.clip_atlas_visible.is_empty() {
+            // Filmstrip geometry inputs, shared by the parked-video driver and the
+            // capture pass: each visible clip's (start_beat, duration_beats,
+            // in_point seconds), plus bar length and seconds/beat.
+            let beats_per_bar = project
+                .map(|p| p.settings.time_signature_numerator as f64)
+                .unwrap_or(4.0)
+                .max(1.0);
+            let secs_per_beat = project
+                .map(|p| p.settings.seconds_per_beat() as f64)
+                .unwrap_or(0.5)
+                .max(1e-4);
+            let visible_set: ahash::AHashSet<&str> =
+                self.clip_atlas_visible.iter().map(|c| c.as_str()).collect();
+            let mut clip_meta: AHashMap<&str, (f64, f64, f64)> =
+                AHashMap::with_capacity(visible_set.len());
+            for layer in layers {
+                for clip in &layer.clips {
+                    let id = clip.id.as_str();
+                    if visible_set.contains(id) {
+                        clip_meta.insert(
+                            id,
+                            (
+                                clip.start_beat.as_f32() as f64,
+                                clip.duration_beats.as_f32() as f64,
+                                clip.in_point.as_f32() as f64,
+                            ),
+                        );
+                    }
+                }
+            }
+
             // Cold-start (§24 5c P2c): render up to K PARKED generator clips'
             // thumbnails — visible clips with no live source this frame and no atlas
             // cell yet. Their default look (base params, no modulation/override/warm-
@@ -1737,29 +1780,70 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     gen_r.evict_thumb_gens(&self.clip_atlas_visible);
                 }
 
-                // P2b: request one-shot POSTER decodes for parked VIDEO clips (no
-                // cell, no live frame, not already requested). Idempotent + async —
-                // the decoded frame is picked up by `poster_texture` a later frame.
-                // Bounded so we don't flood the decode scheduler. Never composited.
+                // P2b/5c-2: drive parked VIDEO clips' FILMSTRIP decode. Each clip's
+                // isolated decoder walks its bars: request once (with per-bar source
+                // times), then seek to the first not-yet-captured bar. The capture
+                // pass blits the settled frame into that bar's cell, after which the
+                // next frame here advances to the following bar. Bounded per frame so
+                // the decode scheduler is never flooded. Never composited.
                 if let Some(vid_r) = renderers
                     .iter_mut()
                     .find_map(|r| r.as_any_mut().downcast_mut::<VideoRenderer>())
                 {
-                    let mut vbudget = MAX_COLD_START_PER_FRAME;
+                    // A few more than the generator budget: a seek is far cheaper
+                    // than a generator warm-up, and clips fill one bar per round-trip.
+                    let mut vbudget = 3usize;
                     for cid in &self.clip_atlas_visible {
                         if vbudget == 0 {
                             break;
                         }
                         let cid_str = cid.as_str();
-                        if self.clip_atlas_cache.contains_any(cid)
-                            || vid_r.get_clip_texture(cid_str).is_some()
-                            || vid_r.has_poster(cid_str)
-                        {
+                        // Active (live) clips capture their playhead bar directly.
+                        if vid_r.get_clip_texture(cid_str).is_some() {
                             continue;
                         }
-                        if let Some(video_clip_id) = find_parked_video_clip(layers, cid_str)
-                            && vid_r.request_clip_poster(cid_str, video_clip_id)
-                        {
+                        let Some(&(start, dur, in_point)) = clip_meta.get(cid_str) else {
+                            continue;
+                        };
+                        // First request: compute per-bar source times and open.
+                        if !vid_r.has_poster(cid_str) {
+                            let Some(video_clip_id) = find_parked_video_clip(layers, cid_str) else {
+                                continue;
+                            };
+                            let count = crate::clip_filmstrip::cell_count(
+                                crate::clip_filmstrip::clip_bar_count(dur, beats_per_bar),
+                            );
+                            let bar_times: Vec<f32> = (0..count)
+                                .map(|c| {
+                                    let (sb, _) = crate::clip_filmstrip::cell_beat_range(
+                                        c,
+                                        start,
+                                        dur,
+                                        beats_per_bar,
+                                    );
+                                    (in_point + (sb - start) * secs_per_beat).max(0.0) as f32
+                                })
+                                .collect();
+                            if vid_r.request_clip_filmstrip(cid_str, video_clip_id, &bar_times) {
+                                vbudget -= 1;
+                            }
+                            continue;
+                        }
+                        // Seek to the first bar without a captured cell yet.
+                        let count = crate::clip_filmstrip::cell_count(
+                            crate::clip_filmstrip::clip_bar_count(dur, beats_per_bar),
+                        );
+                        let Some(next) =
+                            (0..count).find(|&b| self.clip_atlas_cache.cell_for(cid, b).is_none())
+                        else {
+                            continue; // every bar captured
+                        };
+                        // Already showing `next` (ready to capture) → leave it.
+                        if vid_r.poster_target_bar(cid_str) == Some(next) {
+                            continue;
+                        }
+                        if vid_r.poster_can_advance(cid_str) {
+                            vid_r.advance_poster_to_bar(cid_str, next);
                             vbudget -= 1;
                         }
                     }
@@ -1794,7 +1878,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         if let Some(t) = v.get_clip_texture(cid_str) {
                             return Some(t);
                         }
-                        if let Some(t) = v.poster_texture(cid_str) {
+                        // Parked filmstrip poster: only when a bar frame is settled
+                        // (a seek has landed), so a mid-seek/stale frame is never
+                        // captured into the wrong cell.
+                        if v.poster_target_bar(cid_str).is_some()
+                            && let Some(t) = v.poster_texture(cid_str)
+                        {
                             return Some(t);
                         }
                     }
@@ -1812,25 +1901,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     sources.insert(cid_str, t);
                 }
             }
-            // Filmstrip bar geometry: the start/duration (beats) of each visible
-            // clip, so the snapshot pass can map the playhead beat to the bar cell
-            // it should capture. One pass over the (small) visible set.
-            let beats_per_bar = project
-                .map(|p| p.settings.time_signature_numerator as f64)
-                .unwrap_or(4.0)
-                .max(1.0);
-            let visible_set: ahash::AHashSet<&str> =
-                self.clip_atlas_visible.iter().map(|c| c.as_str()).collect();
-            let mut clip_beats: AHashMap<&str, (f64, f64)> =
-                AHashMap::with_capacity(visible_set.len());
-            for layer in layers {
-                for clip in &layer.clips {
-                    let id = clip.id.as_str();
-                    if visible_set.contains(id) {
-                        clip_beats.insert(
-                            id,
-                            (clip.start_beat.as_f32() as f64, clip.duration_beats.as_f32() as f64),
-                        );
+            // Per parked-video clip: the bar cell its *settled* poster frame
+            // represents, so the capture writes it into the right cell rather than
+            // the playhead-derived one. Active clips and generators have no override.
+            let mut cell_override: AHashMap<&str, u32> = AHashMap::new();
+            if let Some(vid_r) = renderers
+                .iter()
+                .find_map(|r| r.as_any().downcast_ref::<VideoRenderer>())
+            {
+                for cid in &self.clip_atlas_visible {
+                    if let Some(bar) = vid_r.poster_target_bar(cid.as_str()) {
+                        cell_override.insert(cid.as_str(), bar);
                     }
                 }
             }
@@ -1839,7 +1920,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 native_device,
                 &mut native_enc,
                 &sources,
-                &clip_beats,
+                &clip_meta,
+                &cell_override,
                 beat_f64,
                 beats_per_bar,
                 self.clip_atlas_textures[write_idx].as_ref(),

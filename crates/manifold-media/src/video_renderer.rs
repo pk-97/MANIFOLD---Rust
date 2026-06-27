@@ -77,6 +77,17 @@ struct ActiveVideoClip {
     time_accumulator: f32,
 }
 
+/// §24 5c-2 filmstrip walk state for a parked video clip's poster. The poster's
+/// isolated decoder is seeked to each bar's source time in turn; this tracks the
+/// per-bar source seconds and which bar the current decoded frame represents.
+struct FilmstripState {
+    /// Source seconds to seek to for each filmstrip cell (bar / bar-group).
+    times: Vec<f32>,
+    /// The cell index the current decoded poster frame corresponds to (or is being
+    /// sought to). The snapshot pass captures `poster_texture` into this cell.
+    bar: u32,
+}
+
 /// Native video renderer implementing the ClipRenderer trait.
 pub struct VideoRenderer {
     /// Cached pointer to GpuDevice owned by ContentPipeline (same thread, same lifetime).
@@ -90,6 +101,10 @@ pub struct VideoRenderer {
     /// NEVER composited (separate from `active_clips`) — it just holds the single
     /// decoded poster frame. Decode results route here too (`clip_state_mut`).
     poster_clips: AHashMap<ClipId, ActiveVideoClip>,
+    /// §24 5c-2: per-poster filmstrip walk state (bar source times + current bar),
+    /// keyed by the same prefixed poster key as `poster_clips`. Absent for plain
+    /// single-frame posters.
+    poster_filmstrip: AHashMap<ClipId, FilmstripState>,
     scheduler: DecodeScheduler,
     available_rts: Vec<VideoRenderTarget>,
     video_library: Option<VideoLibrary>,
@@ -127,6 +142,7 @@ impl VideoRenderer {
             format,
             active_clips: AHashMap::new(),
             poster_clips: AHashMap::new(),
+            poster_filmstrip: AHashMap::new(),
             scheduler,
             available_rts,
             video_library: None,
@@ -235,6 +251,114 @@ impl VideoRenderer {
             .contains_key(Self::poster_key(clip_id).as_str())
     }
 
+    /// §24 5c-2: request a per-bar FILMSTRIP decode for a parked video clip. Like
+    /// [`Self::request_clip_poster`] but walks the isolated decoder across
+    /// `bar_times` (source seconds per filmstrip cell), so the timeline can show
+    /// frames sampled across the clip's duration, not just its first frame.
+    /// Idempotent — a clip that's active or already decoding is left alone. The
+    /// caller drives bar advancement via [`Self::advance_poster_to_bar`] as each
+    /// bar's cell is captured. No bar frame is reported until the caller seeks to
+    /// one (the initial Prepare frame is ignored), so cell 0 shows the clip's
+    /// in-point, not the file's first frame.
+    pub fn request_clip_filmstrip(
+        &mut self,
+        clip_id: &str,
+        video_clip_id: &str,
+        bar_times: &[f32],
+    ) -> bool {
+        if bar_times.is_empty() {
+            return false;
+        }
+        let key = Self::poster_key(clip_id);
+        if self.active_clips.contains_key(clip_id) || self.poster_clips.contains_key(key.as_str()) {
+            return true;
+        }
+        let (path, duration) = {
+            let Some(ref library) = self.video_library else {
+                return false;
+            };
+            let Some(vc) = library.find_clip_by_id(video_clip_id) else {
+                return false;
+            };
+            (vc.file_path.clone(), vc.duration)
+        };
+        let rt = self.acquire_rt();
+        self.poster_clips.insert(
+            ClipId::new(&key),
+            ActiveVideoClip {
+                video_clip_id: video_clip_id.to_string(),
+                render_target: rt,
+                playing: false,
+                ready: false,
+                has_frame: false,
+                playback_time: 0.0,
+                media_length: duration,
+                frame_rate: 30.0,
+                looping: false,
+                playback_rate: 1.0,
+                decode_pending: true,
+                pending_seek_time: None,
+                time_accumulator: 0.0,
+            },
+        );
+        // `bar = u32::MAX` = no valid bar frame yet; the Prepare frame is ignored.
+        self.poster_filmstrip.insert(
+            ClipId::new(&key),
+            FilmstripState {
+                times: bar_times.to_vec(),
+                bar: u32::MAX,
+            },
+        );
+        self.scheduler.submit(DecodeJob::Open {
+            clip_id: key.clone(),
+            path,
+        });
+        self.scheduler.submit(DecodeJob::Prepare { clip_id: key });
+        true
+    }
+
+    /// The filmstrip cell index the current ready poster frame represents, or
+    /// `None` while a seek is in flight / no bar has been sought yet. The snapshot
+    /// pass captures [`Self::poster_texture`] into this cell.
+    pub fn poster_target_bar(&self, clip_id: &str) -> Option<u32> {
+        let key = Self::poster_key(clip_id);
+        let clip = self.poster_clips.get(key.as_str())?;
+        if !clip.has_frame || clip.decode_pending {
+            return None;
+        }
+        let bar = self.poster_filmstrip.get(key.as_str())?.bar;
+        (bar != u32::MAX).then_some(bar)
+    }
+
+    /// Whether a filmstrip poster is ready to be seeked to its next bar (decoder
+    /// opened and no decode in flight).
+    pub fn poster_can_advance(&self, clip_id: &str) -> bool {
+        self.poster_clips
+            .get(Self::poster_key(clip_id).as_str())
+            .is_some_and(|c| c.ready && !c.decode_pending)
+    }
+
+    /// Seek a filmstrip poster's isolated decoder to `bar`'s source time so its
+    /// next decoded frame represents that cell. No-op if there's no filmstrip for
+    /// the clip or `bar` is out of range.
+    pub fn advance_poster_to_bar(&mut self, clip_id: &str, bar: u32) {
+        let key = Self::poster_key(clip_id);
+        let Some(state) = self.poster_filmstrip.get_mut(key.as_str()) else {
+            return;
+        };
+        let Some(&t) = state.times.get(bar as usize) else {
+            return;
+        };
+        state.bar = bar;
+        if let Some(clip) = self.poster_clips.get_mut(key.as_str()) {
+            clip.decode_pending = true;
+        }
+        self.scheduler.submit(DecodeJob::Seek {
+            clip_id: key,
+            target_time: t.max(0.0),
+        });
+    }
+
     /// The decoded poster texture for a parked video clip, once its frame is ready.
     pub fn poster_texture(&self, clip_id: &str) -> Option<&GpuTexture> {
         self.poster_clips
@@ -279,6 +403,7 @@ impl VideoRenderer {
                 self.scheduler
                     .submit(DecodeJob::Close { clip_id: key.clone() });
             }
+            self.poster_filmstrip.remove(key.as_str());
         }
     }
 
@@ -563,6 +688,7 @@ impl ClipRenderer for VideoRenderer {
                 self.release_rt(clip.render_target);
             }
         }
+        self.poster_filmstrip.clear();
     }
 
     fn on_project_loaded(&mut self, project: &Project) {
@@ -755,6 +881,7 @@ impl ClipRenderer for VideoRenderer {
                 });
             }
             self.poster_clips.clear();
+            self.poster_filmstrip.clear();
         }
     }
 
