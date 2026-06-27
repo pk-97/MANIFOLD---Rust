@@ -155,6 +155,10 @@ pub const CLIP_ATLAS_H: u32 = CLIP_ATLAS_ROWS * CLIP_ATLAS_CELL_H;
 /// Max filmstrip cells the clip atlas holds (LRU-evicted by clip past this).
 pub const CLIP_ATLAS_CELLS: usize = (CLIP_ATLAS_COLS * CLIP_ATLAS_ROWS) as usize;
 
+/// Snapshot of `(published layout, clip→content-hash)` captured when a save
+/// readback is submitted, consumed when it returns (§24 5c-2 P4).
+type ClipAtlasPersistSnapshot = (Vec<(manifold_core::ClipId, u32, u32)>, AHashMap<String, u64>);
+
 /// Aspect-fit viewport `(x, y, w, h)` for atlas cell `i`, letterboxing a source
 /// of `src_w`×`src_h` inside its 16:9 cell so the thumbnail keeps the source's
 /// true aspect (the atlas is cleared transparent first, so the letterbox bars
@@ -252,6 +256,36 @@ fn find_parked_video_clip<'a>(
 /// A free function (not a `&mut self` method) so the caller can pass the persistent
 /// atlas / cache / layout as disjoint field borrows alongside the `&self.native_device`
 /// binding that `render()` holds for the whole frame.
+/// Lazily create the content-owned persistent clip-thumbnail atlas (Rgba16Float),
+/// cleared to transparent (Metal doesn't zero-init) and force-propagated to all
+/// rotating slots so the UI never samples uninitialised VRAM. Shared by the
+/// capture pass and the cache-restore pass.
+#[cfg(target_os = "macos")]
+fn ensure_clip_atlas_persistent(
+    native_device: &manifold_gpu::GpuDevice,
+    enc: &mut manifold_gpu::GpuEncoder,
+    persistent: &mut Option<manifold_gpu::GpuTexture>,
+    propagate: &mut u8,
+) {
+    if persistent.is_some() {
+        return;
+    }
+    let tex = native_device.create_texture(&manifold_gpu::GpuTextureDesc {
+        width: CLIP_ATLAS_W,
+        height: CLIP_ATLAS_H,
+        depth: 1,
+        format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+        dimension: manifold_gpu::GpuTextureDimension::D2,
+        usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
+            | manifold_gpu::GpuTextureUsage::SHADER_READ,
+        label: "Clip Thumbnail Atlas (persistent)",
+        mip_levels: 1,
+    });
+    enc.clear_texture(&tex, 0.0, 0.0, 0.0, 0.0);
+    *persistent = Some(tex);
+    *propagate = crate::shared_texture::SURFACE_COUNT as u8;
+}
+
 #[cfg(target_os = "macos")]
 #[allow(clippy::too_many_arguments)]
 fn fill_clip_atlas(
@@ -286,29 +320,7 @@ fn fill_clip_atlas(
     *frame_counter = frame_counter.wrapping_add(1);
     let frame = *frame_counter;
 
-    // Lazily create the content-owned persistent atlas (Rgba16Float, render target
-    // + sampled — matches the IOSurface format).
-    if persistent.is_none() {
-        let tex = native_device.create_texture(&manifold_gpu::GpuTextureDesc {
-            width: CLIP_ATLAS_W,
-            height: CLIP_ATLAS_H,
-            depth: 1,
-            format: manifold_gpu::GpuTextureFormat::Rgba16Float,
-            dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET
-                | manifold_gpu::GpuTextureUsage::SHADER_READ,
-            label: "Clip Thumbnail Atlas (persistent)",
-            mip_levels: 1,
-        });
-        // Metal does NOT zero-initialise textures — clear the atlas to transparent
-        // so unwritten cells (and first-snapshot Loads) never show garbage VRAM.
-        enc.clear_texture(&tex, 0.0, 0.0, 0.0, 0.0);
-        *persistent = Some(tex);
-        // Force-propagate the cleared atlas to ALL rotating write surfaces over the
-        // next frames, so the UI never samples an uninitialised IOSurface before
-        // the first real snapshot lands.
-        *propagate = crate::shared_texture::SURFACE_COUNT as u8;
-    }
+    ensure_clip_atlas_persistent(native_device, enc, persistent, propagate);
 
     // ── Phase 1: pick this frame's bar captures ──
     // Each visible clip with a live source captures the filmstrip cell under the
@@ -420,6 +432,116 @@ fn fill_clip_atlas(
         "Clip Thumbnail Atlas Publish",
     );
     true
+}
+
+/// Restore cached filmstrip cells into the persistent atlas (§24 5c-2 P4). Requests
+/// missing strips from the disk cache, stashes finished loads, and uploads **one**
+/// cell per frame via a reused RGBA8 staging texture (`replaceRegion` is a CPU
+/// write, so a single upload+blit per frame avoids any GPU read-after-write hazard;
+/// the strip fills in over ~1 s). Returns true if a cell was restored (so the
+/// caller lets the publish copy run). Best-effort: bad/short data is skipped and
+/// the clip simply re-captures.
+#[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
+fn restore_clip_atlas(
+    native_device: &manifold_gpu::GpuDevice,
+    enc: &mut manifold_gpu::GpuEncoder,
+    raw: Option<&manifold_gpu::GpuRenderPipeline>,
+    sampler: Option<&manifold_gpu::GpuSampler>,
+    visible: &[ClipId],
+    clip_hashes: &AHashMap<String, u64>,
+    cache_obj: &mut crate::clip_atlas::ClipAtlasCache,
+    cache_disk: &mut crate::clip_thumb_cache::ClipThumbCache,
+    pending_loads: &mut AHashMap<u64, crate::clip_thumb_cache::StripCells>,
+    persistent: &mut Option<manifold_gpu::GpuTexture>,
+    staging: &mut Option<manifold_gpu::GpuTexture>,
+    propagate: &mut u8,
+    layout_out: &mut Vec<(ClipId, u32, u32)>,
+) -> bool {
+    let (Some(raw), Some(sampler)) = (raw, sampler) else {
+        return false;
+    };
+    // Request a load for each visible clip that has no cells yet (once per session).
+    for cid in visible {
+        if cache_obj.contains_any(cid) {
+            continue;
+        }
+        if let Some(&hash) = clip_hashes.get(cid.as_str())
+            && hash != 0
+        {
+            cache_disk.request_load(hash);
+        }
+    }
+    // Stash finished loads (the load may land a frame when its clip isn't visible).
+    for strip in cache_disk.drain_loaded() {
+        pending_loads.insert(strip.hash, strip.cells);
+    }
+    // Drop strips no visible clip wants any more, bounding memory.
+    let wanted: ahash::AHashSet<u64> = visible
+        .iter()
+        .filter_map(|c| clip_hashes.get(c.as_str()).copied())
+        .filter(|&h| h != 0)
+        .collect();
+    pending_loads.retain(|h, _| wanted.contains(h));
+    if pending_loads.is_empty() {
+        return false;
+    }
+
+    let (cw, ch) = (CLIP_ATLAS_CELL_W, CLIP_ATLAS_CELL_H);
+    let cell_bytes = (cw * ch * 4) as usize;
+    // Restore ONE cell this frame: pick a visible clip + a strip cell its cache lacks.
+    for cid in visible {
+        let Some(&hash) = clip_hashes.get(cid.as_str()) else {
+            continue;
+        };
+        let Some(strip) = pending_loads.get(&hash) else {
+            continue;
+        };
+        let Some((cell_idx, bytes)) = strip
+            .iter()
+            .find(|(idx, _)| cache_obj.cell_for(cid, *idx).is_none())
+        else {
+            continue;
+        };
+        if bytes.len() != cell_bytes {
+            continue;
+        }
+        let Some(atlas_cell) = cache_obj.get_or_alloc(cid, *cell_idx) else {
+            continue;
+        };
+        ensure_clip_atlas_persistent(native_device, enc, persistent, propagate);
+        if staging.is_none() {
+            *staging = Some(native_device.create_texture(&manifold_gpu::GpuTextureDesc {
+                width: cw,
+                height: ch,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::SHADER_READ
+                    | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
+                label: "Clip Thumb Restore Staging",
+                mip_levels: 1,
+            }));
+        }
+        let st = staging.as_ref().expect("staging just created");
+        native_device.upload_texture(st, bytes);
+        let pt = persistent.as_ref().expect("persistent ensured above");
+        enc.draw_fullscreen_viewport(
+            raw,
+            pt,
+            &[
+                manifold_gpu::GpuBinding::Texture { binding: 0, texture: st },
+                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler },
+            ],
+            clip_atlas_cell_full(atlas_cell as usize),
+            manifold_gpu::GpuLoadAction::Load,
+            "Clip Thumb Restore Cell",
+        );
+        *layout_out = cache_obj.layout();
+        *propagate = crate::shared_texture::SURFACE_COUNT as u8;
+        return true;
+    }
+    false
 }
 
 /// The PlaybackEngine (which owns GeneratorRenderer) is borrowed for each frame.
@@ -549,6 +671,24 @@ pub struct ContentPipeline {
     clip_atlas_propagate: u8,
     /// Published `(clip_id, filmstrip cell, atlas cell)` layout for the UI.
     last_clip_atlas_layout: Vec<(manifold_core::ClipId, u32, u32)>,
+    /// §24 5c-2 P4: sidecar disk cache so filmstrips survive reload. `None` if no
+    /// cache dir is available. All disk IO is on its own worker thread.
+    clip_thumb_cache: Option<crate::clip_thumb_cache::ClipThumbCache>,
+    /// Async RGBA8 readback of the persistent atlas for the debounced disk save.
+    #[cfg(target_os = "macos")]
+    clip_atlas_readback: manifold_renderer::gpu_readback::ReadbackRequest,
+    /// Fill-frame at which a debounced save should fire (0 = none scheduled).
+    clip_atlas_persist_due: u64,
+    /// `(layout, clip→hash)` snapshot captured when the save readback was submitted,
+    /// used to slice the atlas bytes when the readback returns a later tick.
+    clip_atlas_persist_pending: Option<ClipAtlasPersistSnapshot>,
+    /// Reused cell-sized RGBA8 staging texture for uploading cached cells back into
+    /// the persistent atlas on restore. Lazily created.
+    #[cfg(target_os = "macos")]
+    clip_atlas_restore_staging: Option<manifold_gpu::GpuTexture>,
+    /// Loaded strips waiting to be uploaded (keyed by content hash), kept until
+    /// every cell is restored or the owning clips leave the visible set.
+    clip_atlas_pending_loads: AHashMap<u64, crate::clip_thumb_cache::StripCells>,
 
     /// Per-surface signal values — tracks the GpuEvent signal value from the last
     /// frame that wrote to each surface. Before writing to surface S, we wait for
@@ -720,6 +860,17 @@ impl ContentPipeline {
             clip_atlas_frame: 0,
             clip_atlas_propagate: 0,
             last_clip_atlas_layout: Vec::new(),
+            clip_thumb_cache: crate::clip_thumb_cache::ClipThumbCache::new(
+                CLIP_ATLAS_CELL_W,
+                CLIP_ATLAS_CELL_H,
+            ),
+            #[cfg(target_os = "macos")]
+            clip_atlas_readback: manifold_renderer::gpu_readback::ReadbackRequest::new(),
+            clip_atlas_persist_due: 0,
+            clip_atlas_persist_pending: None,
+            #[cfg(target_os = "macos")]
+            clip_atlas_restore_staging: None,
+            clip_atlas_pending_loads: AHashMap::new(),
             #[cfg(target_os = "macos")]
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             last_fence_wait_ms: 0.0,
@@ -1711,6 +1862,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 self.clip_atlas_visible.iter().map(|c| c.as_str()).collect();
             let mut clip_meta: AHashMap<&str, (f64, f64, f64)> =
                 AHashMap::with_capacity(visible_set.len());
+            // Per-clip content hash for the disk cache (key for save/restore).
+            let mut clip_hashes: AHashMap<String, u64> =
+                AHashMap::with_capacity(visible_set.len());
             for layer in layers {
                 for clip in &layer.clips {
                     let id = clip.id.as_str();
@@ -1723,6 +1877,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 clip.in_point.as_f32() as f64,
                             ),
                         );
+                        if self.clip_thumb_cache.is_some() {
+                            clip_hashes.insert(
+                                id.to_string(),
+                                crate::clip_thumb_cache::clip_content_hash(clip, layer),
+                            );
+                        }
                     }
                 }
             }
@@ -1915,8 +2075,30 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                 }
             }
+            // Restore cached cells (P4) BEFORE the capture, so a restored bar isn't
+            // needlessly re-captured. One cell/frame, off the disk (worker thread).
+            let restored = if let Some(cache_disk) = self.clip_thumb_cache.as_mut() {
+                restore_clip_atlas(
+                    native_device,
+                    &mut native_enc,
+                    self.preview_pipeline.as_ref(),
+                    self.preview_sampler.as_ref(),
+                    &self.clip_atlas_visible,
+                    &clip_hashes,
+                    &mut self.clip_atlas_cache,
+                    cache_disk,
+                    &mut self.clip_atlas_pending_loads,
+                    &mut self.clip_atlas_persistent,
+                    &mut self.clip_atlas_restore_staging,
+                    &mut self.clip_atlas_propagate,
+                    &mut self.last_clip_atlas_layout,
+                )
+            } else {
+                false
+            };
+
             let write_idx = self.write_surface_index;
-            fill_clip_atlas(
+            let published = fill_clip_atlas(
                 native_device,
                 &mut native_enc,
                 &sources,
@@ -1934,7 +2116,61 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 &mut self.clip_atlas_propagate,
                 &mut self.clip_atlas_persistent,
                 &mut self.last_clip_atlas_layout,
-            )
+            );
+
+            // Debounced disk SAVE (P4): poll a completed atlas readback → slice +
+            // hand to the worker; otherwise schedule + submit a new readback once
+            // captures have settled. All disk IO is off-thread; the readback is the
+            // existing async pattern (submit one tick, read the next).
+            if self.clip_thumb_cache.is_some() {
+                const CLIP_ATLAS_SAVE_DEBOUNCE: u64 = 300; // ~5 s at 60 fps
+                if self.clip_atlas_readback.is_pending() {
+                    if let Some(bytes) = self.clip_atlas_readback.try_read()
+                        && let Some((layout_snap, hashes_snap)) =
+                            self.clip_atlas_persist_pending.take()
+                    {
+                        let strips = crate::clip_thumb_cache::slice_atlas_for_store(
+                            &bytes,
+                            CLIP_ATLAS_W,
+                            &layout_snap,
+                            &hashes_snap,
+                            CLIP_ATLAS_COLS,
+                            CLIP_ATLAS_CELL_W,
+                            CLIP_ATLAS_CELL_H,
+                        );
+                        if let Some(cache_disk) = self.clip_thumb_cache.as_ref() {
+                            for (hash, cells) in strips {
+                                cache_disk.store(hash, cells);
+                            }
+                        }
+                    }
+                } else {
+                    if (published || restored) && self.clip_atlas_persist_due == 0 {
+                        self.clip_atlas_persist_due =
+                            self.clip_atlas_frame + CLIP_ATLAS_SAVE_DEBOUNCE;
+                    }
+                    if self.clip_atlas_persist_due != 0
+                        && self.clip_atlas_frame >= self.clip_atlas_persist_due
+                        && self.clip_atlas_persistent.is_some()
+                        && !self.last_clip_atlas_layout.is_empty()
+                    {
+                        self.clip_atlas_persist_due = 0;
+                        let mut gpu_rb = GpuEncoder::new(&mut native_enc, native_device);
+                        if let Some(pt) = self.clip_atlas_persistent.as_ref() {
+                            self.clip_atlas_readback.submit(
+                                &mut gpu_rb,
+                                pt,
+                                CLIP_ATLAS_W,
+                                CLIP_ATLAS_H,
+                            );
+                            self.clip_atlas_persist_pending =
+                                Some((self.last_clip_atlas_layout.clone(), clip_hashes.clone()));
+                        }
+                    }
+                }
+            }
+
+            published || restored
         } else {
             false
         };
