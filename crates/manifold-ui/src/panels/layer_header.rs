@@ -24,13 +24,10 @@ const NAME_H: f32 = color::LAYER_CTRL_NAME_ROW_HEIGHT;
 const ROW_STEP: f32 = color::LAYER_CTRL_ROW_STEP;
 const MS_BTN_W: f32 = color::LAYER_CTRL_MUTE_SOLO_BTN_WIDTH;
 const BTN_H: f32 = color::LAYER_CTRL_BTN_HEIGHT;
-const INFO_H: f32 = color::LAYER_CTRL_INFO_ROW_HEIGHT;
 const SEP_H: f32 = color::LAYER_CTRL_SEPARATOR_HEIGHT;
 const RIGHT_GUTTER: f32 = color::LAYER_CTRL_RIGHT_GUTTER;
 const TOP_GAP: f32 = color::LAYER_CTRL_TOP_ROW_GAP;
 const FOLDER_W: f32 = color::LAYER_CTRL_FOLDER_BTN_WIDTH;
-const NEW_CLIP_W: f32 = color::LAYER_CTRL_NEW_CLIP_BTN_WIDTH;
-const ADD_GEN_W: f32 = color::LAYER_CTRL_ADD_GEN_CLIP_BTN_WIDTH;
 const GEN_TYPE_H: f32 = color::LAYER_CTRL_GEN_TYPE_ROW_HEIGHT;
 const BADGE_SIZE: f32 = color::LAYER_CTRL_TYPE_BADGE_SIZE;
 // Widths for the MIDI trigger-mode toggle and per-layer device dropdown
@@ -463,16 +460,11 @@ fn compute_layer_row(
         return d;
     }
 
-    // ── Info label ──
-    d.set(C::Info, Rect::new(pad, y, w - pad * 2.0, INFO_H));
-    y += 16.0;
-
+    // Clip-count line + "+ clip" / "+ new clip" buttons removed (old dev tools,
+    // §C timeline redesign). The group child-count summary moves to the lane.
     if is_group {
-        y += 2.0;
+        // No detail controls on a group header.
     } else if is_generator {
-        d.set(C::AddGenClip, Rect::new(pad, y, ADD_GEN_W, BTN_H));
-        y += BTN_H + 2.0;
-
         // MIDI note + trigger-mode toggle (share one row)
         d.set(C::MidiLabel, Rect::new(pad, y, MIDI_LBL_W, BTN_H));
         let gen_midi_x = pad + MIDI_LBL_W + 2.0;
@@ -498,13 +490,11 @@ fn compute_layer_row(
             Rect::new(dev_x, y, (right_edge - dev_x).max(10.0), BTN_H),
         );
     } else {
-        // Folder | PathLabel | +new clip
+        // Folder | PathLabel (folder routing; no "+ new clip" button)
         d.set(C::Folder, Rect::new(pad, y, FOLDER_W, BTN_H));
         let path_left = pad + FOLDER_W + 4.0;
-        let new_clip_x = w - pad - NEW_CLIP_W;
-        let path_w = (new_clip_x - path_left - 4.0).max(10.0);
+        let path_w = (w - pad - RIGHT_GUTTER - path_left).max(10.0);
         d.set(C::PathLabel, Rect::new(path_left, y, path_w, BTN_H));
-        d.set(C::NewClip, Rect::new(new_clip_x, y, NEW_CLIP_W, BTN_H));
         y += ROW_STEP;
 
         // MIDI note + trigger-mode toggle (share one row)
@@ -2146,12 +2136,14 @@ mod tests {
             assert!(panel.rows[i].id(LayerControl::Solo).is_some(), "layer {} solo", i);
             assert!(panel.rows[i].id(LayerControl::Blend).is_some(), "layer {} blend", i);
         }
-        // Generator layer should have gen_type and add_gen_clip
+        // Generator layer should have gen_type.
         assert!(panel.rows[2].id(LayerControl::GenType).is_some());
-        assert!(panel.rows[2].id(LayerControl::AddGenClip).is_some());
-        // Video layers should have folder and new_clip
+        // Video layers should have folder routing.
         assert!(panel.rows[0].id(LayerControl::Folder).is_some());
-        assert!(panel.rows[0].id(LayerControl::NewClip).is_some());
+        // §C: clip-count line + "+ clip" / "+ new clip" buttons are removed.
+        assert_eq!(panel.rows[0].id(LayerControl::Info), None);
+        assert_eq!(panel.rows[0].id(LayerControl::NewClip), None);
+        assert_eq!(panel.rows[2].id(LayerControl::AddGenClip), None);
         // Insert indicator
         assert!(panel.insert_indicator_id.is_some());
     }
@@ -2420,13 +2412,8 @@ mod tests {
             );
             return d;
         }
-        d.set(C::Info, Rect::new(pad, y, w - pad * 2.0, INFO_H));
-        y += 16.0;
         if is_group {
-            y += 2.0;
         } else if is_generator {
-            d.set(C::AddGenClip, Rect::new(pad, y, ADD_GEN_W, BTN_H));
-            y += BTN_H + 2.0;
             d.set(C::MidiLabel, Rect::new(pad, y, MIDI_LBL_W, BTN_H));
             let gen_midi_x = pad + MIDI_LBL_W + 2.0;
             let right_edge = w - pad - RIGHT_GUTTER;
@@ -2451,10 +2438,8 @@ mod tests {
         } else {
             d.set(C::Folder, Rect::new(pad, y, FOLDER_W, BTN_H));
             let path_left = pad + FOLDER_W + 4.0;
-            let new_clip_x = w - pad - NEW_CLIP_W;
-            let path_w = (new_clip_x - path_left - 4.0).max(10.0);
+            let path_w = (w - pad - RIGHT_GUTTER - path_left).max(10.0);
             d.set(C::PathLabel, Rect::new(path_left, y, path_w, BTN_H));
-            d.set(C::NewClip, Rect::new(new_clip_x, y, NEW_CLIP_W, BTN_H));
             y += ROW_STEP;
             d.set(C::MidiLabel, Rect::new(pad, y, MIDI_LBL_W, BTN_H));
             let midi_x = pad + MIDI_LBL_W + 2.0;
