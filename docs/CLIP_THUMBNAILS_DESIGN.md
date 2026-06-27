@@ -204,3 +204,190 @@ parked poster). Remaining items are *polish*, not gaps:
   needs eyeballing on the running app. Everything else (UI blit, cache logic, the
   content-thread paths) is verified by headless PNG / unit tests / adversarial review
   / the workspace sweep.
+
+---
+
+# Filmstrip evolution (§24 5c-2) — design
+
+The shipped system above puts **one** thumbnail cell per clip and stretches it across
+the whole clip body, and (for playing generators) re-snapshots it on a ~1.5 s timer.
+That has three problems we want to remove:
+
+1. **It stretches.** A 32-bar clip body is enormous; one cropped cell across it shows
+   a thin horizontal slice and wastes the width.
+2. **The timed refresh is neither/nor.** Re-snapshotting a playing generator every 90
+   frames is too slow to read as animation, too fast to read as a stable icon — it
+   just *jumps*.
+3. **The cold-start / first-frame source is the worst frame.** A generator's `t=0`
+   default look (or a video's frame 0) is exactly the empty, pre-warm-up frame.
+
+The evolution: **a temporal filmstrip per clip** — N cells across the clip's duration,
+one per bar, tiled across the body. Resolume uses a single static thumbnail; Resolve
+uses a filmstrip plus a lockable poster frame and hover-scrub. We take the Resolve
+model because our clips have real width on a wide, beat-ruled timeline, and a filmstrip
+reads the clip's *arc* at a glance. This section supersedes the single-cell display and
+the timed-refresh capture; it keeps the shipped substrate (IOSurface bridge, persistent
+atlas, `ClipAtlasCache`, the rounded-rect masked blit, the source-preference chain).
+
+## The unifying insight — the playhead sweep *is* the recording
+
+A generator is only truthfully renderable **while it plays** (warm, modulated, audio-
+reactive — none of which is computed off the playhead; re-rendering a parked clip at a
+synthetic time is the invasive path the shipped doc already rejected). But while it
+plays, the playhead crosses *every bar* of the clip. So we don't render off-playhead at
+all — we **record the live output into the bar-cell the playhead is currently in**. The
+strip fills itself as you rehearse, each cell warm and real for that bar. The only cell
+that updates live is the one under the playhead; the rest is static history. That reads
+as "the playhead is painting the strip," which is intuitive, not jumpy.
+
+Video is the deterministic case: there's nothing to keep warm, so video fills by
+**background seek-decode** at each bar's timestamp (no play required). Same visual, same
+draw path, same storage — only the *fill source* differs by clip kind. That symmetry is
+the whole point: one model for both.
+
+## Cell grid — bar-indexed, adaptive, bounded
+
+- **Base resolution = one cell per bar.** Cell boundaries are real bar lines (via the
+  tempo map / `time_sig_numerator` — `crates/manifold-core/src/settings.rs`), so the
+  strip lines up with the timeline's existing beat/bar markers. "What this clip looks
+  like each bar." Variable tempo / meter is handled because we index by the bar grid,
+  not a fixed beat count.
+- **Bounded per clip.** A clip stores at most `M_MAX` cells (start at 64). Past that,
+  drop to one cell per 2 bars, then 4, … (power-of-two grouping) so a 200-bar clip
+  never stores 200 cells. Cell count per clip is `min(bars, M_MAX)` at the chosen
+  grouping.
+- **Display adapts to width; storage does not.** Zoom only re-tiles — never re-renders
+  or re-captures. If the body is wider than `bars × min_readable_px`, cells grow (mild
+  intra-bar stretch is acceptable — it's still "this bar looked like this"). If
+  narrower, sub-sample the stored cells. This decoupling is the property that makes
+  zoom free.
+
+## Capture
+
+The capture pass already runs after the compositor render (`content_pipeline.rs`,
+"Clip thumbnail atlas snapshot"), with the current playhead beat in scope
+(`engine.current_beat_f64()`) and the source-preference chain built
+(post-fx → live → poster/cold-start). What changes is *which cell* and *when*:
+
+- **Generators (playing):** for each active visible clip, compute the current bar
+  `b = floor((beat − clip.start_beat) / beats_per_bar)` at the clip's grouping; if `b`
+  differs from the clip's last-captured bar, blit the live source into that bar's cell.
+  At 120 BPM a 4/4 bar is ~120 frames, so each cell captures roughly once per bar
+  crossing — a handful of blits per frame across all playing clips, trivially within
+  the existing `MAX_SNAPSHOTS_PER_FRAME` cap. Seeking/looping fills cells out of order
+  or overwrites — both correct, since each cell always holds the live frame *for its
+  own bar*.
+- **Video (parked or playing):** background seek-decode. For each bar without a cell,
+  submit a `DecodeJob::Seek` to the bar's video-time on an **isolated decoder** (the
+  prefixed-key poster isolation from P2b generalizes to a strip), grab the frame, blit
+  it into the bar's cell. Bounded queue, prioritize visible clips, persist so it's
+  one-time. Industry practice (and ours, eventually) is **keyframe-fast-seek** — seek
+  to the nearest preceding keyframe without decoding forward to the exact frame: I-
+  frames are self-contained, fast, and a thumbnail doesn't care about ±a few frames.
+  Our seek is a native FFI (`VideoDecoder_SeekTo(handle, seconds)` in `decoder.rs`,
+  which reports the landed PTS via `frame_time()`); a cheap keyframe-only mode is a
+  **native-decoder addition**, not free today. Until it lands, treat video strip fill
+  as "one seek+decode per cell, off-thread, bounded, persisted."
+- **The "best frame" heuristic is gone.** With a strip, each cell is simply that bar —
+  no peak-energy selection needed. Simpler than the shipped single-still.
+
+## Storage & transport — confirmed low-risk
+
+The audit settled the part I was least sure of: **atlas cells are interchangeable and
+drawn one quad per cell** (`atlas_cell_full(cell)` computes a viewport from a flat cell
+index; the UI blit in `app_render.rs` Pass 4b″ already draws an arbitrary cell per
+clip). So a filmstrip needs **no rectangle packer** — a clip holds a *list* of cell
+indices (one per bar), and we draw M quads at consecutive x-offsets across the body.
+The cells need not be contiguous in the atlas.
+
+Concrete changes, all bounded extensions of shipped code:
+- **`ClipAtlasCache`: `ClipId → Vec<cell>`** instead of `ClipId → cell`. `get_or_alloc`
+  takes a bar index; LRU evicts a *whole clip's* cell-list when off-screen and the pool
+  is full. Layout published as `Vec<(ClipId, bar, cell)>`.
+- **Bigger pool + smaller cells + 8-bit.** Recommended start: **128×72, RGBA8, 512
+  cells** (≈19 MB/surface, ~57 MB across the triple buffer + persistent copy ≈ 75 MB).
+  At ~30 visible clips × ~16 visible bars that's ~480 cells — fits; distant clips past
+  the cap fall back to a single still or the type poster (graceful, as today). This
+  needs a **format parameter on `SharedTextureBridge`** (currently hardcoded
+  `Rgba16Float`/8 BPP) and on the persistent atlas — a contained change to one file.
+  Thumbnails are SDR previews, so RGBA8 is correct and halves bandwidth.
+- **Copy cost.** The shipped path copies the whole persistent atlas → rotating surface
+  on any change (one `draw_fullscreen`) and propagates over `SURFACE_COUNT` frames. A
+  bigger atlas makes that copy bigger but it's still one blit; **dirty-cell copy** (copy
+  only changed cells) is an available optimization, not required for correctness. The
+  filmstrip atlas is mostly static history (only the playhead cell churns), so the
+  steady-state copy is cheap regardless.
+
+## Persistence — sidecar cache (decided)
+
+Filmstrips persist to a **sidecar cache, not the project file.** Rationale: regenerable,
+keeps `.manifold` files small and portable (video strips are many frames), and a stale/
+corrupt cache simply rebuilds. **Location:** the app cache dir keyed by project id (not
+next to the user's project — no folder clutter). **Format:** a few packed atlas images
+on disk + a small JSON index `clip_id → { hash, bar→frame }`. **Invalidation key:**
+generator type + `param_values` for generators; file path + mtime + in/out points for
+video. Edit a generator's params → hash changes → only that clip's strip regenerates;
+everything else loads instantly on project open. **Eviction:** cap total disk size, LRU
+by clip. Net effect: open a rehearsed project and the strips are simply *there*.
+
+## Fill states (graceful, never blank, never lying)
+
+- **Bar never recorded → generator-type poster tint, or flat layer colour.** Render
+  each generator preset once, warmed, at default params → a per-*type* poster (≈20
+  presets, one-time, cacheable/shippable; far cheaper than the per-*clip* cold-start the
+  shipped doc does). A never-played generator clip shows its type's poster, not an empty
+  `t=0` frame. Real captures overwrite poster cells bar-by-bar as you play.
+- **Early generator bars are honestly empty** (the sim is still warming up) — and that's
+  *useful*: you can see "nothing happens until bar 3." We do not fake-fill them.
+- **Dark thumbnails keep identity.** A mostly-black generator (fluid sim) erases the
+  layer colour-coding the operator reads the timeline by. Gate on luminance/variance, or
+  tint toward the layer colour, so a dark strip never reads as a broken/empty clip.
+
+## Performance budget & guarantees (non-negotiable)
+
+- Hard cap captures/frame (reuse `MAX_SNAPSHOTS_PER_FRAME`); video decode off-thread on
+  a bounded queue. The 60 fps content tick is never threatened (hot-path discipline).
+- Capture scope = **visible + small margin**; clips playing far off-screen are not
+  recorded (viewport-driven cache, as today). Trade-off noted: you won't capture a clip
+  you play while scrolled away until you scroll near it.
+- **Downsample properly.** Source is up to 3456×2234 → 128×72; a single bilinear tap
+  aliases. Use a mip/box downsample.
+
+## Honest asymmetries (so they don't surprise)
+
+- **Video strip = raw decode (no effects); generator strip = with layer fx** (it's the
+  live composited output). Fixable later by running decoded video frames through the
+  layer chain in a one-off pass; not worth it initially.
+- **Multi-clip layers** can't isolate one clip's post-fx (the compositor blends all) →
+  raw fallback, same limit as the shipped P2a.
+
+## Usability layer (shares the same storage)
+
+The filmstrip cells *are* the hover-scrub frames, so these come almost for free once the
+strip exists:
+- **Hover-scrub** the strip → preview the bar under the cursor (Resolve/Premiere
+  standard). Big win.
+- **Click a cell → seek the playhead to that bar.**
+Both are deferred polish, but the storage is designed so they need no new capture path —
+flag them so we don't architect them out.
+
+## Phased rollout
+
+1. **Display:** draw M bar-cells tiled across the body (adaptive/bounded), replacing the
+   single stretched cell. Cache + layout become list-per-clip. (Biggest visible change;
+   uses existing capture to fill cell 0 first, then more.)
+2. **Generator capture-on-play by bar** + drop the timed refresh. Add the luminance gate
+   and the per-type poster fallback.
+3. **Video background seek-decode per bar** (isolated decoder, bounded queue).
+4. **Sidecar persistence** (load-on-open, hash-invalidate).
+5. **Polish:** keyframe-fast-seek native mode; hover-scrub; click-to-seek; RGBA8 bridge
+   format + cell-size/pool tuning; optional dirty-cell copy.
+
+## What this supersedes
+
+- Single stretched cell per clip → bar-indexed filmstrip.
+- Timed `REFRESH_INTERVAL` re-snapshot of playing clips → capture-on-bar-crossing.
+- Per-clip cold-start `render_clip_thumbnail` (parked generator default-look) → per-type
+  poster fallback (cheaper) + real bars filled on play. (The isolated `ThumbGen`
+  instance machinery can be retired once the poster path lands.)
+- First-frame-only video poster → seek-per-bar strip (the poster becomes "cell 0").
