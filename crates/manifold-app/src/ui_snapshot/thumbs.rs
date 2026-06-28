@@ -85,14 +85,17 @@ pub fn build_quads(clip_rects: &[ClipScreenRect]) -> Vec<ThumbQuad> {
         if cr.is_audio || cr.rect.width < 24.0 {
             continue;
         }
-        // Reserve the bottom name strip — the thumbnail fills only the preview.
+        // Reserve the bottom name strip, then inset by CLIP_THUMB_INSET so the well
+        // frames the thumbnail as a panel — mirrors the app's clip-thumbnail pass.
         let strip_h = manifold_renderer::clip_draw::clip_strip_height(cr.rect.height)
             .unwrap_or(0.0);
+        let m = manifold_ui::color::CLIP_THUMB_INSET;
+        let preview_h = (cr.rect.height - strip_h).max(1.0);
         let preview = Rect::new(
-            cr.rect.x,
-            cr.rect.y,
-            cr.rect.width,
-            (cr.rect.height - strip_h).max(1.0),
+            cr.rect.x + m,
+            cr.rect.y + m,
+            (cr.rect.width - 2.0 * m).max(1.0),
+            (preview_h - 2.0 * m).max(1.0),
         );
         let win_w = preview.height * cell_aspect;
         if win_w < 1.0 {

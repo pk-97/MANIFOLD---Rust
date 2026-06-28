@@ -288,6 +288,11 @@ pub const CLIP_STRIP_HEIGHT: f32 = 16.0;
 /// keeps a solid band the name reads on (the thumbnail reserves it) rather than a
 /// name floating over the preview. Below this the clip is too short for any band.
 pub const CLIP_STRIP_MIN_CLIP_HEIGHT: f32 = 22.0;
+/// Margin (logical px) the thumbnail is inset from the preview-well edges on the
+/// top/left/right, plus the gap it leaves above the name strip. The darker well
+/// then frames the thumbnail as a dedicated panel rather than the image bleeding
+/// to the clip border (Peter, 2026-06-28).
+pub const CLIP_THUMB_INSET: f32 = 4.0;
 /// The preview well = the identity colour scaled toward black by this factor
 /// (hue-preserving), standing in for the thumbnail until §F populates it. Keeps
 /// the clip's identity readable while making the strip read as a distinct band.

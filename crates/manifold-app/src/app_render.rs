@@ -4117,13 +4117,18 @@ impl Application {
                     // the PREVIEW area above it (mockup `.clip .body{bottom:16px}`),
                     // so the layer-coloured strip + name below are never covered.
                     // Same `clip_strip_height` the clip-body pass uses → they agree.
+                    // Then inset by CLIP_THUMB_INSET on top/left/right (and leave the
+                    // same gap above the strip) so the darker well frames the
+                    // thumbnail as a dedicated panel instead of bleeding to the edge.
                     let strip_h = manifold_renderer::clip_draw::clip_strip_height(cr.rect.height)
                         .unwrap_or(0.0);
+                    let m = manifold_ui::color::CLIP_THUMB_INSET;
+                    let preview_h = (cr.rect.height - strip_h).max(1.0);
                     let body = manifold_ui::node::Rect::new(
-                        cr.rect.x,
-                        cr.rect.y,
-                        cr.rect.width,
-                        (cr.rect.height - strip_h).max(1.0),
+                        cr.rect.x + m,
+                        cr.rect.y + m,
+                        (cr.rect.width - 2.0 * m).max(1.0),
+                        (preview_h - 2.0 * m).max(1.0),
                     );
                     let body_right = body.x + body.width;
                     let start_b = cr.start_beat.as_f32() as f64;
