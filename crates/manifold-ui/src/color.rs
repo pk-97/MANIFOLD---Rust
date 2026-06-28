@@ -283,11 +283,11 @@ pub const CLIP_LABEL_PAD_X: f32 = 6.0;
 // height the band is dropped — the clip is just a solid identity bar + name
 // (collapsed lanes), matching the mockup's collapsed-row clip.
 pub const CLIP_STRIP_HEIGHT: f32 = 16.0;
-/// Minimum clip height for the two-band split. Below this (collapsed/short
-/// clips) the clip stays a solid identity bar — a strip would leave no usable
-/// preview. 44 = 16px strip + ~28px minimum preview, so a 36px collapsed-lane
-/// clip stays a bar while a 128px normal-lane clip splits.
-pub const CLIP_STRIP_MIN_CLIP_HEIGHT: f32 = 44.0;
+/// Minimum clip height that still carries a name strip. Down to this height the
+/// strip is *proportional* (≤ `CLIP_STRIP_HEIGHT`) so even a collapsed-lane clip
+/// keeps a solid band the name reads on (the thumbnail reserves it) rather than a
+/// name floating over the preview. Below this the clip is too short for any band.
+pub const CLIP_STRIP_MIN_CLIP_HEIGHT: f32 = 22.0;
 /// The preview well = the identity colour scaled toward black by this factor
 /// (hue-preserving), standing in for the thumbnail until §F populates it. Keeps
 /// the clip's identity readable while making the strip read as a distinct band.

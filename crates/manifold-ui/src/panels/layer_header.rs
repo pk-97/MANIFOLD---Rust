@@ -156,8 +156,10 @@ fn routing_label_style(text_clr: Color32) -> UIStyle {
 }
 
 /// Append the dropdown caret affordance to a value chip's text (mockup `.sel::after`).
+/// Uses `▼` (U+25BC) — the same glyph the fold chevron renders cleanly in the
+/// bitmap font; the "small" `▾` (U+25BE) isn't in Inter and rasterised as tofu.
 fn with_caret(value: &str) -> String {
-    format!("{value}  \u{25BE}")
+    format!("{value} \u{25BC}")
 }
 
 fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {

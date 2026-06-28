@@ -363,3 +363,31 @@ list; status is updated as each lands.
   + white name). The mockup also brightens the selected *lane row's* top/bottom edges; that's drawn by
   the viewport/GPU lane pass, a separate surface. The header treatment already makes selection
   unmissable, so the lane-edge is reinforcement, deferred to the viewport.
+
+## §L. Live-feedback refinements on the running app (2026-06-28)
+
+Peter ran the build with real thumbnails and flagged the clip rendering. Fixes (commit on
+`feat/timeline-ui-redesign`):
+
+- **Name strip reserved from the thumbnail** — the thumbnail covered the strip (it masked to the full
+  clip body), so the name floated over the image. Now the thumbnail tiles only the PREVIEW area (clip
+  minus `clip_strip_height`), leaving the layer-coloured strip + name uncovered at the bottom — the
+  mockup's `.clip .body{bottom:16px}` anatomy. `app_render.rs` (thumbnail `body` = preview) +
+  `clip_draw.rs` agree on the same `clip_strip_height`.
+- **Strip extended to collapsed clips** — `CLIP_STRIP_MIN_CLIP_HEIGHT` 44→22 and the strip height is
+  now *proportional* (`CLIP_STRIP_HEIGHT.min(h*0.45)`), so a collapsed-lane clip gets a (smaller) strip
+  the name reads on instead of a name floating over the thumbnail.
+- **Filmstrip kept (Peter's call) = "true filmstrip", not one window.** `aspect_windows()` already
+  tiles aspect-locked windows; on varied footage each window is a distinct captured frame. A LOOPing
+  clip captures near-identical frames, so its filmstrip repeats — inherent, accepted. The harness
+  `--thumbs` now mirrors the app: reserves the strip + tiles a varied filmstrip (distinct cells).
+- **Identity-colour clip frame (§E)** — a normal clip's border is now the LAYER's identity colour
+  (`c.base_color`), not the dark hairline, so the full-bleed thumbnail + strip read as that layer's
+  card. Selected keeps the bright ring; locked keeps the dim neutral edge.
+- **Dropdown caret glyph** — `▾` (U+25BE) isn't in the bitmap Inter and rasterised as tofu; switched
+  the value-chip caret to `▼` (U+25BC), the glyph the fold chevron already renders cleanly.
+
+**Still open (own scope, needs the running app):** the collapsed-lane filmstrip is dense (many small
+windows = `preview_height × aspect`); if Peter wants it calmer, cap the window count or show one window
++ colour fill on short clips (the §F "zoomed out → one window + layer colour" rule). The varied-frame
+filmstrip on real footage + the loop-repeat case both need Peter's eye on actual video.

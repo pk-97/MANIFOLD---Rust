@@ -3,10 +3,12 @@
 //! layered onto this same seam, the §F aspect-locked window) render headless
 //! without the content thread. See `docs/HEADLESS_UI_HARNESS.md` §5 / Phase 3.
 //!
-//! This first cut paints one full-body window per non-audio clip, each sampling
-//! a distinct atlas cell, which proves the atlas-injection seam end-to-end. The
-//! §F multi-window aspect tiling (`clip_filmstrip::aspect_windows`) layers onto
-//! the exact same `ThumbQuad`/atlas inputs as the next step.
+//! Mirrors the app's clip-thumbnail pass: each non-audio clip RESERVES the bottom
+//! name-strip band (the thumbnail tiles only the preview area above it) and lays a
+//! filmstrip of aspect-locked windows (`win_w = preview_height × cell_aspect`)
+//! across the preview, each window sampling a DISTINCT atlas cell — so the headless
+//! render shows the real two-band anatomy + a varied filmstrip, not one stretched
+//! still.
 
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -69,27 +71,53 @@ fn cell_tint(cell: usize) -> (u8, u8, u8) {
     )
 }
 
-/// One full-body thumbnail quad per non-audio clip, each sampling a distinct
-/// atlas cell (matches the app's `width < 24` / audio skip filter).
+/// A filmstrip of aspect-locked windows per non-audio clip, tiled across the
+/// PREVIEW area (the clip minus its reserved name strip), each window a distinct
+/// atlas cell. Matches the app's `width < 24` / audio skip filter and the same
+/// `clip_strip_height` reservation, so the headless render is faithful to the app.
 pub fn build_quads(clip_rects: &[ClipScreenRect]) -> Vec<ThumbQuad> {
+    use manifold_ui::node::Rect;
     let inv_cols = 1.0 / CLIP_ATLAS_COLS as f32;
     let inv_rows = 1.0 / CLIP_ATLAS_ROWS as f32;
+    let cell_aspect = CLIP_ATLAS_CELL_W as f32 / CLIP_ATLAS_CELL_H as f32;
     let mut quads = Vec::new();
     for (i, cr) in clip_rects.iter().enumerate() {
         if cr.is_audio || cr.rect.width < 24.0 {
             continue;
         }
-        let cell = (i as u32) % CELLS;
-        let gx = (cell % CLIP_ATLAS_COLS) as f32;
-        let gy = (cell / CLIP_ATLAS_COLS) as f32;
-        let (u0, v0) = (gx * inv_cols, gy * inv_rows);
-        quads.push(ThumbQuad {
-            rect: cr.rect,
-            body_rect: cr.rect,
-            radius: manifold_ui::color::CLIP_RADIUS,
-            uv_min: [u0, v0],
-            uv_max: [u0 + inv_cols, v0 + inv_rows],
-        });
+        // Reserve the bottom name strip — the thumbnail fills only the preview.
+        let strip_h = manifold_renderer::clip_draw::clip_strip_height(cr.rect.height)
+            .unwrap_or(0.0);
+        let preview = Rect::new(
+            cr.rect.x,
+            cr.rect.y,
+            cr.rect.width,
+            (cr.rect.height - strip_h).max(1.0),
+        );
+        let win_w = preview.height * cell_aspect;
+        if win_w < 1.0 {
+            continue;
+        }
+        let right = preview.x + preview.width;
+        let mut x = preview.x;
+        let mut k = 0u32;
+        while x < right - 0.5 {
+            let w = win_w.min(right - x);
+            // A distinct cell per window (and per clip) — a varied filmstrip.
+            let cell = (i as u32 * 7 + k) % CELLS;
+            let gx = (cell % CLIP_ATLAS_COLS) as f32;
+            let gy = (cell / CLIP_ATLAS_COLS) as f32;
+            let (u0, v0) = (gx * inv_cols, gy * inv_rows);
+            quads.push(ThumbQuad {
+                rect: Rect::new(x, preview.y, w, preview.height),
+                body_rect: preview,
+                radius: manifold_ui::color::CLIP_RADIUS,
+                uv_min: [u0, v0],
+                uv_max: [u0 + inv_cols, v0 + inv_rows],
+            });
+            x += win_w;
+            k += 1;
+        }
     }
     quads
 }

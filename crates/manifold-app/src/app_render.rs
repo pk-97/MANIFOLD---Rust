@@ -4113,7 +4113,18 @@ impl Application {
                     let Some(strip) = strips_of.get(cr.clip_id.as_str()) else {
                         continue;
                     };
-                    let body = cr.rect;
+                    // Reserve the bottom name-strip band: the thumbnail tiles only
+                    // the PREVIEW area above it (mockup `.clip .body{bottom:16px}`),
+                    // so the layer-coloured strip + name below are never covered.
+                    // Same `clip_strip_height` the clip-body pass uses → they agree.
+                    let strip_h = manifold_renderer::clip_draw::clip_strip_height(cr.rect.height)
+                        .unwrap_or(0.0);
+                    let body = manifold_ui::node::Rect::new(
+                        cr.rect.x,
+                        cr.rect.y,
+                        cr.rect.width,
+                        (cr.rect.height - strip_h).max(1.0),
+                    );
                     let body_right = body.x + body.width;
                     let start_b = cr.start_beat.as_f32() as f64;
                     let dur_b = (cr.end_beat - cr.start_beat).as_f32() as f64;

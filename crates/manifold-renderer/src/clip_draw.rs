@@ -68,11 +68,13 @@ pub fn emit_clip_shadows(ui: &mut UIRenderer, clips: &[ClipBody]) {
     }
 }
 
-/// Strip-band height for a clip of height `h`: `Some(strip_h)` when the clip is
-/// tall enough to split into a preview + a name strip (§E / §K15), `None` for a
-/// short/collapsed clip that stays a solid identity bar.
+/// Name-strip band height for a clip of height `h`: `Some(strip_h)` when the clip
+/// has room for a preview + a name strip (§E / §K15), `None` only for a clip too
+/// short to carry a legible strip at all. Collapsed/short clips get a *proportional*
+/// strip (capped at `CLIP_STRIP_HEIGHT`) so the name always reads on a solid band
+/// instead of floating over the thumbnail — the thumbnail reserves this band.
 pub fn clip_strip_height(h: f32) -> Option<f32> {
-    (h >= color::CLIP_STRIP_MIN_CLIP_HEIGHT).then_some(color::CLIP_STRIP_HEIGHT)
+    (h >= color::CLIP_STRIP_MIN_CLIP_HEIGHT).then(|| color::CLIP_STRIP_HEIGHT.min(h * 0.45))
 }
 
 /// The preview-well colour: the identity colour scaled toward black (hue-
@@ -149,10 +151,15 @@ pub fn emit_clip_body(ui: &mut UIRenderer, c: &ClipBody) {
     }
 
     // Border over the whole clip — transparent fill, so only the outline shows.
+    // §E: a normal clip's frame is the LAYER's IDENTITY colour (Ableton clip-colour),
+    // tying the full-bleed thumbnail + name strip to the layer; the selected clip
+    // keeps the bright focus ring. Locked clips stay on the dim neutral edge.
     let (bw, bc) = if c.selected {
         (color::CLIP_BORDER_SELECTED_WIDTH, color::CLIP_BORDER_SELECTED)
-    } else {
+    } else if c.locked {
         (color::CLIP_BORDER_NORMAL_WIDTH, color::CLIP_BORDER_NORMAL)
+    } else {
+        (color::CLIP_BORDER_NORMAL_WIDTH, c.base_color)
     };
     if bw > 0.0 {
         ui.draw_bordered_rect(
