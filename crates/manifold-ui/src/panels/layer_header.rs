@@ -51,9 +51,12 @@ const DRAG_SOURCE_DIM: Color32 = color::LAYER_DRAG_SOURCE_DIM;
 const INSERT_LINE_CLR: Color32 = color::LAYER_INSERT_LINE;
 const INSERT_LINE_H: f32 = 2.0;
 
-const NAME_FONT: u16 = color::FONT_LABEL;
-const SMALL_FONT: u16 = color::FONT_SMALL;
-const BTN_FONT: u16 = color::FONT_BODY;
+// Timeline header text steps one rung up the type scale for stage legibility
+// (Peter: the mockup reads easier — bigger name + chip text). Name 11→12,
+// chip/label 9→10, button 10→11. Local to the layer header, not a UI-wide bump.
+const NAME_FONT: u16 = color::FONT_SUBHEADING;
+const SMALL_FONT: u16 = color::FONT_BODY;
+const BTN_FONT: u16 = color::FONT_LABEL;
 // §K6: header controls round to the 4px chip radius (the mockup rounds every
 // header chip the same), distinct from the 2px inspector `SMALL_RADIUS`.
 const LH_BTN_RADIUS: f32 = color::CHIP_RADIUS;
@@ -179,7 +182,10 @@ fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {
         pressed_bg_color: pressed,
         border_color,
         border_width,
-        corner_radius: color::BUTTON_RADIUS,
+        // Square corners: rows tile edge-to-edge as a full-bleed identity band, so
+        // the selection ring is a complete rectangle covering the whole row border
+        // (a rounded ring left the actual corners uncovered — Peter, 2026-06-28).
+        corner_radius: color::SQUARE_RADIUS,
         ..UIStyle::default()
     }
 }
@@ -465,18 +471,20 @@ fn compute_layer_row(
     // ── Button row: M | S | [L | BlendMode] ──
     // Audio layers carry only Mute / Solo here, then a Gain row and a Send row;
     // they have no LED output, blend mode, folder, clip, or MIDI controls.
+    // §B mix row: M | S | L chips with the mockup's 5px hbot gap (was 2/4 —
+    // cramped against each other).
     let mut btn_x = pad;
     d.set(C::Mute, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-    btn_x += MS_BTN_W + 2.0;
+    btn_x += MS_BTN_W + 5.0;
     d.set(C::Solo, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-    btn_x += MS_BTN_W + 2.0;
+    btn_x += MS_BTN_W + 5.0;
 
     if is_audio {
         return compute_audio_row(d, y_offset, height, w, pad, btn_x, y);
     }
 
     d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-    btn_x += MS_BTN_W + 4.0;
+    btn_x += MS_BTN_W + 5.0;
 
     let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
     d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
@@ -2404,9 +2412,9 @@ mod tests {
         }
         let mut btn_x = pad;
         d.set(C::Mute, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-        btn_x += MS_BTN_W + 2.0;
+        btn_x += MS_BTN_W + 5.0;
         d.set(C::Solo, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-        btn_x += MS_BTN_W + 2.0;
+        btn_x += MS_BTN_W + 5.0;
         if is_audio {
             d.set(C::Analysis, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
             let mut ay = y + BTN_H + 2.0;
@@ -2421,7 +2429,7 @@ mod tests {
             return d;
         }
         d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-        btn_x += MS_BTN_W + 4.0;
+        btn_x += MS_BTN_W + 5.0;
         let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
         d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
         y += BTN_H + 2.0;

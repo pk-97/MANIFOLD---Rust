@@ -89,8 +89,17 @@ fn well_color(c: Color32) -> Color32 {
         (c.r as f32 * s) as u8,
         (c.g as f32 * s) as u8,
         (c.b as f32 * s) as u8,
-        c.a,
+        // A preview well is a SOLID backstop (the thumbnail blits over it) — force
+        // full opacity so the lane grid never shows through (Peter, 2026-06-28).
+        255,
     )
+}
+
+/// Force a clip colour fully opaque. A clip body is solid by definition — if the
+/// identity colour ever carries alpha < 255, the lane grid would bleed through.
+#[inline]
+fn opaque(c: Color32) -> Color32 {
+    Color32::new(c.r, c.g, c.b, 255)
 }
 
 /// Emit one clip body. Tall clips render the §E anatomy — a darker preview WELL
@@ -102,7 +111,7 @@ pub fn emit_clip_body(ui: &mut UIRenderer, c: &ClipBody) {
         return;
     }
     let r = color::CLIP_RADIUS;
-    let body = c.resolved_color();
+    let body = opaque(c.resolved_color());
 
     if let Some(strip_h) = clip_strip_height(c.rect.height) {
         // Preview well (full-height, rounded) — the identity colour darkened so

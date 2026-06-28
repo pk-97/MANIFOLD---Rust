@@ -826,10 +826,12 @@ pub const FOOTER_HEIGHT: f32 = TRANSPORT_BAR_HEIGHT;
 // One named tier per content density, selected by display *state* — never by
 // layer *type* (type is shown by a badge, not by restructuring the header). See
 // `coordinate_mapper::TrackHeight`.
-/// Normal: the default expanded track (clip bodies + content).
-pub const TRACK_HEIGHT: f32 = 140.0;
-/// Collapsed: a slim header strip — name + button row, no detail.
-pub const COLLAPSED_TRACK_HEIGHT: f32 = 48.0;
+/// Expanded: the default track — clip bodies + content + routing form. 200px
+/// per the redesign spec §B (Peter: focusing on a single layer is intended).
+pub const TRACK_HEIGHT: f32 = 200.0;
+/// Collapsed (a.k.a. compact): identity + mix row, no routing. The two-tier
+/// system is collapsed↔expanded; 58px gives the name + M/S/L row breathing room.
+pub const COLLAPSED_TRACK_HEIGHT: f32 = 58.0;
 /// Tall: a roomier track for larger previews. Reserved for a future per-layer
 /// tall mode; the preset exists so the height vocabulary is complete.
 pub const TALL_TRACK_HEIGHT: f32 = 200.0;
@@ -900,6 +902,9 @@ pub const HEADER_ROW_HEIGHT: f32 = 28.0;
 // rectangles without going consumer-app bubbly.
 pub const BUTTON_RADIUS: f32 = 3.0;
 pub const CARD_RADIUS: f32 = 5.0;
+/// No rounding — a full-bleed rectangle (e.g. timeline rows that tile edge-to-edge
+/// so a selection ring covers the whole border).
+pub const SQUARE_RADIUS: f32 = 0.0;
 pub const SMALL_RADIUS: f32 = 2.0;
 pub const POPUP_RADIUS: f32 = 6.0;
 // The §14.2-rule-6 hairline exception, realised as a token instead of scattered
@@ -933,7 +938,7 @@ pub const BITMAP_SCROLL_SPEED: f32 = 12.5;
 pub const ZOOM_WHEEL_STEP_PER_NOTCH: f32 = 1.18;
 
 // ── Layer control panel layout ──────────────────────────────────────
-pub const LAYER_CTRL_PADDING: f32 = SPACE_S; // §14.4: 5 → 4, onto the scale
+pub const LAYER_CTRL_PADDING: f32 = SPACE_M; // mockup edge gutter (8px) — tracks breathe
 pub const LAYER_CTRL_CHEVRON_WIDTH: f32 = 18.0;
 pub const LAYER_CTRL_DRAG_HANDLE_WIDTH: f32 = 18.0;
 /// Square type-badge chip in the layer name row (§24 5d / §K3). 18px to match
@@ -948,7 +953,7 @@ pub const LAYER_CTRL_BTN_HEIGHT: f32 = 18.0;
 pub const LAYER_CTRL_INFO_ROW_HEIGHT: f32 = 14.0;
 pub const LAYER_CTRL_SEPARATOR_HEIGHT: f32 = 2.0;
 pub const LAYER_CTRL_RIGHT_GUTTER: f32 = 10.0;
-pub const LAYER_CTRL_TOP_ROW_GAP: f32 = 2.0;
+pub const LAYER_CTRL_TOP_ROW_GAP: f32 = 6.0; // mockup htop gap (chevron→badge→name)
 pub const LAYER_CTRL_FOLDER_BTN_WIDTH: f32 = 42.0;
 pub const LAYER_CTRL_NEW_CLIP_BTN_WIDTH: f32 = 62.0;
 pub const LAYER_CTRL_ADD_GEN_CLIP_BTN_WIDTH: f32 = 50.0;

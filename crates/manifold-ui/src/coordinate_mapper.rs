@@ -472,12 +472,12 @@ mod tests {
         mapper.rebuild_y_layout(&layers);
 
         assert!((mapper.get_layer_y_offset(0) - 0.0).abs() < 0.001);
-        assert!((mapper.get_layer_y_offset(1) - 140.0).abs() < 0.001);
-        assert!((mapper.get_layer_y_offset(2) - 280.0).abs() < 0.001);
-        assert!((mapper.get_layer_height(0) - 140.0).abs() < 0.001);
-        assert!((mapper.get_layer_height(1) - 140.0).abs() < 0.001);
-        assert!((mapper.get_layer_height(2) - 140.0).abs() < 0.001);
-        assert!((mapper.total_content_height() - 420.0).abs() < 0.001);
+        assert!((mapper.get_layer_y_offset(1) - 200.0).abs() < 0.001);
+        assert!((mapper.get_layer_y_offset(2) - 400.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(0) - 200.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(1) - 200.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(2) - 200.0).abs() < 0.001);
+        assert!((mapper.total_content_height() - 600.0).abs() < 0.001);
     }
 
     #[test]
@@ -495,12 +495,12 @@ mod tests {
         mapper.rebuild_y_layout(&layers);
 
         // §24 5d: collapse is sized by state, not type — collapsed video AND
-        // collapsed generator are both Collapsed (48); the type is shown by a
+        // collapsed generator are both Collapsed (58); the type is shown by a
         // badge. A group is a container row → its fixed 70.
-        assert!((mapper.get_layer_height(0) - 48.0).abs() < 0.001);
-        assert!((mapper.get_layer_height(1) - 48.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(0) - 58.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(1) - 58.0).abs() < 0.001);
         assert!((mapper.get_layer_height(2) - 70.0).abs() < 0.001);
-        assert!((mapper.total_content_height() - 166.0).abs() < 0.001);
+        assert!((mapper.total_content_height() - 186.0).abs() < 0.001);
     }
 
     #[test]
@@ -548,8 +548,8 @@ mod tests {
             );
         }
         // Spot-check the actual values the rule yields.
-        assert_eq!(CoordinateMapper::layer_height(&layers, 0), 48.0); // collapsed video
-        assert_eq!(CoordinateMapper::layer_height(&layers, 1), 140.0); // expanded generator
+        assert_eq!(CoordinateMapper::layer_height(&layers, 0), 58.0); // collapsed video
+        assert_eq!(CoordinateMapper::layer_height(&layers, 1), 200.0); // expanded generator
         assert_eq!(CoordinateMapper::layer_height(&layers, 2), 70.0); // collapsed group
         assert_eq!(CoordinateMapper::layer_height(&layers, 3), 0.0); // hidden child
     }
@@ -576,7 +576,9 @@ mod tests {
         assert_eq!(TrackHeight::for_collapsed(true), TrackHeight::Collapsed);
         assert_eq!(TrackHeight::for_collapsed(false), TrackHeight::Normal);
         assert!(TrackHeight::Collapsed.px() < TrackHeight::Normal.px());
-        assert!(TrackHeight::Normal.px() < TrackHeight::Tall.px());
+        // Two-tier system: Normal IS the expanded tier (200). Tall is reserved
+        // and currently equal to Normal — no longer strictly greater.
+        assert!(TrackHeight::Normal.px() <= TrackHeight::Tall.px());
     }
 
     #[test]

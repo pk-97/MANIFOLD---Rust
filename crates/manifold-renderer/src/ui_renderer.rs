@@ -117,24 +117,34 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let half_size = center - vec2<f32>(radius);
     let d = length(max(abs(pixel - center) - half_size, vec2<f32>(0.0))) - radius;
 
-    // Antialiased edge
-    let aa = 1.0;
-    let alpha = 1.0 - smoothstep(-aa, aa, d);
+    // Antialiased edge. AA band = ONE physical pixel via the screen-space
+    // derivative of d (fwidth), so edges stay crisp at any DPI. The old fixed
+    // `aa = 1.0` was one *logical* px ≈ two physical px on retina → smeared.
+    let aa = fwidth(d) + 1e-4;
+    let shape_cov = 1.0 - smoothstep(-aa, aa, d);
 
-    if alpha <= 0.0 {
+    if shape_cov <= 0.0 {
         discard;
     }
 
-    // Border
+    // Border ring: AA'd on BOTH the outer edge AND the inner (fill) edge — the
+    // old code hard-stepped the inner edge (`inner_d > 0`), which aliased the
+    // selection ring. Composite the ring over the fill with straight alpha so a
+    // translucent hairline reads correctly over the chip body.
     if border_w > 0.0 {
-        let inner_d = d + border_w;
-        if inner_d > 0.0 {
-            // In border region
-            return vec4<f32>(in.border_color.rgb, in.border_color.a * alpha);
+        let fill_cov = 1.0 - smoothstep(-aa, aa, d + border_w);
+        let border_a = in.border_color.a * clamp(shape_cov - fill_cov, 0.0, 1.0);
+        let fa = fill.a * fill_cov;
+        let out_a = border_a + fa * (1.0 - border_a);
+        if out_a <= 0.0 {
+            discard;
         }
+        let out_rgb =
+            (in.border_color.rgb * border_a + fill.rgb * fa * (1.0 - border_a)) / max(out_a, 1e-4);
+        return vec4<f32>(out_rgb, out_a);
     }
 
-    return vec4<f32>(fill.rgb, fill.a * alpha);
+    return vec4<f32>(fill.rgb, fill.a * shape_cov);
 }
 "#;
 
@@ -195,6 +205,12 @@ struct RectCommand {
 
 /// `grad` value for a solid (non-gradient) rect: enable channel is 0.
 const NO_GRAD: [f32; 4] = [0.0; 4];
+
+/// Vertical optical-centring nudge, as a fraction of font size. Text placed so
+/// its `font_size` box centres in a node sits ~0.1em high — caps/x-height ink
+/// centres above the box centre. Shifting the baseline down by this fraction
+/// makes M/S/L chips and chip values read truly centred (Peter, 2026-06-28).
+const VERTICAL_OPTICAL_NUDGE: f32 = 0.10;
 
 /// A solid-coloured line drawn as an oriented quad. Piggybacks on the
 /// rect pipeline by emitting four rotated corner positions with
@@ -908,12 +924,15 @@ impl UIRenderer {
                     style.font_size,
                     style.font_weight,
                 );
-                let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
+                let fs = style.font_size as f32;
+                let text_y =
+                    bounds.y + (bounds.height - text_size.y) * 0.5 + fs * VERTICAL_OPTICAL_NUDGE;
+                let inset = style.text_inset_x;
 
                 // Leading dim micro-label (mockup `.blend b`): painted at the left
-                // edge in `prefix_color`, with the value shifted right past it so
-                // the chip reads "LABEL value". Left-align only.
-                let mut left_x = bounds.x;
+                // edge (+ chip inset) in `prefix_color`, with the value shifted
+                // right past it so the chip reads "LABEL value". Left-align only.
+                let mut left_x = bounds.x + inset;
                 if let Some(prefix) = style.prefix_label
                     && !prefix.is_empty()
                 {
@@ -924,7 +943,8 @@ impl UIRenderer {
                         style.font_size,
                         style.font_weight,
                     );
-                    let py = bounds.y + (bounds.height - psize.y) * 0.5;
+                    let py =
+                        bounds.y + (bounds.height - psize.y) * 0.5 + fs * VERTICAL_OPTICAL_NUDGE;
                     self.text_renderer.draw_text(
                         left_x,
                         py,
@@ -940,7 +960,7 @@ impl UIRenderer {
 
                 let text_x = match style.text_align {
                     TextAlign::Center => bounds.x + (bounds.width - text_size.x) * 0.5,
-                    TextAlign::Right => bounds.x + bounds.width - text_size.x,
+                    TextAlign::Right => bounds.x + bounds.width - text_size.x - inset,
                     TextAlign::Left => left_x,
                 };
 
@@ -975,7 +995,8 @@ impl UIRenderer {
                 .measure_text_cached(CARET, caret_font, style.font_weight);
             let caret_x =
                 bounds.x_max() - manifold_ui::color::CHIP_CARET_PAD_X - size.x;
-            let caret_y = bounds.y + (bounds.height - size.y) * 0.5;
+            let caret_y = bounds.y + (bounds.height - size.y) * 0.5
+                + (caret_font as f32) * VERTICAL_OPTICAL_NUDGE;
             let depth = self.current_depth();
             self.text_renderer.draw_text(
                 caret_x,

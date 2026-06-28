@@ -50,7 +50,7 @@ borders/dividers; (4) state escapes the muted band (saturated selection, M/S lig
 
 ---
 
-## B. Layer header — ONE grammar, THREE heights
+## B. Layer header — ONE grammar, TWO heights
 
 **One skeleton for every track type** (text / video / generator / group / audio):
 
@@ -59,15 +59,15 @@ borders/dividers; (4) state escapes the muted band (saturated selection, M/S lig
 
 Type badges: `T`=text, `▦`=video, `◇`=generator, `▤`=group, `∿`=audio.
 
-**Three heights:**
+**Two heights** (Peter 2026-06-28 — only two tiers, not three):
 
-- **collapsed (~26px):** name bar only.
-- **compact (~58px):** identity + mix. The default.
+- **collapsed / compact (~58px):** identity + mix. No routing. The compact resting state.
 - **expanded (~200px):** identity + mix + routing form. Tall is *intended* — Peter likes
   focusing on a single layer. Do not shrink it.
 
-Fold `▶/▼` toggles expanded (reveals routing). Resizable/collapsible lane height already exists
-in the app — reuse it; these are its discrete stops.
+Fold `▶/▼` toggles between the two (expanded reveals the routing form). Routing is gated on the
+collapse state — collapsed shows none, expanded shows the full form. Resizable/collapsible lane
+height already exists in the app — these are its two discrete stops.
 
 `M`=mute, `S`=solo, `L`=LED. `L` is greyed (`dead`, disabled-not-absent) where not applicable.
 **OPEN:** confirm exact `L` semantics and where it applies before baking in.

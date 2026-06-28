@@ -406,6 +406,11 @@ pub struct UIStyle {
     /// non-left alignment.
     pub prefix_label: Option<&'static str>,
     pub prefix_color: Color32,
+    /// Horizontal inset (px) for the node's text from the leading/trailing edge —
+    /// the chip's internal padding (mockup `.sel{padding:2px 7px}`). Applied to
+    /// Left-aligned text (and the prefix) from the left edge, and to Right-aligned
+    /// text from the right edge; Centre is unaffected. 0 = text flush to the edge.
+    pub text_inset_x: f32,
 }
 
 impl Default for UIStyle {
@@ -424,6 +429,7 @@ impl Default for UIStyle {
             dropdown_caret: false,
             prefix_label: None,
             prefix_color: Color32::TRANSPARENT,
+            text_inset_x: 0.0,
         }
     }
 }

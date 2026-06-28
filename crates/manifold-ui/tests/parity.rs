@@ -31,12 +31,14 @@ fn layout_ruler_height() {
 
 #[test]
 fn layout_track_height() {
-    assert_eq!(color::TRACK_HEIGHT, 140.0);
+    // Redesign §B value (was Unity 140) — expanded track = 200px.
+    assert_eq!(color::TRACK_HEIGHT, 200.0);
 }
 
 #[test]
 fn layout_layer_controls_width() {
-    assert_eq!(color::LAYER_CONTROLS_WIDTH, 200.0); // Fixed, not resizable
+    // Redesign §K1 value (was Unity 200) — header column widened to 230.
+    assert_eq!(color::LAYER_CONTROLS_WIDTH, 230.0);
 }
 
 #[test]
@@ -157,22 +159,21 @@ fn color_generator_clip_selected() {
 
 #[test]
 fn color_text_primary() {
-    // Unity TextNormal = Color(0.88, 0.88, 0.90, 1) → blue channel 230
-    assert_eq!(color::TEXT_NORMAL, Color32::new(224, 224, 230, 255));
+    // Contrast pass (§A) lifted primary text brighter than the old Unity value.
+    assert_eq!(color::TEXT_NORMAL, Color32::new(230, 230, 235, 255));
 }
 
 #[test]
 fn color_text_primary_c32() {
-    assert_eq!(color::TEXT_PRIMARY_C32, Color32::new(224, 224, 230, 255));
+    assert_eq!(color::TEXT_PRIMARY_C32, Color32::new(230, 230, 235, 255));
 }
 
 // ── Elevation hierarchy (from USER_GUIDE.md §32.2) ──────────────
 
 #[test]
 fn color_track_background_deep_level() {
-    // Phase 3 design tokens re-pointed TRACK_BG to the BG_2 grey-ramp step
-    // (31, 31, 33), replacing the old Unity-ported (36, 36, 37).
-    assert_eq!(color::TRACK_BG, Color32::new(31, 31, 33, 255));
+    // Contrast pass (§A) re-pointed TRACK_BG deeper to the BG ramp step (33,33,36).
+    assert_eq!(color::TRACK_BG, Color32::new(33, 33, 36, 255));
 }
 
 // Generator param-count parity tests moved to

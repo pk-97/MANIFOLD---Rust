@@ -1090,9 +1090,15 @@ impl NativeTextRenderer {
                 // Glyph origin x from the CTRun position (in logical px).
                 let glyph_origin_x = cmd.x + positions_ct[i].x as f32 / scale;
 
-                // Quad top-left in screen space.
-                let x0 = glyph_origin_x + bearing_x;
-                let y0 = baseline_y - bearing_y;
+                // Quad top-left, SNAPPED to the physical pixel grid. The atlas
+                // glyph is rasterized at an integer physical size; placing its quad
+                // on a fractional screen pixel makes the bilinear sampler smear the
+                // coverage across texel boundaries — soft, uneven stems ("blocky").
+                // Snapping the top-left to whole physical pixels restores a 1:1
+                // texel→pixel mapping so stems stay crisp. bw/bh are already
+                // integer-physical / scale, so the far edge lands on-grid too.
+                let x0 = (((glyph_origin_x + bearing_x) * scale).round()) / scale;
+                let y0 = (((baseline_y - bearing_y) * scale).round()) / scale;
                 let x1 = x0 + bw;
                 let y1 = y0 + bh;
 
@@ -1197,7 +1203,11 @@ impl NativeTextRenderer {
                 cmd.color[2] as f32 / 255.0,
                 cmd.color[3] as f32 / 255.0,
             ];
-            let (x0, y0, x1, y1) = (cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h);
+            // Snap the icon top-left to the physical pixel grid (same reason as
+            // glyph quads above) so badge/waveform edges stay crisp.
+            let x0 = ((cmd.x * scale).round()) / scale;
+            let y0 = ((cmd.y * scale).round()) / scale;
+            let (x1, y1) = (x0 + cmd.w, y0 + cmd.h);
 
             // Clip icon to clip bounds — partial pixel-level clipping.
             let (mut qx0, mut qy0, mut qx1, mut qy1) = (x0, y0, x1, y1);
