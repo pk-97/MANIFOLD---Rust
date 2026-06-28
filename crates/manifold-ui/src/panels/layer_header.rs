@@ -104,11 +104,11 @@ fn led_style(led: bool, layer_color: Color32) -> UIStyle {
 }
 
 /// The off-state chip surface for a header control: the layer's *own* identity
-/// colour darkened ~32%, so the chip reads as a recess set into the header rather
-/// than a foreign neutral slab. Replaces the old fixed dark `CHIP_BG` + white
-/// hairline (Peter, 2026-06-28 — pro-DAW restyle).
+/// colour darkened ~70%, so the chip reads as a clearly dark recess with only a
+/// hint of the layer hue (Peter wants these dark) — not a foreign neutral slab.
+/// Replaces the old fixed dark `CHIP_BG` + white hairline (2026-06-28 restyle).
 fn header_chip_bg(layer_color: Color32) -> Color32 {
-    color::scale_rgb(layer_color, 0.68)
+    color::scale_rgb(layer_color, 0.30)
 }
 
 /// The hairline policy for a tonal header chip: none on a dark header (the
@@ -231,7 +231,9 @@ fn field_style() -> UIStyle {
 /// light layer colour) while reading as a secondary label (§K10 / §K12).
 fn routing_label_style(text_clr: Color32) -> UIStyle {
     UIStyle {
-        text_color: color::with_alpha(text_clr, 180),
+        // Full contrast — same as the layer name / main control text (Peter,
+        // 2026-06-28). The faint 70%-alpha read was too washed against the header.
+        text_color: text_clr,
         font_size: SMALL_FONT,
         text_align: TextAlign::Left,
         ..UIStyle::default()
