@@ -1428,42 +1428,30 @@ impl LayerHeaderPanel {
                         ..UIStyle::default()
                     },
                 ),
-                C::Name => {
-                    // §K: a generator's subtype folds into the name row as a quiet
-                    // suffix ("PLASMA · Text") instead of an orphaned strip above
-                    // the buttons. The display string only — `layer.name` (the
-                    // editable identity) is untouched.
-                    let display = if layer.is_generator {
-                        let ty = layer.generator_type.as_deref().unwrap_or("Unknown");
-                        format!("{} · {}", layer.name, ty)
-                    } else {
-                        layer.name.clone()
-                    };
-                    tree.add_button(
-                        clip_parent,
-                        r.x,
-                        r.y,
-                        r.width,
-                        r.height,
-                        UIStyle {
-                            bg_color: Color32::TRANSPARENT,
-                            hover_bg_color: color::LAYER_CHEVRON_HOVER,
-                            pressed_bg_color: color::LAYER_CHEVRON_PRESSED,
-                            // §K16: a selected layer's name brightens to pure white
-                            // (paired with the focus ring), so the selected layer
-                            // reads first; otherwise the identity-contrast colour.
-                            text_color: if layer.is_selected {
-                                color::TEXT_WHITE_C32
-                            } else {
-                                text_clr
-                            },
-                            font_size: NAME_FONT,
-                            text_align: TextAlign::Left,
-                            ..UIStyle::default()
+                C::Name => tree.add_button(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    UIStyle {
+                        bg_color: Color32::TRANSPARENT,
+                        hover_bg_color: color::LAYER_CHEVRON_HOVER,
+                        pressed_bg_color: color::LAYER_CHEVRON_PRESSED,
+                        // §K16: a selected layer's name brightens to pure white
+                        // (paired with the focus ring), so the selected layer
+                        // reads first; otherwise the identity-contrast colour.
+                        text_color: if layer.is_selected {
+                            color::TEXT_WHITE_C32
+                        } else {
+                            text_clr
                         },
-                        &display,
-                    )
-                }
+                        font_size: NAME_FONT,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                    &layer.name,
+                ),
                 C::DragHandle => {
                     // Hamburger icon drawn as 3 horizontal bars.
                     let handle = tree.add_button(
