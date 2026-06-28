@@ -360,26 +360,30 @@ impl TimelineViewportPanel {
         rects
     }
 
-    /// Resting background colour for track lane `i`: the zebra stripe, halved
-    /// when the layer is muted, and lifted one ramp step when it is the focused
-    /// lane (§19 timeline echo — the same lift the inspector card's well gets).
-    /// The single source for both `build_track_backgrounds` and the in-place
-    /// `sync_active_track_lane` recolor.
+    /// Resting background colour for track lane `i`: the zebra stripe, lifted
+    /// one ramp step when it is the focused lane (§19 timeline echo — the same
+    /// lift the inspector card's well gets). Mute does not tint the lane, to
+    /// match Ableton. The single source for both `build_track_backgrounds` and
+    /// the in-place `sync_active_track_lane` recolor.
     pub(super) fn track_bg_color(&self, i: usize) -> Color32 {
-        let base = if i.is_multiple_of(2) {
+        // The selected lane gets its OWN colour (a muted navy), not a brightened
+        // zebra stripe — a lift was too close to the alternating greys to read as
+        // "selected" (Peter, 2026-06-28).
+        if self.active_track_index == Some(i) {
+            return color::TRACK_BG_SELECTED;
+        }
+        // Parity is counted over visible rows (see `track_zebra_even`), not the raw
+        // index, so collapsed group children don't flip the stripe for lanes below.
+        let even = self
+            .track_zebra_even
+            .get(i)
+            .copied()
+            .unwrap_or(i.is_multiple_of(2));
+        if even {
             color::TRACK_BG
         } else {
             color::TRACK_BG_ALT
-        };
-        let mut c = if self.tracks.get(i).is_some_and(|t| t.is_muted) {
-            Color32::new(base.r / 2, base.g / 2, base.b / 2, base.a)
-        } else {
-            base
-        };
-        if self.active_track_index == Some(i) {
-            c = color::lighten(c, color::FOCUS_LIFT_STEP);
         }
-        c
     }
 
     pub(super) fn build_track_backgrounds(&mut self, tree: &mut UITree) {
@@ -401,7 +405,7 @@ impl TimelineViewportPanel {
             let clamped_h = (y + h).min(tr_bottom) - clamped_y;
             let visible = clamped_h > 0.0 && y + h >= tr_top && y <= tr_bottom;
 
-            // Zebra stripe, halved when muted, lifted one ramp step when focused
+            // Zebra stripe, lifted one ramp step when focused
             // (§19 echo) — all owned by `track_bg_color` so build and the in-place
             // recolor (`sync_active_track_lane`) can never drift.
             let style = UIStyle {

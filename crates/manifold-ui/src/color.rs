@@ -194,6 +194,11 @@ pub const PURPLE_ACTIVE: Color32 = Color32::new(150, 130, 210, 255);
 pub const PANEL_BG: Color32 = Color32::new(22, 22, 24, 245); // BG_1 @ a245
 pub const TRACK_BG: Color32 = BG_2; // timeline lane
 pub const TRACK_BG_ALT: Color32 = BG_1; // alternating lane
+// The focused/selected lane's own background — a muted navy, distinct from the
+// grey zebra so the selected layer reads as selected at a glance (not just a
+// brighter stripe). Dark enough to sit behind clips without competing. Shares
+// the blue family of `SELECTED_LAYER_RING` / the selection accent bar.
+pub const TRACK_BG_SELECTED: Color32 = Color32::new(30, 42, 64, 255);
 pub const INSPECTOR_BG: Color32 = BG_1;
 pub const INSPECTOR_BG_FOCUSED: Color32 = BG_1_HOVER;
 pub const HEADER_BG: Color32 = Color32::new(16, 16, 16, 255); // chrome

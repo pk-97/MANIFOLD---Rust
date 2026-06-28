@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MANIFOLD — Control faces, calm version</title>
+<style>
+  :root{
+    --bg:#08080a; --card:#0e0e12; --card-2:#141419; --chrome-2:#2a2a31; --track:#20202a;
+    --line:#43434e; --line-soft:#2c2c34; --txt:#f3f4f7; --txt-dim:#aeb0ba; --txt-faint:#7a7a86;
+    --fill:#41598c; --fill-edge:#6f86bd; --lfo:#45b4cf; --lfo-soft:rgba(69,180,207,.30);
+    --select:#5aa6ff; font-size:13px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{background:var(--bg); color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif; -webkit-font-smoothing:antialiased;}
+  body{padding:30px; line-height:1.3; display:flex; justify-content:center;}
+  .insp{width:460px; background:var(--bg); border:1px solid var(--line); border-radius:9px; overflow:hidden;
+    box-shadow:0 18px 55px rgba(0,0,0,.6);}
+
+  /* layer header */
+  .layhead{display:flex; align-items:center; gap:10px; padding:11px 13px; background:#0c0c10; border-bottom:1px solid var(--line-soft);}
+  .lname{font-size:15px; font-weight:700; letter-spacing:.3px;} .lcaret{color:var(--txt-dim); font-size:10px;}
+  .olbl{font-size:12px; color:var(--txt-dim); margin-left:6px;}
+  .obar{flex:1; height:20px; background:var(--track); border-radius:4px; position:relative; overflow:hidden;}
+  .obar .f{position:absolute; inset:0 3% 0 0; background:var(--fill);} .obar .k{position:absolute; top:0; bottom:0; left:97%; width:3px; background:var(--fill-edge);}
+  .oval{font-size:12px; font-variant-numeric:tabular-nums; width:36px; text-align:right;}
+
+  .card{border:1px solid var(--line-soft); border-radius:7px; margin:10px; overflow:hidden; background:var(--card);}
+
+  /* card header — calm; collapsed cards are JUST this bar */
+  .chead{display:flex; align-items:center; gap:9px; height:42px; padding:0 12px; background:#191921; cursor:pointer;}
+  .card.open .chead{border-bottom:1px solid var(--line-soft);}
+  .chead.fb{background:linear-gradient(#5a2742,#431d31);}
+  .grip{color:var(--txt-faint); font-size:14px;} .chead.fb .grip{color:rgba(255,255,255,.55);}
+  .ctitle{font-size:13.5px; font-weight:600; flex:1;} .chead.fb .ctitle{color:#fff;}
+  .fold{color:var(--txt-faint); font-size:10px;} .chead.fb .fold{color:rgba(255,255,255,.6);}
+
+  /* view toggle — Face | List. The ONE new affordance. */
+  .vt{display:flex; background:#101015; border:1px solid var(--line-soft); border-radius:5px; overflow:hidden;}
+  .chead.fb .vt{background:rgba(0,0,0,.28); border-color:rgba(255,255,255,.18);}
+  .vt span{font-size:10px; padding:4px 10px; color:var(--txt-faint);}
+  .vt span.on{background:var(--chrome-2); color:var(--txt);}
+  .chead.fb .vt span.on{background:rgba(255,255,255,.22); color:#fff;}
+
+  /* body */
+  .body{display:none;} .card.open .body{display:block;}
+
+  /* FACE = the whole body. No thumbnail, no folds labels, no rail unless modulated. */
+  .face{padding:16px 14px;}
+  .facebody{display:flex; gap:16px; align-items:center;}
+  .gv{font-size:11px; color:var(--txt-dim); font-variant-numeric:tabular-nums; display:flex; gap:14px; margin-top:13px; justify-content:center;}
+  .gv b{color:var(--txt); font-weight:600;}
+
+  /* a single modulated readout: small inline tag, only when assigned */
+  .modtag{display:inline-flex; align-items:center; gap:5px; font-size:10px; color:#cdeef5;
+    background:rgba(69,180,207,.12); border:1px solid var(--lfo); border-radius:5px; padding:3px 8px;}
+  .modtag .d{width:6px; height:6px; border-radius:50%; background:var(--lfo);}
+  .modwrap{margin-top:14px; padding-top:12px; border-top:1px solid var(--line-soft); display:flex; gap:8px; align-items:center; justify-content:center;}
+
+  /* LIST view rows (for collapsed-detail / scalar params) */
+  .rows{padding:9px 13px 13px;}
+  .row{display:flex; align-items:center; gap:10px; height:32px;}
+  .rlabel{width:90px; font-size:12.5px; color:var(--txt-dim);}
+  .slider{flex:1; height:21px; background:var(--track); border-radius:4px; position:relative; overflow:hidden;}
+  .slider .vf{position:absolute; left:0; top:0; bottom:0; background:var(--fill);}
+  .slider .k{position:absolute; top:0; bottom:0; width:3px; background:var(--fill-edge);}
+  .rval{width:56px; text-align:right; font-size:12px; font-variant-numeric:tabular-nums;}
+  .rbtns{display:flex; gap:4px;}
+  .rb{width:26px; height:24px; border-radius:4px; background:var(--chrome-2); border:1px solid var(--line-soft); color:var(--txt-faint); font-size:11px; display:flex; align-items:center; justify-content:center;}
+
+  .hint{text-align:center; color:var(--txt-faint); font-size:11px; margin-top:18px; max-width:460px;}
+</style>
+</head>
+<body>
+<div>
+<div class="insp">
+
+  <div class="layhead">
+    <span class="lname">TEXT MIDDLE</span><span class="lcaret">▼</span>
+    <span class="olbl">Opacity</span><div class="obar"><div class="f"></div><div class="k"></div></div><span class="oval">1.00</span>
+  </div>
+
+  <!-- collapsed: just a bar -->
+  <div class="card">
+    <div class="chead"><span class="grip" style="visibility:hidden">☰</span><span class="ctitle">Text</span><span class="fold">▶</span></div>
+  </div>
+
+  <!-- OPEN, FACE view — calm: one gizmo, three readouts, one mod tag -->
+  <div class="card open">
+    <div class="chead fb">
+      <span class="grip">☰</span>
+      <span class="ctitle">Stylized Feedback</span>
+      <div class="vt"><span class="on">Face</span><span>List</span></div>
+      <span class="fold">▼</span>
+    </div>
+    <div class="body">
+      <div class="face">
+        <div class="facebody">
+          <svg viewBox="0 0 200 130" width="100%" height="130" style="display:block">
+            <rect x="58" y="18" width="84" height="84" fill="none" stroke="#4a4a56" stroke-width="1.5"/>
+            <g transform="rotate(180 100 60)"><rect x="65" y="25" width="70" height="70" fill="rgba(69,180,207,.10)" stroke="#45b4cf" stroke-width="1.5"/></g>
+            <g fill="#45b4cf"><rect x="55" y="21" width="6" height="6"/><rect x="129" y="21" width="6" height="6"/><rect x="55" y="95" width="6" height="6"/><rect x="129" y="95" width="6" height="6"/></g>
+            <line x1="100" y1="18" x2="100" y2="6" stroke="#45b4cf" stroke-width="1.5"/><circle cx="100" cy="7" r="4" fill="#45b4cf"/>
+          </svg>
+        </div>
+        <div class="gv"><span>Amount <b>1.00</b></span><span>Zoom <b>0.82</b></span><span>Rotate <b>180°</b></span></div>
+        <!-- only shows because Zoom is modulated -->
+        <div class="modwrap"><span class="modtag"><span class="d"></span>Zoom ← LFO 1</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- collapsed: just a bar -->
+  <div class="card">
+    <div class="chead"><span class="grip">☰</span><span class="ctitle">Edge Stretch</span><span class="fold">▶</span></div>
+  </div>
+
+</div>
+</div>
+</body>
+</html>

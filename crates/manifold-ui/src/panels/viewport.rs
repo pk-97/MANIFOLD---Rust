@@ -64,6 +64,11 @@ pub struct TimelineViewportPanel {
     // Per-track style/state (heights + Y come from `mapper`, the sole authority)
     tracks: Vec<TrackInfo>,
 
+    // Zebra stripe parity per track, counted over VISIBLE rows only. Hidden rows
+    // (collapsed group children, height 0) must not consume a stripe step or the
+    // alternation breaks for every lane below them. Rebuilt in `set_tracks`.
+    track_zebra_even: Vec<bool>,
+
     // Clip data — single storage, bucketed by layer index.
     // Access all clips via clips_by_layer.iter().flatten().
     clips_by_layer: Vec<Vec<ViewportClip>>,
@@ -196,6 +201,7 @@ impl TimelineViewportPanel {
             beats_per_bar: 4,
             layer_ids: Vec::new(),
             tracks: Vec::new(),
+            track_zebra_even: Vec::new(),
             clips_by_layer: Vec::new(),
             bitmap_renderers: Vec::new(),
             render_scale: 2.0, // default HiDPI (macOS Retina)
@@ -335,10 +341,17 @@ impl TimelineViewportPanel {
         // `rebuild_mapper_layout` runs before `set_tracks` (state_sync), so the
         // mapper is current here; a zero height means a hidden child layer.
         self.bitmap_renderers.clear();
+        // Zebra parity is counted over visible rows only — a hidden row (height 0,
+        // i.e. a collapsed group's child) keeps the same parity so the lanes below
+        // it stay correctly alternating.
+        self.track_zebra_even.clear();
+        let mut visible_row = 0usize;
         for i in 0..self.tracks.len() {
             let height = self.mapper.get_layer_height(i);
             if height <= 0.0 {
                 self.bitmap_renderers.push(None);
+                // Hidden: inherit the next visible row's parity (don't advance).
+                self.track_zebra_even.push(visible_row.is_multiple_of(2));
             } else {
                 self.bitmap_renderers
                     .push(Some(crate::bitmap_renderer::LayerBitmapRenderer::new(
@@ -346,6 +359,8 @@ impl TimelineViewportPanel {
                         self.render_scale,
                         height,
                     )));
+                self.track_zebra_even.push(visible_row.is_multiple_of(2));
+                visible_row += 1;
             }
         }
 
@@ -1210,22 +1225,42 @@ mod tests {
     }
 
     #[test]
-    fn focused_lane_lifts_one_ramp_step() {
+    fn focused_lane_uses_dedicated_selection_color() {
         let mut panel = TimelineViewportPanel::new();
         panel.set_tracks(test_tracks()); // two unmuted default tracks
         // No focus → both lanes sit at their resting zebra stripe.
         assert_eq!(panel.track_bg_color(0), crate::color::TRACK_BG);
         assert_eq!(panel.track_bg_color(1), crate::color::TRACK_BG_ALT);
-        // Focus lane 0 → it lifts one ramp step; the other lane is untouched.
+        // Focus lane 0 → it takes the dedicated selection colour; the other lane
+        // is untouched.
         panel.set_active_track_index(Some(0));
-        assert_eq!(
-            panel.track_bg_color(0),
-            crate::color::lighten(crate::color::TRACK_BG, crate::color::FOCUS_LIFT_STEP)
-        );
+        assert_eq!(panel.track_bg_color(0), crate::color::TRACK_BG_SELECTED);
         assert_eq!(panel.track_bg_color(1), crate::color::TRACK_BG_ALT);
         // Clearing focus returns the lane to its resting stripe.
         panel.set_active_track_index(None);
         assert_eq!(panel.track_bg_color(0), crate::color::TRACK_BG);
+    }
+
+    #[test]
+    fn zebra_parity_skips_hidden_rows() {
+        // A collapsed group's child renders at height 0. It must NOT consume a
+        // zebra step, or every lane below it flips to the wrong shade.
+        let mut panel = TimelineViewportPanel::new();
+        // Row 1 is hidden (height 0) — e.g. a collapsed group's child.
+        panel.mapper.set_layout(&[140.0, 0.0, 140.0, 140.0]);
+        panel.set_tracks(vec![
+            TrackInfo::default(),
+            TrackInfo::default(),
+            TrackInfo::default(),
+            TrackInfo::default(),
+        ]);
+        // Visible rows 0,2,3 alternate as 1st/2nd/3rd visible lane — the hidden
+        // row 1 inherits row 2's parity rather than advancing it.
+        assert_eq!(panel.track_bg_color(0), crate::color::TRACK_BG); // 1st visible
+        assert_eq!(panel.track_bg_color(2), crate::color::TRACK_BG_ALT); // 2nd visible
+        assert_eq!(panel.track_bg_color(3), crate::color::TRACK_BG); // 3rd visible
+        // Raw-index parity would have made row 2 == TRACK_BG (index 2 is even),
+        // i.e. the same shade as its visible neighbour above — the bug.
     }
 
     #[test]
