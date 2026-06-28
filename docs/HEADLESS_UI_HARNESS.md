@@ -1,0 +1,128 @@
+# Headless UI Harness — an agent-facing tool for MANIFOLD's UI/UX
+
+**Status:** design, 2026-06-28 (Peter + agent). Not yet built.
+**Provenance:** the `feat/timeline-ui-redesign` review found the redesign rode three
+throwaway harnesses (`timeline_header_preview.rs`, `clip_preview.rs`, `headless_ui_spike.rs`)
+that each render one piece in isolation, with hand-built structs, assert only `drew == true`,
+and write to a dead session scratchpad path. "Verified by render" meant "a human looked, maybe."
+This tool replaces them.
+
+## What this is
+
+A single tool, built **for the agent**, to see, measure, and iterate on MANIFOLD's custom
+bitmap UI **without a window**. It renders the real UI to a PNG, dumps the UI tree as
+machine-readable layout, drives real input events and re-renders, and puts the app next to the
+HTML mockup. One command: `cargo xtask ui-snap`.
+
+The point is to stop guessing from pixels. With a render *and* a tree dump, the agent reasons on
+values ("header `rgb(194,85,127)`, chip `rgb(71,71,74)`, radius 2, border 0") instead of vibes
+("saturation looks high"), catches off-by-2px and wrong-alpha bugs vision misses, and verifies
+stateful behaviour (selection, hover, expand) that a static render can't show.
+
+## Non-goals (read this before adding scope)
+
+- **No golden-image regression gate yet.** A pixel-diff CI gate would fight a moving design and
+  become noise. It comes *later*, once the visual design is locked. Deferred on purpose.
+- **Not a CI gate / not a user feature.** This is a dev instrument for the agent. It can live in
+  tests/xtask, never on a hot path.
+- **Not a new UI framework.** It drives the *existing* panels, input host, and renderer. If a
+  capability is missing in `UIStyle` (borders on skins, box-shadow, letter-spacing), that's a
+  separate backlog item — this tool *reveals* the gap, it doesn't paper over it.
+
+## Capabilities, in priority order
+
+### 1. Scene tree dump — the most important feature
+Alongside every PNG, emit a machine-readable dump of the rendered `UITree`: for each node its
+id/role, rect (x,y,w,h), `bg_color`, `text` + `text_color`, `font_size`/`weight`, `corner_radius`,
+`border_color`/`border_width`, and z/paint order. Print a compact form to stdout so the agent sees
+it inline without opening a file; write the full form as JSON next to the PNG.
+
+This is what turns vision-guessing into exact inspection. It is also the cheapest reliable diff:
+re-run after a change, compare two dumps, see exactly which node moved/recoloured/resized.
+
+### 2. Interaction driver
+Feed real input events through the actual input host (`timeline_input_host.rs` /
+`timeline_editing_host.rs`) — click, hover, key, scroll, drag, select-layer, expand-group,
+open-dropdown — then render + dump the result. The UI is stateful and event-driven; a static
+render misses half of it. The selection indicator and group nesting work **cannot** be verified
+without this (you have to actually *select* something to see the selection treatment).
+
+`--interact "select:layer2"`, `--interact "hover:mute@layer0"`, `--interact "expand:BG STACK"`,
+chained.
+
+### 3. State matrix
+Render one component across all its states — normal / selected / muted / collapsed / expanded /
+hovered — as a single grid image (+ a dump per cell). See every state at once instead of N runs.
+
+### 4. Whole-UI from a real fixture
+A scene that builds the integrated timeline (ruler + header column + lanes + clips + playhead)
+together at a real `ScreenLayout`, from a tiny real `.manifold` Project pushed through the actual
+`ui_translate` / `state_sync` path — so the image **is** the app, not hand-built `LayerInfo`.
+Keep per-panel scenes too for focused work.
+
+### 5. Mockup side-by-side
+Render the app scene next to the HTML mockup (via headless Brave/Chromium), scaled to match, in
+one image. For the agent's eye and for app-vs-target comparison. No pass/fail.
+
+### 6. One command, stable paths, deterministic
+`cargo xtask ui-snap <scene> [--state x] [--interact "..."] [--dump] [--vs-mockup]`.
+Always writes to a predictable location (`target/ui-snapshots/<scene>/`). Fixed 2× DPI, bundled
+Inter font, animation seeded to t=0 — reproducible run to run.
+
+## Architecture sketch
+
+- **Render core** — promote `headless_ui_spike::render_to_png` into a real reusable module
+  (`snapshot(scene, layout) -> Png` over a windowless `GpuDevice` + `UIRenderer`). Stable output
+  dir, not a session scratchpad.
+- **Scene registry** — named scenes in code (Storybook-style), listable and renderable
+  individually. Each scene = (fixture or hand-built data) + which panels to build.
+- **Fixture loader** — load/construct a small `Project`, run it through the real translation path.
+  Reuse the canonical-fixture pattern.
+- **Dump serializer** — walk the built `UITree`, serialize node style + bounds to JSON + a terse
+  stdout summary.
+- **Input driver** — feed events through the real input host, then re-build + re-render + re-dump.
+- **Atlas injection** — a seam to populate the clip thumbnail atlas with fixed test images
+  without the content thread, so clip previews and the §F aspect-locked "Resolve window" render
+  headless.
+- **Mockup renderer** — shell out to headless Brave to PNG; compose side-by-side.
+
+## Build order
+
+1. **Phase 1 (core loop):** render core + tree dump (#1) + one whole-timeline scene (#4) + the
+   `cargo xtask ui-snap` command with stable paths (#6). This alone makes UI work see-able and
+   measurable.
+2. **Phase 2 (state + interaction):** interaction driver (#2) + state matrix (#3). Unlocks the
+   selection / grouping / hover work.
+3. **Phase 3 (content):** thumbnail atlas injection + mockup side-by-side (#5). Unlocks the clip
+   thumbnail / Resolve-window work.
+4. **Later, deferred:** golden-image diffing, once the design is locked.
+
+## Open unknowns to derisk
+
+- **Whole-UI fidelity:** driving real panels headless may hit `WorkspaceState` / window coupling.
+  Fallback: build the real panels directly from a fixture at a real `ScreenLayout` (lighter, likely
+  enough); wiring full `ui_root` headless is the stretch goal.
+- **Atlas injection** needs a small `content_pipeline` seam to accept an injected atlas.
+- **Input host headless:** confirm the input hosts run without a live window/event loop.
+
+## First use cases (why it's needed now)
+
+The motivating timeline-redesign gaps all need render + dump + interaction:
+- **Selection indicator / Ableton-style selection outline** — needs `--interact "select:"` then dump.
+- **Group nesting inset + spine** — needs the whole-UI scene with a parent + children.
+- **Clip name-strip band + Resolve thumbnail window** — needs atlas injection.
+- **Control hairlines / badge chips / value pass** — needs the dump to verify exact px/colour.
+
+## Prior art (adapt, don't adopt — our UI is custom)
+
+- **egui_kittest** — egui's headless harness: runs the UI, simulates events, snapshots, queries by
+  semantics. Closest match to this design.
+- **AccessKit** — semantic/accessibility tree; the model behind "query the UI by meaning, not
+  pixels" (that's the dump, #1).
+- **cargo-insta** — text/structural snapshot testing; a good fit for dump diffs later (not image
+  goldens).
+- **Storybook** — the component-catalog / named-story idea (the scene registry).
+
+## Location
+
+New dev crate `manifold-ui-snapshot` (or an `xtask` subcommand) — dev-only, off all hot paths.
