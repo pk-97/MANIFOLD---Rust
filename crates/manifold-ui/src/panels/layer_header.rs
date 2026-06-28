@@ -27,7 +27,6 @@ const BTN_H: f32 = color::LAYER_CTRL_BTN_HEIGHT;
 const SEP_H: f32 = color::LAYER_CTRL_SEPARATOR_HEIGHT;
 const RIGHT_GUTTER: f32 = color::LAYER_CTRL_RIGHT_GUTTER;
 const TOP_GAP: f32 = color::LAYER_CTRL_TOP_ROW_GAP;
-const GEN_TYPE_H: f32 = color::LAYER_CTRL_GEN_TYPE_ROW_HEIGHT;
 const BADGE_SIZE: f32 = color::LAYER_CTRL_TYPE_BADGE_SIZE;
 // Widths for the MIDI trigger-mode toggle and per-layer device dropdown
 // packed into the existing MIDI / CH rows (no new row, preserves TRACK_HEIGHT).
@@ -304,7 +303,6 @@ enum LayerControl {
     Chevron,
     Name,
     DragHandle,
-    GenType,
     Mute,
     Solo,
     Led,
@@ -334,7 +332,7 @@ enum LayerControl {
     TypeBadge,
 }
 
-const N_CONTROLS: usize = 30;
+const N_CONTROLS: usize = 29;
 
 impl LayerControl {
     /// All controls in declaration (build / z) order.
@@ -346,7 +344,6 @@ impl LayerControl {
         LayerControl::Chevron,
         LayerControl::Name,
         LayerControl::DragHandle,
-        LayerControl::GenType,
         LayerControl::Mute,
         LayerControl::Solo,
         LayerControl::Led,
@@ -481,18 +478,6 @@ fn compute_layer_row(
     d.set(C::DragHandle, Rect::new(handle_x, y, HANDLE_W, BTN_H));
 
     y += ROW_STEP;
-
-    // ── Generator type row (expanded only) ──
-    // §24 5d: a collapsed generator is sized like every other collapsed track
-    // (the Collapsed preset, 48px) and shows its type via the name-row badge, not
-    // a dedicated row — so the subtype name only appears when there's room to
-    // expand. Adding it while collapsed is exactly what forced the old taller-by-
-    // type collapsed-generator height.
-    if is_generator && !is_collapsed {
-        let gen_w = w - name_left - pad;
-        d.set(C::GenType, Rect::new(name_left, y, gen_w, GEN_TYPE_H));
-        y += GEN_TYPE_H;
-    }
 
     // ── Button row: M | S | [L | BlendMode] ──
     // Audio layers carry only Mute / Solo here, then a Gain row and a Send row;
@@ -1443,30 +1428,42 @@ impl LayerHeaderPanel {
                         ..UIStyle::default()
                     },
                 ),
-                C::Name => tree.add_button(
-                    clip_parent,
-                    r.x,
-                    r.y,
-                    r.width,
-                    r.height,
-                    UIStyle {
-                        bg_color: Color32::TRANSPARENT,
-                        hover_bg_color: color::LAYER_CHEVRON_HOVER,
-                        pressed_bg_color: color::LAYER_CHEVRON_PRESSED,
-                        // §K16: a selected layer's name brightens to pure white
-                        // (paired with the focus ring), so the selected layer
-                        // reads first; otherwise the identity-contrast colour.
-                        text_color: if layer.is_selected {
-                            color::TEXT_WHITE_C32
-                        } else {
-                            text_clr
+                C::Name => {
+                    // §K: a generator's subtype folds into the name row as a quiet
+                    // suffix ("PLASMA · Text") instead of an orphaned strip above
+                    // the buttons. The display string only — `layer.name` (the
+                    // editable identity) is untouched.
+                    let display = if layer.is_generator {
+                        let ty = layer.generator_type.as_deref().unwrap_or("Unknown");
+                        format!("{} · {}", layer.name, ty)
+                    } else {
+                        layer.name.clone()
+                    };
+                    tree.add_button(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        UIStyle {
+                            bg_color: Color32::TRANSPARENT,
+                            hover_bg_color: color::LAYER_CHEVRON_HOVER,
+                            pressed_bg_color: color::LAYER_CHEVRON_PRESSED,
+                            // §K16: a selected layer's name brightens to pure white
+                            // (paired with the focus ring), so the selected layer
+                            // reads first; otherwise the identity-contrast colour.
+                            text_color: if layer.is_selected {
+                                color::TEXT_WHITE_C32
+                            } else {
+                                text_clr
+                            },
+                            font_size: NAME_FONT,
+                            text_align: TextAlign::Left,
+                            ..UIStyle::default()
                         },
-                        font_size: NAME_FONT,
-                        text_align: TextAlign::Left,
-                        ..UIStyle::default()
-                    },
-                    &layer.name,
-                ),
+                        &display,
+                    )
+                }
                 C::DragHandle => {
                     // Hamburger icon drawn as 3 horizontal bars.
                     let handle = tree.add_button(
@@ -1496,23 +1493,6 @@ impl LayerHeaderPanel {
                         tree.add_panel(Some(handle), bar_x, bar_y, bar_w, bar_h, bar_style);
                     }
                     handle
-                }
-                C::GenType => {
-                    let gen_text = layer.generator_type.as_deref().unwrap_or("Unknown");
-                    tree.add_label(
-                        clip_parent,
-                        r.x,
-                        r.y,
-                        r.width,
-                        r.height,
-                        gen_text,
-                        UIStyle {
-                            text_color: text_clr,
-                            font_size: SMALL_FONT,
-                            text_align: TextAlign::Left,
-                            ..UIStyle::default()
-                        },
-                    )
                 }
                 C::Mute => tree.add_button(
                     clip_parent,
@@ -2221,8 +2201,6 @@ mod tests {
             assert!(panel.rows[i].id(LayerControl::Solo).is_some(), "layer {} solo", i);
             assert!(panel.rows[i].id(LayerControl::Blend).is_some(), "layer {} blend", i);
         }
-        // Generator layer should have gen_type.
-        assert!(panel.rows[2].id(LayerControl::GenType).is_some());
         // Video layers should have folder routing.
         assert!(panel.rows[0].id(LayerControl::Folder).is_some());
         // §C: clip-count line + "+ clip" / "+ new clip" buttons are removed.
@@ -2457,16 +2435,11 @@ mod tests {
         d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
         d.set(C::DragHandle, Rect::new(handle_x, y, HANDLE_W, BTN_H));
         y += ROW_STEP;
-        if is_generator && !is_collapsed {
-            let gen_w = w - name_left - pad;
-            d.set(C::GenType, Rect::new(name_left, y, gen_w, GEN_TYPE_H));
-            y += GEN_TYPE_H;
-        }
         let mut btn_x = pad;
         d.set(C::Mute, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-        btn_x += MS_BTN_W + 5.0;
+        btn_x += MS_BTN_W + 6.0;
         d.set(C::Solo, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-        btn_x += MS_BTN_W + 5.0;
+        btn_x += MS_BTN_W + 6.0;
         if is_audio {
             d.set(C::Analysis, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
             let mut ay = y + BTN_H + 2.0;
@@ -2481,10 +2454,10 @@ mod tests {
             return d;
         }
         d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-        btn_x += MS_BTN_W + 5.0;
+        btn_x += MS_BTN_W + 6.0;
         let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
         d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
-        y += BTN_H + ROUTING_ROW_GAP;
+        y += BTN_H;
         let sep_h = if is_group {
             color::GROUP_SEPARATOR_HEIGHT
         } else {
@@ -2501,6 +2474,12 @@ mod tests {
         // rect-for-rect; the equivalence gate enforces it).
         if !is_group {
             let right_edge = w - pad - RIGHT_GUTTER;
+            let div_y = (y + MIX_DIVIDER_PAD).round();
+            d.set(
+                C::MixDivider,
+                Rect::new(pad, div_y, (right_edge - pad).max(1.0), MIX_DIVIDER_THICK),
+            );
+            y = div_y + MIX_DIVIDER_THICK + MIX_DIVIDER_PAD;
             let val_x = pad + LBL_W + 6.0;
             let val_w = (right_edge - val_x).max(20.0);
             let mode_x = right_edge - MODE_TOGGLE_W;

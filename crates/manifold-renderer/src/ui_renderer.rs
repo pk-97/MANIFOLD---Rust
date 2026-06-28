@@ -212,10 +212,12 @@ struct RectCommand {
 const NO_GRAD: [f32; 4] = [0.0; 4];
 
 /// Vertical optical-centring nudge, as a fraction of font size. Text placed so
-/// its `font_size` box centres in a node sits ~0.1em high — caps/x-height ink
+/// its `font_size` box centres in a node sits slightly high — caps/x-height ink
 /// centres above the box centre. Shifting the baseline down by this fraction
-/// makes M/S/L chips and chip values read truly centred (Peter, 2026-06-28).
-const VERTICAL_OPTICAL_NUDGE: f32 = 0.10;
+/// makes chip values + the name row read truly centred. 0.10 overshot low
+/// (Peter: "all text slightly too low"); 0.05 lands on true centre against the
+/// drawn icons (chevron / badge / hamburger), which carry no nudge (2026-06-28).
+const VERTICAL_OPTICAL_NUDGE: f32 = 0.05;
 
 /// A solid-coloured line drawn as an oriented quad. Piggybacks on the
 /// rect pipeline by emitting four rotated corner positions with
