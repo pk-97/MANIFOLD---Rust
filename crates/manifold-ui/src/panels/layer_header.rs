@@ -116,12 +116,14 @@ fn chip_button_style() -> UIStyle {
 }
 
 /// A routing *value* chip (Folder path, MIDI note, Channel, Device): the neutral
-/// header chip, left-aligned, carrying a trailing `▾` affordance (added by the
-/// caller via [`with_caret`]) so values read as "opens a list" — the mockup's
-/// `.sel` dropdown (§K13).
+/// header chip, left-aligned, with the renderer-painted dropdown caret pinned to
+/// the right edge (`dropdown_caret`) so values read as "opens a list" — the
+/// mockup's `.sel` dropdown (§K13 / §M). The caret is dim + right-aligned, not a
+/// glyph baked into the value text.
 fn value_chip_style() -> UIStyle {
     UIStyle {
         text_align: TextAlign::Left,
+        dropdown_caret: true,
         ..chip_button_style()
     }
 }
@@ -153,13 +155,6 @@ fn routing_label_style(text_clr: Color32) -> UIStyle {
         text_align: TextAlign::Left,
         ..UIStyle::default()
     }
-}
-
-/// Append the dropdown caret affordance to a value chip's text (mockup `.sel::after`).
-/// Uses `▼` (U+25BC) — the same glyph the fold chevron renders cleanly in the
-/// bitmap font; the "small" `▾` (U+25BE) isn't in Inter and rasterised as tofu.
-fn with_caret(value: &str) -> String {
-    format!("{value} \u{25BC}")
 }
 
 fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {
@@ -1047,24 +1042,25 @@ impl LayerHeaderPanel {
     }
 
     pub fn set_midi_note_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        // §K13: the value chips keep their dropdown caret on live refresh.
+        // §M: the caret is a style flag (`dropdown_caret`), painted by the
+        // renderer — the live-refresh text is just the value, no glyph to re-append.
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::MidiInput) {
-                tree.set_text(id, &with_caret(text));
+                tree.set_text(id, text);
             }
     }
 
     pub fn set_midi_channel_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::ChDropdown) {
-                tree.set_text(id, &with_caret(text));
+                tree.set_text(id, text);
             }
     }
 
     pub fn set_midi_device_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::DevDropdown) {
-                tree.set_text(id, &with_caret(text));
+                tree.set_text(id, text);
             }
     }
 
@@ -1577,7 +1573,7 @@ impl LayerHeaderPanel {
                         r.width,
                         r.height,
                         value_chip_style(),
-                        &with_caret(&path_text),
+                        &path_text,
                     )
                 }
                 C::PathLabel => tree.add_label(
@@ -1620,7 +1616,7 @@ impl LayerHeaderPanel {
                         r.width,
                         r.height,
                         value_chip_style(),
-                        &with_caret(&midi_text),
+                        &midi_text,
                     )
                 }
                 C::MidiMode => {
@@ -1659,7 +1655,7 @@ impl LayerHeaderPanel {
                         r.width,
                         r.height,
                         value_chip_style(),
-                        &with_caret(&ch_text),
+                        &ch_text,
                     )
                 }
                 C::DevLabel => tree.add_label(
@@ -1683,7 +1679,7 @@ impl LayerHeaderPanel {
                         r.width,
                         r.height,
                         value_chip_style(),
-                        &with_caret(dev_text),
+                        dev_text,
                     )
                 }
                 C::AddGenClip => tree.add_button(
@@ -1731,7 +1727,7 @@ impl LayerHeaderPanel {
                         r.width,
                         r.height,
                         value_chip_style(),
-                        &with_caret(send_text),
+                        send_text,
                     )
                 }
             };

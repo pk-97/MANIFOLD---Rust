@@ -738,6 +738,17 @@ pub const CHIP_LINE: Color32 = Color32::new(255, 255, 255, 41);
 /// Corner radius for header-control chips. The mockup rounds every header chip
 /// to 4px; kept distinct from the 2px inspector `SMALL_RADIUS`.
 pub const CHIP_RADIUS: f32 = 4.0;
+/// Dropdown-caret affordance on a value chip (mockup `.sel::after`): a dim ▼
+/// pinned to the chip's right edge. Dimmer + smaller than the value text so it
+/// reads as an affordance, not content. Painted by the renderer when
+/// `UIStyle::dropdown_caret` is set.
+pub const CHIP_CARET: Color32 = Color32::new(255, 255, 255, 150);
+/// Caret glyph point size (the value text is `FONT_SMALL` 9px; the caret sits one
+/// step down, matching the mockup's 9px-caret-on-10.5px-text proportion).
+pub const CHIP_CARET_FONT: u16 = 8;
+/// Inset of the caret's right edge from the chip's right edge (the chip's own
+/// right padding).
+pub const CHIP_CARET_PAD_X: f32 = 7.0;
 pub const LAYER_CHEVRON_HOVER: Color32 = Color32::new(255, 255, 255, 15);
 pub const LAYER_CHEVRON_PRESSED: Color32 = Color32::new(255, 255, 255, 8);
 

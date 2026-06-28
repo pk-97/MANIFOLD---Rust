@@ -50,7 +50,11 @@ impl ClipBody {
 }
 
 /// Emit the lift shadow under every selected clip. Call before the bodies so a
-/// selected clip's shadow never lands on top of a neighbouring body.
+/// selected clip's shadow never lands on top of a neighbouring body. (An *ambient*
+/// shadow under every clip — the mockup's `.clip` box-shadow — was tried and
+/// dropped: on MANIFOLD's near-black lanes a black drop-shadow doesn't read, so it
+/// was pure per-frame cost. The clips' depth comes from the inset card + identity
+/// border, not a shadow.)
 pub fn emit_clip_shadows(ui: &mut UIRenderer, clips: &[ClipBody]) {
     for c in clips {
         if !c.selected || !c.visible() {

@@ -391,3 +391,34 @@ Peter ran the build with real thumbnails and flagged the clip rendering. Fixes (
 windows = `preview_height × aspect`); if Peter wants it calmer, cap the window count or show one window
 + colour fill on short clips (the §F "zoomed out → one window + layer colour" rule). The varied-frame
 filmstrip on real footage + the loop-repeat case both need Peter's eye on actual video.
+
+## §M. Chrome-refinement pass — "polish and pretty" (2026-06-28)
+
+Peter, after the §L pass: *"mostly at a polish and pretty stage. The HTML has lots of nice polish that
+native doesn't — buttons, text, boxes, inputs all look much more refined."* Comparing the headless dump
+to the mockup CSS, the chip **boxes** already match at the token level (chip bg `#1b1b21`, white-`.16`
+hairline, r4 — exactly `--chip`/`--chip-line`). The refinement gap is the chips' **internals**: a single
+text run can't right-pin or dim an affordance.
+
+**Shipped — dropdown caret pinned right + dimmed (M1/M2, root fix).** The value chips baked the caret
+into the text string (`"None ▼"`, left-aligned, full weight) — the mockup `.sel` pins a dim `▼` hard
+right via `justify-content:space-between` + `::after{color:rgba(255,255,255,.6);font-size:9px}`. The
+renderer (`draw_node`) painted exactly one text run, so a string-baked caret was the only option.
+Root fix: a Copy-safe `UIStyle::dropdown_caret` bool; when set, `draw_node` paints a dim `▼`
+(`color::CHIP_CARET` = white-`150`, `CHIP_CARET_FONT` 8px) pinned to the node's right edge, independent
+of the value text. `value_chip_style()` sets it; `with_caret()` (string concat) is deleted, and the
+live-refresh setters set the bare value. Verified headless (left-column crop @3×): caret reads as a dim
+right-pinned glyph on every identity hue; the `Note` toggle correctly has none. Zero new nodes (no
+hit-test risk), `layout_matches_frozen_oracle` unaffected (style-only), token guard unmoved at 131
+(new consts in the exempt `color.rs`).
+
+**Tried + dropped — ambient clip shadow (M8).** The mockup gives every `.clip` a `0 1px 2px
+rgba(0,0,0,.35)` shadow. Implemented (subtle per-clip `draw_shadow`) then reverted: on MANIFOLD's
+near-black lanes a black drop-shadow doesn't read (crop confirmed black-on-black), so it was pure
+per-frame GPU cost. Clip depth comes from the inset card + identity border, not a shadow.
+
+**Deferred (documented, not dropped):** the `BLEND` micro-label hierarchy (mockup `<b>BLEND</b>` dim +
+value bright) needs two styled text runs in one chip — the single-run renderer can't, and a child label
+complicates the per-control id/setter model for a subtle gain; revisit if a general label/value-chip
+primitive lands. Also still deferred from §K: header-column cross-panel elevation, lane-edge selection
+brightening, letter-spacing (hot CoreText path), tabular-nums, transport active-mode highlight.

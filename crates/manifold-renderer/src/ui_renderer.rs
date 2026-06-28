@@ -928,6 +928,38 @@ impl UIRenderer {
                 );
             }
         }
+
+        // Dropdown caret (§M / mockup `.sel::after`): a dim ▼ pinned to the
+        // node's right edge, drawn independent of the main text so a value chip
+        // reads as a dropdown without baking the glyph into the value string.
+        #[cfg(target_os = "macos")]
+        if style.dropdown_caret {
+            const CARET: &str = "\u{25BC}";
+            let clip_bounds = self
+                .clip_stack
+                .last()
+                .map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
+            let caret_color = manifold_ui::color::CHIP_CARET;
+            let caret_color = [caret_color.r, caret_color.g, caret_color.b, caret_color.a];
+            let caret_font = manifold_ui::color::CHIP_CARET_FONT;
+            let size = self
+                .text_renderer
+                .measure_text_cached(CARET, caret_font, style.font_weight);
+            let caret_x =
+                bounds.x_max() - manifold_ui::color::CHIP_CARET_PAD_X - size.x;
+            let caret_y = bounds.y + (bounds.height - size.y) * 0.5;
+            let depth = self.current_depth();
+            self.text_renderer.draw_text(
+                caret_x,
+                caret_y,
+                CARET,
+                caret_font as f32,
+                caret_color,
+                style.font_weight,
+                clip_bounds,
+                depth,
+            );
+        }
     }
 
     /// Queue an atlas-icon draw. `icon_id` is a [`manifold_ui::icons::Icon`] id.

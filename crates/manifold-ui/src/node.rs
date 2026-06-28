@@ -393,6 +393,12 @@ pub struct UIStyle {
     pub font_size: u16,
     pub font_weight: FontWeight,
     pub text_align: TextAlign,
+    /// When true, the renderer paints a dim dropdown caret (▼) pinned to the
+    /// node's right edge, independent of (and after) the main text. Lets a value
+    /// chip read as "opens a list" — the mockup's `.sel::after` — without baking a
+    /// glyph into the text string (which would left-align with the value and sit
+    /// at full weight). The main value text stays left-aligned and ellipsis-free.
+    pub dropdown_caret: bool,
 }
 
 impl Default for UIStyle {
@@ -408,6 +414,7 @@ impl Default for UIStyle {
             font_size: crate::color::FONT_HEADING,
             font_weight: crate::color::FONT_WEIGHT_DEFAULT,
             text_align: TextAlign::Left,
+            dropdown_caret: false,
         }
     }
 }
