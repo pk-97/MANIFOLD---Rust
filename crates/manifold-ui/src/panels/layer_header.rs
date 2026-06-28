@@ -35,6 +35,10 @@ const MODE_TOGGLE_W: f32 = 32.0;
 /// §D routing form: one fixed label column for Folder/MIDI/Channel/Device so the
 /// values align in a second column (wide enough for the spelled-out labels).
 const LBL_W: f32 = 52.0;
+/// Vertical gap between routing rows (Folder/MIDI/Channel/Device) — the mockup
+/// `.rform{gap:9px}` airy rhythm. The old 2px read cramped now that the expanded
+/// track is 200px. Used for the mix→routing gap too.
+const ROUTING_ROW_GAP: f32 = 9.0;
 const ACCENT_W: f32 = color::GROUP_ACCENT_BAR_WIDTH;
 const CHILD_INDENT: f32 = color::GROUP_CHILD_INDENT_PX;
 const BORDER_H: f32 = color::GROUP_BOTTOM_BORDER_HEIGHT;
@@ -114,6 +118,9 @@ fn chip_button_style() -> UIStyle {
         font_size: SMALL_FONT,
         corner_radius: LH_BTN_RADIUS,
         text_align: TextAlign::Center,
+        // Internal padding so left-aligned value/prefix text sits off the chip
+        // border (mockup `.sel`/`.blend` 7px) instead of jammed against it.
+        text_inset_x: color::CHIP_TEXT_INSET_X,
         ..UIStyle::default()
     }
 }
@@ -489,7 +496,7 @@ fn compute_layer_row(
     let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
     d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
 
-    y += BTN_H + 2.0;
+    y += BTN_H + ROUTING_ROW_GAP;
 
     // ── Collapsed non-group: skip detail controls ──
     let sep_h = if is_group {
@@ -522,7 +529,7 @@ fn compute_layer_row(
         if !is_generator {
             d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
             d.set(C::Folder, Rect::new(val_x, y, val_w, BTN_H));
-            y += BTN_H + 2.0;
+            y += BTN_H + ROUTING_ROW_GAP;
         }
         // MIDI | note input + trigger-mode toggle.
         d.set(C::MidiLabel, Rect::new(pad, y, LBL_W, BTN_H));
@@ -531,11 +538,11 @@ fn compute_layer_row(
             Rect::new(val_x, y, (mode_x - 4.0 - val_x).max(10.0), BTN_H),
         );
         d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
-        y += BTN_H + 2.0;
+        y += BTN_H + ROUTING_ROW_GAP;
         // Channel | dropdown.
         d.set(C::ChLabel, Rect::new(pad, y, LBL_W, BTN_H));
         d.set(C::ChDropdown, Rect::new(val_x, y, val_w, BTN_H));
-        y += BTN_H + 2.0;
+        y += BTN_H + ROUTING_ROW_GAP;
         // Device | dropdown.
         d.set(C::DevLabel, Rect::new(pad, y, LBL_W, BTN_H));
         d.set(C::DevDropdown, Rect::new(val_x, y, val_w, BTN_H));
@@ -2432,7 +2439,7 @@ mod tests {
         btn_x += MS_BTN_W + 5.0;
         let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
         d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
-        y += BTN_H + 2.0;
+        y += BTN_H + ROUTING_ROW_GAP;
         let sep_h = if is_group {
             color::GROUP_SEPARATOR_HEIGHT
         } else {
@@ -2455,7 +2462,7 @@ mod tests {
             if !is_generator {
                 d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
                 d.set(C::Folder, Rect::new(val_x, y, val_w, BTN_H));
-                y += BTN_H + 2.0;
+                y += BTN_H + ROUTING_ROW_GAP;
             }
             d.set(C::MidiLabel, Rect::new(pad, y, LBL_W, BTN_H));
             d.set(
@@ -2463,10 +2470,10 @@ mod tests {
                 Rect::new(val_x, y, (mode_x - 4.0 - val_x).max(10.0), BTN_H),
             );
             d.set(C::MidiMode, Rect::new(mode_x, y, MODE_TOGGLE_W, BTN_H));
-            y += BTN_H + 2.0;
+            y += BTN_H + ROUTING_ROW_GAP;
             d.set(C::ChLabel, Rect::new(pad, y, LBL_W, BTN_H));
             d.set(C::ChDropdown, Rect::new(val_x, y, val_w, BTN_H));
-            y += BTN_H + 2.0;
+            y += BTN_H + ROUTING_ROW_GAP;
             d.set(C::DevLabel, Rect::new(pad, y, LBL_W, BTN_H));
             d.set(C::DevDropdown, Rect::new(val_x, y, val_w, BTN_H));
         }

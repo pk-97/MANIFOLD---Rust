@@ -749,6 +749,9 @@ pub const CHIP_CARET_FONT: u16 = 8;
 /// Inset of the caret's right edge from the chip's right edge (the chip's own
 /// right padding).
 pub const CHIP_CARET_PAD_X: f32 = 7.0;
+/// Internal horizontal padding for chip text — the mockup `.sel{padding:2px 7px}`
+/// so value/label text sits off the border, symmetric with the caret's right pad.
+pub const CHIP_TEXT_INSET_X: f32 = 7.0;
 /// Dim leading micro-label on a label/value chip (mockup `.blend b`) — e.g. the
 /// "BLEND" before the mode. Same dim as the caret so the chip's two secondary
 /// affordances (leading label, trailing caret) read at one weight.

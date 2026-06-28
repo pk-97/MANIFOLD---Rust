@@ -115,7 +115,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = in.uv * vec2<f32>(rect_w, rect_h);
     let center = vec2<f32>(rect_w, rect_h) * 0.5;
     let half_size = center - vec2<f32>(radius);
-    let d = length(max(abs(pixel - center) - half_size, vec2<f32>(0.0))) - radius;
+    // Full rounded-box SDF. The `min(max(q.x,q.y),0)` interior term is what makes
+    // `d` go NEGATIVE inside the box; without it (the old form) `d` is 0 across the
+    // whole interior at radius 0, so a border floods the entire fill white. The
+    // term is 0 outside/on the edge, so radius>0 rects are unchanged.
+    let q = abs(pixel - center) - half_size;
+    let d = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
 
     // Antialiased edge. AA band = ONE physical pixel via the screen-space
     // derivative of d (fwidth), so edges stay crisp at any DPI. The old fixed
