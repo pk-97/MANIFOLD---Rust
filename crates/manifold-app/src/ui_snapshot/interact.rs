@@ -54,6 +54,12 @@ fn select_layer(ui: &mut UIRoot, data: &mut SceneData, target: &str) -> String {
         }
     }
     let hit = clicked.is_some();
+    if !hit {
+        eprintln!(
+            "ui-snap: WARNING — synthesized click missed the '{target}' header; the real input \
+             path was NOT exercised. Falling back to id match so the render still updates."
+        );
+    }
     let i = clicked.unwrap_or(idx);
 
     // Apply selection exactly as the bridge does on LayerClicked.

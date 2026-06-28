@@ -55,7 +55,7 @@ pub fn run(args: &[String]) {
     ui.layout.inspector_width = 0.0;
     ui.layout.timeline_split_ratio = 0.93;
     sync_build(&mut ui, &data);
-    render_and_dump(&ui, &dir, scene, "", want_dump, want_thumbs);
+    render_and_dump(&ui, &data.selection, &dir, scene, "", want_dump, want_thumbs);
 
     // Optional: render the HTML mockup and composite app | mockup side by side.
     if want_vs_mockup {
@@ -67,7 +67,7 @@ pub fn run(args: &[String]) {
         let desc = interact::apply(&mut ui, &mut data, &spec);
         println!("ui-snap: interact {desc}");
         sync_build(&mut ui, &data);
-        render_and_dump(&ui, &dir, scene, ".after", want_dump, want_thumbs);
+        render_and_dump(&ui, &data.selection, &dir, scene, ".after", want_dump, want_thumbs);
     }
 }
 
@@ -86,6 +86,7 @@ fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData) {
 /// a terse stdout summary.
 fn render_and_dump(
     ui: &UIRoot,
+    selection: &manifold_ui::UIState,
     dir: &Path,
     scene: &str,
     suffix: &str,
@@ -95,7 +96,15 @@ fn render_and_dump(
     let tex_w = (LOGICAL_W * SCALE) as u32;
     let tex_h = (LOGICAL_H * SCALE) as u32;
     let png = dir.join(format!("{scene}{suffix}.png"));
-    render::render_ui_to_png(ui, tex_w, tex_h, SCALE, with_thumbs, png.to_str().expect("utf-8 path"));
+    render::render_ui_to_png(
+        ui,
+        selection,
+        tex_w,
+        tex_h,
+        SCALE,
+        with_thumbs,
+        png.to_str().expect("utf-8 path"),
+    );
     println!("ui-snap: wrote {}", png.display());
 
     if want_dump {

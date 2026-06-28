@@ -24,6 +24,7 @@ const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba8Unorm;
 /// multiple of 64 so the readback stride (`tex_w * 4`) is 256-byte aligned.
 pub fn render_ui_to_png(
     ui: &UIRoot,
+    selection: &manifold_ui::UIState,
     tex_w: u32,
     tex_h: u32,
     scale: f32,
@@ -56,13 +57,17 @@ pub fn render_ui_to_png(
         let tracks = ui.viewport.get_tracks_rect();
 
         // Pass 2: GPU clip bodies (Load).
+        // Resolve per-clip selected/hovered from real state, exactly as
+        // app_render does — never pin them false (a hardcode would misrepresent
+        // clip selection once a `select:clip` scene exists).
+        let hovered_clip = ui.viewport.hovered_clip_id();
         let bodies: Vec<ClipBody> = clip_rects
             .iter()
             .map(|cr| ClipBody {
                 rect: cr.rect,
                 base_color: cr.base_color,
-                selected: false,
-                hovered: false,
+                selected: selection.is_selected(&cr.clip_id),
+                hovered: hovered_clip == Some(cr.clip_id.as_str()),
                 muted: cr.is_muted,
                 locked: cr.is_locked,
                 generator: cr.is_generator,
