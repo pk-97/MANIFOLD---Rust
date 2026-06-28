@@ -40,7 +40,7 @@ pub fn toggle_style(on: bool) -> UIStyle {
             pressed_bg_color: color::ACCENT_BLUE_PRESS_C32,
             text_color: color::TEXT_WHITE_C32,
             font_size: color::FONT_CAPTION,
-            corner_radius: color::BUTTON_RADIUS,
+            corner_radius: color::CHIP_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
@@ -51,7 +51,7 @@ pub fn toggle_style(on: bool) -> UIStyle {
             pressed_bg_color: color::BG_3_PRESSED,
             text_color: color::TEXT_DIMMED_C32,
             font_size: color::FONT_CAPTION,
-            corner_radius: color::BUTTON_RADIUS,
+            corner_radius: color::CHIP_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
@@ -105,65 +105,37 @@ pub struct StateButtonSkin {
 }
 
 impl StateButtonSkin {
-    /// Chrome bars (transport / mixer / footer): a bright raised chip with white
-    /// off-text and the bold 30/20 active deltas. The default [`state_button`].
+    /// THE neutral state-button skin — one look for every latching / momentary
+    /// button that isn't on an identity-coloured surface: chrome bars, transport,
+    /// footer, AND the effect / generator card mod-source + config buttons. A chip
+    /// on the grey ramp's control level (`BG_3`), the bold 30/20 active deltas, the
+    /// unified control radius (`CHIP_RADIUS`). Active fills with the caller's
+    /// semantic hue (PLAY green, mod-source teal/orange, …); off recesses to the
+    /// neutral chip. Identity-coloured surfaces (the layer header) use
+    /// [`chip_state_style`]`(ChipSurface::Tonal(..))` instead — same grammar, tonal
+    /// fill. The card variants below are now aliases of this: the kit used to carry
+    /// four divergent skins (chrome / header / raised / recessed) with different
+    /// greys + radii; they are one chip now.
     pub const CHROME: Self = Self {
         active_lighten: 30,
         active_darken: 20,
-        off_bg: color::BUTTON_DIM,
-        off_hover: color::BUTTON_HIGHLIGHTED,
-        off_press: color::BUTTON_PRESSED,
-        off_text: color::TEXT_WHITE_C32,
-        corner_radius: color::BUTTON_RADIUS,
-        border_color: Color32::TRANSPARENT,
-        border_width: 0.0,
-    };
-
-    /// Layer-header chip (§C / §K): a control sitting on the identity-coloured
-    /// header. A dark NEUTRAL chip + a white hairline so it reads on any hue,
-    /// filling with the caller's M/S/L/A identity hue when active. The bold 30/20
-    /// active deltas match the chrome bar; the hairline is what's new.
-    pub const HEADER_CHIP: Self = Self {
-        active_lighten: 30,
-        active_darken: 20,
-        off_bg: color::CHIP_BG,
-        off_hover: color::CHIP_BG_HOVER,
-        off_press: color::CHIP_BG_PRESSED,
-        off_text: color::TEXT_WHITE_C32,
+        off_bg: color::BG_3,
+        off_hover: color::BG_3_HOVER,
+        off_press: color::BG_3_PRESSED,
+        off_text: color::TEXT_NORMAL,
         corner_radius: color::CHIP_RADIUS,
-        border_color: color::CHIP_LINE,
-        border_width: 1.0,
-    };
-
-    /// Inspector card, *raised*: the modulation-source buttons (envelope /
-    /// driver / audio). A dim raised chip + dimmed off-text, with gentler 20/10
-    /// active deltas tuned for the denser card.
-    pub const CARD_RAISED: Self = Self {
-        active_lighten: 20,
-        active_darken: 10,
-        off_bg: color::DRIVER_INACTIVE_C32,
-        off_hover: color::DRIVER_INACTIVE_HOVER_C32,
-        off_press: color::DRIVER_INACTIVE_PRESS_C32,
-        off_text: color::TEXT_DIMMED_C32,
-        corner_radius: color::SMALL_RADIUS,
         border_color: Color32::TRANSPARENT,
         border_width: 0.0,
     };
 
-    /// Inspector card, *recessed*: the dense config option cells (beat div,
-    /// waveform, dot, triplet, reverse). The off-chip sits *below* panel level —
-    /// a darker recessed cell — with the same gentle 20/10 active deltas.
-    pub const CARD_RECESSED: Self = Self {
-        active_lighten: 20,
-        active_darken: 10,
-        off_bg: color::CONFIG_BTN_INACTIVE_C32,
-        off_hover: color::CONFIG_BTN_HOVER_C32,
-        off_press: color::CONFIG_BTN_PRESSED_C32,
-        off_text: color::TEXT_DIMMED_C32,
-        corner_radius: color::SMALL_RADIUS,
-        border_color: Color32::TRANSPARENT,
-        border_width: 0.0,
-    };
+    /// The effect / generator card mod-source buttons (envelope / driver / audio).
+    /// Folded into the one neutral chip (was a dimmer raised variant). Kept as a
+    /// named alias so call sites read intently.
+    pub const CARD_RAISED: Self = Self::CHROME;
+
+    /// The dense card config cells (beat div, waveform, dot, triplet, reverse).
+    /// Folded into the one neutral chip (was a darker recessed variant).
+    pub const CARD_RECESSED: Self = Self::CHROME;
 }
 
 /// The state-button mechanic with an explicit [`StateButtonSkin`]: active fills
@@ -375,7 +347,7 @@ pub fn button_primary_style() -> UIStyle {
         pressed_bg_color: color::ACCENT_BLUE_PRESS_C32,
         text_color: color::TEXT_WHITE_C32,
         font_size: color::FONT_BODY,
-        corner_radius: color::BUTTON_RADIUS,
+        corner_radius: color::CHIP_RADIUS,
         text_align: TextAlign::Center,
         ..UIStyle::default()
     }
@@ -388,7 +360,7 @@ pub fn button_secondary_style() -> UIStyle {
         pressed_bg_color: color::BG_3_PRESSED,
         text_color: color::TEXT_NORMAL,
         font_size: color::FONT_BODY,
-        corner_radius: color::BUTTON_RADIUS,
+        corner_radius: color::CHIP_RADIUS,
         text_align: TextAlign::Center,
         ..UIStyle::default()
     }
@@ -413,7 +385,7 @@ pub fn icon_button_style() -> UIStyle {
         pressed_bg_color: color::PRESS_OVERLAY,
         text_color: color::CHEVRON_COLOR,
         font_size: color::FONT_BODY,
-        corner_radius: color::BUTTON_RADIUS,
+        corner_radius: color::CHIP_RADIUS,
         text_align: TextAlign::Center,
         ..UIStyle::default()
     }
@@ -444,7 +416,7 @@ pub fn segment_style(selected: bool) -> UIStyle {
             pressed_bg_color: color::BG_3_PRESSED,
             text_color: color::TEXT_NORMAL,
             font_size: color::FONT_SUBHEADING,
-            corner_radius: color::BUTTON_RADIUS,
+            corner_radius: color::CHIP_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
@@ -455,7 +427,7 @@ pub fn segment_style(selected: bool) -> UIStyle {
             pressed_bg_color: color::BG_1,
             text_color: color::TEXT_DIMMED_C32,
             font_size: color::FONT_SUBHEADING,
-            corner_radius: color::BUTTON_RADIUS,
+            corner_radius: color::CHIP_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         }
@@ -576,7 +548,7 @@ mod tests {
         assert_eq!(on.hover_bg_color, color::lighten(color::MUTED_COLOR, 30));
         assert_eq!(on.pressed_bg_color, color::darken(color::MUTED_COLOR, 20));
         let off = state_button_style(color::MUTED_COLOR, false);
-        assert_eq!(off.bg_color, color::BUTTON_DIM);
+        assert_eq!(off.bg_color, color::BG_3); // the one neutral chip
     }
 
     #[test]
@@ -606,41 +578,23 @@ mod tests {
     }
 
     #[test]
-    fn card_raised_skin_reproduces_legacy_de_button_constants() {
-        // Parity: the modulation-source button look is unchanged by the kit move
-        // (gentle 20/10 deltas, the dim raised chip, dimmed off-text).
-        let s = &StateButtonSkin::CARD_RAISED;
-        assert_eq!((s.active_lighten, s.active_darken), (20, 10));
-        let off = state_button_skinned(color::ENVELOPE_ACTIVE_C32, false, color::FONT_CAPTION, s);
-        assert_eq!(off.bg_color, color::DRIVER_INACTIVE_C32);
-        assert_eq!(off.hover_bg_color, color::DRIVER_INACTIVE_HOVER_C32);
-        assert_eq!(off.pressed_bg_color, color::DRIVER_INACTIVE_PRESS_C32);
-        assert_eq!(off.text_color, color::TEXT_DIMMED_C32);
-        assert_eq!(off.corner_radius, color::SMALL_RADIUS);
-        let on = state_button_skinned(color::ENVELOPE_ACTIVE_C32, true, color::FONT_CAPTION, s);
-        assert_eq!(on.font_size, color::FONT_CAPTION);
-        assert_eq!(on.text_color, color::TEXT_WHITE_C32);
-    }
-
-    #[test]
-    fn card_recessed_skin_reproduces_legacy_config_off_and_active_hover() {
-        // Parity: off-chip + active hover unchanged. The active *press* is now
-        // derived (darken 10) for consistency with the colored config variant —
-        // the one deliberate, sub-perceptual delta vs the old hand-tuned constant
-        // (the old press was a non-uniform −10/−20/−20 that no `darken` reproduces).
-        let s = &StateButtonSkin::CARD_RECESSED;
-        let off = state_button_skinned(color::DRIVER_ACTIVE_C32, false, color::FONT_CAPTION, s);
-        assert_eq!(off.bg_color, color::CONFIG_BTN_INACTIVE_C32);
-        assert_eq!(off.hover_bg_color, color::CONFIG_BTN_HOVER_C32);
-        assert_eq!(off.pressed_bg_color, color::CONFIG_BTN_PRESSED_C32);
-        let on = state_button_skinned(color::DRIVER_ACTIVE_C32, true, color::FONT_CAPTION, s);
-        // Hover still equals the old DRIVER_ACTIVE_HOVER constant value…
-        assert_eq!(on.hover_bg_color, Color32::new(40, 186, 211, 255));
-        // …press is now the derived darken(10), the consistency fix.
-        assert_eq!(
-            on.pressed_bg_color,
-            color::darken(color::DRIVER_ACTIVE_C32, 10)
-        );
+    fn card_skins_are_now_aliases_of_the_one_neutral_chip() {
+        // The kit's four divergent skins collapsed to one: the card mod-source and
+        // config buttons are the same neutral chip as the chrome bars now (BG_3,
+        // 30/20 deltas, CHIP_RADIUS, normal off-text). Active still fills with the
+        // caller's hue.
+        for s in [&StateButtonSkin::CARD_RAISED, &StateButtonSkin::CARD_RECESSED] {
+            assert_eq!((s.active_lighten, s.active_darken), (30, 20));
+            let off = state_button_skinned(color::ENVELOPE_ACTIVE_C32, false, color::FONT_CAPTION, s);
+            assert_eq!(off.bg_color, color::BG_3);
+            assert_eq!(off.hover_bg_color, color::BG_3_HOVER);
+            assert_eq!(off.pressed_bg_color, color::BG_3_PRESSED);
+            assert_eq!(off.text_color, color::TEXT_NORMAL);
+            assert_eq!(off.corner_radius, color::CHIP_RADIUS);
+            let on = state_button_skinned(color::DRIVER_ACTIVE_C32, true, color::FONT_CAPTION, s);
+            assert_eq!(on.bg_color, color::DRIVER_ACTIVE_C32);
+            assert_eq!(on.text_color, color::TEXT_WHITE_C32);
+        }
     }
 
     #[test]

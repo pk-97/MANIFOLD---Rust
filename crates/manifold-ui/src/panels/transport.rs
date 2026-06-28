@@ -54,9 +54,7 @@ const PERC_BUTTON_W: f32 = 48.0;
 
 // ── Panel-specific colors ──────────────────────────────────────────
 
-const BUTTON_HOVER_C: Color32 = color::TRANSPORT_BUTTON_HOVER;
 const SAVE_DIRTY_BG: Color32 = color::TRANSPORT_SAVE_DIRTY_BG;
-const BPM_FIELD_HOVER: Color32 = color::TRANSPORT_BPM_FIELD_HOVER;
 
 const BUTTON_FONT: u16 = color::FONT_SUBHEADING;
 const STATUS_FONT: u16 = color::FONT_BODY;
@@ -340,13 +338,15 @@ impl TransportPanel {
         let reset_c = if self.bpm_reset_active { color::BPM_RESET_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
         let clear_c = if self.bpm_clear_active { color::BPM_CLEAR_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
 
+        // The BPM type-in field rides the same neutral chip surface as the buttons
+        // beside it — one control look across the transport bar.
         let bpm_field_style = UIStyle {
-            bg_color: color::SLIDER_TRACK_C32,
-            hover_bg_color: BPM_FIELD_HOVER,
-            pressed_bg_color: color::BUTTON_PRESSED,
-            text_color: color::TEXT_WHITE_C32,
+            bg_color: color::BG_3,
+            hover_bg_color: color::BG_3_HOVER,
+            pressed_bg_color: color::BG_3_PRESSED,
+            text_color: color::TEXT_NORMAL,
             font_size: BUTTON_FONT,
-            corner_radius: color::SMALL_RADIUS,
+            corner_radius: color::CHIP_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
         };
@@ -389,16 +389,6 @@ impl TransportPanel {
     }
 
     fn right_group(&self) -> View {
-        let open_recent_style = UIStyle {
-            bg_color: color::BUTTON_INACTIVE_C32,
-            hover_bg_color: BUTTON_HOVER_C,
-            pressed_bg_color: color::BUTTON_PRESSED,
-            text_color: color::TEXT_WHITE_C32,
-            font_size: color::FONT_LABEL,
-            corner_radius: color::BUTTON_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        };
         let save_bg = if self.save_text.contains('*') { SAVE_DIRTY_BG } else { color::BUTTON_INACTIVE_C32 };
         let export_bg = if self.export_active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
         let hdr_bg = if self.hdr_active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
@@ -411,7 +401,7 @@ impl TransportPanel {
             .cross_align(Align::Center)
             .child(Self::btn("NEW", NEW_BUTTON_W, inactive(), PanelAction::NewProject))
             .child(Self::btn("OPEN", OPEN_BUTTON_W, inactive(), PanelAction::OpenProject))
-            .child(Self::btn("OPEN RECENT", OPEN_RECENT_W, open_recent_style, PanelAction::OpenRecent))
+            .child(Self::btn("OPEN RECENT", OPEN_RECENT_W, inactive(), PanelAction::OpenRecent))
             .child(Self::btn(self.save_text.as_str(), SAVE_BUTTON_W, button_style(save_bg), PanelAction::SaveProject))
             .child(Self::btn("SAVE AS", SAVE_AS_W, inactive(), PanelAction::SaveProjectAs))
             // The file|render section gap is RIGHT_SPACING + SECTION_SPACER; the
