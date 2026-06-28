@@ -45,6 +45,9 @@ pub fn run(args: &[String]) {
     ui.layout.inspector_width = 0.0;
     ui.layout.timeline_split_ratio = 0.93;
     sync_project_data(&mut ui, &data.project, data.active, &data.selection);
+    // Zoom out so the 48-beat fixture clips fit the lane width (set before build
+    // so the ruler ticks and the clip rects agree on px/beat).
+    ui.viewport.set_zoom(24.0);
     ui.build();
     let mut tcache = TransportDisplayCache::new();
     push_state(
@@ -64,7 +67,7 @@ pub fn run(args: &[String]) {
     let tex_w = (LOGICAL_W * SCALE) as u32;
     let tex_h = (LOGICAL_H * SCALE) as u32;
     let png = dir.join(format!("{scene}.png"));
-    render::render_tree_to_png(&ui.tree, tex_w, tex_h, SCALE, png.to_str().expect("utf-8 path"));
+    render::render_ui_to_png(&ui, tex_w, tex_h, SCALE, png.to_str().expect("utf-8 path"));
     println!("ui-snap: wrote {}", png.display());
 
     if want_dump {
