@@ -591,7 +591,7 @@ impl AudioSetupPanel {
             inner_w - 74.0,
             ROW_H,
             dropdown_trigger_style(),
-            &format!("{}   \u{25BC}", self.device_label()), // value … ▼
+            &self.device_label(),
         );
         cy += ROW_H + ROW_GAP;
 
@@ -762,7 +762,7 @@ impl AudioSetupPanel {
                 ch_w,
                 ROW_H,
                 dropdown_trigger_style(),
-                &format!("{}   \u{25BC}", send.channel_label),
+                &send.channel_label,
             );
 
             // Level meter: a thin track under the channel dropdown with a fill
@@ -1201,7 +1201,7 @@ impl AudioSetupPanel {
                 layer_w,
                 TRIG_ROW_H,
                 dropdown_trigger_style(),
-                &format!("{}   \u{25BC}", row.layer_label),
+                &row.layer_label,
             );
 
             // Live level meter — a thin underline across the tuning zone (band
@@ -1868,21 +1868,12 @@ fn label_button_style() -> UIStyle {
     }
 }
 
-/// A dropdown trigger — a bordered field showing the current value with a ▼
-/// caret, the standard "click to choose" affordance.
+/// A dropdown trigger — the canonical neutral dropdown chip
+/// (`components::dropdown_chip_style` on the grey ramp), the same control the
+/// layer-header routing chips and the inspector pickers use. The renderer paints
+/// the caret from the `dropdown_caret` flag, so call sites pass the bare value.
 fn dropdown_trigger_style() -> UIStyle {
-    UIStyle {
-        bg_color: Color32::new(30, 30, 34, 255),
-        hover_bg_color: Color32::new(44, 44, 50, 255),
-        pressed_bg_color: Color32::new(26, 26, 30, 255),
-        text_color: Color32::new(214, 214, 220, 255),
-        border_color: Color32::new(58, 58, 64, 255),
-        border_width: 1.0,
-        corner_radius: color::BUTTON_RADIUS,
-        font_size: BTN_FONT,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
-    }
+    crate::chrome::components::dropdown_trigger_style(BTN_FONT)
 }
 
 #[cfg(test)]

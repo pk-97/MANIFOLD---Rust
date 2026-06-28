@@ -564,31 +564,23 @@ pub(crate) fn toggle_btn_style(enabled: bool) -> UIStyle {
     crate::chrome::components::toggle_style(enabled)
 }
 
-/// Style for a dropdown trigger — a control cell that shows the current
-/// selection and opens a `DropdownPanel` on click. Reads like the card config
-/// buttons but distinct enough to signal "opens a menu". Shared so the
-/// detection inspector, string-param cards, and any future picker look identical.
+/// Style for a dropdown trigger — a control cell that shows the current selection
+/// and opens a `DropdownPanel` on click. The canonical neutral dropdown chip
+/// (`components::dropdown_chip_style` on the grey ramp): the layer-header routing
+/// chip on a hueless surface, so the detection inspector, string-param cards, clip
+/// chrome, and any future picker all read identically — caret affordance, chip
+/// radius, and padding included.
 pub(crate) fn dropdown_trigger_style(font_size: u16) -> UIStyle {
-    UIStyle {
-        bg_color: color::CONFIG_BTN_INACTIVE_C32,
-        hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-        pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-        text_color: color::TEXT_NORMAL,
-        font_size,
-        corner_radius: color::SMALL_RADIUS,
-        text_align: TextAlign::Left,
-        ..UIStyle::default()
-    }
+    crate::chrome::components::dropdown_trigger_style(font_size)
 }
 
-/// A dropdown trigger as a typed Chrome [`View`] component — the declarative
-/// twin of [`build_dropdown_trigger`]. A panel drops this into its description
-/// (size it + `.key(K)` to resolve the click, and `.inert()` since the gesture
-/// routes through the panel's `handle_click`); it renders byte-identically to the
-/// imperative builder. The granular building block the inspector cards compose
-/// instead of hand-building a trigger into a slot.
+/// A dropdown trigger as a typed Chrome [`View`] component — the declarative twin
+/// of the imperative builder. A panel drops this into its description (size it +
+/// `.key(K)` to resolve the click, and `.inert()` since the gesture routes through
+/// the panel's `handle_click`). The caret is the style's `dropdown_caret` flag, so
+/// `current` is the bare value (no baked `\u{25BC}`).
 pub(crate) fn dropdown_trigger_view(current: &str, font_size: u16) -> View {
-    View::button(format!(" {current}   \u{25BC}")).style(dropdown_trigger_style(font_size))
+    View::button(current.to_string()).style(dropdown_trigger_style(font_size))
 }
 
 // ── Shared builder functions ────────────────────────────────────

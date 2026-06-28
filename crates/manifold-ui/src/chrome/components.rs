@@ -221,6 +221,148 @@ pub fn state_button(label: impl Into<String>, active_color: Color32, active: boo
     View::button(label).style(state_button_style(active_color, active))
 }
 
+// ── Chip ────────────────────────────────────────────────────────────
+// The rounded value/dropdown/label control that the layer-header blend + routing
+// chips established and that every neutral dropdown trigger now shares. One
+// grammar — chip radius, the dim dropdown caret, the prefix micro-label, the
+// hover/press feel, the hairline-on-light policy — across two SURFACES: a hueless
+// neutral panel (chrome / inspector / pickers) and an identity-coloured one (a
+// layer header). The §"same grammar, neutral surface" decision: only where the
+// fill colour comes from differs, never the shape or affordances.
+
+/// The surface a chip sits on. `Neutral` = the grey ramp's control level
+/// (`BG_3`), for the hueless dark panels. `Tonal(c)` = a darkened recess of the
+/// identity colour `c` (a layer header's hue), the layer-header look.
+#[derive(Clone, Copy)]
+pub enum ChipSurface {
+    Neutral,
+    Tonal(Color32),
+}
+
+impl ChipSurface {
+    /// Resting chip fill.
+    pub fn bg(self) -> Color32 {
+        match self {
+            ChipSurface::Neutral => color::BG_3,
+            // A clearly dark recess with only a hint of the layer hue (Peter wants
+            // these dark) — not a foreign neutral slab.
+            ChipSurface::Tonal(c) => color::scale_rgb(c, 0.30),
+        }
+    }
+    fn hover(self) -> Color32 {
+        match self {
+            ChipSurface::Neutral => color::BG_3_HOVER,
+            ChipSurface::Tonal(_) => color::lighten(self.bg(), 18),
+        }
+    }
+    fn pressed(self) -> Color32 {
+        match self {
+            ChipSurface::Neutral => color::BG_3_PRESSED,
+            ChipSurface::Tonal(_) => color::darken(self.bg(), 12),
+        }
+    }
+    /// Resting text colour: white on a tonal chip (reads on any identity hue), the
+    /// normal off-white on a neutral chip (the established chrome/inspector read,
+    /// not a harsh full white).
+    fn text(self) -> Color32 {
+        match self {
+            ChipSurface::Neutral => color::TEXT_NORMAL,
+            ChipSurface::Tonal(_) => color::TEXT_WHITE_C32,
+        }
+    }
+    /// Hairline policy: a tonal chip on a *light* identity needs a faint dark line
+    /// to re-seat where a chip would otherwise look flat; on a dark identity (and
+    /// on the neutral ramp) the chip separates on its own, so no border.
+    fn border(self) -> (Color32, f32) {
+        match self {
+            ChipSurface::Tonal(c) if color::relative_luminance(c) > 0.55 => {
+                (color::CHIP_LINE_DARK, 1.0)
+            }
+            _ => (Color32::TRANSPARENT, 0.0),
+        }
+    }
+}
+
+/// A latching control on a chip surface (the layer-header M/S/L/A, or any on/off
+/// chip): fills with `active_color` when on (hover lightens 30 / press darkens
+/// 20, the bold chrome deltas), else recesses to the surface's own chip. The chip
+/// counterpart of [`state_button_skinned`] — the difference is that the off-state
+/// fill is the *surface*'s colour (tonal or neutral) rather than a fixed skin
+/// constant, which is what lets a header chip tone to the layer's hue while a
+/// neutral chip stays grey.
+pub fn chip_state_style(
+    surface: ChipSurface,
+    active_color: Color32,
+    active: bool,
+    font_size: u16,
+    radius: f32,
+) -> UIStyle {
+    let (border_color, border_width) = surface.border();
+    let (bg, hover, pressed, text) = if active {
+        (
+            active_color,
+            color::lighten(active_color, 30),
+            color::darken(active_color, 20),
+            color::TEXT_WHITE_C32,
+        )
+    } else {
+        (surface.bg(), surface.hover(), surface.pressed(), surface.text())
+    };
+    UIStyle {
+        bg_color: bg,
+        hover_bg_color: hover,
+        pressed_bg_color: pressed,
+        text_color: text,
+        border_color,
+        border_width,
+        font_size,
+        corner_radius: radius,
+        text_align: TextAlign::Center,
+        ..UIStyle::default()
+    }
+}
+
+/// A plain chip (the blend / MIDI-mode label chips; a neutral non-dropdown value
+/// cell): the surface fill + hairline + text, with the caller's font / alignment
+/// / radius / inset. No caret. Add a prefix micro-label or a caret by spreading
+/// over it — `UIStyle { prefix_label: Some("BLEND"), ..chip_style(..) }` — exactly
+/// as the layer header composes its blend chip.
+pub fn chip_style(
+    surface: ChipSurface,
+    font_size: u16,
+    align: TextAlign,
+    radius: f32,
+    text_inset_x: f32,
+) -> UIStyle {
+    let (border_color, border_width) = surface.border();
+    UIStyle {
+        bg_color: surface.bg(),
+        hover_bg_color: surface.hover(),
+        pressed_bg_color: surface.pressed(),
+        text_color: surface.text(),
+        border_color,
+        border_width,
+        font_size,
+        corner_radius: radius,
+        text_align: align,
+        text_inset_x,
+        ..UIStyle::default()
+    }
+}
+
+/// A value / dropdown chip: [`chip_style`] left-aligned with the dim dropdown
+/// caret pinned to its right edge — the "opens a list" control the layer header's
+/// routing chips and every neutral dropdown trigger share. The one canonical
+/// dropdown-trigger look (it replaces the three that had drifted: the old kit
+/// `BG_3` trigger, the param-card `CONFIG_BTN` trigger, and the header value chip).
+pub fn dropdown_chip_style(surface: ChipSurface, font_size: u16, radius: f32) -> UIStyle {
+    UIStyle {
+        text_align: TextAlign::Left,
+        dropdown_caret: true,
+        ..chip_style(surface, font_size, TextAlign::Left, radius, color::CHIP_TEXT_INSET_X)
+    }
+}
+
 // ── Button (primary / secondary) ────────────────────────────────────
 // Primary = the one bold accent action (`Change`, a dialog's confirm).
 // Secondary = neutral control grey (everything else). One accent, used
@@ -328,25 +470,20 @@ pub fn segment(label: impl Into<String>, selected: bool) -> View {
 // ── Dropdown trigger ────────────────────────────────────────────────
 // The cell that shows the current selection and opens a `DropdownPanel` on
 // click. Default for option pickers (Source / Feature / Band / Mode) — reduces
-// clutter and scales past a handful of choices. The trailing `\u{25BE}` is the
-// "opens a list" affordance.
+// clutter and scales past a handful of choices. THE canonical dropdown is the
+// neutral chip: [`dropdown_chip_style`] on the grey ramp, so a chrome / inspector
+// / picker dropdown is the layer-header routing chip on a hueless surface (the
+// renderer paints the caret from the `dropdown_caret` flag — never bake `\u{25BE}`
+// into the text, or it left-aligns at full weight and you get two carets).
 
 pub fn dropdown_trigger_style(font_size: u16) -> UIStyle {
-    UIStyle {
-        bg_color: color::BG_3,
-        hover_bg_color: color::BG_3_HOVER,
-        pressed_bg_color: color::BG_3_PRESSED,
-        text_color: color::TEXT_NORMAL,
-        font_size,
-        corner_radius: color::BUTTON_RADIUS,
-        text_align: TextAlign::Left,
-        ..UIStyle::default()
-    }
+    dropdown_chip_style(ChipSurface::Neutral, font_size, color::CHIP_RADIUS)
 }
 
-/// A dropdown trigger showing `text` plus a trailing chevron affordance.
+/// A dropdown trigger showing `text`; the caret affordance is painted by the
+/// style's `dropdown_caret` flag, so `text` is the bare value.
 pub fn dropdown_trigger(text: impl AsRef<str>, font_size: u16) -> View {
-    View::button(format!("{}  \u{25BE}", text.as_ref())).style(dropdown_trigger_style(font_size))
+    View::button(text.as_ref().to_string()).style(dropdown_trigger_style(font_size))
 }
 
 // ── ParamRow pieces ─────────────────────────────────────────────────
@@ -541,9 +678,67 @@ mod tests {
     }
 
     #[test]
+    fn chip_tonal_off_is_a_darkened_recess_of_the_identity_hue() {
+        // The layer-header look: off-state chip = the layer colour scaled to 30%,
+        // hover lightens 18 / press darkens 12, white text.
+        let c = Color32::new(180, 80, 200, 255);
+        let s = chip_style(ChipSurface::Tonal(c), color::FONT_BODY, TextAlign::Center, 4.0, 7.0);
+        assert_eq!(s.bg_color, color::scale_rgb(c, 0.30));
+        assert_eq!(s.hover_bg_color, color::lighten(s.bg_color, 18));
+        assert_eq!(s.pressed_bg_color, color::darken(s.bg_color, 12));
+        assert_eq!(s.text_color, color::TEXT_WHITE_C32);
+    }
+
+    #[test]
+    fn chip_neutral_uses_the_grey_ramp_and_normal_text() {
+        // Off-identity surfaces stay on the ramp + normal off-white — same grammar,
+        // neutral surface (no harsh full white, no foreign tint).
+        let s = chip_style(ChipSurface::Neutral, color::FONT_BODY, TextAlign::Left, 4.0, 7.0);
+        assert_eq!(s.bg_color, color::BG_3);
+        assert_eq!(s.hover_bg_color, color::BG_3_HOVER);
+        assert_eq!(s.pressed_bg_color, color::BG_3_PRESSED);
+        assert_eq!(s.text_color, color::TEXT_NORMAL);
+    }
+
+    #[test]
+    fn chip_state_fills_hue_when_active_recesses_to_surface_when_off() {
+        let c = Color32::new(64, 64, 80, 255);
+        let on = chip_state_style(ChipSurface::Tonal(c), color::MUTED_COLOR, true, 11, 6.0);
+        assert_eq!(on.bg_color, color::MUTED_COLOR);
+        assert_eq!(on.hover_bg_color, color::lighten(color::MUTED_COLOR, 30));
+        assert_eq!(on.pressed_bg_color, color::darken(color::MUTED_COLOR, 20));
+        let off = chip_state_style(ChipSurface::Tonal(c), color::MUTED_COLOR, false, 11, 6.0);
+        assert_eq!(off.bg_color, ChipSurface::Tonal(c).bg());
+    }
+
+    #[test]
+    fn chip_light_identity_gets_a_dark_hairline_dark_one_does_not() {
+        // A tonal chip on a light header re-seats with a faint dark line; on a dark
+        // header (and on neutral) the chip separates on its own.
+        let light = chip_style(ChipSurface::Tonal(Color32::new(240, 240, 120, 255)), 9, TextAlign::Center, 4.0, 0.0);
+        assert_eq!(light.border_color, color::CHIP_LINE_DARK);
+        assert_eq!(light.border_width, 1.0);
+        let dark = chip_style(ChipSurface::Tonal(Color32::new(40, 40, 60, 255)), 9, TextAlign::Center, 4.0, 0.0);
+        assert_eq!(dark.border_width, 0.0);
+        let neutral = chip_style(ChipSurface::Neutral, 9, TextAlign::Center, 4.0, 0.0);
+        assert_eq!(neutral.border_width, 0.0);
+    }
+
+    #[test]
+    fn dropdown_chip_is_left_aligned_with_a_caret() {
+        let s = dropdown_chip_style(ChipSurface::Neutral, color::FONT_BODY, 4.0);
+        assert!(s.dropdown_caret);
+        assert_eq!(s.text_align, TextAlign::Left);
+        assert_eq!(s.text_inset_x, color::CHIP_TEXT_INSET_X);
+    }
+
+    #[test]
     fn dropdown_trigger_carries_chevron_affordance() {
         let v = dropdown_trigger("Mode", color::FONT_BODY);
-        assert!(v.text.as_deref().unwrap().contains('\u{25BE}'));
+        // The caret is the style's `dropdown_caret` flag (renderer-painted), not a
+        // glyph baked into the text.
+        assert!(dropdown_trigger_style(color::FONT_BODY).dropdown_caret);
+        assert_eq!(v.text.as_deref(), Some("Mode"));
         assert!(validate(&v.inert()).is_empty());
     }
 

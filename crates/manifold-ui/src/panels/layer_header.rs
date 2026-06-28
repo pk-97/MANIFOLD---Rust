@@ -1,5 +1,5 @@
 use super::{Panel, PanelAction};
-use crate::chrome::{ChromeHost, Pad, Sizing, View};
+use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
 use crate::color::{self, darken, lighten};
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
@@ -103,96 +103,52 @@ fn led_style(led: bool, layer_color: Color32) -> UIStyle {
     state_btn(color::LED_COLOR, led, layer_color)
 }
 
-/// The off-state chip surface for a header control: the layer's *own* identity
-/// colour darkened ~70%, so the chip reads as a clearly dark recess with only a
-/// hint of the layer hue (Peter wants these dark) — not a foreign neutral slab.
-/// Replaces the old fixed dark `CHIP_BG` + white hairline (2026-06-28 restyle).
-fn header_chip_bg(layer_color: Color32) -> Color32 {
-    color::scale_rgb(layer_color, 0.30)
-}
-
-/// The hairline policy for a tonal header chip: none on a dark header (the
-/// darkened chip already separates), a faint *dark* line on a light header (where
-/// the chip would otherwise look flat). Never the old white stroke.
-fn header_chip_border(layer_color: Color32) -> (Color32, f32) {
-    if color::relative_luminance(layer_color) > 0.55 {
-        (color::CHIP_LINE_DARK, 1.0)
-    } else {
-        (Color32::TRANSPARENT, 0.0)
-    }
-}
+// The layer-header chip look now lives in the shared component kit as the `Tonal`
+// surface of the canonical chip grammar (`chrome::components::ChipSurface` +
+// `chip_state_style` / `chip_style` / `dropdown_chip_style`). These thin wrappers
+// pin the surface to the layer's identity colour and the layer-header font /
+// radius / pill metrics; the kit owns the mechanic so a header chip and a neutral
+// inspector dropdown are the same control on two surfaces. Call sites unchanged —
+// the rendered chips are byte-identical to the pre-kit local helpers.
 
 /// The layer-card flavour of the state-button mechanic: M/S/L/A on an
-/// identity-coloured header. Off = a tonal chip (the header colour darkened) with
-/// no white stroke; on = filled with the caller's M/S/L/A hue.
+/// identity-coloured header. Off = a tonal chip (the header colour darkened); on =
+/// filled with the caller's M/S/L/A hue. Pilled (§K) — rounder than the dropdown
+/// chips so M/S/L/A read as buttons, not more value pickers.
 fn state_btn(active_color: Color32, active: bool, layer_color: Color32) -> UIStyle {
-    let (border_color, border_width) = header_chip_border(layer_color);
-    if active {
-        UIStyle {
-            bg_color: active_color,
-            hover_bg_color: color::lighten(active_color, 30),
-            pressed_bg_color: color::darken(active_color, 20),
-            text_color: color::TEXT_WHITE_C32,
-            border_color,
-            border_width,
-            font_size: BTN_FONT,
-            // Pill the toggle cluster (§K) — rounder than the dropdown chips so
-            // M/S/L/A read as buttons, not more value pickers.
-            corner_radius: MSL_PILL_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    } else {
-        let bg = header_chip_bg(layer_color);
-        UIStyle {
-            bg_color: bg,
-            hover_bg_color: color::lighten(bg, 18),
-            pressed_bg_color: color::darken(bg, 12),
-            text_color: color::TEXT_WHITE_C32,
-            border_color,
-            border_width,
-            font_size: BTN_FONT,
-            corner_radius: MSL_PILL_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    }
+    components::chip_state_style(
+        components::ChipSurface::Tonal(layer_color),
+        active_color,
+        active,
+        BTN_FONT,
+        MSL_PILL_RADIUS,
+    )
 }
 
 /// A header chip for the non-toggle header controls (blend, MIDI mode): the same
 /// tonal surface as `state_btn`'s off state, so every control on the coloured
-/// header shares one recessed surface (§C / §K9) — no white stroke.
+/// header shares one recessed surface (§C / §K9). The `CHIP_TEXT_INSET_X` keeps
+/// left-aligned value/prefix text off the chip edge (mockup `.sel`/`.blend` 7px).
 fn chip_button_style(layer_color: Color32) -> UIStyle {
-    let bg = header_chip_bg(layer_color);
-    let (border_color, border_width) = header_chip_border(layer_color);
-    UIStyle {
-        bg_color: bg,
-        hover_bg_color: color::lighten(bg, 18),
-        pressed_bg_color: color::darken(bg, 12),
-        text_color: color::TEXT_WHITE_C32,
-        border_color,
-        border_width,
-        font_size: SMALL_FONT,
-        corner_radius: LH_BTN_RADIUS,
-        text_align: TextAlign::Center,
-        // Internal padding so left-aligned value/prefix text sits off the chip
-        // edge (mockup `.sel`/`.blend` 7px) instead of jammed against it.
-        text_inset_x: color::CHIP_TEXT_INSET_X,
-        ..UIStyle::default()
-    }
+    components::chip_style(
+        components::ChipSurface::Tonal(layer_color),
+        SMALL_FONT,
+        TextAlign::Center,
+        LH_BTN_RADIUS,
+        color::CHIP_TEXT_INSET_X,
+    )
 }
 
 /// A routing *value* chip (Folder path, MIDI note, Channel, Device): the tonal
 /// header chip, left-aligned, with the renderer-painted dropdown caret pinned to
-/// the right edge (`dropdown_caret`) so values read as "opens a list" — the
-/// mockup's `.sel` dropdown (§K13 / §M). The caret is dim + right-aligned, not a
-/// glyph baked into the value text.
+/// the right edge so values read as "opens a list" — the mockup's `.sel` dropdown
+/// (§K13 / §M).
 fn value_chip_style(layer_color: Color32) -> UIStyle {
-    UIStyle {
-        text_align: TextAlign::Left,
-        dropdown_caret: true,
-        ..chip_button_style(layer_color)
-    }
+    components::dropdown_chip_style(
+        components::ChipSurface::Tonal(layer_color),
+        SMALL_FONT,
+        LH_BTN_RADIUS,
+    )
 }
 
 /// The left-edge selection accent bar's fill: the app-wide bright selection
@@ -472,11 +428,20 @@ fn compute_layer_row(
         color::LAYER_CONTROLS_WIDTH
     };
 
-    d.set(C::Background, Rect::new(0.0, y_offset, w, height));
-
     let left_indent = if is_child { CHILD_INDENT } else { 0.0 };
     let pad = PAD + left_indent;
     let mut y = y_offset + PAD;
+
+    // A child layer insets its identity card to the right by `left_indent`,
+    // leaving a gutter that reveals the dark panel backdrop and the group accent
+    // spine — the mockup's nested-card look. The card (Background) and every
+    // per-row visual that rides on it (selection accent, bottom border,
+    // separator) start at `card_x`; only the group AccentBar stays pinned to the
+    // panel edge as the spine that runs down the children. For a top-level layer
+    // `card_x` is 0, so the card is full-bleed exactly as before.
+    let card_x = left_indent;
+    let card_w = (w - card_x).max(1.0);
+    d.set(C::Background, Rect::new(card_x, y_offset, card_w, height));
 
     // ── Group visuals ──
     if is_child {
@@ -491,12 +456,13 @@ fn compute_layer_row(
     if is_child && is_last_child {
         d.set(
             C::BottomBorder,
-            Rect::new(0.0, y_offset + height - BORDER_H, w, BORDER_H),
+            Rect::new(card_x, y_offset + height - BORDER_H, card_w, BORDER_H),
         );
     }
-    // Selection accent — a thin left-edge bar, always laid out so the node exists
-    // for in-place restyle; its colour is transparent until the layer is selected.
-    d.set(C::SelectAccent, Rect::new(0.0, y_offset, SEL_ACCENT_W, height));
+    // Selection accent — a thin bar on the card's left edge, always laid out so
+    // the node exists for in-place restyle; its colour is transparent until the
+    // layer is selected.
+    d.set(C::SelectAccent, Rect::new(card_x, y_offset, SEL_ACCENT_W, height));
 
     // ── Top row: Chevron | Name | DragHandle ──
     let chevron_w = CHEVRON_W;
@@ -525,7 +491,7 @@ fn compute_layer_row(
     btn_x += MS_BTN_W + MSL_GAP;
 
     if is_audio {
-        return compute_audio_row(d, y_offset, height, w, pad, btn_x, y);
+        return compute_audio_row(d, y_offset, height, w, card_x, pad, btn_x, y);
     }
 
     d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
@@ -546,7 +512,7 @@ fn compute_layer_row(
     if !has_expanded_controls {
         d.set(
             C::Separator,
-            Rect::new(0.0, y_offset + height - sep_h, w, sep_h),
+            Rect::new(card_x, y_offset + height - sep_h, card_w, sep_h),
         );
         return d;
     }
@@ -599,7 +565,7 @@ fn compute_layer_row(
     let _ = y; // suppress unused
     d.set(
         C::Separator,
-        Rect::new(0.0, y_offset + height - sep_h, w, sep_h),
+        Rect::new(card_x, y_offset + height - sep_h, card_w, sep_h),
     );
     d
 }
@@ -612,6 +578,7 @@ fn compute_audio_row(
     y_offset: f32,
     height: f32,
     w: f32,
+    card_x: f32,
     pad: f32,
     btn_x: f32,
     y_buttons: f32,
@@ -634,7 +601,7 @@ fn compute_audio_row(
     let _ = y;
     d.set(
         C::Separator,
-        Rect::new(0.0, y_offset + height - SEP_H, w, SEP_H),
+        Rect::new(card_x, y_offset + height - SEP_H, (w - card_x).max(1.0), SEP_H),
     );
     d
 }
@@ -2424,10 +2391,12 @@ mod tests {
         } else {
             color::LAYER_CONTROLS_WIDTH
         };
-        d.set(C::Background, Rect::new(0.0, y_offset, w, height));
         let left_indent = if is_child { CHILD_INDENT } else { 0.0 };
         let pad = PAD + left_indent;
         let mut y = y_offset + PAD;
+        let card_x = left_indent;
+        let card_w = (w - card_x).max(1.0);
+        d.set(C::Background, Rect::new(card_x, y_offset, card_w, height));
         if is_child {
             d.set(C::AccentBar, Rect::new(0.0, y_offset, ACCENT_W, height));
         }
@@ -2440,10 +2409,10 @@ mod tests {
         if is_child && is_last_child {
             d.set(
                 C::BottomBorder,
-                Rect::new(0.0, y_offset + height - BORDER_H, w, BORDER_H),
+                Rect::new(card_x, y_offset + height - BORDER_H, card_w, BORDER_H),
             );
         }
-        d.set(C::SelectAccent, Rect::new(0.0, y_offset, SEL_ACCENT_W, height));
+        d.set(C::SelectAccent, Rect::new(card_x, y_offset, SEL_ACCENT_W, height));
         let chevron_w = CHEVRON_W;
         d.set(C::Chevron, Rect::new(pad, y, CHEVRON_W, BTN_H));
         let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
@@ -2466,7 +2435,7 @@ mod tests {
             d.set(C::Send, Rect::new(pad, ay, (right_edge - pad).max(20.0), BTN_H));
             d.set(
                 C::Separator,
-                Rect::new(0.0, y_offset + height - SEP_H, w, SEP_H),
+                Rect::new(card_x, y_offset + height - SEP_H, (w - card_x).max(1.0), SEP_H),
             );
             return d;
         }
@@ -2483,7 +2452,7 @@ mod tests {
         if is_collapsed && !is_group {
             d.set(
                 C::Separator,
-                Rect::new(0.0, y_offset + height - sep_h, w, sep_h),
+                Rect::new(card_x, y_offset + height - sep_h, card_w, sep_h),
             );
             return d;
         }
@@ -2521,7 +2490,7 @@ mod tests {
         let _ = y;
         d.set(
             C::Separator,
-            Rect::new(0.0, y_offset + height - sep_h, w, sep_h),
+            Rect::new(card_x, y_offset + height - sep_h, card_w, sep_h),
         );
         d
     }
