@@ -313,26 +313,26 @@ list; status is updated as each lands.
 
 | # | Element (dump node) | Property | App now | Target (mockup) | File / token | Status |
 |---|---|---|---|---|---|---|
-| K1 | header column (#83) | width | 200 | 230 | `color::LAYER_CONTROLS_WIDTH` | todo |
-| K2 | header column (#83) | right-edge elevation | none | `box-shadow 2px 0 6px rgba(0,0,0,.45)` | UIStyle shadow + layout | todo |
-| K3 | type badge (#109…) | size | 13 | 18 | `LAYER_CTRL_TYPE_BADGE_SIZE` | todo |
-| K4 | type badge | fill / border / radius | none | `--chip #1b1b21` + `chip-line` 1px + r4 | `layer_header` TypeBadge build | todo |
-| K5 | M/S/L (#95–97) | width | 28 | 20 | `LAYER_CTRL_MUTE_SOLO_BTN_WIDTH` | todo |
-| K6 | M/S/L + blend + values | radius | 2 | 4 | `LH_BTN_RADIUS`→`CHIP_RADIUS` | todo |
-| K7 | M/S/L off-chip | bg / border | `#47474a`, none | `--chip` + `chip-line` 1px | `state_btn`/skin border | todo |
-| K8 | blend (#98) | text | `Normal` | `BLEND  Normal` (micro-label) / `GAIN x.x` | `Blend` build | todo |
-| K9 | blend | bg / border | `#47474a`, none | `--chip` + `chip-line` 1px | `small_button_style` | todo |
-| K10 | routing labels (#100/102/105/107) | case | mixed (`Folder`) | UPPERCASE | `MidiLabel`/`ChLabel`/… text | todo |
-| K11 | routing labels | role | `Folder` is a BUTTON | label (value is the dropdown) | `Folder`/`PathLabel` swap | todo |
-| K12 | routing labels | colour | contrast text | faint `rgba(255,255,255,.72)` | label style | todo |
-| K13 | routing values (#101/103/106/108) | shape | mixed label/button | dropdown chip + trailing `▾` | value build + caret | todo |
-| K14 | clips (GPU) | vertical inset | 12 | 6 | `CLIP_VERTICAL_PAD` | todo |
-| K15 | clips (GPU) | anatomy | one body + bottom text | preview body (top) + solid layer-colour name strip (bottom 16px) | `clip_draw.rs` | todo |
-| K16 | selected layer header | name colour | contrast text | `#fff` + ring (exists) | `bg_style`/Name | todo |
-| K17 | routing labels | letter-spacing | 0 | 0.5px tracked | UIStyle `letter_spacing` + text path | todo |
-| K18 | zoom/mode buttons | radius | 3 | 6 | transport chrome | **DEFERRED** (see note) |
-| K19 | transport numerics | tabular-nums | proportional | tabular | CoreText feature | **DEFERRED** (see note) |
-| K20 | mode buttons | active highlight | flat | `Perform` lifted/`on` | mode build | todo |
+| K1 | header column (#83) | width | 200 | 230 | `color::LAYER_CONTROLS_WIDTH` | ✅ done (dump #83 = 230) |
+| K2 | header column (#83) | right-edge elevation | none | `box-shadow 2px 0 6px rgba(0,0,0,.45)` | UIStyle shadow + layout | ⏸ deferred (cross-panel) |
+| K3 | type badge (#109…) | size | 13 | 18 | `LAYER_CTRL_TYPE_BADGE_SIZE` | ✅ done (dump 18×18) |
+| K4 | type badge | fill / border / radius | none | `--chip #1b1b21` + `chip-line` 1px + r4 | `layer_header` TypeBadge build | ✅ done (bg #1b1b21, bd #ffffff29@1, r4) |
+| K5 | M/S/L (#95–97) | width | 28 | 20 | `LAYER_CTRL_MUTE_SOLO_BTN_WIDTH` | ✅ done (dump 20) |
+| K6 | M/S/L + blend + values | radius | 2 | 4 | `LH_BTN_RADIUS`→`CHIP_RADIUS` | ✅ done (dump r4) |
+| K7 | M/S/L off-chip | bg / border | `#47474a`, none | `--chip` + `chip-line` 1px | `state_btn`/`HEADER_CHIP` skin border | ✅ done |
+| K8 | blend (#98) | text | `Normal` | `BLEND  Normal` (micro-label) | `Blend` build + `set_blend_mode_text` | ✅ done (dump "BLEND  Normal") |
+| K9 | blend | bg / border | `#47474a`, none | `--chip` + `chip-line` 1px | `chip_button_style` | ✅ done |
+| K10 | routing labels | case | mixed (`Folder`) | UPPERCASE | label text | ✅ done (FOLDER/MIDI/CHANNEL/DEVICE) |
+| K11 | routing labels | role | `Folder` is a BUTTON | label static, value = dropdown | `Folder`/`PathLabel` swap | ✅ done (FolderClicked still on C::Folder; oracle green) |
+| K12 | routing labels | colour | contrast text | faint | `routing_label_style` (`with_alpha` 180) | ✅ done |
+| K13 | routing values | shape | mixed label/button | dropdown chip + trailing `▾` | `value_chip_style` + `with_caret` + setters | ✅ done (None ▾ / All ▾ / Note ▾) |
+| K14 | clips (GPU) | vertical inset | 12 | 6 | `CLIP_VERTICAL_PAD` | ✅ done |
+| K15 | clips (GPU) | anatomy | one body + bottom text | preview well (top) + solid identity name strip (bottom 16px) | `clip_draw.rs` | ✅ done (PNG two-band; bar for collapsed) |
+| K16 | selected layer | name colour + ring | contrast text | `#fff` + focus ring | `Name` build + `bg_style` | ✅ done (header ring + white name); lane-edge ⏸ deferred (viewport GPU) |
+| K17 | routing labels | letter-spacing | 0 | 0.5px tracked | UIStyle `letter_spacing` + text path | ⏸ deferred (hot CoreText path, ~0 ROI; uppercase delivers it) |
+| K18 | zoom/mode buttons | radius | 3 | 6 | transport chrome | ⏸ deferred (chrome consistency) |
+| K19 | transport numerics | tabular-nums | proportional | tabular | CoreText feature | ⏸ deferred (chrome-only) |
+| K20 | mode buttons | active highlight | flat | `Perform` `on` | mode build (transport chrome) | ⏸ deferred (chrome scope) |
 
 **Deferred-with-reason (not silently dropped):**
 - **K18 zoom/mode radius 3→6** — these live in the shared transport bar, where *every* control is
@@ -344,3 +344,22 @@ list; status is updated as each lands.
 - **K19 tabular-nums** — the timeline's numeric labels (time, BPM, px/beat) are all in the transport
   bar (chrome), not the timeline proper. CoreText font-feature plumbing for a chrome-only benefit is
   out of scope for the timeline redesign. Revisit with K18 if a transport pass happens.
+- **K2 header-column elevation** — the mockup's `.col-head` lift is a soft shadow the column casts
+  *onto the lanes*. The header column and the lanes are separate composited panels with their own
+  scissor rects, so the shadow crosses a panel boundary — it's a real cross-panel render change (a
+  reusable `UIStyle` box-shadow honoured by `draw_node`, or a left-edge inner shadow on the viewport),
+  not a value tweak. The column already reads as distinct (BG_2 grey vs dark lanes), so this is polish,
+  not legibility. Scoped as its own follow-up; **NOT** faked with a hard divider (that would overclaim
+  a lift). NO glow either way (the mockup's playhead glow is intentionally dropped).
+- **K17 letter-spacing** — a real `UIStyle` gap, but the benefit is ~0.5px of tracking on a handful of
+  small uppercase labels (≈sub-pixel), and the cost is threading a new param through the hot CoreText
+  text path (`native_text` shaping + every `draw_text` site). UPPERCASE (done, free at the string
+  level) already delivers the dominant label treatment; tracking is near-zero ROI for real cost.
+  Better as a dedicated typography pass if Peter wants it.
+- **K20 mode active-highlight** — the `Audio/Perform/Monitor` buttons are transport chrome (same bar as
+  K18). Highlighting the active mode is a chrome-state change, not timeline structure; deferred with
+  K18 to a transport pass.
+- **K16 lane-edge selection** — the selected-layer signal is fully delivered on the header (focus ring
+  + white name). The mockup also brightens the selected *lane row's* top/bottom edges; that's drawn by
+  the viewport/GPU lane pass, a separate surface. The header treatment already makes selection
+  unmissable, so the lane-edge is reinforcement, deferred to the viewport.

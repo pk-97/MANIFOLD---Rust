@@ -1067,9 +1067,10 @@ impl LayerHeaderPanel {
     }
 
     pub fn set_midi_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
+        // MidiMode is a toggle, not a dropdown — no caret (see the build arm).
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::MidiMode) {
-                tree.set_text(id, &with_caret(text));
+                tree.set_text(id, text);
             }
     }
 
@@ -1621,6 +1622,8 @@ impl LayerHeaderPanel {
                     )
                 }
                 C::MidiMode => {
+                    // A toggle (Note↔All on click), not a dropdown — so it carries
+                    // NO caret (a caret would promise a list) and stays a plain chip.
                     let mode_text = if layer.midi_all_notes { "All" } else { "Note" };
                     tree.add_button(
                         clip_parent,
@@ -1628,8 +1631,8 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        value_chip_style(),
-                        &with_caret(mode_text),
+                        chip_button_style(),
+                        mode_text,
                     )
                 }
                 C::ChLabel => tree.add_label(
