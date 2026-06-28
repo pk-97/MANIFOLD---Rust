@@ -6,6 +6,7 @@
 //!   cargo xtask ui-snap <scene> [--dump] [--interact "select:<layer>"]
 //! See `docs/HEADLESS_UI_HARNESS.md`.
 
+mod compare;
 mod dump;
 mod fixtures;
 mod interact;
@@ -33,6 +34,7 @@ fn out_dir(scene: &str) -> PathBuf {
 pub fn run(args: &[String]) {
     let scene = args.get(1).map(String::as_str).unwrap_or("timeline");
     let want_dump = args.iter().any(|a| a == "--dump");
+    let want_vs_mockup = args.iter().any(|a| a == "--vs-mockup");
     let interact = arg_value(args, "--interact");
 
     let Some(mut data) = fixtures::build(scene) else {
@@ -52,6 +54,11 @@ pub fn run(args: &[String]) {
     ui.layout.timeline_split_ratio = 0.93;
     sync_build(&mut ui, &data);
     render_and_dump(&ui, &dir, scene, "", want_dump);
+
+    // Optional: render the HTML mockup and composite app | mockup side by side.
+    if want_vs_mockup {
+        compare::vs_mockup(&dir, scene, &dir.join(format!("{scene}.png")));
+    }
 
     // Optional interaction: drive a real event, re-sync, render the "after".
     if let Some(spec) = interact {

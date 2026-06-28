@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MANIFOLD — Timeline redesign mockup (tiers + title-bottom)</title>
+<style>
+  :root{
+    /* --- neutral chrome — CONTRAST PASS: value range spread wide --- */
+    --bg:           #08080a;   /* deeper black so raised surfaces separate */
+    --lane:         #141418;
+    --lane-alt:     #101014;
+    --chrome-0:     #1e1e23;   /* header column base — genuinely lifted */
+    --chrome-1:     #28282f;   /* raised elements */
+    --chrome-2:     #37373f;   /* buttons clearly raised */
+    --line:         #43434e;   /* dividers actually visible */
+    --line-soft:    #2c2c34;   /* grid beat lines */
+    --line-bar:     #4c4c57;   /* grid bar lines */
+    --txt:          #f5f5f7;
+    --txt-dim:      #b4b4be;   /* labels readable */
+    --txt-faint:    #80808c;   /* faint still legible */
+    /* --- semantic hues (reserved, never used for content) --- */
+    --playhead:     #ff4d4d;
+    --select:       #5aa6ff;
+    --solo:         #56db8c;
+    --mute:         #ff6b6b;
+    --record:       #ff4040;
+    /* control chip on a coloured header — opaque NEUTRAL so controls never read as hue-on-hue */
+    --chip:         #1b1b21;
+    --chip-line:    rgba(255,255,255,.16);
+    font-size:13px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{background:var(--bg); color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;}
+  body{padding:22px; line-height:1.3;}
+
+  .frame{max-width:1180px; margin:0 auto; border:1px solid var(--line);
+    border-radius:8px; overflow:hidden; background:var(--bg);
+    box-shadow:0 18px 60px rgba(0,0,0,.55);}
+
+  /* ============ TOP BAR (neutral chrome) ============ */
+  .topbar{display:flex; align-items:center; gap:14px; height:46px; padding:0 14px;
+    background:linear-gradient(var(--chrome-1),var(--chrome-0));
+    border-bottom:1px solid var(--line);}
+  .proj{font-weight:600; letter-spacing:.2px; color:var(--txt);}
+  .time{margin-left:6px; font-variant-numeric:tabular-nums; color:var(--txt-dim);
+    font-size:14px; letter-spacing:.5px;}
+  .time b{color:var(--txt); font-weight:600;}
+  .spacer{flex:1;}
+  .zoom{display:flex; align-items:center; gap:0; background:var(--chrome-2);
+    border:1px solid var(--line); border-radius:6px; overflow:hidden;}
+  .zoom button{background:none; border:none; color:var(--txt-dim); width:30px; height:26px;
+    font-size:15px; cursor:pointer;}
+  .zoom button:hover{color:var(--txt); background:#2c2c33;}
+  .zoom .lvl{padding:0 10px; color:var(--txt-dim); font-size:12px; border-left:1px solid var(--line);
+    border-right:1px solid var(--line); height:26px; display:flex; align-items:center;
+    font-variant-numeric:tabular-nums;}
+  .modes{display:flex; gap:6px;}
+  .mode{padding:6px 13px; border-radius:6px; background:var(--chrome-2); border:1px solid var(--line);
+    color:var(--txt-dim); font-size:12px; font-weight:500; cursor:pointer;}
+  .mode:hover{color:var(--txt);}
+  .mode.on{background:#2b3a52; border-color:#3a5a86; color:#cfe0ff;}
+
+  /* ============ TIMELINE GRID ============ */
+  .tl{display:grid; grid-template-columns:230px 1fr;}
+  .col-head{background:var(--chrome-0);
+    border-right:1px solid var(--line);
+    /* value-based depth: the header column reads as "lifted" above the lanes */
+    box-shadow:2px 0 6px rgba(0,0,0,.45);
+    position:relative; z-index:3;}
+  .col-lanes{position:relative; overflow:hidden;}
+
+  /* ---- ruler ---- */
+  .ruler{height:30px; display:flex; align-items:flex-end; position:relative;
+    background:var(--chrome-0); border-bottom:1px solid var(--line);}
+  .ruler.lanes{background:var(--lane);}
+  .rtick{position:absolute; bottom:0; font-size:10.5px; color:var(--txt-faint);
+    padding-left:4px; border-left:1px solid var(--line); height:11px; line-height:1; padding-top:0;}
+  .rtick span{position:relative; top:-13px; left:1px; font-variant-numeric:tabular-nums;}
+
+  /* ============================================================
+     HEADER ROWS — ONE grammar, THREE heights
+       collapsed 26  → name bar only
+       compact   58  → identity + mix (default)
+       expanded 200  → identity + mix + clips + routing
+     ============================================================ */
+  .hrow{height:58px; padding:8px 10px; border-bottom:1px solid var(--line-soft);
+    display:flex; flex-direction:column; justify-content:space-between; position:relative;
+    overflow:hidden;}
+  .hrow.collapsed{height:26px; padding:4px 10px; justify-content:center;}
+  .hrow.expanded{height:200px; justify-content:flex-start; gap:11px;}
+  /* identity colour FILLS the whole header (Ableton-style solid lane) */
+  .hrow .accent{position:absolute; inset:0; z-index:0;}
+  .htop,.hbot,.rform{position:relative; z-index:1;}
+
+  .htop{display:flex; align-items:center; gap:8px;}
+  .fold{color:rgba(255,255,255,.78); font-size:9px; cursor:pointer; width:9px;}
+  .fold.open{color:rgba(255,255,255,.95);}
+  .badge{width:18px; height:18px; border-radius:4px; display:flex; align-items:center;
+    justify-content:center; font-size:11px; font-weight:700; flex-shrink:0;
+    background:var(--chip); color:#fff; border:1px solid var(--chip-line);}
+  .name{font-size:12.5px; font-weight:600; color:var(--txt); flex:1; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis;}
+  .menu{color:rgba(255,255,255,.8); font-size:12px; cursor:pointer; padding:0 1px;}
+  .menu:hover{color:#fff;}
+
+  .hbot{display:flex; align-items:center; gap:5px;}
+  /* controls sit on the coloured header → dark translucent chips read on any hue */
+  .iconbtn{width:20px; height:18px; border-radius:4px; background:var(--chip);
+    border:1px solid var(--chip-line); color:rgba(255,255,255,.88); font-size:10px; font-weight:700;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;}
+  .iconbtn.on-m{background:var(--mute); border-color:rgba(0,0,0,.25); color:#fff;}
+  .iconbtn.on-s{background:var(--solo); border-color:rgba(0,0,0,.25); color:#0c2415;}
+  .iconbtn.dead{opacity:.32; cursor:default;}   /* disabled, not absent */
+  .blend{margin-left:auto; font-size:10.5px; color:rgba(255,255,255,.92); padding:1px 7px;
+    background:var(--chip); border:1px solid var(--chip-line); border-radius:4px;
+    display:flex; align-items:center; gap:4px;}
+  .blend b{color:rgba(255,255,255,.6); font-weight:700; font-size:9px;}
+
+  /* ---- expanded-only: routing form (label column + aligned values) ---- */
+  .rform{display:grid; grid-template-columns:54px 1fr; gap:9px 8px; align-items:center;
+    border-top:1px solid var(--line-soft); padding-top:8px;}
+  .rlabel{font-size:9.5px; color:rgba(255,255,255,.72); text-transform:uppercase; letter-spacing:.5px;}
+  .rfield{display:flex; gap:6px;}
+  .sel{flex:1; background:var(--chip); border:1px solid var(--chip-line); border-radius:4px;
+    padding:2px 7px; font-size:10.5px; color:rgba(255,255,255,.92); cursor:pointer;
+    display:flex; align-items:center; justify-content:space-between; min-width:0;}
+  .sel span{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .sel::after{content:"▾"; color:rgba(255,255,255,.6); font-size:9px; margin-left:6px; flex-shrink:0;}
+  .sel:hover{border-color:rgba(255,255,255,.3); color:#fff;}
+
+  /* nesting: children indent + share grammar; a spine shows the group */
+  .hrow.child{padding-left:24px;}
+  .spine{position:absolute; left:14px; top:0; bottom:0; width:1px; background:rgba(0,0,0,.45); z-index:1;}
+
+  /* ============ LANE ROWS (heights mirror headers row-for-row) ============ */
+  .lrow{height:58px; border-bottom:1px solid var(--line-soft); position:relative;
+    background:var(--lane);}
+  .lrow.alt{background:var(--lane-alt);}
+  .lrow.collapsed{height:26px;}
+  .lrow.expanded{height:200px;}
+
+  /* ---- SELECTED LAYER — bright focus ring + lift; header KEEPS its identity colour ---- */
+  /* (the colour fill is the identity, so selection can't be a fill — it's a ring) */
+  .hrow.layer-sel{box-shadow:inset 0 0 0 2px #e6f0ff; z-index:2;}
+  .hrow.layer-sel .name{color:#fff;}
+  .hrow.layer-sel .accent::after{content:""; position:absolute; inset:0; background:rgba(255,255,255,.16);}
+  .lrow.layer-sel{box-shadow:inset 0 2px 0 #e6f0ff, inset 0 -2px 0 #e6f0ff;}
+
+  /* grid lines drawn behind clips */
+  .grid{position:absolute; inset:0; pointer-events:none;
+    background-image:
+      repeating-linear-gradient(90deg, var(--line-bar) 0 1px, transparent 1px 96px),
+      repeating-linear-gradient(90deg, var(--line-soft) 0 1px, transparent 1px 24px);}
+
+  /* ---- clips: content preview ON TOP, name strip ON BOTTOM ---- */
+  .clip{position:absolute; top:6px; bottom:6px; border-radius:4px; overflow:hidden;
+    border:1px solid rgba(0,0,0,.4); cursor:default;
+    box-shadow:0 1px 2px rgba(0,0,0,.35);}
+  .clip .body{position:absolute; top:0; left:0; right:0; bottom:16px;}
+  .clip .strip{position:absolute; left:0; right:0; bottom:0; height:16px;
+    font-size:10px; font-weight:600; color:rgba(255,255,255,.92);
+    padding:0 6px; line-height:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .clip.sel{border:1.5px solid var(--select); box-shadow:0 2px 7px rgba(0,0,0,.6);
+    z-index:2;}  /* selected clip lifts (value + crisp border + shadow) */
+  /* collapsed-row clip is just a colored bar with name */
+  .lrow.collapsed .clip{top:4px; bottom:4px;}
+  .lrow.collapsed .clip .body{display:none;}
+  .lrow.collapsed .clip .strip{top:0; height:auto; bottom:0; line-height:18px;
+    display:flex; align-items:center;}
+
+  /* content-preview treatments */
+  .pv-video{background:
+      linear-gradient(115deg,#6a98a6 0%, #3f6470 40%, #5c808e 70%, #3a5660 100%);}
+  .pv-video::after{content:""; position:absolute; inset:0;
+      background:radial-gradient(circle at 30% 40%, rgba(255,255,255,.10), transparent 50%);}
+  .pv-text{background:#3a2030; display:flex; align-items:center; justify-content:center;}
+  .pv-text span{font-size:15px; font-weight:800; color:rgba(255,255,255,.22); letter-spacing:1px;}
+  .pv-gen{background:#323a5a;
+      background-image:radial-gradient(rgba(255,255,255,.18) 1px, transparent 1.4px);
+      background-size:8px 8px;}
+  .pv-audio{background:#2e2620;}
+  .wave{position:absolute; inset:0; opacity:.55;}
+
+  /* playhead + insert cursor, drawn on top of everything */
+  .playhead{position:absolute; top:0; bottom:0; width:2px; background:var(--playhead);
+    z-index:5; box-shadow:0 0 6px rgba(255,77,77,.5);}
+  .playhead .cap{position:absolute; top:-30px; left:-5px; width:12px; height:10px;
+    background:var(--playhead); clip-path:polygon(0 0,100% 0,50% 100%);}
+  .insert{position:absolute; top:0; bottom:0; width:1px; background:var(--select);
+    opacity:.5; z-index:4;}
+
+  /* loop / region brackets in the ruler */
+  .loop{position:absolute; top:2px; height:5px; background:var(--select); opacity:.85; border-radius:2px;}
+
+  /* ============ LEGEND ============ */
+  .legend{display:grid; grid-template-columns:repeat(5,1fr); gap:0;
+    border-top:1px solid var(--line); background:var(--chrome-0);}
+  .lcell{padding:11px 13px; border-right:1px solid var(--line-soft);}
+  .lcell:last-child{border-right:none;}
+  .lcell h4{font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--txt);
+    margin-bottom:5px;}
+  .lcell p{font-size:11px; color:var(--txt-dim); line-height:1.45;}
+  .caption{text-align:center; color:var(--txt-faint); font-size:11px; margin-top:14px;}
+</style>
+</head>
+<body>
+<div class="frame">
+
+  <!-- ===== TOP BAR ===== -->
+  <div class="topbar">
+    <span class="proj">backgroundImages</span>
+    <span class="time"><b>01:10.1</b> &nbsp;|&nbsp; 38.3.4</span>
+    <div class="spacer"></div>
+    <div class="zoom"><button>−</button><span class="lvl">120 px/beat</span><button>+</button></div>
+    <div class="modes">
+      <span class="mode">Audio</span>
+      <span class="mode on">Perform</span>
+      <span class="mode">Monitor</span>
+    </div>
+  </div>
+
+  <!-- ===== TIMELINE ===== -->
+  <div class="tl">
+
+    <!-- LEFT: header column (one grammar for every type) -->
+    <div class="col-head">
+      <div class="ruler"></div>
+
+      <!-- TEXT track — COMPACT -->
+      <div class="hrow">
+        <div class="accent" style="background:#c2557f"></div>
+        <div class="htop">
+          <span class="fold">▶</span>
+          <span class="badge" title="Text">T</span>
+          <span class="name">TEXT BOT L</span>
+          <span class="menu">☰</span>
+        </div>
+        <div class="hbot">
+          <span class="iconbtn on-m">M</span>
+          <span class="iconbtn">S</span>
+          <span class="iconbtn dead">L</span>
+          <span class="blend"><b>BLEND</b> Normal</span>
+        </div>
+      </div>
+
+      <!-- VIDEO track — EXPANDED (routing revealed) -->
+      <div class="hrow expanded">
+        <div class="accent" style="background:#4f6cca"></div>
+        <div class="htop">
+          <span class="fold open">▼</span>
+          <span class="badge" title="Video">▦</span>
+          <span class="name">FLOWERS</span>
+          <span class="menu">☰</span>
+        </div>
+        <div class="hbot">
+          <span class="iconbtn">M</span>
+          <span class="iconbtn">S</span>
+          <span class="iconbtn dead">L</span>
+          <span class="blend"><b>BLEND</b> Screen</span>
+        </div>
+        <div class="rform">
+          <span class="rlabel">Folder</span>
+          <div class="rfield"><span class="sel"><span>None</span></span></div>
+          <span class="rlabel">MIDI</span>
+          <div class="rfield"><span class="sel"><span>None</span></span><span class="sel"><span>Note</span></span></div>
+          <span class="rlabel">Channel</span>
+          <div class="rfield"><span class="sel"><span>All</span></span></div>
+          <span class="rlabel">Device</span>
+          <div class="rfield"><span class="sel"><span>All</span></span></div>
+        </div>
+      </div>
+
+      <!-- GENERATOR track — EXPANDED + SELECTED LAYER -->
+      <div class="hrow expanded layer-sel">
+        <div class="accent" style="background:#7d4fc8"></div>
+        <div class="htop">
+          <span class="fold open">▼</span>
+          <span class="badge" title="Generator">◇</span>
+          <span class="name">PLASMA</span>
+          <span class="menu">☰</span>
+        </div>
+        <div class="hbot">
+          <span class="iconbtn">M</span>
+          <span class="iconbtn on-s">S</span>
+          <span class="iconbtn dead">L</span>
+          <span class="blend"><b>BLEND</b> Add</span>
+        </div>
+        <div class="rform">
+          <span class="rlabel">Folder</span>
+          <div class="rfield"><span class="sel"><span>BG STACK</span></span></div>
+          <span class="rlabel">MIDI</span>
+          <div class="rfield"><span class="sel"><span>Push 2</span></span><span class="sel"><span>CC 74</span></span></div>
+          <span class="rlabel">Channel</span>
+          <div class="rfield"><span class="sel"><span>1</span></span></div>
+          <span class="rlabel">Device</span>
+          <div class="rfield"><span class="sel"><span>Ableton</span></span></div>
+        </div>
+      </div>
+
+      <!-- GROUP parent (same grammar + fold) — COMPACT -->
+      <div class="hrow">
+        <div class="accent" style="background:#62687c"></div>
+        <div class="htop">
+          <span class="fold open">▼</span>
+          <span class="badge" title="Group">▤</span>
+          <span class="name">BG STACK</span>
+          <span class="menu">☰</span>
+        </div>
+        <div class="hbot">
+          <span class="iconbtn">M</span>
+          <span class="iconbtn">S</span>
+          <span class="iconbtn dead">L</span>
+          <span class="blend"><b>BLEND</b> Normal</span>
+        </div>
+      </div>
+
+      <!-- GROUP children (indent + spine, identical grammar) — COMPACT -->
+      <div class="hrow child">
+        <div class="spine"></div>
+        <div class="accent" style="background:#3f9a64; left:14px"></div>
+        <div class="htop">
+          <span class="badge" title="Video">▦</span>
+          <span class="name">CLOUDS</span>
+          <span class="menu">☰</span>
+        </div>
+        <div class="hbot">
+          <span class="iconbtn">M</span>
+          <span class="iconbtn">S</span>
+          <span class="iconbtn dead">L</span>
+          <span class="blend"><b>BLEND</b> Normal</span>
+        </div>
+      </div>
+
+      <!-- GROUP child — COLLAPSED (bar only) -->
+      <div class="hrow child collapsed">
+        <div class="spine"></div>
+        <div class="accent" style="background:#b0894a; left:14px"></div>
+        <div class="htop">
+          <span class="badge" style="width:14px;height:14px;font-size:9px" title="Generator">◇</span>
+          <span class="name" style="font-size:11.5px">NOISE FIELD</span>
+          <span class="iconbtn" style="margin-left:auto;width:16px;height:14px;font-size:9px">M</span>
+          <span class="iconbtn" style="width:16px;height:14px;font-size:9px">S</span>
+        </div>
+      </div>
+
+      <!-- AUDIO track — COMPACT (blend slot → gain) -->
+      <div class="hrow">
+        <div class="accent" style="background:#c2873f"></div>
+        <div class="htop">
+          <span class="fold">▶</span>
+          <span class="badge" title="Audio">∿</span>
+          <span class="name">KICK</span>
+          <span class="menu">☰</span>
+        </div>
+        <div class="hbot">
+          <span class="iconbtn">M</span>
+          <span class="iconbtn">S</span>
+          <span class="iconbtn on-s" title="LED — active here">L</span>
+          <span class="blend"><b>GAIN</b> 0.0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: lanes -->
+    <div class="col-lanes">
+      <!-- ruler with bar ticks + loop bracket -->
+      <div class="ruler lanes">
+        <div class="loop" style="left:0; width:768px"></div>
+        <div class="rtick" style="left:0"><span>1</span></div>
+        <div class="rtick" style="left:96px"><span>5</span></div>
+        <div class="rtick" style="left:192px"><span>9</span></div>
+        <div class="rtick" style="left:288px"><span>13</span></div>
+        <div class="rtick" style="left:384px"><span>17</span></div>
+        <div class="rtick" style="left:480px"><span>21</span></div>
+        <div class="rtick" style="left:576px"><span>25</span></div>
+        <div class="rtick" style="left:672px"><span>29</span></div>
+        <div class="rtick" style="left:768px"><span>33</span></div>
+        <div class="rtick" style="left:864px"><span>37</span></div>
+      </div>
+
+      <!-- TEXT lane — COMPACT -->
+      <div class="lrow">
+        <div class="grid"></div>
+        <div class="clip" style="left:8px; width:240px; background:#3a2030; border-color:#c2557f">
+          <div class="body pv-text"><span>EXILE</span></div>
+          <div class="strip" style="background:#b0507a">EXILE</div>
+        </div>
+        <div class="clip" style="left:256px; width:180px; background:#3a2030; border-color:#c2557f">
+          <div class="body pv-text"><span>RETURN</span></div>
+          <div class="strip" style="background:#b0507a">RETURN</div>
+        </div>
+        <div class="clip" style="left:444px; width:300px; background:#3a2030; border-color:#c2557f">
+          <div class="body pv-text"><span>HORIZON</span></div>
+          <div class="strip" style="background:#b0507a">HORIZON</div>
+        </div>
+      </div>
+
+      <!-- VIDEO lane — EXPANDED (taller card, bigger preview, selected clip lifts) -->
+      <div class="lrow expanded alt">
+        <div class="grid"></div>
+        <div class="clip sel" style="left:8px; width:430px; background:#1e2440; border-color:#4f6cca">
+          <div class="body pv-video"></div>
+          <div class="strip" style="background:#4f6cca">flowers_loop_A.mov</div>
+        </div>
+        <div class="clip" style="left:448px; width:296px; background:#1e2440; border-color:#4f6cca">
+          <div class="body pv-video"></div>
+          <div class="strip" style="background:#4f6cca">flowers_loop_B.mov</div>
+        </div>
+      </div>
+
+      <!-- GENERATOR lane — EXPANDED + SELECTED LAYER -->
+      <div class="lrow expanded layer-sel">
+        <div class="grid"></div>
+        <div class="clip" style="left:8px; width:736px; background:#2a1f44; border-color:#7d4fc8">
+          <div class="body pv-gen"></div>
+          <div class="strip" style="background:#7d4fc8">Plasma · drift</div>
+        </div>
+      </div>
+
+      <!-- GROUP parent lane (summary fill) — COMPACT -->
+      <div class="lrow alt">
+        <div class="grid"></div>
+        <div class="clip" style="left:8px; width:736px; background:#20222c; border-color:#62687c">
+          <div class="body" style="background:#181820"></div>
+          <div class="strip" style="background:#565c6e; color:#eceef2">BG STACK · 2 layers</div>
+        </div>
+      </div>
+
+      <!-- GROUP child: video — COMPACT -->
+      <div class="lrow">
+        <div class="grid"></div>
+        <div class="clip" style="left:8px; width:360px; background:#16301f; border-color:#3f9a64">
+          <div class="body pv-video" style="background:linear-gradient(115deg,#4a7a5a,#2f5240,#456e50,#2c4838)"></div>
+          <div class="strip" style="background:#3f9a64">clouds_slow.mov</div>
+        </div>
+        <div class="clip" style="left:376px; width:368px; background:#16301f; border-color:#3f9a64">
+          <div class="body pv-video" style="background:linear-gradient(115deg,#4a7a5a,#2f5240,#456e50,#2c4838)"></div>
+          <div class="strip" style="background:#3f9a64">clouds_fast.mov</div>
+        </div>
+      </div>
+
+      <!-- GROUP child: generator — COLLAPSED (bar only) -->
+      <div class="lrow collapsed alt">
+        <div class="grid"></div>
+        <div class="clip" style="left:8px; width:736px; background:#2e2414; border-color:#b0894a">
+          <div class="strip" style="background:#b0894a">Noise field</div>
+        </div>
+      </div>
+
+      <!-- AUDIO lane with waveform — COMPACT -->
+      <div class="lrow">
+        <div class="grid"></div>
+        <div class="clip" style="left:8px; width:736px; background:#2e2414; border-color:#c2873f">
+          <div class="body pv-audio">
+            <svg class="wave" preserveAspectRatio="none" viewBox="0 0 736 40">
+              <path fill="#d8b87a" d="M0 20 L8 20 L8 8 L16 8 L16 30 L24 30 L24 14 L32 14 L32 26 L40 26 L40 6 L48 6 L48 34 L56 34 L56 18 L64 18 L64 22 L72 22 L72 10 L80 10 L80 28 L88 28 L88 16 L96 16 L96 24 L104 24 L104 9 L112 9 L112 31 L120 31 L120 15 L128 15 L128 25 L136 25 L136 7 L144 7 L144 33 L152 33 L152 19 L160 19 L160 21 L168 21 L168 11 L176 11 L176 29 L184 29 L184 17 L192 17 L192 23 L200 23 L200 8 L208 8 L208 32 L216 32 L216 14 L224 14 L224 26 L232 26 L232 6 L240 6 L240 34 L248 34 L248 18 L256 18 L256 22 L264 22 L264 10 L272 10 L272 28 L280 28 L280 16 L288 16 L288 24 L296 24 L296 9 L304 9 L304 31 L312 31 L312 15 L320 15 L320 25 L328 25 L328 12 L336 12 L336 28 L344 28 L344 18 L352 18 L352 20 L360 20 L368 20 L368 8 L376 8 L376 30 L384 30 L384 14 L392 14 L392 26 L400 26 L400 7 L408 7 L408 33 L416 33 L416 19 L424 19 L424 21 L432 21 L432 11 L440 11 L440 29 L448 29 L448 16 L456 16 L456 24 L464 24 L464 9 L472 9 L472 31 L480 31 L480 15 L488 15 L488 25 L496 25 L496 13 L504 13 L504 27 L512 27 L512 18 L520 18 L520 22 L528 22 L528 10 L536 10 L536 28 L544 28 L544 17 L552 17 L552 23 L560 23 L560 8 L568 8 L568 32 L576 32 L576 14 L584 14 L584 26 L592 26 L592 12 L600 12 L600 28 L608 28 L608 19 L616 19 L616 21 L624 21 L624 11 L632 11 L632 29 L640 29 L640 16 L648 16 L648 24 L656 24 L656 13 L664 13 L664 27 L672 27 L672 18 L680 18 L680 22 L688 22 L688 9 L696 9 L696 31 L704 31 L704 15 L712 15 L712 25 L720 25 L720 17 L728 17 L728 23 L736 23 Z"/>
+            </svg>
+          </div>
+          <div class="strip" style="background:#c2873f">kick_bus.wav</div>
+        </div>
+      </div>
+
+      <!-- playhead + insert cursor on top -->
+      <div class="insert" style="left:520px"></div>
+      <div class="playhead" style="left:360px"><div class="cap"></div></div>
+    </div>
+  </div>
+
+  <!-- ===== LEGEND ===== -->
+  <div class="legend">
+    <div class="lcell"><h4>Three heights</h4><p>Collapsed = name bar. Compact = identity + mix (default). Expanded = + clips + routing. The fold ▶/▼ reveals routing; routing never floods the lane.</p></div>
+    <div class="lcell"><h4>One grammar</h4><p>Every type — text/video/gen/group/audio — shares the same skeleton. Type badge (T/▦/◇/▤/∿) carries identity; the blend slot becomes Gain on audio.</p></div>
+    <div class="lcell"><h4>Routing form</h4><p>Folder · MIDI · Channel · Device as a label/value grid. Labels in a fixed column; values aligned, one control vocabulary (all dropdowns ▾).</p></div>
+    <div class="lcell"><h4>Selection</h4><p>Headers carry the solid identity colour (Ableton), so selection can't be a colour fill. Selected <b>layer</b> = bright focus ring + lift (Plasma); selected <b>clip</b> = crisp border (Flowers A).</p></div>
+    <div class="lcell"><h4>Still to add</h4><p>Aspect-locked preview window (width = lane-height × project AR, re-tiling on zoom) layers onto these cards — not shown here yet.</p></div>
+  </div>
+</div>
+
+<p class="caption">MANIFOLD timeline — three tiers + title-bottom. Static mockup, not the real renderer.</p>
+</body>
+</html>
