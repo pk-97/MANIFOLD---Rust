@@ -206,8 +206,17 @@ fn luminance(c: Color32) -> f32 {
 /// edge for now; ellipsis is a Phase-6 polish) and uses dark-on-light /
 /// light-on-dark text chosen by body luminance so it reads on any layer colour.
 /// Narrow clips are skipped — a label there is illegible noise.
-pub fn emit_clip_names(ui: &mut UIRenderer, clips: &[ClipScreenRect]) {
+///
+/// `tracks` is the timeline tracks viewport. It is pushed as the outer clip so a
+/// clip scrolled left under the header column can never draw its name over the
+/// layer controls — the per-clip clip below intersects it, so the bound holds at
+/// any scroll position or zoom. Taking the rect here (rather than relying on the
+/// caller to wrap the call in `push_immediate_clip`) keeps the function
+/// self-contained: every emitter sibling that *did* depend on the caller wrapping
+/// it had already drifted out of sync, which is exactly the bleed this fixes.
+pub fn emit_clip_names(ui: &mut UIRenderer, clips: &[ClipScreenRect], tracks: Rect) {
     let font = color::FONT_LABEL as f32;
+    ui.push_immediate_clip(tracks.x, tracks.y, tracks.width, tracks.height);
     for c in clips {
         if c.name.is_empty() || c.rect.width < color::CLIP_LABEL_MIN_WIDTH {
             continue;
@@ -238,4 +247,5 @@ pub fn emit_clip_names(ui: &mut UIRenderer, clips: &[ClipScreenRect]) {
         ui.draw_text(c.rect.x + pad, ty, &c.name, font, text_color);
         ui.pop_immediate_clip();
     }
+    ui.pop_immediate_clip();
 }

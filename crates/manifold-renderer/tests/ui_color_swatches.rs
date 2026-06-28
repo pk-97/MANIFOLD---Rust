@@ -648,7 +648,9 @@ fn clip_body_sheet() {
     ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::BG_0);
     ui.draw_text(24.0, 14.0, "GPU CLIP BODIES + NAMES (\u{00a7}24 5b)", 13.0, color::TEXT_NORMAL);
     emit_clips(&mut ui, &clips);
-    emit_clip_names(&mut ui, &name_rects);
+    // Full-surface tracks rect — the swatch grid is the whole tile, so this just
+    // satisfies the viewport-clamp arg without cropping any name.
+    emit_clip_names(&mut ui, &name_rects, Rect::new(0.0, 0.0, W as f32, H as f32));
     // State labels above each clip.
     for (i, &(label, ..)) in cases.iter().enumerate() {
         let row = i / 4;

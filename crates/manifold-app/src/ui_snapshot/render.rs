@@ -107,7 +107,7 @@ pub fn render_ui_to_png(
 
         // Pass 4: clip names on top (Load).
         renderer.begin_frame();
-        emit_clip_names(&mut renderer, &clip_rects);
+        emit_clip_names(&mut renderer, &clip_rects, tracks);
         if renderer.prepare(&device, tex_w, tex_h, dpi) {
             let mut enc = device.create_encoder("ui-snap-names");
             renderer.render(&mut enc, &target.texture, GpuLoadAction::Load);

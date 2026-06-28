@@ -4295,7 +4295,11 @@ impl Application {
             // Clip name labels (§24 5b) — on top of the bodies + waveforms, at
             // BASE depth (under the dropdown/modal overlays). Reuses the visible
             // clip list resolved for the Pass 4b body emission this frame.
-            manifold_renderer::clip_draw::emit_clip_names(ui, &self.clip_rect_scratch);
+            manifold_renderer::clip_draw::emit_clip_names(
+                ui,
+                &self.clip_rect_scratch,
+                overlay_tracks,
+            );
 
             // Waveform/stem lane buttons (Base layer, before the overlays).
             // Bounded by overlay_region_start — the overlays live past it and
