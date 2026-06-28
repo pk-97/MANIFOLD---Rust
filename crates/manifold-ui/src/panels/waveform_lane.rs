@@ -13,7 +13,7 @@ use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
-use crate::node::{Color32, NodeId, Rect, TextAlign, UIStyle};
+use crate::node::{Color32, NodeId, Rect, UIStyle};
 use crate::tree::UITree;
 use crate::waveform_painter;
 use crate::waveform_renderer::WaveformRenderer;
@@ -104,15 +104,10 @@ const REANALYZE_BUTTONS: [(&str, f32); 5] = [
 
 /// Button style for re-analyze buttons (matches Unity WaveformButtonNormal/Highlighted/Pressed).
 fn reanalyze_btn_style() -> UIStyle {
+    // The neutral kit button.
     UIStyle {
-        bg_color: color::WAVEFORM_BTN_NORMAL,
-        hover_bg_color: color::WAVEFORM_BTN_HIGHLIGHTED,
-        pressed_bg_color: color::WAVEFORM_BTN_PRESSED,
-        text_color: color::DROPDOWN_INACTIVE_TEXT,
         font_size: color::FONT_SMALL,
-        corner_radius: color::BUTTON_RADIUS,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
+        ..crate::chrome::components::button_secondary_style()
     }
 }
 
@@ -249,15 +244,12 @@ impl WaveformLanePanel {
             remove_y,
             REMOVE_BTN_W,
             REMOVE_BTN_H,
+            // Neutral kit button with the destructive red hover preserved.
             UIStyle {
-                bg_color: color::WAVEFORM_BTN_NORMAL,
                 hover_bg_color: color::WAVEFORM_REMOVE_HIGHLIGHTED,
                 pressed_bg_color: color::WAVEFORM_REMOVE_PRESSED,
-                text_color: color::TEXT_NEAR_WHITE,
                 font_size: color::FONT_SMALL,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
+                ..crate::chrome::components::button_secondary_style()
             },
             "X",
         ));
@@ -271,15 +263,12 @@ impl WaveformLanePanel {
             expand_y,
             EXPAND_BTN_W,
             EXPAND_BTN_H,
+            // Neutral kit button with the expand-blue hover preserved.
             UIStyle {
-                bg_color: color::WAVEFORM_BTN_NORMAL,
                 hover_bg_color: color::WAVEFORM_EXPAND_HIGHLIGHTED,
                 pressed_bg_color: color::WAVEFORM_EXPAND_PRESSED,
-                text_color: Color32::new(191, 191, 191, 255),
                 font_size: color::FONT_SMALL,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
+                ..crate::chrome::components::button_secondary_style()
             },
             "\u{25B6}", // ▶ right-pointing triangle (collapsed)
         ));

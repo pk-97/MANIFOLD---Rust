@@ -1808,19 +1808,11 @@ impl Overlay for AudioSetupPanel {
 }
 
 fn btn_style(active: bool) -> UIStyle {
+    // An option selector — the kit segmented-control cell (selected raises onto the
+    // control level, the rest sit at panel level).
     UIStyle {
-        bg_color: if active {
-            Color32::new(46, 46, 52, 255)
-        } else {
-            Color32::new(36, 36, 40, 255)
-        },
-        hover_bg_color: Color32::new(51, 51, 58, 255),
-        pressed_bg_color: Color32::new(28, 28, 32, 255),
-        text_color: Color32::new(210, 210, 216, 255),
         font_size: BTN_FONT,
-        corner_radius: color::SMALL_RADIUS,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
+        ..crate::chrome::components::segment_style(active)
     }
 }
 

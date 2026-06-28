@@ -12,7 +12,7 @@
 //! composite that drives this card is untouched. See `docs/CHROME_API_DESIGN.md`.
 
 use super::PanelAction;
-use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
+use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View, components};
 use crate::color;
 use crate::node::*;
 use crate::slider::{SliderColors, SliderDragState};
@@ -36,7 +36,6 @@ const LED_SLIDER_W: f32 = 80.0;
 const OPACITY_LABEL_W: f32 = 50.0;
 const FONT_SIZE: u16 = color::FONT_BODY;
 
-use crate::color::{EXIT_PATH_BG, EXIT_PATH_HOVER, EXIT_PATH_PRESSED};
 
 // Stable keys: chrome elements the panel resolves (clicks / overlay anchor) and
 // the slots the sliders drop into.
@@ -127,28 +126,11 @@ impl MasterChromePanel {
     // ── View description (chrome only — sliders dropped into slots) ──
 
     fn led_toggle_style(&self) -> UIStyle {
-        if self.cached_led_enabled {
-            UIStyle {
-                bg_color: color::PLAY_GREEN,
-                hover_bg_color: color::PLAY_ACTIVE,
-                pressed_bg_color: color::BUTTON_PRESSED,
-                text_color: color::TEXT_WHITE_C32,
-                font_size: FONT_SIZE,
-                corner_radius: color::SMALL_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            }
-        } else {
-            UIStyle {
-                bg_color: color::BUTTON_INACTIVE,
-                hover_bg_color: color::BUTTON_DIM,
-                pressed_bg_color: color::BUTTON_PRESSED,
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: FONT_SIZE,
-                corner_radius: color::SMALL_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            }
+        // The kit state button — fills green when the LED output is live, recesses
+        // to the neutral chip when off.
+        UIStyle {
+            font_size: FONT_SIZE,
+            ..components::state_button_style(color::PLAY_GREEN, self.cached_led_enabled)
         }
     }
 
@@ -178,13 +160,8 @@ impl MasterChromePanel {
         let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
             .fixed(CHEVRON_W, CHEVRON_H)
             .style(UIStyle {
-                bg_color: Color32::TRANSPARENT,
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
-                text_color: color::CHEVRON_COLOR,
                 font_size: FONT_SIZE,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
+                ..components::icon_button_style()
             })
             .inert() // click handled via handle_click (inspector routing kept)
             .key(KEY_CHEVRON);
@@ -218,14 +195,8 @@ impl MasterChromePanel {
             .fill_w()
             .h(Sizing::Fixed(TOGGLE_H))
             .style(UIStyle {
-                bg_color: EXIT_PATH_BG,
-                hover_bg_color: EXIT_PATH_HOVER,
-                pressed_bg_color: EXIT_PATH_PRESSED,
-                text_color: color::TEXT_PRIMARY_C32,
                 font_size: FONT_SIZE,
-                corner_radius: color::SMALL_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
+                ..components::button_secondary_style()
             })
             .inert()
             .key(KEY_EXIT_PATH);

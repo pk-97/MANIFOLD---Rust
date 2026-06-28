@@ -10,7 +10,7 @@
 
 use super::PanelAction;
 use super::param_slider_shared::dropdown_trigger_view;
-use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View};
+use crate::chrome::{Align, ChromeHost, Pad, Sizing, SliderSpec, View, components};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
@@ -42,9 +42,7 @@ const FONT_SIZE: u16 = color::FONT_BODY;
 const NAME_FONT_SIZE: u16 = color::FONT_SUBHEADING;
 const SMALL_FONT_SIZE: u16 = color::FONT_LABEL;
 
-use crate::color::{
-    BPM_BTN_COLOR, BPM_BTN_HOVER, GEN_TYPE_COLOR, LOOP_OFF_COLOR, LOOP_ON_COLOR, darken, lighten,
-};
+use crate::color::{BPM_BTN_COLOR, GEN_TYPE_COLOR, LOOP_ON_COLOR, darken};
 
 // Stable keys.
 const KEY_BPM: u64 = 1;
@@ -257,19 +255,14 @@ impl ClipChromePanel {
     }
 
     fn toggle_button(text: &str, on: bool, key: u64) -> View {
-        let base = if on { LOOP_ON_COLOR } else { LOOP_OFF_COLOR };
+        // The kit state button — fills with the loop-blue when on, recesses to the
+        // neutral chip when off.
         View::button(text)
             .fill_w()
             .h(Sizing::Fixed(LOOP_BUTTON_H))
             .style(UIStyle {
-                bg_color: base,
-                hover_bg_color: lighten(base, 10),
-                pressed_bg_color: darken(base, 10),
-                text_color: color::TEXT_PRIMARY_C32,
                 font_size: SMALL_FONT_SIZE,
-                corner_radius: color::BUTTON_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
+                ..components::state_button_style(LOOP_ON_COLOR, on)
             })
             .inert()
             .key(key)
@@ -294,14 +287,8 @@ impl ClipChromePanel {
                     .fill_w()
                     .h(Sizing::Fixed(ROW_BTN_H))
                     .style(UIStyle {
-                        bg_color: BPM_BTN_COLOR,
-                        hover_bg_color: BPM_BTN_HOVER,
-                        pressed_bg_color: color::SLIDER_TRACK_PRESSED_C32,
-                        text_color: color::TEXT_PRIMARY_C32,
                         font_size: FONT_SIZE,
-                        corner_radius: color::SMALL_RADIUS,
-                        text_align: TextAlign::Center,
-                        ..UIStyle::default()
+                        ..components::button_secondary_style()
                     })
                     .inert()
                     .key(KEY_BPM),
@@ -390,14 +377,8 @@ impl ClipChromePanel {
                 .fill_w()
                 .h(Sizing::Fixed(LOOP_BUTTON_H))
                 .style(UIStyle {
-                    bg_color: BPM_BTN_COLOR,
-                    hover_bg_color: BPM_BTN_HOVER,
-                    pressed_bg_color: darken(BPM_BTN_COLOR, 10),
-                    text_color: color::TEXT_PRIMARY_C32,
                     font_size: SMALL_FONT_SIZE,
-                    corner_radius: color::BUTTON_RADIUS,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
+                    ..components::button_secondary_style()
                 })
                 .inert()
                 .key(KEY_DETECT),
@@ -445,14 +426,9 @@ impl ClipChromePanel {
                 .fill_w()
                 .h(Sizing::Fixed(LOOP_BUTTON_H))
                 .style(UIStyle {
-                    bg_color: LOOP_OFF_COLOR,
-                    hover_bg_color: lighten(LOOP_OFF_COLOR, 10),
-                    pressed_bg_color: darken(LOOP_OFF_COLOR, 10),
                     text_color: color::TEXT_DIMMED_C32,
                     font_size: SMALL_FONT_SIZE,
-                    corner_radius: color::BUTTON_RADIUS,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
+                    ..components::button_secondary_style()
                 })
                 .inert()
                 .key(KEY_CLEAR),
@@ -462,19 +438,12 @@ impl ClipChromePanel {
     fn instrument_row(&self, i: usize, inst: &DetectInstrumentRow) -> View {
         let row_h = if inst.enabled { INSTR_ROW_H } else { DISABLED_ROW_H };
         let toggle_h = (row_h - 2.0).max(10.0);
-        let en_base = if inst.enabled { LOOP_ON_COLOR } else { LOOP_OFF_COLOR };
         let enable = View::button(if inst.enabled { "\u{2713}" } else { "" })
             .w(Sizing::Fixed(TOGGLE_W))
             .h(Sizing::Fixed(toggle_h))
             .style(UIStyle {
-                bg_color: en_base,
-                hover_bg_color: lighten(en_base, 10),
-                pressed_bg_color: darken(en_base, 10),
-                text_color: color::TEXT_PRIMARY_C32,
                 font_size: color::FONT_CAPTION,
-                corner_radius: color::SMALL_RADIUS,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
+                ..components::state_button_style(LOOP_ON_COLOR, inst.enabled)
             })
             .inert()
             .key(KEY_INSTR_ENABLE_BASE + i as u64);

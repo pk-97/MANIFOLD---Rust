@@ -45,10 +45,6 @@ const COLLAPSE_ALL_W: f32 = 60.0;
 /// collapse-all control.
 const COMPACT_TOGGLE_W: f32 = 26.0;
 const TAB_FONT_SIZE: u16 = 12;
-const TAB_BG_ACTIVE: Color32 = Color32::new(48, 48, 52, 255);
-const TAB_BG_INACTIVE: Color32 = Color32::new(26, 26, 28, 255);
-const TAB_TEXT_ACTIVE: Color32 = Color32::new(224, 224, 228, 255);
-const TAB_TEXT_INACTIVE: Color32 = Color32::new(132, 132, 138, 255);
 
 /// Key for recovering the materialised "+ Add Effect" button's node id (the same
 /// key is reused per column — each [`chrome::materialize`] call returns only its
@@ -80,15 +76,9 @@ fn section_card_view() -> View {
 fn add_effect_button_view() -> View {
     View::button("+ Add Effect")
         .fill()
-        .style(UIStyle {
-            bg_color: ADD_EFFECT_BTN_BG,
-            hover_bg_color: ADD_EFFECT_BTN_HOVER,
-            text_color: ADD_EFFECT_BTN_TEXT,
-            corner_radius: color::BUTTON_RADIUS,
-            text_align: TextAlign::Center,
-            font_size: color::FONT_LABEL,
-            ..UIStyle::default()
-        })
+        // The neutral kit button — the "+" carries the add affordance, no bespoke
+        // blue tint (one control look across the app).
+        .style(chrome::components::button_secondary_style())
         .inert()
         .key(KEY_ADD_EFFECT_BTN)
 }
@@ -101,9 +91,6 @@ const DRAG_GHOST_TEXT: Color32 = Color32::new(220, 220, 230, 255);
 const DRAG_INDICATOR_H: f32 = 2.0;
 const DRAG_INDICATOR_INSET: f32 = 4.0;
 const DRAG_INDICATOR_COLOR: Color32 = color::ACCENT_BLUE_C32;
-const ADD_EFFECT_BTN_BG: Color32 = color::ADD_EFFECT_BTN_BG_C32;
-const ADD_EFFECT_BTN_HOVER: Color32 = color::ADD_EFFECT_BTN_HOVER_C32;
-const ADD_EFFECT_BTN_TEXT: Color32 = color::ADD_EFFECT_BTN_TEXT_C32;
 
 // ── Pressed target (for drag routing) ───────────────────────────
 
@@ -352,18 +339,11 @@ impl InspectorCompositePanel {
                 rect.y,
                 tab_w,
                 rect.height,
+                // The kit segmented-control cell — the Clip/Layer/Master tabs and
+                // any other tab strip share one look.
                 UIStyle {
-                    bg_color: if active { TAB_BG_ACTIVE } else { TAB_BG_INACTIVE },
-                    hover_bg_color: TAB_BG_ACTIVE,
-                    text_color: if active {
-                        TAB_TEXT_ACTIVE
-                    } else {
-                        TAB_TEXT_INACTIVE
-                    },
                     font_size: TAB_FONT_SIZE,
-                    text_align: TextAlign::Center,
-                    corner_radius: color::BUTTON_RADIUS,
-                    ..UIStyle::default()
+                    ..chrome::components::segment_style(active)
                 },
                 Self::tab_label(*tab),
             );
@@ -383,12 +363,7 @@ impl InspectorCompositePanel {
     /// They act on the active tab's column (the single source of truth).
     fn build_tab_controls(&mut self, tree: &mut UITree, x: f32, y: f32, h: f32) -> f32 {
         // §6b — compact toggle (cog): hide every card's modulation config drawers
-        // while keeping mods armed. Accent fill when engaged (hidden).
-        let (bg, txt) = if self.mods_compact {
-            (color::ACCENT_BLUE, color::TEXT_WHITE_C32)
-        } else {
-            (color::BG_3, color::TEXT_DIMMED_C32)
-        };
+        // while keeping mods armed. The kit toggle — accent fill when engaged.
         let id = tree.add_button(
             None,
             x,
@@ -396,14 +371,8 @@ impl InspectorCompositePanel {
             COMPACT_TOGGLE_W,
             h,
             UIStyle {
-                bg_color: bg,
-                hover_bg_color: color::BG_3_HOVER,
-                pressed_bg_color: color::BG_3_PRESSED,
-                text_color: txt,
                 font_size: color::FONT_BODY,
-                text_align: TextAlign::Center,
-                corner_radius: color::BUTTON_RADIUS,
-                ..UIStyle::default()
+                ..chrome::components::toggle_style(self.mods_compact)
             },
             // cog (atlas icon) — hide/show modulation settings
             &crate::icons::Icon::Cog.text(),
@@ -421,14 +390,9 @@ impl InspectorCompositePanel {
             COLLAPSE_ALL_W,
             h,
             UIStyle {
-                bg_color: color::BG_3,
-                hover_bg_color: color::BG_3_HOVER,
-                pressed_bg_color: color::BG_3_PRESSED,
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: color::FONT_BODY,
-                text_align: TextAlign::Center,
-                corner_radius: color::BUTTON_RADIUS,
-                ..UIStyle::default()
+                ..chrome::components::button_secondary_style()
             },
             if any_expanded { "Collapse" } else { "Expand" },
         );
@@ -2168,7 +2132,7 @@ mod tests {
         assert_eq!(btn.text.as_deref(), Some("+ Add Effect"));
         assert_eq!(btn.node_type, UINodeType::Button);
         assert!(btn.flags.contains(UIFlags::INTERACTIVE));
-        assert_eq!(btn.style.bg_color, ADD_EFFECT_BTN_BG);
+        assert_eq!(btn.style.bg_color, chrome::components::button_secondary_style().bg_color);
     }
 
     #[test]
