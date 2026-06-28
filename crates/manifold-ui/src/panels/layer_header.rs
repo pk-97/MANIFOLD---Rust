@@ -1532,7 +1532,8 @@ impl LayerHeaderPanel {
                         r.width,
                         r.height,
                         UIStyle {
-                            text_align: TextAlign::Left,
+                            // Centre the whole "BLEND <mode>" block in the chip.
+                            text_align: TextAlign::Center,
                             prefix_label: Some("BLEND"),
                             prefix_color: color::CHIP_PREFIX,
                             ..chip_button_style()

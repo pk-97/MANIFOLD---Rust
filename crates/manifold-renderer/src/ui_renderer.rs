@@ -934,46 +934,48 @@ impl UIRenderer {
                     bounds.y + (bounds.height - text_size.y) * 0.5 + fs * VERTICAL_OPTICAL_NUDGE;
                 let inset = style.text_inset_x;
 
-                // Leading dim micro-label (mockup `.blend b`): painted at the left
-                // edge (+ chip inset) in `prefix_color`, with the value shifted
-                // right past it so the chip reads "LABEL value". Left-align only.
-                let mut left_x = bounds.x + inset;
-                if let Some(prefix) = style.prefix_label
-                    && !prefix.is_empty()
-                {
-                    const PREFIX_GAP: f32 = 5.0;
+                // Optional leading dim micro-label (mockup `.blend b`) painted in
+                // `prefix_color`. Measured FIRST so alignment positions the whole
+                // label+value block as a unit — Center centres "BLEND Normal"
+                // together, not just the value (which would split the label off).
+                const PREFIX_GAP: f32 = 5.0;
+                let prefix = style.prefix_label.filter(|p| !p.is_empty());
+                let prefix_advance = match prefix {
+                    Some(p) => {
+                        self.text_renderer
+                            .measure_text_cached(p, style.font_size, style.font_weight)
+                            .x
+                            + PREFIX_GAP
+                    }
+                    None => 0.0,
+                };
+
+                let block_w = prefix_advance + text_size.x;
+                let start_x = match style.text_align {
+                    TextAlign::Center => bounds.x + (bounds.width - block_w) * 0.5,
+                    TextAlign::Right => bounds.x + bounds.width - block_w - inset,
+                    TextAlign::Left => bounds.x + inset,
+                };
+
+                if let Some(p) = prefix {
                     let pc = style.prefix_color;
-                    let psize = self.text_renderer.measure_text_cached(
-                        prefix,
-                        style.font_size,
-                        style.font_weight,
-                    );
-                    let py =
-                        bounds.y + (bounds.height - psize.y) * 0.5 + fs * VERTICAL_OPTICAL_NUDGE;
                     self.text_renderer.draw_text(
-                        left_x,
-                        py,
-                        prefix,
-                        style.font_size as f32,
+                        start_x,
+                        text_y,
+                        p,
+                        fs,
                         [pc.r, pc.g, pc.b, pc.a],
                         style.font_weight,
                         clip_bounds,
                         depth,
                     );
-                    left_x += psize.x + PREFIX_GAP;
                 }
 
-                let text_x = match style.text_align {
-                    TextAlign::Center => bounds.x + (bounds.width - text_size.x) * 0.5,
-                    TextAlign::Right => bounds.x + bounds.width - text_size.x - inset,
-                    TextAlign::Left => left_x,
-                };
-
                 self.text_renderer.draw_text(
-                    text_x,
+                    start_x + prefix_advance,
                     text_y,
                     text,
-                    style.font_size as f32,
+                    fs,
                     text_color,
                     style.font_weight,
                     clip_bounds,
