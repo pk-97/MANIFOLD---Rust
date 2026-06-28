@@ -98,8 +98,7 @@ fn timeline_scene() -> SceneData {
 
     let content = ContentState { current_beat: Beats(20.0), is_playing: false, ..Default::default() };
 
-    let mut selection = UIState::default();
-    selection.select_layer(lid("plasma"));
-
-    SceneData { project, content, active: Some(2), selection }
+    // No selection by default — `--interact select:<layer>` makes the ring appear,
+    // so base-vs-after renders/dumps differ measurably.
+    SceneData { project, content, active: None, selection: UIState::default() }
 }
