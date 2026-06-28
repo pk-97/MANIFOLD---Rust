@@ -940,9 +940,9 @@ pub fn sync_project_data(
         // Clip data → TimelineViewportPanel
         let mut viewport_clips = Vec::new();
         for (i, layer) in project.timeline.layers.iter().enumerate() {
-            for clip in &layer.clips {
+            for (clip_idx, clip) in layer.clips.iter().enumerate() {
                 let is_gen = layer.layer_type == LayerType::Generator;
-                let name = clip_display_name(layer, clip);
+                let name = clip_display_name(layer, clip, clip_idx + 1, &project.video_library);
                 use manifold_ui::panels::viewport::ViewportClip;
                 let clip_color = clip_base_color(layer, clip, 1.0);
                 viewport_clips.push(ViewportClip {
@@ -980,31 +980,76 @@ pub fn sync_project_data(
     }
 }
 
-/// Display name for a timeline clip in the viewport: the generator's name, a
-/// ♪-prefixed file name for an audio clip, the video clip id, or a fallback.
-/// Shared by both clip-sync paths so they label clips identically.
+/// Display title for a timeline clip in the viewport: **type · instance ·
+/// format**. The type is the generator subtype / "Video" / "Audio", the
+/// instance is the clip's 1-based position on its layer (left to right), and
+/// the format is the container + resolution (video) or container (audio).
+/// Generators carry no file format. Shared by both clip-sync paths so they
+/// label clips identically.
+///
+/// Examples: `Text 1` · `Video 2 · MOV 1080p` · `Audio 1 · WAV`.
 fn clip_display_name(
     layer: &manifold_core::layer::Layer,
     clip: &manifold_core::clip::TimelineClip,
+    instance: usize,
+    video_library: &manifold_core::video::VideoLibrary,
 ) -> String {
     if layer.layer_type == LayerType::Generator {
-        layer
+        let ty = layer
             .gen_params()
             .map(|gp| {
                 manifold_core::preset_type_registry::display_name(gp.generator_type()).to_string()
             })
-            .unwrap_or_else(|| "Gen".to_string())
+            .unwrap_or_else(|| "Gen".to_string());
+        format!("{ty} {instance}")
     } else if clip.is_audio() {
-        let stem = std::path::Path::new(&clip.audio_file_path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        format!("\u{266A} {stem}") // ♪ <name>
+        match file_ext_upper(&clip.audio_file_path) {
+            Some(ext) => format!("Audio {instance} \u{b7} {ext}"),
+            None => format!("Audio {instance}"),
+        }
     } else if !clip.video_clip_id.is_empty() {
-        clip.video_clip_id.clone()
+        // Container + resolution from the source clip, when the library knows it.
+        let fmt = video_library
+            .find_clip_by_id(&clip.video_clip_id)
+            .map(|vc| {
+                let ext = file_ext_upper(&vc.file_name);
+                let res = resolution_label(vc.resolution_width, vc.resolution_height);
+                match (ext, res) {
+                    (Some(e), Some(r)) => format!(" \u{b7} {e} {r}"),
+                    (Some(e), None) => format!(" \u{b7} {e}"),
+                    (None, Some(r)) => format!(" \u{b7} {r}"),
+                    (None, None) => String::new(),
+                }
+            })
+            .unwrap_or_default();
+        format!("Video {instance}{fmt}")
     } else {
-        "Clip".to_string()
+        format!("Clip {instance}")
     }
+}
+
+/// Uppercased file extension (`flowers.mov` → `MOV`), or `None` when the path
+/// has no extension.
+fn file_ext_upper(path: &str) -> Option<String> {
+    std::path::Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_uppercase())
+}
+
+/// A short resolution tag from pixel dimensions — `1080p`, `4K`, etc. Falls
+/// back to `W×H` for non-standard sizes, and `None` when dimensions are unset.
+fn resolution_label(width: i32, height: i32) -> Option<String> {
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some(match height {
+        2160 => "4K".to_string(),
+        1440 => "1440p".to_string(),
+        1080 => "1080p".to_string(),
+        720 => "720p".to_string(),
+        480 => "480p".to_string(),
+        _ => format!("{width}\u{00d7}{height}"),
+    })
 }
 
 /// Effective base colour for a clip: its per-clip `color_override` if set,
@@ -1031,8 +1076,8 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
     let mut viewport_clips = Vec::new();
     for (i, layer) in project.timeline.layers.iter().enumerate() {
         let is_gen = layer.layer_type == LayerType::Generator;
-        for clip in &layer.clips {
-            let name = clip_display_name(layer, clip);
+        for (clip_idx, clip) in layer.clips.iter().enumerate() {
+            let name = clip_display_name(layer, clip, clip_idx + 1, &project.video_library);
             let clip_color = clip_base_color(layer, clip, 0.86);
             viewport_clips.push(ViewportClip {
                 clip_id: clip.id.clone(),
