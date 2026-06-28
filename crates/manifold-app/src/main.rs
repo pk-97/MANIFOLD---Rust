@@ -39,6 +39,8 @@ mod texture_pane;
 mod text_input;
 mod ui_bridge;
 mod ui_root;
+#[cfg(feature = "ui-snapshot")]
+mod ui_snapshot;
 mod ui_translate;
 mod user_prefs;
 mod window_input;
@@ -46,6 +48,17 @@ mod window_registry;
 mod workspace;
 
 fn main() {
+    // Headless UI snapshot subcommand (feature `ui-snapshot`): render the real
+    // UI tree to a PNG + tree dump with no window, then exit before winit.
+    #[cfg(feature = "ui-snapshot")]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some("ui-snap") {
+            crate::ui_snapshot::run(&args[1..]);
+            return;
+        }
+    }
+
     // --- Panic hook (10.1, 10.12) ---
     // Install before anything else so even early panics get logged to disk.
     // Critical with `panic=abort` + stripped symbols in release builds.

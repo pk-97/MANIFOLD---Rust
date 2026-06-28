@@ -6,3 +6,8 @@
 # this is a "measure it" optimisation, not a load-bearing one.
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld/bin/ld64.lld"]
+
+# `cargo xtask ui-snap <scene> [--dump]` → the headless UI snapshot harness
+# (feature-gated subcommand of manifold-app). See docs/HEADLESS_UI_HARNESS.md.
+[alias]
+xtask = "run --quiet -p manifold-app --features ui-snapshot --"

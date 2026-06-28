@@ -1869,6 +1869,7 @@ dependencies = [
  "crossbeam-channel",
  "env_logger",
  "half",
+ "image",
  "io-surface",
  "libc",
  "log",

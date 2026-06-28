@@ -125,4 +125,10 @@ The motivating timeline-redesign gaps all need render + dump + interaction:
 
 ## Location
 
-New dev crate `manifold-ui-snapshot` (or an `xtask` subcommand) — dev-only, off all hot paths.
+**Built as a feature-gated subcommand inside `manifold-app`** (`src/ui_snapshot/`, feature
+`ui-snapshot`), not a separate crate. Derisk found `manifold-app` is **bin-only** — `ui_root` and
+`ui_bridge` are private modules in `main.rs`, with no `lib` target — so the real translation path
+(`UIRoot` + `state_sync`) is unreachable from a sibling crate or integration test without
+restructuring the app crate. The subcommand reaches it directly with zero restructure, gated off
+the shipping binary by the optional feature. Invoked via the `cargo xtask` alias
+(`.cargo/config.toml`): `cargo xtask ui-snap <scene> [--dump]`.

@@ -38,6 +38,9 @@ arboard = "3"
 png = "0.18"
 half = "2"
 manifold-profiler = { path = "../manifold-profiler", optional = true }
+# Headless UI snapshot harness (feature `ui-snapshot`): PNG encode of the
+# rendered tree. Optional so it never enters the shipping binary.
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 # macOS platform dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -49,6 +52,7 @@ objc2-foundation = { version = "0.3", features = ["NSString", "NSNotification"] 
 
 [features]
 profiling = ["dep:manifold-profiler"]
+ui-snapshot = ["dep:image"]
 
 [lints]
 workspace = true

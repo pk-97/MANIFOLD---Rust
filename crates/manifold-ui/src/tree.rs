@@ -423,6 +423,13 @@ impl UITree {
         &self.nodes[id.index()]
     }
 
+    /// Read-only view of every node in insertion order (`NodeId` == index).
+    /// For headless inspection (the UI snapshot harness' tree dump); the
+    /// renderer and hit-test use the typed accessors above.
+    pub fn nodes(&self) -> &[UINode] {
+        &self.nodes
+    }
+
     pub fn get_node_mut(&mut self, id: NodeId) -> &mut UINode {
         debug_assert!(
             self.is_live(id),
