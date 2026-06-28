@@ -28,6 +28,18 @@ use crate::chrome::view::View;
 use crate::color;
 use crate::node::{Color32, TextAlign, UIStyle};
 
+// ── The one control outline ─────────────────────────────────────────
+// THE fundamental rule that makes a control look identical on every surface: a
+// control carries its OWN 1px edge, so it reads as a defined chip on the
+// near-black chrome bar, a mid inspector section, and a bright layer header
+// alike — instead of relying on surface contrast (a dark chip vanishes on the
+// dark bar, pops on a bright header → the same control looking different). A
+// low-alpha light line sits cleanly on any fill (neutral grey, tonal, or a
+// semantic active hue). Every kit control below draws it; nothing draws a
+// control without it. This is what makes "impossible to differ" physically true.
+pub const CONTROL_OUTLINE: Color32 = Color32::new(255, 255, 255, 46); // ~18% white
+pub const CONTROL_OUTLINE_WIDTH: f32 = 1.0;
+
 // ── Toggle ──────────────────────────────────────────────────────────
 // Binary on/off: `ON`/`Inv`/`Delta`, mute, solo. Bold accent when on, neutral
 // control grey when off — shape *and* colour both say the state.
@@ -39,6 +51,8 @@ pub fn toggle_style(on: bool) -> UIStyle {
             hover_bg_color: color::ACCENT_BLUE_HOVER_C32,
             pressed_bg_color: color::ACCENT_BLUE_PRESS_C32,
             text_color: color::TEXT_WHITE_C32,
+            border_color: CONTROL_OUTLINE,
+            border_width: CONTROL_OUTLINE_WIDTH,
             font_size: color::FONT_CAPTION,
             corner_radius: color::CHIP_RADIUS,
             text_align: TextAlign::Center,
@@ -50,6 +64,8 @@ pub fn toggle_style(on: bool) -> UIStyle {
             hover_bg_color: color::BG_3_HOVER,
             pressed_bg_color: color::BG_3_PRESSED,
             text_color: color::TEXT_DIMMED_C32,
+            border_color: CONTROL_OUTLINE,
+            border_width: CONTROL_OUTLINE_WIDTH,
             font_size: color::FONT_CAPTION,
             corner_radius: color::CHIP_RADIUS,
             text_align: TextAlign::Center,
@@ -124,8 +140,8 @@ impl StateButtonSkin {
         off_press: color::BG_3_PRESSED,
         off_text: color::TEXT_NORMAL,
         corner_radius: color::CHIP_RADIUS,
-        border_color: Color32::TRANSPARENT,
-        border_width: 0.0,
+        border_color: CONTROL_OUTLINE,
+        border_width: CONTROL_OUTLINE_WIDTH,
     };
 
     /// The effect / generator card mod-source buttons (envelope / driver / audio).
@@ -242,15 +258,17 @@ impl ChipSurface {
             ChipSurface::Tonal(_) => color::TEXT_WHITE_C32,
         }
     }
-    /// Hairline policy: a tonal chip on a *light* identity needs a faint dark line
-    /// to re-seat where a chip would otherwise look flat; on a dark identity (and
-    /// on the neutral ramp) the chip separates on its own, so no border.
+    /// Every chip carries the one [`CONTROL_OUTLINE`] so it reads as a defined
+    /// control on any surface — EXCEPT a tonal chip on a *light* identity header,
+    /// where a light edge would glare and the chip instead needs a faint dark line
+    /// to re-seat (the one "specific strict reason" a control's edge differs: the
+    /// background is too bright for the standard light outline to read).
     fn border(self) -> (Color32, f32) {
         match self {
             ChipSurface::Tonal(c) if color::relative_luminance(c) > 0.55 => {
                 (color::CHIP_LINE_DARK, 1.0)
             }
-            _ => (Color32::TRANSPARENT, 0.0),
+            _ => (CONTROL_OUTLINE, CONTROL_OUTLINE_WIDTH),
         }
     }
 }
@@ -346,6 +364,8 @@ pub fn button_primary_style() -> UIStyle {
         hover_bg_color: color::ACCENT_BLUE_HOVER_C32,
         pressed_bg_color: color::ACCENT_BLUE_PRESS_C32,
         text_color: color::TEXT_WHITE_C32,
+        border_color: CONTROL_OUTLINE,
+        border_width: CONTROL_OUTLINE_WIDTH,
         font_size: color::FONT_BODY,
         corner_radius: color::CHIP_RADIUS,
         text_align: TextAlign::Center,
@@ -359,6 +379,8 @@ pub fn button_secondary_style() -> UIStyle {
         hover_bg_color: color::BG_3_HOVER,
         pressed_bg_color: color::BG_3_PRESSED,
         text_color: color::TEXT_NORMAL,
+        border_color: CONTROL_OUTLINE,
+        border_width: CONTROL_OUTLINE_WIDTH,
         font_size: color::FONT_BODY,
         corner_radius: color::CHIP_RADIUS,
         text_align: TextAlign::Center,
@@ -415,6 +437,8 @@ pub fn segment_style(selected: bool) -> UIStyle {
             hover_bg_color: color::BG_3_HOVER,
             pressed_bg_color: color::BG_3_PRESSED,
             text_color: color::TEXT_NORMAL,
+            border_color: CONTROL_OUTLINE,
+            border_width: CONTROL_OUTLINE_WIDTH,
             font_size: color::FONT_SUBHEADING,
             corner_radius: color::CHIP_RADIUS,
             text_align: TextAlign::Center,
@@ -426,6 +450,8 @@ pub fn segment_style(selected: bool) -> UIStyle {
             hover_bg_color: color::BG_2,
             pressed_bg_color: color::BG_1,
             text_color: color::TEXT_DIMMED_C32,
+            border_color: CONTROL_OUTLINE,
+            border_width: CONTROL_OUTLINE_WIDTH,
             font_size: color::FONT_SUBHEADING,
             corner_radius: color::CHIP_RADIUS,
             text_align: TextAlign::Center,
@@ -666,16 +692,20 @@ mod tests {
     }
 
     #[test]
-    fn chip_light_identity_gets_a_dark_hairline_dark_one_does_not() {
-        // A tonal chip on a light header re-seats with a faint dark line; on a dark
-        // header (and on neutral) the chip separates on its own.
+    fn every_chip_carries_the_one_outline_except_a_light_identity_header() {
+        // The fundamental rule: a control carries its own edge so it's defined on
+        // any surface. Neutral chips + tonal chips on a dark header get the one
+        // light CONTROL_OUTLINE; a tonal chip on a *light* header swaps to the dark
+        // line (the only "strict reason" the edge differs — a light bg).
         let light = chip_style(ChipSurface::Tonal(Color32::new(240, 240, 120, 255)), 9, TextAlign::Center, 4.0, 0.0);
         assert_eq!(light.border_color, color::CHIP_LINE_DARK);
         assert_eq!(light.border_width, 1.0);
         let dark = chip_style(ChipSurface::Tonal(Color32::new(40, 40, 60, 255)), 9, TextAlign::Center, 4.0, 0.0);
-        assert_eq!(dark.border_width, 0.0);
+        assert_eq!(dark.border_color, CONTROL_OUTLINE);
+        assert_eq!(dark.border_width, CONTROL_OUTLINE_WIDTH);
         let neutral = chip_style(ChipSurface::Neutral, 9, TextAlign::Center, 4.0, 0.0);
-        assert_eq!(neutral.border_width, 0.0);
+        assert_eq!(neutral.border_color, CONTROL_OUTLINE);
+        assert_eq!(neutral.border_width, CONTROL_OUTLINE_WIDTH);
     }
 
     #[test]
