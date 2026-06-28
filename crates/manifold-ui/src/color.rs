@@ -749,6 +749,10 @@ pub const CHIP_CARET_FONT: u16 = 8;
 /// Inset of the caret's right edge from the chip's right edge (the chip's own
 /// right padding).
 pub const CHIP_CARET_PAD_X: f32 = 7.0;
+/// Dim leading micro-label on a label/value chip (mockup `.blend b`) — e.g. the
+/// "BLEND" before the mode. Same dim as the caret so the chip's two secondary
+/// affordances (leading label, trailing caret) read at one weight.
+pub const CHIP_PREFIX: Color32 = Color32::new(255, 255, 255, 150);
 pub const LAYER_CHEVRON_HOVER: Color32 = Color32::new(255, 255, 255, 15);
 pub const LAYER_CHEVRON_PRESSED: Color32 = Color32::new(255, 255, 255, 8);
 

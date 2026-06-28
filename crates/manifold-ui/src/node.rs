@@ -399,6 +399,13 @@ pub struct UIStyle {
     /// glyph into the text string (which would left-align with the value and sit
     /// at full weight). The main value text stays left-aligned and ellipsis-free.
     pub dropdown_caret: bool,
+    /// Optional dim label painted BEFORE the (left-aligned) main text, with the
+    /// value shifted right past it — the mockup's `.blend <b>BLEND</b> Normal`
+    /// label/value chip. Static because it's a fixed control name (BLEND, GAIN);
+    /// the value is the node's own text. Painted in `prefix_color`; ignored for
+    /// non-left alignment.
+    pub prefix_label: Option<&'static str>,
+    pub prefix_color: Color32,
 }
 
 impl Default for UIStyle {
@@ -415,6 +422,8 @@ impl Default for UIStyle {
             font_weight: crate::color::FONT_WEIGHT_DEFAULT,
             text_align: TextAlign::Left,
             dropdown_caret: false,
+            prefix_label: None,
+            prefix_color: Color32::TRANSPARENT,
         }
     }
 }

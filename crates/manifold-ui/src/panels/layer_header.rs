@@ -1032,12 +1032,11 @@ impl LayerHeaderPanel {
     }
 
     pub fn set_blend_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        // §K8: keep the "BLEND" micro-label on the live-refresh path, or the
-        // sync would strip it back to the bare mode each frame (build formats it,
-        // this must agree).
+        // §M: the "BLEND" micro-label is a style prefix (`prefix_label`) painted by
+        // the renderer — the live-refresh text is just the bare mode value.
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::Blend) {
-                tree.set_text(id, &format!("BLEND  {text}"));
+                tree.set_text(id, text);
             }
     }
 
@@ -1507,10 +1506,10 @@ impl LayerHeaderPanel {
                     "L",
                 ),
                 C::Blend => {
-                    // §K8: a "BLEND" micro-label prefixes the mode so the chip
-                    // says what it controls (the mockup's `<b>BLEND</b> Normal`).
-                    // One text node, left-aligned on the neutral chip.
-                    let blend_text = format!("BLEND  {}", layer.blend_mode);
+                    // §M: a dim "BLEND" micro-label prefixes the mode (the mockup's
+                    // `<b>BLEND</b> Normal`). The label is a renderer-painted prefix
+                    // (`prefix_label`/`prefix_color`), not baked into the value
+                    // string — so the value reads bright and the label reads dim.
                     tree.add_button(
                         clip_parent,
                         r.x,
@@ -1519,9 +1518,11 @@ impl LayerHeaderPanel {
                         r.height,
                         UIStyle {
                             text_align: TextAlign::Left,
+                            prefix_label: Some("BLEND"),
+                            prefix_color: color::CHIP_PREFIX,
                             ..chip_button_style()
                         },
-                        &blend_text,
+                        &layer.blend_mode,
                     )
                 }
                 C::Separator => {

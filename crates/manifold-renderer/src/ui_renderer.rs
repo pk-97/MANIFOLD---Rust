@@ -910,10 +910,38 @@ impl UIRenderer {
                 );
                 let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
 
+                // Leading dim micro-label (mockup `.blend b`): painted at the left
+                // edge in `prefix_color`, with the value shifted right past it so
+                // the chip reads "LABEL value". Left-align only.
+                let mut left_x = bounds.x;
+                if let Some(prefix) = style.prefix_label
+                    && !prefix.is_empty()
+                {
+                    const PREFIX_GAP: f32 = 5.0;
+                    let pc = style.prefix_color;
+                    let psize = self.text_renderer.measure_text_cached(
+                        prefix,
+                        style.font_size,
+                        style.font_weight,
+                    );
+                    let py = bounds.y + (bounds.height - psize.y) * 0.5;
+                    self.text_renderer.draw_text(
+                        left_x,
+                        py,
+                        prefix,
+                        style.font_size as f32,
+                        [pc.r, pc.g, pc.b, pc.a],
+                        style.font_weight,
+                        clip_bounds,
+                        depth,
+                    );
+                    left_x += psize.x + PREFIX_GAP;
+                }
+
                 let text_x = match style.text_align {
                     TextAlign::Center => bounds.x + (bounds.width - text_size.x) * 0.5,
                     TextAlign::Right => bounds.x + bounds.width - text_size.x,
-                    TextAlign::Left => bounds.x,
+                    TextAlign::Left => left_x,
                 };
 
                 self.text_renderer.draw_text(

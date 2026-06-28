@@ -412,13 +412,22 @@ right-pinned glyph on every identity hue; the `Note` toggle correctly has none. 
 hit-test risk), `layout_matches_frozen_oracle` unaffected (style-only), token guard unmoved at 131
 (new consts in the exempt `color.rs`).
 
+**Shipped — `BLEND` micro-label hierarchy (M5, root fix).** The mockup `.blend` chip is a dim
+`<b>BLEND</b>` + a bright value; we baked `"BLEND  Normal"` into one flat-white string. Same single-run
+limit as the caret, from the other side — so the same shape of fix: a Copy-safe `UIStyle::prefix_label:
+Option<&'static str>` + `prefix_color`. When set, `draw_node` paints the dim prefix at the left edge
+(`color::CHIP_PREFIX`) and shifts the value right past it. The Blend chip sets `prefix_label:
+Some("BLEND")` + a bare-mode value; `set_blend_mode_text` sets the bare value. Verified headless: "BLEND"
+reads clearly dimmer than "Normal" beside it. The two additions (`dropdown_caret`, `prefix_label`) close
+the renderer's "one text run per chip" limit exactly where the mockup needs it — trailing caret +
+leading label.
+
 **Tried + dropped — ambient clip shadow (M8).** The mockup gives every `.clip` a `0 1px 2px
 rgba(0,0,0,.35)` shadow. Implemented (subtle per-clip `draw_shadow`) then reverted: on MANIFOLD's
 near-black lanes a black drop-shadow doesn't read (crop confirmed black-on-black), so it was pure
 per-frame GPU cost. Clip depth comes from the inset card + identity border, not a shadow.
 
-**Deferred (documented, not dropped):** the `BLEND` micro-label hierarchy (mockup `<b>BLEND</b>` dim +
-value bright) needs two styled text runs in one chip — the single-run renderer can't, and a child label
-complicates the per-control id/setter model for a subtle gain; revisit if a general label/value-chip
-primitive lands. Also still deferred from §K: header-column cross-panel elevation, lane-edge selection
-brightening, letter-spacing (hot CoreText path), tabular-nums, transport active-mode highlight.
+**Still deferred from §K (documented, not dropped):** header-column cross-panel elevation, lane-edge
+selection brightening, letter-spacing (hot CoreText path), tabular-nums, transport active-mode
+highlight. Candidate next polish (Peter's eye): value-chip font 9→10.5px (mockup size, risks overflow in
+the dense 230px column), `.sel:hover` border-brighten, solo-on dark-text-on-green detail.
