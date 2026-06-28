@@ -1,5 +1,5 @@
 use super::{Panel, PanelAction};
-use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
+use crate::chrome::{ChromeHost, Pad, Sizing, View};
 use crate::color::{self, darken, lighten};
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
@@ -27,7 +27,6 @@ const BTN_H: f32 = color::LAYER_CTRL_BTN_HEIGHT;
 const SEP_H: f32 = color::LAYER_CTRL_SEPARATOR_HEIGHT;
 const RIGHT_GUTTER: f32 = color::LAYER_CTRL_RIGHT_GUTTER;
 const TOP_GAP: f32 = color::LAYER_CTRL_TOP_ROW_GAP;
-const BADGE_SIZE: f32 = color::LAYER_CTRL_TYPE_BADGE_SIZE;
 // Widths for the MIDI trigger-mode toggle and per-layer device dropdown
 // packed into the existing MIDI / CH rows (no new row, preserves TRACK_HEIGHT).
 const MODE_TOGGLE_W: f32 = 32.0;
@@ -39,6 +38,10 @@ const LBL_W: f32 = 52.0;
 /// track is 200px. Used for the mix→routing gap too.
 const ROUTING_ROW_GAP: f32 = 9.0;
 const ACCENT_W: f32 = color::GROUP_ACCENT_BAR_WIDTH;
+/// Width of the left-edge selection accent bar. The selected layer is marked by
+/// this bright bar (DAW convention) plus a small brighten of its own colour —
+/// not a full border box.
+const SEL_ACCENT_W: f32 = 3.0;
 const CHILD_INDENT: f32 = color::GROUP_CHILD_INDENT_PX;
 const BORDER_H: f32 = color::GROUP_BOTTOM_BORDER_HEIGHT;
 
@@ -80,75 +83,129 @@ const RECORD_PULSE_PERIOD_SECS: f32 = 1.1;
 // ── Style helpers ───────────────────────────────────────────────────
 
 // Mute / Solo / LED / Analysis are all the same state-button mechanic — filled
-// with their identity colour when on, a neutral chip when off — so they delegate
-// to `components::state_button_style` and differ only in the carve-out hue (plus
-// this card's smaller font + tighter radius). One mechanic, four hues.
+// with their identity colour when on, a tonal recess of the header colour when
+// off — so they delegate to the local `state_btn` and differ only in the
+// carve-out hue. One mechanic, four hues.
 
-fn mute_style(muted: bool) -> UIStyle {
-    state_btn(color::MUTED_COLOR, muted)
+fn mute_style(muted: bool, layer_color: Color32) -> UIStyle {
+    state_btn(color::MUTED_COLOR, muted, layer_color)
 }
 
-fn analysis_style(analysis: bool) -> UIStyle {
-    state_btn(color::ANALYSIS_COLOR, analysis)
+fn analysis_style(analysis: bool, layer_color: Color32) -> UIStyle {
+    state_btn(color::ANALYSIS_COLOR, analysis, layer_color)
 }
 
-fn solo_style(solo: bool) -> UIStyle {
-    state_btn(color::SOLO_COLOR, solo)
+fn solo_style(solo: bool, layer_color: Color32) -> UIStyle {
+    state_btn(color::SOLO_COLOR, solo, layer_color)
 }
 
-fn led_style(led: bool) -> UIStyle {
-    state_btn(color::LED_COLOR, led)
+fn led_style(led: bool, layer_color: Color32) -> UIStyle {
+    state_btn(color::LED_COLOR, led, layer_color)
 }
 
-/// The layer-card flavour of the state-button mechanic: M/S/L/A on an
-/// identity-coloured header. Uses the `HEADER_CHIP` skin (§K7) — a dark neutral
-/// chip + white hairline when off, filled with the caller's hue when on — so the
-/// control never reads hue-on-hue against the layer colour.
-fn state_btn(active_color: Color32, active: bool) -> UIStyle {
-    UIStyle {
-        // Pill the toggle cluster (§K) — rounder than the dropdown chips so M/S/L/A
-        // read as buttons, not more value pickers.
-        corner_radius: MSL_PILL_RADIUS,
-        ..components::state_button_skinned(
-            active_color,
-            active,
-            BTN_FONT,
-            &components::StateButtonSkin::HEADER_CHIP,
-        )
+/// The off-state chip surface for a header control: the layer's *own* identity
+/// colour darkened ~32%, so the chip reads as a recess set into the header rather
+/// than a foreign neutral slab. Replaces the old fixed dark `CHIP_BG` + white
+/// hairline (Peter, 2026-06-28 — pro-DAW restyle).
+fn header_chip_bg(layer_color: Color32) -> Color32 {
+    color::scale_rgb(layer_color, 0.68)
+}
+
+/// The hairline policy for a tonal header chip: none on a dark header (the
+/// darkened chip already separates), a faint *dark* line on a light header (where
+/// the chip would otherwise look flat). Never the old white stroke.
+fn header_chip_border(layer_color: Color32) -> (Color32, f32) {
+    if color::relative_luminance(layer_color) > 0.55 {
+        (color::CHIP_LINE_DARK, 1.0)
+    } else {
+        (Color32::TRANSPARENT, 0.0)
     }
 }
 
-/// A neutral header chip for the non-toggle header controls (blend, drag handle,
-/// MIDI mode): the same dark chip + hairline as `state_btn`'s off state, so every
-/// control on the coloured header shares one surface (§C / §K9).
-fn chip_button_style() -> UIStyle {
+/// The layer-card flavour of the state-button mechanic: M/S/L/A on an
+/// identity-coloured header. Off = a tonal chip (the header colour darkened) with
+/// no white stroke; on = filled with the caller's M/S/L/A hue.
+fn state_btn(active_color: Color32, active: bool, layer_color: Color32) -> UIStyle {
+    let (border_color, border_width) = header_chip_border(layer_color);
+    if active {
+        UIStyle {
+            bg_color: active_color,
+            hover_bg_color: color::lighten(active_color, 30),
+            pressed_bg_color: color::darken(active_color, 20),
+            text_color: color::TEXT_WHITE_C32,
+            border_color,
+            border_width,
+            font_size: BTN_FONT,
+            // Pill the toggle cluster (§K) — rounder than the dropdown chips so
+            // M/S/L/A read as buttons, not more value pickers.
+            corner_radius: MSL_PILL_RADIUS,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        }
+    } else {
+        let bg = header_chip_bg(layer_color);
+        UIStyle {
+            bg_color: bg,
+            hover_bg_color: color::lighten(bg, 18),
+            pressed_bg_color: color::darken(bg, 12),
+            text_color: color::TEXT_WHITE_C32,
+            border_color,
+            border_width,
+            font_size: BTN_FONT,
+            corner_radius: MSL_PILL_RADIUS,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        }
+    }
+}
+
+/// A header chip for the non-toggle header controls (blend, MIDI mode): the same
+/// tonal surface as `state_btn`'s off state, so every control on the coloured
+/// header shares one recessed surface (§C / §K9) — no white stroke.
+fn chip_button_style(layer_color: Color32) -> UIStyle {
+    let bg = header_chip_bg(layer_color);
+    let (border_color, border_width) = header_chip_border(layer_color);
     UIStyle {
-        bg_color: color::CHIP_BG,
-        hover_bg_color: color::CHIP_BG_HOVER,
-        pressed_bg_color: color::CHIP_BG_PRESSED,
+        bg_color: bg,
+        hover_bg_color: color::lighten(bg, 18),
+        pressed_bg_color: color::darken(bg, 12),
         text_color: color::TEXT_WHITE_C32,
-        border_color: color::CHIP_LINE,
-        border_width: 1.0,
+        border_color,
+        border_width,
         font_size: SMALL_FONT,
         corner_radius: LH_BTN_RADIUS,
         text_align: TextAlign::Center,
         // Internal padding so left-aligned value/prefix text sits off the chip
-        // border (mockup `.sel`/`.blend` 7px) instead of jammed against it.
+        // edge (mockup `.sel`/`.blend` 7px) instead of jammed against it.
         text_inset_x: color::CHIP_TEXT_INSET_X,
         ..UIStyle::default()
     }
 }
 
-/// A routing *value* chip (Folder path, MIDI note, Channel, Device): the neutral
+/// A routing *value* chip (Folder path, MIDI note, Channel, Device): the tonal
 /// header chip, left-aligned, with the renderer-painted dropdown caret pinned to
 /// the right edge (`dropdown_caret`) so values read as "opens a list" — the
 /// mockup's `.sel` dropdown (§K13 / §M). The caret is dim + right-aligned, not a
 /// glyph baked into the value text.
-fn value_chip_style() -> UIStyle {
+fn value_chip_style(layer_color: Color32) -> UIStyle {
     UIStyle {
         text_align: TextAlign::Left,
         dropdown_caret: true,
-        ..chip_button_style()
+        ..chip_button_style(layer_color)
+    }
+}
+
+/// The left-edge selection accent bar's fill: the app-wide bright selection
+/// colour when selected, transparent otherwise. Toggled in place on selection
+/// change, mirroring the clip-selection language.
+fn sel_accent_style(selected: bool) -> UIStyle {
+    UIStyle {
+        bg_color: if selected {
+            color::SELECTED_LAYER_RING
+        } else {
+            Color32::TRANSPARENT
+        },
+        ..UIStyle::default()
     }
 }
 
@@ -182,30 +239,23 @@ fn routing_label_style(text_clr: Color32) -> UIStyle {
 }
 
 fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {
-    // Selection is a bright focus RING + a small lift — not a colour fill. The
-    // header fill is the layer's identity colour, so a tint disappears against it
-    // (the old `lighten(30)` read as "muted on muted"). The ring reads on any hue.
+    // Selection = a brighten of the row's OWN identity colour + a left accent bar
+    // (the separate `SelectAccent` node), never a border box. The old white focus
+    // ring read as a web outline and fought the neon identity; a small lift keeps
+    // the hue and the accent bar marks "active" the pro-DAW way (Peter,
+    // 2026-06-28).
     let bg = if selected {
-        lighten(layer_color, 18)
+        lighten(layer_color, 22)
     } else {
         layer_color
     };
     let hover = lighten(bg, 15);
     let pressed = darken(bg, 10);
-    let (border_color, border_width) = if selected {
-        (color::SELECTED_LAYER_RING, color::SELECTED_LAYER_RING_WIDTH)
-    } else {
-        (Color32::TRANSPARENT, 0.0)
-    };
     UIStyle {
         bg_color: bg,
         hover_bg_color: hover,
         pressed_bg_color: pressed,
-        border_color,
-        border_width,
-        // Square corners: rows tile edge-to-edge as a full-bleed identity band, so
-        // the selection ring is a complete rectangle covering the whole row border
-        // (a rounded ring left the actual corners uncovered — Peter, 2026-06-28).
+        // Square corners: rows tile edge-to-edge as a full-bleed identity band.
         corner_radius: color::SQUARE_RADIUS,
         ..UIStyle::default()
     }
@@ -266,23 +316,6 @@ pub struct LayerInfo {
     pub color: Color32,
 }
 
-impl LayerInfo {
-    /// The type-badge icon for this layer (§24 5d). Group / audio / generator are
-    /// flagged explicitly; everything else is a video layer.
-    fn badge_icon(&self) -> crate::icons::Icon {
-        use crate::icons::Icon;
-        if self.is_group {
-            Icon::LayerGroup
-        } else if self.is_audio {
-            Icon::LayerAudio
-        } else if self.is_generator {
-            Icon::LayerGenerator
-        } else {
-            Icon::LayerVideo
-        }
-    }
-}
-
 // ── LayerControl ────────────────────────────────────────────────────
 
 /// One descriptor per addressable control the layer card can show. The card is
@@ -300,6 +333,10 @@ enum LayerControl {
     AccentBar,
     Connector,
     BottomBorder,
+    /// Left-edge selection highlight bar — drawn over the background + group
+    /// accent so a selected layer (incl. a child) shows the bright bar. Decoration
+    /// — non-interactive; its colour is toggled per selection.
+    SelectAccent,
     Chevron,
     Name,
     DragHandle,
@@ -326,10 +363,6 @@ enum LayerControl {
     Gain,
     Send,
     Analysis,
-    /// Layer-type badge (§24 5d): a type glyph in the name row so type is read
-    /// from an icon, not from the header restructuring by type. Decoration —
-    /// non-interactive, drawn last (on top of the background).
-    TypeBadge,
 }
 
 const N_CONTROLS: usize = 29;
@@ -341,6 +374,7 @@ impl LayerControl {
         LayerControl::AccentBar,
         LayerControl::Connector,
         LayerControl::BottomBorder,
+        LayerControl::SelectAccent,
         LayerControl::Chevron,
         LayerControl::Name,
         LayerControl::DragHandle,
@@ -365,7 +399,6 @@ impl LayerControl {
         LayerControl::Gain,
         LayerControl::Send,
         LayerControl::Analysis,
-        LayerControl::TypeBadge,
     ];
 
     #[inline]
@@ -459,19 +492,17 @@ fn compute_layer_row(
             Rect::new(0.0, y_offset + height - BORDER_H, w, BORDER_H),
         );
     }
+    // Selection accent — a thin left-edge bar, always laid out so the node exists
+    // for in-place restyle; its colour is transparent until the layer is selected.
+    d.set(C::SelectAccent, Rect::new(0.0, y_offset, SEL_ACCENT_W, height));
 
-    // ── Top row: Chevron | TypeBadge | Name | DragHandle ──
+    // ── Top row: Chevron | Name | DragHandle ──
     let chevron_w = CHEVRON_W;
     d.set(C::Chevron, Rect::new(pad, y, CHEVRON_W, BTN_H));
 
-    // Type badge (§24 5d): a square glyph between the chevron and the name,
-    // vertically centred in the name-row height. Same slot for every type — the
-    // glyph differs, the layout doesn't.
-    let badge_x = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
-    let badge_y = y + (BTN_H - BADGE_SIZE) * 0.5;
-    d.set(C::TypeBadge, Rect::new(badge_x, badge_y, BADGE_SIZE, BADGE_SIZE));
-
-    let name_left = badge_x + BADGE_SIZE + TOP_GAP;
+    // The type badge (* / ▶ glyph) was removed (Peter, 2026-06-28): the name now
+    // starts right after the chevron and reclaims the badge's slot.
+    let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
     let handle_x = w - pad - HANDLE_W - 8.0;
     let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
     d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));
@@ -1002,7 +1033,8 @@ impl LayerHeaderPanel {
                 *cached = muted;
             }
             if let Some(mute_id) = row.id(LayerControl::Mute) {
-                tree.set_style(mute_id, mute_style(muted));
+                let lc = self.cached_colors.get(index).copied().unwrap_or(Color32::TRANSPARENT);
+                tree.set_style(mute_id, mute_style(muted, lc));
             }
         }
     }
@@ -1016,7 +1048,8 @@ impl LayerHeaderPanel {
                 *cached = solo;
             }
             if let Some(solo_id) = row.id(LayerControl::Solo) {
-                tree.set_style(solo_id, solo_style(solo));
+                let lc = self.cached_colors.get(index).copied().unwrap_or(Color32::TRANSPARENT);
+                tree.set_style(solo_id, solo_style(solo, lc));
             }
         }
     }
@@ -1030,7 +1063,8 @@ impl LayerHeaderPanel {
                 *cached = led;
             }
             if let Some(led_id) = row.id(LayerControl::Led) {
-                tree.set_style(led_id, led_style(led));
+                let lc = self.cached_colors.get(index).copied().unwrap_or(Color32::TRANSPARENT);
+                tree.set_style(led_id, led_style(led, lc));
             }
         }
     }
@@ -1050,6 +1084,10 @@ impl LayerHeaderPanel {
                     .copied()
                     .unwrap_or(Color32::TRANSPARENT);
                 tree.set_style(bg_id, bg_style(selected, layer_color));
+            }
+            // Toggle the left-edge selection accent bar in place.
+            if let Some(accent_id) = row.id(LayerControl::SelectAccent) {
+                tree.set_style(accent_id, sel_accent_style(selected));
             }
         }
     }
@@ -1406,27 +1444,13 @@ impl LayerHeaderPanel {
                         chev,
                     )
                 }
-                C::TypeBadge => tree.add_label(
+                C::SelectAccent => tree.add_panel(
                     clip_parent,
                     r.x,
                     r.y,
                     r.width,
                     r.height,
-                    // The icon char routes the renderer to the badge glyph; the
-                    // node bounds size it (square, centred). §K4: a filled NEUTRAL
-                    // chip + white hairline (the mockup badge) so the type glyph
-                    // sits in its own surface, not bare on the identity colour. A
-                    // white glyph reads on the dark chip on any layer hue.
-                    &layer.badge_icon().text(),
-                    UIStyle {
-                        bg_color: color::CHIP_BG,
-                        border_color: color::CHIP_LINE,
-                        border_width: 1.0,
-                        corner_radius: color::CHIP_RADIUS,
-                        text_color: color::TEXT_WHITE_C32,
-                        text_align: TextAlign::Center,
-                        ..UIStyle::default()
-                    },
+                    sel_accent_style(layer.is_selected),
                 ),
                 C::Name => tree.add_button(
                     clip_parent,
@@ -1453,7 +1477,10 @@ impl LayerHeaderPanel {
                     &layer.name,
                 ),
                 C::DragHandle => {
-                    // Hamburger icon drawn as 3 horizontal bars.
+                    // Hamburger icon drawn as 3 horizontal bars. No pill: the grab
+                    // handle isn't a live-show action, so it recedes — a bare glyph
+                    // in a muted header tint, with only a faint hover/press overlay
+                    // for the affordance (Peter, 2026-06-28).
                     let handle = tree.add_button(
                         clip_parent,
                         r.x,
@@ -1461,9 +1488,9 @@ impl LayerHeaderPanel {
                         r.width,
                         r.height,
                         UIStyle {
-                            bg_color: color::HANDLE_BG,
-                            hover_bg_color: color::BUTTON_HIGHLIGHTED,
-                            pressed_bg_color: color::BUTTON_PRESSED,
+                            bg_color: Color32::TRANSPARENT,
+                            hover_bg_color: color::HOVER_OVERLAY,
+                            pressed_bg_color: color::PRESS_OVERLAY,
                             corner_radius: LH_BTN_RADIUS,
                             ..UIStyle::default()
                         },
@@ -1473,7 +1500,9 @@ impl LayerHeaderPanel {
                     let bar_h: f32 = 1.5;
                     let bar_x = r.x + (r.width - bar_w) * 0.5;
                     let bar_style = UIStyle {
-                        bg_color: color::TEXT_ON_DARK,
+                        // ~60% of the layer's contrast text colour — visible but
+                        // recessive on any identity hue.
+                        bg_color: color::with_alpha(text_clr, 150),
                         ..UIStyle::default()
                     };
                     for i in 0..3 {
@@ -1488,7 +1517,7 @@ impl LayerHeaderPanel {
                     r.y,
                     r.width,
                     r.height,
-                    mute_style(layer.is_muted),
+                    mute_style(layer.is_muted, layer.color),
                     "M",
                 ),
                 C::Solo => tree.add_button(
@@ -1497,7 +1526,7 @@ impl LayerHeaderPanel {
                     r.y,
                     r.width,
                     r.height,
-                    solo_style(layer.is_solo),
+                    solo_style(layer.is_solo, layer.color),
                     "S",
                 ),
                 C::Analysis => tree.add_button(
@@ -1506,7 +1535,7 @@ impl LayerHeaderPanel {
                     r.y,
                     r.width,
                     r.height,
-                    analysis_style(layer.analysis_only),
+                    analysis_style(layer.analysis_only, layer.color),
                     "A",
                 ),
                 C::Led => tree.add_button(
@@ -1515,7 +1544,7 @@ impl LayerHeaderPanel {
                     r.y,
                     r.width,
                     r.height,
-                    led_style(layer.is_led),
+                    led_style(layer.is_led, layer.color),
                     "L",
                 ),
                 C::Blend => {
@@ -1534,7 +1563,7 @@ impl LayerHeaderPanel {
                             text_align: TextAlign::Center,
                             prefix_label: Some("BLEND"),
                             prefix_color: color::CHIP_PREFIX,
-                            ..chip_button_style()
+                            ..chip_button_style(layer.color)
                         },
                         &layer.blend_mode,
                     )
@@ -1601,7 +1630,7 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        value_chip_style(),
+                        value_chip_style(layer.color),
                         &path_text,
                     )
                 }
@@ -1620,7 +1649,7 @@ impl LayerHeaderPanel {
                     r.y,
                     r.width,
                     r.height,
-                    chip_button_style(),
+                    chip_button_style(layer.color),
                     "+ new clip",
                 ),
                 C::MidiLabel => tree.add_label(
@@ -1644,7 +1673,7 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        value_chip_style(),
+                        value_chip_style(layer.color),
                         &midi_text,
                     )
                 }
@@ -1658,7 +1687,7 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        chip_button_style(),
+                        chip_button_style(layer.color),
                         mode_text,
                     )
                 }
@@ -1683,7 +1712,7 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        value_chip_style(),
+                        value_chip_style(layer.color),
                         &ch_text,
                     )
                 }
@@ -1707,7 +1736,7 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        value_chip_style(),
+                        value_chip_style(layer.color),
                         dev_text,
                     )
                 }
@@ -1717,7 +1746,7 @@ impl LayerHeaderPanel {
                     r.y,
                     r.width,
                     r.height,
-                    chip_button_style(),
+                    chip_button_style(layer.color),
                     "+ Clip",
                 ),
                 C::Gain => {
@@ -1755,7 +1784,7 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        value_chip_style(),
+                        value_chip_style(layer.color),
                         send_text,
                     )
                 }
@@ -2412,12 +2441,10 @@ mod tests {
                 Rect::new(0.0, y_offset + height - BORDER_H, w, BORDER_H),
             );
         }
+        d.set(C::SelectAccent, Rect::new(0.0, y_offset, SEL_ACCENT_W, height));
         let chevron_w = CHEVRON_W;
         d.set(C::Chevron, Rect::new(pad, y, CHEVRON_W, BTN_H));
-        let badge_x = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
-        let badge_y = y + (BTN_H - BADGE_SIZE) * 0.5;
-        d.set(C::TypeBadge, Rect::new(badge_x, badge_y, BADGE_SIZE, BADGE_SIZE));
-        let name_left = badge_x + BADGE_SIZE + TOP_GAP;
+        let name_left = pad + chevron_w + if chevron_w > 0.0 { TOP_GAP } else { 0.0 };
         let handle_x = w - pad - HANDLE_W - 8.0;
         let name_w = (handle_x - name_left - TOP_GAP).max(20.0);
         d.set(C::Name, Rect::new(name_left, y, name_w, NAME_H));

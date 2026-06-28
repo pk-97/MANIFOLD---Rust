@@ -33,6 +33,23 @@ pub fn darken(c: Color32, amount: u8) -> Color32 {
     )
 }
 
+/// Multiply each RGB channel by `factor` (clamped to 0..=255); alpha unchanged.
+/// A *proportional* darken/brighten — unlike `darken`/`lighten`, which add or
+/// subtract a flat amount, this scales, so "32% darker" (`factor = 0.68`) reads
+/// uniformly across a bright neon header and a deep one. Used to derive a
+/// header-chip surface from the layer's own identity colour.
+pub fn scale_rgb(c: Color32, factor: f32) -> Color32 {
+    let s = |x: u8| (x as f32 * factor).round().clamp(0.0, 255.0) as u8;
+    Color32::new(s(c.r), s(c.g), s(c.b), c.a)
+}
+
+/// Perceptual luminance (Rec. 709) in 0..1. A header is "light" above ~0.55,
+/// where a tonal (darkened) chip on it needs a faint dark hairline to re-seat;
+/// on a dark header the darkened chip separates on its own.
+pub fn relative_luminance(c: Color32) -> f32 {
+    0.2126 * (c.r as f32 / 255.0) + 0.7152 * (c.g as f32 / 255.0) + 0.0722 * (c.b as f32 / 255.0)
+}
+
 /// Same colour at a new alpha. The one place to derive a translucent variant of
 /// a colour that is only known at runtime (a layer's contrast text faded to a
 /// secondary label, a hue at a wash alpha), so call sites don't hand-roll a raw
@@ -740,6 +757,11 @@ pub const CHIP_BG_PRESSED: Color32 = Color32::new(20, 20, 25, 255);
 /// Hairline edge on a chip — a low-alpha white so the chip separates from the
 /// identity colour behind it without a hard line.
 pub const CHIP_LINE: Color32 = Color32::new(255, 255, 255, 41);
+/// Hairline for a tonal header chip on a *light* identity header (§ layer-header
+/// restyle): a faint dark line that re-seats the chip where the old white stroke
+/// would have glared. Omitted on dark headers, where the darkened chip separates
+/// on its own. ~35% black.
+pub const CHIP_LINE_DARK: Color32 = Color32::new(0, 0, 0, 90);
 /// Corner radius for header-control chips. The mockup rounds every header chip
 /// to 4px; kept distinct from the 2px inspector `SMALL_RADIUS`.
 pub const CHIP_RADIUS: f32 = 4.0;
