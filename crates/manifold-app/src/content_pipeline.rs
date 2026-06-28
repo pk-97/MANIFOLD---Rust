@@ -144,12 +144,16 @@ pub const ATLAS_CELLS: usize = (ATLAS_GRID * ATLAS_GRID) as usize;
 /// bar (or bar-group) of one clip's filmstrip. Cells are interchangeable — a clip
 /// holds a *list* of cell indices — so no rectangle packing is needed. Smaller
 /// cells than the node atlas because each is drawn narrow (one bar wide) and many
-/// are live at once. `32×8` × `128×72` → a `4096×576` atlas (~18.9 MB Rgba16Float
-/// per IOSurface slot); 256 cells ≈ 30 visible clips × ~8 visible bars.
+/// are live at once. `32×8` × `256×144` → an `8192×1152` atlas (~75.5 MB
+/// Rgba16Float per IOSurface slot, ~302 MB across the persistent + 3 IOSurface
+/// copies — trivial on a modern GPU); 256 cells ≈ 30 visible clips × ~8 visible
+/// bars. Cells doubled from `128×72` (2026-06-28) so thumbnails are sharp when
+/// upscaled into the tall timeline lanes instead of blocky; format stays
+/// Rgba16Float, full cell count kept (VRAM is not the constraint at this scale).
 pub const CLIP_ATLAS_COLS: u32 = 32;
 pub const CLIP_ATLAS_ROWS: u32 = 8;
-pub const CLIP_ATLAS_CELL_W: u32 = 128;
-pub const CLIP_ATLAS_CELL_H: u32 = 72;
+pub const CLIP_ATLAS_CELL_W: u32 = 256;
+pub const CLIP_ATLAS_CELL_H: u32 = 144;
 pub const CLIP_ATLAS_W: u32 = CLIP_ATLAS_COLS * CLIP_ATLAS_CELL_W;
 pub const CLIP_ATLAS_H: u32 = CLIP_ATLAS_ROWS * CLIP_ATLAS_CELL_H;
 /// Max filmstrip cells the clip atlas holds (LRU-evicted by clip past this).

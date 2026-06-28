@@ -79,10 +79,12 @@ struct LayerGeneratorState {
 /// needs internal downscaling for performance (e.g. raymarching, fluid sim),
 /// it does so inside its own `render()` by allocating and managing its own
 /// reduced-resolution intermediate textures — the runtime doesn't model it.
-/// Thumbnail-resolution dimensions for the §24 5c cold-start render (an atlas
-/// cell). Tiny, so a parked-clip thumbnail render is cheap.
-const THUMB_W: u32 = 256;
-const THUMB_H: u32 = 144;
+/// Thumbnail-resolution dimensions for the §24 5c cold-start render. Rendered at
+/// 2× the atlas cell (256×144) so the box-downsample into the cell supersamples
+/// — crisper text and edges than a 1:1 render. Still tiny, so the parked-clip
+/// thumbnail render stays cheap (~1.2 MB transient target).
+const THUMB_W: u32 = 512;
+const THUMB_H: u32 = 288;
 /// Warm-up frames for a freshly-created cold-start instance (§24 5c-2): stateful
 /// generators look empty at t=0, so we advance the runtime this many steps before
 /// the parked still is read. ~0.75 s at 60 fps; cheap on the tiny target.
