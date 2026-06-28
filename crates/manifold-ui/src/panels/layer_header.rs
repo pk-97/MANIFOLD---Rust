@@ -64,6 +64,11 @@ const BTN_FONT: u16 = color::FONT_LABEL;
 // §K6: header controls round to the 4px chip radius (the mockup rounds every
 // header chip the same), distinct from the 2px inspector `SMALL_RADIUS`.
 const LH_BTN_RADIUS: f32 = color::CHIP_RADIUS;
+// The M/S/L/A toggles round harder than the dropdown chips — the mockup reads
+// them as pills, distinct from the rectangular value/blend chips, so the toggle
+// cluster is legible as a group of buttons rather than more dropdowns. 6 on the
+// 18px button is rounded-pill, not a full capsule (which would be 9).
+const MSL_PILL_RADIUS: f32 = 6.0;
 /// §19 record pulse: one breathe (dim → bright → dim) per this many seconds. A
 /// calm ~1 Hz cadence — present without strobing.
 const RECORD_PULSE_PERIOD_SECS: f32 = 1.1;
@@ -96,12 +101,17 @@ fn led_style(led: bool) -> UIStyle {
 /// chip + white hairline when off, filled with the caller's hue when on — so the
 /// control never reads hue-on-hue against the layer colour.
 fn state_btn(active_color: Color32, active: bool) -> UIStyle {
-    components::state_button_skinned(
-        active_color,
-        active,
-        BTN_FONT,
-        &components::StateButtonSkin::HEADER_CHIP,
-    )
+    UIStyle {
+        // Pill the toggle cluster (§K) — rounder than the dropdown chips so M/S/L/A
+        // read as buttons, not more value pickers.
+        corner_radius: MSL_PILL_RADIUS,
+        ..components::state_button_skinned(
+            active_color,
+            active,
+            BTN_FONT,
+            &components::StateButtonSkin::HEADER_CHIP,
+        )
+    }
 }
 
 /// A neutral header chip for the non-toggle header controls (blend, drag handle,
@@ -294,6 +304,9 @@ enum LayerControl {
     Solo,
     Led,
     Blend,
+    /// Hairline rule under the mix row separating M/S/L/Blend from the routing
+    /// form (§K). Decoration — non-interactive, drawn over the background.
+    MixDivider,
     Separator,
     Info,
     Folder,
@@ -316,7 +329,7 @@ enum LayerControl {
     TypeBadge,
 }
 
-const N_CONTROLS: usize = 29;
+const N_CONTROLS: usize = 30;
 
 impl LayerControl {
     /// All controls in declaration (build / z) order.
@@ -333,6 +346,7 @@ impl LayerControl {
         LayerControl::Solo,
         LayerControl::Led,
         LayerControl::Blend,
+        LayerControl::MixDivider,
         LayerControl::Separator,
         LayerControl::Info,
         LayerControl::Folder,
@@ -478,20 +492,21 @@ fn compute_layer_row(
     // ── Button row: M | S | [L | BlendMode] ──
     // Audio layers carry only Mute / Solo here, then a Gain row and a Send row;
     // they have no LED output, blend mode, folder, clip, or MIDI controls.
-    // §B mix row: M | S | L chips with the mockup's 5px hbot gap (was 2/4 —
-    // cramped against each other).
+    // §B mix row: M | S | L pills with a 6px gap — a touch more air than the old
+    // 5px so the rounded toggles read as a breathing cluster, not jammed.
+    const MSL_GAP: f32 = 6.0;
     let mut btn_x = pad;
     d.set(C::Mute, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-    btn_x += MS_BTN_W + 5.0;
+    btn_x += MS_BTN_W + MSL_GAP;
     d.set(C::Solo, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-    btn_x += MS_BTN_W + 5.0;
+    btn_x += MS_BTN_W + MSL_GAP;
 
     if is_audio {
         return compute_audio_row(d, y_offset, height, w, pad, btn_x, y);
     }
 
     d.set(C::Led, Rect::new(btn_x, y, MS_BTN_W, BTN_H));
-    btn_x += MS_BTN_W + 5.0;
+    btn_x += MS_BTN_W + MSL_GAP;
 
     let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
     d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
@@ -519,6 +534,11 @@ fn compute_layer_row(
     // (BTN_H + 2) keep all four inside the track height. Groups have no routing.
     if !is_group {
         let right_edge = w - pad - RIGHT_GUTTER;
+        // §K divider: a contrast-aware hairline in the button→routing gap separating
+        // the M/S/L/Blend mix row from the routing form — the mockup's clean divide.
+        // It sits inside the existing ROUTING_ROW_GAP, so it costs no height.
+        let div_y = (y - ROUTING_ROW_GAP * 0.5).round();
+        d.set(C::MixDivider, Rect::new(pad, div_y, (right_edge - pad).max(1.0), 1.0));
         let val_x = pad + LBL_W + 6.0;
         let val_w = (right_edge - val_x).max(20.0);
         let mode_x = right_edge - MODE_TOGGLE_W;
@@ -1541,6 +1561,19 @@ impl LayerHeaderPanel {
                         &layer.blend_mode,
                     )
                 }
+                C::MixDivider => tree.add_panel(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    UIStyle {
+                        // Contrast-keyed off the layer's own text colour so the
+                        // hairline reads on any identity hue without a hard line.
+                        bg_color: color::with_alpha(text_clr, 64),
+                        ..UIStyle::default()
+                    },
+                ),
                 C::Separator => {
                     let sep_color = if layer.is_group {
                         color::GROUP_SEPARATOR_COLOR
