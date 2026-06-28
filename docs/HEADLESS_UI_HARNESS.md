@@ -1,6 +1,23 @@
 # Headless UI Harness — an agent-facing tool for MANIFOLD's UI/UX
 
-**Status:** design, 2026-06-28 (Peter + agent). Not yet built.
+**Status:** BUILT 2026-06-28 (Phases 1–3), branch `feat/timeline-ui-redesign`. A feature-gated
+subcommand of `manifold-app` (feature `ui-snapshot`), run via the `cargo xtask` alias.
+
+**Usage:**
+```
+cargo xtask ui-snap timeline --dump                      # whole timeline + tree dump
+cargo xtask ui-snap timeline --interact "select:plasma"  # drive a real click; base + .after
+cargo xtask ui-snap states                               # state matrix (6 states in one image)
+cargo xtask ui-snap timeline --vs-mockup                 # app | mockup side-by-side
+cargo xtask ui-snap timeline --thumbs                    # inject a test atlas into the clips
+```
+Output goes to `target/ui-snapshots/<scene>/`. Verified end-to-end: real `UIRoot`/`state_sync`
+path, the tree dump with real node values, a real-input-host `select:` that flips the selection-
+ring node in the dump and the PNG, the 6-state matrix, the mockup composite, and atlas injection
+through the real `ClipThumbGpu`. **Next step:** the §F aspect-locked multi-window tiling layers
+onto the same `ThumbQuad`/atlas inputs (`clip_filmstrip::aspect_windows`); the `--thumbs` cut
+currently injects one full-body window per clip. Golden-image diffing remains deferred by design.
+
 **Provenance:** the `feat/timeline-ui-redesign` review found the redesign rode three
 throwaway harnesses (`timeline_header_preview.rs`, `clip_preview.rs`, `headless_ui_spike.rs`)
 that each render one piece in isolation, with hand-built structs, assert only `drew == true`,
