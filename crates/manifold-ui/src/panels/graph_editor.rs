@@ -246,6 +246,20 @@ const CHECKBOX_GAP: f32 = 10.0;
 const FONT_SIZE: u16 = 12;
 const HEADER_FONT_SIZE: u16 = 14;
 
+/// A node-param value cell / inline action button — the kit's neutral chip, so the
+/// graph editor's clickable cells carry the same one control outline + radius as
+/// every other control in the app. `align` is Right for value readouts, Center for
+/// action buttons (Edit Code / Browse) and table cells.
+fn value_cell_style(align: TextAlign) -> UIStyle {
+    crate::chrome::components::chip_style(
+        crate::chrome::components::ChipSurface::Neutral,
+        FONT_SIZE,
+        align,
+        color::CHIP_RADIUS,
+        4.0,
+    )
+}
+
 /// Per-row state captured during `build` so `register_intents` (clicks) and
 /// `handle_event` (drags) can map a tree node id back to its parameter without
 /// re-walking the snapshot. Inner-node rows track BOTH the expose checkbox and
@@ -674,17 +688,7 @@ impl GraphEditorPanel {
                 y,
                 btn_w,
                 ROW_H,
-                UIStyle {
-                    bg_color: color::BUTTON_INACTIVE_C32,
-                    hover_bg_color: color::HOVER_OVERLAY,
-                    text_color: color::TEXT_WHITE_C32,
-                    font_size: FONT_SIZE,
-                    text_align: TextAlign::Center,
-                    corner_radius: color::BUTTON_RADIUS,
-                    border_color: color::TEXT_DIMMED_C32,
-                    border_width: 1.0,
-                    ..UIStyle::default()
-                },
+                value_cell_style(TextAlign::Center),
                 "Edit Code…",
             );
             self.rows.push(RowState::WgslButton {
@@ -824,17 +828,7 @@ impl GraphEditorPanel {
                     y,
                     value_w,
                     ROW_H,
-                    UIStyle {
-                        bg_color: color::BUTTON_INACTIVE_C32,
-                        hover_bg_color: color::HOVER_OVERLAY,
-                        text_color: color::TEXT_WHITE_C32,
-                        font_size: FONT_SIZE,
-                        text_align: TextAlign::Right,
-                        corner_radius: color::BUTTON_RADIUS,
-                        border_color: color::TEXT_DIMMED_C32,
-                        border_width: 1.0,
-                        ..UIStyle::default()
-                    },
+                    value_cell_style(TextAlign::Right),
                     &value_str,
                 );
                 Some(id)
@@ -1008,17 +1002,7 @@ impl GraphEditorPanel {
                 y,
                 cell_w,
                 ROW_H,
-                UIStyle {
-                    bg_color: color::BUTTON_INACTIVE_C32,
-                    hover_bg_color: color::HOVER_OVERLAY,
-                    text_color: color::TEXT_WHITE_C32,
-                    font_size: FONT_SIZE,
-                    text_align: TextAlign::Right,
-                    corner_radius: color::BUTTON_RADIUS,
-                    border_color: color::TEXT_DIMMED_C32,
-                    border_width: 1.0,
-                    ..UIStyle::default()
-                },
+                value_cell_style(TextAlign::Right),
                 &format!("{:.3}", ps.vec_value[ch]),
             );
             self.rows.push(RowState::VecComponent {
@@ -1109,15 +1093,7 @@ impl GraphEditorPanel {
                 y,
                 value_w,
                 ROW_H,
-                UIStyle {
-                    bg_color: color::BUTTON_INACTIVE_C32,
-                    hover_bg_color: color::HOVER_OVERLAY,
-                    text_color: color::TEXT_WHITE_C32,
-                    font_size: FONT_SIZE,
-                    text_align: TextAlign::Right,
-                    corner_radius: color::BUTTON_RADIUS,
-                    ..UIStyle::default()
-                },
+                value_cell_style(TextAlign::Right),
                 &value_str,
             );
             // Anchor the editor across the whole row (the value cell alone is
@@ -1139,17 +1115,7 @@ impl GraphEditorPanel {
                 y,
                 browse_w,
                 ROW_H,
-                UIStyle {
-                    bg_color: color::BUTTON_INACTIVE_C32,
-                    hover_bg_color: color::HOVER_OVERLAY,
-                    text_color: color::TEXT_WHITE_C32,
-                    font_size: FONT_SIZE,
-                    text_align: TextAlign::Center,
-                    corner_radius: color::BUTTON_RADIUS,
-                    border_color: color::TEXT_DIMMED_C32,
-                    border_width: 1.0,
-                    ..UIStyle::default()
-                },
+                value_cell_style(TextAlign::Center),
                 "Browse",
             );
             self.rows.push(RowState::BrowseButton {
@@ -1213,15 +1179,7 @@ impl GraphEditorPanel {
                     yy,
                     cell_w,
                     CELL_H,
-                    UIStyle {
-                        bg_color: color::BUTTON_INACTIVE_C32,
-                        hover_bg_color: color::HOVER_OVERLAY,
-                        text_color: color::TEXT_WHITE_C32,
-                        font_size: FONT_SIZE,
-                        text_align: TextAlign::Center,
-                        corner_radius: color::SMALL_RADIUS,
-                        ..UIStyle::default()
-                    },
+                    value_cell_style(TextAlign::Center),
                     &fmt_table_cell(v),
                 );
                 self.rows.push(RowState::TableCell {
