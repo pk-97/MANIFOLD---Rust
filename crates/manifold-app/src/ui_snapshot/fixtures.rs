@@ -25,6 +25,7 @@ pub struct SceneData {
 pub fn build(scene: &str) -> Option<SceneData> {
     match scene {
         "timeline" => Some(timeline_scene()),
+        "states" => Some(states_scene()),
         _ => None,
     }
 }
@@ -101,4 +102,40 @@ fn timeline_scene() -> SceneData {
     // No selection by default — `--interact select:<layer>` makes the ring appear,
     // so base-vs-after renders/dumps differ measurably.
     SceneData { project, content, active: None, selection: UIState::default() }
+}
+
+/// One layer per state, so a single real render shows the whole state matrix in
+/// one image: normal / selected / muted / solo / collapsed / expanded.
+fn states_scene() -> SceneData {
+    fn vid(name: &str, id: &str, index: i32) -> Layer {
+        let mut l = Layer::new(name.into(), LayerType::Video, index);
+        l.layer_id = lid(id);
+        l.clips
+            .push(TimelineClip::new_video(format!("{id}.mov"), Beats(0.0), Beats(40.0), Seconds::ZERO));
+        l
+    }
+
+    let normal = vid("NORMAL", "normal", 0);
+    let selected = vid("SELECTED", "selected", 1);
+    let mut muted = vid("MUTED", "muted", 2);
+    muted.is_muted = true;
+    let mut solo = vid("SOLO", "solo", 3);
+    solo.is_solo = true;
+    let mut collapsed = vid("COLLAPSED", "collapsed", 4);
+    collapsed.is_collapsed = true;
+
+    // A generator layer shows the expanded routing form.
+    let mut expanded = Layer::new("EXPANDED".into(), LayerType::Generator, 5);
+    expanded.layer_id = lid("expanded");
+    expanded.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(40.0)));
+
+    let mut project = Project::default();
+    project.timeline.layers = vec![normal, selected, muted, solo, collapsed, expanded];
+
+    let content = ContentState { current_beat: Beats(10.0), is_playing: false, ..Default::default() };
+
+    let mut selection = UIState::default();
+    selection.select_layer(lid("selected"));
+
+    SceneData { project, content, active: Some(1), selection }
 }
