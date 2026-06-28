@@ -134,7 +134,7 @@ pub fn get_clip_color(
     } else if is_hovered {
         color::lighten(layer_color, 15)
     } else {
-        Color32::new(layer_color.r, layer_color.g, layer_color.b, 255)
+        color::with_alpha(layer_color, 255)
     };
 
     if is_muted {

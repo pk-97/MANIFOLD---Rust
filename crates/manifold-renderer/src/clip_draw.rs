@@ -68,8 +68,29 @@ pub fn emit_clip_shadows(ui: &mut UIRenderer, clips: &[ClipBody]) {
     }
 }
 
-/// Emit one clip body: a rounded gradient fill, then its border on top
-/// (transparent-filled so only the outline draws).
+/// Strip-band height for a clip of height `h`: `Some(strip_h)` when the clip is
+/// tall enough to split into a preview + a name strip (§E / §K15), `None` for a
+/// short/collapsed clip that stays a solid identity bar.
+pub fn clip_strip_height(h: f32) -> Option<f32> {
+    (h >= color::CLIP_STRIP_MIN_CLIP_HEIGHT).then_some(color::CLIP_STRIP_HEIGHT)
+}
+
+/// The preview-well colour: the identity colour scaled toward black (hue-
+/// preserving), standing in for the thumbnail until §F populates it.
+fn well_color(c: Color32) -> Color32 {
+    let s = color::CLIP_PREVIEW_WELL_SCALE;
+    Color32::new(
+        (c.r as f32 * s) as u8,
+        (c.g as f32 * s) as u8,
+        (c.b as f32 * s) as u8,
+        c.a,
+    )
+}
+
+/// Emit one clip body. Tall clips render the §E anatomy — a darker preview WELL
+/// on top (the thumbnail's home once §F lands) + a solid identity NAME STRIP on
+/// the bottom — then the border on top. Short/collapsed clips stay a single
+/// rounded identity bar. The border is transparent-filled so only the outline draws.
 pub fn emit_clip_body(ui: &mut UIRenderer, c: &ClipBody) {
     if !c.visible() {
         return;
@@ -77,26 +98,57 @@ pub fn emit_clip_body(ui: &mut UIRenderer, c: &ClipBody) {
     let r = color::CLIP_RADIUS;
     let body = c.resolved_color();
 
-    // Vertical body gradient: top edge lightened, fading to the base at the
-    // bottom — a soft top-lit roundness. Locked clips are already dim and inert,
-    // so they stay flat.
-    let top = if c.locked {
-        body
+    if let Some(strip_h) = clip_strip_height(c.rect.height) {
+        // Preview well (full-height, rounded) — the identity colour darkened so
+        // the strip below reads as a distinct band. A subtle top-lit gradient.
+        let well = if c.locked { body } else { well_color(body) };
+        let well_top = if c.locked {
+            well
+        } else {
+            color::lighten(well, color::CLIP_GRADIENT_LIGHTEN)
+        };
+        ui.draw_gradient_rect(
+            c.rect.x,
+            c.rect.y,
+            c.rect.width,
+            c.rect.height,
+            r,
+            well_top,
+            well,
+            [0.0, 1.0],
+        );
+        // Name strip (bottom band, rounded) — the full identity colour. Its top
+        // corners round into the well (a few px), which reads cleanly.
+        ui.draw_gradient_rect(
+            c.rect.x,
+            c.rect.y + c.rect.height - strip_h,
+            c.rect.width,
+            strip_h,
+            r,
+            body,
+            body,
+            [0.0, 1.0],
+        );
     } else {
-        color::lighten(body, color::CLIP_GRADIENT_LIGHTEN)
-    };
-    ui.draw_gradient_rect(
-        c.rect.x,
-        c.rect.y,
-        c.rect.width,
-        c.rect.height,
-        r,
-        top,
-        body,
-        [0.0, 1.0],
-    );
+        // Short/collapsed clip: one solid identity bar (top-lit gradient).
+        let top = if c.locked {
+            body
+        } else {
+            color::lighten(body, color::CLIP_GRADIENT_LIGHTEN)
+        };
+        ui.draw_gradient_rect(
+            c.rect.x,
+            c.rect.y,
+            c.rect.width,
+            c.rect.height,
+            r,
+            top,
+            body,
+            [0.0, 1.0],
+        );
+    }
 
-    // Border over the body — transparent fill, so only the outline shows.
+    // Border over the whole clip — transparent fill, so only the outline shows.
     let (bw, bc) = if c.selected {
         (color::CLIP_BORDER_SELECTED_WIDTH, color::CLIP_BORDER_SELECTED)
     } else {
@@ -153,11 +205,16 @@ pub fn emit_clip_names(ui: &mut UIRenderer, clips: &[ClipScreenRect]) {
             continue;
         }
         ui.push_immediate_clip(c.rect.x + pad, c.rect.y, inner_w, c.rect.height);
-        // Anchor the label to the BOTTOM of the clip (title-bottom — keeps the
-        // name out of the thumbnail/content above it; Ableton/Premiere/FCP style).
-        // Clamp so a very short clip never pushes the text above its own top.
-        let bottom_pad = 3.0;
-        let ty = (c.rect.y + c.rect.height - font - bottom_pad).max(c.rect.y);
+        // The name lives on the bottom NAME STRIP (§K15): centred in the strip
+        // band on a tall clip, or bottom-anchored on a short solid bar. Either
+        // way the strip carries the identity colour, so the luminance-picked text
+        // colour above already reads against it. Clamp so a tiny clip can't push
+        // the text above its own top.
+        let ty = match clip_strip_height(c.rect.height) {
+            Some(strip_h) => (c.rect.y + c.rect.height - strip_h + (strip_h - font) * 0.5)
+                .max(c.rect.y),
+            None => (c.rect.y + c.rect.height - font - 3.0).max(c.rect.y),
+        };
         ui.draw_text(c.rect.x + pad, ty, &c.name, font, text_color);
         ui.pop_immediate_clip();
     }

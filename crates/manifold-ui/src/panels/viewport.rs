@@ -836,7 +836,7 @@ impl TimelineViewportPanel {
             .iter()
             .map(|m| {
                 let mc = color::marker_color_to_color32(m.color);
-                let line_color = Color32::new(mc.r, mc.g, mc.b, color::MARKER_LINE_ALPHA);
+                let line_color = color::with_alpha(mc, color::MARKER_LINE_ALPHA);
                 (m.beat.as_f32(), line_color)
             })
             .collect();

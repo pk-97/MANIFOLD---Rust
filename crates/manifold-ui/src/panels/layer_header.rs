@@ -54,7 +54,9 @@ const INSERT_LINE_H: f32 = 2.0;
 const NAME_FONT: u16 = color::FONT_LABEL;
 const SMALL_FONT: u16 = color::FONT_SMALL;
 const BTN_FONT: u16 = color::FONT_BODY;
-const LH_BTN_RADIUS: f32 = color::SMALL_RADIUS; // §14.4: local copy → token alias
+// §K6: header controls round to the 4px chip radius (the mockup rounds every
+// header chip the same), distinct from the 2px inspector `SMALL_RADIUS`.
+const LH_BTN_RADIUS: f32 = color::CHIP_RADIUS;
 /// §19 record pulse: one breathe (dim → bright → dim) per this many seconds. A
 /// calm ~1 Hz cadence — present without strobing.
 const RECORD_PULSE_PERIOD_SECS: f32 = 1.1;
@@ -82,22 +84,30 @@ fn led_style(led: bool) -> UIStyle {
     state_btn(color::LED_COLOR, led)
 }
 
-/// The layer-card flavour of [`components::state_button_style`]: the shared
-/// on/off mechanic with this panel's smaller font + tighter radius.
+/// The layer-card flavour of the state-button mechanic: M/S/L/A on an
+/// identity-coloured header. Uses the `HEADER_CHIP` skin (§K7) — a dark neutral
+/// chip + white hairline when off, filled with the caller's hue when on — so the
+/// control never reads hue-on-hue against the layer colour.
 fn state_btn(active_color: Color32, active: bool) -> UIStyle {
-    UIStyle {
-        font_size: BTN_FONT,
-        corner_radius: LH_BTN_RADIUS,
-        ..components::state_button_style(active_color, active)
-    }
+    components::state_button_skinned(
+        active_color,
+        active,
+        BTN_FONT,
+        &components::StateButtonSkin::HEADER_CHIP,
+    )
 }
 
-fn small_button_style() -> UIStyle {
+/// A neutral header chip for the non-toggle header controls (blend, drag handle,
+/// MIDI mode): the same dark chip + hairline as `state_btn`'s off state, so every
+/// control on the coloured header shares one surface (§C / §K9).
+fn chip_button_style() -> UIStyle {
     UIStyle {
-        bg_color: color::BUTTON_DIM,
-        hover_bg_color: color::BUTTON_HIGHLIGHTED,
-        pressed_bg_color: color::BUTTON_PRESSED,
+        bg_color: color::CHIP_BG,
+        hover_bg_color: color::CHIP_BG_HOVER,
+        pressed_bg_color: color::CHIP_BG_PRESSED,
         text_color: color::TEXT_WHITE_C32,
+        border_color: color::CHIP_LINE,
+        border_width: 1.0,
         font_size: SMALL_FONT,
         corner_radius: LH_BTN_RADIUS,
         text_align: TextAlign::Center,
@@ -105,6 +115,20 @@ fn small_button_style() -> UIStyle {
     }
 }
 
+/// A routing *value* chip (Folder path, MIDI note, Channel, Device): the neutral
+/// header chip, left-aligned, carrying a trailing `▾` affordance (added by the
+/// caller via [`with_caret`]) so values read as "opens a list" — the mockup's
+/// `.sel` dropdown (§K13).
+fn value_chip_style() -> UIStyle {
+    UIStyle {
+        text_align: TextAlign::Left,
+        ..chip_button_style()
+    }
+}
+
+/// The recording-controls device label (top chrome, on the dark panel — NOT a
+/// header chip). Kept on the neutral row surface so the timeline-chip restyle
+/// doesn't bleed into the recording chrome.
 fn field_style() -> UIStyle {
     UIStyle {
         bg_color: color::LAYER_ROW_BG,
@@ -116,6 +140,24 @@ fn field_style() -> UIStyle {
         text_align: TextAlign::Left,
         ..UIStyle::default()
     }
+}
+
+/// A routing *label* (FOLDER / MIDI / CHANNEL / DEVICE): faint, uppercase, in the
+/// fixed label column. Faint = the layer's contrast text dropped to ~70% alpha,
+/// so it stays legible on any identity hue (a flat white would wash out on a
+/// light layer colour) while reading as a secondary label (§K10 / §K12).
+fn routing_label_style(text_clr: Color32) -> UIStyle {
+    UIStyle {
+        text_color: color::with_alpha(text_clr, 180),
+        font_size: SMALL_FONT,
+        text_align: TextAlign::Left,
+        ..UIStyle::default()
+    }
+}
+
+/// Append the dropdown caret affordance to a value chip's text (mockup `.sel::after`).
+fn with_caret(value: &str) -> String {
+    format!("{value}  \u{25BE}")
 }
 
 fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {
@@ -469,10 +511,12 @@ fn compute_layer_row(
         let val_w = (right_edge - val_x).max(20.0);
         let mode_x = right_edge - MODE_TOGGLE_W;
 
-        // Folder | path value — video layers only (generators have no source folder).
+        // FOLDER label | folder-path value chip — video layers only (generators
+        // have no source folder). §K11: the static label sits in the label column
+        // (PathLabel), the interactive picker chip in the value column (Folder).
         if !is_generator {
-            d.set(C::Folder, Rect::new(pad, y, LBL_W, BTN_H));
-            d.set(C::PathLabel, Rect::new(val_x, y, val_w, BTN_H));
+            d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
+            d.set(C::Folder, Rect::new(val_x, y, val_w, BTN_H));
             y += BTN_H + 2.0;
         }
         // MIDI | note input + trigger-mode toggle.
@@ -991,37 +1035,41 @@ impl LayerHeaderPanel {
     }
 
     pub fn set_blend_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
+        // §K8: keep the "BLEND" micro-label on the live-refresh path, or the
+        // sync would strip it back to the bare mode each frame (build formats it,
+        // this must agree).
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::Blend) {
-                tree.set_text(id, text);
+                tree.set_text(id, &format!("BLEND  {text}"));
             }
     }
 
     pub fn set_midi_note_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
+        // §K13: the value chips keep their dropdown caret on live refresh.
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::MidiInput) {
-                tree.set_text(id, text);
+                tree.set_text(id, &with_caret(text));
             }
     }
 
     pub fn set_midi_channel_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::ChDropdown) {
-                tree.set_text(id, text);
+                tree.set_text(id, &with_caret(text));
             }
     }
 
     pub fn set_midi_device_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::DevDropdown) {
-                tree.set_text(id, text);
+                tree.set_text(id, &with_caret(text));
             }
     }
 
     pub fn set_midi_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
         if let Some(row) = self.rows.get(index)
             && let Some(id) = row.id(LayerControl::MidiMode) {
-                tree.set_text(id, text);
+                tree.set_text(id, &with_caret(text));
             }
     }
 
@@ -1337,11 +1385,17 @@ impl LayerHeaderPanel {
                     r.width,
                     r.height,
                     // The icon char routes the renderer to the badge glyph; the
-                    // node bounds size it (square, centred). Contrast colour so it
-                    // reads on the layer-coloured background.
+                    // node bounds size it (square, centred). §K4: a filled NEUTRAL
+                    // chip + white hairline (the mockup badge) so the type glyph
+                    // sits in its own surface, not bare on the identity colour. A
+                    // white glyph reads on the dark chip on any layer hue.
                     &layer.badge_icon().text(),
                     UIStyle {
-                        text_color: text_clr,
+                        bg_color: color::CHIP_BG,
+                        border_color: color::CHIP_LINE,
+                        border_width: 1.0,
+                        corner_radius: color::CHIP_RADIUS,
+                        text_color: color::TEXT_WHITE_C32,
                         text_align: TextAlign::Center,
                         ..UIStyle::default()
                     },
@@ -1356,7 +1410,14 @@ impl LayerHeaderPanel {
                         bg_color: Color32::TRANSPARENT,
                         hover_bg_color: color::LAYER_CHEVRON_HOVER,
                         pressed_bg_color: color::LAYER_CHEVRON_PRESSED,
-                        text_color: text_clr,
+                        // §K16: a selected layer's name brightens to pure white
+                        // (paired with the focus ring), so the selected layer
+                        // reads first; otherwise the identity-contrast colour.
+                        text_color: if layer.is_selected {
+                            color::TEXT_WHITE_C32
+                        } else {
+                            text_clr
+                        },
                         font_size: NAME_FONT,
                         text_align: TextAlign::Left,
                         ..UIStyle::default()
@@ -1446,15 +1507,24 @@ impl LayerHeaderPanel {
                     led_style(layer.is_led),
                     "L",
                 ),
-                C::Blend => tree.add_button(
-                    clip_parent,
-                    r.x,
-                    r.y,
-                    r.width,
-                    r.height,
-                    small_button_style(),
-                    &layer.blend_mode,
-                ),
+                C::Blend => {
+                    // §K8: a "BLEND" micro-label prefixes the mode so the chip
+                    // says what it controls (the mockup's `<b>BLEND</b> Normal`).
+                    // One text node, left-aligned on the neutral chip.
+                    let blend_text = format!("BLEND  {}", layer.blend_mode);
+                    tree.add_button(
+                        clip_parent,
+                        r.x,
+                        r.y,
+                        r.width,
+                        r.height,
+                        UIStyle {
+                            text_align: TextAlign::Left,
+                            ..chip_button_style()
+                        },
+                        &blend_text,
+                    )
+                }
                 C::Separator => {
                     let sep_color = if layer.is_group {
                         color::GROUP_SEPARATOR_COLOR
@@ -1490,40 +1560,39 @@ impl LayerHeaderPanel {
                         },
                     )
                 }
-                C::Folder => tree.add_button(
-                    clip_parent,
-                    r.x,
-                    r.y,
-                    r.width,
-                    r.height,
-                    small_button_style(),
-                    "Folder",
-                ),
-                C::PathLabel => {
+                // §K11: the interactive element is the VALUE in the value column
+                // (a dropdown chip showing the folder path + caret), the static
+                // "FOLDER" label sits in the label column. `FolderClicked` stays
+                // wired to `C::Folder`, now correctly the value chip.
+                C::Folder => {
                     let path_text =
                         folder_path_text(&layer.video_folder_path, layer.source_clip_count);
-                    tree.add_label(
+                    tree.add_button(
                         clip_parent,
                         r.x,
                         r.y,
                         r.width,
                         r.height,
-                        &path_text,
-                        UIStyle {
-                            text_color: text_clr,
-                            font_size: SMALL_FONT,
-                            text_align: TextAlign::Left,
-                            ..UIStyle::default()
-                        },
+                        value_chip_style(),
+                        &with_caret(&path_text),
                     )
                 }
+                C::PathLabel => tree.add_label(
+                    clip_parent,
+                    r.x,
+                    r.y,
+                    r.width,
+                    r.height,
+                    "FOLDER",
+                    routing_label_style(text_clr),
+                ),
                 C::NewClip => tree.add_button(
                     clip_parent,
                     r.x,
                     r.y,
                     r.width,
                     r.height,
-                    small_button_style(),
+                    chip_button_style(),
                     "+ new clip",
                 ),
                 C::MidiLabel => tree.add_label(
@@ -1533,12 +1602,7 @@ impl LayerHeaderPanel {
                     r.width,
                     r.height,
                     "MIDI",
-                    UIStyle {
-                        text_color: text_clr,
-                        font_size: SMALL_FONT,
-                        text_align: TextAlign::Left,
-                        ..UIStyle::default()
-                    },
+                    routing_label_style(text_clr),
                 ),
                 C::MidiInput => {
                     let midi_text = if layer.midi_all_notes {
@@ -1552,8 +1616,8 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        field_style(),
-                        &midi_text,
+                        value_chip_style(),
+                        &with_caret(&midi_text),
                     )
                 }
                 C::MidiMode => {
@@ -1564,8 +1628,8 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        small_button_style(),
-                        mode_text,
+                        value_chip_style(),
+                        &with_caret(mode_text),
                     )
                 }
                 C::ChLabel => tree.add_label(
@@ -1574,13 +1638,8 @@ impl LayerHeaderPanel {
                     r.y,
                     r.width,
                     r.height,
-                    "Channel",
-                    UIStyle {
-                        text_color: text_clr,
-                        font_size: SMALL_FONT,
-                        text_align: TextAlign::Left,
-                        ..UIStyle::default()
-                    },
+                    "CHANNEL",
+                    routing_label_style(text_clr),
                 ),
                 C::ChDropdown => {
                     let ch_text = if layer.midi_channel < 0 {
@@ -1594,8 +1653,8 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        small_button_style(),
-                        &ch_text,
+                        value_chip_style(),
+                        &with_caret(&ch_text),
                     )
                 }
                 C::DevLabel => tree.add_label(
@@ -1604,13 +1663,8 @@ impl LayerHeaderPanel {
                     r.y,
                     r.width,
                     r.height,
-                    "Device",
-                    UIStyle {
-                        text_color: text_clr,
-                        font_size: SMALL_FONT,
-                        text_align: TextAlign::Left,
-                        ..UIStyle::default()
-                    },
+                    "DEVICE",
+                    routing_label_style(text_clr),
                 ),
                 C::DevDropdown => {
                     let dev_text: &str = match layer.midi_device.as_deref() {
@@ -1623,8 +1677,8 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        small_button_style(),
-                        dev_text,
+                        value_chip_style(),
+                        &with_caret(dev_text),
                     )
                 }
                 C::AddGenClip => tree.add_button(
@@ -1633,7 +1687,7 @@ impl LayerHeaderPanel {
                     r.y,
                     r.width,
                     r.height,
-                    small_button_style(),
+                    chip_button_style(),
                     "+ Clip",
                 ),
                 C::Gain => {
@@ -1671,8 +1725,8 @@ impl LayerHeaderPanel {
                         r.y,
                         r.width,
                         r.height,
-                        small_button_style(),
-                        send_text,
+                        value_chip_style(),
+                        &with_caret(send_text),
                     )
                 }
             };
@@ -2389,8 +2443,8 @@ mod tests {
             let val_w = (right_edge - val_x).max(20.0);
             let mode_x = right_edge - MODE_TOGGLE_W;
             if !is_generator {
-                d.set(C::Folder, Rect::new(pad, y, LBL_W, BTN_H));
-                d.set(C::PathLabel, Rect::new(val_x, y, val_w, BTN_H));
+                d.set(C::PathLabel, Rect::new(pad, y, LBL_W, BTN_H));
+                d.set(C::Folder, Rect::new(val_x, y, val_w, BTN_H));
                 y += BTN_H + 2.0;
             }
             d.set(C::MidiLabel, Rect::new(pad, y, LBL_W, BTN_H));

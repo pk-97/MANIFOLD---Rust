@@ -302,3 +302,45 @@ running app), and the genuinely net-new aspect-locked thumbnail window (§F).
 - `tests/design_tokens.rs` guard is at **133** vs baseline **132** — an untokenized `Color32::new`
   drifted in on the `feat/multi-selection-ux` base this branch forked from. Find + tokenize it (or
   bump the baseline if legitimate) as a separate cleanup; it is inherited, not introduced here.
+
+## §K. Per-property delta table — derived from the headless dump vs mockup CSS (2026-06-28)
+
+Derived by diffing `cargo xtask ui-snap timeline --dump` (real `UITree` node values) against
+`crates/manifold-app/assets/timeline-mockup.html`. App values are the dump; targets are the mockup
+CSS. **Palette rule:** keep the app's high-saturation identity colours — the mockup is the target for
+STRUCTURE / spacing / control-shape ONLY (never its muted hexes). NO glow. This table is the work
+list; status is updated as each lands.
+
+| # | Element (dump node) | Property | App now | Target (mockup) | File / token | Status |
+|---|---|---|---|---|---|---|
+| K1 | header column (#83) | width | 200 | 230 | `color::LAYER_CONTROLS_WIDTH` | todo |
+| K2 | header column (#83) | right-edge elevation | none | `box-shadow 2px 0 6px rgba(0,0,0,.45)` | UIStyle shadow + layout | todo |
+| K3 | type badge (#109…) | size | 13 | 18 | `LAYER_CTRL_TYPE_BADGE_SIZE` | todo |
+| K4 | type badge | fill / border / radius | none | `--chip #1b1b21` + `chip-line` 1px + r4 | `layer_header` TypeBadge build | todo |
+| K5 | M/S/L (#95–97) | width | 28 | 20 | `LAYER_CTRL_MUTE_SOLO_BTN_WIDTH` | todo |
+| K6 | M/S/L + blend + values | radius | 2 | 4 | `LH_BTN_RADIUS`→`CHIP_RADIUS` | todo |
+| K7 | M/S/L off-chip | bg / border | `#47474a`, none | `--chip` + `chip-line` 1px | `state_btn`/skin border | todo |
+| K8 | blend (#98) | text | `Normal` | `BLEND  Normal` (micro-label) / `GAIN x.x` | `Blend` build | todo |
+| K9 | blend | bg / border | `#47474a`, none | `--chip` + `chip-line` 1px | `small_button_style` | todo |
+| K10 | routing labels (#100/102/105/107) | case | mixed (`Folder`) | UPPERCASE | `MidiLabel`/`ChLabel`/… text | todo |
+| K11 | routing labels | role | `Folder` is a BUTTON | label (value is the dropdown) | `Folder`/`PathLabel` swap | todo |
+| K12 | routing labels | colour | contrast text | faint `rgba(255,255,255,.72)` | label style | todo |
+| K13 | routing values (#101/103/106/108) | shape | mixed label/button | dropdown chip + trailing `▾` | value build + caret | todo |
+| K14 | clips (GPU) | vertical inset | 12 | 6 | `CLIP_VERTICAL_PAD` | todo |
+| K15 | clips (GPU) | anatomy | one body + bottom text | preview body (top) + solid layer-colour name strip (bottom 16px) | `clip_draw.rs` | todo |
+| K16 | selected layer header | name colour | contrast text | `#fff` + ring (exists) | `bg_style`/Name | todo |
+| K17 | routing labels | letter-spacing | 0 | 0.5px tracked | UIStyle `letter_spacing` + text path | todo |
+| K18 | zoom/mode buttons | radius | 3 | 6 | transport chrome | **DEFERRED** (see note) |
+| K19 | transport numerics | tabular-nums | proportional | tabular | CoreText feature | **DEFERRED** (see note) |
+| K20 | mode buttons | active highlight | flat | `Perform` lifted/`on` | mode build | todo |
+
+**Deferred-with-reason (not silently dropped):**
+- **K18 zoom/mode radius 3→6** — these live in the shared transport bar, where *every* control is
+  r3 (the dump shows SRC:INT / LINK / PLAY / STOP / REC / NEW / OPEN … all at r3). Bumping only
+  zoom/mode to r6 desyncs the chrome; bumping the whole bar to r6 is a transport-wide change beyond
+  the timeline redesign. The mockup's simplified top bar doesn't carry that constraint. Per
+  `dont-cascade-redesign` + `structural-fidelity`, left at r3 for chrome consistency. Revisit only
+  as an explicit transport-chrome pass.
+- **K19 tabular-nums** — the timeline's numeric labels (time, BPM, px/beat) are all in the transport
+  bar (chrome), not the timeline proper. CoreText font-feature plumbing for a chrome-only benefit is
+  out of scope for the timeline redesign. Revisit with K18 if a transport pass happens.

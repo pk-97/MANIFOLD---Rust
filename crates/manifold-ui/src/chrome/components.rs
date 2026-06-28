@@ -96,6 +96,12 @@ pub struct StateButtonSkin {
     pub off_press: Color32,
     pub off_text: Color32,
     pub corner_radius: f32,
+    /// Hairline edge drawn on the chip in BOTH states (active + off). Lets a
+    /// chip separate from a coloured surface behind it (the layer-header chips on
+    /// an identity-coloured header). Transparent / `0.0` = no border, the chrome
+    /// + inspector default.
+    pub border_color: Color32,
+    pub border_width: f32,
 }
 
 impl StateButtonSkin {
@@ -109,6 +115,24 @@ impl StateButtonSkin {
         off_press: color::BUTTON_PRESSED,
         off_text: color::TEXT_WHITE_C32,
         corner_radius: color::BUTTON_RADIUS,
+        border_color: Color32::TRANSPARENT,
+        border_width: 0.0,
+    };
+
+    /// Layer-header chip (§C / §K): a control sitting on the identity-coloured
+    /// header. A dark NEUTRAL chip + a white hairline so it reads on any hue,
+    /// filling with the caller's M/S/L/A identity hue when active. The bold 30/20
+    /// active deltas match the chrome bar; the hairline is what's new.
+    pub const HEADER_CHIP: Self = Self {
+        active_lighten: 30,
+        active_darken: 20,
+        off_bg: color::CHIP_BG,
+        off_hover: color::CHIP_BG_HOVER,
+        off_press: color::CHIP_BG_PRESSED,
+        off_text: color::TEXT_WHITE_C32,
+        corner_radius: color::CHIP_RADIUS,
+        border_color: color::CHIP_LINE,
+        border_width: 1.0,
     };
 
     /// Inspector card, *raised*: the modulation-source buttons (envelope /
@@ -122,6 +146,8 @@ impl StateButtonSkin {
         off_press: color::DRIVER_INACTIVE_PRESS_C32,
         off_text: color::TEXT_DIMMED_C32,
         corner_radius: color::SMALL_RADIUS,
+        border_color: Color32::TRANSPARENT,
+        border_width: 0.0,
     };
 
     /// Inspector card, *recessed*: the dense config option cells (beat div,
@@ -135,6 +161,8 @@ impl StateButtonSkin {
         off_press: color::CONFIG_BTN_PRESSED_C32,
         off_text: color::TEXT_DIMMED_C32,
         corner_radius: color::SMALL_RADIUS,
+        border_color: Color32::TRANSPARENT,
+        border_width: 0.0,
     };
 }
 
@@ -155,6 +183,8 @@ pub fn state_button_skinned(
             hover_bg_color: color::lighten(active_color, skin.active_lighten),
             pressed_bg_color: color::darken(active_color, skin.active_darken),
             text_color: color::TEXT_WHITE_C32,
+            border_color: skin.border_color,
+            border_width: skin.border_width,
             font_size,
             corner_radius: skin.corner_radius,
             text_align: TextAlign::Center,
@@ -166,6 +196,8 @@ pub fn state_button_skinned(
             hover_bg_color: skin.off_hover,
             pressed_bg_color: skin.off_press,
             text_color: skin.off_text,
+            border_color: skin.border_color,
+            border_width: skin.border_width,
             font_size,
             corner_radius: skin.corner_radius,
             text_align: TextAlign::Center,

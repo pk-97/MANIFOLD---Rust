@@ -33,6 +33,14 @@ pub fn darken(c: Color32, amount: u8) -> Color32 {
     )
 }
 
+/// Same colour at a new alpha. The one place to derive a translucent variant of
+/// a colour that is only known at runtime (a layer's contrast text faded to a
+/// secondary label, a hue at a wash alpha), so call sites don't hand-roll a raw
+/// `Color32::new(c.r, c.g, c.b, a)`.
+pub fn with_alpha(c: Color32, a: u8) -> Color32 {
+    Color32::new(c.r, c.g, c.b, a)
+}
+
 /// Linear interpolation between two colours, `t` clamped to 0..1 (alpha mixed too).
 pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
@@ -266,6 +274,25 @@ pub const CLIP_LABEL_ON_DARK: Color32 = Color32::new(238, 238, 242, 235);
 pub const CLIP_LABEL_MIN_WIDTH: f32 = 30.0;
 /// Left inset of the label inside the clip body.
 pub const CLIP_LABEL_PAD_X: f32 = 6.0;
+
+// ── Clip name-strip band (§E / §K15) ────────────────────────────────
+// Premiere/FCP anatomy: a content PREVIEW on top + a solid layer-coloured NAME
+// STRIP on the bottom (the mockup's `.clip .body` + `.clip .strip`). The strip
+// carries the identity colour and the name; the preview area is a darker well of
+// the same hue (it becomes the thumbnail once §F lands). Below a minimum clip
+// height the band is dropped — the clip is just a solid identity bar + name
+// (collapsed lanes), matching the mockup's collapsed-row clip.
+pub const CLIP_STRIP_HEIGHT: f32 = 16.0;
+/// Minimum clip height for the two-band split. Below this (collapsed/short
+/// clips) the clip stays a solid identity bar — a strip would leave no usable
+/// preview. 44 = 16px strip + ~28px minimum preview, so a 36px collapsed-lane
+/// clip stays a bar while a 128px normal-lane clip splits.
+pub const CLIP_STRIP_MIN_CLIP_HEIGHT: f32 = 44.0;
+/// The preview well = the identity colour scaled toward black by this factor
+/// (hue-preserving), standing in for the thumbnail until §F populates it. Keeps
+/// the clip's identity readable while making the strip read as a distinct band.
+/// Tuned so the well is clearly darker than the strip without going muddy.
+pub const CLIP_PREVIEW_WELL_SCALE: f32 = 0.5;
 
 // ── Group layer structural colors ───────────────────────────────────
 pub const COLLAPSED_GROUP_OVERLAY_BG: Color32 = Color32::new(20, 20, 28, 255);
@@ -694,6 +721,23 @@ pub const LAYER_INSERT_LINE: Color32 = Color32::new(100, 180, 255, 255);
 pub const LAYER_ROW_BG: Color32 = Color32::new(40, 40, 42, 255);
 pub const LAYER_ROW_HOVER_BG: Color32 = Color32::new(50, 50, 53, 255);
 pub const LAYER_ROW_PRESSED_BG: Color32 = Color32::new(35, 35, 37, 255);
+
+// ── Header-control chip (§C / §K) ───────────────────────────────────
+// A control sitting on a layer header sits on the layer's IDENTITY colour, so
+// it must use an opaque NEUTRAL chip — never a tint of the hue (a darken of the
+// hue is just darker hue → reads hue-on-hue, the low-contrast trap §C names).
+// One dark neutral chip + a white hairline reads cleanly on any identity colour
+// (Ableton's pattern). Drives the type badge, M/S/L, blend, and routing-value
+// chips. Distinct from BUTTON_DIM (the grey chrome-bar chip) on purpose.
+pub const CHIP_BG: Color32 = Color32::new(27, 27, 33, 255);
+pub const CHIP_BG_HOVER: Color32 = Color32::new(40, 40, 47, 255);
+pub const CHIP_BG_PRESSED: Color32 = Color32::new(20, 20, 25, 255);
+/// Hairline edge on a chip — a low-alpha white so the chip separates from the
+/// identity colour behind it without a hard line.
+pub const CHIP_LINE: Color32 = Color32::new(255, 255, 255, 41);
+/// Corner radius for header-control chips. The mockup rounds every header chip
+/// to 4px; kept distinct from the 2px inspector `SMALL_RADIUS`.
+pub const CHIP_RADIUS: f32 = 4.0;
 pub const LAYER_CHEVRON_HOVER: Color32 = Color32::new(255, 255, 255, 15);
 pub const LAYER_CHEVRON_PRESSED: Color32 = Color32::new(255, 255, 255, 8);
 
@@ -775,13 +819,18 @@ pub const COLLAPSED_TRACK_HEIGHT: f32 = 48.0;
 /// tall mode; the preset exists so the height vocabulary is complete.
 pub const TALL_TRACK_HEIGHT: f32 = 200.0;
 pub const RULER_HEIGHT: f32 = 40.0;
-pub const LAYER_CONTROLS_WIDTH: f32 = 200.0;
+// §K1: header column widened 200→230 to match the mockup grid (room for the
+// 18px type-badge chip + name + menu in the identity row without crushing).
+pub const LAYER_CONTROLS_WIDTH: f32 = 230.0;
 pub const PLAYHEAD_WIDTH: f32 = 2.0;
 /// Size of the playhead head marker — a downward triangle at the top of the
 /// ruler that makes the "now" position unmissable next to the insert cursor (§24 5e).
 pub const PLAYHEAD_HEAD_SIZE: f32 = 13.0;
 pub const CLIP_MIN_WIDTH: f32 = 10.0;
-pub const CLIP_VERTICAL_PAD: f32 = 12.0;
+// §K14: tighter clip inset (12→6) so clip cards fill more of the lane, matching
+// the mockup's `top:6px; bottom:6px`. One token → viewport rects, hit-test, and
+// the GPU clip pass stay in agreement.
+pub const CLIP_VERTICAL_PAD: f32 = 6.0;
 pub const OVERVIEW_STRIP_HEIGHT: f32 = 16.0;
 // ── Timeline horizontal scrollbar (§24 5e) ──────────────────────────
 /// Height of the reserved scrollbar strip at the bottom of the timeline body.
@@ -872,11 +921,14 @@ pub const ZOOM_WHEEL_STEP_PER_NOTCH: f32 = 1.18;
 pub const LAYER_CTRL_PADDING: f32 = SPACE_S; // §14.4: 5 → 4, onto the scale
 pub const LAYER_CTRL_CHEVRON_WIDTH: f32 = 18.0;
 pub const LAYER_CTRL_DRAG_HANDLE_WIDTH: f32 = 18.0;
-/// Square type-badge glyph in the layer name row (§24 5d).
-pub const LAYER_CTRL_TYPE_BADGE_SIZE: f32 = 13.0;
+/// Square type-badge chip in the layer name row (§24 5d / §K3). 18px to match
+/// the mockup badge — a filled chip the glyph sits inside, not a bare glyph.
+pub const LAYER_CTRL_TYPE_BADGE_SIZE: f32 = 18.0;
 pub const LAYER_CTRL_NAME_ROW_HEIGHT: f32 = 18.0;
 pub const LAYER_CTRL_ROW_STEP: f32 = 23.0;
-pub const LAYER_CTRL_MUTE_SOLO_BTN_WIDTH: f32 = 28.0;
+// §K5: M/S/L chips narrowed 28→20 to match the mockup iconbtn (frees width for
+// the blend chip + keeps the mix row uncrowded in the 230px column).
+pub const LAYER_CTRL_MUTE_SOLO_BTN_WIDTH: f32 = 20.0;
 pub const LAYER_CTRL_BTN_HEIGHT: f32 = 18.0;
 pub const LAYER_CTRL_INFO_ROW_HEIGHT: f32 = 14.0;
 pub const LAYER_CTRL_SEPARATOR_HEIGHT: f32 = 2.0;

@@ -29,8 +29,11 @@ use std::path::{Path, PathBuf};
 // `HAIRLINE_RADIUS`). The one survivor is a `// design-token-exempt:` circular
 // status dot. From here the radius guard is absolute — any raw literal fails.
 // COLOR is still grandfathered pending the §15 ramp. (135→132: the §24 5b clip
-// cutover deleted `bitmap_painter::draw_clip` and its three test literals.)
-const COLOR_BASELINE: usize = 132;
+// cutover deleted `bitmap_painter::draw_clip` and its three test literals. 132→131:
+// the timeline-UI-redesign §K added `color::with_alpha` and routed three derived
+// `Color32::new(c.r, c.g, c.b, a)` call sites through it — net −1, absorbing the
+// inherited multi-selection-ux drift the redesign §J flagged.)
+const COLOR_BASELINE: usize = 131;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]
