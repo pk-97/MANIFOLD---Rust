@@ -1571,8 +1571,11 @@ impl GraphEditorPanel {
             } => self.handle_drag_begin(*node_id, origin.x),
             UIEvent::Drag { node_id, pos, .. } => self.handle_drag(*node_id, pos.x),
             UIEvent::DragEnd { node_id, .. } => {
+                // End the scrub when this drag ends. If the cell node left the
+                // build mid-drag (`node_id == None`), end it anyway — a drag that
+                // began must end, and the anchor must not stick.
                 if let Some(drag) = self.drag
-                    && drag.value_cell_node_id == *node_id
+                    && node_id.is_none_or(|n| drag.value_cell_node_id == n)
                 {
                     self.drag = None;
                 }
@@ -2529,7 +2532,7 @@ mod tests {
 
         // DragEnd clears state; subsequent drags on this cell are no-ops.
         let end = UIEvent::DragEnd {
-            node_id: cell,
+            node_id: Some(cell),
             pos: Vec2::new(160.0, 0.0),
         };
         assert!(panel.handle_event(&end).is_empty());

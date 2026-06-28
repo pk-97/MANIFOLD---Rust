@@ -182,8 +182,13 @@ pub enum UIEvent {
         pos: Vec2,
         modifiers: Modifiers,
     },
+    /// Terminal release event — fires on every mouse-up that followed a press,
+    /// even when the pressed widget left the tree before release (a rebuild
+    /// dropped it). `node_id` is best-effort context: `None` means "the press
+    /// target is no longer in the build", not "no event". See
+    /// [`UIInputSystem::process_pointer`].
     PointerUp {
-        node_id: NodeId,
+        node_id: Option<NodeId>,
         pos: Vec2,
     },
     HoverEnter {
@@ -204,8 +209,14 @@ pub enum UIEvent {
         pos: Vec2,
         delta: Vec2,
     },
+    /// Terminal drag event — fires for every drag that began, even when the
+    /// pressed widget left the tree mid-drag. A drag that began MUST end: the
+    /// consumer relies on this to tear down its drag state (overlay cursor,
+    /// region select, scrub anchor). `node_id` is best-effort context — `None`
+    /// means the originating node is gone, not that the drag didn't end. See
+    /// [`UIInputSystem::process_pointer`].
     DragEnd {
-        node_id: NodeId,
+        node_id: Option<NodeId>,
         pos: Vec2,
     },
     KeyDown {
@@ -534,12 +545,18 @@ impl UIInputSystem {
                     }
 
                     if self.is_dragging {
-                        if let Some(n) = tree.node_for_widget(pw) {
-                            self.pending_events.push(UIEvent::DragEnd {
-                                node_id: n,
-                                pos: screen_pos,
-                            });
-                        }
+                        // A drag that began MUST end. Emit DragEnd unconditionally
+                        // — gating it on the pressed widget still resolving meant a
+                        // rebuild that dropped the node mid-drag (clip drags
+                        // invalidate the tracks bitmap every frame) silently ate the
+                        // terminal event, leaving the consumer's drag state stuck
+                        // forever (frozen Move cursor, un-finalized region select).
+                        // The node id is best-effort context, same contract as
+                        // RightClick's optional node.
+                        self.pending_events.push(UIEvent::DragEnd {
+                            node_id: tree.node_for_widget(pw),
+                            pos: screen_pos,
+                        });
                     } else if hit_widget == Some(pw)
                         && let Some(live) = hit_id
                     {
@@ -574,12 +591,13 @@ impl UIInputSystem {
                         }
                     }
 
-                    if let Some(n) = tree.node_for_widget(pw) {
-                        self.pending_events.push(UIEvent::PointerUp {
-                            node_id: n,
-                            pos: screen_pos,
-                        });
-                    }
+                    // PointerUp always fires on release (its consumers — slider /
+                    // scrub release — must clear their drag flags regardless of
+                    // whether the pressed node survived). Best-effort node id.
+                    self.pending_events.push(UIEvent::PointerUp {
+                        node_id: tree.node_for_widget(pw),
+                        pos: screen_pos,
+                    });
                 }
                 self.pressed_widget = None;
                 self.is_dragging = false;
@@ -846,6 +864,54 @@ mod tests {
             .filter(|e| matches!(e, UIEvent::Click { .. }))
             .collect();
         assert_eq!(clicks.len(), 0);
+    }
+
+    /// Regression: a drag whose pressed widget LEFT the tree before release must
+    /// still emit its terminal `DragEnd` + `PointerUp`. Clip drags invalidate the
+    /// tracks bitmap every frame, so the pressed node can fail to resolve at the
+    /// exact moment of release; pre-fix the terminal events were gated on that
+    /// resolution and silently dropped, orphaning the consumer's drag state
+    /// (frozen Move cursor, un-finalized region select). The node id is `None`
+    /// here — best-effort context, not a delivery precondition.
+    #[test]
+    fn drag_end_fires_even_when_pressed_widget_vanishes() {
+        let (mut tree, mut input) = setup();
+
+        // Press on the button, then drag past threshold (DragBegin).
+        input.process_pointer(&mut tree, Vec2::new(60.0, 60.0), PointerAction::Down, 0.0);
+        input.process_pointer(&mut tree, Vec2::new(80.0, 60.0), PointerAction::Move, 0.0);
+        assert!(
+            input
+                .drain_events()
+                .iter()
+                .any(|e| matches!(e, UIEvent::DragBegin { .. })),
+            "drag must have begun"
+        );
+
+        // Rebuild the tree WITHOUT the button — the pressed widget no longer
+        // resolves to any live node (models a mid-drag tracks-bitmap rebuild
+        // that dropped the node under the cursor).
+        tree.clear();
+        tree.add_panel(None, 0.0, 0.0, 800.0, 600.0, UIStyle::default());
+
+        // Release. Both terminal events must still fire.
+        input.process_pointer(&mut tree, Vec2::new(80.0, 60.0), PointerAction::Up, 0.0);
+        let events = input.drain_events();
+
+        let drag_end = events.iter().find(|e| matches!(e, UIEvent::DragEnd { .. }));
+        assert!(
+            matches!(drag_end, Some(UIEvent::DragEnd { node_id: None, .. })),
+            "DragEnd must fire with a None node when the pressed widget vanished, got {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, UIEvent::PointerUp { node_id: None, .. })),
+            "PointerUp must also fire on release, got {events:?}"
+        );
+
+        // The producer's own drag state is torn down regardless.
+        assert!(!input.is_dragging);
     }
 
     #[test]
