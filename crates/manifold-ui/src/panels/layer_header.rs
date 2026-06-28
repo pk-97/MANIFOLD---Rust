@@ -69,6 +69,11 @@ const LH_BTN_RADIUS: f32 = color::CHIP_RADIUS;
 // cluster is legible as a group of buttons rather than more dropdowns. 6 on the
 // 18px button is rounded-pill, not a full capsule (which would be 9).
 const MSL_PILL_RADIUS: f32 = 6.0;
+/// Breathing room above and below the mix→routing divider (§K). Wider than the
+/// inter-row gap so the rule reads as a deliberate section break between the
+/// M/S/L/Blend mix row and the routing form, not just another row line.
+const MIX_DIVIDER_PAD: f32 = 10.0;
+const MIX_DIVIDER_THICK: f32 = 1.0;
 /// §19 record pulse: one breathe (dim → bright → dim) per this many seconds. A
 /// calm ~1 Hz cadence — present without strobing.
 const RECORD_PULSE_PERIOD_SECS: f32 = 1.1;
@@ -511,7 +516,7 @@ fn compute_layer_row(
     let dd_w = (w - btn_x - pad - RIGHT_GUTTER).max(20.0);
     d.set(C::Blend, Rect::new(btn_x, y, dd_w, BTN_H));
 
-    y += BTN_H + ROUTING_ROW_GAP;
+    y += BTN_H;
 
     // ── Collapsed non-group: skip detail controls ──
     let sep_h = if is_group {
@@ -530,15 +535,20 @@ fn compute_layer_row(
 
     // §D routing form — aligned [label | value] rows (expanded-only). A fixed
     // label column (LBL_W) puts every value at the same x; Channel and Device get
-    // their own spelled-out rows instead of sharing one cramped line. Tight rows
-    // (BTN_H + 2) keep all four inside the track height. Groups have no routing.
+    // their own spelled-out rows instead of sharing one cramped line. Groups have
+    // no routing.
     if !is_group {
         let right_edge = w - pad - RIGHT_GUTTER;
-        // §K divider: a contrast-aware hairline in the button→routing gap separating
-        // the M/S/L/Blend mix row from the routing form — the mockup's clean divide.
-        // It sits inside the existing ROUTING_ROW_GAP, so it costs no height.
-        let div_y = (y - ROUTING_ROW_GAP * 0.5).round();
-        d.set(C::MixDivider, Rect::new(pad, div_y, (right_edge - pad).max(1.0), 1.0));
+        // §K divider: a contrast-aware rule separating the M/S/L/Blend mix row from
+        // the routing form — the mockup's clean section break. MIX_DIVIDER_PAD of
+        // breathing room above and below it (more than the inter-row gap) so it
+        // reads as a deliberate break, not another row line.
+        let div_y = (y + MIX_DIVIDER_PAD).round();
+        d.set(
+            C::MixDivider,
+            Rect::new(pad, div_y, (right_edge - pad).max(1.0), MIX_DIVIDER_THICK),
+        );
+        y = div_y + MIX_DIVIDER_THICK + MIX_DIVIDER_PAD;
         let val_x = pad + LBL_W + 6.0;
         let val_w = (right_edge - val_x).max(20.0);
         let mode_x = right_edge - MODE_TOGGLE_W;
@@ -1569,8 +1579,9 @@ impl LayerHeaderPanel {
                     r.height,
                     UIStyle {
                         // Contrast-keyed off the layer's own text colour so the
-                        // hairline reads on any identity hue without a hard line.
-                        bg_color: color::with_alpha(text_clr, 64),
+                        // rule reads on any identity hue. ~50% alpha — clearly
+                        // visible as a section break without being a hard line.
+                        bg_color: color::with_alpha(text_clr, 128),
                         ..UIStyle::default()
                     },
                 ),
