@@ -238,6 +238,18 @@ impl UiDisplayLink {
         self.vsync_ready.swap(false, Ordering::AcqRel)
     }
 
+    /// The display's current actual refresh rate in Hz (0.0 if the link hasn't
+    /// produced a valid period yet). Live — reflects ProMotion rate changes.
+    pub fn actual_refresh_hz(&self) -> f64 {
+        let period =
+            unsafe { CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link) };
+        if period > 0.0 {
+            1.0 / period
+        } else {
+            0.0
+        }
+    }
+
     /// Non-destructive check: has the display link callback fired since last
     /// consumed by `vsync_ready()`? Used to confirm the display link is alive
     /// after a retarget without consuming the signal.

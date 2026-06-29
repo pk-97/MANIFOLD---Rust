@@ -436,6 +436,9 @@ pub struct Application {
     // Frame timing
     pub(crate) frame_timer: FrameTimer,
     pub(crate) frame_count: u64,
+    /// Per-frame UI profiler (main-window breakdown). No-op unless
+    /// `MANIFOLD_UI_FRAME_PROFILE=1`. See `ui_frame_profile`.
+    pub(crate) ui_profile: crate::ui_frame_profile::UiFrameProfile,
     /// Cached transport display strings (avoids per-frame format! allocations).
     pub(crate) transport_cache: crate::ui_bridge::TransportDisplayCache,
 
@@ -675,6 +678,7 @@ impl Application {
             // UI frame rate: uncapped (120fps target, vsync limits actual present).
             // Content thread has its own timer at project FPS — fully decoupled.
             frame_timer: FrameTimer::new(120.0),
+            ui_profile: crate::ui_frame_profile::UiFrameProfile::new(),
             frame_count: 0,
             transport_cache: crate::ui_bridge::TransportDisplayCache::new(),
             cursor_pos: Vec2::ZERO,

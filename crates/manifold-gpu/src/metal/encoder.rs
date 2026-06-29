@@ -1589,6 +1589,24 @@ impl GpuEncoder {
         }
     }
 
+    /// Register a completed handler that reports this buffer's **true GPU
+    /// execution time** (`GPUEndTime - GPUStartTime`, seconds) once the GPU
+    /// finishes. Non-blocking: the closure runs on a background thread at
+    /// completion. For profilers — feed the value into an atomic/channel, do
+    /// not block. Reports `0.0` if the driver has no timestamps for the buffer.
+    pub fn add_gpu_time_handler<F: Fn(f64) + Send + 'static>(&self, callback: F) {
+        use block2::RcBlock;
+        let block = RcBlock::new(move |buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+            let cb = unsafe { buf.as_ref() };
+            let start = unsafe { cb.GPUStartTime() };
+            let end = unsafe { cb.GPUEndTime() };
+            callback((end - start).max(0.0));
+        });
+        unsafe {
+            self.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
+        }
+    }
+
     /// Register a diagnostic completed handler that logs GPU errors.
     pub fn add_completed_handler_with_status(&self, label: &str) {
         use block2::RcBlock;

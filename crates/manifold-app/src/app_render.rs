@@ -412,7 +412,7 @@ impl Application {
     }
 
     pub(crate) fn tick_and_render(&mut self) {
-        let _dt = self.frame_timer.consume_tick();
+        let dt = self.frame_timer.consume_tick();
         let realtime = self.frame_timer.realtime_since_start();
         self.time_since_start = realtime as f32;
 
@@ -425,6 +425,10 @@ impl Application {
         }
 
         // Content rendering now runs on dedicated thread — no cadence check needed here.
+        // `frame_t0` / `seg` drive the UI frame profiler (no-op unless
+        // MANIFOLD_UI_FRAME_PROFILE=1). `seg` is reset at each section boundary.
+        let frame_t0 = std::time::Instant::now();
+        let mut seg = frame_t0;
 
         // 1. Drain state from content thread
         // Deferred audio load request — collected inside the rx borrow, executed after.
@@ -762,6 +766,9 @@ impl Application {
             // 1h. Push visibility/text state to UITree nodes (buttons, labels).
             self.ws.ui_root.update_waveform_stem_nodes();
         }
+
+        self.ui_profile.add("drain_state", seg.elapsed());
+        seg = std::time::Instant::now();
 
         // 2. Process UI events and dispatch actions
         // Keep the Add-picker's embedded-preset list current (fingerprint-gated;
@@ -2461,6 +2468,9 @@ impl Application {
         let scroll_dirty = self.scroll_dirty;
         self.scroll_dirty.clear();
 
+        self.ui_profile.add("process_events", seg.elapsed());
+        seg = std::time::Instant::now();
+
         // 3. Rebuild if needed
         // Full rebuild: structural changes, data mutations, or explicit needs_rebuild.
         // Partial rebuild: only scroll/zoom changed — rebuild viewport + layer_headers,
@@ -2506,6 +2516,9 @@ impl Application {
 
         #[cfg(target_os = "macos")]
         self.sync_workspace_preview_size();
+
+        self.ui_profile.add("rebuild_tree", seg.elapsed());
+        seg = std::time::Instant::now();
 
         // 4. Push engine state to UI panels (AFTER build so new nodes get state)
         let active_idx = self
@@ -2827,15 +2840,31 @@ impl Application {
             if self.ws.ui_root.audio_setup_panel.is_open() {
                 self.ws.offscreen_dirty = true;
             }
+            self.ui_profile.add("update_repaint_upload", seg.elapsed());
             self.present_all_windows(front);
+            let g0 = std::time::Instant::now();
             self.present_graph_editor_window();
+            self.ui_profile.add("present_graph_editor", g0.elapsed());
         }
         #[cfg(not(target_os = "macos"))]
         {
+            self.ui_profile.add("update_repaint_upload", seg.elapsed());
             self.present_all_windows(0);
+            let g0 = std::time::Instant::now();
             self.present_graph_editor_window();
+            self.ui_profile.add("present_graph_editor", g0.elapsed());
         }
 
+        let display_hz = self
+            .ws
+            .ui_display_link
+            .as_ref()
+            .map_or(0.0, |dl| dl.actual_refresh_hz());
+        self.ui_profile.frame_end(
+            frame_t0.elapsed(),
+            std::time::Duration::from_secs_f64(dt),
+            display_hz,
+        );
         self.frame_count += 1;
     }
 
@@ -3766,6 +3795,9 @@ impl Application {
     fn present_all_windows(&mut self, front_index: usize) {
         let Some(gpu) = &self.gpu else { return };
 
+        // UI frame profiler cursor (no-op unless MANIFOLD_UI_FRAME_PROFILE=1).
+        let mut pseg = std::time::Instant::now();
+
         // ── Panel cache update ──
         let scale = self.scale_factor;
         let panel_infos = self.ws.ui_root.panel_cache_info();
@@ -3789,6 +3821,8 @@ impl Application {
                 self.ws.ui_root.tree.clear_dirty_range(*start, *end);
             }
         }
+        self.ui_profile.add("present.panel_cache", pseg.elapsed());
+        pseg = std::time::Instant::now();
 
         // ── Render target: offscreen texture ──
         // All passes render to an offscreen texture. The drawable is acquired
@@ -3841,6 +3875,9 @@ impl Application {
                     None => return,
                 }
             };
+            self.ui_profile
+                .add("present.fast_next_drawable", pseg.elapsed());
+            pseg = std::time::Instant::now();
             let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
             if let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) {
                 let mut enc = gpu.device.create_encoder("Re-present");
@@ -3864,6 +3901,7 @@ impl Application {
                 enc.present_drawable(&drawable);
                 enc.commit();
             }
+            self.ui_profile.add("present.fast_blit_present", pseg.elapsed());
             return;
         }
         self.ws.offscreen_dirty = false;
@@ -3875,6 +3913,7 @@ impl Application {
 
         // ── Build the frame ──
         let mut encoder = gpu.device.create_encoder("Frame");
+        pseg = std::time::Instant::now();
 
         // Pass 1: Clear to black
         encoder.clear_texture(offscreen, 0.0, 0.0, 0.0, 1.0);
@@ -3958,6 +3997,9 @@ impl Application {
             }
         }
 
+        self.ui_profile.add("present.clear_atlas_compositor", pseg.elapsed());
+        pseg = std::time::Instant::now();
+
         // ── Pass 4: timeline tracks, in z-ordered sub-passes (§24 5b) ──
         //   4a  grid bitmaps (per layer)              — under the clips
         //   4b  GPU clip bodies (rounded, gradient, lift)
@@ -3980,6 +4022,9 @@ impl Application {
                 &layer_rects,
             );
         }
+
+        self.ui_profile.add("present.pass4a_grid", pseg.elapsed());
+        pseg = std::time::Instant::now();
 
         // Pass 4b: GPU clip bodies — rounded gradient tiles with a lift-on-select
         // shadow, in their own UIRenderer prepare/render cycle (reusing the shared
@@ -4032,6 +4077,10 @@ impl Application {
                 }
             }
         }
+        self.ui_profile
+            .count("present.pass4b_clip_bodies", self.clip_rect_scratch.len() as u64);
+        self.ui_profile.add("present.pass4b_clip_bodies", pseg.elapsed());
+        pseg = std::time::Instant::now();
 
         // Pass 4b': Per-clip waveform textures, painted INSIDE the audio-clip
         // bodies (§24 5b). Reuses the visible-clip list resolved in 4b; only audio
@@ -4052,6 +4101,8 @@ impl Application {
                 &self.clip_rect_scratch,
             );
         }
+        self.ui_profile.add("present.pass4b_waveforms", pseg.elapsed());
+        pseg = std::time::Instant::now();
 
         // Tell the content thread which clips want a thumbnail (non-audio,
         // wide enough), deduped so a stable view sends nothing. The content thread
@@ -4209,6 +4260,10 @@ impl Application {
                 }
             }
         }
+        self.ui_profile
+            .count("present.pass4b_thumbnails", self.clip_thumb_quad_scratch.len() as u64);
+        self.ui_profile.add("present.pass4b_thumbnails", pseg.elapsed());
+        pseg = std::time::Instant::now();
 
         // Pass 4c: The lane / stem / overview / collapsed-group panel bitmaps.
         // These are separate regions (below / beside the tracks, or collapsed group
@@ -4248,6 +4303,9 @@ impl Application {
                 );
             }
         }
+
+        self.ui_profile.add("present.pass4c_panels", pseg.elapsed());
+        pseg = std::time::Instant::now();
 
         // Timeline overlays (region highlight / insert cursor / beat markers) as
         // GPU rects (§24 5b — no longer baked into a per-layer bitmap). Resolved
@@ -4575,8 +4633,22 @@ impl Application {
             }
         }
 
+        self.ui_profile.add("present.pass5_overlay", pseg.elapsed());
+        pseg = std::time::Instant::now();
+
         // ── Commit offscreen render ──
+        // Capture the offscreen buffer's TRUE GPU execution time async — tells
+        // us whether next_drawable's block is our own GPU work (heavy offscreen)
+        // or external starvation (content thread hogging the shared GPU).
+        if let Some((sink_us, sink_n)) = self.ui_profile.gpu_sink() {
+            encoder.add_gpu_time_handler(move |secs| {
+                sink_us.fetch_add((secs * 1_000_000.0) as u64, std::sync::atomic::Ordering::Relaxed);
+                sink_n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            });
+        }
         encoder.commit();
+        self.ui_profile.add("present.commit", pseg.elapsed());
+        pseg = std::time::Instant::now();
 
         // Clear ALL remaining dirty flags. render_dirty_panels only clears
         // panel cache ranges — overlay nodes (HUD, playhead, popups) live
@@ -4614,6 +4686,8 @@ impl Application {
                 }
             }
         };
+        self.ui_profile.add("present.next_drawable", pseg.elapsed());
+        pseg = std::time::Instant::now();
 
         // ── Blit offscreen → drawable + present ──
         let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
@@ -4646,6 +4720,7 @@ impl Application {
         );
         present_enc.present_drawable(&drawable);
         present_enc.commit();
+        self.ui_profile.add("present.blit_present", pseg.elapsed());
     }
 }
 

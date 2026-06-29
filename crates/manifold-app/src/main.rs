@@ -38,6 +38,7 @@ mod shared_texture;
 mod texture_pane;
 mod text_input;
 mod ui_bridge;
+mod ui_frame_profile;
 mod ui_root;
 #[cfg(feature = "ui-snapshot")]
 mod ui_snapshot;
