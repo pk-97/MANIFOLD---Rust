@@ -30,6 +30,7 @@ pub(crate) use manifold_ui::graph_canvas::mapping_popover;
 mod graph_dump;
 mod input_handler;
 mod input_host;
+mod menu;
 mod perform_mode;
 mod project_io;
 #[cfg(target_os = "macos")]

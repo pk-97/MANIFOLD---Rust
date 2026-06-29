@@ -777,6 +777,52 @@ impl Application {
             .ui_root
             .sync_embedded_presets(&self.local_project);
         let mut actions = self.ws.ui_root.process_events();
+
+        // Native menu bar clicks → the same PanelAction dispatch as on-screen
+        // chrome. Drain into an owned Vec first so the immutable borrow of
+        // `self.app_menu` ends before we touch `&mut self` below. File/View
+        // items map onto existing PanelActions; Undo/Redo and Import/Settings
+        // are handled directly (no PanelAction equivalent).
+        let menu_actions = self
+            .app_menu
+            .as_ref()
+            .map(crate::menu::AppMenu::drain)
+            .unwrap_or_default();
+        for ma in menu_actions {
+            use crate::menu::MenuAction as M;
+            use manifold_ui::panels::PanelAction as P;
+            match ma {
+                M::New => actions.push(P::NewProject),
+                M::Open => actions.push(P::OpenProject),
+                M::OpenRecent => actions.push(P::OpenRecent),
+                M::Save => actions.push(P::SaveProject),
+                M::SaveAs => actions.push(P::SaveProjectAs),
+                M::ExportVideo => actions.push(P::ExportVideo),
+                M::ExportFrame => actions.push(P::ExportFrame),
+                M::Perform => actions.push(P::EnterPerformMode),
+                M::Monitor => actions.push(P::ToggleMonitor),
+                M::Audio => actions.push(P::OpenAudioSetup),
+                M::ImportVideo => self.import_video_clip(),
+                M::Undo => {
+                    if let Some(tx) = self.content_tx.as_ref() {
+                        crate::ui_bridge::undo(tx);
+                    }
+                }
+                M::Redo => {
+                    if let Some(tx) = self.content_tx.as_ref() {
+                        crate::ui_bridge::redo(tx);
+                    }
+                }
+                M::Settings => self.pending_open_settings = true,
+            }
+        }
+
+        // Settings… → floating settings popup. (Popup lands in Phase 2; this is
+        // the consume point so the flag has a single reader.)
+        if std::mem::take(&mut self.pending_open_settings) {
+            log::info!("MANIFOLD ▸ Settings… (floating settings popup — Phase 2)");
+        }
+
         // An in-place inspector scroll (wheel in window_input, or a scrollbar
         // drag handled inside process_events) offset the content nodes without a
         // rebuild — re-render just the inspector's atlas slot. A full rebuild

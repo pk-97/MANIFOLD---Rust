@@ -130,6 +130,13 @@ pub struct Application {
     pub(crate) window_registry: WindowRegistry,
     pub(crate) primary_window_id: Option<WindowId>,
 
+    /// Native menu bar (File / Edit / View …). Built once in `resumed`; kept
+    /// alive here for the process lifetime. `None` until the window is up.
+    pub(crate) app_menu: Option<crate::menu::AppMenu>,
+    /// Set when `MANIFOLD ▸ Settings…` fires; consumed by the UI to open the
+    /// floating settings popup.
+    pub(crate) pending_open_settings: bool,
+
     // Content thread communication
     pub(crate) content_tx: Option<crossbeam_channel::Sender<ContentCommand>>,
     pub(crate) state_rx: Option<crossbeam_channel::Receiver<ContentState>>,
@@ -539,6 +546,8 @@ impl Application {
             gpu: None,
             window_registry: WindowRegistry::new(),
             primary_window_id: None,
+            app_menu: None,
+            pending_open_settings: false,
             content_tx: None,
             state_rx: None,
             content_thread_handle: None,
@@ -1685,6 +1694,13 @@ impl ApplicationHandler for Application {
 
         let size = window.inner_size();
         let scale = window.scale_factor();
+
+        // Native menu bar. Built + attached once the app/window exists (macOS
+        // `init_for_nsapp` needs a live `NSApplication`). Clicks are drained in
+        // the render loop and routed through the normal `PanelAction` dispatch.
+        let app_menu = crate::menu::AppMenu::new();
+        app_menu.init_platform();
+        self.app_menu = Some(app_menu);
 
         // Detect connected display resolutions (Unity: Footer.CollectDisplayResolutions).
         // Use the highest video mode resolution per monitor — this is the native panel

@@ -41,6 +41,7 @@ manifold-profiler = { path = "../manifold-profiler", optional = true }
 # Headless UI snapshot harness (feature `ui-snapshot`): PNG encode of the
 # rendered tree. Optional so it never enters the shipping binary.
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+muda = "0.19.3"
 
 # macOS platform dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
