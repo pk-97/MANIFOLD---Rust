@@ -31,9 +31,6 @@ const ROW_GAP: f32 = 4.0;
 /// container height to get the row height.
 pub(crate) const TOP_PAD: f32 = 4.0;
 const BTN_GAP: f32 = 1.0;
-/// Width of the left-edge accent spine (source identity). Sits within `PAD_H`, so
-/// it never overlaps row content.
-const ACCENT_W: f32 = 2.5;
 /// Width reserved for a [`DrawerRow::Buttons`] leading label. Matches the audio
 /// shaping sliders' label width so feature/band rows line up with them.
 const ROW_LABEL_W: f32 = 52.0;
@@ -258,37 +255,12 @@ pub fn build(
     spec: &DrawerSpec,
 ) -> DrawerIds {
     let height = spec.height();
-    // The drawer reads as a contained operation over its slider via the SURFACE —
-    // a dark zone tinted with the source colour — not a border. No box; grouping is
-    // the tint + the spine. Surface, spine, and every control resolve from the
-    // one theme.
-    let container = tree.add_panel(
-        parent,
-        x,
-        y,
-        w,
-        height,
-        spec.theme.surface_style(crate::color::CARD_RADIUS),
-    );
-
-    // Source-identity spine on the left edge (Trigger / LFO / Audio / Ableton).
-    // Inset vertically by the corner radius so it doesn't poke past the rounded
-    // container corners.
-    {
-        let inset = crate::color::CARD_RADIUS;
-        tree.add_panel(
-            Some(container),
-            x,
-            y + inset,
-            ACCENT_W,
-            (height - inset * 2.0).max(0.0),
-            UIStyle {
-                bg_color: spec.theme.spine_color(),
-                corner_radius: crate::color::HAIRLINE_RADIUS,
-                ..UIStyle::default()
-            },
-        );
-    }
+    // Contents-only container: the source-tinted backing + accent spine are drawn
+    // by the MOD CARD that wraps the whole param (slider + drawer) in
+    // `build_param_row`, so the drawer itself is transparent — its rows render on
+    // that one shared card, which is what makes the drawer read as belonging to its
+    // slider. The theme still colours the rows (option fills, slider fills, labels).
+    let container = tree.add_panel(parent, x, y, w, height, UIStyle::default());
 
     let mut button_ids: Vec<NodeId> = Vec::new();
     let mut sliders: Vec<SliderNodeIds> = Vec::new();

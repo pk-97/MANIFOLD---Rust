@@ -1172,6 +1172,19 @@ fn mod_tab_label(tab: ModTab) -> &'static str {
     }
 }
 
+/// The source-identity colour for a modulation tab — the single mapping the mod
+/// card's tint and the drawer's control accent both derive from, so a tab and its
+/// card always read as the same source (Trigger orange / LFO teal / Audio green /
+/// Ableton purple).
+pub(crate) fn mod_tab_accent(tab: ModTab) -> Color32 {
+    match tab {
+        ModTab::Envelope => color::ENVELOPE_ACTIVE_C32,
+        ModTab::Driver => color::DRIVER_ACTIVE_C32,
+        ModTab::Audio => AUDIO_MOD_ACTIVE_C32,
+        ModTab::Ableton => color::ABL_BADGE_C32,
+    }
+}
+
 /// Tab strip selecting which active config the drawer shows. Drawn only when ≥2
 /// configs are active. Returns the tab node ids paired with their `ModTab` for
 /// click routing.
@@ -1318,6 +1331,52 @@ pub(crate) fn build_param_row(
     );
     let slider_rect = Rect::new(x, cy, slider_w, ROW_HEIGHT);
 
+    // Modulation-button column x's (computed up front so the mod card, the drawer,
+    // and the arm buttons all derive from one set of positions). `row_right` is the
+    // mod-button column's right edge — the right edge of the card and the drawer.
+    let env_arm_w = if build_env_button {
+        DE_BUTTON_SIZE + DE_BUTTON_GAP
+    } else {
+        0.0
+    };
+    let btn_x = x + slider_w + MOD_LANE_GAP;
+    let drv_btn_x = btn_x + env_arm_w;
+    let audio_btn_x = drv_btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP;
+    let row_right = audio_btn_x + DE_BUTTON_SIZE;
+
+    // Which modulation configs are active, and which one the drawer shows. Computed
+    // here (not just before the drawer) because the mod card behind the row needs it.
+    let active_tabs = if show_drawer {
+        active_mod_tabs(mod_state, info, i)
+    } else {
+        Vec::new()
+    };
+    let shown_tab = resolve_active_tab(&active_tabs, active_tab);
+
+    // Mod card: when a config drawer is open, the slider row and its drawer share
+    // ONE source-tinted card (rounded, no spine) so the drawer reads as part of its
+    // slider — the whole modulated param is one backed unit, tinted by the shown
+    // source. Drawn FIRST so the slider, arm buttons, and drawer render on top.
+    // Visual only: it does not advance `cy`, so the card never affects height math.
+    if let Some(tab) = shown_tab {
+        let card_theme = Theme::INSPECTOR.with_accent(mod_tab_accent(tab)).tinted();
+        let tab_strip_h = if active_tabs.len() >= 2 {
+            MOD_TAB_STRIP_H
+        } else {
+            0.0
+        };
+        let card_h = ROW_HEIGHT + ROW_SPACING + tab_strip_h + mod_config_height(tab);
+        let card_w = (row_right - x).max(1.0);
+        tree.add_panel(
+            parent,
+            x,
+            cy,
+            card_w,
+            card_h,
+            card_theme.surface_style(color::CARD_RADIUS),
+        );
+    }
+
     // Full-row hit catcher, added BEFORE the slider widgets so reverse-insertion
     // hit-testing lets the track/label win on top and the catcher only collects
     // the value cell + gaps. Transparent + interactive; carries no visual.
@@ -1404,9 +1463,7 @@ pub(crate) fn build_param_row(
 
     ids.slider = Some(slider);
 
-    // D/E buttons (right of the slider row). The slider→group gap is wider than
-    // the inter-button gap so the value doesn't crowd the arm buttons.
-    let btn_x = x + slider_w + MOD_LANE_GAP;
+    // D/E buttons (right of the slider row), at the column x's computed up top.
     let btn_y = cy + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
     if build_env_button {
         let env_active = mod_state.envelope_expanded.get(i).copied().unwrap_or(false);
@@ -1424,12 +1481,6 @@ pub(crate) fn build_param_row(
         ));
     }
     let drv_active = mod_state.driver_expanded.get(i).copied().unwrap_or(false);
-    let drv_btn_x = btn_x
-        + if build_env_button {
-            DE_BUTTON_SIZE + DE_BUTTON_GAP
-        } else {
-            0.0
-        };
     // LFO arm button shows the waveform icon for the driver's current shape (the
     // UIRenderer draws the SDF waveform atlas icon). Defaults to sine when unset.
     // A plain "∿" char isn't in the UI font — it renders as tofu.
@@ -1450,7 +1501,6 @@ pub(crate) fn build_param_row(
 
     // Audio-modulation button — third in the lane, right of the driver button.
     let audio_active = mod_state.audio_active.get(i).copied().unwrap_or(false);
-    let audio_btn_x = drv_btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP;
     ids.audio_btn = add_row_button(
         tree,
         parent,
@@ -1466,29 +1516,20 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
-    // Drawer geometry: a SLIGHT left inset from the row's label edge (the same
-    // "belongs to its parent" indent as a group-nested layer on the timeline),
-    // right edge at the mod-button column's right edge. The drawer reads as an
-    // operation *under* its slider via the indent + its source-tinted surface +
-    // accent spine — not the old track-width indent, which re-ate the label column
-    // and made the slider-vs-drawer boundary hard to read. The slider hugs its own
-    // drawer above; a larger gap after it separates the next row.
+    // Drawer geometry: a slight left inset from the row's label edge so the config
+    // rows read as sub-controls under the slider, right edge at the mod-button
+    // column's right edge. The drawer's rows render ON the one mod card drawn above
+    // (transparent container) — that shared card is what binds drawer to slider.
     let drawer_x = x + DRAWER_INDENT;
-    let drawer_right = audio_btn_x + DE_BUTTON_SIZE;
-    let drawer_w = (drawer_right - drawer_x).max(1.0);
+    let drawer_w = (row_right - drawer_x).max(1.0);
 
     // Modulation config drawer. Zero or one active config shows directly (no tab
     // strip — unchanged); two or more share this one drawer behind a tab strip
     // so they never stack three deep (§6.2). The T/∿/A arm buttons above stay on
     // the row, so arming is still one click. Track overlays (driver/audio trim
     // bars, envelope target) live on the slider above and show for every armed
-    // mod regardless of which config tab is open.
-    let active_tabs = if show_drawer {
-        active_mod_tabs(mod_state, info, i)
-    } else {
-        Vec::new()
-    };
-    let shown_tab = resolve_active_tab(&active_tabs, active_tab);
+    // mod regardless of which config tab is open. `active_tabs` / `shown_tab` were
+    // resolved up top (the mod card needed them).
     if active_tabs.len() >= 2 {
         ids.mod_tabs =
             build_mod_tab_strip(tree, parent, drawer_x, cy, drawer_w, &active_tabs, shown_tab);

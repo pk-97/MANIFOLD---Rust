@@ -73,13 +73,8 @@ impl Theme {
         }
     }
 
-    /// The accent-spine colour (the thin left-edge identity bar).
-    pub fn spine_color(self) -> Color32 {
-        self.accent
-    }
-
     /// Style for this theme's panel surface at `radius` — the bg fill, no border
-    /// (grouping comes from the fill tint + spine, not a box).
+    /// (grouping comes from the fill tint, not a box or a spine).
     pub fn surface_style(self, radius: f32) -> UIStyle {
         UIStyle {
             bg_color: self.surface,
@@ -210,6 +205,5 @@ mod tests {
         let t = Theme::INSPECTOR.with_accent(color::ABL_BADGE_C32).tinted();
         assert_eq!(t.label_style(color::FONT_BODY).text_color, color::TEXT_WHITE_C32);
         assert_eq!(t.surface_style(color::CARD_RADIUS).bg_color, t.surface);
-        assert_eq!(t.spine_color(), color::ABL_BADGE_C32);
     }
 }

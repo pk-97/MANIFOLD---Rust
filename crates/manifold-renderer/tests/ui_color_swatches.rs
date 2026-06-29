@@ -1235,25 +1235,40 @@ fn modulation_drawer_sheet() {
     let mut tree = UITree::new();
 
     ui.begin_frame();
-    // Sit on the dark card inner well, as the drawer does in-app.
+    // Sit on the dark card inner well, as the param rows do in-app.
     ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::EFFECT_CARD_INNER_BG_C32);
     ui.draw_text(
         14.0,
         8.0,
-        "MODULATION DRAWERS via Theme  (param = blue, drawer = source colour)",
+        "MOD CARD via Theme  (slider + drawer = ONE source-tinted card; param fill = blue)",
         12.0,
         color::TEXT_NORMAL,
     );
 
+    // Immediate-mode mod cards (rendered before render_tree, so they sit behind the
+    // slider + drawer nodes — exactly how build_param_row draws the card first).
+    let row_h = 24.0;
+    let slider_gap = 6.0; // ROW_SPACING
+    let indent = color::SPACE_L; // DRAWER_INDENT
     let mut y = 30.0;
+    let mut placed: Vec<(f32, f32, &DrawerSpec)> = Vec::new();
     for (label, spec) in groups {
         ui.draw_text(x, y, label, 11.0, color::TEXT_DIMMED_C32);
         y += 16.0;
-        // The blue param slider the drawer operates over.
+        let card_top = y;
+        let card_h = row_h + slider_gap + spec.height();
+        // One source-tinted card, no spine, behind the whole param.
+        ui.draw_rounded_rect(x, card_top, dw, card_h, spec.theme.surface.to_f32(), color::CARD_RADIUS);
+        placed.push((card_top, card_h, spec));
+        y += card_h + 18.0;
+    }
+
+    // Now the slider + drawer nodes on top of each card.
+    for (card_top, _card_h, spec) in placed {
         let _ = BitmapSlider::build(
             &mut tree,
             None,
-            Rect::new(x, y, dw, 24.0),
+            Rect::new(x, card_top, dw, row_h),
             Some("Amount"),
             0.62,
             "0.65",
@@ -1261,12 +1276,14 @@ fn modulation_drawer_sheet() {
             sf,
             52.0,
         );
-        y += 24.0 + 4.0;
-        // Slight left inset — the drawer "belongs to" the slider above it (matches
-        // `param_slider_shared::DRAWER_INDENT`).
-        let indent = color::SPACE_L;
-        let ids = drawer::build(&mut tree, None, x + indent, y, dw - indent, spec);
-        y += ids.height + 18.0;
+        drawer::build(
+            &mut tree,
+            None,
+            x + indent,
+            card_top + row_h + slider_gap,
+            dw - indent,
+            spec,
+        );
     }
 
     ui.render_tree(&tree, None);
