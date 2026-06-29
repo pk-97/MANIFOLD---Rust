@@ -197,6 +197,7 @@ impl HeaderPanel {
         View::stack()
             .fill()
             .bg(color::PANEL_BG_DARK)
+            .border(color::BORDER, 1.0)
             .pad(Pad { l: INSET, t: GROUP_Y_PAD, r: INSET, b: GROUP_Y_PAD })
             .child(self.left_group())
             .child(self.center_group())

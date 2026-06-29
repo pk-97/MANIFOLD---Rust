@@ -132,6 +132,7 @@ impl FooterPanel {
         View::row(SECTION_SPACER)
             .fill()
             .bg(color::PANEL_BG_DARK)
+            .border(color::BORDER, 1.0)
             .pad(Pad { l: PAD, t: ELEM_Y_PAD, r: RIGHT_GUTTER, b: ELEM_Y_PAD })
             .child(
                 View::label(self.selection_info.as_str())

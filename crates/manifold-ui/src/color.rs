@@ -212,8 +212,6 @@ pub const DROPDOWN_ITEM_BG: Color32 = BG_3;
 pub const DROPDOWN_TEMPLATE_BG: Color32 = BG_2;
 pub const PICKER_BG: Color32 = Color32::new(14, 14, 15, 247); // overlay scrim
 pub const PROGRESS_BAR_BG: Color32 = Color32::new(31, 31, 33, 242); // BG_2 @ a242
-pub const TRANSPORT_BAR_BG: Color32 = Color32::new(16, 16, 16, 255); // chrome
-pub const FOOTER_BG: Color32 = Color32::new(19, 19, 20, 255); // chrome
 pub const OVERLAY_BG: Color32 = Color32::new(13, 13, 14, 237); // BG_0 @ a237
 pub const HUD_BG: Color32 = Color32::new(10, 10, 11, 255); // HUD (below void)
 
