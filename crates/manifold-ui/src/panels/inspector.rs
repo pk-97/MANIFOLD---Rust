@@ -307,21 +307,21 @@ impl InspectorCompositePanel {
             return;
         }
         let n = self.available_tabs.len();
-        // The per-column controls (compact toggle + collapse-all) are parented to
-        // the ACTIVE tab — rendered right after its button so they read as acting
-        // on it, and they travel as the active tab changes. Hidden when the active
-        // column has no cards. The block claims `controls_extra` after the active
-        // tab: [gap][cog][gap][collapse].
+        // The per-column controls (compact toggle + collapse-all) are anchored to
+        // the strip's RIGHT EDGE — a fixed position regardless of which tab is
+        // active, so they don't slide when selection changes. The tabs lay out in
+        // the remaining width on the left. The block claims `controls_extra` at the
+        // right: [gap][cog][gap][collapse]. Hidden when the active column has no
+        // cards (then the tabs span the full width).
         let show_controls = self.active_column_card_count() > 0;
         let controls_extra = if show_controls {
             TAB_GAP + COMPACT_TOGGLE_W + TAB_GAP + COLLAPSE_ALL_W
         } else {
             0.0
         };
+        let tab_area_w = (rect.width - controls_extra).max(1.0);
         let inter_gap = TAB_GAP * n.saturating_sub(1) as f32;
-        let tab_w = ((rect.width - inter_gap - controls_extra) / n as f32)
-            .floor()
-            .max(1.0);
+        let tab_w = ((tab_area_w - inter_gap) / n as f32).floor().max(1.0);
 
         let tabs = self.available_tabs.clone();
         let mut x = rect.x;
@@ -349,12 +349,14 @@ impl InspectorCompositePanel {
             );
             self.tab_node_ids.push((id, *tab));
             x += tab_w;
-            // Parent the controls to the active tab: render them immediately after
-            // its button, before the next tab's gap.
-            if show_controls && active {
-                x += TAB_GAP;
-                x = self.build_tab_controls(tree, x, rect.y, rect.height);
-            }
+        }
+
+        // Controls anchored to the strip's right edge — fixed, independent of the
+        // active tab. cog_x is back-computed so the collapse button's right edge
+        // lands flush at `rect.right`.
+        if show_controls {
+            let cog_x = rect.x + rect.width - COLLAPSE_ALL_W - TAB_GAP - COMPACT_TOGGLE_W;
+            self.build_tab_controls(tree, cog_x, rect.y, rect.height);
         }
     }
 

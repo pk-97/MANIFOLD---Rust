@@ -1770,7 +1770,7 @@ impl ParamCardPanel {
                         &info,
                         &self.state.mod_state,
                         i,
-                        &SliderColors::gen_param(),
+                        &SliderColors::default_slider(),
                         FONT_SIZE,
                         true,
                         label_width,

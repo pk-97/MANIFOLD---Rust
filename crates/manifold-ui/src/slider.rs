@@ -6,7 +6,11 @@ use crate::tree::UITree;
 // ── Layout constants ────────────────────────────────────────────────
 
 pub const DEFAULT_LABEL_WIDTH: f32 = 60.0;
-pub const VALUE_WIDTH: f32 = 60.0;
+/// Width of the value gutter at the track's right end. The value text lives
+/// *inside* the track here (bg matches the track so it reads as one continuous
+/// control); the fill and thumb never enter the gutter, so the number stays
+/// legible even at full value. Replaces the old separate value column.
+pub const VALUE_GUTTER: f32 = 56.0;
 pub const GAP: f32 = 4.0;
 
 /// Label-column width that grows with the row, so widening a card gives the
@@ -31,21 +35,28 @@ pub struct SliderNodeIds {
     pub track: NodeId,           // interactive — drag target
     pub fill: NodeId,            // non-interactive — subtle fill from left to value
     pub thumb: NodeId,           // non-interactive — thin vertical bar at value position
-    pub value_text: NodeId,      // interactive — click to type
-    pub track_rect: Rect,        // cached for x_to_normalized()
+    pub value_text: NodeId,      // interactive — click to type (in the right gutter)
+    pub track_rect: Rect,        // usable track (excludes value gutter); for x_to_normalized()
     pub default_normalized: f32, // for right-click reset
 }
 
 /// Stateless helper for building and updating bitmap slider widgets.
 /// Composes 5 existing node types (Label, Button, Panel, Panel, Button).
 ///
-/// Visual: `[Label]  [====fill====|thumb|.........track.........] [Value]`
+/// Visual: `[Label]  [==fill==|thumb|......track......  Value]`
+/// The value sits in a fixed gutter at the track's right; fill/thumb stop before
+/// it, so they never collide with the number.
 ///
 /// The owning panel manages all state, events, and undo. This struct only
 /// builds nodes and provides math.
 pub struct BitmapSlider;
 
 /// Colors for a slider instance.
+///
+/// One theme drives every slider in the app — macros, effect params, generator
+/// params. The value text now lives inside the track (its bg is `track`), so the
+/// old per-context `value_bg` (which only differed by card background) is gone,
+/// and with it the `default_slider`/`gen_param` split.
 #[derive(Clone)]
 pub struct SliderColors {
     pub track: Color32,
@@ -54,14 +65,10 @@ pub struct SliderColors {
     pub fill: Color32,
     pub thumb: Color32,
     pub text: Color32,
-    /// Background for the value text label. Must be opaque to clear old text
-    /// during incremental atlas re-rendering (LoadAction::Load preserves the
-    /// previous frame's glyphs — a transparent bg leaves stale text visible).
-    pub value_bg: Color32,
 }
 
 impl SliderColors {
-    /// Default slider colors (effect cards).
+    /// The unified slider theme. Every slider in the app renders through this.
     pub fn default_slider() -> Self {
         Self {
             track: color::SLIDER_TRACK_C32,
@@ -70,24 +77,11 @@ impl SliderColors {
             fill: color::SLIDER_FILL_C32,
             thumb: color::SLIDER_THUMB_C32,
             text: color::SLIDER_TEXT_C32,
-            value_bg: color::EFFECT_CARD_INNER_BG_C32,
         }
     }
 
-    /// Generator param slider colors (uses gen card background).
-    pub fn gen_param() -> Self {
-        Self {
-            track: color::SLIDER_TRACK_C32,
-            track_hover: color::SLIDER_TRACK_HOVER_C32,
-            track_pressed: color::SLIDER_TRACK_PRESSED_C32,
-            fill: color::SLIDER_FILL_C32,
-            thumb: color::SLIDER_THUMB_C32,
-            text: color::SLIDER_TEXT_C32,
-            value_bg: color::GEN_CARD_INNER_BG_C32,
-        }
-    }
-
-    /// Envelope slider colors.
+    /// Modulation-drawer (envelope/trigger/LFO) slider colors. Folds into the
+    /// unified theme once drawer context moves to the container accent edge.
     pub fn envelope() -> Self {
         Self {
             track: color::ENV_TRACK_C32,
@@ -96,7 +90,6 @@ impl SliderColors {
             fill: color::ENV_FILL_C32,
             thumb: color::ENV_THUMB_C32,
             text: color::SLIDER_TEXT_C32,
-            value_bg: color::EFFECT_CARD_INNER_BG_C32,
         }
     }
 }
@@ -155,29 +148,12 @@ impl BitmapSlider {
             x += label_width + GAP;
         }
 
-        // ── Value text (fixed width, right) ──
-        let value_x = rect.x + rect.width - VALUE_WIDTH;
-        ids.value_text = tree.add_label(
-            parent_id,
-            value_x,
-            y,
-            VALUE_WIDTH,
-            h,
-            value_text,
-            UIStyle {
-                bg_color: colors.value_bg,
-                text_color: colors.text,
-                font_size,
-                // Right-aligned so a stacked column of values lines up at the
-                // decimal edge and reads like a mixer, instead of each value
-                // floating centered in its cell.
-                text_align: TextAlign::Right,
-                ..UIStyle::default()
-            },
-        );
-
-        // ── Track (flexible width, between label and value) ──
-        let track_w = (value_x - GAP - x).max(1.0);
+        // ── Track (flexible width; the value lives in a fixed gutter at its
+        //    right end, so the usable track stops short of the panel edge). The
+        //    track node is the usable region — `track_rect` — so drag mapping,
+        //    fill, and thumb all agree and never reach under the value. ──
+        let track_right = rect.x + rect.width - VALUE_GUTTER;
+        let track_w = (track_right - x).max(1.0);
         let track_rect = Rect::new(x, y, track_w, h);
         ids.track_rect = track_rect;
 
@@ -230,6 +206,29 @@ impl BitmapSlider {
             },
             None,
             UIFlags::empty(),
+        );
+
+        // ── Value text (inline, in the right gutter) ──
+        // Sits at the track's right end with the track's own colour behind it, so
+        // it reads as one continuous control (Ableton/Resolve style). Right-
+        // aligned so a stacked column of values lines up at the decimal edge.
+        // Built last so a wide enum value overflows left cleanly *over* the track
+        // rather than being painted under it. The bg is opaque (track colour) to
+        // clear stale glyphs during incremental atlas re-render.
+        ids.value_text = tree.add_label(
+            parent_id,
+            track_right,
+            y,
+            VALUE_GUTTER,
+            h,
+            value_text,
+            UIStyle {
+                bg_color: colors.track,
+                text_color: colors.text,
+                font_size,
+                text_align: TextAlign::Right,
+                ..UIStyle::default()
+            },
         );
 
         ids
