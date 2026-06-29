@@ -415,7 +415,6 @@ pub fn dispatch(
 
         // ── Project/file/export/audio ─────────────────────────────
         PanelAction::ToggleHdr
-        | PanelAction::TogglePercussion
         | PanelAction::ToggleLiveRecording
         | PanelAction::SelectAudioInputDevice
         | PanelAction::SetAudioInputDevice(_)

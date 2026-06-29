@@ -1,14 +1,17 @@
 //! Settings popup — a small floating modal for render configuration that used
 //! to clutter the transport/footer bars (resolution, render scale, tonemap,
-//! HDR, percussion). Opened from `MANIFOLD ▸ Settings…` (⌘,) or the native
-//! menu.
+//! HDR). Opened from `MANIFOLD ▸ Settings…` (⌘,) or the native menu.
 //!
 //! Self-contained like [`super::audio_setup_panel`]: it builds `UITree` nodes
 //! and maps a clicked node id back to a [`PanelAction`] — the *same* actions the
 //! old footer/transport buttons emitted (`SetRenderScale`, `SetTonemapCurve`,
-//! `ResolutionClicked`, `ToggleHdr`, `TogglePercussion`), already routed through
-//! `ui_bridge`. Current state is pushed in via the `set_*` setters each sync so
-//! the segmented controls highlight the active option.
+//! `ResolutionClicked`, `ToggleHdr`), already routed through `ui_bridge`.
+//! Current state is pushed in via the `set_*` setters each sync so the
+//! segmented controls highlight the active option.
+//!
+//! Note: HDR here is the *export* format flag (`settings.export_hdr`), consumed
+//! only by the video-export encoder — live on-screen HDR is automatic, driven by
+//! the display's EDR headroom.
 
 use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
 use crate::color;
@@ -40,7 +43,7 @@ const BTN_FONT: u16 = color::FONT_LABEL;
 
 /// Number of control rows under the single "Render" section. Kept in lockstep
 /// with `build_rows` so `body_height` matches the imperative layout.
-const ROW_COUNT: f32 = 5.0;
+const ROW_COUNT: f32 = 4.0;
 
 pub struct SettingsPopup {
     open: bool,
@@ -55,7 +58,6 @@ pub struct SettingsPopup {
     render_scale: f32,
     tonemap: TonemapCurve,
     hdr_on: bool,
-    perc_on: bool,
 }
 
 impl Default for SettingsPopup {
@@ -76,7 +78,6 @@ impl SettingsPopup {
             render_scale: 1.0,
             tonemap: TonemapCurve::AcesNarkowicz,
             hdr_on: false,
-            perc_on: false,
         }
     }
 
@@ -106,9 +107,6 @@ impl SettingsPopup {
     }
     pub fn set_hdr(&mut self, on: bool) {
         self.hdr_on = on;
-    }
-    pub fn set_percussion(&mut self, on: bool) {
-        self.perc_on = on;
     }
 
     fn body_height(&self) -> f32 {
@@ -231,8 +229,9 @@ impl SettingsPopup {
         }
         cy += ROW_H + ROW_GAP;
 
-        // HDR output toggle.
-        self.row_label(tree, inner_x, cy, "HDR Output");
+        // HDR export-format toggle. Affects the recorded/exported file only —
+        // live on-screen HDR is automatic (driven by the display's EDR headroom).
+        self.row_label(tree, inner_x, cy, "HDR Export");
         let hdr_id = tree.add_button(
             Some(self.bg_id),
             ctrl_x,
@@ -243,20 +242,6 @@ impl SettingsPopup {
             if self.hdr_on { "On" } else { "Off" },
         );
         self.actions.push((hdr_id, PanelAction::ToggleHdr));
-        cy += ROW_H + ROW_GAP;
-
-        // Percussion detection toggle.
-        self.row_label(tree, inner_x, cy, "Percussion");
-        let perc_id = tree.add_button(
-            Some(self.bg_id),
-            ctrl_x,
-            cy,
-            ctrl_w,
-            ROW_H,
-            toggle_style(self.perc_on),
-            if self.perc_on { "On" } else { "Off" },
-        );
-        self.actions.push((perc_id, PanelAction::TogglePercussion));
     }
 
     fn row_label(&self, tree: &mut UITree, x: f32, y: f32, text: &str) {
@@ -342,7 +327,7 @@ fn btn_style(active: bool) -> UIStyle {
     }
 }
 
-/// A boolean toggle (HDR / Percussion): filled accent when on, neutral chip off.
+/// A boolean toggle (HDR export): filled accent when on, neutral chip off.
 fn toggle_style(on: bool) -> UIStyle {
     UIStyle {
         font_size: BTN_FONT,

@@ -434,8 +434,6 @@ pub fn push_state(
                 project.settings.tonemap_curve,
             ));
         ui.settings_popup.set_hdr(project.settings.export_hdr);
-        ui.settings_popup
-            .set_percussion(project.percussion_import.is_some());
     }
 
     // Footer stats

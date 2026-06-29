@@ -169,7 +169,6 @@ pub enum PanelAction {
     ExportFrame,
     ToggleHdr,
     ExportXml,
-    TogglePercussion,
 
     // Header
     ZoomIn,

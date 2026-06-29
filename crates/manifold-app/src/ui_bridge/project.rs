@@ -36,32 +36,6 @@ pub(super) fn dispatch_project(
             log::info!("HDR export → {}", project.settings.export_hdr);
             DispatchResult::handled()
         }
-        PanelAction::TogglePercussion => {
-            let last_dir =
-                dialog_path_memory::get_last_directory(DialogContext::PercussionImport, user_prefs);
-            let mut dialog = rfd::FileDialog::new()
-                .set_title("Import Audio for Percussion Analysis")
-                .add_filter(
-                    "Audio Files",
-                    &[
-                        "wav", "mp3", "m4a", "aac", "flac", "ogg", "aif", "aiff", "wma", "json",
-                    ],
-                );
-            if !last_dir.is_empty() {
-                dialog = dialog.set_directory(&last_dir);
-            }
-            if let Some(path) = dialog.pick_file() {
-                let path_str = path.to_string_lossy().to_string();
-                dialog_path_memory::remember_directory(
-                    DialogContext::PercussionImport,
-                    &path_str,
-                    user_prefs,
-                );
-                ContentCommand::send(content_tx, ContentCommand::PercussionImport(path_str));
-                ui.layout.waveform_lane_visible = true;
-            }
-            DispatchResult::structural()
-        }
         PanelAction::ToggleLiveRecording
         | PanelAction::SelectAudioInputDevice
         | PanelAction::SetAudioInputDevice(_)
