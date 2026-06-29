@@ -18,7 +18,11 @@ use crate::ui_root::UIRoot;
 pub fn apply(ui: &mut UIRoot, data: &mut SceneData, spec: &str) -> String {
     match spec.split_once(':') {
         Some(("select", target)) => select_layer(ui, data, target),
-        Some((verb, _)) => format!("unknown interact verb '{verb}' (known: select)"),
+        Some(("open", "settings")) => {
+            ui.settings_popup.open();
+            "open -> settings popup".to_string()
+        }
+        Some((verb, _)) => format!("unknown interact verb '{verb}' (known: select, open)"),
         None => format!("malformed interact '{spec}' (want verb:target)"),
     }
 }

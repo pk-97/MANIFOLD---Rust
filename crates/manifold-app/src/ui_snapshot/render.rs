@@ -115,6 +115,23 @@ pub fn render_ui_to_png(
         }
     }
 
+    // Pass 5: top-level overlays (modals, dropdowns, perf HUD) on top of
+    // everything — mirrors the live app drawing the overlay region at
+    // `Depth::OVERLAY`. The headless passes are painter's-order, so a final Load
+    // pass over the overlay node ranges lifts them above the immediate-mode clip
+    // passes; without it an open modal would be occluded by the clips.
+    if !ui.overlay_draw.is_empty() {
+        renderer.begin_frame();
+        for &(start, end) in &ui.overlay_draw {
+            renderer.render_tree_range(&ui.tree, start, end);
+        }
+        if renderer.prepare(&device, tex_w, tex_h, dpi) {
+            let mut enc = device.create_encoder("ui-snap-overlays");
+            renderer.render(&mut enc, &target.texture, GpuLoadAction::Load);
+            enc.commit_and_wait_completed();
+        }
+    }
+
     let bytes = readback(&device, &target.texture, tex_w, tex_h);
     image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)
         .unwrap_or_else(|e| panic!("save {path}: {e}"));

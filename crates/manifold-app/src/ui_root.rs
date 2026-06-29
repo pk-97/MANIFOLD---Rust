@@ -21,6 +21,7 @@ enum OverlayId {
     PerfHud,
     Dropdown,
     AudioSetup,
+    Settings,
     BrowserPopup,
     AbletonPicker,
 }
@@ -31,9 +32,10 @@ impl OverlayId {
     /// The dropdown sits on top: it's a transient selection surface opened *from*
     /// another overlay (e.g. the Audio Setup modal's device/channel pickers), so
     /// it must render above whatever spawned it.
-    const Z_ORDER: [OverlayId; 5] = [
+    const Z_ORDER: [OverlayId; 6] = [
         OverlayId::PerfHud,
         OverlayId::AudioSetup,
+        OverlayId::Settings,
         OverlayId::BrowserPopup,
         OverlayId::AbletonPicker,
         OverlayId::Dropdown,
@@ -175,6 +177,7 @@ pub struct UIRoot {
     pub dropdown: DropdownPanel,
     pub browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel,
     pub audio_setup_panel: manifold_ui::panels::audio_setup_panel::AudioSetupPanel,
+    pub settings_popup: manifold_ui::panels::settings_popup::SettingsPopup,
     pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
 
     /// Project-embedded ("forked") presets surfaced into the Add pickers, kept
@@ -341,6 +344,7 @@ impl UIRoot {
             dropdown: DropdownPanel::new(),
             browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel::new(),
             audio_setup_panel: manifold_ui::panels::audio_setup_panel::AudioSetupPanel::new(),
+            settings_popup: manifold_ui::panels::settings_popup::SettingsPopup::new(),
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
             embedded_presets: Vec::new(),
             embedded_presets_fingerprint: 0,
@@ -711,6 +715,7 @@ impl UIRoot {
             OverlayId::PerfHud => &mut self.perf_hud,
             OverlayId::Dropdown => &mut self.dropdown,
             OverlayId::AudioSetup => &mut self.audio_setup_panel,
+            OverlayId::Settings => &mut self.settings_popup,
             OverlayId::BrowserPopup => &mut self.browser_popup,
             OverlayId::AbletonPicker => &mut self.ableton_picker,
         }
@@ -724,6 +729,7 @@ impl UIRoot {
             OverlayId::PerfHud => self.perf_hud.is_open(),
             OverlayId::Dropdown => self.dropdown.is_open(),
             OverlayId::AudioSetup => self.audio_setup_panel.is_open(),
+            OverlayId::Settings => self.settings_popup.is_open(),
             OverlayId::BrowserPopup => self.browser_popup.is_open(),
             OverlayId::AbletonPicker => self.ableton_picker.is_open(),
         }

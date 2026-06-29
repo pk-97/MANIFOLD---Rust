@@ -18,6 +18,7 @@ pub mod overlay;
 pub mod param_card;
 pub mod param_slider_shared;
 pub mod perf_hud;
+pub mod settings_popup;
 pub mod popup_shell;
 pub mod stem_lane;
 pub mod transport;

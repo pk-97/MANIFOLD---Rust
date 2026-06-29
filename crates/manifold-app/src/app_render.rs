@@ -817,10 +817,11 @@ impl Application {
             }
         }
 
-        // Settings… → floating settings popup. (Popup lands in Phase 2; this is
-        // the consume point so the flag has a single reader.)
+        // Settings… (⌘, or the MANIFOLD menu) → open the floating settings popup.
         if std::mem::take(&mut self.pending_open_settings) {
-            log::info!("MANIFOLD ▸ Settings… (floating settings popup — Phase 2)");
+            self.ws.ui_root.settings_popup.open();
+            // Programmatic open: nudge the overlay driver to rebuild + draw it.
+            self.ws.ui_root.overlay_dirty = true;
         }
 
         // An in-place inspector scroll (wheel in window_input, or a scrollbar

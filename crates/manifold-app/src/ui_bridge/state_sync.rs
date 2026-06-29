@@ -434,6 +434,19 @@ pub fn push_state(
         ui.footer.set_tonemap_curve(crate::ui_translate::tonemap_curve_to_ui(
             project.settings.tonemap_curve,
         ));
+
+        // Settings popup now hosts the render config — mirror the same state so
+        // its segmented controls highlight the active option.
+        ui.settings_popup.set_resolution_text(&res_label);
+        ui.settings_popup
+            .set_render_scale(project.settings.render_scale);
+        ui.settings_popup
+            .set_tonemap_curve(crate::ui_translate::tonemap_curve_to_ui(
+                project.settings.tonemap_curve,
+            ));
+        ui.settings_popup.set_hdr(project.settings.export_hdr);
+        ui.settings_popup
+            .set_percussion(project.percussion_import.is_some());
     }
 
     // Footer stats
