@@ -25,9 +25,12 @@ pub const MAX_LABEL_WIDTH: f32 = 160.0;
 pub fn label_width_for_row(row_w: f32) -> f32 {
     (row_w * 0.28).clamp(DEFAULT_LABEL_WIDTH, MAX_LABEL_WIDTH)
 }
-pub const TRACK_RADIUS: f32 = 2.0;
+pub const TRACK_RADIUS: f32 = 6.0;
 const FILL_INSET: f32 = 1.0;
-const THUMB_WIDTH: f32 = 8.0;
+/// The thumb is a slim WHITE trim flush at the fill's right end — one uniform
+/// rounded bar `(======|)`, not a fat handle sitting in empty track. Narrow so
+/// it reads as the fill's bright cap, not a competing element.
+const THUMB_WIDTH: f32 = 4.0;
 const THUMB_INSET: f32 = 1.0;
 
 /// Identifies the nodes that make up a single slider instance.
@@ -194,7 +197,7 @@ impl BitmapSlider {
             UINodeType::Panel,
             UIStyle {
                 bg_color: colors.thumb,
-                corner_radius: color::HAIRLINE_RADIUS,
+                corner_radius: THUMB_WIDTH * 0.5, // pill trim, matches the rounded fill
                 ..UIStyle::default()
             },
             None,
@@ -491,7 +494,11 @@ fn compute_fill_width(track_width: f32, normalized_value: f32) -> f32 {
 
 fn compute_thumb_rect(track_rect: Rect, normalized_value: f32) -> Rect {
     let usable = track_rect.width - FILL_INSET * 2.0;
-    let thumb_x = track_rect.x + FILL_INSET + normalized_value * usable - THUMB_WIDTH * 0.5;
+    // Right-align the trim to the fill's end: its right edge lands on the value
+    // position, so the bright marker caps the fill instead of straddling the
+    // boundary into empty track. `(======|)` reads as one bar + trim.
+    let fill_right = track_rect.x + FILL_INSET + normalized_value * usable;
+    let thumb_x = fill_right - THUMB_WIDTH;
     let clamp_min = track_rect.x + FILL_INSET;
     let clamp_max = track_rect.x_max() - FILL_INSET - THUMB_WIDTH;
     // Guard against tracks too narrow for the thumb

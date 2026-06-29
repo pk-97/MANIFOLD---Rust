@@ -633,12 +633,20 @@ pub const TEXT_DIMMED_C32: Color32 = Color32::new(178, 178, 184, 255); // §A: s
 pub const DIVIDER_C32: Color32 = DIVIDER;
 
 // ── Bitmap Slider Palette ───────────────────────────────────────────
-pub const SLIDER_TRACK_C32: Color32 = BG_3;
-pub const SLIDER_TRACK_HOVER_C32: Color32 = BG_3_HOVER;
-pub const SLIDER_TRACK_PRESSED_C32: Color32 = BG_3_PRESSED;
-pub const SLIDER_FILL_C32: Color32 = Color32::new(55, 85, 125, 180);
-pub const SLIDER_THUMB_C32: Color32 = Color32::new(180, 200, 230, 255);
-pub const SLIDER_TEXT_C32: Color32 = Color32::new(190, 190, 195, 255);
+// The track is a DARK RECESSED WELL — darker than the card it sits on — so the
+// bright fill (the lane hue) reads as light-in-a-groove. This inverts the old
+// scheme (track = BG_3, *lighter* than the card), which is what made the slider
+// muddy: "grey fill on grey track on grey card." The value box shares this well
+// colour, so the number reads as a bright glyph in the same recess.
+pub const SLIDER_TRACK_C32: Color32 = Color32::new(12, 14, 19, 255);
+pub const SLIDER_TRACK_HOVER_C32: Color32 = Color32::new(18, 20, 27, 255);
+pub const SLIDER_TRACK_PRESSED_C32: Color32 = Color32::new(8, 9, 13, 255);
+/// Default fill for sliders with no lane identity (master-scope cards, macros).
+/// Opaque + bright so it reads on the dark well; layer/generator param cards
+/// override this with the selected layer's hue.
+pub const SLIDER_FILL_C32: Color32 = Color32::new(89, 148, 235, 255);
+pub const SLIDER_THUMB_C32: Color32 = Color32::new(255, 255, 255, 255);
+pub const SLIDER_TEXT_C32: Color32 = Color32::new(255, 255, 255, 255);
 
 // ── Bitmap Toggle / Accent ──────────────────────────────────────────
 pub const ACCENT_BLUE_C32: Color32 = Color32::new(89, 148, 235, 255);

@@ -487,6 +487,12 @@ pub struct ParamCardPanel {
 
     // Card position (for effect drag-reorder hit testing)
     card_y: f32,
+
+    /// Identity hue of the owning layer (the timeline lane colour). When set, it
+    /// themes the card header bg, the selected-border, and every slider fill, so
+    /// the inspector reads as "editing the blue lane". `None` for master-scope
+    /// cards (no lane) — those keep the neutral header + default blue fill.
+    accent: Option<Color32>,
 }
 
 impl ParamCardPanel {
@@ -558,7 +564,14 @@ impl ParamCardPanel {
             first_node: 0,
             node_count: 0,
             card_y: 0.0,
+            accent: None,
         }
+    }
+
+    /// Set the owning layer's identity hue (timeline lane colour). Takes effect
+    /// on the next [`build`](Self::build). `None` clears it (master scope).
+    pub fn set_accent(&mut self, accent: Option<Color32>) {
+        self.accent = accent;
     }
 
     /// Configure from card metadata. Call before [`build`](Self::build).
@@ -792,13 +805,59 @@ impl ParamCardPanel {
     /// Border color for the card's current kind + state.
     fn base_border_color(&self) -> Color32 {
         if self.is_selected {
-            color::SELECTED_BORDER
+            // The selected card takes the lane hue as its border (mockup
+            // `.module.sel`), tying it to the timeline lane; falls back to the
+            // neutral selection blue for master-scope cards with no lane.
+            self.accent.unwrap_or(color::SELECTED_BORDER)
         } else {
             match self.kind {
                 ParamCardKind::Effect => color::CARD_BORDER_C32,
                 ParamCardKind::Generator => color::GEN_CARD_BORDER_C32,
             }
         }
+    }
+
+    /// Header background for the current state. A per-card graph override wins
+    /// (pink MOD tint); otherwise the owning layer's identity hue themes the bar
+    /// so the card reads as part of its lane, falling back to the neutral header
+    /// for master-scope cards with no lane.
+    fn header_bg(&self) -> Color32 {
+        if self.state.has_graph_mod {
+            color::MOD_HEADER_BG_C32
+        } else if let Some(accent) = self.accent {
+            accent
+        } else {
+            match self.kind {
+                ParamCardKind::Effect => color::DRAG_HANDLE_BG_C32,
+                ParamCardKind::Generator => color::GEN_CARD_HEADER_BG_C32,
+            }
+        }
+    }
+
+    /// Name-label colour for the header — automatic contrast text on a coloured
+    /// (accent or MOD) header, the kind's identity-tinted name on the neutral one.
+    fn header_name_color(&self) -> Color32 {
+        if self.state.has_graph_mod {
+            color::TEXT_WHITE_C32
+        } else if let Some(accent) = self.accent {
+            color::contrast_text_color(accent)
+        } else {
+            match self.kind {
+                ParamCardKind::Effect => color::EFFECT_HEADER_NAME,
+                ParamCardKind::Generator => color::GEN_CARD_HEADER_NAME_C32,
+            }
+        }
+    }
+
+    /// Slider theme for this card — the unified theme, with the fill recoloured
+    /// to the lane hue when the card has one (so every fill in the card carries
+    /// the layer identity). Master-scope cards keep the default blue fill.
+    fn slider_colors(&self) -> SliderColors {
+        let mut c = SliderColors::default_slider();
+        if let Some(accent) = self.accent {
+            c.fill = accent;
+        }
+        c
     }
 
     /// Inner-well fill for the card's current kind + focus. The selected card
@@ -1065,7 +1124,7 @@ impl ParamCardPanel {
         let header = View::row(0.0)
             .fill_w()
             .h(Sizing::Fixed(HEADER_HEIGHT))
-            .bg(color::GEN_CARD_HEADER_BG_C32)
+            .bg(self.header_bg())
             .radius(CORNER_RADIUS - BORDER_W)
             .interactive()
             .inert()
@@ -1080,7 +1139,7 @@ impl ParamCardPanel {
                     .fill_w()
                     .fill_h()
                     .font(FONT_SIZE)
-                    .text_color(color::GEN_CARD_HEADER_NAME_C32)
+                    .text_color(self.header_name_color())
                     .align_text(TextAlign::Left)
                     .interactive()
                     .inert()
@@ -1159,11 +1218,7 @@ impl ParamCardPanel {
     /// The header *contents* (drag handle, name, badges, toggle, chevron, cog)
     /// are still built imperatively into this header bg.
     fn effect_frame_view(&self, border_color: Color32) -> View {
-        let header_bg = if self.state.has_graph_mod {
-            color::MOD_HEADER_BG_C32
-        } else {
-            color::DRAG_HANDLE_BG_C32
-        };
+        let header_bg = self.header_bg();
         View::panel()
             .fill()
             .bg(border_color)
@@ -1231,7 +1286,7 @@ impl ParamCardPanel {
                             .fill_w()
                             .fill_h()
                             .font(FONT_SIZE)
-                            .text_color(color::EFFECT_HEADER_NAME)
+                            .text_color(self.header_name_color())
                             .align_text(TextAlign::Left)
                             .key(KEY_NAME),
                     ),
@@ -1279,11 +1334,7 @@ impl ParamCardPanel {
 
         // Card frame (border + inner bg) on the host — interactive so clicks on
         // the edge / body select the card (resolved by id in `handle_click`).
-        let border_color = if self.is_selected {
-            color::SELECTED_BORDER
-        } else {
-            color::CARD_BORDER_C32
-        };
+        let border_color = self.base_border_color();
         let view = self.effect_frame_view(border_color);
         let h = self.compute_height() - CARD_BOTTOM_MARGIN;
         self.host
@@ -1583,7 +1634,7 @@ impl ParamCardPanel {
                 &info,
                 &self.state.mod_state,
                 i,
-                &SliderColors::default_slider(),
+                &self.slider_colors(),
                 CONFIG_BTN_FONT_SIZE,
                 self.supports_envelopes,
                 label_width,
@@ -1647,11 +1698,7 @@ impl ParamCardPanel {
         self.label_cache.iter_mut().for_each(|v| *v = None);
 
         // ── Card frame + header (host) ──
-        let border_color = if self.is_selected {
-            color::SELECTED_BORDER
-        } else {
-            color::GEN_CARD_BORDER_C32
-        };
+        let border_color = self.base_border_color();
         let view = self.generator_card_view(border_color);
         let h = self.compute_height() - CARD_BOTTOM_MARGIN;
         self.host
@@ -1785,7 +1832,7 @@ impl ParamCardPanel {
                         &info,
                         &self.state.mod_state,
                         i,
-                        &SliderColors::default_slider(),
+                        &self.slider_colors(),
                         FONT_SIZE,
                         true,
                         label_width,
