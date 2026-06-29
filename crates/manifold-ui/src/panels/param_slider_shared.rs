@@ -1214,9 +1214,10 @@ fn build_mod_tab_strip(
 /// `E` button on `supports_envelopes`; generators always show it).
 ///
 /// `x` is the row's left edge (already padded); `slider_w` the slider width
-/// (track + label, D/E buttons reserved to its right); `config_w` the full
-/// inner content width the drawers span. Node creation order is identical to
-/// the prior inline code, so first-node/node-count bookkeeping is preserved.
+/// (track + label, D/E buttons reserved to its right). The drawers inset to the
+/// slider TRACK span (`slider.track_rect`), so they read as an operation over
+/// that slider. Node creation order is identical to the prior inline code, so
+/// first-node/node-count bookkeeping is preserved.
 #[allow(clippy::too_many_arguments)]
 // Per-row interactive-control roles, mixed into a row's key base to give each
 // control a stable, reorder-proof WidgetId. Values only need to be unique within
@@ -1256,7 +1257,6 @@ pub(crate) fn build_param_row(
     x: f32,
     cy: f32,
     slider_w: f32,
-    config_w: f32,
     info: &ParamInfo,
     mod_state: &ParamModState,
     i: usize,
@@ -1461,6 +1461,12 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
+    // Drawer geometry: inset to the slider TRACK (not the full row) so the drawer
+    // reads as an operation OVER that slider. Left edge = track left (past the
+    // label column), width = track width (stops at the value box / mod buttons).
+    let drawer_x = slider.track_rect.x;
+    let drawer_w = slider.track_rect.width;
+
     // Modulation config drawer. Zero or one active config shows directly (no tab
     // strip — unchanged); two or more share this one drawer behind a tab strip
     // so they never stack three deep (§6.2). The T/∿/A arm buttons above stay on
@@ -1475,7 +1481,7 @@ pub(crate) fn build_param_row(
     let shown_tab = resolve_active_tab(&active_tabs, active_tab);
     if active_tabs.len() >= 2 {
         ids.mod_tabs =
-            build_mod_tab_strip(tree, parent, x, cy, config_w, &active_tabs, shown_tab);
+            build_mod_tab_strip(tree, parent, drawer_x, cy, drawer_w, &active_tabs, shown_tab);
         cy += MOD_TAB_STRIP_H;
     }
 
@@ -1483,7 +1489,7 @@ pub(crate) fn build_param_row(
     // handle on the track above; this is how fast the value falls back.
     if shown_tab == Some(ModTab::Envelope) {
         ids.envelope_config = Some(build_envelope_config(
-            tree, parent, x, cy, config_w, mod_state, i,
+            tree, parent, drawer_x, cy, drawer_w, mod_state, i,
         ));
         cy += ENV_CONFIG_HEIGHT;
     }
@@ -1493,9 +1499,9 @@ pub(crate) fn build_param_row(
         ids.driver_config = Some(build_driver_config(
             tree,
             parent,
-            x,
+            drawer_x,
             cy,
-            config_w,
+            drawer_w,
             mod_state,
             i,
             config_font,
@@ -1508,7 +1514,7 @@ pub(crate) fn build_param_row(
     if shown_tab == Some(ModTab::Ableton)
         && let Some(ref display) = info.ableton_display
     {
-        ids.ableton_config = Some(build_ableton_config(tree, parent, x, cy, config_w, display));
+        ids.ableton_config = Some(build_ableton_config(tree, parent, drawer_x, cy, drawer_w, display));
         cy += ABL_CONFIG_HEIGHT;
     }
 
@@ -1600,7 +1606,7 @@ pub(crate) fn build_param_row(
             slider_font_size: FONT_SIZE,
             accent: Some(AUDIO_MOD_ACTIVE_C32),
         };
-        let dids = drawer::build(tree, parent, x, cy, config_w, &spec);
+        let dids = drawer::build(tree, parent, drawer_x, cy, drawer_w, &spec);
         cy += dids.height;
         ids.audio_config = Some((dids, send_count));
     }
