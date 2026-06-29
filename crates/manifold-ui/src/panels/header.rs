@@ -29,9 +29,6 @@ const PROGRESS_BAR_INSET: f32 = 5.0;
 
 const ZOOM_BUTTON_W: f32 = 28.0;
 const ZOOM_LABEL_W: f32 = 70.0;
-const AUDIO_BUTTON_W: f32 = 60.0;
-const MONITOR_BUTTON_W: f32 = 60.0;
-const PERFORM_BUTTON_W: f32 = 60.0;
 
 const TIME_DISPLAY_W: f32 = 260.0;
 
@@ -92,17 +89,9 @@ impl HeaderPanel {
 
     // ── Styles ──────────────────────────────────────────────────────
 
-    // Audio / Perform / Monitor and the zoom −/+ are all neutral chrome chips —
-    // no state colour — so they share the kit's off-state chip (the same
-    // `BUTTON_DIM` 71-grey as the transport bar and layer-card mixer), differing
-    // only in font. One neutral chip across every top chrome bar.
-    fn action_button_style() -> UIStyle {
-        UIStyle {
-            font_size: color::FONT_HEADING,
-            ..components::state_button_style(color::BUTTON_DIM, false)
-        }
-    }
-
+    // The zoom −/+ are neutral chrome chips — no state colour — sharing the kit's
+    // off-state chip (the same `BUTTON_DIM` 71-grey as the transport bar and
+    // layer-card mixer). One neutral chip across every top chrome bar.
     fn zoom_button_style() -> UIStyle {
         UIStyle {
             font_size: color::FONT_TITLE,
@@ -171,8 +160,8 @@ impl HeaderPanel {
     }
 
     fn right_group(&self) -> View {
-        // Tight zoom cluster [−][label][+] with no inter-gaps, then the spaced
-        // Audio / Perform / Monitor buttons. End-aligned to the inset right edge.
+        // Tight zoom cluster [−][label][+], end-aligned to the inset right edge.
+        // (Audio / Perform / Monitor moved to the View menu.)
         let zoom_cluster = View::row(0.0)
             .fill_h()
             .child(
@@ -198,21 +187,10 @@ impl HeaderPanel {
                     .on_click(PanelAction::ZoomIn),
             );
 
-        let action = |label: &str, w: f32, act: PanelAction| {
-            View::button(label)
-                .w(Sizing::Fixed(w))
-                .fill_h()
-                .style(Self::action_button_style())
-                .on_click(act)
-        };
-
         View::row(GROUP_SPACING)
             .fill()
             .main_align(Align::End)
             .child(zoom_cluster)
-            .child(action("Audio", AUDIO_BUTTON_W, PanelAction::OpenAudioSetup))
-            .child(action("Perform", PERFORM_BUTTON_W, PanelAction::EnterPerformMode))
-            .child(action("Monitor", MONITOR_BUTTON_W, PanelAction::ToggleMonitor))
     }
 
     fn view(&self) -> View {
@@ -281,9 +259,6 @@ mod tests {
         time_display: Rect,
         zoom_out: Rect,
         zoom_in: Rect,
-        audio: Rect,
-        perform: Rect,
-        monitor: Rect,
     }
 
     impl HeaderGolden {
@@ -294,16 +269,8 @@ mod tests {
             let cx = bounds.x + (bounds.width - TIME_DISPLAY_W) * 0.5;
             self.time_display = Rect::new(cx, elem_y, TIME_DISPLAY_W, elem_h);
 
+            // Right edge: [−][label][+] zoom cluster, inset from the bar end.
             let mut rx = bounds.x_max() - INSET;
-            rx -= MONITOR_BUTTON_W;
-            self.monitor = Rect::new(rx, elem_y, MONITOR_BUTTON_W, elem_h);
-            rx -= GROUP_SPACING;
-            rx -= PERFORM_BUTTON_W;
-            self.perform = Rect::new(rx, elem_y, PERFORM_BUTTON_W, elem_h);
-            rx -= GROUP_SPACING;
-            rx -= AUDIO_BUTTON_W;
-            self.audio = Rect::new(rx, elem_y, AUDIO_BUTTON_W, elem_h);
-            rx -= GROUP_SPACING;
             rx -= ZOOM_BUTTON_W;
             self.zoom_in = Rect::new(rx, elem_y, ZOOM_BUTTON_W, elem_h);
             rx -= ZOOM_LABEL_W;
@@ -341,9 +308,6 @@ mod tests {
 
         assert_rect(node_with_text(&tree, "\u{2212}").bounds, g.zoom_out, "zoom_out");
         assert_rect(node_with_text(&tree, "+").bounds, g.zoom_in, "zoom_in");
-        assert_rect(node_with_text(&tree, "Audio").bounds, g.audio, "audio");
-        assert_rect(node_with_text(&tree, "Perform").bounds, g.perform, "perform");
-        assert_rect(node_with_text(&tree, "Monitor").bounds, g.monitor, "monitor");
         // Centered time display lands at true screen centre despite the inset.
         assert_rect(
             node_with_text(&tree, "00:00.00 / 00:00.00  |  1.1.1").bounds,
@@ -362,11 +326,6 @@ mod tests {
         let mut intents = IntentRegistry::new();
         panel.register_intents(&mut intents);
 
-        let audio_id = node_with_text(&tree, "Audio").id;
-        assert!(matches!(
-            intents.resolve(&tree, Some(audio_id), Gesture::Click),
-            Some(PanelAction::OpenAudioSetup)
-        ));
         let zin = node_with_text(&tree, "+").id;
         assert!(matches!(
             intents.resolve(&tree, Some(zin), Gesture::Click),
