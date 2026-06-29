@@ -31,6 +31,11 @@ pub(crate) const DRAWER_BOTTOM_GAP: f32 = color::SPACE_L;
 /// way the old track-width indent did. Affects geometry only (`drawer_x`), not
 /// height — height math is unchanged.
 pub(crate) const DRAWER_INDENT: f32 = color::SPACE_L;
+/// Top overhang of the mod card above the slider row. The slider's trim / envelope
+/// target handles poke a couple px above the track (e.g. `build_envelope_target`
+/// starts at `track.y - 2`); the card extends up by this so it covers them instead
+/// of clipping their tops. Visual only — does not move the slider or affect height.
+pub(crate) const MOD_CARD_TOP_PAD: f32 = 4.0;
 // Card inner inset (§14.5 C). The canonical `SPACE_M`: with the card's 1px frame
 // border that puts param-label content at `BORDER_W + SPACE_M` =
 // `color::SECTION_CONTENT_INSET`, the one column the border-less chrome panels
@@ -1365,12 +1370,15 @@ pub(crate) fn build_param_row(
         } else {
             0.0
         };
-        let card_h = ROW_HEIGHT + ROW_SPACING + tab_strip_h + mod_config_height(tab);
+        // Extend up by MOD_CARD_TOP_PAD so the card covers the slider's trim /
+        // target handles (they poke a couple px above the track), then keep the
+        // same bottom by adding that pad into the height.
+        let card_h = MOD_CARD_TOP_PAD + ROW_HEIGHT + ROW_SPACING + tab_strip_h + mod_config_height(tab);
         let card_w = (row_right - x).max(1.0);
         tree.add_panel(
             parent,
             x,
-            cy,
+            cy - MOD_CARD_TOP_PAD,
             card_w,
             card_h,
             card_theme.surface_style(color::CARD_RADIUS),
