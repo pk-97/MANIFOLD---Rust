@@ -205,11 +205,6 @@ pub struct InspectorCompositePanel {
     // Cache tracking
     cache_first_node: usize,
     cache_node_count: usize,
-
-    /// Identity hue of the selected layer (its timeline lane colour). Themes the
-    /// selected tab and is pushed onto every layer/generator param card so the
-    /// whole inspector reads as "editing this lane". `None` on master scope.
-    accent: Option<Color32>,
 }
 
 impl InspectorCompositePanel {
@@ -256,18 +251,10 @@ impl InspectorCompositePanel {
             card_drag_label: String::new(),
             cache_first_node: usize::MAX,
             cache_node_count: 0,
-            accent: None,
         }
     }
 
     // ── Configuration ─────────────────────────────────────────────
-
-    /// Set the selected layer's identity hue (its timeline lane colour), or
-    /// `None` for master scope. Takes effect on the next [`build`]. Pushed onto
-    /// every layer/generator param card and used to tint the selected tab.
-    pub fn set_accent_color(&mut self, accent: Option<Color32>) {
-        self.accent = accent;
-    }
 
     /// The scope currently shown in the inspector.
     pub fn active_tab(&self) -> InspectorTab {
@@ -349,10 +336,10 @@ impl InspectorCompositePanel {
                 font_size: TAB_FONT_SIZE,
                 ..chrome::components::segment_style(active)
             };
-            // Tint the SELECTED tab toward the lane hue (mockup `.tab.sel`), so the
-            // active scope reads as part of the layer being edited.
-            if active && let Some(accent) = self.accent {
-                style.bg_color = color::mix(color::BG_2, accent, 0.30);
+            // Tint the SELECTED tab toward the one inspector accent (not a lane
+            // hue), so the active scope reads as selected without per-layer colour.
+            if active {
+                style.bg_color = color::mix(color::BG_2, color::INSPECTOR_ACCENT, 0.30);
             }
             // Interactive button (not a label) so clicks hit-test and route —
             // a plain label carries no INTERACTIVE flag and is invisible to the
@@ -1767,15 +1754,9 @@ impl Panel for InspectorCompositePanel {
         }
         for card in &mut self.master_effects {
             card.clear_nodes();
-            // Master scope has no lane identity — neutral header + default fill.
-            card.set_accent(None);
         }
         for card in &mut self.layer_effects {
             card.clear_nodes();
-            card.set_accent(self.accent);
-        }
-        if let Some(gp) = self.gen_params.as_mut() {
-            gp.set_accent(self.accent);
         }
 
         let rect = layout.inspector();

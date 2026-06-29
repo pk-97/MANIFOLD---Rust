@@ -221,6 +221,9 @@ pub struct ParamCardConfig {
 // Change button) carries its own kind-specific widths.
 
 const HEADER_HEIGHT: f32 = color::HEADER_ROW_HEIGHT; // §14.2 rule 5: one header height
+/// Breathing room between the coloured header and the first param row, so the
+/// slider doesn't butt against the header. Matches the card's bottom padding.
+const HEADER_BODY_GAP: f32 = PADDING;
 const BORDER_W: f32 = 1.0;
 // Card corner = the design-token card radius (Phase 3). Radius is purely
 // visual — it doesn't move any laid rect, so the golden header-layout tests
@@ -271,29 +274,38 @@ struct BadgeLayout {
     abl_x: Option<f32>,
     env_x: Option<f32>,
     drv_x: Option<f32>,
+    aud_x: Option<f32>,
     name_right: f32,
 }
 
-/// Lay the visible header badges out flush against the left edge of the toggle,
-/// packing only the active ones so a lone badge sits at the right edge instead
-/// of floating mid-header in a slot reserved for badges that aren't showing.
+/// Lay the visible header badges out CENTERED in the region between the name's
+/// left edge (`content_left`) and the toggle. Packing only the active ones keeps
+/// the cluster tight; centering keeps it clear of the ON/OFF toggle so the
+/// badges don't read as another button. The name cell clips to `name_right`
+/// (just before the cluster's left edge).
 fn effect_badge_layout(
+    content_left: f32,
     toggle_x: f32,
     show_mod: bool,
     show_abl: bool,
     show_env: bool,
     show_drv: bool,
+    show_aud: bool,
 ) -> BadgeLayout {
-    let shows = [show_mod, show_abl, show_env, show_drv];
+    let shows = [show_mod, show_abl, show_env, show_drv, show_aud];
     let count = shows.iter().filter(|s| **s).count();
-    let block_right = toggle_x - GAP;
+    let region_left = content_left;
+    let region_right = toggle_x - GAP;
     let block_w = if count == 0 {
         0.0
     } else {
         count as f32 * BADGE_W + (count as f32 - 1.0) * GAP
     };
-    let block_left = block_right - block_w;
-    let mut xs: [Option<f32>; 4] = [None; 4];
+    // Centre the block in the region; clamp so it never runs under the toggle nor
+    // off the left edge.
+    let centered = (region_left + region_right) * 0.5 - block_w * 0.5;
+    let block_left = centered.clamp(region_left, (region_right - block_w).max(region_left));
+    let mut xs: [Option<f32>; 5] = [None; 5];
     let mut cursor = block_left;
     for (i, show) in shows.iter().enumerate() {
         if *show {
@@ -306,7 +318,8 @@ fn effect_badge_layout(
         abl_x: xs[1],
         env_x: xs[2],
         drv_x: xs[3],
-        name_right: if count == 0 { block_right } else { block_left - GAP },
+        aud_x: xs[4],
+        name_right: if count == 0 { region_right } else { block_left - GAP },
     }
 }
 
@@ -323,7 +336,9 @@ pub struct ParamCardState {
     pub has_env: bool,
     /// Aggregate: any param has an Ableton mapping (ABL badge).
     pub has_abl: bool,
-    /// The card's graph diverges from the catalog default (MOD badge + tint).
+    /// Aggregate: any param has an armed audio modulation (AUD badge).
+    pub has_audio: bool,
+    /// The card's graph diverges from the catalog default (MOD badge only).
     pub has_graph_mod: bool,
     /// Shared per-param modulation state (driver/envelope expansion, trim,
     /// target, ADSR, driver config).
@@ -336,6 +351,7 @@ impl ParamCardState {
             has_drv: false,
             has_env: false,
             has_abl: false,
+            has_audio: false,
             has_graph_mod: false,
             mod_state: ParamModState::allocate(param_count),
         }
@@ -409,6 +425,8 @@ pub struct ParamCardPanel {
     drv_badge_text_id: Option<NodeId>,
     mod_badge_bg_id: Option<NodeId>,
     mod_badge_text_id: Option<NodeId>,
+    aud_badge_bg_id: Option<NodeId>,
+    aud_badge_text_id: Option<NodeId>,
 
     // ── Node IDs — generator shell ──
     change_btn_id: Option<NodeId>,
@@ -418,6 +436,7 @@ pub struct ParamCardPanel {
     cached_has_env: bool,
     cached_has_drv: bool,
     cached_has_abl: bool,
+    cached_has_audio: bool,
     cached_has_graph_mod: bool,
 
     // ── Node IDs — per-param (shared) ──
@@ -487,12 +506,6 @@ pub struct ParamCardPanel {
 
     // Card position (for effect drag-reorder hit testing)
     card_y: f32,
-
-    /// Identity hue of the owning layer (the timeline lane colour). When set, it
-    /// themes the card header bg, the selected-border, and every slider fill, so
-    /// the inspector reads as "editing the blue lane". `None` for master-scope
-    /// cards (no lane) — those keep the neutral header + default blue fill.
-    accent: Option<Color32>,
 }
 
 impl ParamCardPanel {
@@ -529,11 +542,14 @@ impl ParamCardPanel {
             drv_badge_text_id: None,
             mod_badge_bg_id: None,
             mod_badge_text_id: None,
+            aud_badge_bg_id: None,
+            aud_badge_text_id: None,
             change_btn_id: None,
             cached_enabled: true,
             cached_has_env: false,
             cached_has_drv: false,
             cached_has_abl: false,
+            cached_has_audio: false,
             cached_has_graph_mod: false,
             slider_ids: Vec::new(),
             base_values: Vec::new(),
@@ -564,14 +580,7 @@ impl ParamCardPanel {
             first_node: 0,
             node_count: 0,
             card_y: 0.0,
-            accent: None,
         }
-    }
-
-    /// Set the owning layer's identity hue (timeline lane colour). Takes effect
-    /// on the next [`build`](Self::build). `None` clears it (master scope).
-    pub fn set_accent(&mut self, accent: Option<Color32>) {
-        self.accent = accent;
     }
 
     /// Configure from card metadata. Call before [`build`](Self::build).
@@ -614,6 +623,9 @@ impl ParamCardPanel {
             &config.driver_free_period,
         );
         self.state.mod_state.sync_audio(n, &config.audio);
+        // AUD badge aggregate: any param has an armed audio modulation (parallels
+        // has_drv / has_env). Derived after sync_audio populates audio_active.
+        self.state.has_audio = self.state.mod_state.audio_active.iter().any(|&a| a);
         self.osc_addresses = config
             .params
             .iter()
@@ -805,10 +817,9 @@ impl ParamCardPanel {
     /// Border color for the card's current kind + state.
     fn base_border_color(&self) -> Color32 {
         if self.is_selected {
-            // The selected card takes the lane hue as its border (mockup
-            // `.module.sel`), tying it to the timeline lane; falls back to the
-            // neutral selection blue for master-scope cards with no lane.
-            self.accent.unwrap_or(color::SELECTED_BORDER)
+            // The one inspector accent marks the selected card — same colour on
+            // every card, never the per-layer lane hue.
+            color::INSPECTOR_ACCENT
         } else {
             match self.kind {
                 ParamCardKind::Effect => color::CARD_BORDER_C32,
@@ -817,47 +828,16 @@ impl ParamCardPanel {
         }
     }
 
-    /// Header background for the current state. A per-card graph override wins
-    /// (pink MOD tint); otherwise the owning layer's identity hue themes the bar
-    /// so the card reads as part of its lane, falling back to the neutral header
-    /// for master-scope cards with no lane.
+    /// Header background — the one inspector accent for every card, regardless of
+    /// kind or layer. A graph override (MOD) does NOT recolour the header; it only
+    /// lights its badge.
     fn header_bg(&self) -> Color32 {
-        if self.state.has_graph_mod {
-            color::MOD_HEADER_BG_C32
-        } else if let Some(accent) = self.accent {
-            accent
-        } else {
-            match self.kind {
-                ParamCardKind::Effect => color::DRAG_HANDLE_BG_C32,
-                ParamCardKind::Generator => color::GEN_CARD_HEADER_BG_C32,
-            }
-        }
+        color::INSPECTOR_ACCENT
     }
 
-    /// Name-label colour for the header — automatic contrast text on a coloured
-    /// (accent or MOD) header, the kind's identity-tinted name on the neutral one.
+    /// Name-label colour for the header — automatic contrast text on the accent.
     fn header_name_color(&self) -> Color32 {
-        if self.state.has_graph_mod {
-            color::TEXT_WHITE_C32
-        } else if let Some(accent) = self.accent {
-            color::contrast_text_color(accent)
-        } else {
-            match self.kind {
-                ParamCardKind::Effect => color::EFFECT_HEADER_NAME,
-                ParamCardKind::Generator => color::GEN_CARD_HEADER_NAME_C32,
-            }
-        }
-    }
-
-    /// Slider theme for this card — the unified theme, with the fill recoloured
-    /// to the lane hue when the card has one (so every fill in the card carries
-    /// the layer identity). Master-scope cards keep the default blue fill.
-    fn slider_colors(&self) -> SliderColors {
-        let mut c = SliderColors::default_slider();
-        if let Some(accent) = self.accent {
-            c.fill = accent;
-        }
-        c
+        color::contrast_text_color(color::INSPECTOR_ACCENT)
     }
 
     /// Inner-well fill for the card's current kind + focus. The selected card
@@ -1016,6 +996,7 @@ impl ParamCardPanel {
     fn compute_height_effect(&self) -> f32 {
         let mut h = BORDER_W * 2.0 + HEADER_HEIGHT;
         if !self.is_collapsed && !self.param_info.is_empty() {
+            h += HEADER_BODY_GAP;
             for i in 0..self.param_info.len() {
                 // Hidden params consume zero vertical space.
                 if !self.param_info[i].exposed {
@@ -1031,6 +1012,9 @@ impl ParamCardPanel {
     fn compute_height_generator(&self) -> f32 {
         let mut h = BORDER_W * 2.0 + HEADER_HEIGHT;
         if !self.is_collapsed {
+            if !self.param_info.is_empty() || !self.string_param_info.is_empty() {
+                h += HEADER_BODY_GAP;
+            }
             for (i, info) in self.param_info.iter().enumerate() {
                 if info.is_toggle || info.is_trigger {
                     h += ROW_HEIGHT + ROW_SPACING;
@@ -1352,7 +1336,13 @@ impl ParamCardPanel {
 
         // Param sliders
         if !self.is_collapsed && !self.param_info.is_empty() {
-            self.build_effect_sliders(tree, parent, inner.x, inner.y + HEADER_HEIGHT, inner_w);
+            self.build_effect_sliders(
+                tree,
+                parent,
+                inner.x,
+                inner.y + HEADER_HEIGHT + HEADER_BODY_GAP,
+                inner_w,
+            );
         }
 
         self.node_count = tree.count() - self.first_node;
@@ -1371,18 +1361,25 @@ impl ParamCardPanel {
         let chevron_x = x + w - PADDING - CHEVRON_W;
         let cog_x = chevron_x - GAP - COG_W;
         let toggle_x = cog_x - GAP - TOGGLE_W;
+        // Left edge of the name/badge region — after the drag handle (perform) or
+        // at the padding (author, no drag handle).
+        let content_left = x + PADDING
+            + if self.context == CardContext::Author { 0.0 } else { DRAG_HANDLE_W + GAP };
         let badges = effect_badge_layout(
+            content_left,
             toggle_x,
             self.state.has_graph_mod,
             self.state.has_abl,
             self.state.has_env,
             self.state.has_drv,
+            self.state.has_audio,
         );
         let badge_park = toggle_x - GAP - BADGE_W;
         let mod_x = badges.mod_x.unwrap_or(badge_park);
         let abl_x = badges.abl_x.unwrap_or(badge_park);
         let env_x = badges.env_x.unwrap_or(badge_park);
         let drv_x = badges.drv_x.unwrap_or(badge_park);
+        let aud_x = badges.aud_x.unwrap_or(badge_park);
         let elem_y = y + (HEADER_HEIGHT - 16.0) * 0.5;
         let badge_y = y + (HEADER_HEIGHT - BADGE_H) * 0.5;
 
@@ -1546,9 +1543,44 @@ impl ParamCardPanel {
         tree.set_visible(mod_badge_bg_id, show_mod);
         tree.set_visible(mod_badge_text_id, show_mod);
 
+        // AUD badge — green chip, matching the audio "A" arm button; shows when
+        // any param on the card has an armed audio modulation.
+        let show_aud = self.state.has_audio;
+        let aud_badge_bg_id = tree.add_panel(
+            Some(header_bg_id),
+            aud_x,
+            badge_y,
+            BADGE_W,
+            BADGE_H,
+            UIStyle {
+                bg_color: color::AUDIO_TRIM_BAR_C32,
+                corner_radius: BADGE_RADIUS,
+                ..UIStyle::default()
+            },
+        );
+        self.aud_badge_bg_id = Some(aud_badge_bg_id);
+        let aud_badge_text_id = tree.add_label(
+            Some(aud_badge_bg_id),
+            aud_x,
+            badge_y,
+            BADGE_W,
+            BADGE_H,
+            "AUD",
+            UIStyle {
+                text_color: color::TEXT_WHITE_C32,
+                font_size: color::FONT_CAPTION,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+        );
+        self.aud_badge_text_id = Some(aud_badge_text_id);
+        tree.set_visible(aud_badge_bg_id, show_aud);
+        tree.set_visible(aud_badge_text_id, show_aud);
+
         self.cached_has_env = show_env;
         self.cached_has_drv = show_drv;
         self.cached_has_abl = show_abl;
+        self.cached_has_audio = show_aud;
         self.cached_has_graph_mod = show_mod;
         self.cached_enabled = self.enabled;
 
@@ -1634,7 +1666,7 @@ impl ParamCardPanel {
                 &info,
                 &self.state.mod_state,
                 i,
-                &self.slider_colors(),
+                &SliderColors::default_slider(),
                 CONFIG_BTN_FONT_SIZE,
                 self.supports_envelopes,
                 label_width,
@@ -1723,7 +1755,7 @@ impl ParamCardPanel {
         if !self.is_collapsed && !self.param_info.is_empty() {
             let content_w = inner_w - PADDING * 2.0;
             let cx = inner_x + PADDING;
-            let mut cy = inner_y + HEADER_HEIGHT;
+            let mut cy = inner_y + HEADER_HEIGHT + HEADER_BODY_GAP;
             // Author mode reserves the same right-edge mapping-drawer chevron
             // lane the effect card does, so generator slider rows shrink to
             // match and the chevron sits past the D/E buttons. Generators are
@@ -1832,7 +1864,7 @@ impl ParamCardPanel {
                         &info,
                         &self.state.mod_state,
                         i,
-                        &self.slider_colors(),
+                        &SliderColors::default_slider(),
                         FONT_SIZE,
                         true,
                         label_width,
@@ -1936,12 +1968,16 @@ impl ParamCardPanel {
         };
         let toggle_x = tree.get_bounds(toggle_btn_id).x;
         let badge_y = tree.get_bounds(mod_badge_bg_id).y;
+        // The name cell's left edge is the region's left bound for centering.
+        let content_left = tree.get_bounds(name_clip_id).x;
         let badges = effect_badge_layout(
+            content_left,
             toggle_x,
             self.state.has_graph_mod,
             self.state.has_abl,
             self.state.has_env,
             self.state.has_drv,
+            self.state.has_audio,
         );
         let park = toggle_x - GAP - BADGE_W;
         for (bg, txt, x) in [
@@ -1949,6 +1985,7 @@ impl ParamCardPanel {
             (self.abl_badge_bg_id, self.abl_badge_text_id, badges.abl_x),
             (self.env_badge_bg_id, self.env_badge_text_id, badges.env_x),
             (self.drv_badge_bg_id, self.drv_badge_text_id, badges.drv_x),
+            (self.aud_badge_bg_id, self.aud_badge_text_id, badges.aud_x),
         ] {
             let r = Rect::new(x.unwrap_or(park), badge_y, BADGE_W, BADGE_H);
             if let Some(bg) = bg {
@@ -2001,11 +2038,13 @@ impl ParamCardPanel {
         if self.state.has_env != self.cached_has_env
             || self.state.has_drv != self.cached_has_drv
             || self.state.has_abl != self.cached_has_abl
+            || self.state.has_audio != self.cached_has_audio
             || self.state.has_graph_mod != self.cached_has_graph_mod
         {
             self.cached_has_env = self.state.has_env;
             self.cached_has_drv = self.state.has_drv;
             self.cached_has_abl = self.state.has_abl;
+            self.cached_has_audio = self.state.has_audio;
             self.cached_has_graph_mod = self.state.has_graph_mod;
             for (id, visible) in [
                 (self.abl_badge_bg_id, self.cached_has_abl),
@@ -2014,6 +2053,8 @@ impl ParamCardPanel {
                 (self.env_badge_text_id, self.cached_has_env),
                 (self.drv_badge_bg_id, self.cached_has_drv),
                 (self.drv_badge_text_id, self.cached_has_drv),
+                (self.aud_badge_bg_id, self.cached_has_audio),
+                (self.aud_badge_text_id, self.cached_has_audio),
                 (self.mod_badge_bg_id, self.cached_has_graph_mod),
                 (self.mod_badge_text_id, self.cached_has_graph_mod),
             ] {
@@ -2022,23 +2063,9 @@ impl ParamCardPanel {
                 }
             }
             // Re-pack the badges + resize the name cell now the active set changed.
+            // The header keeps the one accent — a graph override lights the MOD
+            // badge only, it never recolours the header.
             self.reposition_effect_badges(tree);
-            // Re-tint the header background when the modified-state flips.
-            let header_bg = if self.cached_has_graph_mod {
-                color::MOD_HEADER_BG_C32
-            } else {
-                color::DRAG_HANDLE_BG_C32
-            };
-            if let Some(header_bg_id) = self.header_bg_id {
-                tree.set_style(
-                    header_bg_id,
-                    UIStyle {
-                        bg_color: header_bg,
-                        corner_radius: CORNER_RADIUS - BORDER_W,
-                        ..UIStyle::default()
-                    },
-                );
-            }
         }
 
         // Skip slider sync if collapsed

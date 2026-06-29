@@ -351,11 +351,7 @@ impl Layer {
     /// From Unity Layer.cs line 586-590.
     pub fn generate_layer_color(index: usize) -> crate::color::Color {
         let hue = (index as f32 * 0.618_034) % 1.0;
-        // High-saturation identity hue: the lane colour now themes the inspector
-        // (headers, slider fills) as well as the timeline lane, so a muted 0.6
-        // read flat under the high-contrast surface stack. 0.82/0.85 keeps the
-        // hue vivid while leaving enough value range for contrast-text on top.
-        crate::color::Color::hsv_to_rgb(hue, 0.82, 0.85)
+        crate::color::Color::hsv_to_rgb(hue, 0.6, 0.8)
     }
 
     pub fn is_group(&self) -> bool {

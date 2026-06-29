@@ -696,6 +696,14 @@ pub const AUDIO_TRIM_FILL_C32: Color32 = Color32::new(72, 199, 116, 38);
 pub const MOD_BADGE_C32: Color32 = Color32::new(220, 60, 140, 255);
 pub const MOD_HEADER_BG_C32: Color32 = Color32::new(70, 30, 50, 255);
 
+// ── Inspector identity accent ───────────────────────────────────────
+// ONE colour themes the inspector — card headers, the selected-card border, the
+// active tab. Deliberately NOT the per-layer lane hue: inheriting the lane made
+// inspector colour meaningless (every layer a different random hue that encodes
+// nothing). One consistent accent instead. Slider fills keep SLIDER_FILL_C32,
+// which already resolves to this same blue.
+pub const INSPECTOR_ACCENT: Color32 = ACCENT_BLUE_C32;
+
 // ── Bitmap Effect Card ──────────────────────────────────────────────
 pub const EFFECT_CARD_INNER_BG_C32: Color32 = BG_0; // dark well, recessed in the card
 pub const CARD_BORDER_C32: Color32 = BORDER;

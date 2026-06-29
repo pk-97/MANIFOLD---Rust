@@ -1339,25 +1339,6 @@ pub fn sync_inspector_data(
                 }
             });
         ui.inspector.configure_tabs(&tabs, active);
-
-        // Identity accent: the inspector themes its headers, slider fills, and
-        // selected tab to the colour of the layer being edited (its timeline
-        // lane), so editing the blue lane reads blue. Master scope has no lane.
-        let accent = if active == InspectorTab::Master {
-            None
-        } else {
-            active_layer
-                .and_then(|i| project.timeline.layers.get(i))
-                .map(|l| {
-                    manifold_ui::node::Color32::from_f32(
-                        l.layer_color.r,
-                        l.layer_color.g,
-                        l.layer_color.b,
-                        l.layer_color.a,
-                    )
-                })
-        };
-        ui.inspector.set_accent_color(accent);
     }
 
     // Master effects → inspector (envelopes ride on each instance)
