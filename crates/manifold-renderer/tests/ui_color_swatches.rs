@@ -1256,11 +1256,18 @@ fn modulation_drawer_sheet() {
         ui.draw_text(x, y, label, 11.0, color::TEXT_DIMMED_C32);
         y += 16.0;
         let card_top = y;
-        let top_pad = 4.0; // mirrors param_slider_shared::MOD_CARD_TOP_PAD
-        let card_h = top_pad + row_h + slider_gap + spec.height();
-        // One source-tinted card, no spine, behind the whole param. Extends up by
-        // top_pad to cover the slider's trim handles.
-        ui.draw_rounded_rect(x, card_top - top_pad, dw, card_h, spec.theme.surface.to_f32(), color::CARD_RADIUS);
+        let pad = 4.0; // mirrors param_slider_shared::MOD_CARD_PAD
+        let card_h = pad + row_h + slider_gap + spec.height();
+        // One source-tinted card, no spine, behind the whole param. Padded out on
+        // top + left + right so content sits inset (top also covers trim handles).
+        ui.draw_rounded_rect(
+            x - pad,
+            card_top - pad,
+            dw + pad * 2.0,
+            card_h,
+            spec.theme.surface.to_f32(),
+            color::CARD_RADIUS,
+        );
         placed.push((card_top, card_h, spec));
         y += card_h + 18.0;
     }
