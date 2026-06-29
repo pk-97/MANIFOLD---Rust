@@ -674,6 +674,7 @@ pub(crate) fn build_driver_config(
         ],
         btn_font_size,
         slider_font_size: FONT_SIZE,
+        accent: Some(color::DRIVER_ACTIVE_C32),
     };
     let dids = drawer::build(tree, parent, x, y, w, &spec);
 
@@ -771,11 +772,12 @@ pub(crate) fn build_envelope_config(
             label: "Decay".into(),
             norm: (decay / ENV_DECAY_MAX).clamp(0.0, 1.0),
             value_text: format!("{decay:.2}"),
-            colors: SliderColors::envelope(),
+            colors: SliderColors::default_slider(),
             label_w: ENV_DECAY_LABEL_W,
         }],
         btn_font_size: FONT_SIZE,
         slider_font_size: FONT_SIZE,
+        accent: Some(color::ENVELOPE_ACTIVE_C32),
     };
     let dids = drawer::build(tree, parent, x, y, w, &spec);
     let decay_slider = dids
@@ -1039,6 +1041,7 @@ pub(crate) fn build_ableton_config(
         })],
         btn_font_size: color::FONT_CAPTION,
         slider_font_size: FONT_SIZE,
+        accent: Some(color::ABL_BADGE_C32),
     };
     let dids = drawer::build(tree, parent, x, y, w, &spec);
     let invert_btn_id = dids.button_ids()[0];
@@ -1589,6 +1592,7 @@ pub(crate) fn build_param_row(
             ],
             btn_font_size: config_font,
             slider_font_size: FONT_SIZE,
+            accent: Some(AUDIO_MOD_ACTIVE_C32),
         };
         let dids = drawer::build(tree, parent, x, cy, config_w, &spec);
         cy += dids.height;

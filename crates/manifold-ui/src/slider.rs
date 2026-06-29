@@ -68,7 +68,9 @@ pub struct SliderColors {
 }
 
 impl SliderColors {
-    /// The unified slider theme. Every slider in the app renders through this.
+    /// The unified slider theme. Every slider in the app renders through this —
+    /// macros, effect params, generator params, and modulation drawers. Drawer
+    /// context comes from the container's accent spine, not a recoloured slider.
     pub fn default_slider() -> Self {
         Self {
             track: color::SLIDER_TRACK_C32,
@@ -76,19 +78,6 @@ impl SliderColors {
             track_pressed: color::SLIDER_TRACK_PRESSED_C32,
             fill: color::SLIDER_FILL_C32,
             thumb: color::SLIDER_THUMB_C32,
-            text: color::SLIDER_TEXT_C32,
-        }
-    }
-
-    /// Modulation-drawer (envelope/trigger/LFO) slider colors. Folds into the
-    /// unified theme once drawer context moves to the container accent edge.
-    pub fn envelope() -> Self {
-        Self {
-            track: color::ENV_TRACK_C32,
-            track_hover: color::ENV_TRACK_HOVER_C32,
-            track_pressed: color::ENV_TRACK_PRESSED_C32,
-            fill: color::ENV_FILL_C32,
-            thumb: color::ENV_THUMB_C32,
             text: color::SLIDER_TEXT_C32,
         }
     }

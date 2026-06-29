@@ -665,13 +665,6 @@ pub const CONFIG_BTN_INACTIVE_C32: Color32 = Color32::new(44, 44, 48, 255);
 pub const CONFIG_BTN_HOVER_C32: Color32 = Color32::new(54, 54, 58, 255);
 pub const CONFIG_BTN_PRESSED_C32: Color32 = Color32::new(38, 38, 42, 255);
 
-// ── Bitmap Envelope Slider ──────────────────────────────────────────
-pub const ENV_TRACK_C32: Color32 = Color32::new(44, 44, 48, 255);
-pub const ENV_FILL_C32: Color32 = Color32::new(100, 70, 30, 120);
-pub const ENV_THUMB_C32: Color32 = Color32::new(230, 180, 100, 255);
-pub const ENV_TRACK_HOVER_C32: Color32 = Color32::new(52, 52, 56, 255);
-pub const ENV_TRACK_PRESSED_C32: Color32 = Color32::new(40, 40, 44, 255);
-
 // ── Bitmap Trim / Target Handles ────────────────────────────────────
 pub const TRIM_FILL_C32: Color32 = Color32::new(20, 166, 191, 38);
 pub const TRIM_BAR_HOVER_C32: Color32 = Color32::new(40, 186, 211, 255);

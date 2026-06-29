@@ -32,6 +32,9 @@ const ROW_GAP: f32 = 4.0;
 /// container height to get the row height.
 pub(crate) const TOP_PAD: f32 = 4.0;
 const BTN_GAP: f32 = 1.0;
+/// Width of the left-edge accent spine (source identity). Sits within `PAD_H`, so
+/// it never overlaps row content.
+const ACCENT_W: f32 = 2.5;
 /// Width reserved for a [`DrawerRow::Buttons`] leading label. Matches the audio
 /// shaping sliders' label width so feature/band rows line up with them.
 const ROW_LABEL_W: f32 = 52.0;
@@ -161,6 +164,11 @@ pub struct DrawerSpec {
     pub btn_font_size: u16,
     /// Font size for slider labels/values.
     pub slider_font_size: u16,
+    /// Modulation-source identity colour. When set, a thin accent spine runs down
+    /// the drawer's left edge — this is how a drawer says *which* source it
+    /// configures (Trigger / LFO / Audio / Ableton), so the sliders inside can use
+    /// the one neutral slider theme instead of being recoloured per source.
+    pub accent: Option<Color32>,
 }
 
 impl DrawerSpec {
@@ -259,6 +267,25 @@ pub fn build(
             ..UIStyle::default()
         },
     );
+
+    // Source-identity spine on the left edge (Trigger / LFO / Audio / Ableton).
+    // Inset vertically by the corner radius so it doesn't poke past the rounded
+    // container corners.
+    if let Some(accent) = spec.accent {
+        let inset = crate::color::SMALL_RADIUS;
+        tree.add_panel(
+            Some(container),
+            x,
+            y + inset,
+            ACCENT_W,
+            (height - inset * 2.0).max(0.0),
+            UIStyle {
+                bg_color: accent,
+                corner_radius: crate::color::HAIRLINE_RADIUS,
+                ..UIStyle::default()
+            },
+        );
+    }
 
     let mut button_ids: Vec<NodeId> = Vec::new();
     let mut sliders: Vec<SliderNodeIds> = Vec::new();
@@ -445,6 +472,7 @@ mod tests {
             ],
             btn_font_size: 10,
             slider_font_size: 11,
+            accent: None,
         };
 
         let mut tree = UITree::new();
@@ -470,11 +498,12 @@ mod tests {
                 label: "Decay".into(),
                 norm: 0.25,
                 value_text: "2.00".into(),
-                colors: SliderColors::envelope(),
+                colors: SliderColors::default_slider(),
                 label_w: 50.0,
             }],
             btn_font_size: 10,
             slider_font_size: 11,
+            accent: None,
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
@@ -507,6 +536,7 @@ mod tests {
             rows: vec![uniform_buttons(&labels)],
             btn_font_size: 10,
             slider_font_size: 11,
+            accent: None,
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
@@ -535,6 +565,7 @@ mod tests {
             })],
             btn_font_size: 10,
             slider_font_size: 11,
+            accent: None,
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
@@ -551,15 +582,18 @@ mod tests {
             rows: vec![buttons(&[("a", false)])],
             btn_font_size: 10,
             slider_font_size: 11,
+            accent: None,
         };
         let two = DrawerSpec {
             rows: vec![buttons(&[("a", false)]), buttons(&[("b", false)])],
             btn_font_size: 10,
             slider_font_size: 11,
+            accent: None,
         };
         assert!(two.height() > one.height());
         // Empty spec is zero height.
-        let empty = DrawerSpec { rows: vec![], btn_font_size: 10, slider_font_size: 11 };
+        let empty =
+            DrawerSpec { rows: vec![], btn_font_size: 10, slider_font_size: 11, accent: None };
         assert_eq!(empty.height(), 0.0);
     }
 }
