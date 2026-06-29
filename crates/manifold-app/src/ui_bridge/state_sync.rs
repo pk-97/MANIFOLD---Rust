@@ -375,17 +375,9 @@ pub fn push_state(
         let can_clear = project.tempo_map.point_count() > 1;
         ui.transport.set_bpm_clear_active(can_clear);
 
-        // Save button — "SAVE" clean, "SAVE *" dirty with warm brown tint
-        ui.transport
-            .set_save_text(if is_dirty { "SAVE *" } else { "SAVE" });
-
-        // Export state — the EXPORT button just reflects whether a range exists;
-        // the IN/OUT label is drawn by the viewport markers, not the button.
-        let has_range = project.timeline.export_range_enabled;
-        ui.transport.set_export_active(has_range);
-        ui.transport.set_hdr_active(project.settings.export_hdr);
-        let perc_active = project.percussion_import.is_some();
-        ui.transport.set_perc_active(perc_active);
+        // Save dirty state is shown by the "•" in the window/header project name
+        // (set above); the transport SAVE button moved to the File menu. HDR /
+        // Percussion / render config moved to the Settings popup (fed below).
 
         // Export range markers on viewport
         ui.viewport.set_export_range(
@@ -408,9 +400,13 @@ pub fn push_state(
         let ppb = ui.viewport.pixels_per_beat();
         ui.header.set_zoom_label(&format!("{:.0} px/beat", ppb));
 
-        // Footer — quantize mode, resolution, FPS
+        // Footer — quantize mode + FPS. (Resolution / render scale / tonemap
+        // moved to the Settings popup; the footer keeps the live FPS readout.)
         ui.footer
             .set_quantize_text(project.settings.quantize_mode.display_name());
+        ui.footer
+            .set_fps_text(&format!("{:.0} FPS", project.settings.frame_rate));
+
         // Show preset label if dimensions match, otherwise show "WxH" (Unity: UpdateFooterResolutionText)
         let (preset_w, preset_h) = project.settings.resolution_preset.dimensions();
         let res_label = if preset_w == project.settings.output_width
@@ -427,16 +423,9 @@ pub fn push_state(
                 project.settings.output_width, project.settings.output_height
             )
         };
-        ui.footer.set_resolution_text(&res_label);
-        ui.footer
-            .set_fps_text(&format!("{:.0} FPS", project.settings.frame_rate));
-        ui.footer.set_render_scale(project.settings.render_scale);
-        ui.footer.set_tonemap_curve(crate::ui_translate::tonemap_curve_to_ui(
-            project.settings.tonemap_curve,
-        ));
 
-        // Settings popup now hosts the render config — mirror the same state so
-        // its segmented controls highlight the active option.
+        // Settings popup hosts the render config — feed the same state so its
+        // segmented controls highlight the active option.
         ui.settings_popup.set_resolution_text(&res_label);
         ui.settings_popup
             .set_render_scale(project.settings.render_scale);

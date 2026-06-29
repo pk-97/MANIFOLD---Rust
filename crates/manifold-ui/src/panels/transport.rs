@@ -19,7 +19,6 @@ const INSET: f32 = color::SPACE_M;
 const GROUP_Y_PAD: f32 = color::SPACE_S;
 const ITEM_SPACING: f32 = color::SPACE_S; // §14.4: 5 → 4
 const SECTION_SPACER: f32 = color::SPACE_M;
-const RIGHT_SPACING: f32 = color::SPACE_S;
 const CENTER_SPACER: f32 = color::SPACE_L;
 
 const DIVIDER_W: f32 = 1.0;
@@ -42,19 +41,7 @@ const BPM_FIELD_W: f32 = 60.0;
 const BPM_RESET_W: f32 = 24.0;
 const BPM_CLEAR_W: f32 = 32.0;
 
-const NEW_BUTTON_W: f32 = 40.0;
-const OPEN_BUTTON_W: f32 = 45.0;
-const OPEN_RECENT_W: f32 = 92.0;
-const SAVE_BUTTON_W: f32 = 42.0;
-const SAVE_AS_W: f32 = 55.0;
-const EXPORT_BUTTON_W: f32 = 55.0;
-const FRAME_BUTTON_W: f32 = 48.0;
-const HDR_BUTTON_W: f32 = 35.0;
-const PERC_BUTTON_W: f32 = 48.0;
-
 // ── Panel-specific colors ──────────────────────────────────────────
-
-const SAVE_DIRTY_BG: Color32 = color::TRANSPORT_SAVE_DIRTY_BG;
 
 const BUTTON_FONT: u16 = color::FONT_SUBHEADING;
 const STATUS_FONT: u16 = color::FONT_BODY;
@@ -124,10 +111,6 @@ pub struct TransportPanel {
     bpm_text: String,
     bpm_reset_active: bool,
     bpm_clear_active: bool,
-    save_text: String,
-    export_active: bool,
-    hdr_active: bool,
-    perc_active: bool,
 }
 
 impl TransportPanel {
@@ -158,10 +141,6 @@ impl TransportPanel {
             bpm_text: "120.0".into(),
             bpm_reset_active: false,
             bpm_clear_active: false,
-            save_text: "SAVE".into(),
-            export_active: false,
-            hdr_active: false,
-            perc_active: false,
         }
     }
 
@@ -240,22 +219,6 @@ impl TransportPanel {
 
     pub fn set_bpm_clear_active(&mut self, active: bool) {
         self.bpm_clear_active = active;
-    }
-
-    pub fn set_save_text(&mut self, text: &str) {
-        self.save_text = text.into();
-    }
-
-    pub fn set_export_active(&mut self, active: bool) {
-        self.export_active = active;
-    }
-
-    pub fn set_hdr_active(&mut self, active: bool) {
-        self.hdr_active = active;
-    }
-
-    pub fn set_perc_active(&mut self, active: bool) {
-        self.perc_active = active;
     }
 
     // ── View description ────────────────────────────────────────────
@@ -388,39 +351,16 @@ impl TransportPanel {
             )
     }
 
-    fn right_group(&self) -> View {
-        let save_bg = if self.save_text.contains('*') { SAVE_DIRTY_BG } else { color::BUTTON_INACTIVE_C32 };
-        let export_bg = if self.export_active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
-        let hdr_bg = if self.hdr_active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
-        let perc_bg = if self.perc_active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
-        let inactive = || button_style(color::BUTTON_INACTIVE_C32);
-
-        View::row(RIGHT_SPACING)
-            .fill()
-            .main_align(Align::End)
-            .cross_align(Align::Center)
-            .child(Self::btn("NEW", NEW_BUTTON_W, inactive(), PanelAction::NewProject))
-            .child(Self::btn("OPEN", OPEN_BUTTON_W, inactive(), PanelAction::OpenProject))
-            .child(Self::btn("OPEN RECENT", OPEN_RECENT_W, inactive(), PanelAction::OpenRecent))
-            .child(Self::btn(self.save_text.as_str(), SAVE_BUTTON_W, button_style(save_bg), PanelAction::SaveProject))
-            .child(Self::btn("SAVE AS", SAVE_AS_W, inactive(), PanelAction::SaveProjectAs))
-            // The file|render section gap is RIGHT_SPACING + SECTION_SPACER; the
-            // row already contributes RIGHT_SPACING on each side of the cell.
-            .child(self.section_break(SECTION_SPACER - RIGHT_SPACING))
-            .child(Self::btn("EXPORT", EXPORT_BUTTON_W, button_style(export_bg), PanelAction::ExportVideo))
-            .child(Self::btn("FRAME", FRAME_BUTTON_W, inactive(), PanelAction::ExportFrame))
-            .child(Self::btn("HDR", HDR_BUTTON_W, button_style(hdr_bg), PanelAction::ToggleHdr))
-            .child(Self::btn("PERC", PERC_BUTTON_W, button_style(perc_bg), PanelAction::TogglePercussion))
-    }
-
     fn view(&self) -> View {
+        // File ops moved to the native File menu; HDR/Percussion to the Settings
+        // popup — so the old right group is gone. Left (sync) + centred transport
+        // remain; the centre group stays centred via its own `main_align`.
         View::stack()
             .fill()
             .bg(color::PANEL_BG_DARK)
             .pad(Pad { l: INSET, t: GROUP_Y_PAD, r: INSET, b: GROUP_Y_PAD })
             .child(self.left_group())
             .child(self.center_group())
-            .child(self.right_group())
     }
 }
 
@@ -519,29 +459,7 @@ mod tests {
             cx += BPM_RESET_W + ITEM_SPACING;
             put("CLR", cx, BPM_CLEAR_W);
 
-            // Right
-            let right_w = NEW_BUTTON_W + RIGHT_SPACING + OPEN_BUTTON_W + RIGHT_SPACING + OPEN_RECENT_W
-                + RIGHT_SPACING + SAVE_BUTTON_W + RIGHT_SPACING + SAVE_AS_W + RIGHT_SPACING
-                + SECTION_SPACER + EXPORT_BUTTON_W + RIGHT_SPACING + FRAME_BUTTON_W + RIGHT_SPACING
-                + HDR_BUTTON_W + RIGHT_SPACING + PERC_BUTTON_W;
-            let mut rx = bounds.x_max() - INSET - right_w;
-            put("NEW", rx, NEW_BUTTON_W);
-            rx += NEW_BUTTON_W + RIGHT_SPACING;
-            put("OPEN", rx, OPEN_BUTTON_W);
-            rx += OPEN_BUTTON_W + RIGHT_SPACING;
-            put("OPEN RECENT", rx, OPEN_RECENT_W);
-            rx += OPEN_RECENT_W + RIGHT_SPACING;
-            put("SAVE", rx, SAVE_BUTTON_W);
-            rx += SAVE_BUTTON_W + RIGHT_SPACING;
-            put("SAVE AS", rx, SAVE_AS_W);
-            rx += SAVE_AS_W + RIGHT_SPACING + SECTION_SPACER;
-            put("EXPORT", rx, EXPORT_BUTTON_W);
-            rx += EXPORT_BUTTON_W + RIGHT_SPACING;
-            put("FRAME", rx, FRAME_BUTTON_W);
-            rx += FRAME_BUTTON_W + RIGHT_SPACING;
-            put("HDR", rx, HDR_BUTTON_W);
-            rx += HDR_BUTTON_W + RIGHT_SPACING;
-            put("PERC", rx, PERC_BUTTON_W);
+            // Right group removed: file ops → File menu, HDR/PERC → Settings popup.
         }
     }
 
@@ -564,7 +482,7 @@ mod tests {
         g.compute(layout.transport_bar());
 
         let got = buttons(&tree);
-        assert_eq!(got.len(), 20, "20 transport buttons");
+        assert_eq!(got.len(), 11, "11 transport buttons (sync left + transport centre)");
         for (text, rect) in &got {
             let want = g.rects.get(text.as_str()).unwrap_or_else(|| panic!("unexpected button {text:?}"));
             assert!(
@@ -598,8 +516,8 @@ mod tests {
             Some(PanelAction::PlayPause)
         ));
         assert!(matches!(
-            intents.resolve(&tree, id_of("EXPORT"), Gesture::Click),
-            Some(PanelAction::ExportVideo)
+            intents.resolve(&tree, id_of("SYNC"), Gesture::Click),
+            Some(PanelAction::ToggleSyncOutput)
         ));
         assert!(matches!(
             intents.resolve(&tree, panel.bpm_field_id(), Gesture::Click),

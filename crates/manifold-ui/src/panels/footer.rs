@@ -12,7 +12,6 @@ use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
-use crate::types::TonemapCurve;
 
 // ── Layout constants (from FooterLayout.cs) ────────────────────────
 
@@ -23,13 +22,6 @@ const SECTION_SPACER: f32 = 18.0;
 
 const QUANTIZE_LABEL_W: f32 = 20.0;
 const QUANTIZE_BUTTON_W: f32 = 44.0;
-const RESOLUTION_LABEL_W: f32 = 32.0;
-const RESOLUTION_BUTTON_W: f32 = 120.0;
-const SCALE_BUTTON_W: f32 = 28.0;
-const SCALE_BTN_GAP: f32 = 2.0;
-const TONEMAP_LABEL_W: f32 = 24.0;
-const TONEMAP_BUTTON_W: f32 = 36.0;
-const TONEMAP_BTN_GAP: f32 = 2.0;
 const FPS_LABEL_W: f32 = 32.0;
 const FPS_FIELD_W: f32 = 46.0;
 const RIGHT_GUTTER: f32 = 10.0;
@@ -51,10 +43,7 @@ pub struct FooterPanel {
     // Display state — the single source the `view()` description reads.
     selection_info: String,
     quantize_text: String,
-    resolution_text: String,
     fps_text: String,
-    current_render_scale: f32,
-    current_tonemap_curve: TonemapCurve,
 }
 
 impl FooterPanel {
@@ -64,10 +53,7 @@ impl FooterPanel {
             rect: Rect::ZERO,
             selection_info: String::new(),
             quantize_text: "Off".into(),
-            resolution_text: "1080p".into(),
             fps_text: "60".into(),
-            current_render_scale: 1.0,
-            current_tonemap_curve: TonemapCurve::AcesNarkowicz,
         }
     }
 
@@ -89,20 +75,8 @@ impl FooterPanel {
         self.quantize_text = text.into();
     }
 
-    pub fn set_resolution_text(&mut self, text: &str) {
-        self.resolution_text = text.into();
-    }
-
     pub fn set_fps_text(&mut self, text: &str) {
         self.fps_text = text.into();
-    }
-
-    pub fn set_render_scale(&mut self, scale: f32) {
-        self.current_render_scale = scale;
-    }
-
-    pub fn set_tonemap_curve(&mut self, curve: TonemapCurve) {
-        self.current_tonemap_curve = curve;
     }
 
     // ── Styles ──────────────────────────────────────────────────────
@@ -116,17 +90,6 @@ impl FooterPanel {
         }
     }
 
-    /// A mutually-exclusive footer selector (render scale / tonemap): a kit
-    /// segment cell — the selected one raises onto the control level, the rest
-    /// sit at panel level. §18: kit owns the look (was a bespoke blue-when-active;
-    /// grey-raised keeps the one accent for genuine focus, per §15's "sparingly").
-    fn active_button_style(active: bool) -> UIStyle {
-        UIStyle {
-            font_size: FOOTER_FONT,
-            ..components::segment_style(active)
-        }
-    }
-
     // ── View description ────────────────────────────────────────────
 
     fn dim_label(text: &str, w: f32) -> View {
@@ -136,24 +99,6 @@ impl FooterPanel {
             .font(FOOTER_FONT)
             .text_color(color::TEXT_DIMMED_C32)
             .align_text(TextAlign::Right)
-    }
-
-    fn scale_btn(&self, label: &str, scale: f32) -> View {
-        let active = (scale - self.current_render_scale).abs() < 0.01;
-        View::button(label)
-            .w(Sizing::Fixed(SCALE_BUTTON_W))
-            .fill_h()
-            .style(Self::active_button_style(active))
-            .on_click(PanelAction::SetRenderScale(scale))
-    }
-
-    fn tonemap_btn(&self, label: &str, curve: TonemapCurve) -> View {
-        let active = curve == self.current_tonemap_curve;
-        View::button(label)
-            .w(Sizing::Fixed(TONEMAP_BUTTON_W))
-            .fill_h()
-            .style(Self::active_button_style(active))
-            .on_click(PanelAction::SetTonemapCurve(curve))
     }
 
     /// The whole footer, described once. The outer row insets by the footer's
@@ -170,35 +115,6 @@ impl FooterPanel {
                     .fill_h()
                     .style(Self::footer_button_style())
                     .on_click(PanelAction::CycleQuantize),
-            );
-
-        let resolution = View::row(LABEL_GAP)
-            .fill_h()
-            .child(Self::dim_label("RES:", RESOLUTION_LABEL_W))
-            .child(
-                View::button(self.resolution_text.as_str())
-                    .w(Sizing::Fixed(RESOLUTION_BUTTON_W))
-                    .fill_h()
-                    .style(Self::footer_button_style())
-                    .on_click(PanelAction::ResolutionClicked),
-            );
-
-        let scale = View::row(SCALE_BTN_GAP)
-            .fill_h()
-            .child(self.scale_btn("1\u{00D7}", 1.0))
-            .child(self.scale_btn("75%", 0.75))
-            .child(self.scale_btn("50%", 0.5));
-
-        let tonemap = View::row(LABEL_GAP)
-            .fill_h()
-            .child(Self::dim_label("TM:", TONEMAP_LABEL_W))
-            .child(
-                View::row(TONEMAP_BTN_GAP)
-                    .fill_h()
-                    .child(self.tonemap_btn("ACE", TonemapCurve::AcesNarkowicz))
-                    .child(self.tonemap_btn("Hill", TonemapCurve::AcesHill))
-                    .child(self.tonemap_btn("AgX", TonemapCurve::Agx))
-                    .child(self.tonemap_btn("Khr", TonemapCurve::KhronosPbrNeutral)),
             );
 
         let fps = View::row(LABEL_GAP)
@@ -226,9 +142,6 @@ impl FooterPanel {
                     .align_text(TextAlign::Left),
             )
             .child(quantize)
-            .child(resolution)
-            .child(scale)
-            .child(tonemap)
             .child(fps)
     }
 }
@@ -292,14 +205,6 @@ mod tests {
     #[derive(Default)]
     struct FooterGolden {
         quantize_button: Rect,
-        resolution_button: Rect,
-        scale_100: Rect,
-        scale_75: Rect,
-        scale_50: Rect,
-        tonemap_aces: Rect,
-        tonemap_hill: Rect,
-        tonemap_agx: Rect,
-        tonemap_khr: Rect,
         fps_field: Rect,
     }
 
@@ -313,32 +218,6 @@ mod tests {
             self.fps_field = Rect::new(rx, y, FPS_FIELD_W, elem_h);
             rx -= LABEL_GAP;
             rx -= FPS_LABEL_W;
-            rx -= SECTION_SPACER;
-
-            rx -= TONEMAP_BUTTON_W;
-            self.tonemap_khr = Rect::new(rx, y, TONEMAP_BUTTON_W, elem_h);
-            rx -= TONEMAP_BTN_GAP + TONEMAP_BUTTON_W;
-            self.tonemap_agx = Rect::new(rx, y, TONEMAP_BUTTON_W, elem_h);
-            rx -= TONEMAP_BTN_GAP + TONEMAP_BUTTON_W;
-            self.tonemap_hill = Rect::new(rx, y, TONEMAP_BUTTON_W, elem_h);
-            rx -= TONEMAP_BTN_GAP + TONEMAP_BUTTON_W;
-            self.tonemap_aces = Rect::new(rx, y, TONEMAP_BUTTON_W, elem_h);
-            rx -= LABEL_GAP;
-            rx -= TONEMAP_LABEL_W;
-            rx -= SECTION_SPACER;
-
-            rx -= SCALE_BUTTON_W;
-            self.scale_50 = Rect::new(rx, y, SCALE_BUTTON_W, elem_h);
-            rx -= SCALE_BTN_GAP + SCALE_BUTTON_W;
-            self.scale_75 = Rect::new(rx, y, SCALE_BUTTON_W, elem_h);
-            rx -= SCALE_BTN_GAP + SCALE_BUTTON_W;
-            self.scale_100 = Rect::new(rx, y, SCALE_BUTTON_W, elem_h);
-            rx -= SECTION_SPACER;
-
-            rx -= RESOLUTION_BUTTON_W;
-            self.resolution_button = Rect::new(rx, y, RESOLUTION_BUTTON_W, elem_h);
-            rx -= LABEL_GAP;
-            rx -= RESOLUTION_LABEL_W;
             rx -= SECTION_SPACER;
 
             rx -= QUANTIZE_BUTTON_W;
@@ -365,8 +244,8 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         assert!(panel.host.is_built());
-        // bg + selection + 5 groups (with the tonemap sub-row) + 10 buttons + 4 labels.
-        assert_eq!(buttons(&tree).len(), 10, "10 footer buttons");
+        // bg + selection + quantize + fps groups → 2 buttons (Q value, FPS field).
+        assert_eq!(buttons(&tree).len(), 2, "2 footer buttons");
         assert!(panel.fps_field_id().is_some(), "fps field resolves by key");
     }
 
@@ -380,18 +259,7 @@ mod tests {
         let mut g = FooterGolden::default();
         g.compute(layout.footer());
 
-        let want = [
-            (g.quantize_button, "Off"),
-            (g.resolution_button, "1080p"),
-            (g.scale_100, "1\u{00D7}"),
-            (g.scale_75, "75%"),
-            (g.scale_50, "50%"),
-            (g.tonemap_aces, "ACE"),
-            (g.tonemap_hill, "Hill"),
-            (g.tonemap_agx, "AgX"),
-            (g.tonemap_khr, "Khr"),
-            (g.fps_field, "60"),
-        ];
+        let want = [(g.quantize_button, "Off"), (g.fps_field, "60")];
         let mut want: Vec<(Rect, String)> =
             want.iter().map(|(r, t)| (*r, t.to_string())).collect();
         want.sort_by(|a, b| a.0.x.partial_cmp(&b.0.x).unwrap());
@@ -445,20 +313,5 @@ mod tests {
             "value change must not bump structure_version"
         );
         assert_eq!(tree.get_node(fps_id).text.as_deref(), Some("30 FPS"));
-    }
-
-    #[test]
-    fn render_scale_highlight_is_in_place() {
-        let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
-        let mut panel = FooterPanel::new();
-        panel.build(&mut tree, &layout);
-        let sv = tree.structure_version();
-
-        panel.set_render_scale(0.5);
-        panel.update(&mut tree);
-
-        // Structure unchanged (only the active button's bg color moved).
-        assert_eq!(tree.structure_version(), sv);
     }
 }

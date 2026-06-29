@@ -130,7 +130,6 @@ fn footer_demo() {
 
     let mut footer = FooterPanel::new();
     footer.set_selection_info("Layers: 5   |   Clips: 5");
-    footer.set_render_scale(0.75); // 75% is the active scale segment
     let layout = ScreenLayout::new(W as f32, H as f32);
     let mut tree = UITree::new();
     footer.build(&mut tree, &layout);
