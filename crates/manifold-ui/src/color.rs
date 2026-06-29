@@ -703,6 +703,10 @@ pub const MOD_HEADER_BG_C32: Color32 = Color32::new(70, 30, 50, 255);
 // nothing). One consistent accent instead. Slider fills keep SLIDER_FILL_C32,
 // which already resolves to this same blue.
 pub const INSPECTOR_ACCENT: Color32 = ACCENT_BLUE_C32;
+// Card header fill — a DEEPENED accent (same hue, darker) so WHITE header text
+// reads cleanly. The bright accent left auto-contrast text muddy (dark text on a
+// mid-bright blue), and the bright bar itself read loud; the deep blue fixes both.
+pub const INSPECTOR_HEADER_BG: Color32 = Color32::new(44, 74, 122, 255);
 
 // ── Bitmap Effect Card ──────────────────────────────────────────────
 pub const EFFECT_CARD_INNER_BG_C32: Color32 = BG_0; // dark well, recessed in the card

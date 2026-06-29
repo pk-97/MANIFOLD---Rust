@@ -828,16 +828,17 @@ impl ParamCardPanel {
         }
     }
 
-    /// Header background — the one inspector accent for every card, regardless of
-    /// kind or layer. A graph override (MOD) does NOT recolour the header; it only
-    /// lights its badge.
+    /// Header background — the one deep-blue inspector accent for every card,
+    /// regardless of kind or layer. A graph override (MOD) does NOT recolour the
+    /// header; it only lights its badge.
     fn header_bg(&self) -> Color32 {
-        color::INSPECTOR_ACCENT
+        color::INSPECTOR_HEADER_BG
     }
 
-    /// Name-label colour for the header — automatic contrast text on the accent.
+    /// Name-label colour for the header — white, for high contrast on the deep
+    /// header blue.
     fn header_name_color(&self) -> Color32 {
-        color::contrast_text_color(color::INSPECTOR_ACCENT)
+        color::TEXT_WHITE_C32
     }
 
     /// Inner-well fill for the card's current kind + focus. The selected card
