@@ -102,14 +102,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         discard;
     }
     let color = textureSample(t_atlas, s_atlas, in.uv);
-    // Luminance gate: near-black thumbnail pixels fade out so the clip's body
-    // colour (drawn underneath in the body pass) shows through. A mostly-dark
-    // generator (fluid sim, sparse particles) then keeps its layer colour-coding
-    // instead of reading as an empty/broken clip, while its bright content stays
-    // fully opaque. The threshold is low, so only near-black keys out.
-    let lum = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-    let content_alpha = smoothstep(0.015, 0.10, lum);
-    return vec4<f32>(color.rgb, color.a * alpha * content_alpha);
+    // The thumbnail is a PREVIEW: show the captured footage as-is. We deliberately
+    // ignore the source alpha (`color.a`) and don't gate on luminance — both let the
+    // tinted clip body/well behind the thumbnail bleed through, which reads as the
+    // whole clip being tinted by its layer colour. Producers don't write a clean
+    // opaque alpha (alpha-standardisation), so keying on it tints every clip. The
+    // only alpha is the rounded-rect SDF mask, so the body colour shows ONLY at the
+    // clip's rounded corners.
+    return vec4<f32>(color.rgb, alpha);
 }
 "#;
 
