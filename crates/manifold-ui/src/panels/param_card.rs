@@ -224,6 +224,9 @@ const HEADER_HEIGHT: f32 = color::HEADER_ROW_HEIGHT; // §14.2 rule 5: one heade
 /// Breathing room between the coloured header and the first param row, so the
 /// slider doesn't butt against the header. Matches the card's bottom padding.
 const HEADER_BODY_GAP: f32 = PADDING;
+/// Card title font — a heading size, clearly larger than the body-size param
+/// rows so the effect/generator name reads as a title, not another parameter.
+const HEADER_FONT_SIZE: u16 = color::FONT_HEADING;
 const BORDER_W: f32 = 1.0;
 // Card corner = the design-token card radius (Phase 3). Radius is purely
 // visual — it doesn't move any laid rect, so the golden header-layout tests
@@ -1123,7 +1126,7 @@ impl ParamCardPanel {
                 View::label(self.name.as_str())
                     .fill_w()
                     .fill_h()
-                    .font(FONT_SIZE)
+                    .font(HEADER_FONT_SIZE)
                     .text_color(self.header_name_color())
                     .align_text(TextAlign::Left)
                     .interactive()
@@ -1270,7 +1273,7 @@ impl ParamCardPanel {
                         View::label(self.name.as_str())
                             .fill_w()
                             .fill_h()
-                            .font(FONT_SIZE)
+                            .font(HEADER_FONT_SIZE)
                             .text_color(self.header_name_color())
                             .align_text(TextAlign::Left)
                             .key(KEY_NAME),
