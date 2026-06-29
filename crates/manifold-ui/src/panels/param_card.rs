@@ -1242,19 +1242,20 @@ impl ParamCardPanel {
                     .style(toggle_btn_style(self.enabled))
                     .inert()
                     .key(KEY_TOGGLE),
-            )
-            .child(
-                View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
-                    .fixed(CHEVRON_W, 16.0)
-                    .style(UIStyle {
-                        text_color: color::CHEVRON_COLOR,
-                        font_size: FONT_SIZE,
-                        text_align: TextAlign::Center,
-                        ..transparent_btn(color::HOVER_OVERLAY, color::PRESS_OVERLAY)
-                    })
-                    .inert()
-                    .key(KEY_CHEVRON),
             );
+        // Cog (or a reserved slot in Author) sits LEFT of the chevron so the
+        // expand chevron is always the rightmost control — same trailing order as
+        // the generator header (… · cog · ▾).
+        let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
+            .fixed(CHEVRON_W, 16.0)
+            .style(UIStyle {
+                text_color: color::CHEVRON_COLOR,
+                font_size: FONT_SIZE,
+                text_align: TextAlign::Center,
+                ..transparent_btn(color::HOVER_OVERLAY, color::PRESS_OVERLAY)
+            })
+            .inert()
+            .key(KEY_CHEVRON);
         if !author {
             row.child(
                 View::button("")
@@ -1263,8 +1264,9 @@ impl ParamCardPanel {
                     .inert()
                     .key(KEY_COG),
             )
+            .child(chevron)
         } else {
-            row.child(View::panel().w(Sizing::Fixed(COG_W)).fill_h())
+            row.child(View::panel().w(Sizing::Fixed(COG_W)).fill_h()).child(chevron)
         }
     }
 
@@ -1313,9 +1315,11 @@ impl ParamCardPanel {
         // Layout (right-to-left for fixed elements). Badges pack flush against
         // the toggle — only the active ones take a slot — so the name cell is
         // as wide as possible and a lone badge never floats mid-header.
-        let cog_x = x + w - PADDING - COG_W;
-        let chevron_x = cog_x - GAP - CHEVRON_W;
-        let toggle_x = chevron_x - GAP - TOGGLE_W;
+        // Trailing order (right→left): chevron (always rightmost), cog, toggle —
+        // matches the host View child order in `effect_header_row`.
+        let chevron_x = x + w - PADDING - CHEVRON_W;
+        let cog_x = chevron_x - GAP - COG_W;
+        let toggle_x = cog_x - GAP - TOGGLE_W;
         let badges = effect_badge_layout(
             toggle_x,
             self.state.has_graph_mod,
@@ -3594,8 +3598,9 @@ mod tests {
 
     #[test]
     fn effect_header_layout_matches_golden() {
-        // The host-built effect header lands toggle / chevron / cog at the same
-        // right-to-left rects the old imperative layout used.
+        // The host-built effect header lands toggle / cog / chevron at the right,
+        // with the expand chevron always the rightmost control (matches the
+        // generator header trailing order).
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new(); // Perform context
         panel.configure(&effect_config());
@@ -3605,9 +3610,9 @@ mod tests {
         let inner_x = rect.x + BORDER_W;
         let inner_y = rect.y + BORDER_W;
         let inner_w = rect.width - BORDER_W * 2.0;
-        let cog_x = inner_x + inner_w - PADDING - COG_W;
-        let chevron_x = cog_x - GAP - CHEVRON_W;
-        let toggle_x = chevron_x - GAP - TOGGLE_W;
+        let chevron_x = inner_x + inner_w - PADDING - CHEVRON_W;
+        let cog_x = chevron_x - GAP - COG_W;
+        let toggle_x = cog_x - GAP - TOGGLE_W;
         let elem_y = inner_y + (HEADER_HEIGHT - 16.0) * 0.5;
 
         let close = |a: Rect, b: Rect| {
