@@ -6,11 +6,14 @@ use crate::tree::UITree;
 // ── Layout constants ────────────────────────────────────────────────
 
 pub const DEFAULT_LABEL_WIDTH: f32 = 60.0;
-/// Width of the value gutter at the track's right end. The value text lives
-/// *inside* the track here (bg matches the track so it reads as one continuous
-/// control); the fill and thumb never enter the gutter, so the number stays
-/// legible even at full value. Replaces the old separate value column.
-pub const VALUE_GUTTER: f32 = 56.0;
+/// Width of the value box at the row's right end — a distinct cell (its own
+/// rounded chip) showing the value, click-to-type. Toggle/enum controls that
+/// stand in for a value (e.g. a Clip Trigger ON/OFF) use this same width so the
+/// right column stays aligned.
+pub const VALUE_BOX_W: f32 = 56.0;
+/// Padding between the slider track's right edge and the value box, so the value
+/// reads as its own cell instead of being jammed against the fill.
+pub const VALUE_GAP: f32 = 6.0;
 pub const GAP: f32 = 4.0;
 
 /// Label-column width that grows with the row, so widening a card gives the
@@ -138,10 +141,11 @@ impl BitmapSlider {
         }
 
         // ── Track (flexible width; the value lives in a fixed gutter at its
-        //    right end, so the usable track stops short of the panel edge). The
-        //    track node is the usable region — `track_rect` — so drag mapping,
-        //    fill, and thumb all agree and never reach under the value. ──
-        let track_right = rect.x + rect.width - VALUE_GUTTER;
+        //    right end, separated by VALUE_GAP, so the usable track stops short of
+        //    it). The track node is the usable region — `track_rect` — so drag
+        //    mapping, fill, and thumb all agree and never reach under the value. ──
+        let value_box_x = rect.x + rect.width - VALUE_BOX_W;
+        let track_right = value_box_x - VALUE_GAP;
         let track_w = (track_right - x).max(1.0);
         let track_rect = Rect::new(x, y, track_w, h);
         ids.track_rect = track_rect;
@@ -197,22 +201,21 @@ impl BitmapSlider {
             UIFlags::empty(),
         );
 
-        // ── Value text (inline, in the right gutter) ──
-        // Sits at the track's right end with the track's own colour behind it, so
-        // it reads as one continuous control (Ableton/Resolve style). Right-
-        // aligned so a stacked column of values lines up at the decimal edge.
-        // Built last so a wide enum value overflows left cleanly *over* the track
-        // rather than being painted under it. The bg is opaque (track colour) to
-        // clear stale glyphs during incremental atlas re-render.
+        // ── Value box (its own rounded cell, separated from the track by
+        // VALUE_GAP, click-to-type). Right-aligned so a stacked column of values
+        // lines up at the decimal edge. Opaque bg (track colour) to clear stale
+        // glyphs during incremental atlas re-render. A small right inset keeps the
+        // number off the cell's edge.
         ids.value_text = tree.add_label(
             parent_id,
-            track_right,
+            value_box_x,
             y,
-            VALUE_GUTTER,
+            VALUE_BOX_W,
             h,
             value_text,
             UIStyle {
                 bg_color: colors.track,
+                corner_radius: TRACK_RADIUS,
                 text_color: colors.text,
                 font_size,
                 text_align: TextAlign::Right,

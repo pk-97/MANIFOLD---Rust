@@ -246,8 +246,10 @@ const BADGE_H: f32 = 14.0;
 const BADGE_RADIUS: f32 = 7.0;
 const CONFIG_BTN_FONT_SIZE: u16 = color::FONT_CAPTION;
 
-// Generator shell furniture.
-const TOGGLE_BTN_W: f32 = 40.0;
+// Generator shell furniture. A toggle/trigger row stands in for a value, so its
+// button is the same width as the slider value box and right-aligns to the same
+// column — the right edge of every row lines up.
+const TOGGLE_BTN_W: f32 = crate::slider::VALUE_BOX_W;
 const TOGGLE_BTN_H: f32 = 16.0;
 const CHANGE_BTN_W: f32 = 60.0;
 const CHANGE_BTN_H: f32 = 16.0;

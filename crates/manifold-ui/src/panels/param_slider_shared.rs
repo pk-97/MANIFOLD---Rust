@@ -17,8 +17,8 @@ pub use crate::types::AbletonMappingStatus;
 
 // ── Shared layout constants ─────────────────────────────────────
 
-pub(crate) const ROW_HEIGHT: f32 = 20.0;
-pub(crate) const ROW_SPACING: f32 = color::SPACE_S;
+pub(crate) const ROW_HEIGHT: f32 = 24.0;
+pub(crate) const ROW_SPACING: f32 = 6.0;
 // Card inner inset (§14.5 C). The canonical `SPACE_M`: with the card's 1px frame
 // border that puts param-label content at `BORDER_W + SPACE_M` =
 // `color::SECTION_CONTENT_INSET`, the one column the border-less chrome panels

@@ -25,8 +25,10 @@ use crate::types::MACRO_COUNT;
 
 // ── Layout constants ───────────────────────────────────────────────
 
-const ROW_HEIGHT: f32 = 18.0;
-const ROW_SPACING: f32 = 2.0;
+// Match the inspector param rows so the macros bank reads as one instrument with
+// the cards below it (same row height + gap).
+const ROW_HEIGHT: f32 = 24.0;
+const ROW_SPACING: f32 = 6.0;
 const HEADER_ROW_H: f32 = 22.0;
 const PAD_TOP: f32 = 4.0;
 const PAD_BOTTOM: f32 = 4.0;
