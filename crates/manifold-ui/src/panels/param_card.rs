@@ -226,7 +226,7 @@ const HEADER_HEIGHT: f32 = color::HEADER_ROW_HEIGHT; // §14.2 rule 5: one heade
 const HEADER_BODY_GAP: f32 = PADDING;
 /// Card title font — a heading size, clearly larger than the body-size param
 /// rows so the effect/generator name reads as a title, not another parameter.
-const HEADER_FONT_SIZE: u16 = color::FONT_HEADING;
+const HEADER_FONT_SIZE: u16 = 18;
 const BORDER_W: f32 = 1.0;
 // Card corner = the design-token card radius (Phase 3). Radius is purely
 // visual — it doesn't move any laid rect, so the golden header-layout tests
