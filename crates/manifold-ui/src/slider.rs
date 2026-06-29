@@ -202,10 +202,8 @@ impl BitmapSlider {
         );
 
         // ── Value box (its own rounded cell, separated from the track by
-        // VALUE_GAP, click-to-type). Right-aligned so a stacked column of values
-        // lines up at the decimal edge. Opaque bg (track colour) to clear stale
-        // glyphs during incremental atlas re-render. A small right inset keeps the
-        // number off the cell's edge.
+        // VALUE_GAP, click-to-type). Centered in the cell. Opaque bg (track
+        // colour) to clear stale glyphs during incremental atlas re-render.
         ids.value_text = tree.add_label(
             parent_id,
             value_box_x,
@@ -218,7 +216,7 @@ impl BitmapSlider {
                 corner_radius: TRACK_RADIUS,
                 text_color: colors.text,
                 font_size,
-                text_align: TextAlign::Right,
+                text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
         );

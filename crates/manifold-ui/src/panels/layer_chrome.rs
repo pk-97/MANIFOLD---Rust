@@ -15,7 +15,6 @@ use crate::tree::UITree;
 // ── Layout constants (from LayerChromeBitmapPanel.cs) ─────────────
 
 const HEADER_ROW_H: f32 = color::HEADER_ROW_HEIGHT; // §14.2 rule 5: one header height (was 27.5)
-const DIVIDER_H: f32 = 1.0;
 const PAD_H: f32 = color::SECTION_CONTENT_INSET; // §14.5 C: align with card param-label column
 const PAD_V: f32 = 2.0;
 const GAP: f32 = 4.0;
@@ -67,9 +66,9 @@ impl LayerChromePanel {
 
     pub fn compute_height(&self) -> f32 {
         // §6d: name + chevron + opacity are merged onto one row, so the chrome is
-        // a single row + trailing divider — constant whether collapsed (opacity
-        // hidden in-place) or expanded.
-        PAD_V + HEADER_ROW_H + DIVIDER_H + PAD_V
+        // a single row — constant whether collapsed (opacity hidden in-place) or
+        // expanded.
+        PAD_V + HEADER_ROW_H + PAD_V
     }
 
     pub fn first_node(&self) -> usize {
@@ -112,13 +111,6 @@ impl LayerChromePanel {
     }
 
     // ── View description (chrome only) ───────────────────────────
-
-    fn divider() -> View {
-        View::panel()
-            .fill_w()
-            .h(Sizing::Fixed(DIVIDER_H))
-            .bg(color::DIVIDER_C32)
-    }
 
     fn chrome_view(&self) -> View {
         let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
@@ -180,7 +172,6 @@ impl LayerChromePanel {
             .fill()
             .pad(Pad { l: PAD_H, t: PAD_V, r: PAD_H, b: PAD_V })
             .child(header)
-            .child(Self::divider())
     }
 
     // ── Build ────────────────────────────────────────────────────
@@ -302,10 +293,8 @@ mod tests {
         let got = tree.get_bounds(panel.host.node_id_for_key(KEY_OPACITY_SLOT).unwrap());
         assert!((got.y - (rect.y + PAD_V)).abs() < 0.01, "opacity not on header row: {got:?}");
         assert!(got.width > 0.0, "opacity slot has no width: {got:?}");
-        // Whole chrome is one row + trailing divider.
-        assert!(
-            (panel.compute_height() - (PAD_V + HEADER_ROW_H + DIVIDER_H + PAD_V)).abs() < 0.01
-        );
+        // Whole chrome is one row (no trailing divider).
+        assert!((panel.compute_height() - (PAD_V + HEADER_ROW_H + PAD_V)).abs() < 0.01);
     }
 
     #[test]
