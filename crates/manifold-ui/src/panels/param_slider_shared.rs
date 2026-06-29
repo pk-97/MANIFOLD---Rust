@@ -19,6 +19,11 @@ pub use crate::types::AbletonMappingStatus;
 
 pub(crate) const ROW_HEIGHT: f32 = 24.0;
 pub(crate) const ROW_SPACING: f32 = 6.0;
+/// Extra gap below an expanded modulation drawer, before the next param row. The
+/// slider hugs its own drawer (ROW_SPACING above); this larger break after it
+/// makes the next slider clearly a separate row. Paired in `row_drawer_height`
+/// so build + height computation agree.
+pub(crate) const DRAWER_BOTTOM_GAP: f32 = color::SPACE_L;
 // Card inner inset (§14.5 C). The canonical `SPACE_M`: with the card's 1px frame
 // border that puts param-label content at `BORDER_W + SPACE_M` =
 // `color::SECTION_CONTENT_INSET`, the one column the border-less chrome panels
@@ -1461,11 +1466,13 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
-    // Drawer geometry: inset to the slider TRACK (not the full row) so the drawer
-    // reads as an operation OVER that slider. Left edge = track left (past the
-    // label column), width = track width (stops at the value box / mod buttons).
+    // Drawer geometry: left edge at the slider TRACK (so it reads as an operation
+    // over that slider — indented under it, past the label), right edge extended
+    // to the mod-button column's right edge so it reclaims the otherwise-empty
+    // value/mod region instead of leaving a tall dead strip.
     let drawer_x = slider.track_rect.x;
-    let drawer_w = slider.track_rect.width;
+    let drawer_right = audio_btn_x + DE_BUTTON_SIZE;
+    let drawer_w = (drawer_right - drawer_x).max(1.0);
 
     // Modulation config drawer. Zero or one active config shows directly (no tab
     // strip — unchanged); two or more share this one drawer behind a tab strip
@@ -1609,6 +1616,12 @@ pub(crate) fn build_param_row(
         let dids = drawer::build(tree, parent, drawer_x, cy, drawer_w, &spec);
         cy += dids.height;
         ids.audio_config = Some((dids, send_count));
+    }
+
+    // Clear break after an expanded drawer so the next slider reads as a separate
+    // row (the slider above hugs its own drawer). Mirrored in `row_drawer_height`.
+    if !active_tabs.is_empty() {
+        cy += DRAWER_BOTTOM_GAP;
     }
 
     ids.new_cy = cy;

@@ -1057,15 +1057,17 @@ impl ParamCardPanel {
             return 0.0;
         };
         let active = active_mod_tabs(&self.state.mod_state, info, i);
-        match active.len() {
-            0 => 0.0,
+        let h = match active.len() {
+            0 => return 0.0,
             1 => mod_config_height(active[0]),
             _ => {
                 let stored = self.mod_active_tab.get(i).copied().unwrap_or(ModTab::Driver);
                 let shown = resolve_active_tab(&active, stored).unwrap_or(active[0]);
                 MOD_TAB_STRIP_H + mod_config_height(shown)
             }
-        }
+        };
+        // Match the build's post-drawer break (see `build_param_row`).
+        h + DRAWER_BOTTOM_GAP
     }
 
     // ── Build ─────────────────────────────────────────────────────
@@ -3959,7 +3961,8 @@ mod tests {
         let expanded_h = panel.compute_height();
 
         assert!(expanded_h > base_h);
-        assert!((expanded_h - base_h - driver_config_height()).abs() < 0.1);
+        // Drawer height includes the post-drawer break (DRAWER_BOTTOM_GAP).
+        assert!((expanded_h - base_h - driver_config_height() - DRAWER_BOTTOM_GAP).abs() < 0.1);
     }
 
     #[test]
@@ -3994,6 +3997,7 @@ mod tests {
 
         assert!(expanded_h > base_h);
         let audio_h = crate::panels::param_slider_shared::audio_config_height();
-        assert!((expanded_h - base_h - audio_h).abs() < 0.1);
+        // Drawer height includes the post-drawer break (DRAWER_BOTTOM_GAP).
+        assert!((expanded_h - base_h - audio_h - DRAWER_BOTTOM_GAP).abs() < 0.1);
     }
 }

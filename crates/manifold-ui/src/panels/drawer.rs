@@ -263,7 +263,12 @@ pub fn build(
         height,
         UIStyle {
             bg_color: crate::color::CONFIG_BG_C32,
-            corner_radius: crate::color::SMALL_RADIUS,
+            // A visible border + card radius so the drawer reads as one bounded
+            // sub-panel of its slider, distinct from the card body and the next
+            // param row — not loose rows floating on the card.
+            border_color: crate::color::BORDER,
+            border_width: 1.0,
+            corner_radius: crate::color::CARD_RADIUS,
             ..UIStyle::default()
         },
     );
@@ -272,7 +277,7 @@ pub fn build(
     // Inset vertically by the corner radius so it doesn't poke past the rounded
     // container corners.
     if let Some(accent) = spec.accent {
-        let inset = crate::color::SMALL_RADIUS;
+        let inset = crate::color::CARD_RADIUS;
         tree.add_panel(
             Some(container),
             x,
