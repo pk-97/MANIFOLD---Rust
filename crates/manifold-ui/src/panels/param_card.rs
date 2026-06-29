@@ -1546,7 +1546,13 @@ impl ParamCardPanel {
         // default, so narrow timeline cards keep the timeline's width exactly.
         let label_width = crate::slider::label_width_for_row(w - PADDING * 2.0);
         // Three buttons in the lane now: E (envelope), → (driver), A (audio).
-        let slider_w = w - PADDING * 2.0 - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 3.0 - chevron_lane;
+        // Lane = slider→group gap + 3 buttons + 2 inter-button gaps.
+        let slider_w = w
+            - PADDING * 2.0
+            - MOD_LANE_GAP
+            - DE_BUTTON_SIZE * 3.0
+            - DE_BUTTON_GAP * 2.0
+            - chevron_lane;
 
         for i in 0..self.param_info.len() {
             // Hidden params: leave slider_ids[i] = None and skip widget
@@ -1676,8 +1682,11 @@ impl ParamCardPanel {
             } else {
                 0.0
             };
-            let slider_w =
-                content_w - (DE_BUTTON_SIZE + DE_BUTTON_GAP) * 3.0 - chevron_lane;
+            let slider_w = content_w
+                - MOD_LANE_GAP
+                - DE_BUTTON_SIZE * 3.0
+                - DE_BUTTON_GAP * 2.0
+                - chevron_lane;
             // Same growth rule as the effect card (see build_effect_sliders).
             let label_width = crate::slider::label_width_for_row(content_w);
 

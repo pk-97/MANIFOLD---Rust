@@ -29,7 +29,12 @@ pub(crate) const GAP: f32 = color::SPACE_S;
 pub(crate) const FONT_SIZE: u16 = color::FONT_BODY;
 
 pub(crate) const DE_BUTTON_SIZE: f32 = 20.0;
-pub(crate) const DE_BUTTON_GAP: f32 = color::SPACE_XS;
+/// Gap *between* the three T/∿/A arm buttons. Tight, so they read as one group.
+pub(crate) const DE_BUTTON_GAP: f32 = color::SPACE_S;
+/// Gap between the slider's right edge and the T/∿/A group. Wider than the
+/// inter-button gap so the value and the arm buttons don't crowd each other —
+/// the slider reads as one cell, the arm group as another.
+pub(crate) const MOD_LANE_GAP: f32 = color::SPACE_M;
 
 /// Per-row modulation config tabs. The T/∿/A arm buttons stay on the row (one-
 /// click arm); when two or more configs are active they share ONE drawer with a
@@ -1394,8 +1399,9 @@ pub(crate) fn build_param_row(
 
     ids.slider = Some(slider);
 
-    // D/E buttons (right of the slider row).
-    let btn_x = x + slider_w + DE_BUTTON_GAP;
+    // D/E buttons (right of the slider row). The slider→group gap is wider than
+    // the inter-button gap so the value doesn't crowd the arm buttons.
+    let btn_x = x + slider_w + MOD_LANE_GAP;
     let btn_y = cy + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
     if build_env_button {
         let env_active = mod_state.envelope_expanded.get(i).copied().unwrap_or(false);

@@ -1793,19 +1793,22 @@ impl Panel for InspectorCompositePanel {
         let macros_h = self.macros_panel.height();
         let macros_y = rect.y;
 
-        // Tab strip below the macros: the rungs of the current selection
-        // (Clip · Layer · Group · Master), active one highlighted.
-        let tab_h = TAB_STRIP_HEIGHT;
-        let tab_y = macros_y + macros_h + 2.0; // 2px gap below macros
-        self.build_tab_strip(tree, Rect::new(rect.x, tab_y, rect.width, tab_h));
-
-        // One full-width column for the active scope. Both scroll containers are
-        // still begun every frame so their node ids never go stale; the inactive
-        // one collapses to zero width. column_split_x routes scroll/drag to the
-        // live column.
+        // One content box shared by the macros strip, the tab strip, AND the
+        // section cards, so all three line up on the same left and right inset
+        // (the tabs used to span the full width and visibly stick out past the
+        // cards). `content_w` reserves the scrollbar gutter on the right; the
+        // cards' right edge lands at `col_x + content_w`, so tabs/macros sized to
+        // it match exactly.
         let col_x = rect.x + COLUMN_PAD;
         let content_w = (rect.width - COLUMN_PAD * 2.0 - SCROLLBAR_W).max(0.0);
         let full_col_w = (rect.width - COLUMN_PAD * 2.0).max(0.0);
+
+        // Tab strip below the macros: the rungs of the current selection
+        // (Clip · Layer · Group · Master), active one highlighted. Inset to the
+        // shared content box.
+        let tab_h = TAB_STRIP_HEIGHT;
+        let tab_y = macros_y + macros_h + 2.0; // 2px gap below macros
+        self.build_tab_strip(tree, Rect::new(col_x, tab_y, content_w, tab_h));
         let (master_col_w, layer_col_w) = if self.master_visible() {
             (full_col_w, 0.0)
         } else {
@@ -1951,7 +1954,7 @@ impl Panel for InspectorCompositePanel {
 
         // ── MACROS STRIP (pinned to the top, above the tab strip; built last so
         // it draws on top of any column content) ──
-        let macros_rect = Rect::new(left_x, macros_y, rect.width - COLUMN_PAD * 2.0, macros_h);
+        let macros_rect = Rect::new(left_x, macros_y, content_w, macros_h);
         self.macros_panel.build(tree, macros_rect);
 
         self.update_scroll_bounds();
