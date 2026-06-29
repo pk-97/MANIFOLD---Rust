@@ -1136,6 +1136,154 @@ fn playhead_scrollbar_demo() {
     eprintln!("playhead scrollbar demo → {png}");
 }
 
+/// Renders the three modulation drawers (Trigger / LFO / Audio) built through the
+/// new `chrome::Theme` context, each above a blue param slider — so the settled
+/// design can be eyeballed: a source-tinted dark surface (no border), white text,
+/// source-coloured option fills + slider fills + spine, distinct from the blue
+/// param slider it operates over. This is the API's first consumer.
+#[test]
+fn modulation_drawer_sheet() {
+    use manifold_ui::chrome::Theme;
+    use manifold_ui::node::Rect;
+    use manifold_ui::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
+    use manifold_ui::slider::{BitmapSlider, SliderColors};
+    use manifold_ui::UITree;
+
+    let device = GpuDevice::new();
+    let mut ui = UIRenderer::new(&device, FORMAT);
+    let out_dir = std::env::var("SWATCH_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let png = format!("{out_dir}/modulation_drawer_sheet.png");
+
+    let bf = color::FONT_BODY;
+    let sf = color::FONT_BODY;
+    let btn = |l: &str, a: bool| DrawerButton::new(l, a);
+    let buttons = |bs: Vec<DrawerButton>, label: Option<&str>, w: ButtonWidth| DrawerRow::Buttons {
+        buttons: bs,
+        width: w,
+        label: label.map(|s| s.to_string()),
+    };
+    let slider = |label: &str, norm: f32, value: &str| DrawerRow::Slider {
+        label: label.to_string(),
+        norm,
+        value_text: value.to_string(),
+        label_w: 52.0,
+    };
+
+    // Trigger (orange) — a single Decay slider.
+    let trigger = DrawerSpec {
+        rows: vec![slider("Decay", 0.40, "1.00")],
+        btn_font_size: bf,
+        slider_font_size: sf,
+        theme: Theme::INSPECTOR.with_accent(color::ENVELOPE_ACTIVE_C32).tinted(),
+    };
+
+    // LFO (driver) — rate grid + feel + shapes.
+    let rate: Vec<DrawerButton> = ["1/32", "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16", "32", "Free"]
+        .iter()
+        .enumerate()
+        .map(|(i, l)| btn(l, i == 8))
+        .collect();
+    let lfo = DrawerSpec {
+        rows: vec![
+            buttons(rate, None, ButtonWidth::Uniform),
+            buttons(
+                vec![btn("Straight", true), btn("Dotted", false), btn("Triplet", false)],
+                None,
+                ButtonWidth::Uniform,
+            ),
+            buttons(
+                vec![btn("Sin", false), btn("Tri", false), btn("Saw", true), btn("Sqr", false), btn("Rnd", false), btn("Invert", false)],
+                None,
+                ButtonWidth::Uniform,
+            ),
+        ],
+        btn_font_size: bf,
+        slider_font_size: sf,
+        theme: Theme::INSPECTOR.with_accent(color::DRIVER_ACTIVE_C32).tinted(),
+    };
+
+    // Audio (green) — selectors + shaping sliders.
+    let audio = DrawerSpec {
+        rows: vec![
+            buttons(vec![btn("Audio 1", true)], Some("Source"), ButtonWidth::Proportional),
+            buttons(
+                vec![btn("Amp", true), btn("Centroid", false), btn("Noise", false), btn("Flux", false), btn("Trans", false)],
+                Some("Feature"),
+                ButtonWidth::Uniform,
+            ),
+            buttons(
+                vec![btn("Full", true), btn("Low", false), btn("Mid", false), btn("High", false)],
+                Some("Band"),
+                ButtonWidth::Uniform,
+            ),
+            buttons(vec![btn("Inv", false), btn("Delta", false)], None, ButtonWidth::Proportional),
+            slider("Amount", 0.55, "1.00"),
+            slider("Attack", 0.06, "5 ms"),
+            slider("Release", 0.14, "120 ms"),
+        ],
+        btn_font_size: bf,
+        slider_font_size: sf,
+        theme: Theme::INSPECTOR.with_accent(color::AUDIO_TRIM_BAR_C32).tinted(),
+    };
+
+    let groups: [(&str, &DrawerSpec); 3] =
+        [("TRIGGER (envelope)", &trigger), ("LFO (driver)", &lfo), ("AUDIO", &audio)];
+
+    let x = 24.0;
+    let dw = 600.0;
+    let mut tree = UITree::new();
+
+    ui.begin_frame();
+    // Sit on the dark card inner well, as the drawer does in-app.
+    ui.draw_rect(0.0, 0.0, W as f32, H as f32, color::EFFECT_CARD_INNER_BG_C32);
+    ui.draw_text(
+        14.0,
+        8.0,
+        "MODULATION DRAWERS via Theme  (param = blue, drawer = source colour)",
+        12.0,
+        color::TEXT_NORMAL,
+    );
+
+    let mut y = 30.0;
+    for (label, spec) in groups {
+        ui.draw_text(x, y, label, 11.0, color::TEXT_DIMMED_C32);
+        y += 16.0;
+        // The blue param slider the drawer operates over.
+        let _ = BitmapSlider::build(
+            &mut tree,
+            None,
+            Rect::new(x, y, dw, 24.0),
+            Some("Amount"),
+            0.62,
+            "0.65",
+            &SliderColors::default_slider(),
+            sf,
+            52.0,
+        );
+        y += 24.0 + 4.0;
+        // Slight left inset — the drawer "belongs to" the slider above it (matches
+        // `param_slider_shared::DRAWER_INDENT`).
+        let indent = color::SPACE_L;
+        let ids = drawer::build(&mut tree, None, x + indent, y, dw - indent, spec);
+        y += ids.height + 18.0;
+    }
+
+    ui.render_tree(&tree, None);
+    let drew = ui.prepare(&device, W, H, 1.0);
+    assert!(drew, "modulation drawer sheet produced no draw commands");
+    let target = RenderTarget::new(&device, W, H, FORMAT, "mod-drawer-sheet");
+    {
+        let mut enc = device.create_encoder("mod-drawer-render");
+        ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
+        enc.commit_and_wait_completed();
+    }
+    let bytes = readback(&device, &target.texture);
+    image::save_buffer(&png, &bytes, W, H, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {png}: {e}"));
+    eprintln!("modulation drawer sheet → {png}");
+}
+
 fn draw_column(ui: &mut UIRenderer, x: f32, y0: f32, rows: &[(&str, Color32)]) {
     for (i, (label, c)) in rows.iter().enumerate() {
         let y = y0 + i as f32 * ROW_H;

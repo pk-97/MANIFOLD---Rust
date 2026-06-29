@@ -8,7 +8,7 @@
 use super::DriverConfigAction;
 use super::TrimKind;
 use super::param_card::ParamInfo;
-use crate::chrome::View;
+use crate::chrome::{Theme, View};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -24,6 +24,13 @@ pub(crate) const ROW_SPACING: f32 = 6.0;
 /// makes the next slider clearly a separate row. Paired in `row_drawer_height`
 /// so build + height computation agree.
 pub(crate) const DRAWER_BOTTOM_GAP: f32 = color::SPACE_L;
+/// Left inset of a modulation drawer from the row's left edge — the same "belongs
+/// to its parent" indent grammar as a layer nested inside a group on the timeline
+/// (`color::GROUP_CHILD_INDENT_PX`), but a slighter single-level step: it says the
+/// drawer is an operation *under* its slider without re-eating the label column the
+/// way the old track-width indent did. Affects geometry only (`drawer_x`), not
+/// height — height math is unchanged.
+pub(crate) const DRAWER_INDENT: f32 = color::SPACE_L;
 // Card inner inset (§14.5 C). The canonical `SPACE_M`: with the card's 1px frame
 // border that puts param-label content at `BORDER_W + SPACE_M` =
 // `color::SECTION_CONTENT_INSET`, the one column the border-less chrome panels
@@ -542,19 +549,11 @@ pub(crate) fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
     )
 }
 
-/// Driver config buttons (beat div, waveform, dot, triplet, reverse): a recessed
-/// option cell, filled with the driver-active teal when on. `font_size` is the
+/// A recessed option cell filled with `active_color` when on (e.g. Ableton purple
+/// for the INV button). The drawer's own option cells now resolve from
+/// [`crate::chrome::Theme::option_style`]; this remains for the few callers that
+/// build a one-off config button outside a themed drawer. `font_size` is the
 /// caller's (effect card 8, gen param 10).
-pub(crate) fn config_btn_style(active: bool, font_size: u16) -> UIStyle {
-    crate::chrome::components::state_button_skinned(
-        color::DRIVER_ACTIVE_C32,
-        active,
-        font_size,
-        &crate::chrome::components::StateButtonSkin::CARD_RECESSED,
-    )
-}
-
-/// Like [`config_btn_style`] but with a custom active hue (e.g. Ableton purple).
 pub(crate) fn config_btn_style_colored(
     active: bool,
     active_color: Color32,
@@ -686,7 +685,7 @@ pub(crate) fn build_driver_config(
         ],
         btn_font_size,
         slider_font_size: FONT_SIZE,
-        accent: Some(color::DRIVER_ACTIVE_C32),
+        theme: Theme::INSPECTOR.with_accent(color::DRIVER_ACTIVE_C32).tinted(),
     };
     let dids = drawer::build(tree, parent, x, y, w, &spec);
 
@@ -784,12 +783,11 @@ pub(crate) fn build_envelope_config(
             label: "Decay".into(),
             norm: (decay / ENV_DECAY_MAX).clamp(0.0, 1.0),
             value_text: format!("{decay:.2}"),
-            colors: SliderColors::default_slider(),
             label_w: ENV_DECAY_LABEL_W,
         }],
         btn_font_size: FONT_SIZE,
         slider_font_size: FONT_SIZE,
-        accent: Some(color::ENVELOPE_ACTIVE_C32),
+        theme: Theme::INSPECTOR.with_accent(color::ENVELOPE_ACTIVE_C32).tinted(),
     };
     let dids = drawer::build(tree, parent, x, y, w, &spec);
     let decay_slider = dids
@@ -1053,7 +1051,7 @@ pub(crate) fn build_ableton_config(
         })],
         btn_font_size: color::FONT_CAPTION,
         slider_font_size: FONT_SIZE,
-        accent: Some(color::ABL_BADGE_C32),
+        theme: Theme::INSPECTOR.with_accent(color::ABL_BADGE_C32).tinted(),
     };
     let dids = drawer::build(tree, parent, x, y, w, &spec);
     let invert_btn_id = dids.button_ids()[0];
@@ -1468,11 +1466,14 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
-    // Drawer geometry: left edge at the slider TRACK (so it reads as an operation
-    // over that slider — indented under it, past the label), right edge extended
-    // to the mod-button column's right edge so it reclaims the otherwise-empty
-    // value/mod region instead of leaving a tall dead strip.
-    let drawer_x = slider.track_rect.x;
+    // Drawer geometry: a SLIGHT left inset from the row's label edge (the same
+    // "belongs to its parent" indent as a group-nested layer on the timeline),
+    // right edge at the mod-button column's right edge. The drawer reads as an
+    // operation *under* its slider via the indent + its source-tinted surface +
+    // accent spine — not the old track-width indent, which re-ate the label column
+    // and made the slider-vs-drawer boundary hard to read. The slider hugs its own
+    // drawer above; a larger gap after it separates the next row.
+    let drawer_x = x + DRAWER_INDENT;
     let drawer_right = audio_btn_x + DE_BUTTON_SIZE;
     let drawer_w = (drawer_right - drawer_x).max(1.0);
 
@@ -1533,7 +1534,6 @@ pub(crate) fn build_param_row(
     // drawer API.
     if shown_tab == Some(ModTab::Audio) {
         use crate::panels::drawer::{self, ButtonWidth, DrawerButton, DrawerRow, DrawerSpec};
-        use crate::slider::SliderColors;
         let send_sel = mod_state.audio_send_idx.get(i).copied().unwrap_or(-1);
         let send_count = mod_state.audio_send_labels.len();
         let send_buttons: Vec<DrawerButton> = mod_state
@@ -1578,7 +1578,6 @@ pub(crate) fn build_param_row(
             label: label.to_string(),
             norm: norm.clamp(0.0, 1.0),
             value_text,
-            colors: SliderColors::default_slider(),
             label_w: AUDIO_SHAPE_LABEL_W,
         };
         // Modifier toggles below the band row: "Inv" (loud → low) then "Delta"
@@ -1613,7 +1612,7 @@ pub(crate) fn build_param_row(
             ],
             btn_font_size: config_font,
             slider_font_size: FONT_SIZE,
-            accent: Some(AUDIO_MOD_ACTIVE_C32),
+            theme: Theme::INSPECTOR.with_accent(AUDIO_MOD_ACTIVE_C32).tinted(),
         };
         let dids = drawer::build(tree, parent, drawer_x, cy, drawer_w, &spec);
         cy += dids.height;

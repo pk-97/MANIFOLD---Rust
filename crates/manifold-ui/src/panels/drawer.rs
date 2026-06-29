@@ -16,11 +16,10 @@
 //!
 //! See `docs/AUDIO_MODULATION_DESIGN.md` §10.2.
 
+use crate::chrome::Theme;
 use crate::node::*;
-use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
+use crate::slider::{BitmapSlider, SliderNodeIds};
 use crate::tree::UITree;
-
-use super::param_slider_shared::config_btn_style;
 
 /// Layout constants — match the existing driver/envelope drawers so a migrated
 /// drawer renders identically.
@@ -131,14 +130,15 @@ pub enum DrawerRow {
         label: Option<String>,
     },
     /// A full-width value slider. Not click-addressed (the panel's existing
-    /// slider-drag path handles it via the returned [`SliderNodeIds`]).
+    /// slider-drag path handles it via the returned [`SliderNodeIds`]). Its colours
+    /// resolve from the drawer's [`DrawerSpec::theme`] (fill = the source accent),
+    /// so a drawer slider always belongs to its source without a per-row colour arg.
     Slider {
         label: String,
         /// Normalized fill 0..1.
         norm: f32,
         /// Display text shown in the slider's value field.
         value_text: String,
-        colors: SliderColors,
         /// Width reserved for the leading label.
         label_w: f32,
     },
@@ -164,11 +164,14 @@ pub struct DrawerSpec {
     pub btn_font_size: u16,
     /// Font size for slider labels/values.
     pub slider_font_size: u16,
-    /// Modulation-source identity colour. When set, a thin accent spine runs down
-    /// the drawer's left edge — this is how a drawer says *which* source it
-    /// configures (Trigger / LFO / Audio / Ableton), so the sliders inside can use
-    /// the one neutral slider theme instead of being recoloured per source.
-    pub accent: Option<Color32>,
+    /// The drawer's styling context — its source identity ([`Theme::accent`]), the
+    /// tinted-dark surface it paints, and the text colour. Every control inside
+    /// (container fill, accent spine, option cells, sliders, labels) resolves its
+    /// colour from this one value, so a drawer takes on its source's colour
+    /// (orange Trigger / magenta LFO / green Audio / purple Ableton) in one place
+    /// instead of threading a palette. Built by the caller as
+    /// `Theme::INSPECTOR.with_accent(SOURCE).tinted()`.
+    pub theme: Theme,
 }
 
 impl DrawerSpec {
@@ -255,28 +258,23 @@ pub fn build(
     spec: &DrawerSpec,
 ) -> DrawerIds {
     let height = spec.height();
+    // The drawer reads as a contained operation over its slider via the SURFACE —
+    // a dark zone tinted with the source colour — not a border. No box; grouping is
+    // the tint + the spine. Surface, spine, and every control resolve from the
+    // one theme.
     let container = tree.add_panel(
         parent,
         x,
         y,
         w,
         height,
-        UIStyle {
-            bg_color: crate::color::CONFIG_BG_C32,
-            // A visible border + card radius so the drawer reads as one bounded
-            // sub-panel of its slider, distinct from the card body and the next
-            // param row — not loose rows floating on the card.
-            border_color: crate::color::BORDER,
-            border_width: 1.0,
-            corner_radius: crate::color::CARD_RADIUS,
-            ..UIStyle::default()
-        },
+        spec.theme.surface_style(crate::color::CARD_RADIUS),
     );
 
     // Source-identity spine on the left edge (Trigger / LFO / Audio / Ableton).
     // Inset vertically by the corner radius so it doesn't poke past the rounded
     // container corners.
-    if let Some(accent) = spec.accent {
+    {
         let inset = crate::color::CARD_RADIUS;
         tree.add_panel(
             Some(container),
@@ -285,7 +283,7 @@ pub fn build(
             ACCENT_W,
             (height - inset * 2.0).max(0.0),
             UIStyle {
-                bg_color: accent,
+                bg_color: spec.theme.spine_color(),
                 corner_radius: crate::color::HAIRLINE_RADIUS,
                 ..UIStyle::default()
             },
@@ -310,12 +308,7 @@ pub fn build(
                         label_w,
                         ROW_LABEL_H,
                         text,
-                        UIStyle {
-                            text_color: Color32::new(150, 150, 160, 255),
-                            font_size: spec.slider_font_size,
-                            text_align: TextAlign::Left,
-                            ..UIStyle::default()
-                        },
+                        spec.theme.label_style(spec.slider_font_size),
                     );
                 }
                 let labels: Vec<&str> = buttons.iter().map(|b| b.label.as_str()).collect();
@@ -327,7 +320,11 @@ pub fn build(
                 };
                 let mut cx = x + PAD_H + label_w;
                 for (b, bw) in buttons.iter().zip(widths.iter()) {
-                    let mut style = config_btn_style(b.active, spec.btn_font_size);
+                    // Base option look comes from the theme: selected fills the
+                    // source accent, idle recesses to a dark well. A per-button
+                    // accent (an audio send's own identity colour) overlays on top —
+                    // genuinely local identity, not the subtree accent.
+                    let mut style = spec.theme.option_style(b.active, spec.btn_font_size);
                     if let Some(accent) = b.accent {
                         if b.accent_text_only {
                             // Identity as text color only; active keeps the
@@ -351,11 +348,14 @@ pub fn build(
                 label,
                 norm,
                 value_text,
-                colors,
                 label_w,
             } => {
                 let sx = x + PAD_H;
                 let slider_w = w - PAD_H * 2.0;
+                // Slider colours resolve from the theme: fill = the source accent,
+                // so a drawer slider belongs to its source (orange Decay, green
+                // audio shaping) without a per-row colour arg.
+                let sc = spec.theme.slider_colors();
                 let ids = BitmapSlider::build(
                     tree,
                     Some(container),
@@ -363,7 +363,7 @@ pub fn build(
                     Some(label.as_str()),
                     norm.clamp(0.0, 1.0),
                     value_text.as_str(),
-                    colors,
+                    &sc,
                     spec.slider_font_size,
                     *label_w,
                 );
@@ -477,7 +477,7 @@ mod tests {
             ],
             btn_font_size: 10,
             slider_font_size: 11,
-            accent: None,
+            theme: Theme::INSPECTOR,
         };
 
         let mut tree = UITree::new();
@@ -503,12 +503,11 @@ mod tests {
                 label: "Decay".into(),
                 norm: 0.25,
                 value_text: "2.00".into(),
-                colors: SliderColors::default_slider(),
                 label_w: 50.0,
             }],
             btn_font_size: 10,
             slider_font_size: 11,
-            accent: None,
+            theme: Theme::INSPECTOR,
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
@@ -541,7 +540,7 @@ mod tests {
             rows: vec![uniform_buttons(&labels)],
             btn_font_size: 10,
             slider_font_size: 11,
-            accent: None,
+            theme: Theme::INSPECTOR,
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
@@ -570,7 +569,7 @@ mod tests {
             })],
             btn_font_size: 10,
             slider_font_size: 11,
-            accent: None,
+            theme: Theme::INSPECTOR,
         };
         let mut tree = UITree::new();
         let root = tree.add_panel(None, 0.0, 0.0, 400.0, 200.0, UIStyle::default());
@@ -587,18 +586,18 @@ mod tests {
             rows: vec![buttons(&[("a", false)])],
             btn_font_size: 10,
             slider_font_size: 11,
-            accent: None,
+            theme: Theme::INSPECTOR,
         };
         let two = DrawerSpec {
             rows: vec![buttons(&[("a", false)]), buttons(&[("b", false)])],
             btn_font_size: 10,
             slider_font_size: 11,
-            accent: None,
+            theme: Theme::INSPECTOR,
         };
         assert!(two.height() > one.height());
         // Empty spec is zero height.
         let empty =
-            DrawerSpec { rows: vec![], btn_font_size: 10, slider_font_size: 11, accent: None };
+            DrawerSpec { rows: vec![], btn_font_size: 10, slider_font_size: 11, theme: Theme::INSPECTOR };
         assert_eq!(empty.height(), 0.0);
     }
 }
