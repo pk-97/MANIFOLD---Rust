@@ -80,18 +80,24 @@ pub fn cell_beat_range(
     (s, e.max(s))
 }
 
-/// §F aspect-locked filmstrip windows. The atlas captures one cell per bar(-group),
-/// but drawing one image per bar squishes the frame at low zoom (a bar is a few px —
-/// the "squished slivers"). Instead, tile fixed-aspect windows across the clip
-/// (`win_w = body_height × cell_aspect`) and show ONE captured cell per window — the
-/// first candidate cell at/after the window's left edge — so each window shows a full,
-/// undistorted frame, and the cell count drawn collapses to `body_width / win_w`.
+/// §F/§G continuous filmstrip windows. The atlas captures one cell per bar(-group),
+/// but capture is sparse — a bar's cell only exists once the playhead has swept it
+/// during playback, so unplayed bars have no cell. Drawing a window only where a cell
+/// exists leaves dark gaps at irregular x positions (the "spotty / unaligned" look).
 ///
-/// `cells` is each candidate cell as `(atlas_cell, on-screen start x)`, ascending by x.
-/// Pushes `(atlas_cell, x0, w)` per window into `out` (cleared first); `w` is clamped to
+/// Instead, lay a REGULAR grid of `win_w`-wide windows left→right across the body and
+/// fill EVERY window from the nearest captured cell — the most recent capture at or
+/// before the window's centre, else the first available cell. Unplayed bars are
+/// bridged by holding the closest real frame (like a scrubber holding the last decoded
+/// frame) instead of showing the body colour. The result is a gapless, evenly-spaced
+/// strip that still refines bar-by-bar as the clip plays.
+///
+/// `cells` is each captured cell as `(atlas_cell, on-screen start x)`, ascending by x
+/// (empty → no windows: the clip has no thumbnail yet, body colour shows). Pushes
+/// `(atlas_cell, x0, w)` per window into `out` (cleared first); `w` is clamped to
 /// `body_right` (a partial last window). Allocation-free apart from `out` (caller-owned
-/// scratch). At high zoom (cells ≥ `win_w` apart) it degenerates to one window per cell.
-pub fn aspect_windows(
+/// scratch). Cost is `windows × cells`, both tiny (≤ ~30 × ≤ 64).
+pub fn grid_windows(
     cells: &[(u32, f32)],
     body_x: f32,
     body_right: f32,
@@ -99,25 +105,28 @@ pub fn aspect_windows(
     out: &mut Vec<(u32, f32, f32)>,
 ) {
     out.clear();
-    if win_w < 1.0 {
+    if win_w < 1.0 || cells.is_empty() {
         return;
     }
-    // A window may start at the very left edge; seed below it so the first cell counts.
-    let mut next_x = body_x - 1.0;
-    for &(cell, cx) in cells {
-        if cx < next_x {
-            continue; // covered by the previous window
-        }
-        let x0 = cx.max(body_x);
-        if x0 >= body_right - 0.5 {
-            break;
-        }
+    let mut x0 = body_x;
+    while x0 < body_right - 0.5 {
         let w = win_w.min(body_right - x0);
         if w < 0.5 {
             break;
         }
-        out.push((cell, x0, w));
-        next_x = x0 + win_w;
+        let center = x0 + w * 0.5;
+        // Most recent captured cell at or before the window centre; default to the
+        // first cell so windows left of every capture still draw (nearest on the right).
+        let mut chosen = cells[0].0;
+        for &(cell, cx) in cells {
+            if cx <= center {
+                chosen = cell;
+            } else {
+                break; // cells ascending — no later cell is ≤ centre
+            }
+        }
+        out.push((chosen, x0, w));
+        x0 += win_w;
     }
 }
 
@@ -128,32 +137,51 @@ mod tests {
     const BPB: f64 = 4.0;
 
     #[test]
-    fn aspect_windows_collapse_slivers_at_low_zoom() {
-        // 10 bar-cells 8px apart (the low-zoom "sliver" case); body 0..80, win 40.
+    fn grid_windows_are_regular_and_gapless() {
+        // 10 bar-cells 8px apart; body 0..80, win 40 → two clean back-to-back windows
+        // on a regular grid (0, 40), each holding the latest cell at/before its centre.
         let cells: Vec<(u32, f32)> = (0..10).map(|i| (i, i as f32 * 8.0)).collect();
         let mut out = Vec::new();
-        aspect_windows(&cells, 0.0, 80.0, 40.0, &mut out);
-        // Two clean 40px windows instead of ten slivers; each shows the cell at its edge.
-        assert_eq!(out, vec![(0, 0.0, 40.0), (5, 40.0, 40.0)]);
+        grid_windows(&cells, 0.0, 80.0, 40.0, &mut out);
+        // window 0 centre=20 → latest cell ≤20 is cell at x=16 (idx 2);
+        // window 1 centre=60 → latest cell ≤60 is cell at x=56 (idx 7).
+        assert_eq!(out, vec![(2, 0.0, 40.0), (7, 40.0, 40.0)]);
     }
 
     #[test]
-    fn aspect_windows_one_per_cell_at_high_zoom() {
-        // Cells 80px apart (> win 40) → each cell its own window.
-        let cells = [(0u32, 0.0_f32), (1, 80.0), (2, 160.0)];
+    fn grid_windows_fill_sparse_gaps_by_holding_nearest() {
+        // Only two captured cells far apart (the sparse/unplayed case). Body 0..200,
+        // win 40 → five regular windows, every one filled (no gaps), holding the most
+        // recent capture: cell 0 until the second capture at x=120 takes over.
+        let cells = [(0u32, 0.0_f32), (9, 120.0)];
         let mut out = Vec::new();
-        aspect_windows(&cells, 0.0, 200.0, 40.0, &mut out);
-        assert_eq!(out, vec![(0, 0.0, 40.0), (1, 80.0, 40.0), (2, 160.0, 40.0)]);
+        grid_windows(&cells, 0.0, 200.0, 40.0, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                (0, 0.0, 40.0),   // centre 20  ≤120 → cell 0
+                (0, 40.0, 40.0),  // centre 60  ≤120 → cell 0
+                (0, 80.0, 40.0),  // centre 100 ≤120 → cell 0
+                (9, 120.0, 40.0), // centre 140 >120 → cell 9
+                (9, 160.0, 40.0), // centre 180 >120 → cell 9
+            ]
+        );
     }
 
     #[test]
-    fn aspect_windows_clamp_partial_last_window() {
+    fn grid_windows_clamp_partial_last_and_edge_cases() {
         // Single cell, body only 25px wide → one window clamped to the body.
         let mut out = Vec::new();
-        aspect_windows(&[(7, 0.0)], 0.0, 25.0, 40.0, &mut out);
+        grid_windows(&[(7, 0.0)], 0.0, 25.0, 40.0, &mut out);
         assert_eq!(out, vec![(7, 0.0, 25.0)]);
+        // Cells all to the RIGHT of the first window's centre → fall back to first cell.
+        grid_windows(&[(4, 100.0)], 0.0, 40.0, 40.0, &mut out);
+        assert_eq!(out, vec![(4, 0.0, 40.0)]);
+        // No captured cells yet → no windows (body colour shows), never panics.
+        grid_windows(&[], 0.0, 100.0, 40.0, &mut out);
+        assert!(out.is_empty());
         // Degenerate win_w → no windows, never panics.
-        aspect_windows(&[(0, 0.0)], 0.0, 100.0, 0.0, &mut out);
+        grid_windows(&[(0, 0.0)], 0.0, 100.0, 0.0, &mut out);
         assert!(out.is_empty());
     }
 

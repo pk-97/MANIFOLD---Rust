@@ -4234,9 +4234,10 @@ impl Application {
                     let count = crate::clip_filmstrip::cell_count(
                         crate::clip_filmstrip::clip_bar_count(dur_b, bpb),
                     );
-                    // §F: collect the captured cells with their on-screen start x,
-                    // then tile aspect-locked windows over them (one full frame per
-                    // window) instead of one squished sliver per bar.
+                    // §F/§G: collect the captured cells with their on-screen start x,
+                    // then lay a continuous grid of aspect-locked windows over the body,
+                    // each filled by the nearest captured frame — gapless and regularly
+                    // spaced even when only some bars have been swept/captured.
                     thumb_cells.clear();
                     for (&idx, &cell) in strip {
                         if idx >= count {
@@ -4250,7 +4251,7 @@ impl Application {
                     // Window width = a project-aspect frame at the lane height, decoupled
                     // from bar width — the §F fix for the squished low-zoom filmstrip.
                     let win_w = body.height * cell_aspect;
-                    crate::clip_filmstrip::aspect_windows(
+                    crate::clip_filmstrip::grid_windows(
                         &thumb_cells,
                         body.x,
                         body_right,
