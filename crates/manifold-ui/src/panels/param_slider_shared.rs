@@ -45,9 +45,9 @@ pub(crate) const MOD_CARD_PAD: f32 = 4.0;
 // this, so they cascade.
 pub(crate) const PADDING: f32 = color::SPACE_M;
 pub(crate) const GAP: f32 = color::SPACE_S;
-// Param rows run one step larger than body chrome so the name + value read
-// clearly in the inspector (they're the live instrument surface).
-pub(crate) const FONT_SIZE: u16 = 12;
+// Param rows track the body-text token so the inspector matches layer-control
+// chrome on the type ramp (they're the live instrument surface).
+pub(crate) const FONT_SIZE: u16 = color::FONT_BODY;
 
 pub(crate) const DE_BUTTON_SIZE: f32 = 20.0;
 /// Gap *between* the three T/∿/A arm buttons. Tight, so they read as one group.
