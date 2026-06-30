@@ -5,10 +5,11 @@
 //! generator / group+children / audio. See `docs/HEADLESS_UI_HARNESS.md` §2.
 
 use manifold_core::clip::TimelineClip;
+use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::{Beats, LayerId, Seconds};
+use manifold_core::{Beats, LayerId, PresetTypeId, Seconds};
 use manifold_ui::UIState;
 
 use crate::content_state::ContentState;
@@ -26,7 +27,35 @@ pub fn build(scene: &str) -> Option<SceneData> {
     match scene {
         "timeline" => Some(timeline_scene()),
         "states" => Some(states_scene()),
+        "inspector" => Some(inspector_scene()),
         _ => None,
+    }
+}
+
+/// A fully-initialized effect-kind `PresetInstance` of `type_id`, params seeded
+/// from the registry defaults (so the inspector card shows real rows, not an
+/// empty effect). The renderer crate is linked into the snapshot binary, so its
+/// `inventory::submit!` preset sources have populated the registry by here.
+fn effect(type_id: &str) -> PresetInstance {
+    let mut e = PresetInstance::new(PresetTypeId::from_string(type_id.to_string()));
+    e.init_defaults();
+    e
+}
+
+/// Arm a sine LFO (1/4 note) on the effect's first parameter, so the inspector
+/// renders the source-tinted modulation drawer (LFO = teal) under that row —
+/// the most involved inspector chrome. No-op if the effect has no params.
+fn arm_lfo(fx: &mut PresetInstance) {
+    use manifold_core::effects::ParameterDriver;
+    use manifold_core::types::{BeatDivision, DriverWaveform};
+    let param_id = manifold_core::preset_definition_registry::try_get(fx.effect_type())
+        .and_then(|def| def.param_ids.first().cloned());
+    if let Some(param_id) = param_id {
+        fx.drivers = Some(vec![ParameterDriver::new(
+            param_id,
+            BeatDivision::Quarter,
+            DriverWaveform::Sine,
+        )]);
     }
 }
 
@@ -102,6 +131,44 @@ fn timeline_scene() -> SceneData {
     // No selection by default — `--interact select:<layer>` makes the ring appear,
     // so base-vs-after renders/dumps differ measurably.
     SceneData { project, content, active: None, selection: UIState::default() }
+}
+
+/// Inspector-focused scene: a selected video layer carrying a real effect chain
+/// (Mirror → Bloom), so a single headless render shows the inspector's param
+/// cards / sliders / chrome — the surface the `timeline` scene hides (it zeroes
+/// the inspector width). A couple of context layers sit above/below so the
+/// timeline still reads as a real session next to the inspector.
+fn inspector_scene() -> SceneData {
+    let mut text = Layer::new("TEXT BOT L".into(), LayerType::Video, 0);
+    text.layer_id = lid("text-bot-l");
+    text.clips
+        .push(TimelineClip::new_video("EXILE".into(), Beats(0.0), Beats(24.0), Seconds::ZERO));
+    text.clips
+        .push(TimelineClip::new_video("RETURN".into(), Beats(24.0), Beats(24.0), Seconds::ZERO));
+
+    // The subject: a video layer with a two-effect chain. Selected, so the
+    // inspector shows its layer card + the Mirror and Bloom effect cards.
+    let mut glow = Layer::new("GLOW".into(), LayerType::Video, 1);
+    glow.layer_id = lid("glow");
+    glow.clips
+        .push(TimelineClip::new_video("glow_loop.mov".into(), Beats(0.0), Beats(48.0), Seconds::ZERO));
+    let mut mirror = effect("Mirror");
+    arm_lfo(&mut mirror);
+    glow.effects = Some(vec![mirror, effect("Bloom")]);
+
+    let mut plasma = Layer::new("PLASMA".into(), LayerType::Generator, 2);
+    plasma.layer_id = lid("plasma");
+    plasma.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+
+    let mut project = Project::default();
+    project.timeline.layers = vec![text, glow, plasma];
+
+    let content = ContentState { current_beat: Beats(8.0), is_playing: false, ..Default::default() };
+
+    let mut selection = UIState::default();
+    selection.select_layer(lid("glow"));
+
+    SceneData { project, content, active: Some(1), selection }
 }
 
 /// One layer per state, so a single real render shows the whole state matrix in

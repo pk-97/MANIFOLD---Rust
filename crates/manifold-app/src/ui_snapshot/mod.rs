@@ -15,7 +15,7 @@ mod thumbs;
 
 use std::path::{Path, PathBuf};
 
-use crate::ui_bridge::{push_state, sync_project_data, TransportDisplayCache};
+use crate::ui_bridge::{push_state, sync_inspector_data, sync_project_data, TransportDisplayCache};
 use crate::ui_root::UIRoot;
 
 // Logical UI size = texture size (rendered 1:1; `UIRenderer::prepare`'s scale is
@@ -40,7 +40,7 @@ pub fn run(args: &[String]) {
     let interact = arg_value(args, "--interact");
 
     let Some(mut data) = fixtures::build(scene) else {
-        eprintln!("ui-snap: unknown scene '{scene}' (known: timeline)");
+        eprintln!("ui-snap: unknown scene '{scene}' (known: timeline, states, inspector)");
         std::process::exit(2);
     };
 
@@ -50,10 +50,17 @@ pub fn run(args: &[String]) {
     // Build the UI through the REAL core→UI translation path, render the base.
     let mut ui = UIRoot::new();
     ui.resize(LOGICAL_W, LOGICAL_H);
-    // Make the timeline the subject: drop the inspector, let lanes fill the
-    // vertical. (Both fields are read by layout.resize() inside ui.build().)
-    ui.layout.inspector_width = 0.0;
-    ui.layout.timeline_split_ratio = 0.93;
+    if scene == "inspector" {
+        // The inspector IS the subject: keep it at a generous width and give the
+        // timeline a normal split so the selected layer's cards have room.
+        ui.layout.inspector_width = 600.0;
+        ui.layout.timeline_split_ratio = 0.6;
+    } else {
+        // Make the timeline the subject: drop the inspector, let lanes fill the
+        // vertical. (Both fields are read by layout.resize() inside ui.build().)
+        ui.layout.inspector_width = 0.0;
+        ui.layout.timeline_split_ratio = 0.93;
+    }
     sync_build(&mut ui, &data);
     render_and_dump(&ui, &data.selection, &dir, scene, "", want_dump, want_thumbs);
 
@@ -74,6 +81,11 @@ pub fn run(args: &[String]) {
 /// The real translation path: structural sync → zoom-to-fit → build → push state.
 fn sync_build(ui: &mut UIRoot, data: &fixtures::SceneData) {
     sync_project_data(ui, &data.project, data.active, &data.selection);
+    // Configure the inspector (tabs + the active layer's effect/gen cards) from
+    // the selection — the live app calls this whenever the active layer changes.
+    // Without it the inspector stays on its default Master view, so the selected
+    // layer's chain never appears.
+    sync_inspector_data(ui, &data.project, data.active, &data.selection);
     // Zoom out so the 48-beat fixture clips fit the lane width (set before build
     // so the ruler ticks and the clip rects agree on px/beat).
     ui.viewport.set_zoom(24.0);
