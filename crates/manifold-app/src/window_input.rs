@@ -506,17 +506,19 @@ impl Application {
             .unwrap_or((1.0, 1.0, 1.0));
         let logical_x = position.x as f32 / scale as f32;
         let logical_y = position.y as f32 / scale as f32;
-        let palette_width = manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
-        let sidebar_x = window_w - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+        // Preview sidebar on the left, card lane on the right (matches the
+        // main timeline's inspector docking right).
+        let preview_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+        let card_x = window_w - manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
         // Canvas viewport matches the render-time slice
-        // (offset by palette_width); without this the
+        // (offset by preview_width); without this the
         // canvas's `to_graph` would treat screen x=0 as the
         // canvas left edge and node hit-tests would be off
-        // by `palette_width` to the left.
+        // by `preview_width` to the left.
         let viewport = crate::graph_canvas::Rect::new(
-            palette_width,
+            preview_width,
             0.0,
-            (sidebar_x - palette_width).max(0.0),
+            (card_x - preview_width).max(0.0),
             window_h,
         );
         // Always update canvas cursor — graph-space coords
@@ -528,16 +530,16 @@ impl Application {
             canvas.popover_on_move(logical_x, logical_y);
         }
         // Same for the editor card's sideways mapping drawer (a
-        // separate popover anchored on the left-lane card row).
+        // separate popover anchored on the right-lane card row).
         self.editor_mapping_popover.on_move(logical_x, logical_y);
         // Forward into the editor's UITree only when the
-        // cursor sits in either margin (palette on the left
-        // or expose-panel sidebar on the right). Move
-        // events from the canvas region would just cause
-        // spurious hover/exit on tree nodes — except when the
-        // node picker is open, which overlays the whole window
-        // and wants hover feedback on its cells everywhere.
-        let in_panel = logical_x < palette_width || logical_x >= sidebar_x;
+        // cursor sits in either margin (preview sidebar on the
+        // left or the card lane on the right). Move events from
+        // the canvas region would just cause spurious hover/exit
+        // on tree nodes — except when the node picker is open,
+        // which overlays the whole window and wants hover
+        // feedback on its cells everywhere.
+        let in_panel = logical_x < preview_width || logical_x >= card_x;
         let picker_open = self
             .graph_editor
             .as_ref()
@@ -619,30 +621,30 @@ impl Application {
                 })
                 .unwrap_or((1.0, 1.0));
             let (cx, cy) = canvas.cursor();
-            let palette_width =
-                manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
-            let sidebar_x =
-                window_size.0 - manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+            let preview_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+            let card_x =
+                window_size.0 - manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
             // The UITree spans the whole editor window — both
-            // the left palette and the right sidebar live in
-            // it. Route any click in either margin to it; the
-            // canvas only sees clicks in the center column.
-            let in_panel = cx < palette_width || cx >= sidebar_x;
+            // the left preview sidebar and the right card lane
+            // live in it. Route any click in either margin to
+            // it; the canvas only sees clicks in the center
+            // column.
+            let in_panel = cx < preview_width || cx >= card_x;
             // Canvas viewport matches the render-time slice:
-            // origin at palette_width, width is the remaining
+            // origin at preview_width, width is the remaining
             // center column. Passing this (not the full window)
             // is what makes `to_graph` translate cursor coords
             // into the canvas's coordinate system correctly.
             let viewport = crate::graph_canvas::Rect::new(
-                palette_width,
+                preview_width,
                 0.0,
-                (sidebar_x - palette_width).max(0.0),
+                (card_x - preview_width).max(0.0),
                 window_size.1,
             );
             match (button, state) {
                 (MouseButton::Left, ElementState::Pressed) => {
                     // The editor card's mapping drawer floats over
-                    // the canvas (anchored right of the left-lane
+                    // the canvas (anchored beside the right-lane
                     // card), so it gets first crack. Consumed → done;
                     // open-but-missed → close it and fall through.
                     let mut consumed = false;
@@ -664,12 +666,12 @@ impl Application {
                         // consumed by the canvas popover
                     } else if in_panel {
                         // Jump-to-node: a click on a card param's NAME
-                        // in the left lane navigates the centre canvas
+                        // in the right lane navigates the centre canvas
                         // to the node that param is exposed from, so
                         // the instrument and the graph stay in lockstep.
                         // Read-only on the card; only the canvas moves.
                         let mut jumped = false;
-                        if cx < palette_width
+                        if cx >= card_x
                             && let Some(ed) = self.graph_editor.as_ref()
                             && let Some(param_id) =
                                 self.editor_card.label_hit(&ed.ui_root.tree, cx, cy)

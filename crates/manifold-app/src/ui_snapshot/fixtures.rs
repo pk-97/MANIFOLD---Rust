@@ -7,9 +7,10 @@
 use manifold_core::clip::TimelineClip;
 use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
+use manifold_core::preset_def::PresetKind;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_core::{Beats, LayerId, PresetTypeId, Seconds};
+use manifold_core::{Beats, GraphTarget, LayerId, PresetTypeId, Seconds};
 use manifold_ui::UIState;
 
 use crate::content_state::ContentState;
@@ -205,4 +206,29 @@ fn states_scene() -> SceneData {
     selection.select_layer(lid("selected"));
 
     SceneData { project, content, active: Some(1), selection }
+}
+
+/// Fixture for the `editor` scene: a single generator layer carrying `preset`
+/// at registry defaults, so `editor_card_config` resolves the real card — the
+/// same `ParamCardConfig` the live editor's left lane builds from. `None` if
+/// `preset` isn't a generator id (the scene only covers the `GraphTarget::Generator`
+/// arm today; an effect needs a chain to live in, which this fixture doesn't build).
+pub fn generator_editor_fixture(preset: &str) -> Option<(Project, GraphTarget, UIState)> {
+    let pid = PresetTypeId::from_string(preset.to_string());
+    let is_generator = manifold_renderer::node_graph::bundled_preset_type_ids(PresetKind::Generator)
+        .any(|id| id == pid);
+    if !is_generator {
+        return None;
+    }
+
+    let mut layer = Layer::new(preset.into(), LayerType::Generator, 0);
+    let layer_id = lid("editor-preview");
+    layer.layer_id = layer_id.clone();
+    layer.change_generator_type(pid);
+    layer.clips.push(TimelineClip::new_generator(Beats(0.0), Beats(48.0)));
+
+    let mut project = Project::default();
+    project.timeline.layers = vec![layer];
+
+    Some((project, GraphTarget::Generator(layer_id), UIState::default()))
 }

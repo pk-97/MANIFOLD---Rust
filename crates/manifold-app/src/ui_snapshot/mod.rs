@@ -47,6 +47,7 @@ pub fn run(args: &[String]) {
             render_ui_scene(s, want_dump, false, want_thumbs, None);
         }
         run_graph_preset("Mirror");
+        run_editor_preset("FluidSimulation");
         return;
     }
 
@@ -55,6 +56,15 @@ pub fn run(args: &[String]) {
     if scene == "graph" {
         let preset = arg_value(args, "--preset").unwrap_or_else(|| "Mirror".to_string());
         run_graph_preset(&preset);
+        return;
+    }
+
+    // The `editor` scene renders the FULL graph-editor window (card lane +
+    // canvas + sidebar chrome), not just the bare canvas — generator presets
+    // only (see `fixtures::generator_editor_fixture`).
+    if scene == "editor" {
+        let preset = arg_value(args, "--preset").unwrap_or_else(|| "FluidSimulation".to_string());
+        run_editor_preset(&preset);
         return;
     }
 
@@ -72,7 +82,7 @@ fn render_ui_scene(
     interact: Option<String>,
 ) {
     let Some(mut data) = fixtures::build(scene) else {
-        eprintln!("ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, graph, all)");
+        eprintln!("ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, graph, editor, all)");
         std::process::exit(2);
     };
 
@@ -138,6 +148,51 @@ fn run_graph_preset(preset: &str) {
     // The canonical def drives the headless graph render that produces the
     // per-node thumbnails; the snapshot drives the canvas layout.
     render::render_graph_to_png(
+        &gv_snap,
+        view.canonical_def,
+        tex_w,
+        tex_h,
+        SCALE,
+        png.to_str().expect("utf-8 path"),
+    );
+    println!("ui-snap: wrote {} ({preset})", png.display());
+}
+
+/// Render the FULL graph-editor window (preview sidebar + canvas + card lane)
+/// for one generator preset. Builds a one-layer fixture `Project` carrying the
+/// preset (`fixtures::generator_editor_fixture`) so the right lane's card is the
+/// real `ParamCardConfig`, not synthesized — see `render::render_graph_editor_to_png`.
+fn run_editor_preset(preset: &str) {
+    let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
+    let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
+        eprintln!(
+            "ui-snap editor: no graph view for preset '{preset}' \
+             (needs a JSON preset carrying presetMetadata)"
+        );
+        std::process::exit(2);
+    };
+    let Some(rg_snap) = manifold_renderer::node_graph::snapshot_for_view(view) else {
+        eprintln!("ui-snap editor: snapshot_for_view failed for '{preset}' (def failed to materialize)");
+        std::process::exit(2);
+    };
+    let Some((project, target, selection)) = fixtures::generator_editor_fixture(preset) else {
+        eprintln!(
+            "ui-snap editor: '{preset}' isn't a generator preset \
+             (the editor scene only covers GraphTarget::Generator today)"
+        );
+        std::process::exit(2);
+    };
+    let gv_snap = crate::ui_translate::graph_snapshot_to_ui(&rg_snap);
+
+    let dir = out_dir("editor");
+    std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
+    let tex_w = (LOGICAL_W * SCALE) as u32;
+    let tex_h = (LOGICAL_H * SCALE) as u32;
+    let png = dir.join("editor.png");
+    render::render_graph_editor_to_png(
+        &project,
+        &target,
+        &selection,
         &gv_snap,
         view.canonical_def,
         tex_w,

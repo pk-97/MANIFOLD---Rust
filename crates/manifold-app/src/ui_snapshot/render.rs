@@ -239,6 +239,206 @@ pub fn render_graph_to_png(
         .unwrap_or_else(|e| panic!("save {path}: {e}"));
 }
 
+/// Render the FULL graph-editor WINDOW for a generator preset: the left
+/// preview sidebar's CHROME (backing panel + monitor titles + empty-state
+/// hint), the center canvas (nodes/wires/thumbnails, as [`render_graph_to_png`]),
+/// and the right card lane (the real `ParamCardPanel` + inner-node param list,
+/// same widgets the live editor's card lane drives — docks right, same side as
+/// the main timeline's inspector). The live preview-monitor IMAGES are fed by
+/// content-thread commands (`SetGraphPreviewNode`/`SetNodeAtlasVisible`) and
+/// can't render headless — left as the same "Select a node" hint the live
+/// editor shows before a click, not faked. No node is pre-selected, so the
+/// inner-node list shows its own empty state — the editor's state on open.
+#[allow(clippy::too_many_arguments)]
+pub fn render_graph_editor_to_png(
+    project: &manifold_core::project::Project,
+    target: &manifold_core::GraphTarget,
+    selection: &manifold_ui::UIState,
+    snapshot: &manifold_ui::graph_view::GraphSnapshot,
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    tex_w: u32,
+    tex_h: u32,
+    scale: f32,
+    path: &str,
+) {
+    use manifold_ui::draw::Painter;
+    use manifold_ui::graph_canvas::{GraphCanvas, Rect as CanvasRect};
+    use manifold_ui::node::{TextAlign, UIStyle};
+    use manifold_ui::panels::graph_editor::{
+        GraphEditorPanel, EDITOR_CARD_LANE_WIDTH, SIDEBAR_WIDTH,
+    };
+    use manifold_ui::panels::param_card::ParamCardPanel;
+    use manifold_ui::{Rect as UiRect, UITree};
+
+    assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
+    let logical_w = tex_w as f32 / scale;
+    let logical_h = tex_h as f32 / scale;
+    let canvas_x = SIDEBAR_WIDTH;
+    let canvas_width = (logical_w - SIDEBAR_WIDTH - EDITOR_CARD_LANE_WIDTH).max(0.0);
+    let card_x = canvas_x + canvas_width;
+
+    let device = GpuDevice::new();
+    let mut renderer = UIRenderer::new(&device, FORMAT);
+    let target_tex = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap-editor");
+    let dpi = f64::from(scale);
+
+    let mut tree = UITree::new();
+
+    // Right lane: the real card, built the same way `present_graph_editor_window`
+    // builds it — `editor_card_config` resolves the live `ParamCardConfig` from
+    // the fixture's `GraphTarget::Generator`.
+    let mut card = ParamCardPanel::new();
+    let mut card_h = 0.0_f32;
+    if let Some((config, values)) = crate::ui_bridge::editor_card_config(project, Some(target), selection)
+    {
+        card.configure(&config);
+        card.build(&mut tree, UiRect::new(card_x, 0.0, EDITOR_CARD_LANE_WIDTH, logical_h));
+        card.sync_values(&mut tree, &crate::ui_translate::param_slots_to_ui(&values));
+        card_h = card.compute_height();
+    }
+    if card_h > 0.0 {
+        tree.add_panel(
+            None,
+            card_x,
+            card_h + 2.0,
+            EDITOR_CARD_LANE_WIDTH,
+            1.0,
+            UIStyle { bg_color: manifold_ui::color::DIVIDER_COLOR, ..UIStyle::default() },
+        );
+    }
+    let panel_top = if card_h > 0.0 { card_h + 5.0 } else { 0.0 };
+    let mut inner_panel = GraphEditorPanel::new();
+    inner_panel.configure(
+        None,
+        None,
+        std::collections::HashSet::new(),
+        std::collections::HashMap::new(),
+        std::collections::HashMap::new(),
+        std::collections::HashSet::new(),
+    );
+    inner_panel.build(
+        &mut tree,
+        UiRect::new(card_x, panel_top, EDITOR_CARD_LANE_WIDTH, (logical_h - panel_top).max(0.0)),
+    );
+
+    // Left sidebar: backing panel + the two monitor titles + an empty-state
+    // hint, laid out with the same math `present_graph_editor_window` uses (16:9
+    // monitor_aspect default — no content pipeline headless to read the real
+    // project aspect from).
+    {
+        let preview_pad = 8.0_f32;
+        let preview_title_h = 18.0_f32;
+        let monitor_aspect = 16.0_f32 / 9.0;
+        let avail_w = (SIDEBAR_WIDTH - 2.0 * preview_pad).max(1.0);
+        let max_body_h = (((logical_h) - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
+        let width_bound_h = avail_w / monitor_aspect;
+        let (preview_w, preview_h) = if width_bound_h <= max_body_h {
+            (avail_w, width_bound_h)
+        } else {
+            (max_body_h * monitor_aspect, max_body_h)
+        };
+        let preview_x = (SIDEBAR_WIDTH - preview_w) * 0.5;
+        let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
+        let mut pane_y = ((logical_h - pane_block_h) * 0.5).max(preview_pad);
+        let node_title_y = pane_y;
+        let node_img_y = node_title_y + preview_title_h;
+        pane_y = node_img_y + preview_h + preview_pad;
+        let master_title_y = pane_y;
+
+        let title_style = UIStyle {
+            text_color: manifold_ui::color::TEXT_WHITE_C32,
+            font_size: 14,
+            text_align: TextAlign::Left,
+            ..UIStyle::default()
+        };
+        tree.add_panel(
+            None,
+            0.0,
+            0.0,
+            SIDEBAR_WIDTH,
+            logical_h,
+            UIStyle { bg_color: manifold_ui::color::EFFECT_CARD_INNER_BG_C32, ..UIStyle::default() },
+        );
+        tree.add_label(None, preview_x, node_title_y, preview_w, preview_title_h, "Node Output", title_style);
+        tree.add_label(
+            None,
+            preview_x,
+            node_img_y + preview_h * 0.5 - 8.0,
+            preview_w,
+            16.0,
+            "Select a node",
+            UIStyle {
+                text_color: manifold_ui::color::TEXT_DIMMED_C32,
+                font_size: 12,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+        );
+        tree.add_label(None, preview_x, master_title_y, preview_w, preview_title_h, "Master Out", title_style);
+    }
+
+    // Center canvas, offset into its lane between the two side columns — the
+    // same per-node-dump machinery as `render_graph_to_png`.
+    let viewport = CanvasRect::new(canvas_x, 0.0, canvas_width, logical_h);
+    let mut canvas = GraphCanvas::new();
+    canvas.set_snapshot(snapshot);
+    canvas.apply_pending_fit(viewport);
+    let node_textures = render_graph_node_textures(&device, def);
+
+    {
+        let mut enc = device.create_encoder("ui-snap-editor-clear");
+        enc.clear_texture(&target_tex.texture, 0.10, 0.10, 0.12, 1.0);
+        enc.commit_and_wait_completed();
+    }
+
+    // Same paint order as `present_graph_editor_window`: canvas immediate-mode
+    // draws first, then the lane/sidebar UITree layered on top in the same batch.
+    renderer.begin_frame();
+    canvas.render(&mut renderer as &mut dyn Painter, viewport);
+    renderer.render_tree(&tree, None);
+    let drew = renderer.prepare(&device, tex_w, tex_h, dpi);
+    {
+        let mut enc = device.create_encoder("ui-snap-editor");
+        renderer.render(&mut enc, &target_tex.texture, GpuLoadAction::Load);
+        enc.commit_and_wait_completed();
+    }
+    assert!(drew, "graph editor window produced no draws (empty snapshot?)");
+
+    if let Some(nt) = node_textures.as_ref() {
+        let blit = make_blit_pipeline(&device);
+        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            ..Default::default()
+        });
+        let mut enc = device.create_encoder("ui-snap-editor-thumbs");
+        for (node_id, x, y, w, h) in canvas.visible_node_thumbnails(viewport) {
+            let Some(tex) = nt.texture_for(node_id.as_str()) else {
+                continue;
+            };
+            if !tex.is_shader_readable() {
+                continue;
+            }
+            enc.draw_fullscreen_viewport(
+                &blit,
+                &target_tex.texture,
+                &[
+                    GpuBinding::Texture { binding: 0, texture: tex },
+                    GpuBinding::Sampler { binding: 1, sampler: &sampler },
+                ],
+                (x, y, w, h),
+                GpuLoadAction::Load,
+                "Node Thumbnail Blit",
+            );
+        }
+        enc.commit_and_wait_completed();
+    }
+
+    let bytes = readback(&device, &target_tex.texture, tex_w, tex_h);
+    image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {path}: {e}"));
+}
+
 /// A headless one-frame render of `def`'s graph with the executor's per-node
 /// dump enabled, holding the graph + executor alive so the dumped node textures
 /// stay valid. `texture_for` resolves a stable NodeId to its output texture.

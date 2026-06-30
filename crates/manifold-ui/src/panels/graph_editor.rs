@@ -222,15 +222,16 @@ pub struct NodeInspector {
     pub outputs: Vec<(String, f32)>,
 }
 
-/// Right-sidebar width inside the graph-editor window. The sidebar is now
-/// monitors-only (the inner-node param list moved under the left card), so the
-/// width is set by the two stacked 16:9 preview panes — wider here means bigger,
-/// more usable Node Output / Master Out monitors.
+/// Preview-sidebar width inside the graph-editor window — docks on the LEFT.
+/// The sidebar is monitors-only (the inner-node param list lives under the
+/// card lane), so the width is set by the two stacked 16:9 preview panes —
+/// wider here means bigger, more usable Node Output / Master Out monitors.
 pub const SIDEBAR_WIDTH: f32 = 460.0;
 
-/// Left-lane width inside the graph-editor window — the lane that renders the
-/// real `ParamCardPanel` for the edited effect/generator. Wide enough to fit
-/// the full card (label + slider + value + the E/→ row buttons) without the
+/// Card-lane width inside the graph-editor window — docks on the RIGHT (same
+/// side as the main timeline's inspector). The lane that renders the real
+/// `ParamCardPanel` for the edited effect/generator. Wide enough to fit the
+/// full card (label + slider + value + the E/→ row buttons) without the
 /// cramping the 200px mirror lane had. SINGLE SOURCE OF TRUTH: both the render
 /// path (`present_graph_editor_window`) and the canvas input-mapping path (the
 /// editor window's pointer handlers) must read this same constant, or the
@@ -626,10 +627,10 @@ impl GraphEditorPanel {
         }
 
         // ── Selected Node section (the inspector) ─────────────────
-        // The effect-card mirror moved to the editor's left lane, so this
-        // right sidebar is purely the clicked node's parameter inspector:
-        // every param of the selected node with its live value, expose
-        // checkbox, and driver hints.
+        // The effect-card mirror lives in the editor's card lane (right
+        // side); this panel renders docked under it and is purely the
+        // clicked node's parameter inspector: every param of the selected
+        // node with its live value, expose checkbox, and driver hints.
         tree.add_label(
             bg_id,
             viewport.x + PADDING,
@@ -1749,7 +1750,7 @@ fn value_cell_click_to_param(
 }
 
 /// Format the current value of an inner-node parameter for display
-/// in the right sidebar. Enums resolve to their label (e.g., "FoldX"),
+/// in the card lane. Enums resolve to their label (e.g., "FoldX"),
 /// bools to "true"/"false", numerics to a short fixed-point form, and
 /// `summary`-bearing params (Tables) render their summary string.
 fn format_inner_param_value(p: &GraphEditorParam) -> String {

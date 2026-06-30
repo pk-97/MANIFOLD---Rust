@@ -1062,7 +1062,7 @@ impl Application {
 
         // Append the editor card's actions as a trailing segment, recording where
         // it starts. Actions at or past `editor_card_seg_start` were emitted by
-        // the graph editor's left-lane card and dispatch against the editor's
+        // the graph editor's card lane and dispatch against the editor's
         // watched graph identity; everything before is main-window / sidebar and
         // dispatches against the ambient inspector context.
         let editor_card_seg_start = actions.len();
@@ -2916,10 +2916,10 @@ impl Application {
         let scale = win_state.window.scale_factor();
         let logical_w = (surface.width as f64 / scale).max(1.0) as f32;
         let logical_h = (surface.height as f64 / scale).max(1.0) as f32;
-        let palette_width = manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
-        let sidebar_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
-        let canvas_x = palette_width;
-        let canvas_width = (logical_w - palette_width - sidebar_width).max(0.0);
+        let card_width = manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
+        let preview_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+        let canvas_x = preview_width;
+        let canvas_width = (logical_w - preview_width - card_width).max(0.0);
         Some(crate::graph_canvas::Rect::new(
             canvas_x, 0.0, canvas_width, logical_h,
         ))
@@ -3051,18 +3051,19 @@ impl Application {
         let logical_h = (surface_h as f64 / scale).max(1.0) as u32;
 
         // ── Editor window layout ──────────────────────────────────────
-        // Left palette (atoms) + center canvas + right sidebar (param
-        // expose). Built BEFORE rendering so the tree's nodes (panels +
-        // buttons + labels) are ready to draw alongside the canvas.
-        // Left lane renders the real effect/generator card now (the node
-        // palette moved to the spawn popup). Width comes from the single
-        // EDITOR_CARD_LANE_WIDTH constant the canvas input path also reads, so
-        // the canvas origin and click hit-testing stay in lockstep.
-        let palette_width = manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
-        let sidebar_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
-        let canvas_x = palette_width;
-        let canvas_width = (logical_w as f32 - palette_width - sidebar_width).max(0.0);
-        let sidebar_x = canvas_x + canvas_width;
+        // Left preview sidebar (monitors) + center canvas + right card lane
+        // (param expose) — card on the right, same convention as the main
+        // timeline's inspector (`inspector_width` docks at `screen_width -
+        // inspector_width`). Built BEFORE rendering so the tree's nodes
+        // (panels + buttons + labels) are ready to draw alongside the canvas.
+        // Width comes from the single EDITOR_CARD_LANE_WIDTH / SIDEBAR_WIDTH
+        // constants the canvas input path also reads, so the canvas origin and
+        // click hit-testing stay in lockstep.
+        let card_width = manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
+        let preview_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
+        let canvas_x = preview_width;
+        let canvas_width = (logical_w as f32 - preview_width - card_width).max(0.0);
+        let card_x = canvas_x + canvas_width;
         // When a node is being previewed, the preview pane occupies the top of
         // the sidebar; the expose/param rows start below it so they don't
         // overlap. Logical units; the present pass draws the pane to match.
@@ -3080,7 +3081,7 @@ impl Application {
             .filter(|(_, h)| *h > 0)
             .map(|(w, h)| w as f32 / h as f32)
             .unwrap_or(16.0 / 9.0);
-        let avail_w = (sidebar_width - 2.0 * preview_pad).max(1.0);
+        let avail_w = (preview_width - 2.0 * preview_pad).max(1.0);
         // Height budget so 2×(title + body) + 3 pads fits the window vertically.
         let max_body_h =
             (((logical_h as f32) - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
@@ -3090,9 +3091,9 @@ impl Application {
         } else {
             (max_body_h * monitor_aspect, max_body_h)
         };
-        let preview_x = sidebar_x + (sidebar_width - preview_w) * 0.5;
-        // The right column is monitors-only now — the inner-node param list moved
-        // under the left card. Two equal stacked 16:9 monitors (the selected
+        let preview_x = (preview_width - preview_w) * 0.5;
+        // The left column is monitors-only now — the inner-node param list moved
+        // under the right card. Two equal stacked 16:9 monitors (the selected
         // node's output on top, the master compositor output below), each a
         // titled pane (title row + body). The pair is centred vertically in the
         // column so it reads as intentional rather than top-pinned with a void
@@ -3115,8 +3116,7 @@ impl Application {
         // Master-out monitor: just below the node pane.
         let master_title_y = pane_y;
         let master_img_y = master_title_y + preview_title_h;
-        let palette_viewport =
-            manifold_ui::Rect::new(0.0, 0.0, palette_width, logical_h as f32);
+        let card_viewport = manifold_ui::Rect::new(card_x, 0.0, card_width, logical_h as f32);
 
         // Resolve which `PresetInstance` is being edited and build the
         // panel inputs. An open editor without a resolvable
@@ -3205,7 +3205,7 @@ impl Application {
             });
         self.graph_editor_panel.set_node_inspector(node_inspector);
 
-        // The left lane renders the REAL effect/generator card for the edited
+        // The right lane renders the REAL effect/generator card for the edited
         // target — the same `ParamCardPanel` the inspector shows, configured
         // from the same `PresetInstance` / `PresetInstance`, resolved by
         // identity from `watched_graph_target` (effect id or generator layer).
@@ -3221,7 +3221,7 @@ impl Application {
         // is small, so a clear + rebuild is cheaper than dirty-tracking and
         // means stale rows can never linger after the target changes.
         ws.ui_root.tree.clear();
-        // Left lane = the card, then the inner-node param list docked right under
+        // Right lane = the card, then the inner-node param list docked right under
         // it. Track the card's built height so the panel knows where to start.
         let mut card_h = 0.0_f32;
         if let Some((config, values)) = editor_card_data.as_ref() {
@@ -3243,7 +3243,7 @@ impl Application {
                 self.editor_card.configure(config);
                 self.editor_card_config_hash = Some(config_hash);
             }
-            self.editor_card.build(&mut ws.ui_root.tree, palette_viewport);
+            self.editor_card.build(&mut ws.ui_root.tree, card_viewport);
             self.editor_card
                 .sync_values(&mut ws.ui_root.tree, &crate::ui_translate::param_slots_to_ui(values));
             card_h = self.editor_card.compute_height();
@@ -3269,15 +3269,16 @@ impl Application {
             self.editor_card_config_hash = None;
             self.editor_mapping_popover.close();
         }
-        // Inner-node param list: docked under the card in the LEFT lane now (the
-        // right column is monitors-only). A thin divider sets it off from the card.
+        // Inner-node param list: docked under the card in the RIGHT lane now
+        // (the left column is monitors-only). A thin divider sets it off from
+        // the card.
         let panel_top = if card_h > 0.0 { card_h + 5.0 } else { 0.0 };
         if card_h > 0.0 {
             ws.ui_root.tree.add_panel(
                 None,
-                0.0,
+                card_x,
                 card_h + 2.0,
-                palette_width,
+                card_width,
                 1.0,
                 manifold_ui::node::UIStyle {
                     bg_color: manifold_ui::color::DIVIDER_COLOR,
@@ -3286,15 +3287,15 @@ impl Application {
             );
         }
         let panel_viewport = manifold_ui::Rect::new(
-            0.0,
+            card_x,
             panel_top,
-            palette_width,
+            card_width,
             (logical_h as f32 - panel_top).max(0.0),
         );
         self.graph_editor_panel
             .build(&mut ws.ui_root.tree, panel_viewport);
 
-        // Pinned preview monitors in the right column: a backing panel, the two pane
+        // Pinned preview monitors in the left column: a backing panel, the two pane
         // titles, and — for a non-image node — the value inspector text in the
         // node pane. Added to the editor tree so they composite into the
         // offscreen; the monitor images blit onto the drawable below each title
@@ -3308,13 +3309,13 @@ impl Application {
                 ..UIStyle::default()
             };
             let title_x = preview_x;
-            // Backing panel for the whole right column so the two centred monitors
+            // Backing panel for the whole left column so the two centred monitors
             // sit on a clean, uniform surface rather than a black void.
             ws.ui_root.tree.add_panel(
                 None,
-                sidebar_x,
                 0.0,
-                sidebar_width,
+                0.0,
+                preview_width,
                 logical_h as f32,
                 UIStyle {
                     bg_color: manifold_ui::color::EFFECT_CARD_INNER_BG_C32,
