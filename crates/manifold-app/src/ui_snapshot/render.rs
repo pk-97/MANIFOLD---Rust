@@ -137,6 +137,62 @@ pub fn render_ui_to_png(
         .unwrap_or_else(|e| panic!("save {path}: {e}"));
 }
 
+/// Render a graph-editor canvas — nodes, ports, wires — into a `tex_w`×`tex_h`
+/// texture and save as PNG. Mirrors the canvas half of
+/// `Application::present_graph_editor_window`: clear to the editor backdrop,
+/// then the canvas paints immediate-mode through the `Painter` primitives (no
+/// UITree). The card lane / sidebar / preview monitors of the live editor are
+/// intentionally omitted — this isolates the canvas, the surface that most needs
+/// eyes. `tex_w` must be a multiple of 64 (aligned readback).
+pub fn render_graph_to_png(
+    snapshot: &manifold_ui::graph_view::GraphSnapshot,
+    tex_w: u32,
+    tex_h: u32,
+    scale: f32,
+    path: &str,
+) {
+    use manifold_ui::draw::Painter;
+    use manifold_ui::graph_canvas::{GraphCanvas, Rect as CanvasRect};
+
+    assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
+
+    let device = GpuDevice::new();
+    let mut renderer = UIRenderer::new(&device, FORMAT);
+    let target = RenderTarget::new(&device, tex_w, tex_h, FORMAT, "ui-snap-graph");
+    let dpi = f64::from(scale);
+
+    // Lay the snapshot out (topological auto-layout) and frame the whole level —
+    // a fresh canvas starts with `fit_pending = true`, so apply_pending_fit
+    // zoom-to-fits once the nodes have positions. The canvas takes its own Rect
+    // type (distinct from the UITree `manifold_ui::Rect`).
+    let viewport = CanvasRect::new(0.0, 0.0, tex_w as f32 / scale, tex_h as f32 / scale);
+    let mut canvas = GraphCanvas::new();
+    canvas.set_snapshot(snapshot);
+    canvas.apply_pending_fit(viewport);
+
+    // Clear to the editor backdrop (the live editor clears the offscreen to this
+    // before the canvas paints with Load).
+    {
+        let mut enc = device.create_encoder("ui-snap-graph-clear");
+        enc.clear_texture(&target.texture, 0.10, 0.10, 0.12, 1.0);
+        enc.commit_and_wait_completed();
+    }
+
+    renderer.begin_frame();
+    canvas.render(&mut renderer as &mut dyn Painter, viewport);
+    let drew = renderer.prepare(&device, tex_w, tex_h, dpi);
+    {
+        let mut enc = device.create_encoder("ui-snap-graph");
+        renderer.render(&mut enc, &target.texture, GpuLoadAction::Load);
+        enc.commit_and_wait_completed();
+    }
+    assert!(drew, "graph canvas produced no draws (empty snapshot?)");
+
+    let bytes = readback(&device, &target.texture, tex_w, tex_h);
+    image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)
+        .unwrap_or_else(|e| panic!("save {path}: {e}"));
+}
+
 fn readback(device: &GpuDevice, texture: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
     let bytes_per_row = w * 4;
     let total = u64::from(h * bytes_per_row);

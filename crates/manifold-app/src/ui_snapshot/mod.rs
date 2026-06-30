@@ -39,8 +39,15 @@ pub fn run(args: &[String]) {
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
     let interact = arg_value(args, "--interact");
 
+    // The `graph` scene is not a UITree fixture — it renders the node-graph
+    // editor canvas from a synthesized snapshot, on its own render path.
+    if scene == "graph" {
+        run_graph(args);
+        return;
+    }
+
     let Some(mut data) = fixtures::build(scene) else {
-        eprintln!("ui-snap: unknown scene '{scene}' (known: timeline, states, inspector)");
+        eprintln!("ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, graph)");
         std::process::exit(2);
     };
 
@@ -76,6 +83,37 @@ pub fn run(args: &[String]) {
         sync_build(&mut ui, &data);
         render_and_dump(&ui, &data.selection, &dir, scene, ".after", want_dump, want_thumbs);
     }
+}
+
+/// Render the node-graph editor canvas for one preset. The graph snapshot is
+/// synthesized straight from the catalog — `loaded_preset_view_by_id` →
+/// `snapshot_for_view` → the UI translation — so no content thread or running
+/// chain is needed. Pick the preset with `--preset <TypeId>` (effect or
+/// generator); defaults to `Mirror`.
+fn run_graph(args: &[String]) {
+    let preset = arg_value(args, "--preset").unwrap_or_else(|| "Mirror".to_string());
+    let pid = manifold_core::PresetTypeId::from_string(preset.clone());
+
+    let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
+        eprintln!(
+            "ui-snap graph: no graph view for preset '{preset}' \
+             (needs a JSON preset carrying presetMetadata)"
+        );
+        std::process::exit(2);
+    };
+    let Some(rg_snap) = manifold_renderer::node_graph::snapshot_for_view(view) else {
+        eprintln!("ui-snap graph: snapshot_for_view failed for '{preset}' (def failed to materialize)");
+        std::process::exit(2);
+    };
+    let gv_snap = crate::ui_translate::graph_snapshot_to_ui(&rg_snap);
+
+    let dir = out_dir("graph");
+    std::fs::create_dir_all(&dir).expect("create ui-snapshots dir");
+    let tex_w = (LOGICAL_W * SCALE) as u32;
+    let tex_h = (LOGICAL_H * SCALE) as u32;
+    let png = dir.join("graph.png");
+    render::render_graph_to_png(&gv_snap, tex_w, tex_h, SCALE, png.to_str().expect("utf-8 path"));
+    println!("ui-snap: wrote {} ({preset})", png.display());
 }
 
 /// The real translation path: structural sync → zoom-to-fit → build → push state.
