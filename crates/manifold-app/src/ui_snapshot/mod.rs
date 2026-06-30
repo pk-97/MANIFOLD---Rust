@@ -39,15 +39,40 @@ pub fn run(args: &[String]) {
     let want_thumbs = args.iter().any(|a| a == "--thumbs");
     let interact = arg_value(args, "--interact");
 
-    // The `graph` scene is not a UITree fixture — it renders the node-graph
-    // editor canvas from a synthesized snapshot, on its own render path.
-    if scene == "graph" {
-        run_graph(args);
+    // `all`: render every scene in one process — a full-app eyeball after a
+    // change. Skips the per-scene-only flags (mockup, interact); pass those to a
+    // single scene when you need them.
+    if scene == "all" {
+        for s in ["timeline", "states", "inspector"] {
+            render_ui_scene(s, want_dump, false, want_thumbs, None);
+        }
+        run_graph_preset("Mirror");
         return;
     }
 
+    // The `graph` scene is not a UITree fixture — it renders the node-graph
+    // editor canvas from a synthesized snapshot, on its own render path.
+    if scene == "graph" {
+        let preset = arg_value(args, "--preset").unwrap_or_else(|| "Mirror".to_string());
+        run_graph_preset(&preset);
+        return;
+    }
+
+    render_ui_scene(scene, want_dump, want_vs_mockup, want_thumbs, interact);
+}
+
+/// Build + render one UITree scene (`timeline` / `states` / `inspector`) through
+/// the real core→UI translation path, plus an optional `--interact` "after" pass
+/// and mockup composite. Unknown scene name exits 2.
+fn render_ui_scene(
+    scene: &str,
+    want_dump: bool,
+    want_vs_mockup: bool,
+    want_thumbs: bool,
+    interact: Option<String>,
+) {
     let Some(mut data) = fixtures::build(scene) else {
-        eprintln!("ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, graph)");
+        eprintln!("ui-snap: unknown scene '{scene}' (known: timeline, states, inspector, graph, all)");
         std::process::exit(2);
     };
 
@@ -85,14 +110,12 @@ pub fn run(args: &[String]) {
     }
 }
 
-/// Render the node-graph editor canvas for one preset. The graph snapshot is
-/// synthesized straight from the catalog — `loaded_preset_view_by_id` →
-/// `snapshot_for_view` → the UI translation — so no content thread or running
-/// chain is needed. Pick the preset with `--preset <TypeId>` (effect or
-/// generator); defaults to `Mirror`.
-fn run_graph(args: &[String]) {
-    let preset = arg_value(args, "--preset").unwrap_or_else(|| "Mirror".to_string());
-    let pid = manifold_core::PresetTypeId::from_string(preset.clone());
+/// Render the node-graph editor canvas for one preset id (effect or generator).
+/// The graph snapshot is synthesized straight from the catalog —
+/// `loaded_preset_view_by_id` → `snapshot_for_view` → the UI translation — so no
+/// content thread or running chain is needed.
+fn run_graph_preset(preset: &str) {
+    let pid = manifold_core::PresetTypeId::from_string(preset.to_string());
 
     let Some(view) = manifold_renderer::node_graph::loaded_preset_view_by_id(&pid) else {
         eprintln!(

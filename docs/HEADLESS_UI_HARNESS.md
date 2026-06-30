@@ -2,14 +2,19 @@
 
 **Status:** BUILT 2026-06-28 (Phases 1–3), branch `feat/timeline-ui-redesign`. A feature-gated
 subcommand of `manifold-app` (feature `ui-snapshot`), run via the `cargo xtask` alias.
+Extended 2026-06-30 with the `inspector` and `graph` scenes (see **Scenes** below).
 
 **Usage:**
 ```
 cargo xtask ui-snap timeline --dump                      # whole timeline + tree dump
 cargo xtask ui-snap timeline --interact "select:plasma"  # drive a real click; base + .after
 cargo xtask ui-snap states                               # state matrix (6 states in one image)
+cargo xtask ui-snap inspector                            # inspector: layer + effect chain + mod drawer
+cargo xtask ui-snap graph                                # node-graph editor canvas (default: Mirror)
+cargo xtask ui-snap graph --preset Tesseract             # any effect/generator's graph
 cargo xtask ui-snap timeline --vs-mockup                 # app | mockup side-by-side
 cargo xtask ui-snap timeline --thumbs                    # inject a test atlas into the clips
+cargo xtask ui-snap all                                  # render every scene in one sweep
 ```
 Output goes to `target/ui-snapshots/<scene>/`. Verified end-to-end: real `UIRoot`/`state_sync`
 path, the tree dump with real node values, a real-input-host `select:` that flips the selection-
@@ -17,6 +22,20 @@ ring node in the dump and the PNG, the 6-state matrix, the mockup composite, and
 through the real `ClipThumbGpu`. **Next step:** the §F aspect-locked multi-window tiling layers
 onto the same `ThumbQuad`/atlas inputs (`clip_filmstrip::aspect_windows`); the `--thumbs` cut
 currently injects one full-body window per clip. Golden-image diffing remains deferred by design.
+
+## Scenes
+
+| Scene | Renders | Notes |
+|---|---|---|
+| `timeline` | Whole timeline: ruler, header column, lanes, clips, playhead. Inspector dropped. | The original whole-UI scene. `--interact`, `--dump`, `--thumbs`, `--vs-mockup`. |
+| `states` | One layer per state (normal/selected/muted/solo/collapsed/expanded) in one image. | State matrix. |
+| `inspector` | A selected video layer (GLOW) with a real Mirror→Bloom chain; a sine LFO armed on Mirror so the source-tinted (teal) modulation drawer renders. | The inspector — param cards, sliders, enum rows, mod drawer — was invisible before this scene (the others zero the inspector width). The fixture is built through the real `sync_inspector_data` path. |
+| `graph` | The node-graph **editor canvas** for one preset: nodes, typed ports, wires, on the dot-grid backdrop. `--preset <TypeId>` picks any effect or generator (default `Mirror`). | The snapshot is **synthesized from the catalog** (`loaded_preset_view_by_id` → `snapshot_for_view` → `ui_translate::graph_snapshot_to_ui`), so no content thread or running chain is needed. Node preview thumbnails are black headless (no content thread produces node outputs) — the graph *structure* is what this surfaces. The editor's left card lane is the same `ParamCard` the `inspector` scene covers; the right preview monitors are content-thread-bound and out of scope. |
+| `all` | Renders `timeline`, `states`, `inspector`, and `graph` (default preset) in one process. | A full-app sweep for eyeballing everything after a change. |
+
+**Preset ids for `--preset`:** any shipping effect or generator id — e.g. `Mirror`, `Bloom`,
+`Tesseract`. The catalog lives in `docs/NODE_CATALOG.md` (§5/§6.1) and
+`assets/effect-presets/` + `assets/generator-presets/`. An unknown id exits 2 with a message.
 
 **Provenance:** the `feat/timeline-ui-redesign` review found the redesign rode three
 throwaway harnesses (`timeline_header_preview.rs`, `clip_preview.rs`, `headless_ui_spike.rs`)
