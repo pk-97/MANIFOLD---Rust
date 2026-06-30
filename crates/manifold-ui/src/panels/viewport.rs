@@ -913,30 +913,6 @@ impl TimelineViewportPanel {
             .fold(0.0f32, f32::max)
     }
 
-    /// Screen rect for the waveform lane (between ruler and tracks).
-    /// Returns ZERO if waveform lane is not visible.
-    pub fn waveform_lane_rect(&self) -> Rect {
-        let waveform_y = self.ruler_rect.y + self.ruler_rect.height;
-        if self.tracks_rect.y > waveform_y + 1.0 {
-            // There's space between ruler and tracks — that's the waveform area
-            let h = (self.tracks_rect.y - waveform_y).min(color::WAVEFORM_LANE_HEIGHT);
-            Rect::new(self.ruler_rect.x, waveform_y, self.ruler_rect.width, h)
-        } else {
-            Rect::ZERO
-        }
-    }
-
-    /// Screen rect for the stem lanes (below waveform lane, above tracks).
-    pub fn stem_lanes_rect(&self) -> Rect {
-        let waveform_y = self.ruler_rect.y + self.ruler_rect.height;
-        let stem_y = waveform_y + color::WAVEFORM_LANE_HEIGHT;
-        if self.tracks_rect.y > stem_y + 1.0 {
-            let h = self.tracks_rect.y - stem_y;
-            Rect::new(self.ruler_rect.x, stem_y, self.ruler_rect.width, h)
-        } else {
-            Rect::ZERO
-        }
-    }
     pub fn first_node(&self) -> usize {
         self.first_node
     }

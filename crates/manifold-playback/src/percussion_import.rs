@@ -10,7 +10,6 @@ use manifold_core::PresetTypeId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::math::{BeatQuantizer, MathUtils};
-use manifold_core::percussion::ImportedPercussionClipPlacement;
 use manifold_core::percussion_analysis::{
     ClipDetectionAnchor, PercussionAnalysisData, PercussionClipBinding, PercussionImportOptions,
     PercussionPlacementPlan, PercussionTriggerType,
@@ -77,12 +76,10 @@ impl PercussionImportService {
 
     /// Apply a placement plan to the timeline.
     ///
-    /// `source_clip_id` distinguishes the two ownership models:
-    /// - `Some(id)` — per-clip detection (audio-clip-detection). Generated
-    ///   triggers are tagged `detection_source = id`; a re-detect clears only
-    ///   this clip's own prior triggers; no project-global state is written.
-    /// - `None` — legacy global import wizard. Clears whole reused layers and
-    ///   writes `project.percussion_import`. Slated for removal in P5.
+    /// `source_clip_id` is the source audio clip for per-clip detection
+    /// (audio-clip-detection): generated triggers are tagged
+    /// `detection_source = id`, so a re-detect of that clip clears only its own
+    /// prior triggers and no project-global state is written.
     pub fn apply_placement_plan(
         &self,
         project: &mut Project,
@@ -105,8 +102,6 @@ impl PercussionImportService {
         let layout_map = self.resolve_import_layer_layout(project, options);
 
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
-        let mut import_provenance: Vec<ImportedPercussionClipPlacement> =
-            Vec::with_capacity(placements.len());
 
         // First pass: resolve target layers and collect unique indices to clear.
         let mut target_layer_indices: Vec<i32> = vec![-1; placements.len()];
@@ -239,23 +234,11 @@ impl PercussionImportService {
             // so a later re-detect of that clip clears only these triggers.
             timeline_clip.detection_source = source_clip_id.cloned();
 
-            let clip_id = timeline_clip.id.clone();
             let spb = 60.0 / project.settings.bpm.0.max(1.0);
             let mut add_cmd = AddClipCommand::new(timeline_clip, target_layer_lid.clone(), spb);
             add_cmd.execute(project);
             commands.push(Box::new(add_cmd));
             result.added_clips += 1;
-
-            import_provenance.push(ImportedPercussionClipPlacement {
-                clip_id: clip_id.into(),
-                source_time_seconds: Seconds(placement.source_time_seconds as f64),
-                start_beat_offset: options.map_or(Beats::ZERO, |o| o.start_beat_offset),
-                quantize_to_grid: options.is_some_and(|o| o.quantize_to_grid),
-                quantize_step_beats: options.map_or(Beats::ZERO, |o| o.quantize_step_beats),
-                alignment_offset_beats: Beats::ZERO,
-                alignment_slope_beats_per_second: 0.0,
-                alignment_pivot_seconds: Seconds::ZERO,
-            });
         }
 
         if result.added_clips <= 0 {
@@ -275,17 +258,6 @@ impl PercussionImportService {
         };
 
         result.undo_command = Some(command);
-
-        // Legacy global wizard only: record provenance into project state.
-        // Per-clip detection (source_clip_id = Some) caches its analysis on the
-        // clip instead and writes no project-global state.
-        if source_clip_id.is_none() {
-            let perc_import = project
-                .percussion_import
-                .get_or_insert_with(Default::default);
-            perc_import.clip_placements.clear();
-            perc_import.clip_placements.extend(import_provenance);
-        }
         result.success = true;
 
         if result.cleared_clips > 0 {
@@ -667,10 +639,6 @@ mod tests {
         let layer = &project.timeline.layers[idx];
         assert_eq!(layer.clips.len(), 1);
         assert_eq!(layer.clips[0].detection_source.as_ref(), Some(&clip_id));
-        assert!(
-            project.percussion_import.is_none(),
-            "per-clip path writes no project-global state"
-        );
     }
 
     #[test]

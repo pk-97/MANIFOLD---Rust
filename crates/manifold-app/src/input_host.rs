@@ -1325,48 +1325,6 @@ impl TimelineInputHost for AppInputHost<'_> {
         self.scroll_dirty.zoom = true;
     }
 
-    // ── Percussion alignment (Unity InputHandler lines 262-286) ──
-
-    fn import_percussion_map(&mut self) {
-        // Open file dialog, send path to content thread.
-        // Port of Unity: percussionImportController.OnImportPercussionMap().
-        // Uses the same dialog pattern as audio import.
-        use crate::content_command::ContentCommand;
-        let dialog = rfd::FileDialog::new()
-            .set_title("Import Percussion Map")
-            .add_filter("Audio / JSON", &["wav", "mp3", "flac", "ogg", "json"]);
-        if let Some(path) = dialog.pick_file() {
-            let path_str = path.to_string_lossy().to_string();
-            ContentCommand::send(self.content_tx, ContentCommand::PercussionImport(path_str));
-        }
-    }
-
-    fn calibrate_percussion_downbeat(&mut self) {
-        use crate::content_command::ContentCommand;
-        let beat = self.content_state.current_beat;
-        let bpb = self.project.settings.time_signature_numerator.max(1);
-        ContentCommand::send(
-            self.content_tx,
-            ContentCommand::PercussionCalibrateDownbeat {
-                playhead_beat: beat,
-                beats_per_bar: bpb,
-            },
-        );
-    }
-
-    fn nudge_percussion_alignment(&mut self, delta_beats: f32) {
-        use crate::content_command::ContentCommand;
-        ContentCommand::send(
-            self.content_tx,
-            ContentCommand::PercussionNudgeAlignment(Beats::from_f32(delta_beats)),
-        );
-    }
-
-    fn reset_percussion_alignment(&mut self) {
-        use crate::content_command::ContentCommand;
-        ContentCommand::send(self.content_tx, ContentCommand::PercussionResetAlignment);
-    }
-
     // ── Timeline markers ─────────────────────────────────────────
 
     fn add_marker_at_playhead(&mut self) {

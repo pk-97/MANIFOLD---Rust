@@ -1372,37 +1372,6 @@ fn set_display_dimensions_undo_roundtrip() {
 }
 
 #[test]
-fn clear_percussion_undo_roundtrip() {
-    let mut project = make_test_project();
-    // Set up percussion state
-    project.percussion_import = Some(manifold_core::percussion::PercussionImportState {
-        audio_start_beat: Beats(4.0),
-        audio_path: Some("/test/audio.wav".into()),
-        ..Default::default()
-    });
-
-    let mut cmd = ClearPercussionCommand::new(None);
-    cmd.execute(&mut project);
-    assert!(project.percussion_import.is_none());
-
-    cmd.undo(&mut project);
-    assert!(project.percussion_import.is_some());
-    assert_eq!(
-        project.percussion_import.as_ref().unwrap().audio_start_beat,
-        Beats(4.0)
-    );
-    assert_eq!(
-        project
-            .percussion_import
-            .as_ref()
-            .unwrap()
-            .audio_path
-            .as_deref(),
-        Some("/test/audio.wav"),
-    );
-}
-
-#[test]
 fn reorder_effect_group_undo_roundtrip() {
     let mut project = make_test_project();
     // Add 3 master effects

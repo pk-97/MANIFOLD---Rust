@@ -187,10 +187,6 @@ pub struct UIRoot {
     pub embedded_presets: Vec<EmbeddedPresetItem>,
     embedded_presets_fingerprint: u64,
 
-    // Waveform panels (bitmap-rendered, not UITree-based)
-    pub waveform_lane: WaveformLanePanel,
-    pub stem_lanes: StemLaneGroupPanel,
-
     // State
     built: bool,
     screen_width: f32,
@@ -348,8 +344,6 @@ impl UIRoot {
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
             embedded_presets: Vec::new(),
             embedded_presets_fingerprint: 0,
-            waveform_lane: WaveformLanePanel::new(),
-            stem_lanes: StemLaneGroupPanel::new(),
             built: false,
             screen_width: 1280.0,
             screen_height: 720.0,
@@ -664,19 +658,6 @@ impl UIRoot {
         self.viewport_panels_start = self.tree.count();
         self.viewport.build(&mut self.tree, &self.layout);
 
-        // Waveform & stem lane UITree nodes — must be after viewport.build()
-        // so waveform_lane_rect()/stem_lanes_rect() have valid rects.
-        {
-            let wf_rect = self.viewport.waveform_lane_rect();
-            if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
-                self.waveform_lane.build_nodes(&mut self.tree, wf_rect);
-            }
-            let sl_rect = self.viewport.stem_lanes_rect();
-            if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
-                self.stem_lanes.build_nodes(&mut self.tree, sl_rect);
-            }
-        }
-
         // All top-level overlays (perf HUD + dropdown + modals) build at the
         // tail of the tree via the single overlay driver — one enumeration for
         // build, draw, and input. See build_overlays / route_overlay_event.
@@ -687,17 +668,6 @@ impl UIRoot {
     /// Used on horizontal-only scroll where layer headers don't change.
     fn build_viewport_panels(&mut self) {
         self.viewport.build(&mut self.tree, &self.layout);
-
-        {
-            let wf_rect = self.viewport.waveform_lane_rect();
-            if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
-                self.waveform_lane.build_nodes(&mut self.tree, wf_rect);
-            }
-            let sl_rect = self.viewport.stem_lanes_rect();
-            if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
-                self.stem_lanes.build_nodes(&mut self.tree, sl_rect);
-            }
-        }
 
         // Overlays build at the tail of the tree via the single driver.
         self.build_overlays();
@@ -1127,79 +1097,6 @@ impl UIRoot {
 
             panel_actions = self.inspector.handle_event(event, &self.tree);
             actions.append(&mut panel_actions);
-
-            // Waveform lane & stem lanes: route events with local coordinate conversion.
-            // These panels use UITree nodes for buttons/overlays (providing valid hit_ids)
-            // but still route by rect containment to handle local coordinate conversion.
-            {
-                let wf_rect = self.viewport.waveform_lane_rect();
-                let sl_rect = if self.stem_lanes.is_expanded() {
-                    self.viewport.stem_lanes_rect()
-                } else {
-                    manifold_ui::node::Rect::ZERO
-                };
-
-                let wf_active = self.waveform_lane.is_interacting();
-                let mut consumed_by_lane = false;
-
-                // Scroll events pass through to viewport (Unity: WaveformLaneScrollForwarder).
-                let is_scroll = matches!(event, UIEvent::Scroll { .. });
-
-                if let Some(pos) = event.pos() {
-                    if !is_scroll
-                        && wf_rect.width > 0.0
-                        && wf_rect.height > 0.0
-                        && wf_rect.contains(pos)
-                    {
-                        // Event is inside the waveform lane rect
-                        let local = event.with_offset(-wf_rect.x, -wf_rect.y);
-                        panel_actions = self.waveform_lane.handle_event(&local, &self.tree);
-                        actions.append(&mut panel_actions);
-                        consumed_by_lane = true;
-                    } else if !is_scroll
-                        && sl_rect.width > 0.0
-                        && sl_rect.height > 0.0
-                        && sl_rect.contains(pos)
-                    {
-                        // Event is inside the stem lanes rect
-                        let local = event.with_offset(-sl_rect.x, -sl_rect.y);
-                        panel_actions = self.stem_lanes.handle_event(&local, &self.tree);
-                        actions.append(&mut panel_actions);
-                        consumed_by_lane = true;
-                    } else if wf_active {
-                        // Active scrub/drag started inside waveform lane but moved outside.
-                        // Continue routing Drag/PointerUp/DragEnd so the interaction completes.
-                        match event {
-                            UIEvent::Drag { .. }
-                            | UIEvent::PointerUp { .. }
-                            | UIEvent::DragEnd { .. } => {
-                                let local = event.with_offset(-wf_rect.x, -wf_rect.y);
-                                panel_actions = self.waveform_lane.handle_event(&local, &self.tree);
-                                actions.append(&mut panel_actions);
-                                consumed_by_lane = true;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-
-                // Route PointerUp/DragEnd even for position-less events
-                // to ensure scrub/drag state is cleared.
-                if !consumed_by_lane && wf_active {
-                    match event {
-                        UIEvent::PointerUp { .. } | UIEvent::DragEnd { .. } => {
-                            panel_actions = self.waveform_lane.handle_event(event, &self.tree);
-                            actions.append(&mut panel_actions);
-                        }
-                        _ => {}
-                    }
-                }
-
-                if consumed_by_lane {
-                    // Don't pass to viewport/overlay — event was in waveform/stem area
-                    continue;
-                }
-            }
 
             // Viewport: ruler events handled by viewport panel (Seek/scrub).
             // Tracks-area events stashed for InteractionOverlay in app.rs.
@@ -2243,14 +2140,6 @@ impl UIRoot {
         }
         self.audio_setup_panel
             .update_trigger_levels(&mut self.tree, levels);
-    }
-
-    /// Push waveform/stem lane node visibility and style to UITree.
-    /// Called from app_render after syncing mute/solo/stems_available state.
-    /// Separate from update() because app_render must sync state first.
-    pub fn update_waveform_stem_nodes(&mut self) {
-        self.waveform_lane.update_nodes(&mut self.tree);
-        self.stem_lanes.update_nodes(&mut self.tree);
     }
 }
 

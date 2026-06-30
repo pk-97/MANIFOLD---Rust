@@ -1,8 +1,7 @@
 //! Per-clip audio-layer playback (Phase 3 of the Audio Layer feature — see
 //! `docs/AUDIO_LAYER_DESIGN.md` §4) plus the realtime modulation tap (§3R).
 //!
-//! Generalizes the single-track [`crate::audio_sync::ImportedAudioSyncController`]
-//! to **one kira voice per active audio clip**, keyed by `ClipId`. Each tick the
+//! One **kira voice per active audio clip**, keyed by `ClipId`. Each tick the
 //! content thread calls [`AudioLayerPlayback::update`]: every audio clip under
 //! the playhead is played through kira (the existing output backend + mixer),
 //! sample-accurately following the transport (seek-on-drift, replay-on-stop —

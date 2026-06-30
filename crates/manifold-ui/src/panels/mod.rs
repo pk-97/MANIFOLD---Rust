@@ -20,10 +20,8 @@ pub mod param_slider_shared;
 pub mod perf_hud;
 pub mod settings_popup;
 pub mod popup_shell;
-pub mod stem_lane;
 pub mod transport;
 pub mod viewport;
-pub mod waveform_lane;
 
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
@@ -738,25 +736,6 @@ pub enum PanelAction {
     MarkerDragEnded(String, f32),     // marker_id, final_beat
     MarkerRightClicked(String),       // marker_id (context menu)
     DeleteSelectedMarkers,
-
-    // Waveform lane
-    ImportAudioClicked,
-    RemoveAudioClicked,
-    WaveformScrub(f32, f32),  // screen_x, screen_y
-    WaveformDragDelta(f32),   // delta_beats (snapped to whole beats)
-    WaveformDragEnd(f32),     // total_snapped_delta
-    ExpandStemsToggled(bool), // expanded
-
-    // Re-analysis buttons (UI chrome — callbacks to percussion pipeline)
-    ReAnalyzeDrums,
-    ReAnalyzeBass,
-    ReAnalyzeSynth,
-    ReAnalyzeVocal,
-    ReImportStems,
-
-    // Stem mute/solo
-    StemMuteToggled(usize), // stem_index (0-3)
-    StemSoloToggled(usize), // stem_index (0-3)
 
     // Generic dropdown fallback (should not normally reach dispatch)
     DropdownSelected(usize),

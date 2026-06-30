@@ -1,422 +1,19 @@
-// Port of Unity ImportedAudioSyncController.cs (473 lines).
-// Manages playback sync of an imported audio file against the timeline.
-// Uses kira for audio decoding + playback (replacing Unity AudioSource + AudioClip).
+//! Audio decode utility: load an audio file into a kira [`StaticSoundData`] plus
+//! its encoder-delay probe. Shared by per-clip audio-layer playback
+//! ([`crate::audio_layer_playback`]) and the offline export mixdown
+//! ([`crate::audio_mixdown`]). The old project-global imported-audio playback
+//! controller lived here too; it was removed with the legacy percussion feature
+//! (audio is per-clip now). Only the decode helpers remain.
 
-use crate::engine::PlaybackEngine;
-use kira::{
-    manager::{AudioManager, AudioManagerSettings, backend::DefaultBackend},
-    sound::PlaybackState as KiraPlaybackState,
-    sound::static_sound::{StaticSoundData, StaticSoundHandle},
-    tween::Tween,
-};
-use manifold_core::types::PlaybackState;
+use kira::sound::static_sound::StaticSoundData;
 use manifold_core::{Beats, Seconds};
 use std::path::Path;
 use std::process::Command;
 
-const SEEK_TOLERANCE_SECONDS: f32 = 0.06;
-const HARD_RESYNC_SECONDS: f32 = 0.20;
 const MAX_ENCODER_DELAY_SECONDS: f32 = 0.5;
 
-/// Port of Unity ImportedAudioSyncController : MonoBehaviour.
-/// Owns a kira AudioManager (equivalent to Unity AudioSource lifecycle).
-pub struct ImportedAudioSyncController {
-    audio_manager: AudioManager<DefaultBackend>,
-    sound_handle: Option<StaticSoundHandle>,
-    sound_data: Option<StaticSoundData>,
-    clip_duration_seconds: Seconds,
-    audio_path: Option<String>,
-    start_beat: Beats,
-    start_time_seconds: Seconds,
-    encoder_delay_seconds: Seconds,
-    is_ready: bool,
-    on_clip_changed: Option<Box<dyn FnMut(bool) + Send>>,
-}
-
-impl ImportedAudioSyncController {
-    /// Port of Awake(). Creates the audio manager (equivalent to AddComponent<AudioSource>).
-    pub fn new() -> Result<Self, String> {
-        let audio_manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())
-            .map_err(|e| format!("Failed to create audio manager: {}", e))?;
-
-        Ok(Self {
-            audio_manager,
-            sound_handle: None,
-            sound_data: None,
-            clip_duration_seconds: Seconds::ZERO,
-            audio_path: None,
-            start_beat: Beats::ZERO,
-            start_time_seconds: Seconds::ZERO,
-            encoder_delay_seconds: Seconds::ZERO,
-            is_ready: false,
-            on_clip_changed: None,
-        })
-    }
-
-    // ─── Properties (port of C# public properties) ───
-
-    pub fn is_ready(&self) -> bool {
-        self.is_ready
-    }
-    pub fn start_beat(&self) -> Beats {
-        self.start_beat
-    }
-    pub fn encoder_delay_seconds(&self) -> Seconds {
-        self.encoder_delay_seconds
-    }
-    pub fn audio_path(&self) -> Option<&str> {
-        self.audio_path.as_deref()
-    }
-    pub fn clip_duration_seconds(&self) -> Seconds {
-        self.clip_duration_seconds
-    }
-
-    pub fn set_on_clip_changed(&mut self, callback: Option<Box<dyn FnMut(bool) + Send>>) {
-        self.on_clip_changed = callback;
-    }
-
-    /// Set the master audio volume. Used by StemAudioController to mute/unmute
-    /// the master when expanding/collapsing stems.
-    /// Port of C# masterController.Source.volume = value.
-    pub fn set_volume(&mut self, volume: f32) {
-        if let Some(ref mut handle) = self.sound_handle {
-            handle.set_volume(volume as f64, Tween::default());
-        }
-    }
-
-    // ─── LoadAudioAsync (port of C# IEnumerator LoadAudioAsync) ───
-
-    /// Loads and decodes an audio file synchronously (kira decodes into memory).
-    /// Port of Unity LoadAudioAsync(string path, float startBeatOffset).
-    pub fn load_audio(&mut self, path: &str, start_beat_offset: Beats) -> Result<(), String> {
-        if path.is_empty() {
-            return Ok(());
-        }
-
-        self.is_ready = false;
-
-        // Load and decode the audio file (equivalent to UnityWebRequestMultimedia.GetAudioClip).
-        let sound_data = StaticSoundData::from_file(path).map_err(|e| {
-            log::warn!(
-                "[ImportedAudioSyncController] Failed to load imported audio for playback: {}",
-                e
-            );
-            format!("Failed to load audio: {}", e)
-        })?;
-
-        let clip_duration = sound_data.duration().as_secs_f32();
-        if clip_duration <= 0.0 {
-            log::warn!("[ImportedAudioSyncController] Failed to decode imported audio clip.");
-            return Err("Decoded audio clip has zero duration".to_string());
-        }
-
-        // Stop and discard previous sound handle.
-        if let Some(ref mut handle) = self.sound_handle {
-            handle.stop(Tween::default());
-        }
-        self.sound_handle = None;
-
-        self.clip_duration_seconds = Seconds(clip_duration as f64);
-        self.audio_path = Some(path.to_string());
-        self.start_beat = start_beat_offset.max(Beats::ZERO);
-        // startTimeSeconds will be recalculated on first UpdateSync call.
-        self.start_time_seconds = Seconds::ZERO;
-        self.encoder_delay_seconds = probe_encoder_delay_seconds(path);
-
-        // Play the sound immediately paused (equivalent to audioSource.clip = audioClip).
-        let data_clone = sound_data.clone();
-        let mut handle = self
-            .audio_manager
-            .play(data_clone)
-            .map_err(|e| format!("Failed to play audio: {}", e))?;
-        handle.pause(Tween::default());
-        handle.seek_to(0.0);
-        self.sound_handle = Some(handle);
-        self.sound_data = Some(sound_data);
-
-        self.is_ready = true;
-        if let Some(ref mut cb) = self.on_clip_changed {
-            cb(true);
-        }
-
-        let file_name = Path::new(path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let delay_info = if self.encoder_delay_seconds > Seconds::ZERO {
-            format!(
-                " encoderDelay={:.1}ms",
-                self.encoder_delay_seconds.0 * 1000.0
-            )
-        } else {
-            String::new()
-        };
-        log::info!(
-            "[ImportedAudioSyncController] Imported audio attached for sync: '{}' startBeat={:.2}{}",
-            file_name,
-            self.start_beat.0,
-            delay_info
-        );
-
-        Ok(())
-    }
-
-    // ─── SetStartBeat ───
-
-    /// Port of C# SetStartBeat(float beat, PlaybackController playbackController).
-    pub fn set_start_beat(&mut self, beat: Beats, engine: &mut PlaybackEngine) {
-        self.start_beat = Beats(beat.0.max(0.0));
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
-    }
-
-    // ─── GetDurationBeats ───
-
-    /// Port of C# GetDurationBeats(PlaybackController playbackController).
-    pub fn get_duration_beats(&mut self, engine: &mut PlaybackEngine) -> Beats {
-        if !self.is_ready || self.clip_duration_seconds <= Seconds::ZERO {
-            return Beats::ZERO;
-        }
-
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
-        let end_time = self.start_time_seconds + self.clip_duration_seconds;
-        let end_beat = engine.time_to_timeline_beat(end_time);
-        (end_beat - self.start_beat).max(Beats::ZERO)
-    }
-
-    // ─── GetEndBeat ───
-
-    /// Port of C# GetEndBeat(PlaybackController playbackController).
-    pub fn get_end_beat(&mut self, engine: &mut PlaybackEngine) -> Beats {
-        self.start_beat + self.get_duration_beats(engine)
-    }
-
-    // ─── UpdateSync (main sync loop) ───
-
-    /// Port of C# UpdateSync(PlaybackController playbackController).
-    /// Called every frame from the app tick loop.
-    pub fn update_sync(&mut self, engine: &mut PlaybackEngine) {
-        if !self.is_ready || self.clip_duration_seconds <= Seconds::ZERO {
-            return;
-        }
-        if self.sound_handle.is_none() {
-            return;
-        }
-
-        // Sync start_beat from the project's authoritative audio_start_beat.
-        // MutateProject (waveform drag) can change the project value without
-        // calling set_start_beat(), so we always read the latest here.
-        if let Some(project) = engine.project()
-            && let Some(perc) = &project.percussion_import
-        {
-            self.start_beat = perc.audio_start_beat;
-        }
-
-        let clip_length = self.clip_duration_seconds;
-
-        // Keep beat anchor aligned with any transport/tempo timing changes.
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
-        // Offset by encoder delay so playback cursor skips past the
-        // MP3 padding that ffmpeg strips during analysis decoding.
-        let expected_time =
-            engine.current_time() - self.start_time_seconds + self.encoder_delay_seconds;
-        let in_range = expected_time >= Seconds::ZERO && expected_time < clip_length;
-        let clamped_expected = expected_time.clamp(
-            Seconds::ZERO,
-            (clip_length - Seconds(0.001)).max(Seconds::ZERO),
-        );
-
-        let handle_state = self.sound_handle.as_ref().unwrap().state();
-        let is_source_playing = handle_state == KiraPlaybackState::Playing;
-
-        match engine.current_state() {
-            PlaybackState::Playing => {
-                if !in_range {
-                    if is_source_playing {
-                        self.sound_handle.as_mut().unwrap().pause(Tween::default());
-                    }
-                    return;
-                }
-
-                if !is_source_playing {
-                    // Kira auto-transitions to Stopped when audio reaches its
-                    // natural end. resume() is a no-op on stopped handles, so
-                    // we must re-play from sound_data to get a fresh handle.
-                    // Unity's audioSource.Play() works from any state — this
-                    // matches that semantic.
-                    if handle_state == KiraPlaybackState::Stopped {
-                        if let Some(ref data) = self.sound_data {
-                            match self.audio_manager.play(data.clone()) {
-                                Ok(mut new_handle) => {
-                                    new_handle.seek_to(clamped_expected.0);
-                                    self.sound_handle = Some(new_handle);
-                                }
-                                Err(e) => {
-                                    log::warn!(
-                                        "[ImportedAudioSyncController] Failed to restart stopped audio: {}",
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                    } else {
-                        let handle = self.sound_handle.as_mut().unwrap();
-                        handle.seek_to(clamped_expected.0);
-                        handle.resume(Tween::default());
-                    }
-                    return;
-                }
-
-                let handle = self.sound_handle.as_mut().unwrap();
-                let current_pos = Seconds(handle.position());
-                if (current_pos - clamped_expected).abs() > Seconds(HARD_RESYNC_SECONDS as f64) {
-                    handle.seek_to(clamped_expected.0);
-                }
-            }
-            PlaybackState::Paused => {
-                let handle = self.sound_handle.as_mut().unwrap();
-                if is_source_playing {
-                    handle.pause(Tween::default());
-                }
-
-                if in_range {
-                    let current_pos = Seconds(handle.position());
-                    if (current_pos - clamped_expected).abs()
-                        > Seconds(SEEK_TOLERANCE_SECONDS as f64)
-                    {
-                        handle.seek_to(clamped_expected.0);
-                    }
-                }
-            }
-            _ => {
-                // Stopped
-                let handle = self.sound_handle.as_mut().unwrap();
-                if is_source_playing {
-                    handle.pause(Tween::default());
-                }
-
-                let current_pos = handle.position();
-                if current_pos > 0.0 {
-                    handle.seek_to(0.0);
-                }
-            }
-        }
-    }
-
-    // ─── TryGetSourceSecondsAtPlayhead ───
-
-    /// Port of C# TryGetSourceSecondsAtPlayhead(PlaybackController, out float, out float).
-    /// Returns Some((source_seconds, playhead_beat)) or None.
-    pub fn try_get_source_seconds_at_playhead(
-        &mut self,
-        engine: &mut PlaybackEngine,
-    ) -> Option<(Seconds, Beats)> {
-        let playhead_beat = engine.current_beat();
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
-        let source_seconds = engine.current_time() - self.start_time_seconds;
-        if !source_seconds.0.is_finite() {
-            return None;
-        }
-
-        if self.clip_duration_seconds > Seconds::ZERO {
-            if source_seconds < Seconds(-0.0001)
-                || source_seconds > self.clip_duration_seconds + Seconds(0.0001)
-            {
-                return None;
-            }
-            let clamped = source_seconds.clamp(Seconds::ZERO, self.clip_duration_seconds);
-            return Some((clamped, playhead_beat));
-        }
-
-        if source_seconds >= Seconds::ZERO {
-            Some((source_seconds, playhead_beat))
-        } else {
-            None
-        }
-    }
-
-    // ─── ResetAudio ───
-
-    /// Port of C# ResetAudio().
-    pub fn reset_audio(&mut self) {
-        self.is_ready = false;
-        self.audio_path = None;
-        self.start_beat = Beats::ZERO;
-        self.start_time_seconds = Seconds::ZERO;
-        self.encoder_delay_seconds = Seconds::ZERO;
-        if let Some(ref mut cb) = self.on_clip_changed {
-            cb(false);
-        }
-
-        if let Some(ref mut handle) = self.sound_handle {
-            if handle.state() == KiraPlaybackState::Playing {
-                handle.pause(Tween::default());
-            }
-            handle.stop(Tween::default());
-        }
-        self.sound_handle = None;
-        self.sound_data = None;
-        self.clip_duration_seconds = Seconds::ZERO;
-    }
-
-    /// Applies pre-loaded audio data to the controller. Fast — only does
-    /// AudioManager::play (no file I/O). Must be called on the main thread.
-    pub fn apply_preloaded(&mut self, preloaded: PreloadedAudioData) -> Result<(), String> {
-        // Stop and discard previous sound handle.
-        if let Some(ref mut handle) = self.sound_handle {
-            handle.stop(Tween::default());
-        }
-        self.sound_handle = None;
-
-        self.clip_duration_seconds = preloaded.clip_duration;
-        self.audio_path = Some(preloaded.path.clone());
-        self.start_beat = preloaded.start_beat;
-        self.start_time_seconds = Seconds::ZERO;
-        self.encoder_delay_seconds = preloaded.encoder_delay;
-
-        // Play the sound immediately paused (equivalent to audioSource.clip = audioClip).
-        let data_clone = preloaded.sound_data.clone();
-        let mut handle = self
-            .audio_manager
-            .play(data_clone)
-            .map_err(|e| format!("Failed to play audio: {}", e))?;
-        handle.pause(Tween::default());
-        handle.seek_to(0.0);
-        self.sound_handle = Some(handle);
-        self.sound_data = Some(preloaded.sound_data);
-
-        self.is_ready = true;
-        if let Some(ref mut cb) = self.on_clip_changed {
-            cb(true);
-        }
-
-        let file_name = Path::new(&preloaded.path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let delay_info = if self.encoder_delay_seconds > Seconds::ZERO {
-            format!(
-                " encoderDelay={:.1}ms",
-                self.encoder_delay_seconds.0 * 1000.0
-            )
-        } else {
-            String::new()
-        };
-        log::info!(
-            "[ImportedAudioSyncController] Imported audio attached for sync: '{}' startBeat={:.2}{}",
-            file_name,
-            self.start_beat.0,
-            delay_info
-        );
-
-        Ok(())
-    }
-}
-
-// ─── Async preloading (runs on background thread) ───
-
-/// Pre-decoded audio data ready to be applied to the controller on the main thread.
-/// The heavy I/O (file read + decode + ffprobe) happens off-thread; only the fast
-/// AudioManager::play call happens on the main thread via `apply_preloaded`.
+/// Pre-decoded audio data: the kira sound plus the probed encoder delay.
+/// The heavy I/O (file read + decode + ffprobe) is safe to run off-thread.
 pub struct PreloadedAudioData {
     pub sound_data: StaticSoundData,
     pub encoder_delay: Seconds,
@@ -425,8 +22,9 @@ pub struct PreloadedAudioData {
     pub start_beat: Beats,
 }
 
-/// Performs the expensive audio loading work (file I/O + decode + ffprobe).
-/// Safe to call from any thread — returns data to be applied on main thread.
+/// Decode `path` into a [`StaticSoundData`] and probe its encoder delay. Safe to
+/// call from any thread. `start_beat_offset` is carried through for callers that
+/// place the clip on a timeline (clamped to ≥ 0).
 pub fn preload_audio(path: &str, start_beat_offset: Beats) -> Result<PreloadedAudioData, String> {
     let sound_data =
         StaticSoundData::from_file(path).map_err(|e| format!("Failed to load audio: {}", e))?;
@@ -447,10 +45,10 @@ pub fn preload_audio(path: &str, start_beat_offset: Beats) -> Result<PreloadedAu
     })
 }
 
-// ─── ffprobe encoder delay probing (module-level functions) ───
+// ─── ffprobe encoder delay probing ───
 
-/// Port of C# ProbeEncoderDelaySeconds(string audioPath).
-/// Returns 0 for lossless formats or when ffprobe is unavailable.
+/// Returns the encoder priming delay in seconds (lossy formats), or 0 for
+/// lossless formats / when ffprobe is unavailable.
 fn probe_encoder_delay_seconds(audio_path: &str) -> Seconds {
     if audio_path.is_empty() {
         return Seconds::ZERO;
@@ -488,8 +86,6 @@ fn probe_encoder_delay_seconds(audio_path: &str) -> Seconds {
     Seconds::ZERO
 }
 
-/// Port of C# RunFfprobeQuery(string ffprobePath, string audioPath).
-/// Rust uses std::process::Command (no IL2CPP popen workaround needed).
 fn run_ffprobe_query(ffprobe_path: &str, audio_path: &str) -> Option<String> {
     let output = Command::new(ffprobe_path)
         .args([
@@ -509,15 +105,9 @@ fn run_ffprobe_query(ffprobe_path: &str, audio_path: &str) -> Option<String> {
     }
 
     let result = String::from_utf8_lossy(&output.stdout).to_string();
-    if result.is_empty() {
-        None
-    } else {
-        Some(result)
-    }
+    if result.is_empty() { None } else { Some(result) }
 }
 
-/// Port of C# ResolveFfprobeBinary().
-/// Searches standard locations for the ffprobe binary.
 fn resolve_ffprobe_binary() -> Option<String> {
     // 1. Explicit env var.
     if let Ok(env_path) = std::env::var("FFPROBE_PATH")
@@ -551,7 +141,6 @@ fn resolve_ffprobe_binary() -> Option<String> {
     None
 }
 
-/// Port of C# DeriveFfprobeFromFfmpegPath(string ffmpegPath).
 fn derive_ffprobe_from_ffmpeg_path(ffmpeg_path: &str) -> Option<String> {
     if ffmpeg_path.is_empty() {
         return None;

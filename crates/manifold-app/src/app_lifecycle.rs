@@ -9,9 +9,8 @@ use std::sync::Arc;
 use winit::event_loop::ActiveEventLoop;
 
 use manifold_editing::service::EditingService;
-use manifold_playback::audio_decoder::DecodedAudio;
 
-use crate::app::{Application, PendingAudioLoadResult};
+use crate::app::Application;
 use crate::content_command::ContentCommand;
 
 use crate::project_io::ProjectIOAction;
@@ -510,18 +509,8 @@ impl Application {
         if let Some(project) = action.apply_project {
             let t_total = std::time::Instant::now();
 
-            // PrepareForProjectSwitch — clean up previous audio/waveform/stem state
-            // Unity: WorkspaceController.ProjectIO.cs PrepareForProjectSwitch()
-            // Audio + stem reset sent to content thread
-            self.send_content_cmd(ContentCommand::ResetAudio);
-            self.send_content_cmd(ContentCommand::StemReset);
-            self.ws.ui_root.waveform_lane.clear_audio();
-            self.ws.ui_root.stem_lanes.clear_all_stems();
-            self.ws.ui_root.layout.waveform_lane_visible = false;
-            self.ws.ui_root.layout.stem_lanes_expanded = false;
-            self.pending_audio_load = None;
-            self.loaded_audio_path = None;
-
+            // PrepareForProjectSwitch — audio-layer playback resets on the content
+            // thread when it applies LoadProject (evicts the old project's voices).
             // Apply saved layout before initializing
             self.ws.ui_root.apply_project_layout(&project.settings);
             let saved_time = project.saved_playhead_time;
@@ -553,22 +542,6 @@ impl Application {
                     h,
                     rs
                 );
-            }
-
-            // Spawn background audio loading (audio decode on background thread,
-            // result forwarded to content thread via AudioLoaded command)
-            let mut audio_path_for_load: Option<(String, f32)> = None;
-            if let Some(ref perc) = self.local_project.percussion_import
-                && let Some(ref audio_path) = perc.audio_path
-                && !audio_path.is_empty()
-            {
-                audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat.as_f32()));
-                self.ws.ui_root.layout.waveform_lane_visible = true;
-            }
-
-            if let Some((audio_path, start_beat)) = audio_path_for_load {
-                self.loaded_audio_path = Some(audio_path.clone());
-                self.spawn_background_audio_load(audio_path, start_beat);
             }
 
             self.send_content_cmd(ContentCommand::SetProject);
@@ -628,80 +601,6 @@ impl Application {
         if action.needs_clip_sync {
             self.needs_rebuild = true;
         }
-    }
-
-    /// Poll for completed background audio load and apply results.
-    /// Called each frame from tick_and_render.
-    pub(crate) fn poll_pending_audio_load(&mut self) {
-        let rx = match self.pending_audio_load.as_ref() {
-            Some(rx) => rx,
-            None => return,
-        };
-
-        match rx.try_recv() {
-            Ok(result) => {
-                self.pending_audio_load = None;
-
-                // Send loaded audio to content thread
-                self.send_content_cmd(ContentCommand::AudioLoaded {
-                    preloaded: Box::new(result.preloaded),
-                });
-
-                if let Some(decoded) = result.waveform {
-                    self.ws.ui_root.waveform_lane.set_audio_data(
-                        &decoded.samples,
-                        decoded.channels,
-                        decoded.sample_rate,
-                    );
-                    self.ws.ui_root.layout.waveform_lane_visible = true;
-                    // Rebuild viewport so tracks_rect accounts for waveform lane height.
-                    self.needs_rebuild = true;
-                    log::info!("[Waveform] Decoded audio for waveform display");
-                }
-
-                log::info!("[Audio] background load applied to UI thread");
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.pending_audio_load = None;
-            }
-        }
-    }
-
-    /// Spawn a background thread that decodes audio via kira (for playback) and
-    /// extracts PCM samples (for waveform). Results are picked up by
-    /// `poll_pending_audio_load()` each frame.
-    pub(crate) fn spawn_background_audio_load(&mut self, audio_path: String, start_beat: f32) {
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.pending_audio_load = Some(rx);
-
-        std::thread::Builder::new()
-            .name("audio-load".into())
-            .spawn(move || {
-                let t_audio = std::time::Instant::now();
-                let preloaded = match manifold_playback::audio_sync::preload_audio(
-                    &audio_path,
-                    manifold_core::Beats::from_f32(start_beat),
-                ) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        log::warn!("[Audio] Background audio load failed: {}", e);
-                        return;
-                    }
-                };
-                log::info!(
-                    "[Audio] decode (background): {:.1}ms",
-                    t_audio.elapsed().as_secs_f64() * 1000.0
-                );
-
-                let waveform = Some(DecodedAudio::from_static_sound_data(&preloaded.sound_data));
-
-                let _ = tx.send(PendingAudioLoadResult {
-                    preloaded,
-                    waveform,
-                });
-            })
-            .expect("Failed to spawn audio load thread");
     }
 
     /// Open a decorated HDR output window (default size = project resolution).

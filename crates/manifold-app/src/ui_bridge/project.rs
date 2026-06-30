@@ -1,14 +1,13 @@
 //! Project-related dispatch: file operations, export, audio/percussion, resolution,
 //! MIDI note/channel, generator type, waveform/stem actions.
 
+use manifold_core::LayerId;
 use manifold_core::PresetTypeId;
 use manifold_core::project::Project;
-use manifold_core::{Beats, LayerId};
 use manifold_ui::PanelAction;
 
 use super::DispatchResult;
 use crate::app::SelectionState;
-use crate::dialog_path_memory::{self, DialogContext};
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 
@@ -17,10 +16,10 @@ pub(super) fn dispatch_project(
     project: &mut Project,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     _content_state: &crate::content_state::ContentState,
-    ui: &mut UIRoot,
+    _ui: &mut UIRoot,
     _selection: &mut SelectionState,
     _active_layer: &mut Option<LayerId>,
-    user_prefs: &mut UserPrefs,
+    _user_prefs: &mut UserPrefs,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
     match action {
@@ -249,258 +248,6 @@ pub(super) fn dispatch_project(
                 }
             }
             DispatchResult::structural()
-        }
-
-        // ── Waveform lane ─────────────────────────────────────────
-        PanelAction::ImportAudioClicked => {
-            let last_dir =
-                dialog_path_memory::get_last_directory(DialogContext::PercussionImport, user_prefs);
-            let mut dialog = rfd::FileDialog::new()
-                .set_title("Import Audio for Percussion Analysis")
-                .add_filter(
-                    "Audio Files",
-                    &[
-                        "wav", "mp3", "m4a", "aac", "flac", "ogg", "aif", "aiff", "wma", "json",
-                    ],
-                );
-            if !last_dir.is_empty() {
-                dialog = dialog.set_directory(&last_dir);
-            }
-            if let Some(path) = dialog.pick_file() {
-                let path_str = path.to_string_lossy().to_string();
-                dialog_path_memory::remember_directory(
-                    DialogContext::PercussionImport,
-                    &path_str,
-                    user_prefs,
-                );
-                ContentCommand::send(content_tx, ContentCommand::PercussionImport(path_str));
-                ui.layout.waveform_lane_visible = true;
-            }
-            DispatchResult::structural()
-        }
-        PanelAction::RemoveAudioClicked => {
-            log::info!("Remove audio clicked");
-            let old_state = project.percussion_import.clone();
-            let cmd = manifold_editing::commands::settings::ClearPercussionCommand::new(old_state);
-            {
-                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                boxed.execute(project);
-                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-            }
-            ContentCommand::send(content_tx, ContentCommand::ResetAudio);
-            ContentCommand::send(content_tx, ContentCommand::StemReset);
-            ui.waveform_lane.clear_audio();
-            ui.stem_lanes.clear_all_stems();
-            ui.layout.waveform_lane_visible = true;
-            ui.layout.stem_lanes_expanded = false;
-            DispatchResult::structural()
-        }
-        PanelAction::WaveformScrub(local_x, _local_y) => {
-            // Events arrive in panel-local coords (offset by wf_rect.x in ui_root),
-            // so use local_pixel_to_beat which doesn't subtract tracks_rect.x again.
-            let beat = ui.viewport.local_pixel_to_beat(*local_x).max(Beats::ZERO);
-            ContentCommand::send(content_tx, ContentCommand::SeekToBeat(beat));
-            DispatchResult::handled()
-        }
-        PanelAction::WaveformDragDelta(delta_beats) => {
-            // Unity EditingService.OnWaveformDragDeltaBeats (lines 1355-1405):
-            // On first delta, capture audio start + snapshot ALL clips.
-            // Per delta, clamp so nothing goes below beat 0, then move
-            // audio AND all clips by the clamped delta.
-            if !ui.waveform_lane.has_drag_start_beat() {
-                if let Some(state) = project.percussion_import.as_ref() {
-                    ui.waveform_lane.set_drag_start_beat(state.audio_start_beat);
-                }
-                // Snapshot all clips (Unity lines 1366-1377)
-                ui.waveform_lane.waveform_drag_clip_snapshots.clear();
-                for layer in &project.timeline.layers {
-                    for clip in &layer.clips {
-                        ui.waveform_lane.waveform_drag_clip_snapshots.push((
-                            clip.id.clone(),
-                            clip.start_beat.as_f32(),
-                            clip.layer_id.clone(),
-                        ));
-                    }
-                }
-            }
-
-            // Clamp delta so nothing goes below beat 0 (Unity lines 1380-1388)
-            let mut min_current = project
-                .percussion_import
-                .as_ref()
-                .map_or(f32::MAX, |s| s.audio_start_beat.as_f32());
-            for layer in &project.timeline.layers {
-                for clip in &layer.clips {
-                    if clip.start_beat.as_f32() < min_current {
-                        min_current = clip.start_beat.as_f32();
-                    }
-                }
-            }
-            let clamped = delta_beats.max(-min_current);
-
-            // Move audio (Unity lines 1391-1393)
-            if let Some(state) = project.percussion_import.as_mut() {
-                state.audio_start_beat =
-                    (state.audio_start_beat + Beats::from_f32(clamped)).max(Beats::ZERO);
-            }
-
-            // Move ALL clips (Unity lines 1395-1400)
-            for layer in &mut project.timeline.layers {
-                for clip in &mut layer.clips {
-                    clip.start_beat = (clip.start_beat + Beats::from_f32(clamped)).max(Beats::ZERO);
-                }
-                layer.mark_clips_unsorted();
-            }
-
-            // Sync to content thread
-            let db = clamped;
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::MutateProject(Box::new(move |p| {
-                    if let Some(state) = p.percussion_import.as_mut() {
-                        state.audio_start_beat =
-                            (state.audio_start_beat + Beats::from_f32(db)).max(Beats::ZERO);
-                    }
-                    for layer in &mut p.timeline.layers {
-                        for clip in &mut layer.clips {
-                            clip.start_beat =
-                                (clip.start_beat + Beats::from_f32(db)).max(Beats::ZERO);
-                        }
-                        layer.mark_clips_unsorted();
-                    }
-                })),
-            );
-            DispatchResult::structural()
-        }
-        PanelAction::WaveformDragEnd(_total_delta) => {
-            // Unity EditingService.OnWaveformDragEnd (lines 1407-1464):
-            // Build CompositeCommand with SetAudioStartBeatCommand + MoveClipCommand
-            // per changed clip, for a single undoable unit.
-            if let Some(old_audio_start) = ui.waveform_lane.take_drag_start_beat() {
-                let new_audio_start = project
-                    .percussion_import
-                    .as_ref()
-                    .map_or(Beats::ZERO, |s| s.audio_start_beat);
-
-                let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
-
-                // Audio command
-                if (new_audio_start - old_audio_start).abs() > Beats(0.0001) {
-                    commands.push(Box::new(
-                        manifold_editing::commands::settings::SetAudioStartBeatCommand::new(
-                            old_audio_start,
-                            new_audio_start,
-                        ),
-                    ));
-                }
-
-                // Clip move commands (Unity lines 1440-1454)
-                let snapshots = std::mem::take(&mut ui.waveform_lane.waveform_drag_clip_snapshots);
-                for (clip_id, old_beat, layer_id) in &snapshots {
-                    let new_beat = project
-                        .timeline
-                        .find_clip_by_id(clip_id)
-                        .map(|c| c.start_beat);
-                    if let Some(new_beat) = new_beat
-                        && (new_beat.as_f32() - old_beat).abs() > 0.0001
-                    {
-                        commands.push(Box::new(
-                            manifold_editing::commands::clip::MoveClipCommand::new(
-                                clip_id.clone(),
-                                Beats::from_f32(*old_beat),
-                                new_beat,
-                                layer_id.clone(),
-                                layer_id.clone(),
-                            ),
-                        ));
-                    }
-                }
-
-                if !commands.is_empty() {
-                    // State already applied — send for undo stack only
-                    let composite = manifold_editing::command::CompositeCommand::new(
-                        commands,
-                        "Drag audio + clips".into(),
-                    );
-                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
-                        Box::new(composite);
-                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
-                }
-            } else {
-                // No drag_start_beat means drag was a no-op, just clear snapshots
-                ui.waveform_lane.waveform_drag_clip_snapshots.clear();
-            }
-            DispatchResult::structural()
-        }
-        PanelAction::ExpandStemsToggled(expanded) => {
-            ui.waveform_lane.set_expanded_state(*expanded);
-            ui.stem_lanes.set_expanded(*expanded);
-            ui.layout.stem_lanes_expanded = *expanded;
-            ContentCommand::send(content_tx, ContentCommand::StemSetExpanded(*expanded));
-
-            if *expanded
-                && let Some(stem_paths) = project
-                    .percussion_import
-                    .as_ref()
-                    .and_then(|perc| perc.stem_paths.as_ref())
-            {
-                for (i, path) in stem_paths.iter().enumerate() {
-                    if i >= manifold_playback::stem_audio::STEM_COUNT {
-                        break;
-                    }
-                    match manifold_playback::audio_decoder::decode_audio_to_pcm(path) {
-                        Ok(decoded) => {
-                            ui.stem_lanes.set_stem_audio(
-                                i,
-                                &decoded.samples,
-                                decoded.channels,
-                                decoded.sample_rate,
-                            );
-                        }
-                        Err(e) => {
-                            log::warn!("[StemWaveform] Failed to decode stem {}: {}", i, e);
-                        }
-                    }
-                }
-            }
-            DispatchResult::structural()
-        }
-        PanelAction::ReAnalyzeDrums => {
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::ReAnalyzeTriggers("drums".into()),
-            );
-            DispatchResult::handled()
-        }
-        PanelAction::ReAnalyzeBass => {
-            ContentCommand::send(content_tx, ContentCommand::ReAnalyzeTriggers("bass".into()));
-            DispatchResult::handled()
-        }
-        PanelAction::ReAnalyzeSynth => {
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::ReAnalyzeTriggers("synth".into()),
-            );
-            DispatchResult::handled()
-        }
-        PanelAction::ReAnalyzeVocal => {
-            ContentCommand::send(
-                content_tx,
-                ContentCommand::ReAnalyzeTriggers("vocal".into()),
-            );
-            DispatchResult::handled()
-        }
-        PanelAction::ReImportStems => {
-            ContentCommand::send(content_tx, ContentCommand::ReImportStems);
-            DispatchResult::handled()
-        }
-        PanelAction::StemMuteToggled(stem_index) => {
-            ContentCommand::send(content_tx, ContentCommand::StemToggleMute(*stem_index));
-            DispatchResult::handled()
-        }
-        PanelAction::StemSoloToggled(stem_index) => {
-            ContentCommand::send(content_tx, ContentCommand::StemToggleSolo(*stem_index));
-            DispatchResult::handled()
         }
 
         _ => DispatchResult::unhandled(),

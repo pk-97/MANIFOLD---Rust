@@ -11,8 +11,6 @@ use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::{Bpm, LayerId};
 use manifold_editing::service::EditingService;
-use manifold_playback::audio_decoder::DecodedAudio;
-use manifold_playback::audio_sync::{ImportedAudioSyncController, PreloadedAudioData};
 use manifold_playback::engine::PlaybackEngine;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 #[cfg(not(target_os = "macos"))]
@@ -113,13 +111,6 @@ impl ActiveInspectorDrag {
             }
         }
     }
-}
-
-/// Result from background audio loading thread.
-/// Contains pre-decoded audio for both kira playback and waveform visualization.
-pub(crate) struct PendingAudioLoadResult {
-    pub preloaded: PreloadedAudioData,
-    pub waveform: Option<DecodedAudio>,
 }
 
 pub struct Application {
@@ -482,16 +473,6 @@ pub struct Application {
     // Text input
     pub(crate) text_input: crate::text_input::TextInputState,
 
-    // Pending audio load — receives results from background decode thread.
-    // Unity loads audio async via coroutines; we use std::thread + mpsc channel.
-    // Waveform data stays on UI thread; preloaded audio data is forwarded to content thread.
-    pub(crate) pending_audio_load: Option<std::sync::mpsc::Receiver<PendingAudioLoadResult>>,
-
-    /// Tracks the audio path that has been loaded (or is being loaded) so we
-    /// can detect when the content thread sets a *new* audio_path after a fresh
-    /// percussion import and trigger background audio loading + waveform decode.
-    pub(crate) loaded_audio_path: Option<String>,
-
     // Keyboard/zoom handler — port of Unity InputHandler.cs
     // Owns inspector_has_focus (panel focus for context-sensitive routing).
     pub(crate) input_handler: crate::input_handler::InputHandler,
@@ -712,8 +693,6 @@ impl Application {
             },
             user_prefs: UserPrefs::load(),
             text_input: crate::text_input::TextInputState::new(),
-            pending_audio_load: None,
-            loaded_audio_path: None,
             input_handler: crate::input_handler::InputHandler::new(),
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
                 manifold_ui::color::CLIP_VERTICAL_PAD,
@@ -2149,25 +2128,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());
 
-            let audio_sync = match ImportedAudioSyncController::new() {
-                Ok(ctrl) => Some(ctrl),
-                Err(e) => {
-                    log::warn!("[Audio] Failed to initialize audio sync: {}", e);
-                    None
-                }
-            };
-
-            let stem_audio = match manifold_playback::stem_audio::StemAudioController::new() {
-                Ok(ctrl) => Some(ctrl),
-                Err(e) => {
-                    log::warn!(
-                        "[StemAudio] Failed to initialize stem audio controller: {}",
-                        e
-                    );
-                    None
-                }
-            };
-
             let audio_layer_playback =
                 match manifold_playback::audio_layer_playback::AudioLayerPlayback::new() {
                     Ok(p) => Some(p),
@@ -2184,8 +2144,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 engine,
                 editing_service: EditingService::new(),
                 content_pipeline,
-                audio_sync,
-                stem_audio,
                 audio_layer_playback,
                 percussion_orchestrator: PercussionImportOrchestrator::new(
                     None,

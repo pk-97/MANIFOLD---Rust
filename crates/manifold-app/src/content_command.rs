@@ -7,7 +7,6 @@ use manifold_core::project::Project;
 use manifold_core::{Beats, ClipId, EffectId, LayerId, Seconds};
 use manifold_editing::command::Command;
 use manifold_media::export_config::ExportConfig;
-use manifold_playback::audio_sync::PreloadedAudioData;
 
 pub enum ContentCommand {
     // ── Transport ──────────────────────────────────────────────────
@@ -49,27 +48,10 @@ pub enum ContentCommand {
     ResetBpm,
 
     // ── Audio ──────────────────────────────────────────────────────
-    AudioLoaded {
-        preloaded: Box<PreloadedAudioData>,
-    },
-    ResetAudio,
     /// Set which send the Audio Setup spectrogram scope is showing (`None` =
     /// panel closed / no selection). Drives the worker's VQT column producer.
     /// Like `WatchEffectGraph`, this is UI state pushed to the content thread.
     SetSpectrogramSend(Option<manifold_core::AudioSendId>),
-
-    // ── Stem audio ──────────────────────────────────────────────────
-    /// Toggle expand/collapse of stem playback.
-    /// Port of C# StemAudioController.SetExpanded(bool).
-    StemSetExpanded(bool),
-    /// Toggle mute for a stem index.
-    /// Port of C# StemAudioController.ToggleMuted(int).
-    StemToggleMute(usize),
-    /// Toggle solo for a stem index.
-    /// Port of C# StemAudioController.ToggleSoloed(int).
-    StemToggleSolo(usize),
-    /// Reset all stems (on project switch/audio remove).
-    StemReset,
 
     // ── Clipboard ────────────────────────────────────────────────
     /// Copy clips to clipboard on the content thread (EditingService owns clipboard).
@@ -122,27 +104,6 @@ pub enum ContentCommand {
     /// Remove every trigger a given audio clip produced (one undoable step).
     /// Produced by the inspector Clear button (P4).
     ClearClipTriggers(ClipId),
-    /// Trigger percussion import pipeline with the selected audio/JSON file path.
-    /// Port of Unity: percussionImportController.OnImportPercussionMap(path).
-    PercussionImport(String),
-    /// Re-analyze triggers for a specific instrument group (e.g. "drums", "bass").
-    /// Port of Unity: percussionImportController.OnReAnalyzeTriggers(instrumentGroup).
-    ReAnalyzeTriggers(String),
-    /// Re-import stems from current audio file (re-runs Demucs).
-    /// Port of Unity: percussionImportController.OnReImportStems().
-    ReImportStems,
-    /// Calibrate percussion downbeat at the current playhead beat.
-    /// Port of Unity: percussionImportController.CalibrateImportedPercussionDownbeatAtPlayhead().
-    PercussionCalibrateDownbeat {
-        playhead_beat: Beats,
-        beats_per_bar: i32,
-    },
-    /// Nudge percussion alignment by delta_beats.
-    /// Port of Unity: percussionImportController.NudgeImportedPercussionAlignment(delta).
-    PercussionNudgeAlignment(Beats),
-    /// Reset percussion alignment to beat 0.
-    /// Port of Unity: percussionImportController.ResetImportedPercussionAlignment().
-    PercussionResetAlignment,
 
     // ── Ableton bridge ─────────────────────────────────────────────
     /// Map an Ableton macro to a MANIFOLD parameter.

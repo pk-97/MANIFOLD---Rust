@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::LayerId;
 use crate::preset_type_id::PresetTypeId;
-use crate::percussion::ImportedPercussionClipPlacement;
 use crate::project::Project;
 use crate::tempo::TempoMapConverter;
 use crate::units::{Beats, Bpm, Seconds};
@@ -441,15 +440,13 @@ impl PercussionAnalysisData {
     }
 
     /// Port of Unity PercussionAnalysisData.TryMapSecondsToBeat().
-    /// Prefers the project BPM converter for consistency with the reprojection path.
+    /// Prefers the supplied project BPM converter when one is given.
     pub fn try_map_seconds_to_beat(
         &self,
         seconds: Seconds,
         fallback_converter: Option<&mut dyn BeatTimeConverter>,
     ) -> Option<Beats> {
-        // Prefer the project BPM converter for consistency with the
-        // reprojection path (PercussionClipReprojectionPlanner), which
-        // always uses the converter.
+        // Prefer the project BPM converter when one is supplied.
         if let Some(converter) = fallback_converter {
             let beat = converter.seconds_to_beat(seconds);
             return if beat.0.is_finite() { Some(beat) } else { None };
@@ -747,73 +744,6 @@ impl<'a> BeatTimeConverter for ProjectBeatTimeConverter<'a> {
     fn seconds_to_beat(&mut self, seconds: Seconds) -> Beats {
         let fallback_bpm = self.project.settings.bpm;
         TempoMapConverter::seconds_to_beat(&mut self.project.tempo_map, seconds, fallback_bpm)
-    }
-}
-
-// ─── PercussionClipReprojectionPlanner ───
-
-/// Port of Unity PercussionClipReprojectionPlanner static class.
-/// Deterministic mapping utility for reprojection of imported percussion clips
-/// after tempo/grid changes.
-pub struct PercussionClipReprojectionPlanner;
-
-impl PercussionClipReprojectionPlanner {
-    /// Port of Unity TryComputeAlignedSourceBeat().
-    pub fn try_compute_aligned_source_beat(
-        placement: &ImportedPercussionClipPlacement,
-        source_time_seconds: Seconds,
-        beat_time_converter: &mut dyn BeatTimeConverter,
-    ) -> Option<Beats> {
-        if placement.clip_id.is_empty() {
-            return None;
-        }
-
-        let seconds = source_time_seconds.max(Seconds::ZERO);
-        let mut source_beat =
-            beat_time_converter.seconds_to_beat(seconds) + placement.start_beat_offset;
-        if !source_beat.0.is_finite() {
-            return None;
-        }
-
-        source_beat += placement.alignment_offset_beats;
-
-        let slope = placement.alignment_slope_beats_per_second;
-        if slope != 0.0 {
-            let pivot = placement.alignment_pivot_seconds;
-            source_beat += Beats(slope as f64 * (seconds - pivot).0);
-        }
-
-        source_beat = source_beat.max(Beats::ZERO);
-        if source_beat.0.is_finite() {
-            Some(source_beat)
-        } else {
-            None
-        }
-    }
-
-    /// Port of Unity TryComputePlacementBeat().
-    pub fn try_compute_placement_beat(
-        placement: &ImportedPercussionClipPlacement,
-        beat_time_converter: &mut dyn BeatTimeConverter,
-    ) -> Option<(Beats, Beats)> {
-        let source_beat = Self::try_compute_aligned_source_beat(
-            placement,
-            placement.source_time_seconds,
-            beat_time_converter,
-        )?;
-
-        let mut placement_beat = source_beat;
-        if placement.quantize_to_grid && placement.quantize_step_beats > Beats::ZERO {
-            let ratio = (source_beat / placement.quantize_step_beats).round();
-            placement_beat = placement.quantize_step_beats * ratio;
-        }
-        placement_beat = placement_beat.max(Beats::ZERO);
-
-        if source_beat.0.is_finite() && placement_beat.0.is_finite() {
-            Some((source_beat, placement_beat))
-        } else {
-            None
-        }
     }
 }
 

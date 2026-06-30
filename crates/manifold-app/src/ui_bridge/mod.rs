@@ -437,20 +437,7 @@ pub fn dispatch(
         | PanelAction::SetDisplayResolution(..)
         | PanelAction::SetRenderScale(_)
         | PanelAction::SetTonemapCurve(_)
-        | PanelAction::SetGenType(..)
-        | PanelAction::ImportAudioClicked
-        | PanelAction::RemoveAudioClicked
-        | PanelAction::WaveformScrub(..)
-        | PanelAction::WaveformDragDelta(_)
-        | PanelAction::WaveformDragEnd(_)
-        | PanelAction::ExpandStemsToggled(_)
-        | PanelAction::ReAnalyzeDrums
-        | PanelAction::ReAnalyzeBass
-        | PanelAction::ReAnalyzeSynth
-        | PanelAction::ReAnalyzeVocal
-        | PanelAction::ReImportStems
-        | PanelAction::StemMuteToggled(_)
-        | PanelAction::StemSoloToggled(_) => project::dispatch_project(
+        | PanelAction::SetGenType(..) => project::dispatch_project(
             action,
             project,
             content_tx,

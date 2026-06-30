@@ -7,7 +7,6 @@
 use manifold_core::project::Project;
 use manifold_core::types::{ClockAuthority, LayerType, OscSyncMode};
 use manifold_core::{Beats, Bpm, Seconds};
-use manifold_playback::stem_audio::STEM_COUNT;
 use std::sync::Arc;
 
 /// Live state of the editor's node-output preview, pushed each frame so the
@@ -112,13 +111,6 @@ pub struct ContentState {
     pub osc_sender_enabled: bool,
     pub osc_receiving_timecode: bool,
     pub osc_timecode_display: Arc<str>,
-
-    // ── Stem audio state ──────────────────────────────────────────
-    pub stem_expanded: bool,
-    pub stem_ready: bool,
-    pub stem_muted: [bool; STEM_COUNT],
-    pub stem_soloed: [bool; STEM_COUNT],
-    pub stem_available: [bool; STEM_COUNT],
 
     // ── Percussion status ─────────────────────────────────────────
     pub percussion_importing: bool,
@@ -419,11 +411,6 @@ impl Default for ContentState {
             osc_sender_enabled: false,
             osc_receiving_timecode: false,
             osc_timecode_display: Arc::from(""),
-            stem_expanded: false,
-            stem_ready: false,
-            stem_muted: [false; STEM_COUNT],
-            stem_soloed: [false; STEM_COUNT],
-            stem_available: [false; STEM_COUNT],
             percussion_importing: false,
             percussion_status_message: Arc::from(""),
             percussion_progress: 0.0,

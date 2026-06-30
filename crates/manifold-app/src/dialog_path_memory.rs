@@ -20,7 +20,6 @@ pub enum DialogContext {
     ExportImage,
     ExportResolveXML,
     MidiImport,
-    PercussionImport,
 }
 
 // ── Constants — same as Unity DialogPathMemory.cs ────────────────────
@@ -29,7 +28,6 @@ const PREF_KEY_PREFIX: &str = "MANIFOLD_DialogPath_";
 
 // Legacy keys from before centralised path memory.
 const LEGACY_PROJECT_PATH_KEY: &str = "MANIFOLD_LastOpenedProjectPath";
-const LEGACY_PERCUSSION_DIR_KEY: &str = "MANIFOLD_PercussionImportLastDir";
 
 // ── Public API ───────────────────────────────────────────────────────
 
@@ -105,7 +103,6 @@ fn get_legacy_path(context: DialogContext, prefs: &UserPrefs) -> String {
         DialogContext::ProjectOpen | DialogContext::ProjectSave => {
             prefs.get_string(LEGACY_PROJECT_PATH_KEY, "")
         }
-        DialogContext::PercussionImport => prefs.get_string(LEGACY_PERCUSSION_DIR_KEY, ""),
         _ => String::new(),
     }
 }

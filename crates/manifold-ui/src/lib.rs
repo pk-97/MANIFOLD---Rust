@@ -58,12 +58,10 @@ pub use panels::master_chrome::MasterChromePanel;
 pub use panels::param_card::{
     ParamCardConfig, ParamCardKind, ParamCardPanel, ParamCardState, ParamCardStringInfo, ParamInfo,
 };
-pub use panels::stem_lane::{STEM_COUNT, STEM_NAMES, StemLaneGroupPanel};
 pub use panels::transport::TransportPanel;
 pub use panels::viewport::{
     ClipHitResult, SelectionRegion, TimelineViewportPanel, TrackInfo, ViewportClip,
 };
-pub use panels::waveform_lane::WaveformLanePanel;
 pub use panels::{
     AudioShapeParam, BandDivider, DriverConfigAction, GraphParamTarget, HitRegion, InspectorTab,
     Panel, PanelAction, SyncSource, TrimKind,

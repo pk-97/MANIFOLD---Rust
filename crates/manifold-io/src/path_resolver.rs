@@ -99,79 +99,6 @@ impl PathResolver {
             }
         }
 
-        // Resolve percussion audio path
-        if let Some(ref mut perc) = project.percussion_import {
-            // Audio path
-            if let Some(ref audio_path) = perc.audio_path.clone()
-                && !audio_path.is_empty()
-                && !Path::new(audio_path).exists()
-            {
-                let resolved = Self::try_resolve(
-                    audio_path,
-                    perc.relative_audio_path.as_deref(),
-                    -1, // no size check for percussion audio
-                    &project_dir,
-                    &search_dirs,
-                );
-
-                if let Some(resolved_path) = resolved {
-                    let relative = Self::make_relative(&resolved_path, &project_dir);
-                    perc.audio_path = Some(resolved_path);
-                    perc.relative_audio_path = relative;
-                    result.resolved_count += 1;
-                } else {
-                    result.unresolved_count += 1;
-                    result.unresolved.push(audio_path.clone());
-                }
-            }
-
-            // Resolve stem paths
-            if let Some(ref mut stem_paths) = perc.stem_paths.clone() {
-                let mut rel_stems = perc.relative_stem_paths.clone();
-                let mut changed = false;
-
-                for i in 0..stem_paths.len() {
-                    let stem_path = &stem_paths[i];
-                    if stem_path.is_empty() || Path::new(stem_path).exists() {
-                        continue;
-                    }
-
-                    let rel_stem = rel_stems
-                        .as_ref()
-                        .and_then(|rs| rs.get(i))
-                        .map(|s| s.as_str());
-
-                    let resolved =
-                        Self::try_resolve(stem_path, rel_stem, -1, &project_dir, &search_dirs);
-
-                    if let Some(resolved_path) = resolved {
-                        let relative = Self::make_relative(&resolved_path, &project_dir);
-                        // Update stem_paths in place on the perc struct
-                        if let Some(ref mut actual_stems) = perc.stem_paths {
-                            actual_stems[i] = resolved_path;
-                        }
-                        if rel_stems.is_none() {
-                            rel_stems = Some(vec![String::new(); stem_paths.len()]);
-                        }
-                        if let Some(ref mut rs) = rel_stems
-                            && i < rs.len()
-                        {
-                            rs[i] = relative.unwrap_or_default();
-                        }
-                        changed = true;
-                        result.resolved_count += 1;
-                    } else {
-                        result.unresolved_count += 1;
-                        result.unresolved.push(stem_path.clone());
-                    }
-                }
-
-                if changed {
-                    perc.relative_stem_paths = rel_stems;
-                }
-            }
-        }
-
         if result.resolved_count > 0 || result.unresolved_count > 0 {
             log::info!(
                 "[PathResolver] Re-linked {} files, {} already valid, {} unresolved",
@@ -209,26 +136,6 @@ impl PathResolver {
             }
         }
 
-        // Percussion
-        if let Some(ref mut perc) = project.percussion_import {
-            if let Some(ref audio_path) = perc.audio_path
-                && !audio_path.is_empty()
-            {
-                perc.relative_audio_path = Self::make_relative(audio_path, project_dir);
-            }
-
-            if let Some(ref stem_paths) = perc.stem_paths {
-                let mut rel_stems = vec![String::new(); stem_paths.len()];
-                for (i, stem_path) in stem_paths.iter().enumerate() {
-                    if !stem_path.is_empty()
-                        && let Some(rel) = Self::make_relative(stem_path, project_dir)
-                    {
-                        rel_stems[i] = rel;
-                    }
-                }
-                perc.relative_stem_paths = Some(rel_stems);
-            }
-        }
     }
 
     /// Try to resolve a missing file path. Returns the resolved absolute path, or None.
@@ -398,17 +305,6 @@ impl PathResolver {
                         dirs.insert(parent_str);
                     }
                 }
-            }
-        }
-
-        // 4. Percussion audio directory
-        if let Some(ref perc) = project.percussion_import
-            && let Some(ref audio_path) = perc.audio_path
-            && let Some(audio_dir) = Path::new(audio_path).parent()
-        {
-            let dir_str = audio_dir.to_string_lossy().to_string();
-            if !dir_str.is_empty() && audio_dir.is_dir() {
-                dirs.insert(dir_str);
             }
         }
 

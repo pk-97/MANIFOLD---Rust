@@ -318,12 +318,6 @@ impl ContentThread {
 
             // ── Project lifecycle ──────────────────────────────────
             ContentCommand::LoadProject(project) => {
-                if let Some(ref mut audio) = self.audio_sync {
-                    audio.reset_audio();
-                }
-                if let Some(ref mut stem) = self.stem_audio {
-                    stem.reset_stems(self.audio_sync.as_mut());
-                }
                 if let Some(ref mut alp) = self.audio_layer_playback {
                     alp.reset();
                 }
@@ -457,61 +451,8 @@ impl ContentThread {
             }
 
             // ── Audio ──────────────────────────────────────────────
-            ContentCommand::AudioLoaded { preloaded } => {
-                if let Some(ref mut audio_sync) = self.audio_sync
-                    && let Err(e) = audio_sync.apply_preloaded(*preloaded)
-                {
-                    log::warn!("[ContentThread] Failed to apply loaded audio: {}", e);
-                }
-            }
-            ContentCommand::ResetAudio => {
-                if let Some(ref mut audio_sync) = self.audio_sync {
-                    audio_sync.reset_audio();
-                }
-            }
             ContentCommand::SetSpectrogramSend(send) => {
                 self.audio_mod_runtime.set_spectrogram_send(send);
-            }
-
-            // ── Stem audio ────────────────────────────────────────
-            ContentCommand::StemSetExpanded(expand) => {
-                if let Some(ref mut stem) = self.stem_audio {
-                    // Auto-load stems on first expand if paths available but not yet loaded.
-                    // Port of Unity WorkspaceController.EnsureStemAudioController lazy init.
-                    if expand
-                        && !stem.stems_ready()
-                        && let Some(stem_paths_vec) = self
-                            .engine
-                            .project()
-                            .and_then(|p| p.percussion_import.as_ref())
-                            .and_then(|perc| perc.stem_paths.as_ref())
-                    {
-                        let mut paths: [Option<String>; manifold_playback::stem_audio::STEM_COUNT] =
-                            Default::default();
-                        for (i, p) in stem_paths_vec.iter().enumerate() {
-                            if i < manifold_playback::stem_audio::STEM_COUNT {
-                                paths[i] = Some(p.clone());
-                            }
-                        }
-                        stem.load_stems(&paths);
-                    }
-                    stem.set_expanded(expand, self.audio_sync.as_mut());
-                }
-            }
-            ContentCommand::StemToggleMute(index) => {
-                if let Some(ref mut stem) = self.stem_audio {
-                    stem.toggle_muted(index);
-                }
-            }
-            ContentCommand::StemToggleSolo(index) => {
-                if let Some(ref mut stem) = self.stem_audio {
-                    stem.toggle_soloed(index);
-                }
-            }
-            ContentCommand::StemReset => {
-                if let Some(ref mut stem) = self.stem_audio {
-                    stem.reset_stems(self.audio_sync.as_mut());
-                }
             }
 
             // ── Direct project mutation ────────────────────────────
@@ -624,67 +565,8 @@ impl ContentThread {
                     );
                 }
             }
-            ContentCommand::PercussionImport(path) => {
-                let beat = self.engine.current_beat();
-                let beats_per_bar = self
-                    .engine
-                    .project()
-                    .map_or(4, |p| p.settings.time_signature_numerator.max(1));
-                if let Some(p) = self.engine.project_mut() {
-                    self.percussion_orchestrator.on_import_percussion_map(
-                        Some(path),
-                        p,
-                        &mut self.editing_service,
-                        beat.as_f32(),
-                        beats_per_bar,
-                    );
-                }
-            }
-            ContentCommand::ReAnalyzeTriggers(instrument_group) => {
-                if let Some(p) = self.engine.project_mut() {
-                    self.percussion_orchestrator
-                        .on_re_analyze_triggers(&instrument_group, p);
-                }
-            }
-            ContentCommand::ReImportStems => {
-                if let Some(p) = self.engine.project_mut() {
-                    self.percussion_orchestrator.on_re_import_stems(p);
-                }
-            }
-            ContentCommand::PercussionCalibrateDownbeat {
-                playhead_beat,
-                beats_per_bar,
-            } => {
-                if let Some(p) = self.engine.project_mut() {
-                    self.percussion_orchestrator
-                        .calibrate_imported_percussion_downbeat_at_playhead(
-                            p,
-                            &mut self.editing_service,
-                            playhead_beat.as_f32(),
-                            beats_per_bar,
-                            true,
-                        );
-                }
-            }
-            ContentCommand::PercussionNudgeAlignment(delta_beats) => {
-                if let Some(p) = self.engine.project_mut() {
-                    self.percussion_orchestrator
-                        .nudge_imported_percussion_alignment(
-                            delta_beats.as_f32(),
-                            p,
-                            &mut self.editing_service,
-                            true,
-                        );
-                }
-            }
-            ContentCommand::PercussionResetAlignment => {
-                if let Some(p) = self.engine.project_mut() {
-                    self.percussion_orchestrator
-                        .reset_imported_percussion_alignment(p, &mut self.editing_service, true);
-                }
-            }
 
-            // ── Ableton bridge ──────────────────────────���──────────
+            // ── Ableton bridge ──────────────────────────────────────
             ContentCommand::AbletonMapParam { target, address } => {
                 use manifold_core::ableton_mapping::{
                     AbletonMappingStatus, AbletonMappingTarget, AbletonParamMapping,

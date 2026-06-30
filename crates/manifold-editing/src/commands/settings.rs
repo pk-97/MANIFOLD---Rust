@@ -818,32 +818,6 @@ impl Command for ChangeTonemapCurveCommand {
     }
 }
 
-/// Clear percussion import state (remove audio + stems).
-#[derive(Debug)]
-pub struct ClearPercussionCommand {
-    old_state: Option<manifold_core::percussion::PercussionImportState>,
-}
-
-impl ClearPercussionCommand {
-    pub fn new(old_state: Option<manifold_core::percussion::PercussionImportState>) -> Self {
-        Self { old_state }
-    }
-}
-
-impl Command for ClearPercussionCommand {
-    fn execute(&mut self, project: &mut Project) {
-        self.old_state = project.percussion_import.take();
-    }
-
-    fn undo(&mut self, project: &mut Project) {
-        project.percussion_import = self.old_state.take();
-    }
-
-    fn description(&self) -> &str {
-        "Remove Audio"
-    }
-}
-
 /// Restore a recorded tempo lane.
 /// Matches Unity's RestoreRecordedTempoLaneCommand exactly.
 #[derive(Debug)]
@@ -1022,41 +996,6 @@ impl Command for RescaleBeatsForBpmChangeCommand {
 
     fn description(&self) -> &str {
         "Rescale beats for BPM change"
-    }
-}
-
-/// Undoable command for changing the imported audio start beat.
-/// Port of Unity SetImportedAudioCommand (audio_start_beat portion).
-#[derive(Debug)]
-pub struct SetAudioStartBeatCommand {
-    old_start_beat: Beats,
-    new_start_beat: Beats,
-}
-
-impl SetAudioStartBeatCommand {
-    pub fn new(old_start_beat: Beats, new_start_beat: Beats) -> Self {
-        Self {
-            old_start_beat,
-            new_start_beat,
-        }
-    }
-}
-
-impl Command for SetAudioStartBeatCommand {
-    fn execute(&mut self, project: &mut Project) {
-        if let Some(state) = project.percussion_import.as_mut() {
-            state.audio_start_beat = self.new_start_beat;
-        }
-    }
-
-    fn undo(&mut self, project: &mut Project) {
-        if let Some(state) = project.percussion_import.as_mut() {
-            state.audio_start_beat = self.old_start_beat;
-        }
-    }
-
-    fn description(&self) -> &str {
-        "Drag audio start beat"
     }
 }
 

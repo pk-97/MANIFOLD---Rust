@@ -81,16 +81,6 @@ impl ContentThread {
         export_config.start_beat = start_beat;
         export_config.end_beat = end_beat;
 
-        // Wire audio from the content thread's audio sync controller
-        if let Some(ref audio_sync) = self.audio_sync
-            && audio_sync.is_ready()
-            && let Some(path) = audio_sync.audio_path()
-        {
-            export_config.audio_path = Some(path.to_string());
-            export_config.audio_start_beat = audio_sync.start_beat().as_f32();
-            export_config.audio_encoder_delay = audio_sync.encoder_delay_seconds().as_f32();
-        }
-
         // Calculate timing
         let mut tempo_map = project.tempo_map.clone();
         let start_seconds =
@@ -110,6 +100,32 @@ impl ContentThread {
                 &export_config.output_path,
             );
             return;
+        }
+
+        // Render the audio-layer mix for the export range into a temp WAV, then
+        // wire it as the export's audio track. Mirrors live playback exactly
+        // (warp / gain / solo); see manifold_playback::audio_mixdown. Aligned to
+        // the export start, so audio_start_beat = start_beat → mux offset 0.
+        let mix_wav_path = format!("{}.mixdown.wav", export_config.output_path);
+        match manifold_playback::audio_mixdown::render_export_mix(
+            project,
+            Beats::from_f32(start_beat),
+            Beats::from_f32(end_beat),
+            bpm,
+            &mut tempo_map,
+            &mix_wav_path,
+        ) {
+            Ok(true) => {
+                export_config.audio_path = Some(mix_wav_path.clone());
+                export_config.audio_start_beat = start_beat;
+                export_config.audio_encoder_delay = 0.0;
+            }
+            Ok(false) => {
+                log::info!("[Export] No audio-layer clips in range — video-only export");
+            }
+            Err(e) => {
+                log::warn!("[Export] Audio mixdown failed ({e}) — exporting video-only");
+            }
         }
 
         // Detect generator-only projects: no video clips means no decode
@@ -320,6 +336,10 @@ impl ContentThread {
                 }
             }
         }
+
+        // Remove the temporary audio mixdown WAV (already muxed into the final
+        // file; a no-op when no audio was rendered).
+        let _ = std::fs::remove_file(&mix_wav_path);
 
         // 7. Restore playback state
         self.engine.set_export_mode(false);

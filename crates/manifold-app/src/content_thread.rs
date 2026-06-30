@@ -11,7 +11,6 @@ use manifold_core::math::BeatQuantizer;
 use manifold_core::types::{ClockAuthority, OscSyncMode, PlaybackState, TempoPointSource};
 use manifold_core::{Beats, Bpm, Seconds};
 use manifold_editing::service::EditingService;
-use manifold_playback::audio_sync::ImportedAudioSyncController;
 use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::midi_input::MidiInputController;
@@ -20,7 +19,6 @@ use manifold_playback::osc_sender::OscPositionSender;
 use manifold_playback::osc_sync::OscSyncController;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 use manifold_playback::audio_layer_playback::AudioLayerPlayback;
-use manifold_playback::stem_audio::StemAudioController;
 use manifold_playback::sync::{SyncArbiter, SyncTargetSnapshot};
 use manifold_playback::tempo_recorder::TempoRecorder;
 use manifold_playback::transport_controller::TransportController;
@@ -71,8 +69,6 @@ pub struct ContentThread {
     pub engine: PlaybackEngine,
     pub editing_service: EditingService,
     pub content_pipeline: ContentPipeline,
-    pub audio_sync: Option<ImportedAudioSyncController>,
-    pub stem_audio: Option<StemAudioController>,
     /// Per-clip audio-layer playback (one kira voice per active audio clip).
     /// `None` if the kira backend failed to open. See `docs/AUDIO_LAYER_DESIGN.md`.
     pub audio_layer_playback: Option<AudioLayerPlayback>,
@@ -645,18 +641,6 @@ impl ContentThread {
                 realtime,
                 &mut self.sync_arbiter,
             );
-        }
-
-        // 5. Audio sync
-        if let Some(ref mut audio_sync) = self.audio_sync {
-            audio_sync.update_sync(&mut self.engine);
-        }
-
-        // 5b. Stem audio sync (after master — matches Unity Update() ordering).
-        if let Some(ref mut stem_audio) = self.stem_audio
-            && let Some(ref audio_sync) = self.audio_sync
-        {
-            stem_audio.update_sync(audio_sync, &self.engine);
         }
 
         // 5c. Audio-layer playback — one kira voice per active audio clip,
@@ -1233,26 +1217,6 @@ impl ContentThread {
             osc_sender_enabled: self.transport_controller.osc_sender_enabled,
             osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
             osc_timecode_display: self.cached_osc_timecode.clone(),
-            stem_expanded: self.stem_audio.as_ref().is_some_and(|s| s.is_expanded()),
-            stem_ready: self.stem_audio.as_ref().is_some_and(|s| s.stems_ready()),
-            stem_muted: self
-                .stem_audio
-                .as_ref()
-                .map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
-                    core::array::from_fn(|i| s.is_muted(i))
-                }),
-            stem_soloed: self
-                .stem_audio
-                .as_ref()
-                .map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
-                    core::array::from_fn(|i| s.is_soloed(i))
-                }),
-            stem_available: self
-                .stem_audio
-                .as_ref()
-                .map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
-                    core::array::from_fn(|i| s.is_stem_available(i))
-                }),
             percussion_importing: self.percussion_orchestrator.is_import_in_progress(),
             percussion_status_message: self.cached_perc_message.clone(),
             percussion_progress: if perc_progress < 0.0 {

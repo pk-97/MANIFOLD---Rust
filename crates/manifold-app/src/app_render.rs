@@ -431,8 +431,6 @@ impl Application {
         let mut seg = frame_t0;
 
         // 1. Drain state from content thread
-        // Deferred audio load request — collected inside the rx borrow, executed after.
-        let mut deferred_audio_load: Option<(String, f32)> = None;
         if let Some(ref rx) = self.state_rx {
             // Drain all pending states, keep the latest
             while let Ok(state) = rx.try_recv() {
@@ -488,36 +486,6 @@ impl Application {
                         }
                         // Clear suppression once we've accepted a post-load snapshot
                         self.suppress_snapshot_until = 0;
-
-                        // Sync waveform lane visibility and detect new audio path
-                        // from content thread (fresh percussion import or audio-only
-                        // import). Actual loading is deferred to after the rx borrow.
-                        let current_audio_path = self
-                            .local_project
-                            .percussion_import
-                            .as_ref()
-                            .and_then(|p| p.audio_path.clone())
-                            .filter(|s| !s.is_empty());
-                        if let Some(ref path) = current_audio_path {
-                            if !self.ws.ui_root.layout.waveform_lane_visible {
-                                self.ws.ui_root.layout.waveform_lane_visible = true;
-                                self.needs_rebuild = true;
-                            }
-                            let already_loaded =
-                                self.loaded_audio_path.as_ref().is_some_and(|lp| lp == path);
-                            if !already_loaded && self.pending_audio_load.is_none() {
-                                let start_beat = self
-                                    .local_project
-                                    .percussion_import
-                                    .as_ref()
-                                    .map_or(0.0, |p| p.audio_start_beat.as_f32());
-                                deferred_audio_load = Some((path.clone(), start_beat));
-                            }
-                        } else if self.loaded_audio_path.is_some() {
-                            // Audio path was removed (undo, reset) — clear tracking
-                            // so a future re-import will trigger loading again.
-                            self.loaded_audio_path = None;
-                        }
 
                         // Only trigger structural sync when data_version changed
                         // (editing commands, undo/redo). Modulation-only snapshots
@@ -610,19 +578,6 @@ impl Application {
                 };
             }
         }
-
-        // 1a. Trigger deferred audio load (new audio_path from content thread).
-        if let Some((path, start_beat)) = deferred_audio_load {
-            self.loaded_audio_path = Some(path.clone());
-            self.spawn_background_audio_load(path, start_beat);
-            log::info!(
-                "[Audio] Detected new audio path from content thread, \
-                starting background load"
-            );
-        }
-
-        // 1b. Poll for completed background audio load (waveform stays on UI thread)
-        self.poll_pending_audio_load();
 
         // 1b2. Drive per-clip audio-layer waveform decode/cache: gather the live
         // audio clips and let the cache background-decode any new ones, drain
@@ -734,38 +689,6 @@ impl Application {
             &mut self.ws.ui_root.tree,
             self.content_state.is_live_recording,
         );
-
-        // 1f. Sync stem mute/solo state from content thread to UI panels.
-        // Port of Unity: WorkspaceController.OnStemMuteToggled/OnStemSoloToggled refreshing button visuals.
-        {
-            for i in 0..manifold_playback::stem_audio::STEM_COUNT {
-                self.ws
-                    .ui_root
-                    .stem_lanes
-                    .set_mute_state(i, self.content_state.stem_muted[i]);
-                self.ws
-                    .ui_root
-                    .stem_lanes
-                    .set_solo_state(i, self.content_state.stem_soloed[i]);
-            }
-            // 1g. Sync stem availability — drives Expand button visibility on waveform lane.
-            // Port of Unity: WorkspaceController sets SetStemsAvailable when stem PATHS exist.
-            // Check project state (file paths resolved), not content_state.stem_available
-            // (which tracks loaded audio — only true AFTER expansion).
-            let any_stem_available = self
-                .local_project
-                .percussion_import
-                .as_ref()
-                .and_then(|p| p.stem_paths.as_ref())
-                .is_some_and(|paths| !paths.is_empty());
-            self.ws
-                .ui_root
-                .waveform_lane
-                .set_stems_available(any_stem_available);
-
-            // 1h. Push visibility/text state to UITree nodes (buttons, labels).
-            self.ws.ui_root.update_waveform_stem_nodes();
-        }
 
         self.ui_profile.add("drain_state", seg.elapsed());
         seg = std::time::Instant::now();
@@ -2709,51 +2632,6 @@ impl Application {
             }
         }
 
-        // 6a. Update waveform lane overlay (position for dirty-checking)
-        {
-            let scroll_x = self.ws.ui_root.viewport.scroll_x_beats().as_f32()
-                * self.ws.ui_root.viewport.pixels_per_beat();
-            let wf = &mut self.ws.ui_root.waveform_lane;
-            if wf.is_ready() {
-                // Get start beat and duration from project percussion import state
-                let (start_beat, duration_beats) = if let Some(proj) = Some(&self.local_project) {
-                    if let Some(ref perc) = proj.percussion_import {
-                        let dur_sec = wf.clip_duration_seconds();
-                        let bpm = proj.settings.bpm.0.max(1.0);
-                        let dur_beats = dur_sec * bpm / 60.0;
-                        (perc.audio_start_beat.as_f32(), dur_beats)
-                    } else {
-                        (0.0, 0.0)
-                    }
-                } else {
-                    (0.0, 0.0)
-                };
-                let mapper = self.ws.ui_root.viewport.mapper();
-                wf.update_overlay(
-                    start_beat,
-                    duration_beats,
-                    scroll_x,
-                    self.ws.ui_root.viewport.tracks_rect().width,
-                    mapper,
-                );
-            }
-
-            // 6a-ii. Update stem lane overlay (same position/scroll as master).
-            if self.ws.ui_root.stem_lanes.is_expanded() {
-                let start_beat = self
-                    .local_project
-                    .percussion_import
-                    .as_ref()
-                    .map_or(0.0, |perc| perc.audio_start_beat.as_f32());
-                let bpm = self.local_project.settings.bpm.0.max(1.0);
-                let mapper = self.ws.ui_root.viewport.mapper();
-                self.ws
-                    .ui_root
-                    .stem_lanes
-                    .update_overlay(start_beat, scroll_x, bpm, mapper);
-            }
-        }
-
         // 6b. Repaint dirty layer GRID bitmaps. Clip bodies/content + the region /
         // cursor / marker overlays are all GPU now (§24 5b), so the grid is a pure
         // function of the viewport and needs no selection/hover state here.
@@ -2766,56 +2644,6 @@ impl Application {
         if let (Some(gpu), Some(bitmap_gpu)) = (&self.gpu, &mut self.layer_bitmap_gpu) {
             for (layer_idx, pixels, tw, th) in self.ws.ui_root.viewport.dirty_layer_iter() {
                 bitmap_gpu.upload_layer(&gpu.device, layer_idx, pixels, tw as u32, th as u32);
-            }
-
-            // 6d. Repaint + upload waveform lane if dirty
-            let wf_rect = self.ws.ui_root.viewport.waveform_lane_rect();
-            if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
-                let wf = &mut self.ws.ui_root.waveform_lane;
-                // Force dirty on resize
-                if wf.buffer_width != wf_rect.width as usize {
-                    wf.dirty = true;
-                }
-                if wf.dirty {
-                    wf.repaint(wf_rect.width as usize);
-                    // Upload after repaint
-                    if wf.buffer_width > 0 && wf.buffer_height > 0 && !wf.pixel_buffer.is_empty() {
-                        bitmap_gpu.upload_layer(
-                            &gpu.device,
-                            1000,
-                            &wf.pixel_buffer,
-                            wf.buffer_width as u32,
-                            wf.buffer_height as u32,
-                        );
-                    }
-                }
-            }
-
-            // 6e. Repaint + upload stem lanes if dirty
-            if self.ws.ui_root.stem_lanes.is_expanded() {
-                let sl_rect = self.ws.ui_root.viewport.stem_lanes_rect();
-                if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
-                    let sl = &mut self.ws.ui_root.stem_lanes;
-                    let mapper = self.ws.ui_root.viewport.mapper();
-                    if sl.buffer_width != sl_rect.width as usize {
-                        sl.dirty = true;
-                    }
-                    if sl.dirty {
-                        sl.repaint(sl_rect.width as usize, mapper);
-                        if sl.buffer_width > 0
-                            && sl.buffer_height > 0
-                            && !sl.pixel_buffer.is_empty()
-                        {
-                            bitmap_gpu.upload_layer(
-                                &gpu.device,
-                                1001,
-                                &sl.pixel_buffer,
-                                sl.buffer_width as u32,
-                                sl.buffer_height as u32,
-                            );
-                        }
-                    }
-                }
             }
 
             // 6f. Repaint + upload overview strip bitmap
@@ -4320,18 +4148,6 @@ impl Application {
         if let Some(bitmap_gpu) = self.layer_bitmap_gpu.as_mut() {
             let mut rects: Vec<(usize, manifold_ui::node::Rect)> = Vec::new();
 
-            let wf_rect = self.ws.ui_root.viewport.waveform_lane_rect();
-            if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
-                rects.push((1000, wf_rect));
-            }
-
-            if self.ws.ui_root.stem_lanes.is_expanded() {
-                let sl_rect = self.ws.ui_root.viewport.stem_lanes_rect();
-                if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
-                    rects.push((1001, sl_rect));
-                }
-            }
-
             let ov_rect = self.ws.ui_root.viewport.overview_rect();
             if ov_rect.width > 0.0 && ov_rect.height > 0.0 {
                 rects.push((1002, ov_rect));
@@ -4406,23 +4222,6 @@ impl Application {
                 &self.clip_rect_scratch,
                 overlay_tracks,
             );
-
-            // Waveform/stem lane buttons (Base layer, before the overlays).
-            // Bounded by overlay_region_start — the overlays live past it and
-            // are drawn separately below.
-            let wf_first = self.ws.ui_root.waveform_lane.first_node();
-            let sl_first = self.ws.ui_root.stem_lanes.first_node();
-            let overlay_end = self.ws.ui_root.overlay_region_start;
-            let overlay_start = if wf_first != usize::MAX {
-                Some(wf_first)
-            } else if sl_first != usize::MAX {
-                Some(sl_first)
-            } else {
-                None
-            };
-            if let Some(start) = overlay_start {
-                ui.render_tree_range(&self.ws.ui_root.tree, start, overlay_end);
-            }
 
             // Playhead — a red line spanning ruler + tracks, capped by a downward
             // triangle head at the top of the ruler (§24 5e). The head is the

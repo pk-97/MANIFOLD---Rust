@@ -20,10 +20,6 @@ pub struct ScreenLayout {
     /// Timeline height as fraction of content area. 0.30 = bottom 30%.
     /// Clamped to [0.15, 0.70] by resize handle.
     pub timeline_split_ratio: f32,
-    /// Whether the imported audio waveform lane is visible.
-    pub waveform_lane_visible: bool,
-    /// Whether the 4 stem lanes are expanded (visible below the master waveform).
-    pub stem_lanes_expanded: bool,
 }
 
 impl ScreenLayout {
@@ -37,8 +33,6 @@ impl ScreenLayout {
             inspector_width: color::DEFAULT_INSPECTOR_WIDTH,
             effect_browser_width: 0.0,
             timeline_split_ratio: color::DEFAULT_TIMELINE_SPLIT_RATIO,
-            waveform_lane_visible: false,
-            stem_lanes_expanded: false,
         }
     }
 
@@ -186,26 +180,7 @@ impl ScreenLayout {
     /// and the scrollable track area. If they diverge, layer controls will be
     /// vertically misaligned with their tracks.
     pub fn track_header_height(&self) -> f32 {
-        let mut h = color::OVERVIEW_STRIP_HEIGHT + color::RULER_HEIGHT;
-        if self.waveform_lane_visible {
-            h += color::WAVEFORM_LANE_HEIGHT;
-        }
-        if self.waveform_lane_visible && self.stem_lanes_expanded {
-            h += 4.0 * color::STEM_LANE_HEIGHT;
-        }
-        h
-    }
-
-    /// Height of the imported audio waveform lane (when visible).
-    /// From Unity UIConstants.ImportedWaveformLaneHeight = 56.
-    pub fn waveform_lane_height() -> f32 {
-        color::WAVEFORM_LANE_HEIGHT
-    }
-
-    /// Height of a single stem lane.
-    /// From Unity UIConstants.StemLaneHeight = 56.
-    pub fn stem_lane_height() -> f32 {
-        color::STEM_LANE_HEIGHT
+        color::OVERVIEW_STRIP_HEIGHT + color::RULER_HEIGHT
     }
 
     /// Layer controls region: LEFT side of timeline body — the track headers
