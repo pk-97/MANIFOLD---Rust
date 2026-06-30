@@ -77,6 +77,11 @@ pub(crate) fn embedded_presets_fingerprint(project: &Project) -> u64 {
 const FILE_DROP_DEFAULT_DURATION_BEATS: f32 = 4.0;
 const FILE_DROP_MIN_DURATION_BEATS: f32 = 0.125;
 const LAST_OPENED_PROJECT_PREF_KEY: &str = "MANIFOLD_LastOpenedProjectPath";
+/// Pref key for the recent-projects list (JSON array of absolute paths,
+/// most-recent first). Drives the File → Open Recent submenu.
+const RECENT_PROJECTS_PREF_KEY: &str = "MANIFOLD_RecentProjects";
+/// How many entries the Open Recent menu retains (matches the Ableton ballpark).
+const MAX_RECENT_PROJECTS: usize = 12;
 
 // ── ProjectIOAction — replaces IProjectIOHost callback interface ────
 
@@ -114,6 +119,11 @@ pub struct ProjectIOService {
     /// Unity field: lastOpenedProjectPath (line 41).
     last_opened_project_path: Option<String>,
 
+    /// Recently opened/saved project paths, most-recent first, capped at
+    /// [`MAX_RECENT_PROJECTS`]. Persisted as a JSON array under
+    /// [`RECENT_PROJECTS_PREF_KEY`]; drives the File → Open Recent submenu.
+    recent_projects: Vec<String>,
+
     /// Preview metadata cache for file drop duration estimation.
     /// Unity: fileDropPreviewDurationSecondsByPath (line 42).
     file_drop_preview_duration_seconds: std::collections::HashMap<String, f32>,
@@ -122,12 +132,25 @@ pub struct ProjectIOService {
 impl ProjectIOService {
     pub fn new(user_prefs: &UserPrefs) -> Self {
         let last_path = user_prefs.get_string(LAST_OPENED_PROJECT_PREF_KEY, "");
+        let last_opened_project_path = if last_path.is_empty() {
+            None
+        } else {
+            Some(last_path.clone())
+        };
+
+        // Load the recent list (JSON array). Seed from the single last-opened
+        // path on first run after upgrade, so the menu isn't empty for users who
+        // predate the list.
+        let recent_json = user_prefs.get_string(RECENT_PROJECTS_PREF_KEY, "");
+        let mut recent_projects: Vec<String> =
+            serde_json::from_str(&recent_json).unwrap_or_default();
+        if recent_projects.is_empty() && !last_path.is_empty() {
+            recent_projects.push(last_path);
+        }
+
         Self {
-            last_opened_project_path: if last_path.is_empty() {
-                None
-            } else {
-                Some(last_path)
-            },
+            last_opened_project_path,
+            recent_projects,
             file_drop_preview_duration_seconds: std::collections::HashMap::new(),
         }
     }
@@ -137,6 +160,35 @@ impl ProjectIOService {
     #[allow(dead_code)]
     pub fn last_opened_project_path(&self) -> Option<&str> {
         self.last_opened_project_path.as_deref()
+    }
+
+    /// Recent project paths, most-recent first, filtered to those that still
+    /// exist on disk. Drives the File → Open Recent submenu.
+    pub fn recent_projects(&self) -> Vec<PathBuf> {
+        self.recent_projects
+            .iter()
+            .map(PathBuf::from)
+            .filter(|p| p.exists())
+            .collect()
+    }
+
+    /// Promote `path_str` to the front of the recent list (dedup, cap) and
+    /// persist. Called on every successful open and save-as.
+    fn push_recent_project(&mut self, path_str: &str, user_prefs: &mut UserPrefs) {
+        promote_recent(&mut self.recent_projects, path_str, MAX_RECENT_PROJECTS);
+        self.persist_recent_projects(user_prefs);
+    }
+
+    /// Empty the recent-projects list and persist. Backs "Clear Recent Projects".
+    pub fn clear_recent_projects(&mut self, user_prefs: &mut UserPrefs) {
+        self.recent_projects.clear();
+        self.persist_recent_projects(user_prefs);
+    }
+
+    fn persist_recent_projects(&self, user_prefs: &mut UserPrefs) {
+        let json = serde_json::to_string(&self.recent_projects).unwrap_or_else(|_| "[]".to_string());
+        user_prefs.set_string(RECENT_PROJECTS_PREF_KEY, &json);
+        user_prefs.save();
     }
 
     // ── New Project ─────────────────────────────────────────────────
@@ -248,6 +300,8 @@ impl ProjectIOService {
                 self.last_opened_project_path = Some(path_str.clone());
                 user_prefs.set_string(LAST_OPENED_PROJECT_PREF_KEY, &path_str);
                 user_prefs.save();
+                // Promote to the front of the Open Recent list.
+                self.push_recent_project(&path_str, user_prefs);
 
                 if was_v1 {
                     log::info!(
@@ -280,7 +334,7 @@ impl ProjectIOService {
     // the in-progress port integration.
     #[allow(dead_code)]
     pub fn save_project(
-        &self,
+        &mut self,
         project: &mut Project,
         current_path: Option<&Path>,
         current_time: f32,
@@ -314,7 +368,7 @@ impl ProjectIOService {
 
     /// Unity ProjectIOService.OnSaveProjectAs / OnSaveProjectAsAsync (lines 196-228).
     pub fn save_project_as(
-        &self,
+        &mut self,
         project: &mut Project,
         current_time: f32,
         editing_service: &mut EditingService,
@@ -356,6 +410,7 @@ impl ProjectIOService {
 
                     // Persist paths (Unity lines 218-221)
                     let path_str = path.to_string_lossy().to_string();
+                    self.last_opened_project_path = Some(path_str.clone());
                     user_prefs.set_string(LAST_OPENED_PROJECT_PREF_KEY, &path_str);
                     dialog_path_memory::remember_directory(
                         DialogContext::ProjectSave,
@@ -363,6 +418,8 @@ impl ProjectIOService {
                         user_prefs,
                     );
                     user_prefs.save();
+                    // Promote to the front of the Open Recent list.
+                    self.push_recent_project(&path_str, user_prefs);
 
                     editing_service.mark_clean();
                     log::info!("[ProjectIO] Saved to {}", path.display());
@@ -741,6 +798,15 @@ impl ProjectIOService {
     }
 }
 
+/// Move `path` to the front of a most-recent-first list: removes any existing
+/// occurrence (so a re-open promotes rather than duplicates), prepends, then caps
+/// at `max`. Pure — the persistence/menu-refresh wrappers live on the service.
+fn promote_recent(list: &mut Vec<String>, path: &str, max: usize) {
+    list.retain(|p| p != path);
+    list.insert(0, path.to_string());
+    list.truncate(max);
+}
+
 // ── Static helpers — Unity ProjectIOService lines 453-484 ───────────
 
 /// Unity ProjectIOService.ResolveDroppedFilePath (lines 453-463).
@@ -850,6 +916,24 @@ mod tests {
         for no in ["a.mp4", "a.mid", "a.png", "a"] {
             assert!(!is_supported_audio_extension(Path::new(no)), "{no}");
         }
+    }
+
+    #[test]
+    fn promote_recent_dedups_caps_and_orders_most_recent_first() {
+        let mut list: Vec<String> = Vec::new();
+
+        promote_recent(&mut list, "/a.manifold", 3);
+        promote_recent(&mut list, "/b.manifold", 3);
+        promote_recent(&mut list, "/c.manifold", 3);
+        assert_eq!(list, ["/c.manifold", "/b.manifold", "/a.manifold"]);
+
+        // Re-opening an existing entry promotes it without duplicating.
+        promote_recent(&mut list, "/a.manifold", 3);
+        assert_eq!(list, ["/a.manifold", "/c.manifold", "/b.manifold"]);
+
+        // Cap drops the oldest.
+        promote_recent(&mut list, "/d.manifold", 3);
+        assert_eq!(list, ["/d.manifold", "/a.manifold", "/c.manifold"]);
     }
 
     #[test]

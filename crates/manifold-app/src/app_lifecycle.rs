@@ -601,6 +601,20 @@ impl Application {
         if action.needs_clip_sync {
             self.needs_rebuild = true;
         }
+
+        // A load/save may have changed the recent-projects list — refresh the
+        // File → Open Recent submenu so it reflects the latest order.
+        self.refresh_recent_menu();
+    }
+
+    /// Rebuild the File → Open Recent submenu from the current recent-projects
+    /// list. Cheap (≤12 native items) and only runs on project operations, never
+    /// per frame. No-op until the native menu exists.
+    pub(crate) fn refresh_recent_menu(&mut self) {
+        let paths = self.project_io.recent_projects();
+        if let Some(menu) = self.app_menu.as_mut() {
+            menu.set_recent_projects(&paths);
+        }
     }
 
     /// Open a decorated HDR output window (default size = project resolution).

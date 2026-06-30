@@ -17,6 +17,7 @@
 //! into context-aware menu items is a follow-up, not this pass.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use muda::accelerator::Accelerator;
 use muda::{Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
@@ -24,12 +25,15 @@ use muda::{Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 /// Logical action a menu item triggers, resolved from its `MenuId` on drain.
 /// Decoupled from `PanelAction` so the menu module has no UI-crate dependency;
 /// the app maps these onto `PanelAction`s / methods in one place.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     // File
     New,
     Open,
-    OpenRecent,
+    /// Open a specific project from the dynamic "Open Recent" submenu.
+    OpenRecentPath(PathBuf),
+    /// Empty the recent-projects list.
+    ClearRecentProjects,
     Save,
     SaveAs,
     ImportVideo,
@@ -46,23 +50,69 @@ pub enum MenuAction {
     Settings,
 }
 
+/// Id of the "Clear Recent Projects" item appended to the recent submenu.
+/// Stable across rebuilds (string-keyed `MenuId`), so one entry in `actions`
+/// covers every rebuild of the submenu.
+const RECENT_CLEAR_ID: &str = "file.recent.clear";
+
 /// Owns the native menu and the id→action map. Must be kept alive for the
 /// process lifetime — dropping it tears the menu down.
 pub struct AppMenu {
     // Held so the native menu (and its key equivalents) stay registered.
     _menu: Menu,
     actions: HashMap<MenuId, MenuAction>,
+    /// The dynamic "Open Recent" submenu, rebuilt by [`set_recent_projects`].
+    recent_submenu: Submenu,
+    /// Maps each currently-shown recent item's id to the project it opens.
+    /// Rebuilt in lockstep with `recent_submenu`.
+    recent_actions: HashMap<MenuId, PathBuf>,
 }
 
 impl AppMenu {
     /// Build the menu tree. Call once, on the main thread.
     pub fn new() -> Self {
         let mut actions = HashMap::new();
-        let menu = build(&mut actions);
+        let (menu, recent_submenu) = build(&mut actions);
         Self {
             _menu: menu,
             actions,
+            recent_submenu,
+            recent_actions: HashMap::new(),
         }
+    }
+
+    /// Rebuild the "Open Recent" submenu from `paths` (most-recent first), one
+    /// clickable item per project plus a "Clear Recent Projects" footer. Call on
+    /// the main thread at startup and after any project open / save. An empty
+    /// list shows a single disabled placeholder.
+    pub fn set_recent_projects(&mut self, paths: &[PathBuf]) {
+        // Drop every existing child, then the stale id→path mappings.
+        while self.recent_submenu.remove_at(0).is_some() {}
+        self.recent_actions.clear();
+
+        if paths.is_empty() {
+            let placeholder = MenuItem::new("No Recent Projects", false, None);
+            let _ = self.recent_submenu.append(&placeholder);
+            return;
+        }
+
+        for (i, path) in paths.iter().enumerate() {
+            // Show the project name (file stem); fall back to the full path.
+            let label = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string_lossy().into_owned());
+            let id = format!("file.recent.{i}");
+            let mi = MenuItem::with_id(&id, &label, true, None);
+            self.recent_actions.insert(mi.id().clone(), path.clone());
+            let _ = self.recent_submenu.append(&mi);
+        }
+
+        let _ = self.recent_submenu.append(&PredefinedMenuItem::separator());
+        let clear = MenuItem::with_id(RECENT_CLEAR_ID, "Clear Recent Projects", true, None);
+        self.actions
+            .insert(clear.id().clone(), MenuAction::ClearRecentProjects);
+        let _ = self.recent_submenu.append(&clear);
     }
 
     /// Attach the menu to the platform application.
@@ -88,7 +138,9 @@ impl AppMenu {
         let mut out = Vec::new();
         while let Ok(ev) = muda::MenuEvent::receiver().try_recv() {
             if let Some(action) = self.actions.get(&ev.id) {
-                out.push(*action);
+                out.push(action.clone());
+            } else if let Some(path) = self.recent_actions.get(&ev.id) {
+                out.push(MenuAction::OpenRecentPath(path.clone()));
             }
         }
         out
@@ -111,7 +163,9 @@ fn item(
     mi
 }
 
-fn build(actions: &mut HashMap<MenuId, MenuAction>) -> Menu {
+/// Build the menu tree. Returns the root menu plus the (initially empty) "Open
+/// Recent" submenu, which the caller populates via [`AppMenu::set_recent_projects`].
+fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu) {
     let menu = Menu::new();
 
     // ── MANIFOLD (application menu) ────────────────────────────────────────
@@ -140,7 +194,11 @@ fn build(actions: &mut HashMap<MenuId, MenuAction>) -> Menu {
     let file_m = Submenu::new("File", true);
     let _ = file_m.append(&item(actions, "file.new", MenuAction::New, "New", Some("CmdOrCtrl+N")));
     let _ = file_m.append(&item(actions, "file.open", MenuAction::Open, "Open…", Some("CmdOrCtrl+O")));
-    let _ = file_m.append(&item(actions, "file.recent", MenuAction::OpenRecent, "Open Recent", None));
+    // "Open Recent" is a submenu populated at runtime from the recent-projects
+    // list (see `AppMenu::set_recent_projects`). Returned to the caller so it can
+    // refresh it after each project open / save.
+    let recent_m = Submenu::with_id("file.recent", "Open Recent", true);
+    let _ = file_m.append(&recent_m);
     let _ = file_m.append(&PredefinedMenuItem::separator());
     let _ = file_m.append(&item(actions, "file.save", MenuAction::Save, "Save", Some("CmdOrCtrl+S")));
     let _ = file_m.append(&item(
@@ -187,5 +245,5 @@ fn build(actions: &mut HashMap<MenuId, MenuAction>) -> Menu {
     let _ = menu.append(&edit_m);
     let _ = menu.append(&view_m);
 
-    menu
+    (menu, recent_m)
 }

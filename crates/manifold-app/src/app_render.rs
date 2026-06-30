@@ -717,7 +717,14 @@ impl Application {
             match ma {
                 M::New => actions.push(P::NewProject),
                 M::Open => actions.push(P::OpenProject),
-                M::OpenRecent => actions.push(P::OpenRecent),
+                M::OpenRecentPath(path) => {
+                    self.open_project_from_path(path);
+                    self.needs_structural_sync = true;
+                }
+                M::ClearRecentProjects => {
+                    self.project_io.clear_recent_projects(&mut self.user_prefs);
+                    self.refresh_recent_menu();
+                }
                 M::Save => actions.push(P::SaveProject),
                 M::SaveAs => actions.push(P::SaveProjectAs),
                 M::ExportVideo => actions.push(P::ExportVideo),

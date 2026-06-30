@@ -1677,8 +1677,10 @@ impl ApplicationHandler for Application {
         // Native menu bar. Built + attached once the app/window exists (macOS
         // `init_for_nsapp` needs a live `NSApplication`). Clicks are drained in
         // the render loop and routed through the normal `PanelAction` dispatch.
-        let app_menu = crate::menu::AppMenu::new();
+        let mut app_menu = crate::menu::AppMenu::new();
         app_menu.init_platform();
+        // Populate the File → Open Recent submenu from the persisted list.
+        app_menu.set_recent_projects(&self.project_io.recent_projects());
         self.app_menu = Some(app_menu);
 
         // Detect connected display resolutions (Unity: Footer.CollectDisplayResolutions).
