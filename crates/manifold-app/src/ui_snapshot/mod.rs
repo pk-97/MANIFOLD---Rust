@@ -135,7 +135,16 @@ fn run_graph_preset(preset: &str) {
     let tex_w = (LOGICAL_W * SCALE) as u32;
     let tex_h = (LOGICAL_H * SCALE) as u32;
     let png = dir.join("graph.png");
-    render::render_graph_to_png(&gv_snap, tex_w, tex_h, SCALE, png.to_str().expect("utf-8 path"));
+    // The canonical def drives the headless graph render that produces the
+    // per-node thumbnails; the snapshot drives the canvas layout.
+    render::render_graph_to_png(
+        &gv_snap,
+        view.canonical_def,
+        tex_w,
+        tex_h,
+        SCALE,
+        png.to_str().expect("utf-8 path"),
+    );
     println!("ui-snap: wrote {} ({preset})", png.display());
 }
 

@@ -8,7 +8,7 @@
 use std::ffi::c_void;
 use std::slice;
 
-use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
+use manifold_gpu::{GpuBinding, GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
 use manifold_renderer::clip_draw::{emit_clip_names, emit_clips, ClipBody};
 use manifold_renderer::clip_thumb_gpu::ClipThumbGpu;
 use manifold_renderer::render_target::RenderTarget;
@@ -137,15 +137,19 @@ pub fn render_ui_to_png(
         .unwrap_or_else(|e| panic!("save {path}: {e}"));
 }
 
-/// Render a graph-editor canvas — nodes, ports, wires — into a `tex_w`×`tex_h`
-/// texture and save as PNG. Mirrors the canvas half of
-/// `Application::present_graph_editor_window`: clear to the editor backdrop,
-/// then the canvas paints immediate-mode through the `Painter` primitives (no
-/// UITree). The card lane / sidebar / preview monitors of the live editor are
-/// intentionally omitted — this isolates the canvas, the surface that most needs
-/// eyes. `tex_w` must be a multiple of 64 (aligned readback).
+/// Render a graph-editor canvas — nodes, ports, wires, and **real per-node
+/// output thumbnails** — into a `tex_w`×`tex_h` texture and save as PNG. Mirrors
+/// the canvas half of `Application::present_graph_editor_window`: clear to the
+/// editor backdrop, the canvas paints immediate-mode through `Painter` (no
+/// UITree), then each node's actual output texture is blitted over its
+/// placeholder. The graph is rendered headless from `def` (the same machinery
+/// the parity harness uses) with the executor's per-node dump on, so the
+/// thumbnails are the live images — no content thread needed. The editor's card
+/// lane / sidebar / preview monitors are intentionally omitted. `tex_w` must be
+/// a multiple of 64 (aligned readback).
 pub fn render_graph_to_png(
     snapshot: &manifold_ui::graph_view::GraphSnapshot,
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
     tex_w: u32,
     tex_h: u32,
     scale: f32,
@@ -170,6 +174,12 @@ pub fn render_graph_to_png(
     canvas.set_snapshot(snapshot);
     canvas.apply_pending_fit(viewport);
 
+    // Render the graph headless with the per-node dump on, so each node's output
+    // texture is available for the thumbnail blit below. Best-effort: a def that
+    // fails to build/compile leaves `None`, and the render falls through to the
+    // structure-only canvas (black placeholders) instead of failing.
+    let node_textures = render_graph_node_textures(&device, def);
+
     // Clear to the editor backdrop (the live editor clears the offscreen to this
     // before the canvas paints with Load).
     {
@@ -178,6 +188,7 @@ pub fn render_graph_to_png(
         enc.commit_and_wait_completed();
     }
 
+    // Canvas: nodes, ports, wires, and the black thumbnail placeholders.
     renderer.begin_frame();
     canvas.render(&mut renderer as &mut dyn Painter, viewport);
     let drew = renderer.prepare(&device, tex_w, tex_h, dpi);
@@ -188,9 +199,241 @@ pub fn render_graph_to_png(
     }
     assert!(drew, "graph canvas produced no draws (empty snapshot?)");
 
+    // Composite each node's real output texture over its placeholder. The canvas
+    // reports a screen rect per image-emitting node (`visible_node_thumbnails`),
+    // keyed by the same stable NodeId the dump uses.
+    if let Some(nt) = node_textures.as_ref() {
+        let blit = make_blit_pipeline(&device);
+        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            ..Default::default()
+        });
+        let mut enc = device.create_encoder("ui-snap-graph-thumbs");
+        for (node_id, x, y, w, h) in canvas.visible_node_thumbnails(viewport) {
+            let Some(tex) = nt.texture_for(node_id.as_str()) else {
+                continue;
+            };
+            // A render-target-only output can't be sampled — binding it crashes
+            // AGX (the live atlas path guards the same way). Skip its cell.
+            if !tex.is_shader_readable() {
+                continue;
+            }
+            enc.draw_fullscreen_viewport(
+                &blit,
+                &target.texture,
+                &[
+                    GpuBinding::Texture { binding: 0, texture: tex },
+                    GpuBinding::Sampler { binding: 1, sampler: &sampler },
+                ],
+                (x, y, w, h),
+                GpuLoadAction::Load,
+                "Node Thumbnail Blit",
+            );
+        }
+        enc.commit_and_wait_completed();
+    }
+
     let bytes = readback(&device, &target.texture, tex_w, tex_h);
     image::save_buffer(path, &bytes, tex_w, tex_h, image::ExtendedColorType::Rgba8)
         .unwrap_or_else(|e| panic!("save {path}: {e}"));
+}
+
+/// A headless one-frame render of `def`'s graph with the executor's per-node
+/// dump enabled, holding the graph + executor alive so the dumped node textures
+/// stay valid. `texture_for` resolves a stable NodeId to its output texture.
+struct GraphNodeTextures {
+    graph: manifold_renderer::node_graph::Graph,
+    exec: manifold_renderer::node_graph::Executor,
+}
+
+impl GraphNodeTextures {
+    /// The first dumped Texture2D output of the node with stable id `node_id`,
+    /// or `None` if the node didn't run / produced no texture.
+    fn texture_for(&self, node_id: &str) -> Option<&GpuTexture> {
+        let runtime = self
+            .graph
+            .instance_by_node_id(&manifold_core::NodeId::new(node_id))?;
+        self.exec
+            .dump_resources()
+            .iter()
+            .find(|(niid, _, _, tex)| *niid == runtime && tex.is_some())
+            .and_then(|(_, _, _, tex)| tex.as_ref())
+    }
+}
+
+/// Build `def`'s graph, run one frame with `set_dump_all`, and keep the result
+/// so per-node output textures can be read back. `None` if the def can't build
+/// or compile (caller falls through to a structure-only render). Effects whose
+/// graph begins at a `Source` node get a neutral mid-grey fixture on that input;
+/// generators self-produce and need none.
+fn render_graph_node_textures(
+    device: &GpuDevice,
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+) -> Option<GraphNodeTextures> {
+    use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+    use manifold_renderer::node_graph::{
+        compile, EffectGraphDefExt, Executor, FrameTime, MetalBackend, PrimitiveRegistry,
+        GENERATOR_INPUT_TYPE_ID, SOURCE_TYPE_ID,
+    };
+
+    // Square render dims for the node outputs; the blit stretches each into its
+    // (possibly non-square) thumbnail rect with linear sampling.
+    const GW: u32 = 256;
+    const GH: u32 = 256;
+    const GFMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
+
+    // `with_builtin` includes the boundary-node constructors (Generator Input,
+    // Final Output, Source) that a preset def references — a bare `new()` omits
+    // them and `into_graph` fails with UnknownTypeId on `system.generator_input`.
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut graph = match def.clone().into_graph(&registry) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("ui-snap graph: into_graph failed: {e:?}");
+            return None;
+        }
+    };
+
+    // Generators (a Generator Input boundary) need the *content-pipeline* render
+    // path to produce correct node output — per-frame state, particle warmup, and
+    // an HDR tonemap. A single raw-executor frame leaves particle/geometry
+    // generators with wrong intermediates (HDR density clamps to white; an
+    // un-warmed particle sim composites to black), which would be misleading. So
+    // skip node thumbnails for generators: the canvas still shows the full
+    // structure (nodes, ports, wires). Effects — texture in, texture out — render
+    // correctly here. Driving generators through `GeneratorRenderer` (state +
+    // warmup) is the follow-up. See docs/HEADLESS_UI_HARNESS.md.
+    let is_generator = graph
+        .nodes()
+        .any(|inst| inst.node.type_id().as_str() == GENERATOR_INPUT_TYPE_ID);
+    if is_generator {
+        eprintln!(
+            "ui-snap graph: generator preset — node thumbnails skipped (need the \
+             content-pipeline path); rendering structure only"
+        );
+        return None;
+    }
+
+    let plan = match compile(&graph) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ui-snap graph: compile failed: {e:?}");
+            return None;
+        }
+    };
+
+    // Effects begin at a `Source` node whose `out` must be bound, or the chain
+    // reads an unbound texture. Feed a neutral mid-grey fixture so the effect has
+    // something to transform.
+    let source_id = graph
+        .nodes()
+        .find(|inst| inst.node.type_id().as_str() == SOURCE_TYPE_ID)
+        .map(|inst| inst.id);
+    let mut backend = MetalBackend::new(device, GW, GH, GFMT);
+    if let Some(sid) = source_id
+        && let Some(res) = resource_for_output(&plan, sid, "out")
+    {
+        // A UV gradient (R=u, G=v, B=(u+v)/2) rather than a flat fill, so spatial
+        // effects — mirror, distort, blur, displace — visibly act on real content
+        // in the thumbnails instead of grey-in/grey-out.
+        let fixture = RenderTarget::new(device, GW, GH, GFMT, "ui-snap-graph-source");
+        let gradient = make_gradient_pipeline(device, GFMT);
+        let mut fenc = device.create_encoder("ui-snap-graph-source-fill");
+        fenc.draw_fullscreen(&gradient, &fixture.texture, &[], true, true, "Source Fixture Gradient");
+        fenc.commit_and_wait_completed();
+        backend.pre_bind_texture_2d(res, fixture);
+    }
+
+    let mut exec = Executor::new(Box::new(backend));
+    exec.set_dump_all(true);
+
+    // Deterministic clock so any time-dependent node is reproducible run to run.
+    let frame_time = FrameTime {
+        beats: manifold_core::Beats(2.0),
+        seconds: manifold_core::Seconds(1.0),
+        delta: manifold_core::Seconds(1.0 / 60.0),
+        frame_count: 0,
+    };
+
+    let mut enc = device.create_encoder("ui-snap-graph-exec");
+    {
+        let mut gpu = RendererGpuEncoder::new(&mut enc, device);
+        exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
+    }
+    enc.commit_and_wait_completed();
+
+    Some(GraphNodeTextures { graph, exec })
+}
+
+/// The `ResourceId` of `node`'s named output port in `plan`, or `None`. Mirrors
+/// the parity harness's `resource_for_output`.
+fn resource_for_output(
+    plan: &manifold_renderer::node_graph::ExecutionPlan,
+    node: manifold_renderer::node_graph::NodeInstanceId,
+    port: &str,
+) -> Option<manifold_renderer::node_graph::ResourceId> {
+    plan.steps()
+        .iter()
+        .find(|s| s.node == node)
+        .and_then(|s| s.outputs.iter().find(|(name, _)| *name == port).map(|(_, id)| *id))
+}
+
+/// A fullscreen-triangle texture blit pipeline targeting the snapshot format —
+/// the same raw blit the live workspace/atlas preview uses, to composite a node
+/// output texture into a thumbnail viewport.
+fn make_blit_pipeline(device: &GpuDevice) -> manifold_gpu::GpuRenderPipeline {
+    let shader = r#"
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
+    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(t_source, s_source, in.uv);
+}
+"#;
+    device.create_render_pipeline(shader, "vs_main", "fs_main", FORMAT, None, "Node Thumbnail Blit")
+}
+
+/// A fullscreen-triangle pipeline that fills the target with a UV gradient
+/// (R=u, G=v, B=(u+v)/2) — the neutral source fixture for effect graphs, so a
+/// spatial effect's output is legible in its node thumbnail.
+fn make_gradient_pipeline(
+    device: &GpuDevice,
+    format: GpuTextureFormat,
+) -> manifold_gpu::GpuRenderPipeline {
+    let shader = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
+    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(in.uv.x, in.uv.y, (in.uv.x + in.uv.y) * 0.5, 1.0);
+}
+"#;
+    device.create_render_pipeline(shader, "vs_main", "fs_main", format, None, "Source Fixture Gradient")
 }
 
 fn readback(device: &GpuDevice, texture: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
