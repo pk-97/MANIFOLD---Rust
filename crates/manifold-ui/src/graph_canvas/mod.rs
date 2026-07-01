@@ -89,14 +89,16 @@ pub(crate) use model::{
 };
 
 const HEADER_HEIGHT: f32 = 28.0;
-/// Node body width in graph units. Compact by design (was 300): a narrower node
-/// is also a *shorter* node, since the always-on preview screen is sized to
-/// `NODE_WIDTH - 2·PREVIEW_PAD` at the project aspect — so shrinking width cuts
-/// both dimensions and lets a multi-column graph `zoom_to_fit` well above the
-/// old 0.25 floor, i.e. read at an authorable zoom instead of a mush. On-node
-/// param rows and the title truncate to fit. (True per-node content-sizing is a
-/// later refinement; this uniform reduction is the high-leverage first step.)
-const NODE_WIDTH: f32 = 210.0;
+/// Node body width in graph units. Widened from 210 (2026-07-01) so the
+/// unified slider widget's fixed label + value-cell columns leave the track a
+/// real width and typical param names ("Translation X", "Rotation") stop
+/// eliding — at 210 they truncated hard. Still compact by design (was 300
+/// originally): a narrower node is also a *shorter* node, since the always-on
+/// preview screen is sized to `NODE_WIDTH - 2·PREVIEW_PAD` at the project
+/// aspect. On-node param rows and the title still truncate to fit when a name
+/// genuinely doesn't. (True per-node content-sizing is a later refinement;
+/// this uniform width is the high-leverage first step.)
+const NODE_WIDTH: f32 = 240.0;
 const NODE_HEADER_HEIGHT: f32 = 22.0;
 /// Padding around the preview strip inside a node, so the thumbnail reads as a
 /// recessed screen rather than a fill bleeding to the node edges.
@@ -154,9 +156,11 @@ const PARAM_EXPOSE_D: f32 = 7.0;
 /// a small gap, so the label never overlaps the dot.
 const PARAM_LABEL_X: f32 = PARAM_PAD_X + PARAM_EXPOSE_D + 4.0;
 /// Label-cell width (graph units) for a ranged param's slider widget — the
-/// node-face analogue of `slider::DEFAULT_LABEL_WIDTH` (60), a touch narrower
-/// since the node has a lot less width to give the track and value cell.
-const PARAM_SLIDER_LABEL_W: f32 = 52.0;
+/// node-face analogue of `slider::DEFAULT_LABEL_WIDTH` (60). Widened from 52
+/// alongside `NODE_WIDTH` (2026-07-01): 52 elided common names like
+/// "Translation X" hard; 72 fits them while still leaving the track a real
+/// width.
+const PARAM_SLIDER_LABEL_W: f32 = 72.0;
 /// Pixels of horizontal drag that scrub a value across its full min..max
 /// range when editing a param on the node face. Matches the inspector
 /// sidebar's feel (`DRAG_FULL_RANGE_PX`).
