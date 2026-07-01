@@ -190,8 +190,12 @@ const PORT_COL_WIDTH: f32 = 10.0;
 const NODE_CORNER: f32 = 6.0;
 
 // Auto-layout grid spacing: NODE_WIDTH + ~60px breathing room for the wires
-// between columns, so nodes never touch horizontally.
-const COL_SPACING: f32 = 270.0;
+// between columns, so nodes never touch horizontally. Derived (not a
+// hardcoded literal) so a future NODE_WIDTH change can't silently collapse
+// this gap again — it already did once (2026-07-01): NODE_WIDTH climbed
+// 210→240→270 across the slider-parity work while this stayed a bare `270.0`,
+// so columns ended up pitched at exactly the node width with zero gap.
+const COL_SPACING: f32 = NODE_WIDTH + 60.0;
 const LAYOUT_ORIGIN: (f32, f32) = (60.0, 60.0);
 /// Vertical gap between two stacked nodes (or routing lanes) within a
 /// column. Node heights vary, so the layout spaces by `height + VGAP`
@@ -236,7 +240,20 @@ const FANIN_STAGGER_MIN: usize = 6;
 
 const BG_COLOR: Color32 = Color32::new(26, 26, 31, 255);
 const HEADER_BG: Color32 = Color32::new(36, 36, 43, 255);
-const GRID_DOT: Color32 = Color32::new(255, 255, 255, 15);
+/// Faint grid-line colour — same alpha as the old dots; a 1px line at this
+/// alpha reads about as quiet as the dot did, just legible as an actual grid
+/// instead of scattered points.
+const GRID_LINE: Color32 = Color32::new(255, 255, 255, 15);
+/// Graph-unit spacing of both the drawn grid (`draw_grid`) and node-drag
+/// snapping (`DragMode::NodeMove`) — one constant so the grid you see is
+/// exactly the grid nodes snap to, not two independently-tuned values that
+/// can drift apart.
+const GRID_SPACING: f32 = 32.0;
+
+/// Round a graph-space coordinate to the nearest `GRID_SPACING` line.
+pub(crate) fn snap_to_grid(v: f32) -> f32 {
+    (v / GRID_SPACING).round() * GRID_SPACING
+}
 const NODE_BG: Color32 = Color32::new(46, 46, 56, 255);
 const NODE_BG_HOVER: Color32 = Color32::new(56, 56, 69, 255);
 /// Recessed "screen" the preview thumbnail is blitted over (and the letterbox

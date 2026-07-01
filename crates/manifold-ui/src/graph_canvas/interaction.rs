@@ -415,7 +415,10 @@ impl GraphCanvas {
                 let offset = *anchor_offset;
                 let (gx, gy) = self.to_graph(viewport, sx, sy);
                 if let Some(n) = self.nodes.iter_mut().find(|n| n.id == nid) {
-                    n.pos_graph = (gx - offset.0, gy - offset.1);
+                    n.pos_graph = (
+                        snap_to_grid(gx - offset.0),
+                        snap_to_grid(gy - offset.1),
+                    );
                 }
             }
             DragMode::WireFrom { .. } | DragMode::Marquee { .. } => {

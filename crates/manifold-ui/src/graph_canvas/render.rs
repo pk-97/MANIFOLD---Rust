@@ -347,33 +347,42 @@ impl GraphCanvas {
         }
     }
 
+    /// The grid nodes actually snap to (`DragMode::NodeMove`, `snap_to_grid`),
+    /// drawn as real lines rather than dots at each intersection — so what you
+    /// see is what a drag locks to, not a decorative backdrop that happens to
+    /// share a spacing.
     fn draw_grid(&self, ui: &mut dyn Painter, canvas: Rect) {
-        const GRAPH_SPACING: f32 = 32.0;
-        let spacing = GRAPH_SPACING * self.zoom;
+        let spacing = GRID_SPACING * self.zoom;
         if spacing < 8.0 {
             return;
         }
         let viewport = canvas_to_viewport(canvas);
         let (g_min_x, g_min_y) = self.to_graph(viewport, canvas.x, canvas.y);
-        let start_gx = (g_min_x / GRAPH_SPACING).floor() * GRAPH_SPACING;
-        let start_gy = (g_min_y / GRAPH_SPACING).floor() * GRAPH_SPACING;
+        let start_gx = (g_min_x / GRID_SPACING).floor() * GRID_SPACING;
+        let start_gy = (g_min_y / GRID_SPACING).floor() * GRID_SPACING;
+        let line_w = 1.0;
+
         let mut gy = start_gy;
         while {
             let (_, sy) = self.to_screen(viewport, 0.0, gy);
             sy < canvas.y + canvas.h
         } {
-            let mut gx = start_gx;
-            while {
-                let (sx, _) = self.to_screen(viewport, gx, 0.0);
-                sx < canvas.x + canvas.w
-            } {
-                let (sx, sy) = self.to_screen(viewport, gx, gy);
-                if sx >= canvas.x && sy >= canvas.y {
-                    ui.draw_rect(sx - 1.0, sy - 1.0, 2.0, 2.0, GRID_DOT);
-                }
-                gx += GRAPH_SPACING;
+            let (_, sy) = self.to_screen(viewport, 0.0, gy);
+            if sy >= canvas.y {
+                ui.draw_line(canvas.x, sy, canvas.x + canvas.w, sy, line_w, GRID_LINE);
             }
-            gy += GRAPH_SPACING;
+            gy += GRID_SPACING;
+        }
+        let mut gx = start_gx;
+        while {
+            let (sx, _) = self.to_screen(viewport, gx, 0.0);
+            sx < canvas.x + canvas.w
+        } {
+            let (sx, _) = self.to_screen(viewport, gx, 0.0);
+            if sx >= canvas.x {
+                ui.draw_line(sx, canvas.y, sx, canvas.y + canvas.h, line_w, GRID_LINE);
+            }
+            gx += GRID_SPACING;
         }
     }
 
