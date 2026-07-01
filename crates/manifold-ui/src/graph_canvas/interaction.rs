@@ -484,6 +484,18 @@ impl GraphCanvas {
             }
             return;
         }
+        // Expose glyph at a param row's left edge → toggle whether the inner
+        // param feeds the outer performance card (Blender-style on-node expose).
+        // Checked before the row scrub so a click on the dot exposes rather than
+        // scrubbing. Consumes the click either way (even for a handle-less node
+        // that can't be exposed), so the dot never falls through to a scrub.
+        if let Some((node_id, pi)) = self.expose_glyph_under(viewport, sx, sy) {
+            self.select_single(node_id);
+            if let Some(cmd) = self.build_expose_toggle(node_id, pi) {
+                self.pending_actions.push(cmd);
+            }
+            return;
+        }
         // Param row on the node face → start a value scrub for numeric
         // params with a range; for non-scrubbable params just select the
         // node so the inspector sidebar can edit them.
@@ -724,6 +736,32 @@ impl GraphCanvas {
 
     pub fn cursor(&self) -> (f32, f32) {
         self.cursor
+    }
+
+    /// Build the `ToggleNodeParamExpose` for a param row's expose glyph, or
+    /// `None` when the node has no stable handle (anonymous / boundary nodes
+    /// can't be addressed by the exposure command). Captures the inner-param
+    /// metadata (label / range / default / convert / enum labels) the outer-card
+    /// binding needs — byte-identical to the sidebar's expose path, so an on-node
+    /// expose and a sidebar expose produce the same binding.
+    fn build_expose_toggle(&self, node_id: u32, pi: usize) -> Option<GraphEditCommand> {
+        let node = self.find_node(node_id)?;
+        let handle = node.handle.clone()?;
+        let p = node.params.get(pi)?;
+        let (min, max) = p.range.unwrap_or((0.0, 1.0));
+        Some(GraphEditCommand::ToggleNodeParamExpose {
+            node_id: node.node_id.clone(),
+            node_handle: handle,
+            inner_param: p.name.clone(),
+            expose: !p.exposed,
+            label: p.label.clone(),
+            min,
+            max,
+            default_value: p.default_value,
+            convert: param_convert_for_kind(p.kind),
+            is_angle: matches!(p.kind, crate::graph_view::ParamSnapshotKind::Angle),
+            value_labels: p.enum_labels.clone(),
+        })
     }
 
     /// The single focused node id, or `None` when zero or several are

@@ -585,10 +585,27 @@ impl GraphCanvas {
                 TEXT_PRIMARY,
             );
 
-            // Label, left, truncated so it can't collide with the value.
-            let label_budget = (inner_w - value_w - 6.0 * self.zoom).max(0.0);
+            // Expose glyph at the row's left edge (exposable kinds only): a
+            // bright cyan dot when the param feeds the outer performance card, a
+            // dim dot when it's exposable but not yet exposed. Clicking it flips
+            // the exposure (see `on_left_button_down`). The label indents past
+            // the glyph column uniformly, so non-exposable rows stay aligned.
+            if kind_is_exposable(p.kind) {
+                let (gx, gy, gd) = expose_glyph_bounds(sx, row_y, row_h, self.zoom);
+                let col = if p.exposed {
+                    PARAM_EXPOSE_ON
+                } else {
+                    PARAM_EXPOSE_OFF
+                };
+                ui.draw_rounded_rect(gx, gy, gd, gd, col, gd * 0.5);
+            }
+
+            // Label, left (indented past the glyph column), truncated so it
+            // can't collide with the value.
+            let label_x = sx + PARAM_LABEL_X * self.zoom;
+            let label_budget = (sx + sw - pad_x - value_w - 6.0 * self.zoom - label_x).max(0.0);
             let label = elide_to_width(&p.label, text_size, label_budget);
-            ui.draw_text(sx + pad_x, text_y, &label, text_size, TEXT_SECONDARY);
+            ui.draw_text(label_x, text_y, &label, text_size, TEXT_SECONDARY);
 
             // Fill bar under the row for ranged values.
             if let Some(frac) = p.fill {

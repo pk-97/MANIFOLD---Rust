@@ -81,8 +81,8 @@ pub use mapping_popover::MappingPopover;
 // canvas scope level + preview targets off the same UI snapshot the canvas reads.
 pub use model::{node_preview_target, resolve_card_param_node_id, resolve_level};
 pub(crate) use model::{
-    NodeView, ParamView, PortHit, WireView, elide_to_width, find_node_scope, spark_has_variation,
-    text_width, wrap_text,
+    NodeView, ParamView, PortHit, WireView, elide_to_width, expose_glyph_bounds, find_node_scope,
+    kind_is_exposable, param_convert_for_kind, spark_has_variation, text_width, wrap_text,
 };
 
 const HEADER_HEIGHT: f32 = 28.0;
@@ -138,6 +138,16 @@ pub(crate) fn preview_screen_size(aspect: f32) -> (f32, f32) {
 /// their face so you read (and, in a later pass, tune) them where you are,
 /// instead of darting to a side panel.
 const PARAM_ROW_H: f32 = 18.0;
+/// Left padding (graph units) before a param row's content. The expose glyph
+/// sits here; the label starts past it. Shared by render + hit so glyph draw and
+/// click agree. Matches the value/label rows' `pad_x`.
+const PARAM_PAD_X: f32 = 8.0;
+/// Diameter (graph units) of the per-row expose glyph — the Blender-style dot at
+/// a param's left edge that promotes it onto the outer performance card.
+const PARAM_EXPOSE_D: f32 = 7.0;
+/// Left inset (graph units) of a param row's label — past the expose glyph plus
+/// a small gap, so the label never overlaps the dot.
+const PARAM_LABEL_X: f32 = PARAM_PAD_X + PARAM_EXPOSE_D + 4.0;
 /// Pixels of horizontal drag that scrub a value across its full min..max
 /// range when editing a param on the node face. Matches the inspector
 /// sidebar's feel (`DRAG_FULL_RANGE_PX`).
@@ -256,6 +266,12 @@ const MARQUEE_BORDER: Color32 = Color32::new(128, 199, 255, 204);
 /// a ranged value sits between its declared min and max.
 const PARAM_FILL_BG: Color32 = Color32::new(255, 255, 255, 18);
 const PARAM_FILL_FG: Color32 = Color32::new(128, 199, 255, 140);
+/// Expose glyph: a filled bright-cyan dot when the param is on the outer card,
+/// a hollow dim outline when it's exposable but not yet exposed. The cyan is the
+/// card accent (`NODE_BORDER_SELECTED`), so "exposed" reads as the same family as
+/// the performance surface it feeds.
+const PARAM_EXPOSE_ON: Color32 = Color32::new(128, 199, 255, 240);
+const PARAM_EXPOSE_OFF: Color32 = Color32::new(150, 150, 165, 130);
 /// Sparkline trace colour — the same soft cyan as the fill bar, a touch brighter
 /// so the moving line reads against the node body without shouting.
 const SPARKLINE_COLOR: Color32 = Color32::new(140, 209, 255, 217);

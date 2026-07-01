@@ -590,6 +590,129 @@ fn cycle_group_tint_noop_without_a_selected_group() {
     );
 }
 
+// ── On-node expose glyph (Blender-style) ────────────────────────
+
+/// An Enum param over labels `["A","B","C"]`, no declared range, unexposed.
+fn enum_param(name: &str, current: f32) -> crate::graph_view::ParamSnapshot {
+    crate::graph_view::ParamSnapshot {
+        name: name.to_string(),
+        label: name.to_string(),
+        kind: crate::graph_view::ParamSnapshotKind::Enum,
+        default_value: 0.0,
+        current_value: current,
+        range: None,
+        enum_labels: Some(vec!["A".into(), "B".into(), "C".into()]),
+        exposed: false,
+        summary: None,
+        vec_value: None,
+        string_value: None,
+        table_value: None,
+        tooltip: None,
+    }
+}
+
+/// Expand node 1 and return a viewport that culls nothing.
+fn expanded_canvas(param: crate::graph_view::ParamSnapshot) -> (GraphCanvas, Rect) {
+    let mut canvas = GraphCanvas::new();
+    // Expand before the (full-rebuild) snapshot so the param rows lay out.
+    canvas.collapsed.insert(1, false);
+    canvas.set_snapshot(&snapshot_with_param_node("gain", vec![param]));
+    (canvas, Rect::new(0.0, 0.0, 1200.0, 800.0))
+}
+
+/// Screen-space centre of node 1's row-`pi` expose glyph.
+fn glyph_centre(canvas: &GraphCanvas, vp: Rect, pi: usize) -> (f32, f32) {
+    let row = canvas.param_row_rect(vp, 1, pi).expect("row rect");
+    let (gx, gy, gd) = expose_glyph_bounds(row.x, row.y, PARAM_ROW_H * canvas.zoom, canvas.zoom);
+    (gx + gd * 0.5, gy + gd * 0.5)
+}
+
+#[test]
+fn clicking_expose_glyph_emits_toggle_and_selects() {
+    let (mut canvas, vp) = expanded_canvas(float_param("amount", 0.25));
+    let (cx, cy) = glyph_centre(&canvas, vp, 0);
+    canvas.on_left_button_down(vp, cx, cy, 0.0, false);
+
+    // Selecting the node is part of the gesture (so the rest of the UI follows).
+    assert_eq!(canvas.selected_ids(), vec![1]);
+
+    let cmd = canvas
+        .drain_edits()
+        .into_iter()
+        .find_map(|a| match a {
+            GraphEditCommand::ToggleNodeParamExpose {
+                node_handle,
+                inner_param,
+                expose,
+                convert,
+                min,
+                max,
+                default_value,
+                ..
+            } => Some((node_handle, inner_param, expose, convert, min, max, default_value)),
+            _ => None,
+        })
+        .expect("expose toggle emitted");
+    assert_eq!(cmd.0, "gain", "node handle");
+    assert_eq!(cmd.1, "amount", "inner param");
+    assert!(cmd.2, "was unexposed → expose=true");
+    assert!(matches!(cmd.3, crate::types::ParamConvert::Float));
+    assert_eq!((cmd.4, cmd.5), (0.0, 1.0), "range carried");
+    assert_eq!(cmd.6, 0.0, "default carried");
+}
+
+#[test]
+fn clicking_expose_glyph_when_exposed_unexposes() {
+    let mut p = float_param("amount", 0.25);
+    p.exposed = true;
+    let (mut canvas, vp) = expanded_canvas(p);
+    let (cx, cy) = glyph_centre(&canvas, vp, 0);
+    canvas.on_left_button_down(vp, cx, cy, 0.0, false);
+    let expose = canvas.drain_edits().into_iter().find_map(|a| match a {
+        GraphEditCommand::ToggleNodeParamExpose { expose, .. } => Some(expose),
+        _ => None,
+    });
+    assert_eq!(expose, Some(false), "was exposed → expose=false");
+}
+
+#[test]
+fn enum_expose_carries_enum_convert_and_labels() {
+    let (mut canvas, vp) = expanded_canvas(enum_param("mode", 1.0));
+    let (cx, cy) = glyph_centre(&canvas, vp, 0);
+    canvas.on_left_button_down(vp, cx, cy, 0.0, false);
+    let (convert, labels) = canvas
+        .drain_edits()
+        .into_iter()
+        .find_map(|a| match a {
+            GraphEditCommand::ToggleNodeParamExpose {
+                convert,
+                value_labels,
+                ..
+            } => Some((convert, value_labels)),
+            _ => None,
+        })
+        .expect("expose toggle emitted");
+    assert!(matches!(convert, crate::types::ParamConvert::EnumRound));
+    assert_eq!(labels, vec!["A", "B", "C"]);
+}
+
+#[test]
+fn pressing_row_body_scrubs_and_emits_no_expose() {
+    let (mut canvas, vp) = expanded_canvas(float_param("amount", 0.25));
+    // Press on the value side of the row, well past the left-edge glyph.
+    let row = canvas.param_row_rect(vp, 1, 0).expect("row rect");
+    canvas.on_left_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5, 0.0, false);
+    // A numeric row starts a scrub, not an expose.
+    assert!(matches!(canvas.drag_mode, DragMode::ParamScrub { .. }));
+    assert!(
+        canvas
+            .drain_edits()
+            .iter()
+            .all(|a| !matches!(a, GraphEditCommand::ToggleNodeParamExpose { .. })),
+        "row-body press must not toggle exposure"
+    );
+}
+
 // ── Connection type feedback ────────────────────────────────────
 
 #[test]

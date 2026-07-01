@@ -101,6 +101,36 @@ impl GraphCanvas {
         None
     }
 
+    /// Hit-test the expose glyph at a param row's left edge, returning
+    /// `(node_id, param_index)` when the cursor is over the dot of an
+    /// *exposable* param. Built on `param_row_under` + `param_row_rect` +
+    /// `expose_glyph_bounds`, so it can't drift from the drawn glyph. Returns
+    /// `None` for non-exposable rows and for clicks that miss the dot (which
+    /// then fall through to the row scrub). The hit box is padded a couple of
+    /// px past the dot so the small target stays clickable.
+    pub(crate) fn expose_glyph_under(
+        &self,
+        viewport: Rect,
+        sx: f32,
+        sy: f32,
+    ) -> Option<(u32, usize)> {
+        let (node_id, pi) = self.param_row_under(viewport, sx, sy)?;
+        let node = self.find_node(node_id)?;
+        let p = node.params.get(pi)?;
+        if !kind_is_exposable(p.kind) {
+            return None;
+        }
+        let row = self.param_row_rect(viewport, node_id, pi)?;
+        let row_h = PARAM_ROW_H * self.zoom;
+        let (gx, gy, gd) = expose_glyph_bounds(row.x, row.y, row_h, self.zoom);
+        let pad = 2.0 * self.zoom;
+        if sx >= gx - pad && sx <= gx + gd + pad && sy >= gy - pad && sy <= gy + gd + pad {
+            Some((node_id, pi))
+        } else {
+            None
+        }
+    }
+
     /// Screen-space rect of one on-node param row, by `(node_id,
     /// param_index)`. Mirrors `param_row_under`'s layout exactly so an
     /// anchored popover lines up with the row it was opened from. `None`

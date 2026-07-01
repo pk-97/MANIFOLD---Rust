@@ -286,6 +286,70 @@ pub(crate) struct ParamView {
     /// register one. Static per `(type_id, name)`, so it's resolved once
     /// on the topology rebuild and carried forward on value-only refreshes.
     pub(crate) tooltip: Option<String>,
+    /// Whether this param is currently exposed on the outer performance card
+    /// ([`crate::graph_view::ParamSnapshot::exposed`]). Drives the filled /
+    /// hollow expose glyph at the row's left edge; a click on the glyph flips it.
+    pub(crate) exposed: bool,
+    /// Declared default, carried so a click that exposes this param hands the
+    /// new outer-card binding its default — parity with the sidebar's expose
+    /// path (`ps.default_value`).
+    pub(crate) default_value: f32,
+    /// Enum option labels, needed as the outer binding's `value_labels` when an
+    /// enum param is exposed. Empty for non-enum params (`unwrap_or_default`).
+    pub(crate) enum_labels: Vec<String>,
+}
+
+/// The param kinds that can be exposed onto the outer performance card — the
+/// single-slot scalar-ish family. Mirrors the sidebar's `supported` gate
+/// (Color / Vec / String / Table take dedicated editors and are never
+/// single-slot card-exposable). Only these draw an interactive expose glyph on
+/// the node face.
+pub(crate) fn kind_is_exposable(kind: crate::graph_view::ParamSnapshotKind) -> bool {
+    use crate::graph_view::ParamSnapshotKind;
+    matches!(
+        kind,
+        ParamSnapshotKind::Float
+            | ParamSnapshotKind::Angle
+            | ParamSnapshotKind::Frequency
+            | ParamSnapshotKind::Int
+            | ParamSnapshotKind::Bool
+            | ParamSnapshotKind::Enum
+            | ParamSnapshotKind::Trigger
+    )
+}
+
+/// Map a param kind to the outer-binding [`crate::types::ParamConvert`] used
+/// when it's exposed. Mirrors the sidebar's mapping (`graph_editor.rs`) exactly,
+/// so an on-node expose produces a byte-identical outer-card binding.
+pub(crate) fn param_convert_for_kind(
+    kind: crate::graph_view::ParamSnapshotKind,
+) -> crate::types::ParamConvert {
+    use crate::graph_view::ParamSnapshotKind as K;
+    use crate::types::ParamConvert as C;
+    match kind {
+        K::Int => C::IntRound,
+        K::Bool => C::BoolThreshold,
+        K::Enum => C::EnumRound,
+        K::Trigger => C::Trigger,
+        // Float / Angle / Frequency and the never-exposable fallbacks → Float.
+        _ => C::Float,
+    }
+}
+
+/// Screen-space bounds `(x, y, diameter)` of a param row's expose glyph, given
+/// the row's screen-space top-left (`row_x`, `row_top`), the row height, and the
+/// zoom. The single source both the renderer (draw) and the hit-test (click)
+/// read, so the toggle target can never drift from what's drawn.
+pub(crate) fn expose_glyph_bounds(
+    row_x: f32,
+    row_top: f32,
+    row_h: f32,
+    zoom: f32,
+) -> (f32, f32, f32) {
+    let d = super::PARAM_EXPOSE_D * zoom;
+    let gx = row_x + super::PARAM_PAD_X * zoom;
+    let gy = row_top + (row_h - d) * 0.5;
+    (gx, gy, d)
 }
 
 /// What a draggable on-node param needs to turn a horizontal drag into a
@@ -356,6 +420,9 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
         // Baked into the snapshot at translation time (the renderer's
         // `tooltip_for`), so the formatter carries it straight through.
         tooltip: p.tooltip.clone(),
+        exposed: p.exposed,
+        default_value: p.default_value,
+        enum_labels: p.enum_labels.clone().unwrap_or_default(),
     }
 }
 

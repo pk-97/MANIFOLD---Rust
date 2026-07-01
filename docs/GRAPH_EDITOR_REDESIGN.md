@@ -251,3 +251,54 @@ from existing parts:
 - `cargo clippy -p <crate> --all-targets -- -D warnings` before each commit.
 - Unified editor: everything works identically on effect and generator graphs — no fork
   (`feedback_graph_editor_unified_surface`).
+
+## On-node params — the Blender model (2026-07-01 direction)
+
+Peter's call: **kill the editor's bottom "Inner-Node Parameters" sidebar entirely.**
+Every param control + the expose toggle live **on the node face in the canvas**, like
+Blender's shader nodes. Read and tune a param where you are; no darting to a side panel.
+
+Why this isn't from scratch: the canvas **already** renders param rows on the node face
+(label + value + fill bar), scrubs numeric params in place, shows sparklines, and
+collapses. So this is a **migration** — move the sidebar's remaining jobs onto the node,
+then delete the sidebar. The two right-hand panels were never duplicates: the top card is
+the *performance surface* (exposed params only), the bottom was the *authoring picker*
+(every raw param + expose checkbox + table/path/WGSL editors). Only the picker moves onto
+the node; the top performance card stays.
+
+### Phases (each shippable)
+
+1. ✅ **Expose toggle on the node face.** DONE 2026-07-01. A small dot at each exposable
+   param row's left edge — bright cyan = on the outer card, dim = exposable but not.
+   Clicking it emits `ToggleNodeParamExpose`, byte-identical to the old sidebar checkbox
+   (same convert/min/max/default/value_labels), through the same app handler. Row-body
+   click still scrubs. `ParamView` gained `exposed`/`default_value`/`enum_labels`; shared
+   geometry via `expose_glyph_bounds` (render + hit read one source); parity map via
+   `param_convert_for_kind`. Only the scalar-ish "supported" kinds draw a glyph (Color /
+   Vec / String / Table are never single-slot exposable — matches the old `supported` gate).
+   Tests in `graph_canvas/tests.rs`.
+2. ⬜ **Enum / Bool / Trigger editing on the face** — cycle enum, flip bool, fire trigger
+   by clicking the value cell (discrete, no drag). The sidebar's `value_cell_click_to_param`
+   is the parity source; emits `SetGraphNodeParam`.
+3. ⬜ **Color / Vec editing** — swatch + channel editor on the face (a small popover, or
+   inline channel rows). `Color`/`Vec2..4` currently read-only on the face.
+4. ⬜ **String / path + Table + WGSL** — `EditGraphNodeStringParam` (text input),
+   `BrowseGraphNodePath` (native dialog), `EditGraphNodeTableCell` (grid), `EditGraphNodeWgsl`
+   (multiline editor). These open editors anchored on the node row.
+5. ⬜ **Wire-driven / outer-driven state on the row** — the "← wired" / "↳ outer" hints
+   and the read-only lockout the sidebar showed, so an on-node control can't lie about what
+   drives it.
+6. ⬜ **Delete the bottom sidebar** (`GraphEditorPanel` param stack + `GraphEditorNodeView`
+   plumbing). Relocate the "Smart preview" toggle + the scalar-node value inspector (fold
+   into the node face / header). Reclaim the dock space for the canvas.
+
+### Invariants for this work
+
+- **Parity with the sidebar's commands.** Every on-node control must emit the *same*
+  `GraphEditCommand` the sidebar emitted (`feedback_value_level_parity`), so behavior and
+  undo are unchanged — only where you click moves.
+- **One geometry source.** Render and hit-test must read the same layout helper (as Phase 1
+  did with `expose_glyph_bounds`) so a click target can never drift from what's drawn.
+- **Effect and generator graphs identical** (`feedback_graph_editor_unified_surface`).
+- The bottom sidebar stays until Phase 6 — every editor kind must have an on-node home
+  first, or deletion regresses table/path/WGSL editing.
