@@ -1109,12 +1109,21 @@ impl GraphCanvas {
         let span_y = (sy1 - sy0).abs();
         let focused = self.wire_touches_focus(wire);
         // A wire terminating on a cycle-breaking node is a feedback RETURN path
-        // (the "Previous X" recurrent-state taps). It's drawn as a deliberate
-        // return — muted violet, dashed, routed over the top — so the loop
-        // topology reads instead of looking like a wrong-direction data wire.
-        // Layout still excludes it (auto_layout skips these), so this is
-        // purely cosmetic — the endpoints are untouched ground truth.
+        // (the "Previous X" recurrent-state taps). Layout excludes it
+        // (auto_layout skips these), so the source can sit far to the right of
+        // a leftmost Feedback node — a literal wire spanning that whole gap
+        // either runs off-screen or reads as spaghetti on a wide graph.
         let is_return = to.breaks_dependency_cycle;
+
+        // Quiet by default: a small tag at each end naming the other side,
+        // no long-haul arc. Hovering or selecting either endpoint node (the
+        // existing `focused` check) reveals the full routed arc below, for
+        // when you actually want to trace it.
+        if is_return && !focused {
+            self.draw_return_tag(ui, sx0, sy0, &format!("↪ {}", to.title), true);
+            self.draw_return_tag(ui, sx1, sy1, &format!("↩ {}", from.title), false);
+            return;
+        }
 
         // ── Colour + alpha ──
         // Forward wires take the from-port's kind colour (matching the port
@@ -1202,6 +1211,26 @@ impl GraphCanvas {
             }
             prev = curr;
         }
+    }
+
+    /// One endpoint tag for a quiet (unfocused) feedback return — a small
+    /// violet chip naming the other side, sitting just outside the node's
+    /// edge so it reads without a wire drawn under it. `at_source` picks which
+    /// way it hangs: right of the source's output dot, or left of the
+    /// feedback node's input dot, so the two tags always point away from
+    /// their own node and toward where the loop actually goes.
+    fn draw_return_tag(&self, ui: &mut dyn Painter, px: f32, py: f32, label: &str, at_source: bool) {
+        let font = 9.0 * self.zoom;
+        let pad_x = 5.0 * self.zoom;
+        let pad_y = 2.0 * self.zoom;
+        let gap = 6.0 * self.zoom;
+        let text_w = text_width(label, font);
+        let chip_w = text_w + pad_x * 2.0;
+        let chip_h = font + pad_y * 2.0;
+        let chip_x = if at_source { px + gap } else { px - gap - chip_w };
+        let chip_y = py - chip_h * 0.5;
+        ui.draw_rounded_rect(chip_x, chip_y, chip_w, chip_h, RETURN_TAG_BG, chip_h * 0.3);
+        ui.draw_text(chip_x + pad_x, chip_y + pad_y, label, font, RETURN_TAG_TEXT);
     }
 }
 

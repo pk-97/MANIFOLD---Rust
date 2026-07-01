@@ -232,6 +232,11 @@ const RETURN_ARC_CLEAR: f32 = 36.0;
 /// Return paths are dashed: `RETURN_DASH` sampled segments drawn, then the same
 /// count skipped, repeating — a feedback wire at a glance.
 const RETURN_DASH: i32 = 3;
+/// Endpoint-tag chip for a quiet (unfocused) return wire — a dark tint of
+/// `RETURN_WIRE_COLOR` so it reads as the same feedback family without being
+/// as loud as the full arc.
+const RETURN_TAG_BG: Color32 = Color32::new(46, 40, 58, 235);
+const RETURN_TAG_TEXT: [u8; 4] = [200, 188, 219, 255];
 /// Stagger the incoming-wire landing handle by port depth only on nodes with at
 /// least this many inputs, so a dense fan-in (e.g. a ~15-input tracking node)
 /// splays into the input stack instead of overlapping. Small mixers (a/b,
