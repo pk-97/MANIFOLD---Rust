@@ -783,9 +783,6 @@ impl Application {
                 }
             }
         }
-        // The UI-local graph snapshot for the jump-to-node path below — taken
-        // before the `&mut self.graph_canvas` borrow (it returns an owned `Arc`).
-        let editor_ui_snap = self.editor_ui_snapshot();
         if let Some(canvas) = self.graph_canvas.as_mut() {
             let window_size = self
                 .window_registry
@@ -855,27 +852,12 @@ impl Application {
                     {
                         // consumed by the canvas popover
                     } else if in_panel {
-                        // Jump-to-node: a click on a card param's NAME
-                        // in the right lane navigates the centre canvas
-                        // to the node that param is exposed from, so
-                        // the instrument and the graph stay in lockstep.
-                        // Read-only on the card; only the canvas moves.
-                        let mut jumped = false;
-                        if cx >= card_x
-                            && let Some(ed) = self.graph_editor.as_ref()
-                            && let Some(param_id) =
-                                self.editor_card.label_hit(&ed.ui_root.tree, cx, cy)
-                            && let Some(snap) = editor_ui_snap.as_deref()
-                            && let Some(node_id) =
-                                crate::graph_canvas::resolve_card_param_node_id(
-                                    snap, &param_id,
-                                )
-                        {
-                            jumped = canvas.focus_node(snap, &node_id);
-                        }
-                        if !jumped
-                            && let Some(ed) = self.graph_editor.as_mut()
-                        {
+                        // Right lane = the inspector column (left = preview
+                        // monitors): forward the press into its UITree. A card
+                        // click retargets the canvas via the
+                        // EffectCardClicked/GenCardClicked dispatch pass; sliders,
+                        // tabs, chrome and drags all resolve through the inspector.
+                        if let Some(ed) = self.graph_editor.as_mut() {
                             ed.ui_root.input.process_pointer(
                                 &mut ed.ui_root.tree,
                                 Vec2::new(cx, cy),
@@ -971,6 +953,40 @@ impl Application {
         window_id: WindowId,
         delta: MouseScrollDelta,
     ) -> bool {
+        // Right lane = the inspector column: a wheel over it scrolls the inspector
+        // (same `handle_scroll_at` convention as the main window), not the canvas.
+        // The editor rebuilds its tree every present, so updating the scroll offset
+        // here takes effect on the next build_inspector_in_rect. Cursor is tracked
+        // by the canvas; column geometry from the same `Dock` the present reads.
+        let (cx, _cy) = self
+            .graph_canvas
+            .as_ref()
+            .map(|c| c.cursor())
+            .unwrap_or((0.0, 0.0));
+        let card_x = self.graph_editor.as_ref().map(|ed| {
+            let (s, sz) = {
+                let w = &self.window_registry.get(&window_id);
+                w.map(|ws| (ws.window.scale_factor(), ws.window.inner_size()))
+                    .unwrap_or((1.0, winit::dpi::PhysicalSize::new(1, 1)))
+            };
+            let area = manifold_ui::Rect::new(
+                0.0,
+                0.0,
+                sz.width as f32 / s as f32,
+                sz.height as f32 / s as f32,
+            );
+            ed.dock.rects(area).right.x
+        });
+        if let Some(card_x) = card_x
+            && cx >= card_x
+        {
+            let (_dx, dy) = normalize_scroll_delta(delta);
+            if let Some(ed) = self.graph_editor.as_mut() {
+                ed.ui_root.inspector.handle_scroll_at(dy, cx);
+                ed.offscreen_dirty = true;
+            }
+            return true;
+        }
         if let Some(canvas) = self.graph_canvas.as_mut() {
             const LINE_DELTA_PX: f32 = 20.0;
             let dy = match delta {

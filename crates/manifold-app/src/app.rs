@@ -365,19 +365,11 @@ pub struct Application {
     /// `ContentCommand::SetNodePreviewNormalize` to the content thread. Drives
     /// the toggle checkmark each `configure`.
     pub(crate) node_preview_normalize: bool,
-    /// The REAL effect/generator card rendered in the graph editor's left
-    /// lane — the same `ParamCardPanel` the inspector shows, configured each
-    /// editor frame from the edited target's `PresetInstance` /
-    /// `PresetInstance` (via `state_sync::editor_card_config`). This is
-    /// the "card IS the card" surface: the editor lane is the actual
-    /// instrument card, not a read-only mirror, so slider/driver/mapping
-    /// edits happen on it directly.
-    pub(crate) editor_card: manifold_ui::panels::param_card::ParamCardPanel,
-    /// Node-intent dispatch for the editor card's right-click, so the graph
-    /// editor window resolves it through the same fold-up catcher as the main
-    /// inspector (rather than the card's old exact-id `handle_right_click`).
-    /// Repopulated from the card's node ids each editor frame that has events.
-    pub(crate) editor_card_intents: manifold_ui::intent::IntentRegistry,
+    // The editor's right lane is now the WHOLE inspector column
+    // (`Workspace.ui_root.inspector`), not a single watched card. See
+    // `docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md` (Change 3). The former
+    // `editor_card` / `editor_card_intents` / `editor_card_config_hash` fields
+    // were deleted with that swap.
     /// Node-intent dispatch for the editor's right-sidebar inspector
     /// (`graph_editor_panel`) — typed to its own `GraphEditCommand` vocabulary
     /// (the generic `IntentRegistry<A>` from Phase 6.1). Discrete sidebar clicks
@@ -395,15 +387,6 @@ pub struct Application {
     /// the toggle's `SetNodePreviewNormalize` intent on it. `None` when the toggle
     /// wasn't drawn (a non-image node fills the pane with its value inspector).
     pub(crate) editor_smart_preview_toggle_id: Option<manifold_ui::node::NodeId>,
-    /// Hash of the editor card's last-applied `ParamCardConfig`. `configure`
-    /// rebuilds the card's transient UI state (open driver/envelope drawers,
-    /// the mapping drawer), so — exactly like the inspector, whose
-    /// `sync_inspector_data` is gated on structural change — we only reconfigure
-    /// the editor card when its structure or mod-state actually changes, and
-    /// `sync_values` every frame for live values. Param values live outside the
-    /// config (in the separate `values` slice), so a slider drag does NOT bump
-    /// this hash and never resets an in-progress drag or an open drawer.
-    pub(crate) editor_card_config_hash: Option<u64>,
     /// Sideways mapping drawer for the editor card's Author-context rows. Same
     /// `MappingPopover` the canvas uses for on-node rows, but anchored beside the
     /// left-lane card row and opened by its right-edge chevron. Edits emit the
@@ -623,16 +606,6 @@ impl Application {
             editor_ui_graph: None,
             graph_editor_panel: manifold_ui::panels::graph_editor::GraphEditorPanel::new(),
             node_preview_normalize: false,
-            editor_card: {
-                // The editor lane is the authoring surface: Author chrome
-                // (no cog / drag-reorder / perform-mapping menu, plus the
-                // sideways mapping-drawer chevron on mappable rows).
-                let mut card = manifold_ui::panels::param_card::ParamCardPanel::new();
-                card.set_context(manifold_ui::panels::param_card::CardContext::Author);
-                card
-            },
-            editor_card_config_hash: None,
-            editor_card_intents: manifold_ui::intent::IntentRegistry::new(),
             editor_sidebar_intents: manifold_ui::intent::IntentRegistry::new(),
             editor_smart_preview_toggle_id: None,
             editor_mapping_popover: crate::mapping_popover::MappingPopover::new(),

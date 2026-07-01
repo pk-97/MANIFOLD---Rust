@@ -914,6 +914,29 @@ impl Application {
         self.graph_editor_window_id = Some(wid);
         self.graph_canvas = Some(crate::graph_canvas::GraphCanvas::new());
 
+        // Populate the editor's own inspector column immediately so it isn't
+        // blank until the next selection change. Same snapshot the main window's
+        // inspector reads; kept in lockstep thereafter by the tick's gated
+        // re-sync. See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
+        let active_idx = self
+            .active_layer_id
+            .as_ref()
+            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+        if let Some(ed) = self.graph_editor.as_mut() {
+            crate::ui_bridge::sync_project_data(
+                &mut ed.ui_root,
+                &self.local_project,
+                active_idx,
+                &self.selection,
+            );
+            crate::ui_bridge::sync_inspector_data(
+                &mut ed.ui_root,
+                &self.local_project,
+                active_idx,
+                &self.selection,
+            );
+        }
+
         log::info!(
             "[GraphEditor] Opened ({}x{} logical, scale {:.2})",
             logical_w,

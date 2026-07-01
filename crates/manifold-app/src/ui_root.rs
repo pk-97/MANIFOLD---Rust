@@ -595,6 +595,95 @@ impl UIRoot {
         self.built = true;
     }
 
+    /// Build just the inspector column into an explicit `rect` (the disjoint
+    /// `inspector` + `tree` field split kept internal, like `build`). The
+    /// graph-editor window calls this to host the same inspector column in its
+    /// right lane (`dock.right`) — see docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
+    pub fn build_inspector_in_rect(&mut self, rect: Rect) {
+        self.inspector.build_in_rect(&mut self.tree, rect);
+    }
+
+    /// Route pre-drained events through the inspector subset of the main
+    /// event path: overlay (dropdown) routing, node-intent dispatch,
+    /// `inspector.handle_event`, the slider/card-drag loop, and the
+    /// dropdown-open pass. Used by the graph-editor window, which hosts this
+    /// window's inspector column in its right lane but doesn't run the full
+    /// `process_events` (it has no timeline/transport panels). Shares the
+    /// exact routing logic with `process_events`; kept focused so the editor
+    /// doesn't drag in main-window-only handling (viewport, layer headers,
+    /// ⌘⇧A). Returns the inspector's `PanelAction`s for the caller to dispatch.
+    pub fn route_inspector_events(&mut self, events: &[UIEvent]) -> Vec<PanelAction> {
+        // Refresh node-intent dispatch on structural change (the editor rebuilds
+        // its tree each present, so this repopulates each frame that has events).
+        let sv = self.tree.structure_version();
+        if sv != self.intents_structure_version {
+            self.repopulate_intents();
+            self.intents_structure_version = sv;
+        }
+
+        let mut actions = Vec::new();
+        let mut last_click_node: Option<NodeId> = None;
+        for event in events {
+            if let UIEvent::Click { node_id, .. } = event {
+                last_click_node = Some(*node_id);
+            }
+            if let UIEvent::RightClick { pos, .. } = event {
+                self.last_right_click_pos = *pos;
+            }
+            // Open overlays (dropdowns opened from the inspector, e.g. blend mode)
+            // get first crack, then node-intent dispatch, then the inspector.
+            if self.route_overlay_event(event, &mut actions) {
+                self.drain_overlay_selections(&mut actions);
+                continue;
+            }
+            if let Some(action) = self.resolve_intent(event) {
+                actions.push(action);
+                continue;
+            }
+            let mut panel_actions = self.inspector.handle_event(event, &self.tree);
+            actions.append(&mut panel_actions);
+        }
+
+        // Slider / param drags + effect-card reorder (needs &mut tree). Mirrors
+        // the drag loop in `process_events`, inspector-only.
+        for event in events {
+            match event {
+                UIEvent::DragBegin { node_id, .. } => {
+                    self.inspector.try_begin_card_drag(*node_id, &mut self.tree);
+                }
+                UIEvent::Drag { pos, .. } => {
+                    if self.inspector.is_card_drag_active() {
+                        self.inspector.update_card_drag(*pos, &mut self.tree);
+                    } else if self.inspector.has_pressed_target() {
+                        let mut drag_actions = self.inspector.handle_drag(*pos, &mut self.tree);
+                        actions.append(&mut drag_actions);
+                    }
+                }
+                UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
+                    if self.inspector.is_card_drag_active() {
+                        let mut reorder = self.inspector.end_card_drag(&mut self.tree);
+                        actions.append(&mut reorder);
+                    } else if self.inspector.has_pressed_target() {
+                        let mut end = self.inspector.handle_drag_end(&mut self.tree);
+                        actions.append(&mut end);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Intercept dropdown / context-menu / picker triggers and open them here
+        // (same as `process_events`); the rest flow back for dispatch.
+        let mut filtered = Vec::with_capacity(actions.len());
+        for action in actions {
+            if self.try_open_dropdown(&action, last_click_node) {
+                continue;
+            }
+            filtered.push(action);
+        }
+        filtered
+    }
+
     /// Rebuild only scroll-affected panels (layer_headers, viewport, perf_hud).
     /// Static panels (transport, header, footer, inspector) keep their tree nodes.
     ///

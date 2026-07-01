@@ -850,12 +850,6 @@ impl Application {
         // Appended to `actions` after a recorded boundary so the dispatch loop
         // can tell which segment they live in.
         let mut editor_card_actions: Vec<manifold_ui::panels::PanelAction> = Vec::new();
-        // The editor card's right-edge chevron requests the sideways mapping
-        // drawer. It's an editor-local interaction (open a popover anchored on
-        // the row), not a model edit, so it's peeled out of the dispatch stream
-        // and handled below once the `graph_editor` borrow is released. Last
-        // request wins within a frame.
-        let mut pending_open_card_mapping: Option<manifold_core::effects::ParamId> = None;
 
         // 2a. Drain the graph-editor window's UITree events. The editor
         // doesn't go through `UIRoot::process_events` (its panel set is
@@ -921,20 +915,13 @@ impl Application {
                 }
             } else {
                 use manifold_ui::input::UIEvent;
-                // Right-click now resolves through the intent registry (fold-up
-                // catcher), matching the inspector. Refresh it from the card's
-                // current node ids once per frame that carries events; the card
-                // built into `ed.ui_root.tree` last present, so those ids match
-                // this frame's events.
+                // Right lane = the full inspector column (this window's own
+                // `ws.ui_root.inspector`). The one non-inspector interaction left
+                // here is the left preview pane's "Smart preview" auto-gain toggle
+                // (a `GraphEditCommand`, not a `PanelAction`) — register its flip
+                // on the button id captured during the last render and resolve it
+                // off the raw events before the inspector router runs.
                 if !events.is_empty() {
-                    self.editor_card_intents.clear();
-                    self.editor_card
-                        .register_intents(&mut self.editor_card_intents);
-                    // Post on-node-params migration the only editor-panel intent
-                    // left is the node-output "Smart preview" toggle (drawn in the
-                    // left preview pane last present). Register its flip on the
-                    // button id captured during that render; every param control
-                    // now lives on the node face and dispatches through the canvas.
                     self.editor_sidebar_intents.clear();
                     if let Some(id) = self.editor_smart_preview_toggle_id {
                         self.editor_sidebar_intents.on(
@@ -947,52 +934,6 @@ impl Application {
                     }
                 }
                 for event in &events {
-                    // Left-lane card: map editor pointer events to the card's
-                    // node-id methods, exactly as the inspector composite does
-                    // (Click→handle_click, PointerDown→grab, Drag→scrub,
-                    // DragEnd→commit, RightClick→intent resolve). The card ignores
-                    // node_ids that aren't its own, so forwarding every event is
-                    // safe. OpenGraphEditor (the card cog) is dropped here — you're
-                    // already in the editor; CardContext suppresses the button in
-                    // a later pass.
-                    let from_card = match event {
-                        UIEvent::Click { node_id, .. } => self.editor_card.handle_click(*node_id),
-                        UIEvent::PointerDown { node_id, pos, .. } => {
-                            self.editor_card.handle_pointer_down(*node_id, *pos)
-                        }
-                        UIEvent::Drag { pos, .. } => {
-                            self.editor_card.handle_drag(*pos, &mut ed.ui_root.tree)
-                        }
-                        UIEvent::DragEnd { .. } => {
-                            self.editor_card.handle_drag_end(&mut ed.ui_root.tree)
-                        }
-                        UIEvent::RightClick { node_id, .. } => self
-                            .editor_card_intents
-                            .resolve(
-                                &ed.ui_root.tree,
-                                *node_id,
-                                manifold_ui::intent::Gesture::RightClick,
-                            )
-                            .into_iter()
-                            .collect(),
-                        _ => Vec::new(),
-                    };
-                    for a in from_card {
-                        match a {
-                            // Cog is dropped (you're already in the editor).
-                            manifold_ui::panels::PanelAction::OpenGraphEditor(_) => {}
-                            // Chevron → open the sideways mapping drawer; handled
-                            // after this borrow scope ends.
-                            manifold_ui::panels::PanelAction::OpenCardMapping(pid) => {
-                                pending_open_card_mapping = Some(pid);
-                            }
-                            other => editor_card_actions.push(other),
-                        }
-                    }
-                    // The only editor-panel intent left is the node-output
-                    // "Smart preview" toggle — a discrete click resolved through
-                    // the shared registry. All param authoring moved onto the node
-                    // face, so there are no sidebar drags to handle here anymore.
                     if let UIEvent::Click { node_id, .. } = event
                         && let Some(cmd) = self.editor_sidebar_intents.resolve(
                             &ed.ui_root.tree,
@@ -1003,6 +944,13 @@ impl Application {
                         graph_edits.push(cmd);
                     }
                 }
+                // Route the rest through the shared inspector event path — the
+                // same intents + handle_event + drag/card-reorder + dropdown
+                // routing the main window's `process_events` uses — so tabs,
+                // cards, chrome, macros, sliders and drags all work identically.
+                // These actions dispatch against the EDITOR's UIRoot in the
+                // trailing `editor_card_actions` segment below.
+                editor_card_actions.extend(ed.ui_root.route_inspector_events(&events));
             }
         }
         // 2b. Drain editor-canvas actions (wire-drag completions,
@@ -1014,19 +962,10 @@ impl Application {
             actions.extend(canvas.drain_popover_actions());
         }
 
-        // Editor-card chevron requested the sideways mapping drawer: resolve the
-        // binding's current reshape from the edited effect OR generator, anchor
-        // on the row's chevron, and open the popover. The reshape is read from
-        // the instance's per-instance graph override if it has diverged, else
-        // the catalog (effect) / bundled (generator) def. A `None` (e.g. a stale
-        // id) just no-ops.
-        if let Some(pid) = pending_open_card_mapping {
-            self.open_editor_card_mapping(&pid);
-        }
-        // The editor mapping popover emits the same `EffectMapping*` actions the
-        // canvas popover does (range / scale / offset / invert / curve), keyed by
-        // binding id and dispatched against the editor's `watched_graph_target`
-        // (by effect id) in the inline arms below.
+        // The editor mapping popover (canvas on-node rows) emits the same
+        // `EffectMapping*` actions the canvas popover does (range / scale / offset
+        // / invert / curve), keyed by binding id and dispatched against the
+        // editor's `watched_graph_target` in the inline arms below.
         actions.extend(self.editor_mapping_popover.drain_actions());
 
         // 2a. Route viewport tracks-area events through InteractionOverlay.
@@ -1139,19 +1078,13 @@ impl Application {
         let prev_active_layer = self.active_layer_id.clone();
         let prev_sel_version = self.selection.selection_version;
 
-        // Append the editor card's actions as a trailing segment, recording where
-        // it starts. Actions at or past `editor_card_seg_start` were emitted by
-        // the graph editor's card lane and dispatch against the editor's
-        // watched graph identity; everything before is main-window / sidebar and
-        // dispatches against the ambient inspector context.
+        // Append the editor inspector's actions as a trailing segment, recording
+        // where it starts. Actions at or past `editor_card_seg_start` were emitted
+        // by the graph-editor window's inspector column and dispatch against the
+        // EDITOR's own `UIRoot` (its inspector instance) in a second pass below;
+        // everything before is main-window / sidebar and dispatches here.
         let editor_card_seg_start = actions.len();
         actions.extend(editor_card_actions);
-        // Editor-card-segment actions dispatch against the editor's watched
-        // graph identity (effect or generator), by id — not the ambient
-        // inspector context. Cloned once per frame so the dispatch loop can
-        // borrow it while `dispatch` mutably borrows `self`'s other fields.
-        let editor_graph_target: Option<manifold_core::GraphTarget> =
-            self.watched_graph_target.clone();
         // The canvas's current view depth (a path of group ids; empty = root),
         // captured once so the per-node graph edits below target the level the
         // user is actually looking at when they're inside a group.
@@ -1161,7 +1094,7 @@ impl Application {
             .map(|c| c.scope_path().to_vec())
             .unwrap_or_default();
 
-        for (action_idx, action) in actions.iter().enumerate() {
+        for (action_idx, action) in actions.iter().enumerate().take(editor_card_seg_start) {
             // Intercept actions that need Application-level access
             match action {
                 PanelAction::CopyOscAddress(addr) => {
@@ -1823,13 +1756,6 @@ impl Application {
                 _ => {}
             }
             let content_tx = self.content_tx.as_ref().unwrap();
-            // Editor card segment → dispatch with the editor's identity;
-            // main-window / sidebar actions → None (ambient, unchanged).
-            let editor_target = if action_idx >= editor_card_seg_start {
-                editor_graph_target.as_ref()
-            } else {
-                None
-            };
             let result = crate::ui_bridge::dispatch(
                 action,
                 &mut self.local_project,
@@ -1846,13 +1772,75 @@ impl Application {
                 &mut self.audio_crossover_snapshot,
                 &mut self.user_prefs,
                 &mut self.active_inspector_drag,
-                editor_target,
+                None,
             );
             if result.structural_change {
                 needs_structural_sync = true;
             }
             if result.resolution_changed {
                 needs_resolution_resize = true;
+            }
+        }
+
+        // ── Editor inspector segment ────────────────────────────────────────
+        // The graph-editor window hosts its OWN inspector instance
+        // (`ed.ui_root.inspector`), mirroring the main window's selection /
+        // active-layer. Its actions dispatch against the editor's UIRoot with
+        // `editor_target = None` (mirror) so param edits resolve identically and
+        // only the editor's transient tree visuals (collapse, selection
+        // highlight, card-drag) land on the editor tree. Card clicks additionally
+        // retarget the canvas to that card's graph. Card-click retargets are
+        // collected and applied after the editor-workspace borrow drops (they call
+        // `self.watch_*`). See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md.
+        if actions.len() > editor_card_seg_start {
+            let mut retarget_effect: Option<usize> = None;
+            let mut retarget_generator = false;
+            if let Some(ed) = self.graph_editor.as_mut() {
+                let content_tx = self.content_tx.as_ref().unwrap();
+                for action in &actions[editor_card_seg_start..] {
+                    match action {
+                        PanelAction::EffectCardClicked(ei) => retarget_effect = Some(*ei),
+                        PanelAction::GenCardClicked => retarget_generator = true,
+                        _ => {}
+                    }
+                    let result = crate::ui_bridge::dispatch(
+                        action,
+                        &mut self.local_project,
+                        content_tx,
+                        &self.content_state,
+                        &mut ed.ui_root,
+                        &mut self.selection,
+                        &mut self.active_layer_id,
+                        &mut self.slider_snapshot,
+                        &mut self.trim_snapshot,
+                        &mut self.target_snapshot,
+                        &mut self.decay_snapshot,
+                        &mut self.audio_shape_snapshot,
+                        &mut self.audio_crossover_snapshot,
+                        &mut self.user_prefs,
+                        &mut self.active_inspector_drag,
+                        None,
+                    );
+                    if result.structural_change {
+                        needs_structural_sync = true;
+                    }
+                    if result.resolution_changed {
+                        needs_resolution_resize = true;
+                    }
+                }
+            }
+            // Retarget the canvas to the clicked card's graph (opening the window
+            // stays a deliberate cog action, so only retarget when it's open).
+            if self.graph_editor_window_id.is_some() {
+                if let Some(ei) = retarget_effect {
+                    if let Some(eid) = self.resolve_effect_card_id(ei) {
+                        self.watch_effect_graph(eid);
+                    }
+                } else if retarget_generator
+                    && let Some(lid) = self.active_layer_id.clone()
+                {
+                    self.watch_generator_graph(lid);
+                }
             }
         }
 
@@ -2443,6 +2431,26 @@ impl Application {
             );
             needs_structural_sync = true; // Inspector content changed — needs rebuild
         }
+        // Mirror the inspector sync onto the editor window's own inspector
+        // instance so its column stays in lockstep with the main one (same
+        // snapshot, same selection). Gated on `needs_structural_sync`, which is
+        // set by every branch above that re-synced the main inspector — so the
+        // two never drift, and reconfigure (which resets transient card state)
+        // only fires when it does for the main window.
+        if needs_structural_sync && self.graph_editor.is_some() {
+            let active_idx = self
+                .active_layer_id
+                .as_ref()
+                .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            if let Some(ed) = self.graph_editor.as_mut() {
+                crate::ui_bridge::sync_inspector_data(
+                    &mut ed.ui_root,
+                    &self.local_project,
+                    active_idx,
+                    &self.selection,
+                );
+            }
+        }
         // 2a. Per-frame drag polling with auto-scroll.
         // InteractionOverlay.PollMoveDrag — continues edge auto-scroll when mouse is stationary.
         {
@@ -2817,151 +2825,6 @@ impl Application {
         self.frame_count += 1;
     }
 
-    /// Open the editor card's sideways mapping drawer for the binding named by
-    /// `param_id` (its right-edge chevron was clicked). Resolves the binding's
-    /// current range / scale / offset / invert / curve from the edited effect,
-    /// the declared inner-param range from the live snapshot (for the trim track
-    /// span), and anchors the popover on the chevron rect. Effect-only — a
-    /// generator target or an unresolvable id just no-ops.
-    fn open_editor_card_mapping(&mut self, param_id: &str) {
-        // Resolve the param's current mapping values + the trim-track
-        // range from whichever store the editor watches — an effect
-        // (user-binding inline / stock note / fresh seed) or a generator
-        // (note / fresh seed). The drawer edits all of them through the
-        // same command. `None` → don't open.
-        let resolved = match self.watched_graph_target.clone() {
-            Some(manifold_core::GraphTarget::Effect(eid)) => {
-                let Some(fx) = self.local_project.find_effect_by_id(&eid) else {
-                    return;
-                };
-                if let Some(b) = fx
-                    .user_param_bindings()
-                    .into_iter()
-                    .find(|b| b.id == param_id)
-                {
-                    let (node_id, inner_param) = (b.node_id.clone(), b.inner_param.clone());
-                    let range = self
-                        .content_state
-                        .active_graph_snapshot
-                        .as_deref()
-                        .and_then(|snap| {
-                            snap.nodes
-                                .iter()
-                                .find(|n| n.node_id == node_id)
-                                .and_then(|n| n.parameters.iter().find(|p| p.name == inner_param))
-                                .and_then(|p| p.range)
-                        });
-                    (
-                        b.id.clone(), b.label.clone(), b.min, b.max, b.invert, b.curve, b.scale,
-                        b.offset, range,
-                    )
-                } else {
-                    // Stock / recalibrated param: read the current reshape from
-                    // the instance's per-instance graph override if it has
-                    // diverged, else the catalog graph. The trim track spans the
-                    // preset's authored (pre-fork) range from the registry.
-                    let registry_range =
-                        manifold_core::preset_definition_registry::try_get(fx.effect_type())
-                            .and_then(|def| {
-                                def.id_to_index
-                                    .get(param_id)
-                                    .map(|&i| (def.param_defs[i].min, def.param_defs[i].max))
-                            });
-                    let from_def = fx
-                        .graph
-                        .as_ref()
-                        .and_then(|d| full_reshape_from_def(d, param_id))
-                        .or_else(|| {
-                            manifold_renderer::node_graph::loaded_preset_view_by_id(fx.effect_type())
-                                .and_then(|v| full_reshape_from_def(v.canonical_def, param_id))
-                        });
-                    let Some((name, min, max, invert, curve, scale, offset)) = from_def else {
-                        // Not a known stock param (and not a user binding).
-                        return;
-                    };
-                    (
-                        param_id.to_string(), name, min, max, invert, curve, scale, offset,
-                        registry_range,
-                    )
-                }
-            }
-            Some(manifold_core::GraphTarget::Generator(lid)) => {
-                let Some(layer) = self
-                    .local_project
-                    .timeline
-                    .layers
-                    .iter()
-                    .find(|l| l.layer_id == lid)
-                else {
-                    return;
-                };
-                let Some(gp) = layer.gen_params() else {
-                    return;
-                };
-                let registry_range =
-                    manifold_core::preset_definition_registry::try_get(gp.generator_type())
-                        .and_then(|def| {
-                            def.id_to_index
-                                .get(param_id)
-                                .map(|&i| (def.param_defs[i].min, def.param_defs[i].max))
-                        });
-                let from_def = layer
-                    .generator_graph()
-                    .and_then(|d| full_reshape_from_def(d, param_id))
-                    .or_else(|| {
-                        manifold_renderer::node_graph::bundled_preset_def(gp.generator_type())
-                            .and_then(|d| full_reshape_from_def(d, param_id))
-                    });
-                let Some((name, min, max, invert, curve, scale, offset)) = from_def else {
-                    return;
-                };
-                (
-                    param_id.to_string(), name, min, max, invert, curve, scale, offset,
-                    registry_range,
-                )
-            }
-            None => return,
-        };
-        let (binding_id, label, min, max, invert, curve, scale, offset, range) = resolved;
-
-        // Anchor on the chevron (UI-space rect → canvas-space Rect).
-        let Some(ed) = self.graph_editor.as_ref() else {
-            return;
-        };
-        let Some(anchor) = self
-            .editor_card
-            .mapping_chevron_rect(&ed.ui_root.tree, &binding_id)
-        else {
-            return;
-        };
-        let anchor =
-            crate::graph_canvas::Rect::new(anchor.x, anchor.y, anchor.width, anchor.height);
-        // Clip to the editor window's logical rect so the drawer never renders
-        // past an edge.
-        let clip = self
-            .graph_editor_window_id
-            .and_then(|wid| self.window_registry.get(&wid))
-            .map(|w| {
-                let s = w.window.scale_factor() as f32;
-                let sz = w.window.inner_size();
-                crate::graph_canvas::Rect::new(
-                    0.0,
-                    0.0,
-                    (sz.width as f32 / s).max(1.0),
-                    (sz.height as f32 / s).max(1.0),
-                )
-            })
-            .unwrap_or_else(|| crate::graph_canvas::Rect::new(0.0, 0.0, 1280.0, 800.0));
-
-        self.editor_mapping_popover.open(
-            binding_id.to_string(), label, min, max, invert,
-            crate::ui_translate::macro_curve_to_ui(curve), scale, offset, range, anchor, clip,
-        );
-        if let Some(ed) = self.graph_editor.as_mut() {
-            ed.offscreen_dirty = true;
-        }
-    }
-
     /// Render and present one frame to the graph editor window.
     ///
     /// Renders to the editor's offscreen via `UIRenderer` (clear + a
@@ -3244,75 +3107,21 @@ impl Application {
             });
         self.graph_editor_panel.set_node_inspector(node_inspector);
 
-        // The right lane renders the REAL effect/generator card for the edited
-        // target — the same `ParamCardPanel` the inspector shows, configured
-        // from the same `PresetInstance` / `PresetInstance`, resolved by
-        // identity from `watched_graph_target` (effect id or generator layer).
-        // Resolved once per editor frame; `None` (degenerate open state with
-        // no resolvable target) leaves the lane empty.
-        let editor_card_data = crate::ui_bridge::editor_card_config(
-            &self.local_project,
-            self.watched_graph_target.as_ref(),
-            &self.selection,
-        );
+        // Right lane = the WHOLE main-window inspector column (master/layer/clip
+        // tabs, every effect card, generator params, macros, chrome). Same panel
+        // type as the main window, this window's own `ws.ui_root.inspector`
+        // instance, driven by the same `Arc<Project>` snapshot — configured in the
+        // main tick in lockstep with `self.ws`'s inspector, so here we only lay it
+        // out into the right lane. Selecting a card retargets the canvas; edits
+        // mirror both windows next snapshot. Replaces the single watched
+        // `editor_card`. See docs/GRAPH_EDITOR_INSPECTOR_UNIFICATION.md (Change 3).
 
         // Rebuild the editor's UITree from scratch each frame: tree state
         // is small, so a clear + rebuild is cheaper than dirty-tracking and
         // means stale rows can never linger after the target changes.
         ws.ui_root.tree.clear();
-        // Right lane = the card, then the inner-node param list docked right under
-        // it. Track the card's built height so the panel knows where to start.
-        let mut card_h = 0.0_f32;
-        if let Some((config, values)) = editor_card_data.as_ref() {
-            // Gate `configure` on a structural/mod-state change (same discipline
-            // as the inspector's gated `sync_inspector_data`): reconfiguring
-            // resets the card's transient UI state — open drawers, in-progress
-            // drags — so doing it every frame would make the card uninteractive.
-            // Param VALUES are not in the config (they ride `values`), so a drag
-            // leaves this hash unchanged. Hash the config's Debug form: cheap for
-            // one card, and captures every field `configure` consumes without
-            // needing PartialEq across the UI config types.
-            let config_hash = {
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                format!("{config:?}").hash(&mut hasher);
-                hasher.finish()
-            };
-            if self.editor_card_config_hash != Some(config_hash) {
-                self.editor_card.configure(config);
-                self.editor_card_config_hash = Some(config_hash);
-            }
-            self.editor_card.build(&mut ws.ui_root.tree, card_viewport);
-            self.editor_card
-                .sync_values(&mut ws.ui_root.tree, &crate::ui_translate::param_slots_to_ui(values));
-            card_h = self.editor_card.compute_height();
-            // Close the drawer only when the row it anchored on is actually gone
-            // (target changed, param unexposed) — NOT on any config change. The
-            // drawer edits the note live, and the note's min/max now flow into
-            // the card config (so the slider range tracks the drawer), so a
-            // range-handle drag changes the config every frame. Closing on that
-            // dismissed the panel mid-drag. The chevron still resolving means
-            // the row is still there, so keep the drawer open.
-            if self.editor_mapping_popover.is_open()
-                && self
-                    .editor_card
-                    .mapping_chevron_rect(
-                        &ws.ui_root.tree,
-                        self.editor_mapping_popover.binding_id(),
-                    )
-                    .is_none()
-            {
-                self.editor_mapping_popover.close();
-            }
-        } else {
-            self.editor_card_config_hash = None;
-            self.editor_mapping_popover.close();
-        }
-        // The right lane holds only the effect/generator performance card now.
-        // The inner-node param authoring list that used to dock under it is gone —
-        // every param control lives on the node face in the canvas (the on-node
-        // params migration), so the space below the card is reclaimed.
-        let _ = (card_h, card_x, card_width);
+        ws.ui_root.build_inspector_in_rect(card_viewport);
+        let _ = (card_x, card_width);
 
         // Pinned preview monitors in the left column: a backing panel, the two pane
         // titles, and — for a non-image node — the value inspector text in the

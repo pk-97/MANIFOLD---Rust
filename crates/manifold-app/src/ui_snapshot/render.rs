@@ -269,7 +269,6 @@ pub fn render_graph_editor_to_png(
     use manifold_ui::graph_canvas::{GraphCanvas, Rect as CanvasRect};
     use manifold_ui::node::{TextAlign, UIStyle};
     use manifold_ui::panels::graph_editor::{EDITOR_CARD_LANE_WIDTH, SIDEBAR_WIDTH};
-    use manifold_ui::panels::param_card::ParamCardPanel;
     use manifold_ui::{Rect as UiRect, UITree};
 
     assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
@@ -291,22 +290,26 @@ pub fn render_graph_editor_to_png(
 
     let mut tree = UITree::new();
 
-    // Right lane: the real card, built the same way `present_graph_editor_window`
-    // builds it — `editor_card_config` resolves the live `ParamCardConfig` from
-    // the fixture's `GraphTarget::Generator`.
-    let mut card = ParamCardPanel::new();
-    let mut card_h = 0.0_f32;
-    if let Some((config, values)) = crate::ui_bridge::editor_card_config(project, Some(target), selection)
-    {
-        card.configure(&config);
-        card.build(&mut tree, UiRect::new(card_x, 0.0, EDITOR_CARD_LANE_WIDTH, canvas_height));
-        card.sync_values(&mut tree, &crate::ui_translate::param_slots_to_ui(&values));
-        card_h = card.compute_height();
-    }
-    // The right lane holds only the performance card now — the inner-node param
-    // authoring picker that used to dock under it was deleted (params live on the
-    // node face). No divider, no picker.
-    let _ = card_h;
+    // Right lane: the WHOLE inspector column, driven exactly like the live editor
+    // (`present_graph_editor_window`) — a throwaway `UIRoot` synced from the
+    // fixture project, its inspector built into the lane rect and rendered from
+    // its own tree alongside the sidebar `tree` below. Matches the live editor's
+    // full-inspector column (master/layer tabs, cards, chrome, macros).
+    let mut editor_ui = crate::ui_root::UIRoot::new();
+    let active_idx = match target {
+        manifold_core::GraphTarget::Generator(lid) => {
+            project.timeline.layers.iter().position(|l| &l.layer_id == lid)
+        }
+        manifold_core::GraphTarget::Effect(_) => None,
+    };
+    crate::ui_bridge::sync_project_data(&mut editor_ui, project, active_idx, selection);
+    crate::ui_bridge::sync_inspector_data(&mut editor_ui, project, active_idx, selection);
+    editor_ui.build_inspector_in_rect(UiRect::new(
+        card_x,
+        0.0,
+        EDITOR_CARD_LANE_WIDTH,
+        canvas_height,
+    ));
 
     // Left sidebar: backing panel + the two monitor titles + an empty-state
     // hint, laid out with the same math `present_graph_editor_window` uses (16:9
@@ -387,6 +390,8 @@ pub fn render_graph_editor_to_png(
     renderer.begin_frame();
     canvas.render(&mut renderer as &mut dyn Painter, viewport);
     renderer.render_tree(&tree, None);
+    // The inspector column lives in its own tree (built via a throwaway UIRoot).
+    renderer.render_tree(&editor_ui.tree, None);
     // Column dividers, same as the runtime present pass — default widths (this
     // headless path has no interactive drag state).
     let editor_area = UiRect::new(0.0, 0.0, logical_w, logical_h);
