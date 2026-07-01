@@ -81,7 +81,8 @@ pub use mapping_popover::MappingPopover;
 // canvas scope level + preview targets off the same UI snapshot the canvas reads.
 pub use model::{node_preview_target, resolve_card_param_node_id, resolve_level};
 pub(crate) use model::{
-    NodeView, ParamView, PortHit, WireView, find_node_scope, spark_has_variation, wrap_text,
+    NodeView, ParamView, PortHit, WireView, elide_to_width, find_node_scope, spark_has_variation,
+    text_width, wrap_text,
 };
 
 const HEADER_HEIGHT: f32 = 28.0;
@@ -141,10 +142,6 @@ const PARAM_ROW_H: f32 = 18.0;
 /// range when editing a param on the node face. Matches the inspector
 /// sidebar's feel (`DRAG_FULL_RANGE_PX`).
 const PARAM_SCRUB_FULL_RANGE_PX: f32 = 240.0;
-/// Below this zoom, nodes render header + ports only (no param/summary
-/// text): the text would be sub-pixel mush, so the zoomed-out graph reads as
-/// clean colour-coded boxes instead of an unreadable wall.
-const PARAM_LOD_ZOOM: f32 = 0.5;
 const PORT_ROW_HEIGHT: f32 = 18.0;
 const PORT_RADIUS: f32 = 4.0;
 const PORT_COL_WIDTH: f32 = 10.0;

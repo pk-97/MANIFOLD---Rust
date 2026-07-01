@@ -465,6 +465,39 @@ pub(crate) fn node_summary(params: &[crate::graph_view::ParamSnapshot]) -> Optio
     Some(format!("{}: {}", pv.label, pv.value))
 }
 
+/// The bitmap font's advance width as a fraction of the em (font) size.
+/// One source for the char-advance estimate the node body, port labels, and
+/// popovers all use to measure and truncate text.
+pub(crate) const CHAR_W_RATIO: f32 = 0.55;
+
+/// Screen width (logical px) of `text` rendered at `font_size`.
+pub(crate) fn text_width(text: &str, font_size: f32) -> f32 {
+    text.chars().count() as f32 * font_size * CHAR_W_RATIO
+}
+
+/// Trim `text` to fit `budget_px` at `font_size`, appending an ellipsis when
+/// it's clipped; returns the original (borrowed) when it already fits. The
+/// single source for the "label + …" elision the node face repeats for
+/// summaries, param labels, and port names — text scales with zoom and is
+/// clipped to its box, never hidden.
+pub(crate) fn elide_to_width(
+    text: &str,
+    font_size: f32,
+    budget_px: f32,
+) -> std::borrow::Cow<'_, str> {
+    let char_w = (font_size * CHAR_W_RATIO).max(0.01);
+    let max_chars = (budget_px / char_w) as usize;
+    if text.chars().count() > max_chars && max_chars > 1 {
+        let take = max_chars.saturating_sub(1);
+        std::borrow::Cow::Owned(format!(
+            "{}…",
+            text.chars().take(take).collect::<String>()
+        ))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
 /// Wrap `text` to lines no wider than `max_chars`, breaking on spaces.
 /// A single word longer than the limit is left whole — it overflows the
 /// box a touch rather than being chopped mid-word. Only the hover tooltip

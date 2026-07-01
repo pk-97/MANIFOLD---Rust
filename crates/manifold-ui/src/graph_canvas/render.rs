@@ -459,23 +459,25 @@ impl GraphCanvas {
             NODE_CORNER * self.zoom,
         );
 
-        let title_size = (11.0 * self.zoom).max(8.0);
+        // All node text scales linearly with zoom — no font-size floor. A
+        // floor made the text out-scale its shrinking box on zoom-out and
+        // overlap into mush; letting it scale (and clipping to the box, below)
+        // is the real zoom. Titles are elided to the header width so a long
+        // node name can't run past the chevron.
+        let title_size = 11.0 * self.zoom;
+        let title = elide_to_width(&node.title, title_size, sw - 22.0 * self.zoom);
         ui.draw_text(
             sx + 8.0 * self.zoom,
             sy + (header_h - title_size) * 0.5,
-            &node.title,
+            &title,
             title_size,
             TEXT_HEADER,
         );
 
-        // Below the LOD zoom, draw nothing in the body or header-right: the
-        // node reads as a clean colour-coded box (text would be mush).
-        let show_text = self.zoom >= PARAM_LOD_ZOOM;
-
         // Collapse chevron at the header's right edge, for nodes that have
         // params to fold. "+" collapsed (click to expand), "-" expanded.
-        if show_text && !node.params.is_empty() {
-            let chev_size = (11.0 * self.zoom).max(8.0);
+        if !node.params.is_empty() {
+            let chev_size = 11.0 * self.zoom;
             ui.draw_text(
                 sx + sw - 14.0 * self.zoom,
                 sy + (header_h - chev_size) * 0.5,
@@ -488,8 +490,8 @@ impl GraphCanvas {
         // Group "enter" chevron — signals the box opens on double-click.
         // Groups carry no on-face params, so this never collides with the
         // collapse chevron above.
-        if show_text && node.is_group {
-            let chev_size = (13.0 * self.zoom).max(9.0);
+        if node.is_group {
+            let chev_size = 13.0 * self.zoom;
             ui.draw_text(
                 sx + sw - 16.0 * self.zoom,
                 sy + (header_h - chev_size) * 0.5,
@@ -528,7 +530,7 @@ impl GraphCanvas {
         let body_top = sy + header_h + preview_h;
 
         let row_h = PARAM_ROW_H * self.zoom;
-        let text_size = (9.0 * self.zoom).max(7.0);
+        let text_size = 9.0 * self.zoom;
         let pad_x = 8.0 * self.zoom;
         let inner_w = sw - 2.0 * pad_x;
 
@@ -536,7 +538,7 @@ impl GraphCanvas {
         // has been moving the node's primary knob, a small sparkline of its
         // recent history on the right — so a folded node still shows its key
         // value AND whether something is modulating it, without the full wall.
-        if show_text && node.collapsed {
+        if node.collapsed {
             let text_y = body_top + 2.0 * self.zoom;
             // Reserve the right edge for a sparkline if this node has a trace.
             let hist = self
@@ -560,35 +562,21 @@ impl GraphCanvas {
             }
             if let Some(summary) = node.summary.as_deref() {
                 let avail_w = (inner_w - spark_w - 4.0 * self.zoom).max(1.0);
-                let max_chars = (avail_w / (text_size * 0.55)) as usize;
-                let line: std::borrow::Cow<'_, str> =
-                    if summary.chars().count() > max_chars && max_chars > 1 {
-                        let take = max_chars.saturating_sub(1);
-                        std::borrow::Cow::Owned(format!(
-                            "{}…",
-                            summary.chars().take(take).collect::<String>()
-                        ))
-                    } else {
-                        std::borrow::Cow::Borrowed(summary)
-                    };
+                let line = elide_to_width(summary, text_size, avail_w);
                 ui.draw_text(sx + pad_x, text_y, &line, text_size, TEXT_SECONDARY);
             }
         }
 
         // Expanded: every param row — label + value with a fill bar under
         // ranged values, each draggable in place (see ParamScrub).
-        let expanded_params: &[ParamView] = if show_text && !node.collapsed {
-            &node.params
-        } else {
-            &[]
-        };
+        let expanded_params: &[ParamView] = if node.collapsed { &[] } else { &node.params };
         for (i, p) in expanded_params.iter().enumerate() {
             let row_y = body_top + i as f32 * row_h;
             let text_y = row_y + 2.0 * self.zoom;
 
             // Value, right-aligned. Measured first so the label can be
             // truncated against the space the value leaves.
-            let value_w = p.value.chars().count() as f32 * text_size * 0.55;
+            let value_w = text_width(&p.value, text_size);
             ui.draw_text(
                 sx + sw - pad_x - value_w,
                 text_y,
@@ -599,18 +587,7 @@ impl GraphCanvas {
 
             // Label, left, truncated so it can't collide with the value.
             let label_budget = (inner_w - value_w - 6.0 * self.zoom).max(0.0);
-            let max_chars = (label_budget / (text_size * 0.55)) as usize;
-            let label: std::borrow::Cow<'_, str> = if p.label.chars().count() > max_chars
-                && max_chars > 1
-            {
-                let take = max_chars.saturating_sub(1);
-                std::borrow::Cow::Owned(format!(
-                    "{}…",
-                    p.label.chars().take(take).collect::<String>()
-                ))
-            } else {
-                std::borrow::Cow::Borrowed(p.label.as_str())
-            };
+            let label = elide_to_width(&p.label, text_size, label_budget);
             ui.draw_text(sx + pad_x, text_y, &label, text_size, TEXT_SECONDARY);
 
             // Fill bar under the row for ranged values.
@@ -625,12 +602,12 @@ impl GraphCanvas {
             }
         }
 
-        // Port dots always draw — they're the colour-coded anchors that make a
-        // zoomed-out graph legible as a chain. Port *labels* are gated by the
-        // same LOD as the body text: below `PARAM_LOD_ZOOM` they'd be sub-pixel
-        // and overlap into mush (the exact "cramped" failure), so they drop and
-        // the node reads as clean dotted boxes. Labels return on zoom-in.
-        let port_label_size = (10.0 * self.zoom).max(7.0);
+        // Port dots and their labels always draw and scale with zoom — the
+        // labels are the wire vocabulary, never dropped. Each label is elided
+        // to half the node width (minus the port column) so a long name clips
+        // instead of running across into the opposite column.
+        let port_label_size = 10.0 * self.zoom;
+        let label_budget = (sw * 0.5 - (PORT_COL_WIDTH + 2.0) * self.zoom).max(0.0);
         let port_d = PORT_RADIUS * 2.0 * self.zoom;
         for (i, port) in node.inputs.iter().enumerate() {
             let (px, py) = node.input_port_pos_graph(i);
@@ -643,15 +620,14 @@ impl GraphCanvas {
                 port.color,
                 PORT_RADIUS * self.zoom,
             );
-            if show_text {
-                ui.draw_text(
-                    psx + PORT_COL_WIDTH * self.zoom,
-                    psy - port_label_size * 0.5,
-                    &port.name,
-                    port_label_size,
-                    TEXT_PRIMARY,
-                );
-            }
+            let name = elide_to_width(&port.name, port_label_size, label_budget);
+            ui.draw_text(
+                psx + PORT_COL_WIDTH * self.zoom,
+                psy - port_label_size * 0.5,
+                &name,
+                port_label_size,
+                TEXT_PRIMARY,
+            );
         }
         for (i, port) in node.outputs.iter().enumerate() {
             let (px, py) = node.output_port_pos_graph(i);
@@ -664,16 +640,15 @@ impl GraphCanvas {
                 port.color,
                 PORT_RADIUS * self.zoom,
             );
-            if show_text {
-                let approx_w = port.name.len() as f32 * port_label_size * 0.55;
-                ui.draw_text(
-                    psx - PORT_COL_WIDTH * self.zoom - approx_w,
-                    psy - port_label_size * 0.5,
-                    &port.name,
-                    port_label_size,
-                    TEXT_PRIMARY,
-                );
-            }
+            let name = elide_to_width(&port.name, port_label_size, label_budget);
+            let approx_w = text_width(&name, port_label_size);
+            ui.draw_text(
+                psx - PORT_COL_WIDTH * self.zoom - approx_w,
+                psy - port_label_size * 0.5,
+                &name,
+                port_label_size,
+                TEXT_PRIMARY,
+            );
         }
 
         // Find-a-node: dim nodes that don't match the active search so the
