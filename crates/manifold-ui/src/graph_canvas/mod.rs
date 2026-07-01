@@ -240,15 +240,19 @@ const FANIN_STAGGER_MIN: usize = 6;
 
 const BG_COLOR: Color32 = Color32::new(26, 26, 31, 255);
 const HEADER_BG: Color32 = Color32::new(36, 36, 43, 255);
-/// Faint grid-line colour — same alpha as the old dots; a 1px line at this
-/// alpha reads about as quiet as the dot did, just legible as an actual grid
-/// instead of scattered points.
-const GRID_LINE: Color32 = Color32::new(255, 255, 255, 15);
-/// Graph-unit spacing of both the drawn grid (`draw_grid`) and node-drag
-/// snapping (`DragMode::NodeMove`) — one constant so the grid you see is
-/// exactly the grid nodes snap to, not two independently-tuned values that
-/// can drift apart.
+/// Faint grid-line colour. Toned down further (2026-07-01, from 15) once drawn
+/// as lines rather than dots — a line carries a lot more ink than a 2px dot at
+/// the same spacing, so the same alpha read as louder than intended.
+const GRID_LINE: Color32 = Color32::new(255, 255, 255, 9);
+/// Graph-unit increment node dragging snaps to (`DragMode::NodeMove`). Kept
+/// fine — this is the precision floor, not the visual grid's spacing.
 const GRID_SPACING: f32 = 32.0;
+/// How many snap increments apart the *drawn* grid lines are
+/// (`GRID_SPACING * GRID_LINE_EVERY`). Dragging still snaps at the finer
+/// `GRID_SPACING`; the visible grid is deliberately sparser than that so it
+/// reads as a light reference, not a line for every step (2026-07-01 — the
+/// first pass drew one at every increment and it looked dense/busy).
+const GRID_LINE_EVERY: f32 = 4.0;
 
 /// Round a graph-space coordinate to the nearest `GRID_SPACING` line.
 pub(crate) fn snap_to_grid(v: f32) -> f32 {

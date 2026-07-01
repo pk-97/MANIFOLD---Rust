@@ -347,19 +347,20 @@ impl GraphCanvas {
         }
     }
 
-    /// The grid nodes actually snap to (`DragMode::NodeMove`, `snap_to_grid`),
-    /// drawn as real lines rather than dots at each intersection — so what you
-    /// see is what a drag locks to, not a decorative backdrop that happens to
-    /// share a spacing.
+    /// A sparse reference grid, drawn at `GRID_SPACING * GRID_LINE_EVERY` —
+    /// coarser than the finer increment node dragging actually snaps to
+    /// (`DragMode::NodeMove`, `snap_to_grid`), so it reads as a light visual
+    /// aid rather than a line for every snap step.
     fn draw_grid(&self, ui: &mut dyn Painter, canvas: Rect) {
-        let spacing = GRID_SPACING * self.zoom;
+        let draw_spacing = GRID_SPACING * GRID_LINE_EVERY;
+        let spacing = draw_spacing * self.zoom;
         if spacing < 8.0 {
             return;
         }
         let viewport = canvas_to_viewport(canvas);
         let (g_min_x, g_min_y) = self.to_graph(viewport, canvas.x, canvas.y);
-        let start_gx = (g_min_x / GRID_SPACING).floor() * GRID_SPACING;
-        let start_gy = (g_min_y / GRID_SPACING).floor() * GRID_SPACING;
+        let start_gx = (g_min_x / draw_spacing).floor() * draw_spacing;
+        let start_gy = (g_min_y / draw_spacing).floor() * draw_spacing;
         let line_w = 1.0;
 
         let mut gy = start_gy;
@@ -371,7 +372,7 @@ impl GraphCanvas {
             if sy >= canvas.y {
                 ui.draw_line(canvas.x, sy, canvas.x + canvas.w, sy, line_w, GRID_LINE);
             }
-            gy += GRID_SPACING;
+            gy += draw_spacing;
         }
         let mut gx = start_gx;
         while {
@@ -382,7 +383,7 @@ impl GraphCanvas {
             if sx >= canvas.x {
                 ui.draw_line(sx, canvas.y, sx, canvas.y + canvas.h, line_w, GRID_LINE);
             }
-            gx += GRID_SPACING;
+            gx += draw_spacing;
         }
     }
 
