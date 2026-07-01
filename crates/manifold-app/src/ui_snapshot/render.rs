@@ -297,7 +297,7 @@ pub fn render_graph_editor_to_png(
     if let Some((config, values)) = crate::ui_bridge::editor_card_config(project, Some(target), selection)
     {
         card.configure(&config);
-        card.build(&mut tree, UiRect::new(card_x, 0.0, EDITOR_CARD_LANE_WIDTH, logical_h));
+        card.build(&mut tree, UiRect::new(card_x, 0.0, EDITOR_CARD_LANE_WIDTH, canvas_height));
         card.sync_values(&mut tree, &crate::ui_translate::param_slots_to_ui(&values));
         card_h = card.compute_height();
     }
@@ -323,7 +323,7 @@ pub fn render_graph_editor_to_png(
     );
     inner_panel.build(
         &mut tree,
-        UiRect::new(card_x, panel_top, EDITOR_CARD_LANE_WIDTH, (logical_h - panel_top).max(0.0)),
+        UiRect::new(card_x, panel_top, EDITOR_CARD_LANE_WIDTH, (canvas_height - panel_top).max(0.0)),
     );
 
     // Left sidebar: backing panel + the two monitor titles + an empty-state
@@ -335,7 +335,7 @@ pub fn render_graph_editor_to_png(
         let preview_title_h = 18.0_f32;
         let monitor_aspect = 16.0_f32 / 9.0;
         let avail_w = (SIDEBAR_WIDTH - 2.0 * preview_pad).max(1.0);
-        let max_body_h = (((logical_h) - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
+        let max_body_h = ((canvas_height - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
         let width_bound_h = avail_w / monitor_aspect;
         let (preview_w, preview_h) = if width_bound_h <= max_body_h {
             (avail_w, width_bound_h)
@@ -344,7 +344,7 @@ pub fn render_graph_editor_to_png(
         };
         let preview_x = (SIDEBAR_WIDTH - preview_w) * 0.5;
         let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
-        let mut pane_y = ((logical_h - pane_block_h) * 0.5).max(preview_pad);
+        let mut pane_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
         let node_title_y = pane_y;
         let node_img_y = node_title_y + preview_title_h;
         pane_y = node_img_y + preview_h + preview_pad;
@@ -361,7 +361,7 @@ pub fn render_graph_editor_to_png(
             0.0,
             0.0,
             SIDEBAR_WIDTH,
-            logical_h,
+            canvas_height,
             UIStyle { bg_color: manifold_ui::color::EFFECT_CARD_INNER_BG_C32, ..UIStyle::default() },
         );
         tree.add_label(None, preview_x, node_title_y, preview_w, preview_title_h, "Node Output", title_style);

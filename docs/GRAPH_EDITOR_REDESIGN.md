@@ -61,6 +61,14 @@ the remaining steps (typed wires, inline slider restyle) are still open.
    (shared by the live present pass + headless snapshot). Input: press in the strip
    body scrubs (`SeekToBeat`), press on the play button toggles `Play`/`Pause`;
    scrub-drag state on `Workspace.timeline_scrubbing`.
+   - **Full-width refinement (2026-07-01):** the strip now spans the *entire*
+     bottom edge (`DockRects.bottom` = `area.x, area.width`); the left/right
+     columns are shortened to `canvas_h` and sit *above* it (`DockRects.left/right`
+     height = `canvas_h`, vertical seams stop at the strip). Sidebar/card layout
+     reads `canvas_height` (not `logical_h`) so the columns lift off the strip.
+   - **Spacebar toggles play/pause** in the editor window (`editor_keyboard_input`
+     nav block, reached only when no text field/popover is active) — same
+     `Play`/`Pause` as the strip's button.
 
 Still open from this feedback: **hide-unused sockets + "+N" chip** (issue 4's other
 half — filter unused ports at NodeView construction; ports are name-keyed so

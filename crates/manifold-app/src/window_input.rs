@@ -1195,7 +1195,10 @@ impl Application {
             }
             return true;
         }
-        // Editor window: graph-canvas navigation + debug keys.
+        // Editor window: graph-canvas navigation + debug + transport keys.
+        //   Space → toggle play/pause (preview motion while authoring), same
+        //           as the mini-timeline play button. Reached only when no text
+        //           field / popover is active (those arms returned above).
         //   Esc → leave the current group (pop one scope level), if
         //         the view is inside a group.
         //   `   → toggle the debug overlay HUD.
@@ -1204,6 +1207,15 @@ impl Application {
             use winit::keyboard::{Key, NamedKey};
             let mut handled = false;
             match &logical_key {
+                Key::Named(NamedKey::Space) => {
+                    let cmd = if self.content_state.is_playing {
+                        ContentCommand::Pause
+                    } else {
+                        ContentCommand::Play
+                    };
+                    self.send_content_cmd(cmd);
+                    handled = true;
+                }
                 Key::Named(NamedKey::Escape) => {
                     if let Some(canvas) = self.graph_canvas.as_mut() {
                         handled = canvas.exit_group();

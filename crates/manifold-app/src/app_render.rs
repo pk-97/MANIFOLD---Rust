@@ -3110,9 +3110,11 @@ impl Application {
             .map(|(w, h)| w as f32 / h as f32)
             .unwrap_or(16.0 / 9.0);
         let avail_w = (preview_width - 2.0 * preview_pad).max(1.0);
-        // Height budget so 2×(title + body) + 3 pads fits the window vertically.
+        // Height budget so 2×(title + body) + 3 pads fits the column vertically.
+        // `canvas_height` (not the full window) — the column stops above the
+        // full-width mini-timeline strip.
         let max_body_h =
-            (((logical_h as f32) - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
+            ((canvas_height - 3.0 * preview_pad - 2.0 * preview_title_h) * 0.5).max(1.0);
         let width_bound_h = avail_w / monitor_aspect;
         let (preview_w, preview_h) = if width_bound_h <= max_body_h {
             (avail_w, width_bound_h)
@@ -3136,7 +3138,7 @@ impl Application {
             .unwrap_or(false);
         let show_image = self.last_preview_node.is_some() && preview_has_image;
         let pane_block_h = 2.0 * (preview_title_h + preview_h) + preview_pad;
-        let mut pane_y = (((logical_h as f32) - pane_block_h) * 0.5).max(preview_pad);
+        let mut pane_y = ((canvas_height - pane_block_h) * 0.5).max(preview_pad);
         // Node-output monitor: title row + project-aspect body.
         let node_title_y = pane_y;
         let node_img_y = node_title_y + preview_title_h;
@@ -3144,7 +3146,7 @@ impl Application {
         // Master-out monitor: just below the node pane.
         let master_title_y = pane_y;
         let master_img_y = master_title_y + preview_title_h;
-        let card_viewport = manifold_ui::Rect::new(card_x, 0.0, card_width, logical_h as f32);
+        let card_viewport = manifold_ui::Rect::new(card_x, 0.0, card_width, canvas_height);
 
         // Resolve which `PresetInstance` is being edited and build the
         // panel inputs. An open editor without a resolvable
@@ -3318,7 +3320,7 @@ impl Application {
             card_x,
             panel_top,
             card_width,
-            (logical_h as f32 - panel_top).max(0.0),
+            (canvas_height - panel_top).max(0.0),
         );
         self.graph_editor_panel
             .build(&mut ws.ui_root.tree, panel_viewport);
@@ -3338,13 +3340,14 @@ impl Application {
             };
             let title_x = preview_x;
             // Backing panel for the whole left column so the two centred monitors
-            // sit on a clean, uniform surface rather than a black void.
+            // sit on a clean, uniform surface rather than a black void. Stops at
+            // the column height so it doesn't paint over the bottom strip.
             ws.ui_root.tree.add_panel(
                 None,
                 0.0,
                 0.0,
                 preview_width,
-                logical_h as f32,
+                canvas_height,
                 UIStyle {
                     bg_color: manifold_ui::color::EFFECT_CARD_INNER_BG_C32,
                     ..UIStyle::default()
@@ -3425,7 +3428,7 @@ impl Application {
         // A pending jump-to-node centres now that `set_snapshot` has laid the
         // canvas out for this frame's scope (no-op until the target is present).
         if let Some(canvas) = self.graph_canvas.as_mut() {
-            let vp = crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, logical_h as f32);
+            let vp = crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, canvas_height);
             canvas.resolve_pending_focus(vp);
             // Frame the whole level on editor open / scope change (camera only).
             canvas.apply_pending_fit(vp);

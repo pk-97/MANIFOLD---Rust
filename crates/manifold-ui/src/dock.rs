@@ -55,11 +55,12 @@ pub enum DockEdge {
 /// consumers agree. Disabled edges have zero-size panels and handles.
 #[derive(Debug, Clone, Copy)]
 pub struct DockRects {
-    /// Full-height left column (zero-width if the left panel is hidden).
+    /// Left column, above the bottom strip (zero-width if the panel is hidden).
     pub left: Rect,
-    /// Full-height right column (zero-width if hidden).
+    /// Right column, above the bottom strip (zero-width if hidden).
     pub right: Rect,
-    /// Bottom strip under the canvas only (zero-height if hidden).
+    /// Bottom strip spanning the *full* width, under all three columns
+    /// (zero-height if hidden).
     pub bottom: Rect,
     /// The leftover central region — everything not taken by a panel.
     pub canvas: Rect,
@@ -128,6 +129,10 @@ impl Dock {
     }
 
     /// All panel / canvas / handle rects for `area`, computed together.
+    ///
+    /// The bottom strip spans the full width and sits under all three columns;
+    /// the left/right columns and the canvas are each `canvas_h` tall and sit
+    /// above it. The vertical seams stop at the strip so they don't cross it.
     pub fn rects(&self, area: Rect) -> DockRects {
         let (lw, rw, bh) = self.eff();
         let center_x = area.x + lw;
@@ -138,13 +143,13 @@ impl Dock {
         let bottom_y = area.y_max() - bh;
 
         DockRects {
-            left: Rect::new(area.x, area.y, lw, area.height),
-            right: Rect::new(right_x, area.y, rw, area.height),
-            bottom: Rect::new(center_x, bottom_y, center_w, bh),
+            left: Rect::new(area.x, area.y, lw, canvas_h),
+            right: Rect::new(right_x, area.y, rw, canvas_h),
+            bottom: Rect::new(area.x, bottom_y, area.width, bh),
             canvas: Rect::new(center_x, area.y, center_w, canvas_h),
-            left_handle: Rect::new(center_x - h * 0.5, area.y, h, area.height),
-            right_handle: Rect::new(right_x - h * 0.5, area.y, h, area.height),
-            bottom_handle: Rect::new(center_x, bottom_y - h * 0.5, center_w, h),
+            left_handle: Rect::new(center_x - h * 0.5, area.y, h, canvas_h),
+            right_handle: Rect::new(right_x - h * 0.5, area.y, h, canvas_h),
+            bottom_handle: Rect::new(area.x, bottom_y - h * 0.5, area.width, h),
         }
     }
 
@@ -299,10 +304,15 @@ mod tests {
         assert_eq!(r.canvas.width, 1600.0 - EDITOR_LEFT_DEFAULT - EDITOR_RIGHT_DEFAULT);
         // Bottom strip is on by default; the canvas gives up its height for it.
         assert_eq!(r.canvas.height, 900.0 - d.bottom_h);
+        // The strip spans the FULL width and sits under all three columns.
         assert_eq!(r.bottom.y, r.canvas.y_max());
         assert_eq!(r.bottom.height, d.bottom_h);
-        assert_eq!(r.bottom.x, r.canvas.x);
-        assert_eq!(r.bottom.width, r.canvas.width);
+        assert_eq!(r.bottom.x, 0.0);
+        assert_eq!(r.bottom.width, 1600.0);
+        // Columns are shortened to sit above the strip.
+        assert_eq!(r.left.height, r.canvas.height);
+        assert_eq!(r.right.height, r.canvas.height);
+        assert_eq!(r.left.y_max(), r.bottom.y);
         // Panels abut the canvas with no gap or overlap.
         assert_eq!(r.left.x_max(), r.canvas.x);
         assert_eq!(r.canvas.x_max(), r.right.x);
