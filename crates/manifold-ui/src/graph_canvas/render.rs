@@ -625,6 +625,11 @@ impl GraphCanvas {
             }
         }
 
+        // Port dots always draw — they're the colour-coded anchors that make a
+        // zoomed-out graph legible as a chain. Port *labels* are gated by the
+        // same LOD as the body text: below `PARAM_LOD_ZOOM` they'd be sub-pixel
+        // and overlap into mush (the exact "cramped" failure), so they drop and
+        // the node reads as clean dotted boxes. Labels return on zoom-in.
         let port_label_size = (10.0 * self.zoom).max(7.0);
         let port_d = PORT_RADIUS * 2.0 * self.zoom;
         for (i, port) in node.inputs.iter().enumerate() {
@@ -638,13 +643,15 @@ impl GraphCanvas {
                 port.color,
                 PORT_RADIUS * self.zoom,
             );
-            ui.draw_text(
-                psx + PORT_COL_WIDTH * self.zoom,
-                psy - port_label_size * 0.5,
-                &port.name,
-                port_label_size,
-                TEXT_PRIMARY,
-            );
+            if show_text {
+                ui.draw_text(
+                    psx + PORT_COL_WIDTH * self.zoom,
+                    psy - port_label_size * 0.5,
+                    &port.name,
+                    port_label_size,
+                    TEXT_PRIMARY,
+                );
+            }
         }
         for (i, port) in node.outputs.iter().enumerate() {
             let (px, py) = node.output_port_pos_graph(i);
@@ -657,14 +664,16 @@ impl GraphCanvas {
                 port.color,
                 PORT_RADIUS * self.zoom,
             );
-            let approx_w = port.name.len() as f32 * port_label_size * 0.55;
-            ui.draw_text(
-                psx - PORT_COL_WIDTH * self.zoom - approx_w,
-                psy - port_label_size * 0.5,
-                &port.name,
-                port_label_size,
-                TEXT_PRIMARY,
-            );
+            if show_text {
+                let approx_w = port.name.len() as f32 * port_label_size * 0.55;
+                ui.draw_text(
+                    psx - PORT_COL_WIDTH * self.zoom - approx_w,
+                    psy - port_label_size * 0.5,
+                    &port.name,
+                    port_label_size,
+                    TEXT_PRIMARY,
+                );
+            }
         }
 
         // Find-a-node: dim nodes that don't match the active search so the
