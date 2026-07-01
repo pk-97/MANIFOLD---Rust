@@ -411,6 +411,66 @@ impl Application {
         )));
     }
 
+    /// Resolve an effect card's row index (in the active inspector tab) to its
+    /// stable [`EffectId`]. Mirrors the cog's `OpenGraphEditor` resolution:
+    /// keyed by instance id, tab-aware (Master / Layer|Group / Clip). Takes
+    /// `&mut self` only because the Clip-tab lookup runs through
+    /// `Timeline::find_clip_by_id`, which self-heals its location cache.
+    fn resolve_effect_card_id(&mut self, ei: usize) -> Option<manifold_core::EffectId> {
+        match self.ws.ui_root.inspector.last_effect_tab() {
+            manifold_ui::InspectorTab::Master => self
+                .local_project
+                .settings
+                .master_effects
+                .get(ei)
+                .map(|e| e.id.clone()),
+            manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
+                .active_layer_id
+                .as_ref()
+                .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
+                .and_then(|(_, l)| l.effects.as_ref())
+                .and_then(|effects| effects.get(ei))
+                .map(|e| e.id.clone()),
+            manifold_ui::InspectorTab::Clip => self
+                .selection
+                .primary_selected_clip_id
+                .as_ref()
+                .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
+                .and_then(|c| c.effects.get(ei))
+                .map(|e| e.id.clone()),
+        }
+    }
+
+    /// Point the graph editor at an effect instance: push the watched identity
+    /// to the content thread and cache its catalog-default graph def (so the
+    /// per-card edit commands can lift `instance.graph` from `None` on first
+    /// edit). Does NOT open the window — shared by the card cog (which also
+    /// sets `pending_open_graph_editor`) and selection-follows (retarget-only).
+    fn watch_effect_graph(&mut self, effect_id: manifold_core::EffectId) {
+        self.send_content_cmd(ContentCommand::WatchEffectGraph(Some(effect_id.clone())));
+        self.watched_catalog_default = self.local_project.find_effect_by_id(&effect_id).and_then(
+            |instance| manifold_renderer::node_graph::catalog_graph_def_for(instance.effect_type()),
+        );
+        self.watched_graph_target = Some(manifold_core::GraphTarget::Effect(effect_id));
+    }
+
+    /// Point the graph editor at a layer's generator graph. Caches the bundled
+    /// preset JSON for the layer's generator type as the catalog default. Does
+    /// NOT open the window — shared by the generator-card cog and
+    /// selection-follows.
+    fn watch_generator_graph(&mut self, layer_id: manifold_core::LayerId) {
+        self.send_content_cmd(ContentCommand::WatchGeneratorGraph(Some(layer_id.clone())));
+        self.watched_catalog_default = self
+            .local_project
+            .timeline
+            .find_layer_by_id(&layer_id)
+            .map(|(_, l)| l.generator_type().clone())
+            .filter(|gt| !gt.is_none())
+            .and_then(|gt| manifold_renderer::node_graph::bundled_preset_json(&gt))
+            .and_then(|json| serde_json::from_str(&json).ok());
+        self.watched_graph_target = Some(manifold_core::GraphTarget::Generator(layer_id));
+    }
+
     pub(crate) fn tick_and_render(&mut self) {
         let dt = self.frame_timer.consume_tick();
         let realtime = self.frame_timer.realtime_since_start();
@@ -1149,87 +1209,35 @@ impl Application {
                     continue;
                 }
                 PanelAction::OpenGeneratorGraphEditor => {
-                    // Ask the content thread to snapshot the active
-                    // layer's generator graph and set the unified
-                    // watched_graph_target so every PanelAction edit
-                    // handler downstream dispatches against the
-                    // generator graph rather than an effect.
+                    // Ask the content thread to snapshot the active layer's
+                    // generator graph and set the unified watched_graph_target
+                    // so every downstream edit dispatches against the generator
+                    // graph rather than an effect. Shared with selection-follows
+                    // via `watch_generator_graph`; the cog additionally opens
+                    // the window.
                     if let Some(lid) = self.active_layer_id.clone() {
-                        self.send_content_cmd(ContentCommand::WatchGeneratorGraph(Some(
-                            lid.clone(),
-                        )));
-                        self.watched_graph_target =
-                            Some(manifold_core::GraphTarget::Generator(lid.clone()));
-                        // Cache the catalog default — the bundled JSON
-                        // for the layer's generator type — so the edit
-                        // commands can lift None → default on first edit.
-                        self.watched_catalog_default = self
-                            .active_layer_id
-                            .as_ref()
-                            .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
-                            .map(|(_, l)| l.generator_type().clone())
-                            .filter(|gt| !gt.is_none())
-                            .and_then(|gt| {
-                                manifold_renderer::node_graph::bundled_preset_json(&gt)
-                            })
-                            .and_then(|json| serde_json::from_str(&json).ok());
+                        self.watch_generator_graph(lid);
                     }
                     self.pending_open_graph_editor = true;
                     continue;
                 }
                 PanelAction::OpenGraphEditor(ei) => {
-                    // Resolve `ei` (effect index in the active inspector
-                    // tab) to the effect's stable `EffectId`, then ask
-                    // the content thread to start snapshotting that
-                    // specific instance's graph. Keyed by instance id —
-                    // not type id — so two cards of the same effect type
-                    // can produce independent snapshots once Phase 3
-                    // editing lands.
-                    let tab = self.ws.ui_root.inspector.last_effect_tab();
-                    let effect_id = match tab {
-                        manifold_ui::InspectorTab::Master => self
-                            .local_project
-                            .settings
-                            .master_effects
-                            .get(*ei)
-                            .map(|e| e.id.clone()),
-                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Group => self
-                            .active_layer_id
-                            .as_ref()
-                            .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
-                            .and_then(|(_, l)| l.effects.as_ref())
-                            .and_then(|effects| effects.get(*ei))
-                            .map(|e| e.id.clone()),
-                        manifold_ui::InspectorTab::Clip => self
-                            .selection
-                            .primary_selected_clip_id
-                            .as_ref()
-                            .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
-                            .and_then(|c| c.effects.get(*ei))
-                            .map(|e| e.id.clone()),
-                    };
-                    if let Some(eid) = effect_id.clone() {
-                        self.send_content_cmd(ContentCommand::WatchEffectGraph(Some(eid)));
+                    // Resolve `ei` (effect index in the active inspector tab) to
+                    // the effect's stable `EffectId`, then start snapshotting
+                    // that specific instance's graph. Keyed by instance id — not
+                    // type id — so two cards of the same effect type produce
+                    // independent snapshots. `watched_graph_target` is the sole
+                    // identity for every editor-card edit and the exposure panel,
+                    // so clip-scoped effects are addressed with no positional
+                    // fallback. Shared with selection-follows via
+                    // `watch_effect_graph`; the cog additionally opens the window.
+                    match self.resolve_effect_card_id(*ei) {
+                        Some(eid) => self.watch_effect_graph(eid),
+                        None => {
+                            self.watched_graph_target = None;
+                            self.watched_catalog_default = None;
+                        }
                     }
-                    // Phase 4: capture the watched effect's id + its
-                    // catalog-default graph def so the per-card editing
-                    // commands (AddGraphNode, ConnectPorts, ...) can
-                    // lift `instance.graph` from `None` on first edit
-                    // without round-tripping through the renderer.
-                    self.watched_graph_target =
-                        effect_id.clone().map(manifold_core::GraphTarget::Effect);
-                    self.watched_catalog_default = effect_id.as_ref().and_then(|eid| {
-                        let instance = self.local_project.find_effect_by_id(eid)?;
-                        manifold_renderer::node_graph::catalog_graph_def_for(
-                            instance.effect_type(),
-                        )
-                    });
-                    // `watched_graph_target` (set above to `Effect(effect_id)`)
-                    // is the sole identity for the edited instance — master,
-                    // layer, or clip. Every editor-card edit and the
-                    // right-sidebar exposure panel resolve through it by id, so
-                    // clip-scoped effects are addressed correctly with no
-                    // positional fallback.
                     self.pending_open_graph_editor = true;
                     continue;
                 }
@@ -1775,6 +1783,37 @@ impl Application {
                     self.send_content_cmd(ContentCommand::ResetBpm);
                     self.needs_rebuild = true;
                     continue;
+                }
+                // ── Selection-follows ──────────────────────────────────────
+                // Clicking a card in the main inspector retargets an ALREADY
+                // OPEN graph editor to that card's graph, so the editor surface
+                // tracks the selection ("click an effect → you're on its
+                // graph"). The cog (OpenGraphEditor / OpenGeneratorGraphEditor)
+                // still owns OPENING the window; these arms only retarget. No
+                // `continue` — fall through to `ui_bridge::dispatch` so the
+                // card's own selection visuals still apply. When no editor is
+                // open, this is a no-op and opening stays a deliberate cog
+                // action (keeps the authoring/perform boundary intact).
+                //
+                // Gated to the MAIN-window segment (`action_idx <
+                // editor_card_seg_start`): the editor's own card lane emits the
+                // same two actions, and resolving those against the main
+                // inspector's tab/selection would retarget to the wrong graph.
+                PanelAction::EffectCardClicked(ei) => {
+                    if action_idx < editor_card_seg_start
+                        && self.graph_editor_window_id.is_some()
+                        && let Some(eid) = self.resolve_effect_card_id(*ei)
+                    {
+                        self.watch_effect_graph(eid);
+                    }
+                }
+                PanelAction::GenCardClicked => {
+                    if action_idx < editor_card_seg_start
+                        && self.graph_editor_window_id.is_some()
+                        && let Some(lid) = self.active_layer_id.clone()
+                    {
+                        self.watch_generator_graph(lid);
+                    }
                 }
                 _ => {}
             }
