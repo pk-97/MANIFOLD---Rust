@@ -85,7 +85,14 @@ pub(crate) use model::{
 };
 
 const HEADER_HEIGHT: f32 = 28.0;
-const NODE_WIDTH: f32 = 300.0;
+/// Node body width in graph units. Compact by design (was 300): a narrower node
+/// is also a *shorter* node, since the always-on preview screen is sized to
+/// `NODE_WIDTH - 2·PREVIEW_PAD` at the project aspect — so shrinking width cuts
+/// both dimensions and lets a multi-column graph `zoom_to_fit` well above the
+/// old 0.25 floor, i.e. read at an authorable zoom instead of a mush. On-node
+/// param rows and the title truncate to fit. (True per-node content-sizing is a
+/// later refinement; this uniform reduction is the high-leverage first step.)
+const NODE_WIDTH: f32 = 210.0;
 const NODE_HEADER_HEIGHT: f32 = 22.0;
 /// Padding around the preview strip inside a node, so the thumbnail reads as a
 /// recessed screen rather than a fill bleeding to the node edges.
@@ -143,9 +150,9 @@ const PORT_RADIUS: f32 = 4.0;
 const PORT_COL_WIDTH: f32 = 10.0;
 const NODE_CORNER: f32 = 6.0;
 
-// Auto-layout grid spacing. Wide enough that 300px nodes never touch
-// horizontally (NODE_WIDTH + ~60px breathing room for the wires between cols).
-const COL_SPACING: f32 = 360.0;
+// Auto-layout grid spacing: NODE_WIDTH + ~60px breathing room for the wires
+// between columns, so nodes never touch horizontally.
+const COL_SPACING: f32 = 270.0;
 const LAYOUT_ORIGIN: (f32, f32) = (60.0, 60.0);
 /// Vertical gap between two stacked nodes (or routing lanes) within a
 /// column. Node heights vary, so the layout spaces by `height + VGAP`
