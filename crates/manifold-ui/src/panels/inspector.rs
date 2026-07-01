@@ -1719,10 +1719,11 @@ impl InspectorCompositePanel {
         }
     }
 
-}
-
-impl Panel for InspectorCompositePanel {
-    fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
+    /// Build the whole inspector column into an explicit `rect`, decoupled from
+    /// `ScreenLayout::inspector()` so the graph-editor window can host the same
+    /// column in its right lane (`dock.right`). `Panel::build` is the thin
+    /// wrapper that passes `layout.inspector()`.
+    pub fn build_in_rect(&mut self, tree: &mut UITree, rect: Rect) {
         self.cache_first_node = tree.count();
 
         // Add-effect button ids are reassigned by node index every rebuild, but
@@ -1759,7 +1760,6 @@ impl Panel for InspectorCompositePanel {
             card.clear_nodes();
         }
 
-        let rect = layout.inspector();
         if rect.width <= 0.0 {
             return;
         }
@@ -1959,6 +1959,12 @@ impl Panel for InspectorCompositePanel {
         self.update_scrollbar(tree);
 
         self.cache_node_count = tree.count() - self.cache_first_node;
+    }
+}
+
+impl Panel for InspectorCompositePanel {
+    fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
+        self.build_in_rect(tree, layout.inspector());
     }
 
     fn update(&mut self, _tree: &mut UITree) {

@@ -1,6 +1,8 @@
 # Graph Editor ↔ Main Inspector Unification
 
-**Status:** Change 2 (selection-follows) SHIPPED 2026-07-01. Change 1 (inspector reuse) planned.
+**Status:** Change 2 (selection-follows) SHIPPED 2026-07-01. Change 3 (full
+inspector column in the editor) IN PROGRESS 2026-07-01 — supersedes the narrower
+Change 1 below.
 **Related:** `docs/GRAPH_EDITOR_REDESIGN.md`, `project_graph_editor_redesign`, `project_binding_unification_design`, `feedback_graph_editor_unified_surface`
 
 > **Shipped — selection-follows.** Clicking an effect/generator card in the main
@@ -12,6 +14,92 @@
 > action segment (`action_idx < editor_card_seg_start`) so the editor's own card
 > lane can't misfire a retarget, and to `graph_editor_window_id.is_some()` so a
 > closed editor stays closed (opening remains a deliberate cog action).
+
+---
+
+## Change 3 — Full inspector column in the editor (the current direction)
+
+**Decision (2026-07-01).** The editor's right lane stops being a single watched
+card (`editor_card: ParamCardPanel`) and becomes the **whole inspector column** —
+the same `InspectorCompositePanel` the main window shows: master / layer / clip
+tabs, every effect card, generator params, macros, chrome. The editor keeps its
+own **preview monitors** (left) and **mini-timeline** (bottom) as they are; only
+the right lane changes. (Scope narrowed from "full main-UI shell" to
+"inspector column only, existing mini-timeline is fine for now" — Peter, same day.)
+
+### "Literally the same object" — what that resolves to
+
+Not one shared instance. A panel builds its nodes into **one** `UITree`, and each
+window owns its own tree + offscreen — a single `InspectorCompositePanel` can hold
+only one window's node ids at a time (this holds even though both `UIRoot`s live
+on the same UI thread). So it is the **same panel type, driven by the same
+`Arc<Project>` snapshot**: identical look, identical data, edits reflect both ways
+on the next snapshot. Behaviourally one instrument in two windows; structurally
+two instances over one source of truth. Consistent with the Change-1 ruling — no
+pointer / shared-widget scheme, and none should be added (it would be forbidden
+cross-tree shared state).
+
+### Why this is mostly wiring, not new infrastructure
+
+- **The editor window already owns a full `UIRoot`** (`Workspace.ui_root`) with an
+  unused `inspector: InspectorCompositePanel` field — the second instance already
+  exists.
+- **Sync is window-agnostic.** `sync_inspector_data(ui: &mut UIRoot, project, …)`
+  configures any `UIRoot`'s inspector from the snapshot. Call it against the
+  editor's `ws.ui_root` each editor frame.
+- **Dispatch is already editor-aware.** `dispatch_inspector(…, editor_target)` +
+  `editor_dispatch_context` route a card action to the editor's watched target
+  today (that's how the single `editor_card` works). The full inspector emits the
+  same action vocabulary — more of it (chrome, macros, tabs, add-effect, card
+  drag-reorder), each of which already has a dispatch arm.
+
+### The seams (where real code changes)
+
+1. **Build-to-rect.** `InspectorCompositePanel::build` keys every rect off
+   `layout.inspector()` (`inspector.rs:1762`, plus type-in/drag helpers at ~2605,
+   ~2794). Decouple: add `build_in_rect(tree, rect)`; `Panel::build` becomes
+   `build_in_rect(tree, layout.inspector())`. The editor passes `dock.right`. The
+   two helper sites take the same rect (thread it, don't re-read `layout`).
+2. **Present pass.** `present_graph_editor_window` (`app_render.rs`) swaps the
+   `editor_card` build/sync block for: `sync_inspector_data(&mut ws.ui_root, …)`
+   then `ws.ui_root.inspector.build_in_rect(&mut ws.ui_root.tree, dock.right)`.
+   The single-card resolver (`editor_card_config`), `editor_card_config_hash`,
+   and the `editor_card` field are deleted.
+3. **Input.** The editor's pointer/scroll/drag path (`window_input.rs`
+   `editor_mouse_input` / `editor_cursor_moved` / `editor_mouse_wheel`) currently
+   only feeds `process_pointer` for the one card. Extend it to drive the full
+   inspector interaction set the way `UIRoot::process_events` does for the main
+   window: click → drain → dispatch, `inspector.handle_drag[_end]` for slider/param
+   drags, `inspector.handle_scroll` / `try_scroll_in_place` for the wheel,
+   `try_begin_card_drag` / `update_card_drag` / `end_card_drag` for reorder.
+4. **Selection-follows from the editor.** Clicking a card in the *editor's*
+   inspector must retarget the canvas (set `watched_graph_target`, send
+   `WatchEffectGraph` / `WatchGeneratorGraph`) — the same retarget helper the main
+   window uses, now reachable from the editor's action drain.
+5. **Editor dispatch context.** Every inspector action dispatched from the editor
+   passes `editor_target = watched_graph_target` so modulation/param arms resolve
+   against the edited graph, not the main window's selection.
+
+### What deletes
+
+`editor_card` (the single `ParamCardPanel`), `editor_card_config_hash`,
+`editor_card_config` resolver, and the jump-to-node-by-card-label special-case that
+only existed because the right lane held one card. The full inspector's own card →
+canvas retarget replaces it.
+
+## Unified node UI — the on-node controls must match the inspector
+
+**Mandate (2026-07-01).** The node faces in the canvas and the inspector cards
+must read as **one system**. The on-node param rows (name, value cell, slider,
+checkbox, T/~/A modulation glyphs) use the **same UI elements, theme tokens,
+sliders, fonts, and text sizes** as `param_slider_shared` / `ParamCardPanel` —
+not a parallel look. Today the node rows are a thinner, differently-styled
+parallel (see the screenshot: node rows vs. the polished right-lane card). Bring
+them onto the shared widget vocabulary so a slider on a node and the same slider
+on the card are pixel-identical. Concretely: shared `color::` tokens (no bespoke
+node greys), `param_slider_shared` for the slider + value cell, `color::FONT_*`
+sizes, the same T/~/A glyph set and hit-targets. Any new node-face control starts
+from the card widgets, never a fork.
 
 ## Goal
 
@@ -66,7 +154,13 @@ out of sync, it's this-by-design, not a bug.
 
 ---
 
-## Change 1 — Inspector reuse
+## Change 1 — Inspector reuse (SUPERSEDED by Change 3)
+
+> Change 1 planned reusing just the `ParamCard` *widget*, bound to raw node
+> params, inside the editor's own thin param stack. Change 3 goes further: the
+> editor hosts the entire real inspector column, so the node-param adapter below
+> is no longer the plan. Kept for the T/~/A-on-node-params analysis, which still
+> informs the Unified-node-UI work.
 
 ### The binding adapter
 
