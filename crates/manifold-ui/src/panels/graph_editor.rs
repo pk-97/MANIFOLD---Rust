@@ -95,25 +95,10 @@ pub enum GraphEditorParamKind {
     Other,
 }
 
-/// Whether a String param's name looks like a filesystem path, so the inspector
-/// offers a native Browse picker rather than treating it as free text.
-fn is_path_param(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    ["folder", "path", "file", "dir"]
-        .iter()
-        .any(|k| n.contains(k))
-}
-
-/// Compact display for a `Table` cell — integers without a decimal point,
-/// fractionals to three places with trailing zeros trimmed, so the grid stays
-/// narrow.
-fn fmt_table_cell(v: f32) -> String {
-    if v == v.trunc() && v.abs() < 1.0e6 {
-        format!("{}", v as i64)
-    } else {
-        crate::fmt::fmt_trimmed(v, 3)
-    }
-}
+// Path-param detection and table-cell formatting are shared with the node
+// canvas (the on-node editors classify + format a param identically). One
+// definition each in `graph_canvas::model`.
+use crate::graph_canvas::{fmt_table_cell, is_path_param};
 
 impl GraphEditorParamKind {
     /// Component count for the multi-component (colour / vector) kinds, else 0.

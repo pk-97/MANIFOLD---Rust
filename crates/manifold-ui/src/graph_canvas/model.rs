@@ -140,6 +140,12 @@ pub(crate) struct NodeView {
     /// `preview_node_id` is `Some`. Recomputed on a topology rebuild and
     /// whenever the project aspect changes ([`GraphCanvas::set_preview_aspect`]).
     pub(crate) preview_screen: Option<(f32, f32)>,
+    /// Custom WGSL kernel source for a `wgsl_compute*` node, or `None` for every
+    /// other node. Its presence gives an expanded node an "Edit Code…" footer
+    /// strip whose click opens the multiline kernel editor (`EditGraphNodeWgsl`).
+    /// Mirrors [`crate::graph_view::NodeSnapshot::wgsl_source`]; stable per node,
+    /// so it's set once on the topology rebuild. (Phase 4.)
+    pub(crate) wgsl_source: Option<String>,
 }
 
 /// Whether a port carries an image (the only kind the thumbnail atlas captures).
@@ -216,9 +222,33 @@ impl NodeView {
             base + self.body_h() + port_rows * PORT_ROW_HEIGHT + 6.0
         } else {
             // Expanded: one uniform row per NodeRow — ports live inline, so no
-            // separate band.
-            base + self.rows.len() as f32 * PARAM_ROW_H + 6.0
+            // separate band. A `wgsl_compute` node adds an "Edit Code…" footer
+            // strip below the rows (opens the kernel editor).
+            base + self.rows.len() as f32 * PARAM_ROW_H
+                + self.wgsl_footer_h()
+                + 6.0
         }
+    }
+
+    /// Height of the expanded "Edit Code…" footer strip, or `0` for a node with
+    /// no custom WGSL kernel. Only an expanded node draws the footer; a collapsed
+    /// node hides it (expand to edit the kernel).
+    pub(crate) fn wgsl_footer_h(&self) -> f32 {
+        if self.wgsl_source.is_some() && !self.collapsed {
+            WGSL_FOOTER_H
+        } else {
+            0.0
+        }
+    }
+
+    /// Y offset (from the node top) of the "Edit Code…" footer strip — below the
+    /// header, preview band, and all param rows. `None` unless this is an
+    /// expanded node carrying a custom WGSL kernel. The single geometry source
+    /// the renderer draws and the hit-test clicks, so they can't drift.
+    pub(crate) fn wgsl_footer_offset(&self) -> Option<f32> {
+        (self.wgsl_source.is_some() && !self.collapsed).then(|| {
+            NODE_HEADER_HEIGHT + self.preview_h() + self.rows.len() as f32 * PARAM_ROW_H
+        })
     }
 
     /// Height of the output-preview band below the header: the project-aspect
@@ -425,6 +455,40 @@ pub(crate) struct ParamView {
     /// on-node channel editor ([`GraphCanvas::vec_editor`]) read. `[0.0; 4]` for
     /// scalar kinds.
     pub(crate) vec_value: [f32; 4],
+    /// Raw untruncated value for a `String` param — the `current` handed to the
+    /// on-node text editor (`EditGraphNodeStringParam`). `None` for non-String
+    /// params. (Phase 4.)
+    pub(crate) string_value: Option<String>,
+    /// Row-major cell values for a `Table` param — the grid the on-node
+    /// [`TableEditor`](crate::graph_canvas::TableEditor) draws and the `rows`
+    /// stashed on each `EditGraphNodeTableCell`. `None` for non-Table params.
+    /// (Phase 4.)
+    pub(crate) table_value: Option<Vec<Vec<f32>>>,
+    /// `true` when this is a path-like `String` param (folder / file / dir /
+    /// path) — clicking its value opens the native folder picker
+    /// (`BrowseGraphNodePath`) instead of the inline text editor. Always `false`
+    /// for non-String kinds. (Phase 4.)
+    pub(crate) is_path: bool,
+}
+
+/// Whether a `String` param names a filesystem path — folder / file / dir /
+/// path. Path params browse via the native picker; other strings edit inline.
+/// The single definition shared by the node canvas and the (Phase-6-doomed)
+/// sidebar so both classify a param the same way.
+pub(crate) fn is_path_param(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    ["folder", "path", "file", "dir"].iter().any(|k| n.contains(k))
+}
+
+/// Compact display for a `Table` cell — integers without a decimal point,
+/// fractionals to three trimmed places, so a grid of cells stays legible.
+/// The single definition shared by the node canvas grid and the sidebar.
+pub(crate) fn fmt_table_cell(v: f32) -> String {
+    if v == v.trunc() && v.abs() < 1.0e6 {
+        format!("{}", v as i64)
+    } else {
+        crate::fmt::fmt_trimmed(v, 3)
+    }
 }
 
 /// The param kinds that can be exposed onto the outer performance card — the
@@ -553,6 +617,9 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
         default_value: p.default_value,
         enum_labels: p.enum_labels.clone().unwrap_or_default(),
         vec_value: p.vec_value.unwrap_or([0.0; 4]),
+        string_value: p.string_value.clone(),
+        table_value: p.table_value.clone(),
+        is_path: p.kind == ParamSnapshotKind::String && is_path_param(&p.name),
     }
 }
 
@@ -990,6 +1057,7 @@ impl GraphCanvas {
                 preview_node_id: node_preview_target(n),
                 preview_screen: node_preview_target(n)
                     .map(|_| crate::graph_canvas::preview_screen_size(preview_aspect)),
+                wgsl_source: n.wgsl_source.clone(),
             })
             .collect();
         self.nodes = new_nodes;

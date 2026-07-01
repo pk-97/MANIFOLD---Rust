@@ -153,6 +153,23 @@ impl GraphCanvas {
         Some(Rect::new(nx, row_top, sw, row_h))
     }
 
+    /// Screen-space rect of an expanded `wgsl_compute` node's "Edit Code…"
+    /// footer strip, or `None` for any node without a custom kernel (or a
+    /// collapsed one). Built from [`NodeView::wgsl_footer_offset`] — the same
+    /// geometry the renderer draws — so the click target can't drift from the
+    /// drawn strip.
+    pub(crate) fn wgsl_edit_rect(&self, viewport: Rect, node_id: u32) -> Option<Rect> {
+        let node = self.find_node(node_id)?;
+        let off = node.wgsl_footer_offset()?;
+        let (nx, ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
+        Some(Rect::new(
+            nx,
+            ny + off * self.zoom,
+            NODE_WIDTH * self.zoom,
+            WGSL_FOOTER_H * self.zoom,
+        ))
+    }
+
     /// Hit-test ports near the cursor. Searches all output then input
     /// ports of every node, returning the first within `PORT_HIT_RADIUS`
     /// graph-space units of the cursor. Outputs take priority over

@@ -183,6 +183,7 @@ impl GraphCanvas {
         self.mapping_popover.render(ui);
         self.render_enum_dropdown(ui);
         self.render_vec_editor(ui);
+        self.render_table_editor(ui);
         ui.pop_depth();
         ui.push_immediate_clip(viewport.x, viewport.y, viewport.w, viewport.h);
 
@@ -711,6 +712,35 @@ impl GraphCanvas {
                     }
                 }
             }
+            // "Edit Code…" footer for a `wgsl_compute` node — the click target
+            // for `EditGraphNodeWgsl`. Geometry mirrors `wgsl_edit_rect`
+            // (`body_top` + every row), so the drawn strip and the hit box align.
+            if node.wgsl_source.is_some() {
+                let fy = body_top + node.rows.len() as f32 * row_h;
+                let fh = WGSL_FOOTER_H * self.zoom;
+                let inset = 4.0 * self.zoom;
+                let fx = sx + inset;
+                let fw = (sw - 2.0 * inset).max(0.0);
+                let (cx, cy) = self.cursor;
+                let hovered = cx >= fx && cx <= fx + fw && cy >= fy && cy <= fy + fh;
+                let bg = if hovered {
+                    WGSL_FOOTER_HOVER_BG
+                } else {
+                    WGSL_FOOTER_BG
+                };
+                let btn_h = (fh - inset).max(0.0);
+                ui.draw_rounded_rect(fx, fy + inset * 0.5, fw, btn_h, bg, 3.0 * self.zoom);
+                let label = "Edit Code…";
+                let ls = 9.0 * self.zoom;
+                let lw = text_width(label, ls);
+                ui.draw_text(
+                    fx + (fw - lw) * 0.5,
+                    fy + (fh - ls) * 0.5,
+                    label,
+                    ls,
+                    TEXT_PRIMARY,
+                );
+            }
         }
 
         // Find-a-node: dim nodes that don't match the active search so the
@@ -835,6 +865,61 @@ impl GraphCanvas {
             let fw = bar_w * frac;
             if fw > 0.0 {
                 ui.draw_rounded_rect(bar_x, bar_y, fw, bar_h, PARAM_FILL_FG, bar_h * 0.5);
+            }
+        }
+    }
+
+    /// Draw the open `Table` grid editor (Phase 4): a floating panel under the
+    /// param row — a header line (label + `rows×cols`), then the row-major grid
+    /// of numeric cells. Cells read live from the node's `ParamView`, so a
+    /// committed cell edit refreshes here. Clicking a cell opens the app's inline
+    /// numeric editor over it (`EditGraphNodeTableCell`). Screen-space (anchor
+    /// captured at open), POPOVER depth. No-op when closed or the node/param has
+    /// gone.
+    fn render_table_editor(&self, ui: &mut dyn Painter) {
+        let Some(ed) = self.table_editor.as_ref() else {
+            return;
+        };
+        let Some(rows) = self
+            .find_node(ed.node_id)
+            .and_then(|n| n.params.iter().find(|p| p.name == ed.param_name))
+            .and_then(|p| p.table_value.clone())
+        else {
+            return;
+        };
+        let panel = ed.panel_rect();
+        ui.draw_bordered_rect(
+            panel.x, panel.y, panel.w, panel.h, TOOLTIP_BG, 3.0, 1.0, TOOLTIP_BORDER,
+        );
+        let text_size = 9.0 * self.zoom;
+        let pad_x = 6.0 * self.zoom;
+        let (cx, cy) = self.cursor;
+        // Header line: "<label>  rows×cols", left-aligned like the sidebar grid.
+        let header = format!("{} {}×{}", ed.param_name, ed.rows, ed.cols);
+        ui.draw_text(
+            ed.anchor.x + pad_x,
+            ed.anchor.y + ed.anchor.h + 2.0 * self.zoom,
+            &elide_to_width(&header, text_size, ed.anchor.w - 2.0 * pad_x),
+            text_size,
+            TEXT_SECONDARY,
+        );
+        // Grid: one centered numeric cell per (row, col), hover-washed.
+        for r in 0..ed.rows {
+            for c in 0..ed.cols {
+                let cell = ed.cell_rect(r, c);
+                if cx >= cell.x && cx <= cell.x + cell.w && cy >= cell.y && cy <= cell.y + cell.h {
+                    ui.draw_rect(cell.x, cell.y, cell.w, cell.h, ENUM_DD_HOVER_BG);
+                }
+                let v = rows.get(r).and_then(|row| row.get(c)).copied().unwrap_or(0.0);
+                let s = fmt_table_cell(v);
+                let vw = text_width(&s, text_size);
+                ui.draw_text(
+                    cell.x + (cell.w - vw) * 0.5,
+                    cell.y + 2.0 * self.zoom,
+                    &s,
+                    text_size,
+                    TEXT_PRIMARY,
+                );
             }
         }
     }

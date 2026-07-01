@@ -318,9 +318,35 @@ the node; the top performance card stays.
    Tests in `graph_canvas/tests.rs` (`clicking_color_value_opens_editor_*`, `dragging_a_color_channel_*`,
    `color_channel_scrub_clamps_*`, `vec2_editor_*`, `dragging_a_vec2_channel_*`,
    `pressing_outside_open_vec_editor_*`, `pressing_inside_vec_editor_header_*`); render verified headless.
-4. ⬜ **String / path + Table + WGSL** — `EditGraphNodeStringParam` (text input),
-   `BrowseGraphNodePath` (native dialog), `EditGraphNodeTableCell` (grid), `EditGraphNodeWgsl`
-   (multiline editor). These open editors anchored on the node row.
+4. ✅ **String / path + Table + WGSL editing on the face.** DONE 2026-07-01. Clicking a
+   param's value now routes by kind, each emitting the *same* command the sidebar did
+   (parity), so the app's existing handlers + commit paths (which already read the canvas
+   scope) drive them — **zero app-side changes**:
+   - **String (free text) → inline editor.** `EditGraphNodeStringParam { current, anchor }`
+     where `anchor` is the row's screen rect; the app opens its text input over it. `current`
+     is the raw untruncated `string_value`.
+   - **String (path-like: folder/path/file/dir) → native folder picker.** `BrowseGraphNodePath`.
+     Path detection is the shared `graph_canvas::model::is_path_param` (one definition now used
+     by both canvas and sidebar — the sidebar's private copy was deleted).
+   - **Table → on-node grid editor.** A `Table` param (`kind: Other` + a `table_value`) opens a
+     canvas-owned **`TableEditor`** popover under the row (same modal pattern as `EnumDropdown` /
+     `VecEditor`): a header line + the row-major numeric grid, cells read live from the
+     `ParamView` so a committed edit refreshes. Clicking a cell emits `EditGraphNodeTableCell`
+     with that cell's screen anchor + the whole table stashed (the app opens its numeric editor
+     over the cell and rebuilds just that cell on commit). The grid stays open across cell edits;
+     a press outside dismisses. Grid dims captured at open (a cell edit never reshapes).
+   - **WGSL kernel → "Edit Code…" footer.** An expanded `wgsl_compute` node grows a footer strip
+     below its rows (new `NodeView::wgsl_source` + `wgsl_footer_offset` / `WGSL_FOOTER_H`, folded
+     into `height()`); clicking it emits `EditGraphNodeWgsl` (the app re-anchors the multiline
+     editor over the canvas). Footer geometry via `wgsl_edit_rect` — the one source render draws
+     and hit-test clicks. Hidden on a collapsed node (expand to edit).
+   `ParamView` gained `string_value` / `table_value` / `is_path`; `fmt_table_cell` +
+   `is_path_param` are now shared (sidebar copies deleted). Tests in `graph_canvas/tests.rs`
+   (`clicking_string_value_*`, `clicking_path_value_*`, `path_param_is_flagged_*`,
+   `clicking_table_value_*`, `clicking_a_table_cell_*`, `pressing_outside_open_table_editor_*`,
+   `pressing_inside_table_editor_header_*`, `wgsl_node_has_edit_code_footer_*`,
+   `non_wgsl_node_*`, `wgsl_footer_hidden_when_collapsed`); render verified headless
+   (SNAP_P4-injected wgsl node — footer + string/path/table rows draw).
 5. ⬜ **Wire-driven / outer-driven state on the row** — the "← wired" / "↳ outer" hints
    and the read-only lockout the sidebar showed, so an on-node control can't lie about what
    drives it.

@@ -82,8 +82,8 @@ pub use mapping_popover::MappingPopover;
 pub use model::{node_preview_target, resolve_card_param_node_id, resolve_level};
 pub(crate) use model::{
     NodeRow, NodeView, PortHit, WireView, elide_to_width, expose_glyph_bounds, find_node_scope,
-    format_color_hex, kind_is_exposable, param_convert_for_kind, spark_has_variation, text_width,
-    vec_channel_labels, wrap_text,
+    fmt_table_cell, format_color_hex, is_path_param, kind_is_exposable, param_convert_for_kind,
+    spark_has_variation, text_width, vec_channel_labels, wrap_text,
 };
 
 const HEADER_HEIGHT: f32 = 28.0;
@@ -153,6 +153,10 @@ const PARAM_LABEL_X: f32 = PARAM_PAD_X + PARAM_EXPOSE_D + 4.0;
 /// range when editing a param on the node face. Matches the inspector
 /// sidebar's feel (`DRAG_FULL_RANGE_PX`).
 const PARAM_SCRUB_FULL_RANGE_PX: f32 = 240.0;
+/// Height (graph units) of the "Edit Code…" footer strip an expanded
+/// `wgsl_compute` node carries below its param rows — click opens the multiline
+/// kernel editor. Only present when [`NodeView::wgsl_source`] is `Some`.
+const WGSL_FOOTER_H: f32 = 20.0;
 const PORT_ROW_HEIGHT: f32 = 18.0;
 const PORT_RADIUS: f32 = 4.0;
 const PORT_COL_WIDTH: f32 = 10.0;
@@ -277,6 +281,10 @@ const PARAM_EXPOSE_OFF: Color32 = Color32::new(150, 150, 165, 130);
 // wash, the cursor row with a faint white lift, over the floating menu backing.
 const ENUM_DD_CURRENT_BG: Color32 = Color32::new(128, 199, 255, 46);
 const ENUM_DD_HOVER_BG: Color32 = Color32::new(255, 255, 255, 22);
+/// "Edit Code…" footer button on a `wgsl_compute` node (Phase 4): a faint raised
+/// fill, brighter on hover, so the kernel-editor affordance reads as a button.
+const WGSL_FOOTER_BG: Color32 = Color32::new(255, 255, 255, 16);
+const WGSL_FOOTER_HOVER_BG: Color32 = Color32::new(255, 255, 255, 32);
 /// Sparkline trace colour — the same soft cyan as the fill bar, a touch brighter
 /// so the moving line reads against the node body without shouting.
 const SPARKLINE_COLOR: Color32 = Color32::new(140, 209, 255, 217);
@@ -431,6 +439,12 @@ pub struct GraphCanvas {
     /// `None` when closed. Canvas-owned, drawn on top of the nodes and hit-tested
     /// (modally) in `on_left_button_down`, same pattern as `enum_dropdown`.
     pub(crate) vec_editor: Option<VecEditor>,
+    /// Open `Table`-param grid editor, if any (Phase 4 on-node editing). Set by a
+    /// click on a `Table` param's value; clicking a grid cell emits
+    /// `EditGraphNodeTableCell` (the panel stays open so you can edit more cells).
+    /// `None` when closed. Canvas-owned and modal in `on_left_button_down`, same
+    /// pattern as `enum_dropdown` / `vec_editor`.
+    pub(crate) table_editor: Option<TableEditor>,
 }
 
 impl GraphCanvas {
@@ -468,6 +482,7 @@ impl GraphCanvas {
             default_collapsed: false,
             enum_dropdown: None,
             vec_editor: None,
+            table_editor: None,
         }
     }
 
@@ -685,5 +700,90 @@ impl VecEditor {
             let r = self.channel_rect(ch);
             sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h
         })
+    }
+}
+
+/// An open `Table`-param grid editor on the node face (Phase 4). Clicking the
+/// value of a `Table` param opens this panel under the row: a header line, then
+/// the row-major grid of numeric cells. Clicking a cell emits
+/// `EditGraphNodeTableCell` (the app opens its inline numeric editor over that
+/// cell and, on commit, rebuilds the one changed cell into a whole `Table`
+/// value) — byte-for-byte the sidebar's grid. Canvas-owned and modal in
+/// `on_left_button_down`, same pattern as [`EnumDropdown`] / [`VecEditor`]; the
+/// live cell values are read from the node's `ParamView` each frame, so an edit
+/// round-tripping through the snapshot keeps the grid current. Dimensions
+/// (`rows`/`cols`) are captured at open — a cell edit never reshapes the table,
+/// and a structural reshape re-opens the editor.
+#[derive(Debug, Clone)]
+pub(crate) struct TableEditor {
+    /// Runtime (doc) id of the node whose param this drives.
+    pub(crate) node_id: u32,
+    /// Table param name — the `param_name` each emitted command carries.
+    pub(crate) param_name: String,
+    /// Grid dimensions captured at open (row count / max column count).
+    pub(crate) rows: usize,
+    pub(crate) cols: usize,
+    /// Screen-space rect of the param row it opened from. The panel stacks
+    /// directly below it: a header line, then the grid.
+    pub(crate) anchor: Rect,
+}
+
+impl TableEditor {
+    /// Height of one grid row / the header line — matches the param row it
+    /// opened from, so the popover reads at the node's own row rhythm.
+    fn row_h(&self) -> f32 {
+        self.anchor.h
+    }
+
+    /// Width of one cell, dividing the panel width evenly across the columns
+    /// (min 1 to avoid a divide-by-zero on a degenerate empty table).
+    fn cell_w(&self) -> f32 {
+        self.anchor.w / self.cols.max(1) as f32
+    }
+
+    /// Y of the grid's top edge — one header line below the anchor row.
+    fn grid_top(&self) -> f32 {
+        self.anchor.y + self.anchor.h + self.row_h()
+    }
+
+    /// Screen-space rect of the whole panel: header line + `rows` grid lines.
+    pub(crate) fn panel_rect(&self) -> Rect {
+        Rect::new(
+            self.anchor.x,
+            self.anchor.y + self.anchor.h,
+            self.anchor.w,
+            self.row_h() * (self.rows + 1) as f32,
+        )
+    }
+
+    /// Screen-space rect of cell `(r, c)` in the grid.
+    pub(crate) fn cell_rect(&self, r: usize, c: usize) -> Rect {
+        let cw = self.cell_w();
+        Rect::new(
+            self.anchor.x + c as f32 * cw,
+            self.grid_top() + r as f32 * self.row_h(),
+            cw,
+            self.row_h(),
+        )
+    }
+
+    /// True when `(sx, sy)` is anywhere inside the open panel.
+    pub(crate) fn contains(&self, sx: f32, sy: f32) -> bool {
+        let p = self.panel_rect();
+        sx >= p.x && sx <= p.x + p.w && sy >= p.y && sy <= p.y + p.h
+    }
+
+    /// The cell `(row, col)` under `(sx, sy)`, or `None` if the cursor isn't on a
+    /// grid cell (header line / outside the panel).
+    pub(crate) fn cell_at(&self, sx: f32, sy: f32) -> Option<(usize, usize)> {
+        for r in 0..self.rows {
+            for c in 0..self.cols {
+                let rect = self.cell_rect(r, c);
+                if sx >= rect.x && sx <= rect.x + rect.w && sy >= rect.y && sy <= rect.y + rect.h {
+                    return Some((r, c));
+                }
+            }
+        }
+        None
     }
 }

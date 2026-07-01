@@ -578,6 +578,46 @@ impl GraphCanvas {
             // Pressed outside the panel: dismiss and continue with normal dispatch.
             self.vec_editor = None;
         }
+        // An open Table grid editor is modal like the others: a press on a cell
+        // opens that cell's inline numeric editor (`EditGraphNodeTableCell`) and
+        // keeps the grid open so you can edit more cells; a press elsewhere inside
+        // swallows; a press outside dismisses and falls through.
+        if self.table_editor.is_some() {
+            let (cell_rect, inside, node_id, param_name) = {
+                let ed = self.table_editor.as_ref().unwrap();
+                (
+                    ed.cell_at(sx, sy).map(|(r, c)| (r, c, ed.cell_rect(r, c))),
+                    ed.contains(sx, sy),
+                    ed.node_id,
+                    ed.param_name.clone(),
+                )
+            };
+            if let Some((r, c, rect)) = cell_rect {
+                // Read the whole live table off the node so the commit can rebuild
+                // just this cell into a full `Table` value (sidebar parity).
+                if let Some(rows) = self
+                    .find_node(node_id)
+                    .and_then(|n| n.params.iter().find(|p| p.name == param_name))
+                    .and_then(|p| p.table_value.clone())
+                {
+                    let current = rows.get(r).and_then(|row| row.get(c)).copied().unwrap_or(0.0);
+                    self.pending_actions.push(GraphEditCommand::EditGraphNodeTableCell {
+                        node_id,
+                        param_name,
+                        row: r,
+                        col: c,
+                        current,
+                        rows,
+                        anchor: (rect.x, rect.y, rect.w, rect.h),
+                    });
+                }
+                return;
+            }
+            if inside {
+                return; // header line / padding — swallow, stay open
+            }
+            self.table_editor = None;
+        }
         // Breadcrumb bar (header chrome) — jump to a shallower scope. Gets
         // first crack like the reset button since it sits above the canvas
         // surface. No-op return value means the click wasn't on a crumb.
@@ -627,27 +667,24 @@ impl GraphCanvas {
             return;
         }
         // Param row on the node face. Numeric params with a range start a value
-        // scrub; discrete params edit in place (bool toggle, trigger fire, enum
-        // dropdown); the rest (color / vec / string / table) just select — their
-        // editors land in later phases.
+        // scrub; the rest open an editor keyed to the param kind — a discrete
+        // edit (bool flip / trigger fire), or a floating panel (enum dropdown,
+        // colour/vec channels, table grid), or the app's inline text / native
+        // folder editor (string / path). Every branch emits the same command the
+        // sidebar did (parity); only where you click moves.
         if let Some((node_id, pi)) = self.param_row_under(viewport, sx, sy) {
-            let info = self.nodes.iter().find(|n| n.id == node_id).and_then(|n| {
-                n.params.get(pi).map(|p| {
-                    (
-                        p.name.clone(),
-                        p.scrub,
-                        p.kind,
-                        p.current_value,
-                        p.enum_labels.clone(),
-                    )
-                })
-            });
-            if let Some((param_name, scrub, kind, current, enum_labels)) = info {
+            let pv = self
+                .nodes
+                .iter()
+                .find(|n| n.id == node_id)
+                .and_then(|n| n.params.get(pi).cloned());
+            if let Some(p) = pv {
                 self.select_single(node_id);
-                if let Some(s) = scrub {
+                // Numeric ranged params scrub in place.
+                if let Some(s) = p.scrub {
                     self.drag_mode = DragMode::ParamScrub {
                         node_id,
-                        param_name,
+                        param_name: p.name,
                         range: s.range,
                         start_value: s.current_value,
                         is_int: s.is_int,
@@ -655,33 +692,59 @@ impl GraphCanvas {
                     };
                     return;
                 }
+                // A Table param (`kind` is `Other`, carries `table_value`) opens
+                // the grid editor anchored on the row; clicking a cell emits
+                // `EditGraphNodeTableCell`.
+                if let Some(rows) = p.table_value.as_ref() {
+                    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+                    if !rows.is_empty()
+                        && cols > 0
+                        && let Some(anchor) = self.param_row_rect(viewport, node_id, pi)
+                    {
+                        self.enum_dropdown = None;
+                        self.vec_editor = None;
+                        self.table_editor = Some(super::TableEditor {
+                            node_id,
+                            param_name: p.name,
+                            rows: rows.len(),
+                            cols,
+                            anchor,
+                        });
+                    }
+                    return;
+                }
                 use crate::graph_view::ParamSnapshotKind as K;
-                match kind {
+                match p.kind {
                     // Bool → flip; Trigger → fire (+1). Both emit an absolute
                     // SetGraphNodeParam, parity with the sidebar's value cell.
                     K::Bool => self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
                         node_id,
-                        param_name,
-                        new_value: crate::SerializedParamValue::Bool { value: current < 0.5 },
+                        param_name: p.name,
+                        new_value: crate::SerializedParamValue::Bool {
+                            value: p.current_value < 0.5,
+                        },
                     }),
                     K::Trigger => self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
                         node_id,
-                        param_name,
-                        new_value: crate::SerializedParamValue::Float { value: current + 1.0 },
+                        param_name: p.name,
+                        new_value: crate::SerializedParamValue::Float {
+                            value: p.current_value + 1.0,
+                        },
                     }),
                     // Enum → open a dropdown anchored on this row; picking an
                     // option emits the SetGraphNodeParam (handled at the top).
                     K::Enum => {
-                        if !enum_labels.is_empty()
+                        if !p.enum_labels.is_empty()
                             && let Some(anchor) = self.param_row_rect(viewport, node_id, pi)
                         {
-                            let last = enum_labels.len() - 1;
-                            let cur_idx = (current.round().max(0.0) as usize).min(last);
+                            let last = p.enum_labels.len() - 1;
+                            let cur_idx = (p.current_value.round().max(0.0) as usize).min(last);
                             self.vec_editor = None;
+                            self.table_editor = None;
                             self.enum_dropdown = Some(super::EnumDropdown {
                                 node_id,
-                                param_name,
-                                options: enum_labels,
+                                param_name: p.name,
+                                options: p.enum_labels,
                                 current: cur_idx,
                                 anchor,
                             });
@@ -692,14 +755,58 @@ impl GraphCanvas {
                     K::Color | K::Vec2 | K::Vec3 | K::Vec4 => {
                         if let Some(anchor) = self.param_row_rect(viewport, node_id, pi) {
                             self.enum_dropdown = None;
+                            self.table_editor = None;
                             self.vec_editor =
-                                Some(super::VecEditor::new(node_id, param_name, kind, anchor));
+                                Some(super::VecEditor::new(node_id, p.name, p.kind, anchor));
+                        }
+                    }
+                    // String → the app's inline text editor for free text
+                    // (`EditGraphNodeStringParam`, anchored on the row), or the
+                    // native folder picker for a path-like param
+                    // (`BrowseGraphNodePath`). Parity with the sidebar's value
+                    // cell / Browse button.
+                    K::String => {
+                        if p.is_path {
+                            self.pending_actions.push(GraphEditCommand::BrowseGraphNodePath {
+                                node_id,
+                                param_name: p.name,
+                            });
+                        } else if let Some(anchor) = self.param_row_rect(viewport, node_id, pi) {
+                            self.pending_actions
+                                .push(GraphEditCommand::EditGraphNodeStringParam {
+                                    node_id,
+                                    param_name: p.name,
+                                    current: p.string_value.unwrap_or_default(),
+                                    anchor: (anchor.x, anchor.y, anchor.w, anchor.h),
+                                });
                         }
                     }
                     _ => {}
                 }
                 return;
             }
+        }
+        // "Edit Code…" footer on an expanded `wgsl_compute` node → open the
+        // multiline kernel editor (`EditGraphNodeWgsl`; the app re-anchors it over
+        // the canvas, so the anchor is unused, matching the sidebar).
+        if let Some(node_id) = self.node_under(viewport, sx, sy)
+            && let Some(r) = self.wgsl_edit_rect(viewport, node_id)
+            && sx >= r.x
+            && sx <= r.x + r.w
+            && sy >= r.y
+            && sy <= r.y + r.h
+        {
+            let current = self
+                .find_node(node_id)
+                .and_then(|n| n.wgsl_source.clone())
+                .unwrap_or_default();
+            self.select_single(node_id);
+            self.pending_actions.push(GraphEditCommand::EditGraphNodeWgsl {
+                node_id,
+                current,
+                anchor: (0.0, 0.0, 0.0, 0.0),
+            });
+            return;
         }
         // Double-click on a group node descends into it. Checked before the
         // header-drag path so entering doesn't also start a move; a single

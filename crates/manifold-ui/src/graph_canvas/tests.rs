@@ -1023,6 +1023,231 @@ fn color_param_carries_vec_value_onto_the_face() {
     assert_eq!(pv.value, "#4080BF", "hex string on the face");
 }
 
+// ─── Phase 4: string / path + table + WGSL editing on the face ───────────────
+
+fn string_param(name: &str, value: &str) -> crate::graph_view::ParamSnapshot {
+    crate::graph_view::ParamSnapshot {
+        name: name.to_string(),
+        label: name.to_string(),
+        kind: crate::graph_view::ParamSnapshotKind::String,
+        default_value: 0.0,
+        current_value: 0.0,
+        range: None,
+        enum_labels: None,
+        exposed: false,
+        summary: Some(value.to_string()),
+        vec_value: None,
+        string_value: Some(value.to_string()),
+        table_value: None,
+        tooltip: None,
+    }
+}
+
+fn table_param(name: &str, rows: Vec<Vec<f32>>) -> crate::graph_view::ParamSnapshot {
+    let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    crate::graph_view::ParamSnapshot {
+        name: name.to_string(),
+        label: name.to_string(),
+        // A Table param carries `kind: Other` + a `table_value`, exactly the
+        // renderer's translation — the on-node dispatch branches on the value,
+        // not the kind.
+        kind: crate::graph_view::ParamSnapshotKind::Other,
+        default_value: 0.0,
+        current_value: 0.0,
+        range: None,
+        enum_labels: None,
+        exposed: false,
+        summary: Some(format!("{}×{}", rows.len(), cols)),
+        vec_value: None,
+        string_value: None,
+        table_value: Some(rows),
+        tooltip: None,
+    }
+}
+
+/// Snapshot with node 1 (`node.wgsl`) carrying a custom kernel source.
+fn wgsl_snapshot(src: &str) -> GraphSnapshot {
+    let mut n = node(1, "node.wgsl_compute", Some("kernel"));
+    n.wgsl_source = Some(src.to_string());
+    GraphSnapshot {
+        nodes: vec![n],
+        wires: Vec::new(),
+        outer_routings: Vec::new(),
+    }
+}
+
+#[test]
+fn clicking_string_value_opens_inline_text_editor() {
+    let (mut canvas, vp) = expanded_canvas(string_param("label", "hello world"));
+    press_row_value(&mut canvas, vp, 0);
+    let cmd = canvas
+        .drain_edits()
+        .into_iter()
+        .find_map(|a| match a {
+            GraphEditCommand::EditGraphNodeStringParam {
+                node_id,
+                param_name,
+                current,
+                anchor,
+            } => Some((node_id, param_name, current, anchor)),
+            _ => None,
+        })
+        .expect("string click opens the text editor");
+    assert_eq!(cmd.0, 1, "node id");
+    assert_eq!(cmd.1, "label", "param name");
+    assert_eq!(cmd.2, "hello world", "raw current value, untruncated");
+    // Anchor is the row rect (parity with the sidebar's whole-row editor).
+    let row = canvas.param_row_rect(vp, 1, 0).unwrap();
+    assert!((cmd.3.0 - row.x).abs() < 1e-3 && (cmd.3.1 - row.y).abs() < 1e-3);
+}
+
+#[test]
+fn clicking_path_value_opens_native_browse() {
+    // A path-like name ("folder") routes to the native picker, not the editor.
+    let (mut canvas, vp) = expanded_canvas(string_param("folder", "/tmp/clips"));
+    press_row_value(&mut canvas, vp, 0);
+    let cmd = canvas
+        .drain_edits()
+        .into_iter()
+        .find_map(|a| match a {
+            GraphEditCommand::BrowseGraphNodePath { node_id, param_name } => {
+                Some((node_id, param_name))
+            }
+            _ => None,
+        })
+        .expect("path click opens the folder picker");
+    assert_eq!(cmd, (1, "folder".to_string()));
+}
+
+#[test]
+fn path_param_is_flagged_on_the_face() {
+    let (canvas, _vp) = expanded_canvas(string_param("output_path", "/x"));
+    assert!(canvas.find_node(1).unwrap().params[0].is_path, "path param");
+    let (canvas2, _vp) = expanded_canvas(string_param("caption", "hi"));
+    assert!(!canvas2.find_node(1).unwrap().params[0].is_path, "free text");
+}
+
+#[test]
+fn clicking_table_value_opens_grid_editor_without_a_command() {
+    let (mut canvas, vp) =
+        expanded_canvas(table_param("stops", vec![vec![0.0, 1.0], vec![0.5, 0.25]]));
+    press_row_value(&mut canvas, vp, 0);
+    assert!(
+        canvas.drain_edits().is_empty(),
+        "opening the grid editor emits nothing"
+    );
+    let ed = canvas.table_editor.as_ref().expect("grid editor open");
+    assert_eq!(ed.node_id, 1);
+    assert_eq!(ed.param_name, "stops");
+    assert_eq!((ed.rows, ed.cols), (2, 2), "grid dimensions captured");
+}
+
+#[test]
+fn clicking_a_table_cell_emits_edit_table_cell() {
+    let rows = vec![vec![0.0, 1.0, 2.0], vec![10.0, 11.0, 12.0]];
+    let (mut canvas, vp) = expanded_canvas(table_param("seq", rows.clone()));
+    press_row_value(&mut canvas, vp, 0); // open the grid
+    // Press the centre of cell (row 1, col 2) → value 12.0.
+    let cell = canvas.table_editor.as_ref().unwrap().cell_rect(1, 2);
+    canvas.on_left_button_down(vp, cell.x + cell.w * 0.5, cell.y + cell.h * 0.5, 0.0, false);
+    let cmd = canvas
+        .drain_edits()
+        .into_iter()
+        .find_map(|a| match a {
+            GraphEditCommand::EditGraphNodeTableCell {
+                node_id,
+                param_name,
+                row,
+                col,
+                current,
+                rows,
+                ..
+            } => Some((node_id, param_name, row, col, current, rows)),
+            _ => None,
+        })
+        .expect("cell click opens the numeric editor");
+    assert_eq!(cmd.0, 1, "node id");
+    assert_eq!(cmd.1, "seq", "param name");
+    assert_eq!((cmd.2, cmd.3), (1, 2), "cell coords");
+    assert_eq!(cmd.4, 12.0, "current cell value");
+    assert_eq!(cmd.5, rows, "whole table stashed for the rebuild");
+    // The grid stays open so more cells can be edited.
+    assert!(canvas.table_editor.is_some(), "grid stays open across a cell edit");
+}
+
+#[test]
+fn pressing_outside_open_table_editor_dismisses_it() {
+    let (mut canvas, vp) = expanded_canvas(table_param("t", vec![vec![1.0, 2.0]]));
+    press_row_value(&mut canvas, vp, 0);
+    assert!(canvas.table_editor.is_some());
+    // Press far below the panel — dismiss.
+    let p = canvas.table_editor.as_ref().unwrap().panel_rect();
+    canvas.on_left_button_down(vp, p.x + p.w * 0.5, p.y + p.h + 200.0, 0.0, false);
+    assert!(canvas.table_editor.is_none(), "outside press dismisses");
+}
+
+#[test]
+fn pressing_inside_table_editor_header_swallows_and_stays_open() {
+    let (mut canvas, vp) = expanded_canvas(table_param("t", vec![vec![1.0, 2.0]]));
+    press_row_value(&mut canvas, vp, 0);
+    // The header line sits between the anchor row and the grid — inside the
+    // panel but not a cell.
+    let anchor = canvas.param_row_rect(vp, 1, 0).unwrap();
+    let hy = anchor.y + anchor.h + anchor.h * 0.5; // header row centre
+    canvas.on_left_button_down(vp, anchor.x + anchor.w * 0.5, hy, 0.0, false);
+    assert!(canvas.table_editor.is_some(), "header press keeps it open");
+    assert!(canvas.drain_edits().is_empty(), "header press emits nothing");
+}
+
+#[test]
+fn wgsl_node_has_edit_code_footer_and_click_opens_editor() {
+    let mut canvas = GraphCanvas::new();
+    canvas.collapsed.insert(1, false);
+    canvas.set_snapshot(&wgsl_snapshot("fn main() {}"));
+    let vp = Rect::new(0.0, 0.0, 1200.0, 800.0);
+    // The footer exists exactly for a wgsl node with a kernel.
+    let r = canvas.wgsl_edit_rect(vp, 1).expect("wgsl footer rect");
+    canvas.on_left_button_down(vp, r.x + r.w * 0.5, r.y + r.h * 0.5, 0.0, false);
+    let cmd = canvas
+        .drain_edits()
+        .into_iter()
+        .find_map(|a| match a {
+            GraphEditCommand::EditGraphNodeWgsl { node_id, current, .. } => {
+                Some((node_id, current))
+            }
+            _ => None,
+        })
+        .expect("footer click opens the WGSL editor");
+    assert_eq!(cmd.0, 1, "node id");
+    assert_eq!(cmd.1, "fn main() {}", "current kernel source");
+    assert_eq!(canvas.selected_ids(), vec![1], "footer click selects the node");
+}
+
+#[test]
+fn non_wgsl_node_has_no_edit_code_footer() {
+    let (canvas, vp) = expanded_canvas(float_param("amount", 0.5));
+    assert!(
+        canvas.wgsl_edit_rect(vp, 1).is_none(),
+        "a plain node has no kernel footer"
+    );
+    assert!(
+        canvas.find_node(1).unwrap().wgsl_footer_offset().is_none(),
+        "no footer offset without a kernel"
+    );
+}
+
+#[test]
+fn wgsl_footer_hidden_when_collapsed() {
+    let mut canvas = GraphCanvas::new();
+    canvas.collapsed.insert(1, true); // collapsed
+    canvas.set_snapshot(&wgsl_snapshot("fn k() {}"));
+    let vp = Rect::new(0.0, 0.0, 1200.0, 800.0);
+    assert!(
+        canvas.wgsl_edit_rect(vp, 1).is_none(),
+        "collapsed node hides the kernel footer (expand to edit)"
+    );
+}
+
 #[test]
 fn expanded_rows_merge_shadowing_ports_onto_param_rows() {
     use crate::graph_canvas::NodeRow;
