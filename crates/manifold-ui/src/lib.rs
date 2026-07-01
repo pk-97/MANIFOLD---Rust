@@ -44,7 +44,7 @@ pub mod widget_layout;
 pub use bitmap_renderer::LayerBitmapRenderer;
 pub use coordinate_mapper::CoordinateMapper;
 pub use dock::{Dock, DockEdge};
-pub use mini_timeline::{MiniClip, MiniTimeline};
+pub use mini_timeline::{MiniClip, MiniLayerLabel, MiniTimeline};
 pub use draw::{Depth, Painter};
 pub use graph_canvas::{GraphCanvas, MappingPopover};
 pub use graph_edit::GraphEditCommand;

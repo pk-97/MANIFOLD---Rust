@@ -25,9 +25,16 @@ pub const TOP_H: f32 = 24.0;
 pub const RULER_H: f32 = 14.0;
 /// Play/pause button edge (a square in the readout row).
 const BTN: f32 = 16.0;
+/// Width of the layer-name gutter at the left of the ruler + minimap band, so
+/// you can identify (and click to choose) a layer without hunting for its
+/// clip colour. Sits outside the scrub body — a gutter click selects a layer
+/// rather than seeking.
+pub const LABEL_GUTTER_W: f32 = 92.0;
 
 const READOUT_TEXT: [u8; 4] = [205, 205, 212, 255];
 const TICK_LABEL: [u8; 4] = [128, 128, 138, 255];
+const LAYER_LABEL_TEXT: [u8; 4] = [205, 205, 212, 255];
+const LAYER_GUTTER_BG: Color32 = Color32::new(20, 20, 26, 255);
 
 /// One clip as the minimap draws it: a coloured bar on a layer row, positioned
 /// by its beat span. Built by the caller from the project timeline (colour via
@@ -41,31 +48,57 @@ pub struct MiniClip {
     pub color: Color32,
 }
 
+/// One layer row's identity in the gutter: its name (truncated to fit) and
+/// its colour swatch, matching the main timeline's layer header. Row index
+/// into the slice == minimap row index.
+#[derive(Debug, Clone)]
+pub struct MiniLayerLabel {
+    pub name: String,
+    pub color: Color32,
+}
+
 /// Stateless drawer + geometry for the bottom scrub strip.
 pub struct MiniTimeline;
 
 impl MiniTimeline {
     // ── Geometry (shared by render + input) ─────────────────────────────────
 
-    /// The scrubbable region — everything below the readout row (ruler +
-    /// minimap). A press here begins a scrub.
+    /// The scrubbable region — everything below the readout row, right of the
+    /// layer-name gutter (ruler + minimap). A press here begins a scrub; a
+    /// press in the gutter instead (see `row_at_y`) picks a layer.
     pub fn body_rect(area: Rect) -> Rect {
-        Rect::new(area.x, area.y + TOP_H, area.width, (area.height - TOP_H).max(0.0))
+        let gutter_w = LABEL_GUTTER_W.min(area.width);
+        Rect::new(
+            area.x + gutter_w,
+            area.y + TOP_H,
+            (area.width - gutter_w).max(0.0),
+            (area.height - TOP_H).max(0.0),
+        )
     }
 
-    /// The bar ruler band (top of the body).
-    pub fn ruler_rect(area: Rect) -> Rect {
-        Rect::new(area.x, area.y + TOP_H, area.width, RULER_H)
-    }
-
-    /// The clip minimap band (below the ruler).
-    pub fn minimap_rect(area: Rect) -> Rect {
+    /// The layer-name gutter, spanning the same vertical band as the body
+    /// (ruler + minimap) at the strip's left edge.
+    pub fn label_gutter_rect(area: Rect) -> Rect {
         Rect::new(
             area.x,
-            area.y + TOP_H + RULER_H,
-            area.width,
-            (area.height - TOP_H - RULER_H).max(0.0),
+            area.y + TOP_H,
+            LABEL_GUTTER_W.min(area.width),
+            (area.height - TOP_H).max(0.0),
         )
+    }
+
+    /// The bar ruler band (top of the body — gutter-inset, so ticks align
+    /// with the clip lanes below them).
+    pub fn ruler_rect(area: Rect) -> Rect {
+        let body = Self::body_rect(area);
+        Rect::new(body.x, body.y, body.width, RULER_H)
+    }
+
+    /// The clip minimap band (below the ruler — gutter-inset, same as the
+    /// ruler above it).
+    pub fn minimap_rect(area: Rect) -> Rect {
+        let body = Self::body_rect(area);
+        Rect::new(body.x, body.y + RULER_H, body.width, (body.height - RULER_H).max(0.0))
     }
 
     /// The play/pause button rect in the readout row's left edge.
@@ -76,6 +109,25 @@ impl MiniTimeline {
     /// True when `pos` is over the play/pause button.
     pub fn hit_play(area: Rect, pos: Vec2) -> bool {
         Self::play_button_rect(area).contains(pos)
+    }
+
+    /// Layer row under `pos`, if it's within the gutter's row band (the same
+    /// vertical span as `minimap_rect`, so a click on the ruler's sliver of
+    /// the gutter — no rows there — misses). `None` outside the gutter, off
+    /// the row band, or past the last row.
+    pub fn row_at_y(area: Rect, row_count: usize, pos: Vec2) -> Option<usize> {
+        let gutter = Self::label_gutter_rect(area);
+        let mm = Self::minimap_rect(area);
+        if pos.x < gutter.x || pos.x > gutter.x_max() || pos.y < mm.y || pos.y > mm.y_max() {
+            return None;
+        }
+        let rows = row_count.max(1);
+        let row_h = mm.height / rows as f32;
+        if row_h <= 0.0 {
+            return None;
+        }
+        let idx = ((pos.y - mm.y) / row_h) as usize;
+        (idx < rows).then_some(idx)
     }
 
     /// Content length clamped to a sane floor, so an empty project still draws
@@ -112,6 +164,7 @@ impl MiniTimeline {
         current_beat: f32,
         row_count: usize,
         clips: &[MiniClip],
+        layer_labels: &[MiniLayerLabel],
         readout: &str,
         is_playing: bool,
         ui: &mut dyn Painter,
@@ -119,10 +172,14 @@ impl MiniTimeline {
         let total = Self::total(total_beats);
         let ruler = Self::ruler_rect(area);
         let mm = Self::minimap_rect(area);
+        let gutter = Self::label_gutter_rect(area);
 
-        // Panel + darker ruler band.
+        // Panel + darker ruler band + the layer-name gutter as its own quiet
+        // column (spans the ruler's sliver of it too, so it reads as one
+        // solid strip rather than sharing the ruler's lighter band).
         ui.draw_rect(area.x, area.y, area.width, area.height, color::PANEL_BG);
         ui.draw_rect(ruler.x, ruler.y, ruler.width, ruler.height, color::BG_1);
+        ui.draw_rect(gutter.x, gutter.y, gutter.width, gutter.height, LAYER_GUTTER_BG);
 
         // Top readout row: play/pause button + "Bar x · BPM · sig".
         let pb = Self::play_button_rect(area);
@@ -155,7 +212,9 @@ impl MiniTimeline {
             bar += 1;
         }
 
-        // Layer rows: alternating recessed lanes + hairline separators.
+        // Layer rows: alternating recessed lanes + hairline separators, each
+        // paired with its name + colour swatch in the gutter so a row is
+        // identifiable without reading its clips' colours.
         let rows = row_count.max(1);
         let row_h = mm.height / rows as f32;
         for r in 0..rows {
@@ -164,8 +223,20 @@ impl MiniTimeline {
             ui.draw_rect(mm.x, y, mm.width, row_h, bg);
             if r > 0 {
                 ui.draw_line(mm.x, y, mm.x_max(), y, 1.0, color::DIVIDER_COLOR);
+                ui.draw_line(gutter.x, y, gutter.x_max(), y, 1.0, color::DIVIDER_COLOR);
+            }
+            if let Some(label) = layer_labels.get(r) {
+                let swatch_d = (row_h - 8.0).clamp(4.0, 10.0);
+                let swatch_x = gutter.x + 6.0;
+                let swatch_y = y + (row_h - swatch_d) * 0.5;
+                ui.draw_rounded_rect(swatch_x, swatch_y, swatch_d, swatch_d, label.color, 2.0);
+                let text_x = swatch_x + swatch_d + 5.0;
+                let text_budget = (gutter.x_max() - 4.0 - text_x).max(0.0);
+                let name = crate::draw::elide_to_width(&label.name, 10.0, text_budget);
+                ui.draw_text(text_x, y + (row_h - 10.0) * 0.5, &name, 10.0, LAYER_LABEL_TEXT);
             }
         }
+        ui.draw_line(gutter.x_max(), mm.y, gutter.x_max(), mm.y_max(), 1.0, color::DIVIDER_COLOR);
 
         // Clips as coloured bars on their layer row.
         for c in clips {
@@ -218,20 +289,34 @@ mod tests {
     }
 
     #[test]
-    fn body_sits_below_the_readout_row() {
+    fn body_sits_below_the_readout_row_and_right_of_the_gutter() {
         let b = MiniTimeline::body_rect(area());
         assert_eq!(b.y, 500.0 + TOP_H);
         assert_eq!(b.height, 150.0 - TOP_H);
-        assert_eq!(b.width, 800.0);
+        assert_eq!(b.x, 100.0 + LABEL_GUTTER_W);
+        assert_eq!(b.width, 800.0 - LABEL_GUTTER_W);
+    }
+
+    #[test]
+    fn gutter_sits_left_of_the_body_same_vertical_band() {
+        let a = area();
+        let g = MiniTimeline::label_gutter_rect(a);
+        let b = MiniTimeline::body_rect(a);
+        assert_eq!(g.x, a.x);
+        assert_eq!(g.width, LABEL_GUTTER_W);
+        assert_eq!(g.y, b.y);
+        assert_eq!(g.height, b.height);
+        assert_eq!(g.x_max(), b.x);
     }
 
     #[test]
     fn beat_maps_to_x_and_back() {
         let a = area();
         let total = 32.0;
-        // Endpoints land on the body edges.
-        assert!((MiniTimeline::beat_to_x(a, total, 0.0) - a.x).abs() < 0.001);
-        assert!((MiniTimeline::beat_to_x(a, total, total) - a.x_max()).abs() < 0.001);
+        let body = MiniTimeline::body_rect(a);
+        // Endpoints land on the (gutter-inset) body edges, not the raw area.
+        assert!((MiniTimeline::beat_to_x(a, total, 0.0) - body.x).abs() < 0.001);
+        assert!((MiniTimeline::beat_to_x(a, total, total) - body.x_max()).abs() < 0.001);
         // Round-trips through the middle.
         let x = MiniTimeline::beat_to_x(a, total, 12.0);
         assert!((MiniTimeline::beat_at_x(a, total, x) - 12.0).abs() < 0.01);
@@ -248,7 +333,8 @@ mod tests {
     fn empty_project_still_gets_a_ruler() {
         // total 0 → clamps to the 4-beat floor, no divide-by-zero.
         let a = area();
-        assert_eq!(MiniTimeline::beat_to_x(a, 0.0, 0.0), a.x);
+        let body = MiniTimeline::body_rect(a);
+        assert_eq!(MiniTimeline::beat_to_x(a, 0.0, 0.0), body.x);
         assert!(MiniTimeline::beat_to_x(a, 0.0, 4.0) <= a.x_max() + 0.001);
     }
 
@@ -259,5 +345,27 @@ mod tests {
         assert!(pb.y >= a.y && pb.y_max() <= a.y + TOP_H);
         assert!(MiniTimeline::hit_play(a, Vec2::new(pb.x + 2.0, pb.y + 2.0)));
         assert!(!MiniTimeline::hit_play(a, Vec2::new(a.x + 400.0, a.y + 8.0)));
+    }
+
+    #[test]
+    fn row_at_y_picks_the_gutter_row_under_the_cursor() {
+        let a = area();
+        let mm = MiniTimeline::minimap_rect(a);
+        let row_h = mm.height / 3.0;
+        // Middle of row 1 (0-indexed), inside the gutter's x range.
+        let pos = Vec2::new(a.x + 4.0, mm.y + row_h * 1.5);
+        assert_eq!(MiniTimeline::row_at_y(a, 3, pos), Some(1));
+    }
+
+    #[test]
+    fn row_at_y_misses_outside_the_gutter_or_row_band() {
+        let a = area();
+        let mm = MiniTimeline::minimap_rect(a);
+        // Right of the gutter (over the body/ruler instead).
+        assert_eq!(MiniTimeline::row_at_y(a, 3, Vec2::new(a.x + LABEL_GUTTER_W + 10.0, mm.y + 5.0)), None);
+        // Above the row band (over the ruler's sliver of the gutter).
+        assert_eq!(MiniTimeline::row_at_y(a, 3, Vec2::new(a.x + 4.0, a.y + TOP_H + 2.0)), None);
+        // Past the last row.
+        assert_eq!(MiniTimeline::row_at_y(a, 3, Vec2::new(a.x + 4.0, mm.y_max() + 5.0)), None);
     }
 }

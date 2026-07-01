@@ -2934,7 +2934,7 @@ impl Application {
         // path. Shared with the headless snapshot path via `mini_timeline_data`.
         let mini_current_beat = self.content_state.current_beat.as_f32();
         let mini_is_playing = self.content_state.is_playing;
-        let (mini_clips, mini_rows, mini_total_beats, mini_beats_per_bar, mini_readout) =
+        let (mini_clips, mini_layer_labels, mini_rows, mini_total_beats, mini_beats_per_bar, mini_readout) =
             mini_timeline_data(&self.local_project, mini_current_beat);
 
         let Some(gpu) = &self.gpu else { return };
@@ -3281,6 +3281,7 @@ impl Application {
                     mini_current_beat,
                     mini_rows,
                     &mini_clips,
+                    &mini_layer_labels,
                     &mini_readout,
                     mini_is_playing,
                     ui,
@@ -4450,17 +4451,29 @@ impl Application {
 }
 
 /// Build the graph editor's bottom mini-timeline view-model from a project +
-/// playhead beat: `(clips, row_count, total_beats, beats_per_bar, readout)`.
-/// Every layer becomes a row; each clip a coloured bar via the shared
-/// `get_clip_color` (so the strip matches the main timeline). Shared by the
-/// live present pass and the headless snapshot so both draw the same strip.
+/// playhead beat: `(clips, layer_labels, row_count, total_beats,
+/// beats_per_bar, readout)`. Every layer becomes a row (and a gutter label);
+/// each clip a coloured bar via the shared `get_clip_color` (so the strip
+/// matches the main timeline). Shared by the live present pass and the
+/// headless snapshot so both draw the same strip.
 pub(crate) fn mini_timeline_data(
     project: &manifold_core::project::Project,
     current_beat: f32,
-) -> (Vec<manifold_ui::MiniClip>, usize, f32, f32, String) {
+) -> (Vec<manifold_ui::MiniClip>, Vec<manifold_ui::MiniLayerLabel>, usize, f32, f32, String) {
     let mut clips: Vec<manifold_ui::MiniClip> = Vec::new();
+    let mut layer_labels: Vec<manifold_ui::MiniLayerLabel> = Vec::new();
     for (row, layer) in project.timeline.layers.iter().enumerate() {
         let is_gen = layer.layer_type == manifold_core::LayerType::Generator;
+        let lc = layer.layer_color;
+        layer_labels.push(manifold_ui::MiniLayerLabel {
+            name: layer.name.clone(),
+            color: manifold_ui::Color32::new(
+                (lc.r * 255.0).round().clamp(0.0, 255.0) as u8,
+                (lc.g * 255.0).round().clamp(0.0, 255.0) as u8,
+                (lc.b * 255.0).round().clamp(0.0, 255.0) as u8,
+                255,
+            ),
+        });
         for clip in &layer.clips {
             let c = clip.color_override.unwrap_or(layer.layer_color);
             let c32 = manifold_ui::Color32::new(
@@ -4496,6 +4509,7 @@ pub(crate) fn mini_timeline_data(
     );
     (
         clips,
+        layer_labels,
         project.timeline.layers.len(),
         project.timeline.duration_beats().as_f32(),
         bpb,

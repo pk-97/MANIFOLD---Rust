@@ -398,7 +398,7 @@ pub fn render_graph_editor_to_png(
     dock.draw(editor_area, &mut renderer as &mut dyn Painter);
     // Bottom mini-timeline, built from the fixture project (playhead at beat 0),
     // same view-model the live present pass draws.
-    let (mini_clips, mini_rows, mini_total, mini_bpb, mini_readout) =
+    let (mini_clips, mini_layer_labels, mini_rows, mini_total, mini_bpb, mini_readout) =
         crate::app_render::mini_timeline_data(project, 0.0);
     manifold_ui::MiniTimeline::draw(
         dock_rects.bottom,
@@ -407,6 +407,7 @@ pub fn render_graph_editor_to_png(
         0.0,
         mini_rows,
         &mini_clips,
+        &mini_layer_labels,
         &mini_readout,
         false,
         &mut renderer as &mut dyn Painter,

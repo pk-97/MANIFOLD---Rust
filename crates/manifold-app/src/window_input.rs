@@ -757,6 +757,26 @@ impl Application {
                             }
                             return;
                         }
+                        // Gutter click: pick that row's layer (identify + choose,
+                        // same effect a main-timeline layer-header click has —
+                        // `active_layer_id` + `selection.select_layer`), so the
+                        // editor's mirrored inspector follows it too. Checked
+                        // before the scrub body since the gutter sits outside it.
+                        if let Some(row) = manifold_ui::MiniTimeline::row_at_y(
+                            bottom,
+                            self.local_project.timeline.layers.len(),
+                            pos,
+                        ) && let Some(layer) = self.local_project.timeline.layers.get(row)
+                        {
+                            let layer_id = layer.layer_id.clone();
+                            self.active_layer_id = Some(layer_id.clone());
+                            self.selection.select_layer(layer_id);
+                            self.needs_rebuild = true;
+                            if let Some(ed) = self.graph_editor.as_mut() {
+                                ed.offscreen_dirty = true;
+                            }
+                            return;
+                        }
                         if manifold_ui::MiniTimeline::body_rect(bottom).contains(pos) {
                             let total =
                                 self.local_project.timeline.duration_beats().as_f32();
