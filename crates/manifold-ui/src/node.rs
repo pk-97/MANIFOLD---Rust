@@ -135,6 +135,26 @@ impl Color32 {
         }
     }
 
+    /// This colour with its alpha replaced — for runtime-modulated fades (a
+    /// wire tint at "in flight" opacity, a focused-vs-dim wire) that keep the
+    /// RGB and vary only alpha.
+    pub const fn with_alpha(self, a: u8) -> Self {
+        Self { r: self.r, g: self.g, b: self.b, a }
+    }
+
+    /// The inverse of [`Self::from_f32`]: the sRGB bytes as `[0,1]` floats with
+    /// NO gamma decode (unlike [`Self::to_f32`], which converts to linear light).
+    /// For serialization boundaries that store a plain sRGB float array — e.g. a
+    /// group tint round-tripping through `GroupDef::tint`.
+    pub fn to_srgb_f32(self) -> [f32; 4] {
+        [
+            self.r as f32 / 255.0,
+            self.g as f32 / 255.0,
+            self.b as f32 / 255.0,
+            self.a as f32 / 255.0,
+        ]
+    }
+
     /// Convert sRGB byte values to linear float RGBA for GPU rendering.
     ///
     /// The UI colors are specified in sRGB space (matching Unity's UGUI).
@@ -156,21 +176,20 @@ impl Color32 {
 }
 
 /// Color parameter for the UI geometry pipeline (rects, lines): linear-space
-/// RGBA floats. Accepts raw `[f32; 4]` (already linear, passed through
-/// unchanged) or a [`Color32`] (sRGB bytes, converted via
-/// [`Color32::to_f32`]) — so palette constants work directly at draw calls.
+/// RGBA floats. The ONLY implicit conversion is `From<`[`Color32`]`>` (sRGB
+/// bytes → linear via [`Color32::to_f32`]), so every draw call names its colour
+/// as an sRGB `Color32` and the sRGB → linear conversion happens in exactly one
+/// place. A genuinely-linear value (e.g. an HDR fill, or a `Color32::to_f32`
+/// result) is wrapped explicitly as `LinearColor([r, g, b, a])` — there is
+/// deliberately NO `From<[f32; 4]>`, so a raw sRGB float array can't be mistaken
+/// for linear and silently double-encoded (the class of bug that washed out the
+/// graph canvas).
 ///
 /// Deliberately distinct from [`TextColor`]: the text pipeline consumes sRGB
 /// bytes end-to-end, so a single color type would have to re-encode one of
 /// the two paths and shift rendered output.
 #[derive(Clone, Copy, Debug)]
 pub struct LinearColor(pub [f32; 4]);
-
-impl From<[f32; 4]> for LinearColor {
-    fn from(rgba: [f32; 4]) -> Self {
-        Self(rgba)
-    }
-}
 
 impl From<Color32> for LinearColor {
     fn from(c: Color32) -> Self {

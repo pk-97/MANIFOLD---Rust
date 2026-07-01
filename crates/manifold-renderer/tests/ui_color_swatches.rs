@@ -1090,7 +1090,7 @@ fn playhead_scrollbar_demo() {
         ruler_y,
         color::PLAYHEAD_WIDTH,
         tracks_bottom - ruler_y,
-        color::PLAYHEAD_RED.to_f32(),
+        color::PLAYHEAD_RED,
     );
     let s = color::PLAYHEAD_HEAD_SIZE;
     ui.draw_icon(Icon::Playhead.id(), px - s * 0.5, ruler_y, s, s, color::PLAYHEAD_RED, None);
@@ -1099,15 +1099,15 @@ fn playhead_scrollbar_demo() {
     // Insert cursor — blue single-row bar + small ruler square (subordinate).
     let cx = 430.0;
     let row_y = tracks_top + 70.0;
-    ui.draw_rect(cx, row_y, 2.0, 60.0, color::INSERT_CURSOR_BLUE.to_f32());
+    ui.draw_rect(cx, row_y, 2.0, 60.0, color::INSERT_CURSOR_BLUE);
     let ms = color::INSERT_CURSOR_RULER_MARKER_SIZE;
-    ui.draw_rect(cx - ms * 0.5, ruler_y + ruler_h - ms, ms, ms, color::INSERT_CURSOR_BLUE.to_f32());
+    ui.draw_rect(cx - ms * 0.5, ruler_y + ruler_h - ms, ms, ms, color::INSERT_CURSOR_BLUE);
     ui.draw_text(cx + 8.0, row_y, "insert cursor", 11.0, color::INSERT_CURSOR_BLUE);
 
     // Horizontal scrollbar — track + rounded thumb (40% wide, 15% in), like the
     // viewport's `scrollbar_h_layout`.
     let sb_y = H as f32 - sb_h;
-    ui.draw_rect(0.0, sb_y, W as f32, sb_h, color::SCROLLBAR_TRACK_C32.to_f32());
+    ui.draw_rect(0.0, sb_y, W as f32, sb_h, color::SCROLLBAR_TRACK_C32);
     let inset = color::TIMELINE_SCROLLBAR_THUMB_INSET;
     let thumb_w = W as f32 * 0.4;
     let thumb_x = W as f32 * 0.15;
@@ -1117,7 +1117,7 @@ fn playhead_scrollbar_demo() {
         sb_y + inset,
         thumb_w,
         thumb_h,
-        color::SCROLLBAR_THUMB_C32.to_f32(),
+        color::SCROLLBAR_THUMB_C32,
         thumb_h * 0.5,
     );
 
@@ -1264,7 +1264,7 @@ fn modulation_drawer_sheet() {
             card_top - pad,
             dw + pad * 2.0,
             card_h,
-            spec.theme.surface.to_f32(),
+            spec.theme.surface,
             color::CARD_RADIUS,
         );
         placed.push((card_top, card_h, spec));

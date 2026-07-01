@@ -1463,11 +1463,11 @@ impl TextMeasure for UIRenderer {
 /// 1:1 since the two share the same tier constants. See
 /// `crates/manifold-ui/src/draw.rs`.
 impl manifold_ui::draw::Painter for UIRenderer {
-    fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
+    fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: manifold_ui::Color32) {
         self.draw_rect(x, y, w, h, color);
     }
 
-    fn draw_rounded_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4], corner: f32) {
+    fn draw_rounded_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: manifold_ui::Color32, corner: f32) {
         self.draw_rounded_rect(x, y, w, h, color, corner);
     }
 
@@ -1477,15 +1477,15 @@ impl manifold_ui::draw::Painter for UIRenderer {
         y: f32,
         w: f32,
         h: f32,
-        color: [f32; 4],
+        color: manifold_ui::Color32,
         corner: f32,
         border_width: f32,
-        border_color: [f32; 4],
+        border_color: manifold_ui::Color32,
     ) {
         self.draw_bordered_rect(x, y, w, h, color, corner, border_width, border_color);
     }
 
-    fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, color: [f32; 4]) {
+    fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, color: manifold_ui::Color32) {
         self.draw_line(x0, y0, x1, y1, thickness, color);
     }
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use manifold_core::types::ClockAuthority;
 use manifold_renderer::ui_renderer::UIRenderer;
-use manifold_ui::node::FontWeight;
+use manifold_ui::node::{Color32, FontWeight};
 
 use crate::app::Application;
 use crate::perform_mode::{cue, macros as perform_macros, tracks};
@@ -383,11 +383,12 @@ fn numeric_text_width(ui: &mut UIRenderer, text: &str, font_size: u16) -> f32 {
 ///
 /// Read-only — no click handling in perform mode.
 fn draw_sync_indicators(ui: &mut UIRenderer, sync: &SyncStatus) {
-    // Color palette — matches transport bar exactly.
-    let link_orange_bg = [0.75, 0.48, 0.08, 1.0];
-    let midi_purple_bg = [0.58, 0.30, 0.58, 1.0];
-    let inactive_bg = [0.23, 0.23, 0.24, 1.0];
-    let osc_blue_bg = [0.22, 0.52, 0.70, 1.0];
+    // Color palette — matches transport bar exactly. sRGB `Color32`; the draw
+    // API converts to linear once at the boundary.
+    let link_orange_bg = Color32::new(191, 122, 20, 255);
+    let midi_purple_bg = Color32::new(148, 77, 148, 255);
+    let inactive_bg = Color32::new(59, 59, 61, 255);
+    let osc_blue_bg = Color32::new(56, 133, 179, 255);
     let white = [240u8, 240u8, 240u8, 255u8];
     let dimmed = [140u8, 140u8, 145u8, 255u8];
     let dot_green = [64u8, 179u8, 77u8, 255u8];
@@ -413,7 +414,7 @@ fn draw_sync_indicators(ui: &mut UIRenderer, sync: &SyncStatus) {
     let dot_y = y + (badge_h - dot_size) * 0.5;
 
     // Helper: draw a badge (rounded rect with centered text).
-    let draw_badge = |ui: &mut UIRenderer, x: f32, label: &str, bg: [f32; 4]| -> f32 {
+    let draw_badge = |ui: &mut UIRenderer, x: f32, label: &str, bg: Color32| -> f32 {
         let text_w = ui
             .measure_text_cached(label, badge_font, FontWeight::Medium)
             .x;
@@ -425,12 +426,7 @@ fn draw_sync_indicators(ui: &mut UIRenderer, sync: &SyncStatus) {
 
     // Helper: draw a status dot.
     let draw_dot = |ui: &mut UIRenderer, x: f32, color: [u8; 4]| {
-        let c = [
-            color[0] as f32 / 255.0,
-            color[1] as f32 / 255.0,
-            color[2] as f32 / 255.0,
-            1.0,
-        ];
+        let c = Color32::new(color[0], color[1], color[2], 255);
         ui.draw_rounded_rect(x, dot_y, dot_size, dot_size, c, dot_size * 0.5);
     };
 
@@ -564,9 +560,9 @@ fn draw_exit_button(
     // Muted bg by default; brighter on hover so the user gets visual
     // confirmation they're aiming at it before pressing.
     let bg = if hover {
-        [0.55, 0.10, 0.10, 1.0]
+        Color32::new(140, 26, 26, 255) // sRGB, was [0.55, 0.10, 0.10, 1.0]
     } else {
-        [0.20, 0.06, 0.06, 1.0]
+        Color32::new(51, 15, 15, 255) // sRGB, was [0.20, 0.06, 0.06, 1.0]
     };
     ui.draw_rounded_rect(btn_x, btn_y, btn_w, btn_h, bg, 6.0);
 
@@ -609,7 +605,7 @@ fn draw_cue_hud(
     // Color palette.
     let dim = [140u8, 140u8, 145u8, 255u8];
     let white = [240u8, 240u8, 240u8, 255u8];
-    let bar_bg = [0.10, 0.10, 0.12, 1.0];
+    let bar_bg = Color32::new(26, 26, 31, 255); // sRGB, was [0.10, 0.10, 0.12, 1.0]
     let warn = [240u8, 200u8, 60u8, 255u8];
 
     // Traffic-light palette:
@@ -630,12 +626,7 @@ fn draw_cue_hud(
         (60.0 - 30.0 * urgency) as u8,             // B: 60→30
         255u8,
     ];
-    let next_color_f = [
-        next_color[0] as f32 / 255.0,
-        next_color[1] as f32 / 255.0,
-        next_color[2] as f32 / 255.0,
-        1.0,
-    ];
+    let next_color_f = Color32::new(next_color[0], next_color[1], next_color[2], 255);
 
     // ── NOW ────────────────────────────────────────────────────────
     let label_now = "NOW";
@@ -918,8 +909,8 @@ fn draw_macros_column(ui: &mut UIRenderer, lh: f32, macros: &[perform_macros::Ma
     let white = [240u8, 240u8, 240u8, 255u8];
     // Ableton purple — matches the macro accent used elsewhere in the
     // main UI (see ABL_BADGE_C32 / ABL_TRIM_BAR_C32 in manifold-ui::color).
-    let macro_fill = [140.0 / 255.0, 80.0 / 255.0, 200.0 / 255.0, 1.0];
-    let bar_bg = [0.10, 0.10, 0.12, 1.0];
+    let macro_fill = Color32::new(140, 80, 200, 255);
+    let bar_bg = Color32::new(26, 26, 31, 255); // sRGB, was [0.10, 0.10, 0.12, 1.0]
 
     let label_size: u16 = 18;
     let name_size: u16 = 16;

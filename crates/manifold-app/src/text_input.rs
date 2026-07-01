@@ -339,14 +339,15 @@ impl TextInputState {
 // ── Overlay rendering constants ───────────────────────────────────
 // From Unity UGUITextInputHost styling.
 
-/// Background color: dark panel matching transport chrome.
-pub const TEXT_INPUT_BG: [f32; 4] = [0.14, 0.14, 0.15, 1.0];
+/// Background color: dark panel matching transport chrome. sRGB (was authored
+/// as `[0.14, 0.14, 0.15, 1.0]`; the draw API now converts sRGB → linear once).
+pub const TEXT_INPUT_BG: manifold_ui::Color32 = manifold_ui::Color32::new(36, 36, 38, 255);
 /// Text color: light gray.
 pub const TEXT_INPUT_FG: [u8; 4] = [224, 224, 224, 255];
-/// Selection highlight (when select_all).
-pub const TEXT_INPUT_SELECT_BG: [f32; 4] = [0.3, 0.5, 0.8, 0.4];
-/// Cursor color.
-pub const TEXT_INPUT_CURSOR: [f32; 4] = [0.88, 0.88, 0.88, 1.0];
+/// Selection highlight (when select_all). sRGB (was `[0.3, 0.5, 0.8, 0.4]`).
+pub const TEXT_INPUT_SELECT_BG: manifold_ui::Color32 = manifold_ui::Color32::new(77, 128, 204, 102);
+/// Cursor color. sRGB (was `[0.88, 0.88, 0.88, 1.0]`).
+pub const TEXT_INPUT_CURSOR: manifold_ui::Color32 = manifold_ui::Color32::new(224, 224, 224, 255);
 /// Horizontal padding inside the text box.
 pub const TEXT_INPUT_PAD_H: f32 = 4.0;
 /// Vertical padding inside the text box.

@@ -569,7 +569,9 @@ fn cycle_group_tint_emits_first_palette_colour_for_untinted_group() {
         } => Some(tint),
         _ => None,
     });
-    assert_eq!(emitted, Some(Some(GROUP_TINT_PALETTE[0])));
+    // The command carries the def's plain-sRGB float array; the palette is
+    // sRGB `Color32`. Compare through the same boundary conversion.
+    assert_eq!(emitted, Some(Some(GROUP_TINT_PALETTE[0].to_srgb_f32())));
 }
 
 #[test]

@@ -330,7 +330,8 @@ impl GraphCanvas {
         let ghost_color = match self.wire_drop_compat(viewport, from_node, port_color) {
             Some(true) => CONNECT_OK_COLOR,
             Some(false) => CONNECT_BAD_COLOR,
-            None => [port_color[0], port_color[1], port_color[2], 0.55],
+            // Port-kind tint at 0.55 alpha ("in flight"). 0.55 * 255 ≈ 140.
+            None => port_color.with_alpha(140),
         };
         let mut prev = cubic_bezier(0.0, sx0, sy0, cx0, cy0, cx1, cy1, sx1, sy1);
         for i in 1..=steps {
@@ -670,7 +671,7 @@ impl GraphCanvas {
         // matches stay bright and jump out of a busy graph. Drawn last, over the
         // node's own content.
         if !self.node_search.is_empty() && !self.node_matches_search(node) {
-            ui.draw_rect(sx, sy, sw, sh, [0.0039, 0.0039, 0.0060, 0.66]); // srgb(0.05, 0.05, 0.07, 0.66)
+            ui.draw_rect(sx, sy, sw, sh, Color32::new(13, 13, 18, 168)); // 0.66 alpha dim
         }
     }
 
@@ -733,19 +734,19 @@ impl GraphCanvas {
         // the control fan. Any focused wire lights to full.
         let is_control = from.outputs[from_idx].is_control;
         let port_color = from.outputs[from_idx].color;
-        let (base_rgb, alpha): ([f32; 3], f32) = if is_return {
-            (RETURN_WIRE_COLOR, if focused { 0.95 } else { 0.34 })
+        // Base RGB from the port kind (or the one return-wire violet), with a
+        // runtime alpha for focus/control dimming. Alpha bytes: 0.95≈242,
+        // 0.34≈87, 0.16≈41, 0.7≈179.
+        let (base, alpha) = if is_return {
+            (RETURN_WIRE_COLOR, if focused { 242 } else { 87 })
+        } else if focused {
+            (port_color, 242)
+        } else if is_control {
+            (port_color, 41)
         } else {
-            let a = if focused {
-                0.95
-            } else if is_control {
-                0.16
-            } else {
-                0.7
-            };
-            ([port_color[0], port_color[1], port_color[2]], a)
+            (port_color, 179)
         };
-        let wire_color = [base_rgb[0], base_rgb[1], base_rgb[2], alpha];
+        let wire_color = base.with_alpha(alpha);
 
         // ── Control points ──
         let (cx0, cy0, cx1, cy1) = if is_return {

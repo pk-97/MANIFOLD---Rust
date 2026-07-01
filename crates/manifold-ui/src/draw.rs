@@ -14,6 +14,8 @@
 //! adapter `impl`. See `docs/CANVAS_API_DESIGN.md` §0 and Phase 8 of the
 //! overhaul.
 
+use crate::node::Color32;
+
 /// Layering depth for immediate-mode draws. Mirror of
 /// `manifold_renderer::ui_renderer::Depth` — the renderer's `Painter` impl maps
 /// one to the other 1:1, so the same constants name the same layers on both
@@ -36,16 +38,17 @@ impl Depth {
 
 /// The immediate-mode draw primitives the graph canvas + mapping popover need.
 ///
-/// Colours are passed as concrete arrays (the canvas already works in
-/// `[f32; 4]` linear RGBA for fills and `[u8; 4]` sRGB for text); the renderer
-/// adapter converts at the boundary. Object-safe — consumed as `&mut dyn
-/// Painter`.
+/// Colours are passed as [`Color32`] — sRGB bytes, the app-wide colour currency.
+/// The renderer adapter is the single place that converts sRGB → linear light
+/// (`Color32::to_f32`) before the GPU write, so no call site ever hand-converts
+/// or can pass an already-linear value by mistake. Object-safe — consumed as
+/// `&mut dyn Painter`.
 pub trait Painter {
     /// Solid rectangle.
-    fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]);
+    fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color32);
 
     /// Rounded rectangle (no border).
-    fn draw_rounded_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4], corner: f32);
+    fn draw_rounded_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color32, corner: f32);
 
     /// Rounded rectangle with a border.
     #[allow(clippy::too_many_arguments)]
@@ -55,15 +58,15 @@ pub trait Painter {
         y: f32,
         w: f32,
         h: f32,
-        color: [f32; 4],
+        color: Color32,
         corner: f32,
         border_width: f32,
-        border_color: [f32; 4],
+        border_color: Color32,
     );
 
     /// Oriented line segment of the given thickness.
     #[allow(clippy::too_many_arguments)]
-    fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, color: [f32; 4]);
+    fn draw_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, color: Color32);
 
     /// Text at a position. `color` is sRGB `[r, g, b, a]`.
     fn draw_text(&mut self, x: f32, y: f32, text: &str, font_size: f32, color: [u8; 4]);

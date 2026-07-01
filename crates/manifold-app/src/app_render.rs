@@ -4212,13 +4212,13 @@ impl Application {
                 overlay_tracks.height,
             );
             if let Some((r, c)) = timeline_overlays.region {
-                ui.draw_rect(r.x, r.y, r.width, r.height, c.to_f32());
+                ui.draw_rect(r.x, r.y, r.width, r.height, c);
             }
             if let Some((r, c)) = timeline_overlays.cursor {
-                ui.draw_rect(r.x, r.y, r.width, r.height, c.to_f32());
+                ui.draw_rect(r.x, r.y, r.width, r.height, c);
             }
             for (x, c) in &self.timeline_marker_scratch {
-                ui.draw_rect(*x, overlay_tracks.y, 1.0, overlay_tracks.height, c.to_f32());
+                ui.draw_rect(*x, overlay_tracks.y, 1.0, overlay_tracks.height, *c);
             }
             ui.pop_immediate_clip();
 
@@ -4245,7 +4245,7 @@ impl Application {
                     top,
                     manifold_ui::color::PLAYHEAD_WIDTH,
                     height,
-                    manifold_ui::color::PLAYHEAD_RED.to_f32(),
+                    manifold_ui::color::PLAYHEAD_RED,
                 );
                 let s = manifold_ui::color::PLAYHEAD_HEAD_SIZE;
                 ui.draw_icon(
@@ -4270,7 +4270,7 @@ impl Application {
                     track.y,
                     track.width,
                     track.height,
-                    manifold_ui::color::SCROLLBAR_TRACK_C32.to_f32(),
+                    manifold_ui::color::SCROLLBAR_TRACK_C32,
                 );
                 let active = self.ws.ui_root.viewport.scrollbar_h_dragging()
                     || thumb.contains(self.cursor_pos);
@@ -4285,7 +4285,7 @@ impl Application {
                     thumb.y,
                     thumb.width,
                     thumb.height,
-                    thumb_color.to_f32(),
+                    thumb_color,
                     radius,
                 );
             }
@@ -4626,7 +4626,7 @@ fn render_text_input_overlay(
         TEXT_INPUT_BG,
         3.0,
         1.0,
-        [0.35, 0.45, 0.7, 0.8],
+        manifold_ui::Color32::new(89, 115, 179, 204), // sRGB, was [0.35, 0.45, 0.7, 0.8]
     );
 
     // Selection highlight (when select_all)

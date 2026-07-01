@@ -7,7 +7,7 @@ use super::*;
 #[derive(Debug, Clone)]
 pub(crate) struct PortView {
     pub(crate) name: String,
-    pub(crate) color: [f32; 4],
+    pub(crate) color: Color32,
     /// True for scalar (control/value) ports. Wires out of these are the
     /// "set once" driver bindings that dominate the spaghetti, so they get
     /// dimmed unless their node is focused.
@@ -72,7 +72,7 @@ pub(crate) struct NodeView {
     /// Header tint for this node's `Category` (Color & Tone, Noise, Distort,
     /// ...), so the graph reads by family at a glance. `NODE_HEADER_BG` for
     /// nodes with no descriptor / `Uncategorized`.
-    pub(crate) header_color: [f32; 4],
+    pub(crate) header_color: Color32,
     /// Top-left corner in graph-space (logical pixels, pre pan/zoom).
     pub(crate) pos_graph: (f32, f32),
     pub(crate) inputs: Vec<PortView>,
@@ -90,7 +90,7 @@ pub(crate) struct NodeView {
     /// Group accent colour (`GroupDef::tint`), painted on the group header in
     /// place of the default group tint. `None` for ordinary nodes and untinted
     /// groups. Cycled by the recolour gesture on a selected group.
-    pub(crate) group_tint: Option<[f32; 4]>,
+    pub(crate) group_tint: Option<Color32>,
     /// Friendly one-line summary from the node's `NodeDescriptor`, shown
     /// as a hover tooltip over the node's header/body. `None` for groups
     /// (no descriptor) and for any node whose author left the summary
@@ -495,26 +495,26 @@ pub(crate) fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
 /// saturation and brightness so headers stay subtle on the dark canvas; an
 /// exhaustive match means a new `Category` variant forces a colour choice
 /// here rather than silently defaulting.
-pub(crate) fn category_header_color(cat: crate::graph_view::Category) -> [f32; 4] {
+pub(crate) fn category_header_color(cat: crate::graph_view::Category) -> Color32 {
     use crate::graph_view::Category as C;
     match cat {
-        C::ColorAndTone => [0.40, 0.30, 0.22, 1.0],
-        C::BlurAndSharpen => [0.22, 0.30, 0.40, 1.0],
-        C::DistortAndWarp => [0.34, 0.24, 0.40, 1.0],
-        C::Stylize => [0.40, 0.24, 0.34, 1.0],
-        C::Generate => [0.24, 0.36, 0.28, 1.0],
-        C::Noise => [0.22, 0.36, 0.36, 1.0],
-        C::Mask => [0.30, 0.30, 0.34, 1.0],
-        C::Composite => [0.26, 0.28, 0.42, 1.0],
-        C::Geometry3D => [0.30, 0.26, 0.42, 1.0],
-        C::MaterialsAndLighting => [0.38, 0.32, 0.22, 1.0],
-        C::Particles2D => [0.24, 0.34, 0.40, 1.0],
-        C::Particles3D => [0.22, 0.32, 0.42, 1.0],
-        C::Control => [0.36, 0.34, 0.22, 1.0],
-        C::DetectionAndSampling => [0.40, 0.26, 0.26, 1.0],
-        C::MathAndConvert => [0.30, 0.30, 0.30, 1.0],
-        C::Routing => [0.26, 0.30, 0.38, 1.0],
-        C::FieldsAndCoordinates => [0.24, 0.34, 0.34, 1.0],
+        C::ColorAndTone => Color32::new(102, 76, 56, 255),
+        C::BlurAndSharpen => Color32::new(56, 76, 102, 255),
+        C::DistortAndWarp => Color32::new(87, 61, 102, 255),
+        C::Stylize => Color32::new(102, 61, 87, 255),
+        C::Generate => Color32::new(61, 92, 71, 255),
+        C::Noise => Color32::new(56, 92, 92, 255),
+        C::Mask => Color32::new(76, 76, 87, 255),
+        C::Composite => Color32::new(66, 71, 107, 255),
+        C::Geometry3D => Color32::new(76, 66, 107, 255),
+        C::MaterialsAndLighting => Color32::new(97, 82, 56, 255),
+        C::Particles2D => Color32::new(61, 87, 102, 255),
+        C::Particles3D => Color32::new(56, 82, 107, 255),
+        C::Control => Color32::new(92, 87, 56, 255),
+        C::DetectionAndSampling => Color32::new(102, 66, 66, 255),
+        C::MathAndConvert => Color32::new(76, 76, 76, 255),
+        C::Routing => Color32::new(66, 76, 97, 255),
+        C::FieldsAndCoordinates => Color32::new(61, 87, 87, 255),
         C::Uncategorized => NODE_HEADER_BG,
     }
 }
@@ -711,7 +711,14 @@ impl GraphCanvas {
                     .collect(),
                 breaks_dependency_cycle: n.breaks_dependency_cycle,
                 is_group: n.type_id == GROUP_TYPE_ID,
-                group_tint: n.group.as_ref().and_then(|g| g.tint),
+                // The def stores a group's tint as a plain sRGB float array; the
+                // canvas works in sRGB `Color32`. Convert at this boundary (no
+                // gamma — `from_f32` is the byte↔float map, not `to_f32`).
+                group_tint: n
+                    .group
+                    .as_ref()
+                    .and_then(|g| g.tint)
+                    .map(|t| Color32::from_f32(t[0], t[1], t[2], t[3])),
                 tooltip: n.tooltip.clone(),
                 preview_node_id: node_preview_target(n),
                 preview_screen: node_preview_target(n)

@@ -158,7 +158,9 @@ impl GraphCanvas {
         self.pending_actions.push(GraphEditCommand::SetGroupTint {
             scope_path: self.scope.clone(),
             group_id,
-            tint: Some(GROUP_TINT_PALETTE[next_idx]),
+            // The command/def store the tint as a plain sRGB float array; the
+            // palette is sRGB `Color32`. Convert at this boundary (no gamma).
+            tint: Some(GROUP_TINT_PALETTE[next_idx].to_srgb_f32()),
         });
     }
 

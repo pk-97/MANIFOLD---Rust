@@ -204,7 +204,7 @@ impl GraphCanvas {
     /// input port. Compatibility is port-category equality (the canvas encodes
     /// category as colour); the real connect still validates server-side, so
     /// this is purely the live hint behind the ghost wire's green/red tint.
-    pub(crate) fn wire_drop_compat(&self, viewport: Rect, from_node: u32, from_color: [f32; 4]) -> Option<bool> {
+    pub(crate) fn wire_drop_compat(&self, viewport: Rect, from_node: u32, from_color: Color32) -> Option<bool> {
         let hit = self.port_under(viewport, self.cursor.0, self.cursor.1)?;
         if hit.is_output || hit.node_id == from_node {
             return None;
@@ -222,7 +222,7 @@ impl GraphCanvas {
 /// Two ports can be wired iff they share a port category, which the canvas
 /// encodes 1:1 as the port colour (Texture2D and its typed variant share one
 /// colour, so they're treated as compatible — exactly the validator's view).
-pub(crate) fn ports_compatible(from_color: [f32; 4], to_color: [f32; 4]) -> bool {
+pub(crate) fn ports_compatible(from_color: Color32, to_color: Color32) -> bool {
     from_color == to_color
 }
 
