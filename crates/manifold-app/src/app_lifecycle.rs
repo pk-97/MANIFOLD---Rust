@@ -875,6 +875,14 @@ impl Application {
         );
         surface.set_maximum_drawable_count(3);
         surface.set_presents_with_transaction(false);
+        // EDR colorspace: the UI renderer writes linear-light values
+        // (`Color32::srgb_to_linear` in node.rs) into this surface, same as
+        // the main window. Without `configure_edr()`, macOS treats those
+        // bytes as already gamma-encoded and skips the sRGB transfer
+        // function on display — every color in this window reads uniformly
+        // darker/flatter than the main window. Mirrors `app.rs`'s primary
+        // window setup.
+        surface.configure_edr();
 
         let offscreen = gpu.device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: size.width.max(1),
