@@ -273,8 +273,13 @@ pub fn render_graph_editor_to_png(
     assert_eq!(tex_w % 64, 0, "tex_w must be a multiple of 64 for aligned readback");
     let logical_w = tex_w as f32 / scale;
     let logical_h = tex_h as f32 / scale;
+    // Column + bottom-strip geometry from the same `Dock` the live editor uses,
+    // so the snapshot's canvas height / strip band match the runtime.
+    let dock = manifold_ui::Dock::editor();
+    let dock_rects = dock.rects(UiRect::new(0.0, 0.0, logical_w, logical_h));
     let canvas_x = SIDEBAR_WIDTH;
     let canvas_width = (logical_w - SIDEBAR_WIDTH - EDITOR_CARD_LANE_WIDTH).max(0.0);
+    let canvas_height = dock_rects.canvas.height;
     let card_x = canvas_x + canvas_width;
 
     let device = GpuDevice::new();
@@ -379,7 +384,7 @@ pub fn render_graph_editor_to_png(
 
     // Center canvas, offset into its lane between the two side columns — the
     // same per-node-dump machinery as `render_graph_to_png`.
-    let viewport = CanvasRect::new(canvas_x, 0.0, canvas_width, logical_h);
+    let viewport = CanvasRect::new(canvas_x, 0.0, canvas_width, canvas_height);
     let mut canvas = GraphCanvas::new();
     canvas.set_snapshot(snapshot);
     canvas.apply_pending_fit(viewport);
@@ -398,8 +403,21 @@ pub fn render_graph_editor_to_png(
     renderer.render_tree(&tree, None);
     // Column dividers, same as the runtime present pass — default widths (this
     // headless path has no interactive drag state).
-    manifold_ui::Dock::editor().draw(
-        UiRect::new(0.0, 0.0, logical_w, logical_h),
+    let editor_area = UiRect::new(0.0, 0.0, logical_w, logical_h);
+    dock.draw(editor_area, &mut renderer as &mut dyn Painter);
+    // Bottom mini-timeline, built from the fixture project (playhead at beat 0),
+    // same view-model the live present pass draws.
+    let (mini_clips, mini_rows, mini_total, mini_bpb, mini_readout) =
+        crate::app_render::mini_timeline_data(project, 0.0);
+    manifold_ui::MiniTimeline::draw(
+        dock_rects.bottom,
+        mini_total,
+        mini_bpb,
+        0.0,
+        mini_rows,
+        &mini_clips,
+        &mini_readout,
+        false,
         &mut renderer as &mut dyn Painter,
     );
     let drew = renderer.prepare(&device, tex_w, tex_h, dpi);

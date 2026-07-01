@@ -66,6 +66,11 @@ pub struct Workspace {
     /// of truth for the editor's column geometry — render and input both read
     /// `dock.rects(area)`, so hit-testing can't drift from what's drawn.
     pub dock: manifold_ui::Dock,
+
+    /// True while the user is dragging the bottom mini-timeline to scrub the
+    /// playhead. Set on a press in the strip body, cleared on release; a move
+    /// while set seeks the content thread.
+    pub timeline_scrubbing: bool,
 }
 
 impl Workspace {
@@ -79,6 +84,7 @@ impl Workspace {
             offscreen_dirty: true,
             surface_resized_this_frame: false,
             dock: manifold_ui::Dock::editor(),
+            timeline_scrubbing: false,
         }
     }
 }

@@ -98,20 +98,19 @@ pub struct Dock {
 }
 
 impl Dock {
-    /// Graph-editor default: left preview column + right card lane, no bottom
-    /// strip yet (the mini-timeline enables it later). Sizes seed from the
-    /// `EDITOR_*_DEFAULT` constants.
+    /// Graph-editor default: left preview column + right card lane + a bottom
+    /// mini-timeline strip. Sizes seed from the `EDITOR_*_DEFAULT` constants.
     pub fn editor() -> Self {
         Self {
             left_w: EDITOR_LEFT_DEFAULT,
             right_w: EDITOR_RIGHT_DEFAULT,
-            bottom_h: 140.0,
+            bottom_h: 150.0,
             left_range: (260.0, 640.0),
             right_range: (240.0, 560.0),
-            bottom_range: (80.0, 360.0),
+            bottom_range: (90.0, 320.0),
             show_left: true,
             show_right: true,
-            show_bottom: false,
+            show_bottom: true,
             active: None,
             hover: None,
         }
@@ -242,32 +241,28 @@ impl Dock {
 
     // ── Draw (one call from the render pass) ────────────────────────────────
 
-    /// Draw the divider seams for every visible edge, highlighting the hovered
-    /// or dragged handle. A 1px `DIVIDER_COLOR` seam always; the wider
-    /// `RESIZE_HANDLE_*` band only when hovered/active, exactly like the main
-    /// split handle.
+    /// Draw one divider strip per visible edge — a *single* element whose
+    /// width and colour change with state, never a seam plus a band stacked
+    /// (that read as two bars). Idle: a 1px `DIVIDER_COLOR` line. Hover/drag:
+    /// the full `DOCK_HANDLE_W` band in `RESIZE_HANDLE_HOVER`/`_DRAG`, centred
+    /// on the same seam so it grows in place.
     pub fn draw(&self, area: Rect, ui: &mut dyn crate::draw::Painter) {
         let r = self.rects(area);
         let mut seam = |edge: DockEdge, handle: Rect, vertical: bool| {
-            // Highlight band under the cursor / during drag.
-            let band = if self.active == Some(edge) {
-                Some(color::RESIZE_HANDLE_DRAG)
+            let full = if vertical { handle.width } else { handle.height };
+            let (c, thickness): (Color32, f32) = if self.active == Some(edge) {
+                (color::RESIZE_HANDLE_DRAG, full)
             } else if self.hover == Some(edge) {
-                Some(color::RESIZE_HANDLE_HOVER)
+                (color::RESIZE_HANDLE_HOVER, full)
             } else {
-                None
+                (color::DIVIDER_COLOR, 1.0)
             };
-            if let Some(c) = band {
-                ui.draw_rect(handle.x, handle.y, handle.width, handle.height, c);
-            }
-            // Always the thin seam so the column edge reads even at idle.
-            let c: Color32 = color::DIVIDER_COLOR;
             if vertical {
-                let x = handle.x + handle.width * 0.5;
-                ui.draw_line(x, handle.y, x, handle.y_max(), 1.0, c);
+                let x = handle.x + (handle.width - thickness) * 0.5;
+                ui.draw_rect(x, handle.y, thickness, handle.height, c);
             } else {
-                let y = handle.y + handle.height * 0.5;
-                ui.draw_line(handle.x, y, handle.x_max(), y, 1.0, c);
+                let y = handle.y + (handle.height - thickness) * 0.5;
+                ui.draw_rect(handle.x, y, handle.width, thickness, c);
             }
         };
         if self.show_left {
@@ -302,7 +297,12 @@ mod tests {
         let r = d.rects(area());
         assert_eq!(r.canvas.x, EDITOR_LEFT_DEFAULT);
         assert_eq!(r.canvas.width, 1600.0 - EDITOR_LEFT_DEFAULT - EDITOR_RIGHT_DEFAULT);
-        assert_eq!(r.canvas.height, 900.0); // bottom hidden by default
+        // Bottom strip is on by default; the canvas gives up its height for it.
+        assert_eq!(r.canvas.height, 900.0 - d.bottom_h);
+        assert_eq!(r.bottom.y, r.canvas.y_max());
+        assert_eq!(r.bottom.height, d.bottom_h);
+        assert_eq!(r.bottom.x, r.canvas.x);
+        assert_eq!(r.bottom.width, r.canvas.width);
         // Panels abut the canvas with no gap or overlap.
         assert_eq!(r.left.x_max(), r.canvas.x);
         assert_eq!(r.canvas.x_max(), r.right.x);

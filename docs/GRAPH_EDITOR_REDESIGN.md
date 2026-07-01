@@ -31,7 +31,46 @@ features — it is oversized nodes:
 Big nodes → forced to the zoom floor → the one thing that should vanish (labels) is the
 one thing still drawn.
 
+## ⚠ Feedback 2026-07-01 (after first build) — direction correction, 1–3 FIXED
+
+Peter reviewed the three shipped increments (columns, label-LOD, 210px nodes) in
+the running app and raised four issues. **These override the LOD/filmstrip
+principle below** — do not re-argue it. Issues 1–3 are now fixed (2026-07-01);
+issue 4's mini-timeline landed the same pass. Issue 4's "hide-unused sockets" and
+the remaining steps (typed wires, inline slider restyle) are still open.
+
+1. **NO hiding text on zoom. — FIXED.** The label-LOD gate (`51a32b8a`) was reverted
+   and the pre-existing `show_text` / `PARAM_LOD_ZOOM` gating deleted. All node text
+   (title, params, port labels) now scales linearly with zoom — the `.max(7.0)` font
+   floors are gone (they caused the mush by stopping scale-down) — and is elided to
+   its box via the shared `graph_canvas::model::{elide_to_width, text_width}` helpers
+   (one source for the summary/param/port/title truncation the face repeats). Text is
+   never dropped, only scaled + clipped.
+2. **Doubled resize divider. — FIXED.** `Dock::draw` now draws **one** strip per edge
+   whose width+colour change with state: a 1px `DIVIDER_COLOR` line at idle, the full
+   `DOCK_HANDLE_W` band in `RESIZE_HANDLE_HOVER`/`_DRAG` centred on the same seam. No
+   more band-plus-seam = two bars.
+3. **Port labels must stay. — FIXED** (covered by #1; labels always draw, elided to
+   half the node width so a long name clips instead of crossing columns).
+4. **Bottom mini-timeline. — DONE (chrome + scrub + minimap).** New
+   `manifold_ui::MiniTimeline` widget (stateless drawer + geometry, mirrors `Dock`):
+   readout + play/pause button, bar ruler, clip minimap (every layer a thin row,
+   clips coloured via the shared `get_clip_color`), draggable playhead. The `Dock`
+   bottom edge is enabled by default (`show_bottom = true`, `bottom_h = 150`); the
+   canvas gives up its height for it. Data via `app_render::mini_timeline_data`
+   (shared by the live present pass + headless snapshot). Input: press in the strip
+   body scrubs (`SeekToBeat`), press on the play button toggles `Play`/`Pause`;
+   scrub-drag state on `Workspace.timeline_scrubbing`.
+
+Still open from this feedback: **hide-unused sockets + "+N" chip** (issue 4's other
+half — filter unused ports at NodeView construction; ports are name-keyed so
+index-safe), then steps 4–5 (typed wires, inline slider restyle).
+
 ## The direction (Blender-informed)
+
+> **SUPERSEDED on the LOD point** by the feedback block above: principle #3 no
+> longer holds — text scales with zoom and clips, it is never hidden.
+
 
 The lesson from Blender: a graph is legible at one zoom when nodes are **sized to content**.
 Applied here, with our video-tool needs kept:
@@ -179,7 +218,17 @@ from existing parts:
    columns). **DONE 2026-07-01** — `dock.rs` + `Workspace.dock`; render/input/headless
    all read `dock.rects(area)`; left+right live, bottom stubbed for step 6.
 2. **Compact content-sized nodes** + **hide-unused sockets** + **gate port labels by LOD**
-   (this is the mush fix). Biggest legibility win.
+   (this is the mush fix). Biggest legibility win. **PARTIAL 2026-07-01:**
+   - ✅ gate port labels by LOD (51a32b8a) — dots stay, labels drop below 0.5 zoom.
+   - ✅ compact nodes: `NODE_WIDTH` 300→210, `COL_SPACING` 360→270 (fb22348c) —
+     FluidSimulation now fits at 51% (was 38%), so labels are legible at default fit.
+   - ⬜ **hide-unused sockets** + "+N" reveal chip — still TODO. The "Inputs" node
+     shows 9 outputs when ~2 are wired; filter unused at `NodeView` construction
+     (`set_snapshot` has `level_wires` in scope; ports are name-keyed so indices stay
+     safe), with a per-node reveal toggle so you can still wire a currently-unwired
+     input. This is the last height lever + has real chip interaction surface.
+   - ⬜ true per-node content-sizing (width from longest label) — refinement past
+     the uniform 210.
 3. **Filmstrip LOD** (previews stay + enlarge, text drops).
 4. **Typed-color wires** (keep hover-dim + arc routing).
 5. **Inline param slider restyle** + connected/param socket distinction.

@@ -541,6 +541,27 @@ impl Application {
             return;
         }
 
+        // Mini-timeline scrub: a move while scrubbing seeks the playhead and
+        // consumes the move (the canvas + panels don't see it), mirroring the
+        // dock-drag precedence above.
+        if self.graph_editor.as_ref().is_some_and(|ed| ed.timeline_scrubbing) {
+            let bottom = self
+                .graph_editor
+                .as_ref()
+                .map(|ed| ed.dock.rects(area).bottom);
+            if let Some(bottom) = bottom {
+                let total = self.local_project.timeline.duration_beats().as_f32();
+                let beat = manifold_ui::MiniTimeline::beat_at_x(bottom, total, logical_x);
+                self.send_content_cmd(ContentCommand::SeekToBeat(
+                    manifold_core::Beats::from_f32(beat),
+                ));
+                if let Some(ed) = self.graph_editor.as_mut() {
+                    ed.offscreen_dirty = true;
+                }
+            }
+            return;
+        }
+
         // Preview sidebar on the left, card lane on the right (matches the main
         // timeline's inspector docking right). Geometry from the same `Dock` the
         // present pass reads, so the canvas viewport tracks the dragged columns.
@@ -687,6 +708,74 @@ impl Application {
                     ElementState::Released => {
                         if ed.dock.is_dragging() {
                             ed.dock.end();
+                            ed.offscreen_dirty = true;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        // Bottom mini-timeline: a press in the strip body starts a scrub (and
+        // seeks immediately); a press on the play button toggles transport.
+        // Handled on the disjoint `graph_editor` workspace, before the canvas
+        // sees the click. The `bottom` rect is copied out so no borrow is held
+        // across the content-command sends.
+        if button == MouseButton::Left {
+            let (cx, cy) = self
+                .graph_canvas
+                .as_ref()
+                .map(|c| c.cursor())
+                .unwrap_or((0.0, 0.0));
+            let (ww, wh) = self
+                .window_registry
+                .get(&window_id)
+                .map(|ws| {
+                    let s = ws.window.scale_factor();
+                    let sz = ws.window.inner_size();
+                    (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
+                })
+                .unwrap_or((1.0, 1.0));
+            let area = manifold_ui::Rect::new(0.0, 0.0, ww, wh);
+            let bottom = self
+                .graph_editor
+                .as_ref()
+                .filter(|ed| ed.dock.show_bottom)
+                .map(|ed| ed.dock.rects(area).bottom);
+            if let Some(bottom) = bottom {
+                let pos = Vec2::new(cx, cy);
+                match state {
+                    ElementState::Pressed => {
+                        if manifold_ui::MiniTimeline::hit_play(bottom, pos) {
+                            let cmd = if self.content_state.is_playing {
+                                ContentCommand::Pause
+                            } else {
+                                ContentCommand::Play
+                            };
+                            self.send_content_cmd(cmd);
+                            if let Some(ed) = self.graph_editor.as_mut() {
+                                ed.offscreen_dirty = true;
+                            }
+                            return;
+                        }
+                        if manifold_ui::MiniTimeline::body_rect(bottom).contains(pos) {
+                            let total =
+                                self.local_project.timeline.duration_beats().as_f32();
+                            let beat =
+                                manifold_ui::MiniTimeline::beat_at_x(bottom, total, cx);
+                            self.send_content_cmd(ContentCommand::SeekToBeat(
+                                manifold_core::Beats::from_f32(beat),
+                            ));
+                            if let Some(ed) = self.graph_editor.as_mut() {
+                                ed.timeline_scrubbing = true;
+                                ed.offscreen_dirty = true;
+                            }
+                            return;
+                        }
+                    }
+                    ElementState::Released => {
+                        if let Some(ed) = self.graph_editor.as_mut()
+                            && std::mem::take(&mut ed.timeline_scrubbing)
+                        {
                             ed.offscreen_dirty = true;
                             return;
                         }

@@ -3012,6 +3012,15 @@ impl Application {
             self.last_atlas_visible_sent = visible_nodes;
         }
 
+        // ── Mini-timeline data ────────────────────────────────────────
+        // Built from the UI project mirror + playhead BEFORE the disjoint `ws`
+        // borrow below. Cheap: walks the clip list once, off the per-node hot
+        // path. Shared with the headless snapshot path via `mini_timeline_data`.
+        let mini_current_beat = self.content_state.current_beat.as_f32();
+        let mini_is_playing = self.content_state.is_playing;
+        let (mini_clips, mini_rows, mini_total_beats, mini_beats_per_bar, mini_readout) =
+            mini_timeline_data(&self.local_project, mini_current_beat);
+
         let Some(gpu) = &self.gpu else { return };
         let Some(wid) = self.graph_editor_window_id else {
             return;
@@ -3079,6 +3088,9 @@ impl Application {
         let card_width = dock.right.width;
         let canvas_x = dock.canvas.x;
         let canvas_width = dock.canvas.width;
+        // Canvas height is short of the window by the bottom mini-timeline strip
+        // (via the same `dock` the input pass reads, so hit-testing tracks it).
+        let canvas_height = dock.canvas.height;
         let card_x = dock.right.x;
         // When a node is being previewed, the preview pane occupies the top of
         // the sidebar; the expose/param rows start below it so they don't
@@ -3427,7 +3439,7 @@ impl Application {
             ui.begin_frame();
             canvas.render(
                 ui,
-                crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, logical_h as f32),
+                crate::graph_canvas::Rect::new(canvas_x, 0.0, canvas_width, canvas_height),
             );
             // Layer the sidebar UITree on top of the canvas's immediate-mode
             // draws (the flush protocol covers them with their own batches).
@@ -3436,6 +3448,23 @@ impl Application {
             // hover/drag. Drawn after the panels so the seam reads on top of
             // both the canvas and the sidebar backgrounds.
             ws.dock.draw(editor_area, ui);
+            // Bottom mini-timeline: scrub strip + clip minimap in the dock's
+            // bottom band. Authoring-only — scrub to preview the graph at a
+            // point, play to watch motion. Same `dock.bottom` the input pass
+            // hit-tests for scrub/play.
+            if ws.dock.show_bottom {
+                manifold_ui::MiniTimeline::draw(
+                    dock.bottom,
+                    mini_total_beats,
+                    mini_beats_per_bar,
+                    mini_current_beat,
+                    mini_rows,
+                    &mini_clips,
+                    &mini_readout,
+                    mini_is_playing,
+                    ui,
+                );
+            }
             // The mapping drawer floats over the composited canvas + sidebar:
             // it draws inline at POPOVER depth (above the CONTENT-depth nodes),
             // unclipped.
@@ -4597,6 +4626,60 @@ impl Application {
         present_enc.commit();
         self.ui_profile.add("present.blit_present", pseg.elapsed());
     }
+}
+
+/// Build the graph editor's bottom mini-timeline view-model from a project +
+/// playhead beat: `(clips, row_count, total_beats, beats_per_bar, readout)`.
+/// Every layer becomes a row; each clip a coloured bar via the shared
+/// `get_clip_color` (so the strip matches the main timeline). Shared by the
+/// live present pass and the headless snapshot so both draw the same strip.
+pub(crate) fn mini_timeline_data(
+    project: &manifold_core::project::Project,
+    current_beat: f32,
+) -> (Vec<manifold_ui::MiniClip>, usize, f32, f32, String) {
+    let mut clips: Vec<manifold_ui::MiniClip> = Vec::new();
+    for (row, layer) in project.timeline.layers.iter().enumerate() {
+        let is_gen = layer.layer_type == manifold_core::LayerType::Generator;
+        for clip in &layer.clips {
+            let c = clip.color_override.unwrap_or(layer.layer_color);
+            let c32 = manifold_ui::Color32::new(
+                (c.r * 255.0).round().clamp(0.0, 255.0) as u8,
+                (c.g * 255.0).round().clamp(0.0, 255.0) as u8,
+                (c.b * 255.0).round().clamp(0.0, 255.0) as u8,
+                255,
+            );
+            let color = manifold_ui::bitmap_painter::get_clip_color(
+                false,
+                false,
+                clip.is_muted || layer.is_muted,
+                false,
+                is_gen,
+                c32,
+            );
+            clips.push(manifold_ui::MiniClip {
+                row,
+                start_beat: clip.start_beat.as_f32(),
+                end_beat: clip.end_beat().as_f32(),
+                color,
+            });
+        }
+    }
+    let bpb = project.settings.time_signature_numerator.max(1) as f32;
+    let bar = (current_beat / bpb).floor() as i64 + 1;
+    let beat_in_bar = (current_beat - (bar - 1) as f32 * bpb).floor() as i64 + 1;
+    let readout = format!(
+        "Bar {bar}.{beat_in_bar} · {:.0} BPM · {}/{}",
+        project.settings.bpm.0,
+        project.settings.time_signature_numerator,
+        project.settings.time_signature_denominator,
+    );
+    (
+        clips,
+        project.timeline.layers.len(),
+        project.timeline.duration_beats().as_f32(),
+        bpb,
+        readout,
+    )
 }
 
 /// Format the audio scope's hover readout: frequency (kHz above 1 kHz, else Hz)
