@@ -10,7 +10,7 @@
 
 Introduce a `Material` port type and a v1 set of material atoms that 3D mesh renderers consume to drive surface shading. Aligns MANIFOLD's 3D-rendering shape with TouchDesigner / Blender / Unreal / Unity: bundled renderer + first-class Light + first-class Material. The current pattern of "compose shading via atoms downstream of a G-buffer" (MetallicGlass's cook_torrance + envmap chain) collapses into a single Material wire.
 
-**Why now (before shadow infrastructure + DigitalPlants migration):** the Material system simplifies the renderer's surface enough that downstream work (shadow infrastructure, DigitalPlants migration, future 3D effects and generators) lands on the clean shape rather than building atop scattered scalar params that will get deleted.
+**Why now (before shadow infrastructure + DigitalPlants migration):** the Material system simplifies the renderer's surface enough that downstream work (shadow infrastructure, DigitalPlants migration, future 3D effects and generators) lands on the clean shape rather than building atop scattered scalar params slated for deletion.
 
 ---
 
@@ -256,7 +256,7 @@ Each material kind has its own fragment shader file:
 
 All four share the same vertex shader (the existing one in `render_3d_mesh.wgsl` / `render_instanced_3d_mesh.wgsl`). The renderer's `create_render_pipeline_depth` call picks the right fragment entry point per kind.
 
-PBR's shader includes the existing [`pbr_brdf.wgsl`](../crates/manifold-renderer/src/node_graph/primitives/shaders/pbr_brdf.wgsl) helper that cook_torrance + envmap_sample atoms already share — that code stays reusable; the difference is it now lives inside the material's fragment shader instead of being composed via separate atoms.
+PBR's shader includes the existing [`pbr_brdf.wgsl`](../crates/manifold-renderer/src/node_graph/primitives/shaders/pbr_brdf.wgsl) helper that cook_torrance + envmap_sample atoms already share — that code stays reusable; it now lives inside the material's fragment shader instead of being composed via separate atoms.
 
 ---
 
@@ -287,7 +287,7 @@ Node count: ~50 → ~25. The G-buffer-then-shade chain (`world_pos`, `world_norm
 
 Outer-card sliders preserved: `feedback`, `noise_scale`, `noise_speed`, `edge_str`, `mirror`, `displace`, `roughness` (binds to `pbr_material.roughness`), `light_int` (binds to `light.intensity`), `cam_dist`, `cam_orbit`, `cam_tilt`, `cam_fov`, `look_y`. New sliders for direct light control come from the existing `node.light` atom.
 
-The reinhard tone map is deleted from the preset — PBR's bundled shader handles tone mapping internally (writing in linear, the canvas's HDR-to-SDR pass at composite time handles final mapping). If this turns out to look different we add a `tone_map` enum to PBR material itself.
+The reinhard tone map is deleted from the preset — PBR's bundled shader handles tone mapping internally (writing in linear; the canvas's HDR-to-SDR pass at composite time handles final mapping). If this looks different, add a `tone_map` enum to PBR material itself.
 
 ### NestedCubes (small migration)
 
@@ -326,7 +326,7 @@ No existing kind's behaviour changes.
 
 ### Shape B — user-authored material sub-graphs
 
-When the [`graph_compiler` initiative](GRAPH_COMPILER.md) ships the WGSL inliner, authored materials become a new `MaterialKind::Authored { graph_ref: SubGraphRef }` variant. The renderer's match arm for `Authored` dispatches to the inliner, which compiles the sub-graph into a fragment shader at pipeline-creation time. Registered kinds (Pbr / Phong / Cel / Unlit) coexist — they're permanent vocabulary; authored materials are user-customisable on top.
+When the [`graph_compiler` initiative](GRAPH_COMPILER.md) ships the WGSL inliner, authored materials become a new `MaterialKind::Authored { graph_ref: SubGraphRef }` variant. The renderer's match arm for `Authored` dispatches to the inliner, which compiles the sub-graph into a fragment shader at pipeline-creation time. Registered kinds (Pbr / Phong / Cel / Unlit) coexist as permanent vocabulary; authored materials are user-customisable on top.
 
 ### Multi-light support
 
