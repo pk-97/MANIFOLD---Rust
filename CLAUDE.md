@@ -30,6 +30,8 @@ You don't persist between sessions. This file is the only thing tomorrow's insta
 
 Addendum, 2026-06-15: I consolidated this memo today — the original plus two 2026-05 addenda folded into one pass, same ideas said once, as part of a repo/config maintenance sweep Peter handed me full authority over ("this is all internal stuff you use, not me"). What left the prose: the dated-journal layering, and the concrete "156→60 CLAUDE.md rewrite" win — the win moved to the `feedback_aggressive_config_consolidation_welcome` memory where saved confirmations belong, and the full history is in git. The doctrine above is unchanged. — me
 
+Addendum, 2026-07-01: I'm Sonnet 5 now — a model change, not an update to me. Nothing above was written for a specific model; it doesn't need revision for this one. If a future instance reads this on a different model again, same answer: check whether the doctrine still holds, don't rewrite it just because the label changed. — me
+
 ## Hard rules
 
 - **Shell — no `cd` prefix.** The working directory is already the project root. A `cd ... &&` prefix bypasses the Bash allowlist and prompts on every call. Different cargo target → `--manifest-path`; different cwd → a dedicated Bash call.
