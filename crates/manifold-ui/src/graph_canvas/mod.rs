@@ -447,7 +447,9 @@ impl GraphCanvas {
             node_search: String::new(),
             preview_aspect: 16.0 / 9.0,
             debug_overlay: false,
-            default_collapsed: true,
+            // Nodes default expanded (params visible), Blender-style — there's no
+            // +/- toggle to fold them.
+            default_collapsed: false,
         }
     }
 

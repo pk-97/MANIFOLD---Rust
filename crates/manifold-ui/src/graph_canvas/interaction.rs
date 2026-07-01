@@ -456,16 +456,8 @@ impl GraphCanvas {
                 return;
             }
         }
-        // Collapse chevron in a node header toggles that node's param rows.
-        // Checked before ports/header so it doesn't start a wire or a move.
-        if let Some(node_id) = self.chevron_under(viewport, sx, sy) {
-            let now = !self.collapsed.get(&node_id).copied().unwrap_or(true);
-            self.collapsed.insert(node_id, now);
-            if let Some(node) = self.nodes.iter_mut().find(|n| n.id == node_id) {
-                node.collapsed = now;
-            }
-            return;
-        }
+        // No collapse toggle — nodes stay expanded (Blender-style). A header
+        // click falls through to select / drag below.
         if let Some(hit) = self.port_under(viewport, sx, sy) {
             if hit.is_output {
                 self.drag_mode = DragMode::WireFrom {
@@ -748,6 +740,18 @@ impl GraphCanvas {
         let node = self.find_node(node_id)?;
         let handle = node.handle.clone()?;
         let p = node.params.get(pi)?;
+        // Diagnostic (GRAPH_EXPOSE_LOG=1): what the canvas reads at click time. If
+        // `was_exposed` never flips to true across repeated clicks on one param,
+        // the snapshot isn't delivering the toggled state back (backend/refresh),
+        // not a render bug.
+        if std::env::var_os("GRAPH_EXPOSE_LOG").is_some() {
+            eprintln!(
+                "[expose-click] handle={handle} param={} was_exposed={} -> expose={}",
+                p.name,
+                p.exposed,
+                !p.exposed
+            );
+        }
         let (min, max) = p.range.unwrap_or((0.0, 1.0));
         Some(GraphEditCommand::ToggleNodeParamExpose {
             node_id: node.node_id.clone(),

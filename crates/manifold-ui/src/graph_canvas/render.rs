@@ -474,22 +474,12 @@ impl GraphCanvas {
             TEXT_HEADER,
         );
 
-        // Collapse chevron at the header's right edge, for nodes that have
-        // params to fold. "+" collapsed (click to expand), "-" expanded.
-        if !node.params.is_empty() {
-            let chev_size = 11.0 * self.zoom;
-            ui.draw_text(
-                sx + sw - 14.0 * self.zoom,
-                sy + (header_h - chev_size) * 0.5,
-                if node.collapsed { "+" } else { "-" },
-                chev_size,
-                TEXT_SECONDARY,
-            );
-        }
+        // No collapse +/- toggle — nodes default to (and stay) expanded, like
+        // Blender. You read a node's params where it lives; there's no folded
+        // state to hunt for. (The collapse machinery remains latent for a
+        // possible future gesture, but no header affordance drives it.)
 
         // Group "enter" chevron — signals the box opens on double-click.
-        // Groups carry no on-face params, so this never collides with the
-        // collapse chevron above.
         if node.is_group {
             let chev_size = 13.0 * self.zoom;
             ui.draw_text(

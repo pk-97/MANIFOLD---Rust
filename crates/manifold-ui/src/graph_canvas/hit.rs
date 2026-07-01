@@ -190,25 +190,6 @@ impl GraphCanvas {
         None
     }
 
-    /// Hit-test the collapse chevron in a node header (its right edge).
-    /// Returns the node id when the cursor is over the chevron of a node
-    /// that has params (param-less nodes draw no chevron). Checked before
-    /// the header-drag test so toggling collapse doesn't also start a move.
-    pub(crate) fn chevron_under(&self, viewport: Rect, sx: f32, sy: f32) -> Option<u32> {
-        let header_h = NODE_HEADER_HEIGHT * self.zoom;
-        let sw = NODE_WIDTH * self.zoom;
-        let chev_w = 20.0 * self.zoom;
-        self.nodes.iter().find_map(|node| {
-            if node.params.is_empty() {
-                return None;
-            }
-            let (nx, ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
-            let in_x = sx >= nx + sw - chev_w && sx <= nx + sw;
-            let in_y = sy >= ny && sy <= ny + header_h;
-            (in_x && in_y).then_some(node.id)
-        })
-    }
-
     /// Find the wire whose destination is `(to_node, to_port)`. Returns
     /// the wire's index in `self.wires`. Each input port has at most
     /// one incoming wire (enforced at graph-validate time), so this is
