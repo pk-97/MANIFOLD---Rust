@@ -271,6 +271,13 @@ impl BitmapSlider {
     /// geometry constant; cards always call `build` and never this, so their
     /// look is untouched. Purely visual: no hover/pressed states, since the
     /// canvas has no per-row hover treatment to drive them.
+    ///
+    /// `label_width` and `value_box_w` are pre-scaled by the caller (same
+    /// convention for both, unlike the internal geometry constants below,
+    /// which `draw` scales itself since callers don't see them) — the graph
+    /// canvas uses a wider `value_box_w` than the card's shared
+    /// [`VALUE_BOX_W`] because a raw on-node param can be an unnormalized
+    /// integer in the millions that the card never has to display.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         ui: &mut dyn Painter,
@@ -281,13 +288,13 @@ impl BitmapSlider {
         colors: &SliderColors,
         font_size: f32,
         label_width: f32,
+        value_box_w: f32,
         scale: f32,
     ) {
         let fill_inset = FILL_INSET * scale;
         let thumb_width = THUMB_WIDTH * scale;
         let thumb_inset = THUMB_INSET * scale;
         let track_radius = TRACK_RADIUS * scale;
-        let value_box_w = VALUE_BOX_W * scale;
         let value_gap = VALUE_GAP * scale;
         let gap = GAP * scale;
 

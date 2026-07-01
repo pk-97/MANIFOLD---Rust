@@ -89,16 +89,17 @@ pub(crate) use model::{
 };
 
 const HEADER_HEIGHT: f32 = 28.0;
-/// Node body width in graph units. Widened from 210 (2026-07-01) so the
-/// unified slider widget's fixed label + value-cell columns leave the track a
-/// real width and typical param names ("Translation X", "Rotation") stop
-/// eliding — at 210 they truncated hard. Still compact by design (was 300
-/// originally): a narrower node is also a *shorter* node, since the always-on
-/// preview screen is sized to `NODE_WIDTH - 2·PREVIEW_PAD` at the project
-/// aspect. On-node param rows and the title still truncate to fit when a name
-/// genuinely doesn't. (True per-node content-sizing is a later refinement;
-/// this uniform width is the high-leverage first step.)
-const NODE_WIDTH: f32 = 240.0;
+/// Node body width in graph units. 210→240→270 (2026-07-01): the unified
+/// slider widget's fixed label + value-cell columns need real room to leave
+/// the track a usable width without eliding every param name. Still compact
+/// by design (was 300 originally): a narrower node is also a *shorter* node,
+/// since the always-on preview screen is sized to `NODE_WIDTH - 2·PREVIEW_PAD`
+/// at the project aspect. On-node param rows and the title still truncate to
+/// fit when a name genuinely doesn't (a long name + a "← wired"/"↳ outer"
+/// suffix will always be able to outrun any reasonable width). (True per-node
+/// content-sizing is a later refinement; this uniform width is the
+/// high-leverage first step.)
+const NODE_WIDTH: f32 = 270.0;
 const NODE_HEADER_HEIGHT: f32 = 22.0;
 /// Padding around the preview strip inside a node, so the thumbnail reads as a
 /// recessed screen rather than a fill bleeding to the node edges.
@@ -138,13 +139,28 @@ pub(crate) fn preview_screen_size(aspect: f32) -> (f32, f32) {
         (PREVIEW_MAX_H * aspect, PREVIEW_MAX_H)
     }
 }
-/// Height of one on-node parameter row. Ranged params draw the same
-/// track/fill/thumb/value-cell slider widget the inspector card uses
-/// (`slider::BitmapSlider::draw`); matches the card's `ROW_HEIGHT` (24) so
-/// the widget isn't squeezed into a shorter box than it was drawn for. Nodes
-/// carry their params on their face so you read (and tune) them where you
-/// are, instead of darting to a side panel.
-const PARAM_ROW_H: f32 = 24.0;
+/// Vertical pitch of one on-node parameter row — from one row's top to the
+/// next. Matches the card's real row *rhythm*, `param_slider_shared::ROW_HEIGHT`
+/// (24) + `ROW_SPACING` (6) = 30, not just the bare row height: the card never
+/// packs consecutive rows edge-to-edge, and neither should the node (2026-07-01
+/// — an initial 18→24 pass matched the widget height but not the card's actual
+/// gap between rows, which is what actually reads as "padding"). The slider
+/// widget itself draws shorter than the full pitch and is vertically centered
+/// in it (see `PARAM_SLIDER_ROW_H`), so the gap is real whitespace, not just
+/// unused row height. Nodes carry their params on their face so you read (and
+/// tune) them where you are, instead of darting to a side panel.
+const PARAM_ROW_H: f32 = 30.0;
+/// Height (graph units) of the slider widget itself within a param row —
+/// matches the card's `ROW_HEIGHT` (24) exactly. Centered vertically in the
+/// taller `PARAM_ROW_H` pitch, leaving a real gap below before the next row.
+const PARAM_SLIDER_ROW_H: f32 = 24.0;
+/// Width (graph units) of a ranged param's value cell. Wider than the card's
+/// shared `slider::VALUE_BOX_W` (56): the card only ever shows the friendly,
+/// human-scaled value an effect/generator exposes (e.g. "2.00"), but a raw
+/// on-node primitive param can be an unnormalized integer in the millions
+/// ("2000000" — particle counts), which crowded 56's margins to nothing.
+/// Node-only — cards keep drawing through `slider::VALUE_BOX_W` unchanged.
+const PARAM_SLIDER_VALUE_BOX_W: f32 = 72.0;
 /// Left padding (graph units) before a param row's content. The expose glyph
 /// sits here; the label starts past it. Shared by render + hit so glyph draw and
 /// click agree. Matches the value/label rows' `pad_x`.
@@ -156,11 +172,10 @@ const PARAM_EXPOSE_D: f32 = 7.0;
 /// a small gap, so the label never overlaps the dot.
 const PARAM_LABEL_X: f32 = PARAM_PAD_X + PARAM_EXPOSE_D + 4.0;
 /// Label-cell width (graph units) for a ranged param's slider widget — the
-/// node-face analogue of `slider::DEFAULT_LABEL_WIDTH` (60). Widened from 52
-/// alongside `NODE_WIDTH` (2026-07-01): 52 elided common names like
-/// "Translation X" hard; 72 fits them while still leaving the track a real
-/// width.
-const PARAM_SLIDER_LABEL_W: f32 = 72.0;
+/// node-face analogue of `slider::DEFAULT_LABEL_WIDTH` (60). 52→72→84
+/// (2026-07-01): still elided common names like "Active Particle Count"
+/// hard at 72, once `NODE_WIDTH` had the room to give it more.
+const PARAM_SLIDER_LABEL_W: f32 = 84.0;
 /// Pixels of horizontal drag that scrub a value across its full min..max
 /// range when editing a param on the node face. Matches the inspector
 /// sidebar's feel (`DRAG_FULL_RANGE_PX`).

@@ -630,7 +630,11 @@ impl GraphCanvas {
             // left + an expose checkbox + value + fill bar), then leftover inputs.
             for (i, row) in node.rows.iter().enumerate() {
                 let row_y = body_top + i as f32 * row_h;
-                let text_y = row_y + 2.0 * self.zoom;
+                // Centered in the row, matching the expose checkbox
+                // (`expose_glyph_bounds`) and the port dots (`expanded_row_center`)
+                // — a fixed top offset read off-centre once the row pitch grew to
+                // make room for card-matching row spacing.
+                let text_y = row_y + (row_h - text_size) * 0.5;
                 match *row {
                     NodeRow::Output { port } => {
                         let Some(p) = node.outputs.get(port) else {
@@ -713,8 +717,17 @@ impl GraphCanvas {
                             if p.wire_driven {
                                 colors.text = color::TEXT_DIMMED_C32;
                             }
+                            // The widget draws shorter than the full row pitch
+                            // and centers in it, so the pitch's extra room
+                            // (added for card-matching row spacing) reads as a
+                            // real gap to the next row, not slack the slider
+                            // eats.
+                            let slider_h = PARAM_SLIDER_ROW_H * self.zoom;
                             let slider_rect = crate::node::Rect::new(
-                                slider_x, row_y, (row_right - slider_x).max(0.0), row_h,
+                                slider_x,
+                                row_y + (row_h - slider_h) * 0.5,
+                                (row_right - slider_x).max(0.0),
+                                slider_h,
                             );
                             BitmapSlider::draw(
                                 ui,
@@ -725,6 +738,7 @@ impl GraphCanvas {
                                 &colors,
                                 text_size,
                                 PARAM_SLIDER_LABEL_W * self.zoom,
+                                PARAM_SLIDER_VALUE_BOX_W * self.zoom,
                                 self.zoom,
                             );
                         } else {
