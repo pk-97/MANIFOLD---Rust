@@ -661,7 +661,15 @@ impl GraphCanvas {
         // that can't be exposed), so the dot never falls through to a scrub.
         if let Some((node_id, pi)) = self.expose_glyph_under(viewport, sx, sy) {
             self.select_single(node_id);
-            if let Some(cmd) = self.build_expose_toggle(node_id, pi) {
+            // A wire-driven param is read-only: the wire feeds it every frame, so
+            // exposing it to the card would lie about what drives it. Consume the
+            // click (it selected the node) but emit no toggle — parity with the
+            // sidebar's disabled checkbox.
+            let wire_driven = self
+                .find_node(node_id)
+                .and_then(|n| n.params.get(pi))
+                .is_some_and(|p| p.wire_driven);
+            if !wire_driven && let Some(cmd) = self.build_expose_toggle(node_id, pi) {
                 self.pending_actions.push(cmd);
             }
             return;
@@ -680,6 +688,13 @@ impl GraphCanvas {
                 .and_then(|n| n.params.get(pi).cloned());
             if let Some(p) = pv {
                 self.select_single(node_id);
+                // Wire-driven params are read-only: a same-named input wire feeds
+                // the value every frame, so a scrub / editor here would fight the
+                // wire and lie about control. Consume the click (it selected the
+                // node) but open nothing — remove the wire to reclaim the param.
+                if p.wire_driven {
+                    return;
+                }
                 // Numeric ranged params scrub in place.
                 if let Some(s) = p.scrub {
                     self.drag_mode = DragMode::ParamScrub {

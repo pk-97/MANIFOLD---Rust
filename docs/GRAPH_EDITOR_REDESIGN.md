@@ -347,9 +347,24 @@ the node; the top performance card stays.
    `pressing_inside_table_editor_header_*`, `wgsl_node_has_edit_code_footer_*`,
    `non_wgsl_node_*`, `wgsl_footer_hidden_when_collapsed`); render verified headless
    (SNAP_P4-injected wgsl node — footer + string/path/table rows draw).
-5. ⬜ **Wire-driven / outer-driven state on the row** — the "← wired" / "↳ outer" hints
-   and the read-only lockout the sidebar showed, so an on-node control can't lie about what
-   drives it.
+5. ✅ **Wire-driven / outer-driven state on the row.** DONE 2026-07-01. Each param now carries
+   the same two driver facts the sidebar showed, computed canvas-side from data the snapshot
+   already holds (`self.wires` + `outer_routings`) — no new plumbing, byte-for-byte the app's
+   `build_wire_driven_keys` / `build_outer_driven_map` join:
+   - **Wire-driven** (a wire on the node's same-named scalar input port shadows the param) →
+     the row goes **read-only**: the value scrub / editor and the expose glyph all no-op (the
+     click still selects), the value + expose box draw dimmed, and the label carries **"← wired"**.
+     Reading `self.wires` means a wire *inside* a group is seen when you're in it (the sidebar's
+     root-only walk couldn't). Removing the wire reclaims the param.
+   - **Outer-driven** (an outer performance-card slider routes into `(handle, param)`) → the row
+     **stays editable** (the binding apply path skips when the outer slot is unchanged, so inline
+     edits survive) but carries **"↳ <label>"** so you know which card slider reclaims control.
+   - Wire wins when both apply (parity with the sidebar's precedence). `ParamView` gained
+     `wire_driven` / `outer_driver`, filled by `apply_driven_state` (called from both `set_snapshot`
+     paths so exposing a param refreshes the hint without a relayout). Tests: `wire_on_same_named_port_*`,
+     `wire_driven_row_is_read_only_*`, `wire_driven_row_expose_glyph_is_dead`,
+     `outer_routing_marks_param_outer_driven_*`, `wire_wins_when_both_*`, `removing_the_wire_reclaims_*`;
+     render verified headless (SNAP_P5 — "← wired" + "↳ Macro 1" hints draw, wire arcs into the shadow socket).
 6. ⬜ **Delete the bottom sidebar** (`GraphEditorPanel` param stack + `GraphEditorNodeView`
    plumbing). Relocate the "Smart preview" toggle + the scalar-node value inspector (fold
    into the node face / header). Reclaim the dock space for the canvas.

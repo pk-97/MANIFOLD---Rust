@@ -676,23 +676,46 @@ impl GraphCanvas {
                             );
                             right_w += gap + chip;
                         }
+                        // A wire-driven param is read-only (a same-named input
+                        // wire feeds it), so its value reads dimmed — the number
+                        // is live but you can't scrub it here.
+                        let value_color = if p.wire_driven {
+                            TEXT_SECONDARY
+                        } else {
+                            TEXT_PRIMARY
+                        };
                         ui.draw_text(
                             sx + sw - pad_x - value_w,
                             text_y,
                             &p.value,
                             text_size,
-                            TEXT_PRIMARY,
+                            value_color,
                         );
                         // Expose checkbox (exposable kinds only): empty box = not
                         // on the card, filled cyan + tick = exposed. Click toggles.
+                        // Wire-driven params can't be exposed (the wire owns them),
+                        // so the box draws disabled to match the dead click.
                         if kind_is_exposable(p.kind) {
-                            self.draw_expose_checkbox(ui, sx, row_y, row_h, p.exposed);
+                            self.draw_expose_checkbox(
+                                ui, sx, row_y, row_h, p.exposed, !p.wire_driven,
+                            );
                         }
-                        // Label, indented past the socket + checkbox column.
+                        // Label, indented past the socket + checkbox column, with a
+                        // driver hint appended: "← wired" when an input wire shadows
+                        // the param (read-only), else "↳ <outer>" when an outer card
+                        // slider routes in (still editable). Wire wins when both
+                        // apply (parity with the sidebar's precedence).
                         let label_x = sx + PARAM_LABEL_X * self.zoom;
                         let label_budget =
                             (sx + sw - pad_x - right_w - 6.0 * self.zoom - label_x).max(0.0);
-                        let label = elide_to_width(&p.label, text_size, label_budget);
+                        let label_text: std::borrow::Cow<str> = if p.wire_driven {
+                            format!("{}  ← wired", p.label).into()
+                        } else if let Some(outer) = &p.outer_driver {
+                            format!("{}  ↳ {outer}", p.label).into()
+                        } else {
+                            p.label.as_str().into()
+                        };
+                        let label = elide_to_width(&label_text, text_size, label_budget);
                         ui.draw_text(label_x, text_y, &label, text_size, TEXT_SECONDARY);
                         // Fill bar under ranged values — the inline "slider",
                         // spanning from the label indent to the row's right edge.
@@ -928,7 +951,8 @@ impl GraphCanvas {
     /// dark box when the param isn't exposed, a filled cyan box with a tick when
     /// it feeds the outer performance card. Geometry via `expose_glyph_bounds`,
     /// the same source `expose_glyph_under` hit-tests, so the drawn box and the
-    /// click target can't drift.
+    /// click target can't drift. `enabled` is `false` for a wire-driven param —
+    /// the box then draws dimmed so it reads as locked (the click is dead too).
     fn draw_expose_checkbox(
         &self,
         ui: &mut dyn Painter,
@@ -936,10 +960,25 @@ impl GraphCanvas {
         row_y: f32,
         row_h: f32,
         exposed: bool,
+        enabled: bool,
     ) {
         let (bx, by, bd) = expose_glyph_bounds(node_x, row_y, row_h, self.zoom);
         let r = 2.0 * self.zoom;
-        if exposed {
+        if !enabled {
+            // Locked (wire-driven): a faint outline + inner fill, no interactive
+            // tint, so it's visibly present but clearly not a live toggle.
+            ui.draw_rounded_rect(bx, by, bd, bd, PARAM_EXPOSE_OFF, r);
+            let inset = 1.5 * self.zoom;
+            let iw = (bd - 2.0 * inset).max(0.0);
+            ui.draw_rounded_rect(
+                bx + inset,
+                by + inset,
+                iw,
+                iw,
+                PREVIEW_SCREEN_BG,
+                (r - inset * 0.5).max(0.0),
+            );
+        } else if exposed {
             ui.draw_rounded_rect(bx, by, bd, bd, PARAM_EXPOSE_ON, r);
             ui.draw_text(bx + bd * 0.16, by - bd * 0.06, "✓", bd * 0.95, [20, 24, 33, 255]);
         } else {

@@ -469,6 +469,20 @@ pub(crate) struct ParamView {
     /// (`BrowseGraphNodePath`) instead of the inline text editor. Always `false`
     /// for non-String kinds. (Phase 4.)
     pub(crate) is_path: bool,
+    /// `true` when a wire on this node's same-named scalar input port shadows the
+    /// param every frame (port-shadows-param). The row is then **read-only** — a
+    /// value scrub / editor and the expose toggle all no-op, since a local edit
+    /// would lie about what drives the param — and the label carries a "← wired"
+    /// hint. Removing the wire is the only way to reclaim control. Recomputed per
+    /// snapshot from the level's wires (`apply_driven_state`). (Phase 5.)
+    pub(crate) wire_driven: bool,
+    /// `Some(outer_label)` when an outer performance-card slider routes into this
+    /// inner param every frame. The row **stays editable** (the binding apply
+    /// path skips when the outer slot is unchanged, so inline edits survive) but
+    /// carries a "↳ <outer>" hint so the user knows which card slider will
+    /// reclaim control if moved. `None` for un-routed params. Wire-driven wins
+    /// when both apply. Recomputed per snapshot from `outer_routings`. (Phase 5.)
+    pub(crate) outer_driver: Option<String>,
 }
 
 /// Whether a `String` param names a filesystem path — folder / file / dir /
@@ -620,6 +634,10 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
         string_value: p.string_value.clone(),
         table_value: p.table_value.clone(),
         is_path: p.kind == ParamSnapshotKind::String && is_path_param(&p.name),
+        // Filled by `apply_driven_state` once the node's wires + the snapshot's
+        // outer routings are in scope (they aren't per-param on the snapshot).
+        wire_driven: false,
+        outer_driver: None,
     }
 }
 
@@ -992,6 +1010,11 @@ impl GraphCanvas {
                     node.summary = node_summary(&sn.parameters);
                 }
             }
+            // Wire / outer-driven state is a topology property, but exposing a
+            // param (adding an outer routing) can leave the level hash unchanged,
+            // so recompute it here too — cheap, and it keeps the "↳ outer" hint
+            // live without a full relayout.
+            self.apply_driven_state(&snap.outer_routings);
             return;
         }
         self.topology_hash = new_hash;
@@ -1075,6 +1098,9 @@ impl GraphCanvas {
                 to_port: w.to_port.clone(),
             })
             .collect();
+        // Now that this level's wires are in `self.wires`, tag each param's
+        // wire / outer-driven state (drives the read-only lockout + row hints).
+        self.apply_driven_state(&snap.outer_routings);
 
         // Drop sparkline histories for nodes that left this level (group
         // navigation, delete, ungroup) so the map can't grow unbounded across a
@@ -1136,6 +1162,41 @@ impl GraphCanvas {
                 scope_path: self.scope.clone(),
                 positions,
             });
+        }
+    }
+
+    /// Tag every on-face param with its **wire-driven** and **outer-driven**
+    /// state, the same two facts the sidebar showed:
+    /// - **wire-driven** — a wire lands on this node's same-named scalar input
+    ///   port (port-shadows-param), so the wire feeds the param each frame. The
+    ///   row goes read-only and shows "← wired". Read from the current level's
+    ///   `self.wires` (so a wire *inside* a group is seen when you're in it).
+    /// - **outer-driven** — an outer performance-card slider routes into
+    ///   `(node_handle, param)`; the row stays editable but shows "↳ <label>".
+    ///   Read from the snapshot-global `outer_routings`.
+    ///
+    /// Byte-for-byte the app's `build_wire_driven_keys` / `build_outer_driven_map`
+    /// join, but computed canvas-side from data the snapshot already carries — no
+    /// new plumbing. Called from both `set_snapshot` paths (full rebuild + the
+    /// param-only refresh), so exposing a param refreshes the hint without a
+    /// relayout. Wire-driven wins when both apply (the wire short-circuits the
+    /// binding apply path), matching the sidebar's precedence.
+    fn apply_driven_state(&mut self, outer_routings: &[crate::graph_view::OuterParamRouting]) {
+        // Split the borrow: read `wires`, mutate `nodes`.
+        let Self { wires, nodes, .. } = self;
+        for node in nodes.iter_mut() {
+            let handle = node.handle.clone();
+            for p in &mut node.params {
+                p.wire_driven = wires
+                    .iter()
+                    .any(|w| w.to_node == node.id && w.to_port == p.name);
+                p.outer_driver = handle.as_deref().and_then(|h| {
+                    outer_routings
+                        .iter()
+                        .find(|r| r.node_handle == h && r.inner_param == p.name)
+                        .map(|r| r.outer_label.clone())
+                });
+            }
         }
     }
 

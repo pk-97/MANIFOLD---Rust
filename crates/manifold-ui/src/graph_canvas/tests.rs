@@ -1314,3 +1314,133 @@ fn ports_compatible_is_colour_category_equality() {
     assert!(!ports_compatible(PORT_TEXTURE2D_COLOR, PORT_SCALAR_COLOR));
     assert!(!ports_compatible(PORT_SCALAR_COLOR, PORT_ARRAY_COLOR));
 }
+
+// ─── Phase 5: wire-driven / outer-driven state + read-only lockout ───────────
+
+/// Expand node 1 of an arbitrary snapshot and return a generous viewport.
+fn expanded_canvas_from(snap: GraphSnapshot) -> (GraphCanvas, Rect) {
+    let mut canvas = GraphCanvas::new();
+    canvas.collapsed.insert(1, false);
+    canvas.set_snapshot(&snap);
+    (canvas, Rect::new(0.0, 0.0, 1200.0, 800.0))
+}
+
+/// Node 1 (`uv`) with a scalar param `translate` shadowed by a same-named input
+/// port, fed by a wire from node 2. Optionally add an outer routing for it.
+fn wire_driven_snapshot(with_outer: bool) -> GraphSnapshot {
+    let mut n1 = node(1, "node.uv", Some("uv"));
+    n1.inputs = vec![port("translate")];
+    n1.outputs = vec![port("out")];
+    n1.parameters = vec![float_param("translate", 0.5)];
+    let n2 = node(2, "node.src", Some("src"));
+    GraphSnapshot {
+        nodes: vec![n1, n2],
+        wires: vec![wire(2, "out", 1, "translate")],
+        outer_routings: if with_outer {
+            vec![crate::graph_view::OuterParamRouting {
+                outer_label: "Macro 1".to_string(),
+                outer_param_id: "p0".to_string(),
+                node_handle: "uv".to_string(),
+                inner_param: "translate".to_string(),
+                source: crate::graph_view::OuterParamSource::User,
+            }]
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+fn outer_driven_snapshot() -> GraphSnapshot {
+    let mut n1 = node(1, "node.gain", Some("gain"));
+    n1.parameters = vec![float_param("amount", 0.5)];
+    GraphSnapshot {
+        nodes: vec![n1],
+        wires: Vec::new(),
+        outer_routings: vec![crate::graph_view::OuterParamRouting {
+            outer_label: "Master".to_string(),
+            outer_param_id: "p0".to_string(),
+            node_handle: "gain".to_string(),
+            inner_param: "amount".to_string(),
+            source: crate::graph_view::OuterParamSource::User,
+        }],
+    }
+}
+
+#[test]
+fn wire_on_same_named_port_marks_param_wire_driven() {
+    let (canvas, _vp) = expanded_canvas_from(wire_driven_snapshot(false));
+    let p = &canvas.find_node(1).unwrap().params[0];
+    assert!(p.wire_driven, "an input wire on the shadow port drives the param");
+    assert!(p.outer_driver.is_none(), "no outer routing");
+}
+
+#[test]
+fn wire_driven_row_is_read_only_no_scrub() {
+    let (mut canvas, vp) = expanded_canvas_from(wire_driven_snapshot(false));
+    // Press the value side of the wire-driven row.
+    let row = canvas.param_row_rect(vp, 1, 0).expect("row rect");
+    canvas.on_left_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5, 0.0, false);
+    // It selects the node but starts no scrub and emits nothing.
+    assert_eq!(canvas.selected_ids(), vec![1], "still selects");
+    assert!(
+        matches!(canvas.drag_mode, DragMode::None),
+        "wire-driven row starts no scrub"
+    );
+    assert!(canvas.drain_edits().is_empty(), "and emits no command");
+}
+
+#[test]
+fn wire_driven_row_expose_glyph_is_dead() {
+    let (mut canvas, vp) = expanded_canvas_from(wire_driven_snapshot(false));
+    // float param is exposable, so the glyph is a target — but wire-driven, so
+    // the click must not emit a toggle.
+    let (cx, cy) = glyph_centre(&canvas, vp, 0);
+    canvas.on_left_button_down(vp, cx, cy, 0.0, false);
+    assert!(
+        canvas
+            .drain_edits()
+            .iter()
+            .all(|a| !matches!(a, GraphEditCommand::ToggleNodeParamExpose { .. })),
+        "wire-driven expose glyph emits no toggle"
+    );
+}
+
+#[test]
+fn outer_routing_marks_param_outer_driven_but_editable() {
+    let (mut canvas, vp) = expanded_canvas_from(outer_driven_snapshot());
+    let p = &canvas.find_node(1).unwrap().params[0];
+    assert_eq!(p.outer_driver.as_deref(), Some("Master"), "carries the label");
+    assert!(!p.wire_driven, "no wire");
+    // Outer-driven rows STAY editable — pressing the value starts a scrub.
+    let row = canvas.param_row_rect(vp, 1, 0).unwrap();
+    canvas.on_left_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5, 0.0, false);
+    assert!(
+        matches!(canvas.drag_mode, DragMode::ParamScrub { .. }),
+        "outer-driven row is still scrubbable"
+    );
+}
+
+#[test]
+fn wire_wins_when_both_wire_and_outer_drive_a_param() {
+    let (canvas, _vp) = expanded_canvas_from(wire_driven_snapshot(true));
+    let p = &canvas.find_node(1).unwrap().params[0];
+    // Both apply, but the wire short-circuits the binding path, so it wins:
+    // the row is read-only. The outer label is still resolved (for reference),
+    // but render surfaces "← wired" first.
+    assert!(p.wire_driven, "wire present → read-only");
+    assert_eq!(p.outer_driver.as_deref(), Some("Macro 1"), "outer still resolved");
+}
+
+#[test]
+fn removing_the_wire_reclaims_the_param() {
+    // Wire present → read-only; then the same topology minus the wire → editable.
+    let (mut canvas, _vp) = expanded_canvas_from(wire_driven_snapshot(false));
+    assert!(canvas.find_node(1).unwrap().params[0].wire_driven);
+    let mut unwired = wire_driven_snapshot(false);
+    unwired.wires.clear();
+    canvas.set_snapshot(&unwired);
+    assert!(
+        !canvas.find_node(1).unwrap().params[0].wire_driven,
+        "no wire → param editable again"
+    );
+}
