@@ -670,7 +670,7 @@ impl GraphCanvas {
         // matches stay bright and jump out of a busy graph. Drawn last, over the
         // node's own content.
         if !self.node_search.is_empty() && !self.node_matches_search(node) {
-            ui.draw_rect(sx, sy, sw, sh, [0.05, 0.05, 0.07, 0.66]);
+            ui.draw_rect(sx, sy, sw, sh, [0.0039, 0.0039, 0.0060, 0.66]); // srgb(0.05, 0.05, 0.07, 0.66)
         }
     }
 

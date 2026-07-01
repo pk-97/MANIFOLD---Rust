@@ -169,7 +169,18 @@ const LAYOUT_COORD_ITERS: usize = 12;
 /// One muted-violet colour for every feedback return path, so they read as a
 /// family distinct from the blue data / orange control wires regardless of the
 /// source port's kind.
-const RETURN_WIRE_COLOR: [f32; 3] = [0.62, 0.55, 0.78];
+///
+/// This value (and every other `[f32; N]` geometry color below, down to
+/// `RESET_BUTTON_BG`) is linear light, not the authored sRGB — the editor
+/// window's surface is EDR-configured (`configure_edr()`) and gamma-expands
+/// on display, same as every `Color32`-driven UITree color already does via
+/// `Color32::to_f32()`. `Painter::draw_rect`/`draw_line`/etc. take a raw
+/// `[f32; 4]` with no conversion of their own, so canvas geometry has to
+/// pre-convert here or it reads washed out (double gamma-expanded). Text
+/// stays untouched — `draw_text` is sRGB end-to-end by design (see
+/// `Painter::draw_text` / `TextColor`). Each constant's comment carries its
+/// original authored sRGB value for anyone tuning the color by eye.
+const RETURN_WIRE_COLOR: [f32; 3] = [0.3424, 0.2633, 0.5705]; // srgb(0.62, 0.55, 0.78)
 /// How far (graph px) above the higher endpoint's node-top a return path arcs,
 /// so it clears the node band and reads as "going around".
 const RETURN_ARC_CLEAR: f32 = 36.0;
@@ -182,85 +193,85 @@ const RETURN_DASH: i32 = 3;
 /// numbered slots) keep their uniform handles.
 const FANIN_STAGGER_MIN: usize = 6;
 
-const BG_COLOR: [f32; 4] = [0.10, 0.10, 0.12, 1.0];
-const HEADER_BG: [f32; 4] = [0.14, 0.14, 0.17, 1.0];
-const GRID_DOT: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
-const NODE_BG: [f32; 4] = [0.18, 0.18, 0.22, 1.0];
-const NODE_BG_HOVER: [f32; 4] = [0.22, 0.22, 0.27, 1.0];
+const BG_COLOR: [f32; 4] = [0.0100, 0.0100, 0.0134, 1.0]; // srgb(0.10, 0.10, 0.12, 1.0)
+const HEADER_BG: [f32; 4] = [0.0174, 0.0174, 0.0245, 1.0]; // srgb(0.14, 0.14, 0.17, 1.0)
+const GRID_DOT: [f32; 4] = [1.0000, 1.0000, 1.0000, 0.06]; // srgb(1.0, 1.0, 1.0, 0.06)
+const NODE_BG: [f32; 4] = [0.0272, 0.0272, 0.0397, 1.0]; // srgb(0.18, 0.18, 0.22, 1.0)
+const NODE_BG_HOVER: [f32; 4] = [0.0397, 0.0397, 0.0593, 1.0]; // srgb(0.22, 0.22, 0.27, 1.0)
 /// Recessed "screen" the preview thumbnail is blitted over (and the letterbox
 /// colour for non-16:9 outputs). Near-black so an empty / loading strip reads
 /// as an off monitor, not a hole in the node.
-const PREVIEW_SCREEN_BG: [f32; 4] = [0.04, 0.04, 0.05, 1.0];
-const PREVIEW_SCREEN_BORDER: [f32; 4] = [0.0, 0.0, 0.0, 0.5];
-const NODE_HEADER_BG: [f32; 4] = [0.28, 0.30, 0.42, 1.0];
-const NODE_BORDER: [f32; 4] = [0.0, 0.0, 0.0, 0.6];
-const NODE_BORDER_SELECTED: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
-const PORT_TEXTURE2D_COLOR: [f32; 4] = [0.50, 0.78, 1.00, 1.0];
-const PORT_TEXTURE3D_COLOR: [f32; 4] = [0.78, 0.50, 1.00, 1.0];
-const PORT_SCALAR_COLOR: [f32; 4] = [1.00, 0.78, 0.40, 1.0];
-const PORT_ARRAY_COLOR: [f32; 4] = [0.50, 1.00, 0.62, 1.0];
-const PORT_CAMERA_COLOR: [f32; 4] = [1.00, 0.55, 0.55, 1.0];
-const PORT_LIGHT_COLOR: [f32; 4] = [1.00, 0.95, 0.55, 1.0];
-const PORT_MATERIAL_COLOR: [f32; 4] = [0.95, 0.65, 0.40, 1.0];
+const PREVIEW_SCREEN_BG: [f32; 4] = [0.0031, 0.0031, 0.0039, 1.0]; // srgb(0.04, 0.04, 0.05, 1.0)
+const PREVIEW_SCREEN_BORDER: [f32; 4] = [0.0, 0.0, 0.0, 0.5]; // srgb(0.0, 0.0, 0.0, 0.5)
+const NODE_HEADER_BG: [f32; 4] = [0.0637, 0.0732, 0.1473, 1.0]; // srgb(0.28, 0.30, 0.42, 1.0)
+const NODE_BORDER: [f32; 4] = [0.0, 0.0, 0.0, 0.6]; // srgb(0.0, 0.0, 0.0, 0.6)
+const NODE_BORDER_SELECTED: [f32; 4] = [0.2140, 0.5705, 1.0000, 1.0]; // srgb(0.50, 0.78, 1.00, 1.0)
+const PORT_TEXTURE2D_COLOR: [f32; 4] = [0.2140, 0.5705, 1.0000, 1.0]; // srgb(0.50, 0.78, 1.00, 1.0)
+const PORT_TEXTURE3D_COLOR: [f32; 4] = [0.5705, 0.2140, 1.0000, 1.0]; // srgb(0.78, 0.50, 1.00, 1.0)
+const PORT_SCALAR_COLOR: [f32; 4] = [1.0000, 0.5705, 0.1329, 1.0]; // srgb(1.00, 0.78, 0.40, 1.0)
+const PORT_ARRAY_COLOR: [f32; 4] = [0.2140, 1.0000, 0.3424, 1.0]; // srgb(0.50, 1.00, 0.62, 1.0)
+const PORT_CAMERA_COLOR: [f32; 4] = [1.0000, 0.2633, 0.2633, 1.0]; // srgb(1.00, 0.55, 0.55, 1.0)
+const PORT_LIGHT_COLOR: [f32; 4] = [1.0000, 0.8900, 0.2633, 1.0]; // srgb(1.00, 0.95, 0.55, 1.0)
+const PORT_MATERIAL_COLOR: [f32; 4] = [0.8900, 0.3801, 0.1329, 1.0]; // srgb(0.95, 0.65, 0.40, 1.0)
 /// Ghost-wire tint while dragging over a compatible / incompatible input port —
 /// a live green/red "this will / won't connect" hint, so a mis-wire is caught
 /// before the drop, not after. The actual connect still validates server-side.
-const CONNECT_OK_COLOR: [f32; 4] = [0.42, 0.88, 0.52, 0.85];
-const CONNECT_BAD_COLOR: [f32; 4] = [0.92, 0.38, 0.38, 0.85];
+const CONNECT_OK_COLOR: [f32; 4] = [0.1473, 0.7484, 0.2330, 0.85]; // srgb(0.42, 0.88, 0.52, 0.85)
+const CONNECT_BAD_COLOR: [f32; 4] = [0.8276, 0.1193, 0.1193, 0.85]; // srgb(0.92, 0.38, 0.38, 0.85)
 /// Group node tint. A group reads as a distinct, slightly heavier box than an
 /// atom so a complex graph shows its structure at a glance — teal-leaning
 /// header + a faint teal body wash, the colour we reserve for "container".
-const GROUP_HEADER_BG: [f32; 4] = [0.18, 0.34, 0.40, 1.0];
+const GROUP_HEADER_BG: [f32; 4] = [0.0272, 0.0946, 0.1329, 1.0]; // srgb(0.18, 0.34, 0.40, 1.0)
 /// Preset group accent colours the recolour gesture cycles through — muted so
 /// they read as labels, not alerts, under stage lighting. The first entry is
 /// the default teal (`GROUP_HEADER_BG`), so cycling from untinted lands on a
 /// real colour immediately.
 const GROUP_TINT_PALETTE: [[f32; 4]; 6] = [
-    [0.18, 0.34, 0.40, 1.0], // teal (default)
-    [0.40, 0.24, 0.42, 1.0], // plum
-    [0.42, 0.30, 0.18, 1.0], // amber
-    [0.22, 0.40, 0.26, 1.0], // moss
-    [0.40, 0.22, 0.24, 1.0], // rust
-    [0.24, 0.28, 0.44, 1.0], // indigo
+    [0.0272, 0.0946, 0.1329, 1.0], // teal (default), srgb(0.18, 0.34, 0.40)
+    [0.1329, 0.0470, 0.1473, 1.0], // plum, srgb(0.40, 0.24, 0.42)
+    [0.1473, 0.0732, 0.0272, 1.0], // amber, srgb(0.42, 0.30, 0.18)
+    [0.0397, 0.1329, 0.0550, 1.0], // moss, srgb(0.22, 0.40, 0.26)
+    [0.1329, 0.0397, 0.0470, 1.0], // rust, srgb(0.40, 0.22, 0.24)
+    [0.0470, 0.0637, 0.1626, 1.0], // indigo, srgb(0.24, 0.28, 0.44)
 ];
-const GROUP_BODY_BG: [f32; 4] = [0.16, 0.22, 0.25, 1.0];
-const GROUP_BODY_BG_HOVER: [f32; 4] = [0.20, 0.27, 0.30, 1.0];
+const GROUP_BODY_BG: [f32; 4] = [0.0220, 0.0397, 0.0509, 1.0]; // srgb(0.16, 0.22, 0.25, 1.0)
+const GROUP_BODY_BG_HOVER: [f32; 4] = [0.0331, 0.0593, 0.0732, 1.0]; // srgb(0.20, 0.27, 0.30, 1.0)
 /// Border on a group's bounding box and the "enter" chevron, brighter than a
 /// plain node border so the affordance ("this opens") is legible.
-const GROUP_ACCENT: [f32; 4] = [0.45, 0.82, 0.88, 1.0];
+const GROUP_ACCENT: [f32; 4] = [0.1706, 0.6383, 0.7484, 1.0]; // srgb(0.45, 0.82, 0.88, 1.0)
 /// Breadcrumb bar text + the "› " separators, drawn in the canvas header when
 /// the view is inside one or more groups.
 const BREADCRUMB_TEXT: [u8; 4] = [180, 215, 220, 255];
 const BREADCRUMB_DIM: [u8; 4] = [120, 130, 140, 255];
 /// Translucent backdrop behind the debug overlay readout so it stays legible
 /// over busy graph content.
-const DEBUG_OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.62];
+const DEBUG_OVERLAY_BG: [f32; 4] = [0.0, 0.0, 0.0, 0.62]; // srgb(0.0, 0.0, 0.0, 0.62)
 const DEBUG_OVERLAY_TEXT: [u8; 4] = [120, 230, 160, 255];
 /// Breadcrumb font size (logical px). The bitmap font is ~0.55em wide; the
 /// segment layout uses that ratio so render and hit-test agree.
 const BREADCRUMB_FONT: f32 = 12.0;
 /// Rubber-band selection rectangle: a faint blue wash with a brighter border.
-const MARQUEE_FILL: [f32; 4] = [0.50, 0.78, 1.00, 0.12];
-const MARQUEE_BORDER: [f32; 4] = [0.50, 0.78, 1.00, 0.80];
+const MARQUEE_FILL: [f32; 4] = [0.2140, 0.5705, 1.0000, 0.12]; // srgb(0.50, 0.78, 1.00, 0.12)
+const MARQUEE_BORDER: [f32; 4] = [0.2140, 0.5705, 1.0000, 0.80]; // srgb(0.50, 0.78, 1.00, 0.80)
 /// On-node param fill bar: a faint track plus a brighter fill showing where
 /// a ranged value sits between its declared min and max.
-const PARAM_FILL_BG: [f32; 4] = [1.0, 1.0, 1.0, 0.07];
-const PARAM_FILL_FG: [f32; 4] = [0.50, 0.78, 1.00, 0.55];
+const PARAM_FILL_BG: [f32; 4] = [1.0000, 1.0000, 1.0000, 0.07]; // srgb(1.0, 1.0, 1.0, 0.07)
+const PARAM_FILL_FG: [f32; 4] = [0.2140, 0.5705, 1.0000, 0.55]; // srgb(0.50, 0.78, 1.00, 0.55)
 /// Sparkline trace colour — the same soft cyan as the fill bar, a touch brighter
 /// so the moving line reads against the node body without shouting.
-const SPARKLINE_COLOR: [f32; 4] = [0.55, 0.82, 1.00, 0.85];
+const SPARKLINE_COLOR: [f32; 4] = [0.2633, 0.6383, 1.0000, 0.85]; // srgb(0.55, 0.82, 1.00, 0.85)
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
 const TEXT_HEADER: [u8; 4] = [240, 240, 250, 255];
 /// Hover-tooltip chrome: a near-opaque dark card with a faint border,
 /// drawn above the nodes so the help line reads cleanly over any graph.
-const TOOLTIP_BG: [f32; 4] = [0.10, 0.10, 0.13, 0.97];
-const TOOLTIP_BORDER: [f32; 4] = [0.45, 0.48, 0.60, 0.85];
+const TOOLTIP_BG: [f32; 4] = [0.0100, 0.0100, 0.0153, 0.97]; // srgb(0.10, 0.10, 0.13, 0.97)
+const TOOLTIP_BORDER: [f32; 4] = [0.1706, 0.1960, 0.3185, 0.85]; // srgb(0.45, 0.48, 0.60, 0.85)
 const TOOLTIP_TEXT: [u8; 4] = [224, 226, 236, 255];
 /// Pink chip behind the "Reset to Default" header button —
 /// same family as the MOD badge on the effect card so the
 /// "you are diverged" cue is consistent across surfaces.
-const RESET_BUTTON_BG: [f32; 4] = [0.78, 0.27, 0.45, 0.90];
+const RESET_BUTTON_BG: [f32; 4] = [0.5705, 0.0593, 0.1706, 0.90]; // srgb(0.78, 0.27, 0.45, 0.90)
 const RESET_BUTTON_W: f32 = 124.0;
 const RESET_BUTTON_H: f32 = 18.0;
 /// Gap between the reset button and the zoom indicator on its right.

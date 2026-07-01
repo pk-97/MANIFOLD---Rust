@@ -51,19 +51,23 @@ const PREVIEW_H: f32 = 52.0;
 const PREVIEW_SAMPLES: usize = 48;
 
 // ── Colors ──────────────────────────────────────────────────────────
-const PANEL_BG: [f32; 4] = [0.13, 0.13, 0.16, 1.0];
-const PANEL_BORDER: [f32; 4] = [0.50, 0.78, 1.00, 0.85];
-const BTN_BG: [f32; 4] = [0.22, 0.22, 0.27, 1.0];
-const BTN_BG_ACTIVE: [f32; 4] = [0.42, 0.30, 0.62, 1.0]; // Ableton-purple INV
-const CURVE_BG: [f32; 4] = [0.20, 0.20, 0.25, 1.0];
-const CURVE_BG_ACTIVE: [f32; 4] = [0.28, 0.34, 0.50, 1.0];
+// Linear light, not authored sRGB — the editor window's surface is
+// EDR-configured and gamma-expands on display; see the note on
+// `RETURN_WIRE_COLOR` in `graph_canvas/mod.rs`. Comments carry the original
+// authored sRGB value.
+const PANEL_BG: [f32; 4] = [0.0153, 0.0153, 0.0220, 1.0]; // srgb(0.13, 0.13, 0.16, 1.0)
+const PANEL_BORDER: [f32; 4] = [0.2140, 0.5705, 1.0000, 0.85]; // srgb(0.50, 0.78, 1.00, 0.85)
+const BTN_BG: [f32; 4] = [0.0397, 0.0397, 0.0593, 1.0]; // srgb(0.22, 0.22, 0.27, 1.0)
+const BTN_BG_ACTIVE: [f32; 4] = [0.1473, 0.0732, 0.3424, 1.0]; // Ableton-purple INV, srgb(0.42, 0.30, 0.62, 1.0)
+const CURVE_BG: [f32; 4] = [0.0331, 0.0331, 0.0509, 1.0]; // srgb(0.20, 0.20, 0.25, 1.0)
+const CURVE_BG_ACTIVE: [f32; 4] = [0.0637, 0.0946, 0.2140, 1.0]; // srgb(0.28, 0.34, 0.50, 1.0)
 const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
 const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
 // Preview plot: a darker inset box, a bright response line, and a live dot.
-const PREVIEW_BG: [f32; 4] = [0.08, 0.08, 0.10, 1.0];
-const PREVIEW_LINE: [f32; 4] = [0.50, 0.78, 1.00, 0.95];
-const PREVIEW_GRID: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
-const PREVIEW_DOT: [f32; 4] = [1.00, 0.86, 0.45, 1.0];
+const PREVIEW_BG: [f32; 4] = [0.0072, 0.0072, 0.0100, 1.0]; // srgb(0.08, 0.08, 0.10, 1.0)
+const PREVIEW_LINE: [f32; 4] = [0.2140, 0.5705, 1.0000, 0.95]; // srgb(0.50, 0.78, 1.00, 0.95)
+const PREVIEW_GRID: [f32; 4] = [1.0000, 1.0000, 1.0000, 0.06]; // srgb(1.0, 1.0, 1.0, 0.06)
+const PREVIEW_DOT: [f32; 4] = [1.0000, 0.7106, 0.1706, 1.0]; // srgb(1.00, 0.86, 0.45, 1.0)
 
 /// The four curve options in display order. Indexed by the order shown,
 /// not by enum discriminant, so the dropdown order is stable here.
