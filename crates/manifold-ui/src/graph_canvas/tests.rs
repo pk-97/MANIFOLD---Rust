@@ -844,6 +844,185 @@ fn pressing_outside_open_enum_dropdown_dismisses_it() {
     );
 }
 
+// ─── Phase 3: Color / Vec channel editing on the node face ───────────────────
+
+fn color_param(name: &str, rgba: [f32; 4]) -> crate::graph_view::ParamSnapshot {
+    crate::graph_view::ParamSnapshot {
+        name: name.to_string(),
+        label: name.to_string(),
+        kind: crate::graph_view::ParamSnapshotKind::Color,
+        default_value: 0.0,
+        current_value: 0.0,
+        range: None,
+        enum_labels: None,
+        exposed: false,
+        summary: None,
+        vec_value: Some(rgba),
+        string_value: None,
+        table_value: None,
+        tooltip: None,
+    }
+}
+
+fn vec2_param(name: &str, xy: [f32; 2]) -> crate::graph_view::ParamSnapshot {
+    crate::graph_view::ParamSnapshot {
+        name: name.to_string(),
+        label: name.to_string(),
+        kind: crate::graph_view::ParamSnapshotKind::Vec2,
+        default_value: 0.0,
+        current_value: 0.0,
+        range: Some((-1.0, 1.0)),
+        enum_labels: None,
+        exposed: false,
+        summary: None,
+        vec_value: Some([xy[0], xy[1], 0.0, 0.0]),
+        string_value: None,
+        table_value: None,
+        tooltip: None,
+    }
+}
+
+#[test]
+fn clicking_color_value_opens_editor_without_a_command() {
+    let (mut canvas, vp) = expanded_canvas(color_param("tint", [0.2, 0.4, 0.6, 1.0]));
+    press_row_value(&mut canvas, vp, 0);
+    assert!(
+        drained_set_param(&mut canvas).is_none(),
+        "opening the editor emits nothing"
+    );
+    let ed = canvas.vec_editor.as_ref().expect("editor open");
+    assert_eq!(ed.node_id, 1);
+    assert_eq!(ed.param_name, "tint");
+    assert!(ed.is_color, "colour editor");
+    assert_eq!(ed.components, 4, "RGBA");
+    assert!(ed.swatch_rect().is_some(), "colour gets a swatch header");
+}
+
+#[test]
+fn pressing_a_color_channel_starts_a_vec_scrub() {
+    let (mut canvas, vp) = expanded_canvas(color_param("tint", [0.2, 0.4, 0.6, 1.0]));
+    press_row_value(&mut canvas, vp, 0);
+    let g = canvas.vec_editor.as_ref().unwrap().channel_rect(1); // G
+    canvas.on_left_button_down(vp, g.x + g.w * 0.3, g.y + g.h * 0.5, 0.0, false);
+    assert!(
+        matches!(canvas.drag_mode, DragMode::VecScrub { channel: 1, .. }),
+        "channel press starts a scrub on that channel"
+    );
+    // Starting the scrub is not itself a value edit.
+    assert!(drained_set_param(&mut canvas).is_none());
+    // The panel stays open so another channel can be grabbed.
+    assert!(canvas.vec_editor.is_some(), "editor stays open during a scrub");
+}
+
+#[test]
+fn dragging_a_color_channel_emits_full_color_with_others_held() {
+    let (mut canvas, vp) = expanded_canvas(color_param("tint", [0.2, 0.4, 0.6, 1.0]));
+    press_row_value(&mut canvas, vp, 0);
+    let g = canvas.vec_editor.as_ref().unwrap().channel_rect(1); // G
+    let px = g.x + g.w * 0.3;
+    canvas.on_left_button_down(vp, px, g.y + g.h * 0.5, 0.0, false);
+    // Drag right +120px → +0.5 over the 240px full-range (colour span 1.0).
+    canvas.on_pointer_move(vp, px + 120.0, g.y + g.h * 0.5);
+    let (nid, name, val) = drained_set_param(&mut canvas).expect("scrub emits");
+    assert_eq!((nid, name.as_str()), (1, "tint"));
+    match val {
+        crate::SerializedParamValue::Color { value } => {
+            assert!((value[0] - 0.2).abs() < 1e-4, "R held");
+            assert!((value[1] - 0.9).abs() < 1e-3, "G scrubbed 0.4 → 0.9");
+            assert!((value[2] - 0.6).abs() < 1e-4, "B held");
+            assert!((value[3] - 1.0).abs() < 1e-4, "A held");
+        }
+        other => panic!("expected Color, got {other:?}"),
+    }
+}
+
+#[test]
+fn color_channel_scrub_clamps_to_zero_one() {
+    let (mut canvas, vp) = expanded_canvas(color_param("tint", [0.2, 0.9, 0.6, 1.0]));
+    press_row_value(&mut canvas, vp, 0);
+    let g = canvas.vec_editor.as_ref().unwrap().channel_rect(1); // G at 0.9
+    let px = g.x + g.w * 0.3;
+    canvas.on_left_button_down(vp, px, g.y + g.h * 0.5, 0.0, false);
+    // Drag hard right past the top of the range → clamps at 1.0, never above.
+    canvas.on_pointer_move(vp, px + 600.0, g.y + g.h * 0.5);
+    let (_, _, val) = drained_set_param(&mut canvas).expect("scrub emits");
+    match val {
+        crate::SerializedParamValue::Color { value } => {
+            assert!((value[1] - 1.0).abs() < 1e-6, "G clamps at 1.0");
+        }
+        other => panic!("expected Color, got {other:?}"),
+    }
+}
+
+#[test]
+fn vec2_editor_has_two_channels_and_no_swatch() {
+    let (mut canvas, vp) = expanded_canvas(vec2_param("offset", [0.5, -0.5]));
+    press_row_value(&mut canvas, vp, 0);
+    let ed = canvas.vec_editor.as_ref().expect("editor open");
+    assert!(!ed.is_color, "vector, not colour");
+    assert_eq!(ed.components, 2, "XY");
+    assert!(ed.swatch_rect().is_none(), "no swatch header on a vector");
+    // Panel is exactly two channel rows tall (no header row).
+    let panel = ed.panel_rect();
+    assert!((panel.h - 2.0 * ed.anchor.h).abs() < 1e-3);
+}
+
+#[test]
+fn dragging_a_vec2_channel_emits_vec2_over_declared_range() {
+    let (mut canvas, vp) = expanded_canvas(vec2_param("offset", [0.0, 0.0]));
+    press_row_value(&mut canvas, vp, 0);
+    let x = canvas.vec_editor.as_ref().unwrap().channel_rect(0); // X
+    let px = x.x + x.w * 0.3;
+    canvas.on_left_button_down(vp, px, x.y + x.h * 0.5, 0.0, false);
+    // Vec range (-1,1) → span 2.0 → +120px = +1.0.
+    canvas.on_pointer_move(vp, px + 120.0, x.y + x.h * 0.5);
+    let (_, name, val) = drained_set_param(&mut canvas).expect("scrub emits");
+    assert_eq!(name, "offset");
+    match val {
+        crate::SerializedParamValue::Vec2 { value } => {
+            assert!((value[0] - 1.0).abs() < 1e-3, "X scrubbed 0 → +1.0");
+            assert!((value[1] - 0.0).abs() < 1e-4, "Y held");
+        }
+        other => panic!("expected Vec2, got {other:?}"),
+    }
+}
+
+#[test]
+fn pressing_outside_open_vec_editor_dismisses_it() {
+    let (mut canvas, vp) = expanded_canvas(color_param("tint", [0.1, 0.2, 0.3, 1.0]));
+    press_row_value(&mut canvas, vp, 0);
+    assert!(canvas.vec_editor.is_some());
+    // Press far from both the row and the panel — empty canvas.
+    canvas.on_left_button_down(vp, 1000.0, 700.0, 0.0, false);
+    assert!(canvas.vec_editor.is_none(), "outside press dismisses");
+    assert!(
+        drained_set_param(&mut canvas).is_none(),
+        "dismissal emits no value command"
+    );
+}
+
+#[test]
+fn pressing_inside_vec_editor_header_swallows_and_stays_open() {
+    let (mut canvas, vp) = expanded_canvas(color_param("tint", [0.1, 0.2, 0.3, 1.0]));
+    press_row_value(&mut canvas, vp, 0);
+    // The swatch header row is inside the panel but not a channel row.
+    let sw = canvas.vec_editor.as_ref().unwrap().swatch_rect().unwrap();
+    canvas.on_left_button_down(vp, sw.x + sw.w * 0.5, sw.y + sw.h * 0.5, 0.0, false);
+    assert!(canvas.vec_editor.is_some(), "header press keeps it open");
+    assert!(
+        !matches!(canvas.drag_mode, DragMode::VecScrub { .. }),
+        "header press starts no scrub"
+    );
+}
+
+#[test]
+fn color_param_carries_vec_value_onto_the_face() {
+    let (canvas, _vp) = expanded_canvas(color_param("tint", [0.25, 0.5, 0.75, 1.0]));
+    let pv = &canvas.find_node(1).unwrap().params[0];
+    assert_eq!(pv.vec_value, [0.25, 0.5, 0.75, 1.0], "vec value on the face");
+    assert_eq!(pv.value, "#4080BF", "hex string on the face");
+}
+
 #[test]
 fn expanded_rows_merge_shadowing_ports_onto_param_rows() {
     use crate::graph_canvas::NodeRow;

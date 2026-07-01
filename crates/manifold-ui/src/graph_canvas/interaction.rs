@@ -41,6 +41,22 @@ pub(crate) enum DragMode {
         is_int: bool,
         press_origin_x: f32,
     },
+    /// Scrubbing one channel of a `Color` / `Vec2..4` param via its row in the
+    /// open [`VecEditor`](super::VecEditor) panel. `base` is the whole vector at
+    /// press; the dragged `channel` is overwritten each pointer move and the full
+    /// vector emitted as one `SetGraphNodeParam` (the other channels held) —
+    /// parity with the sidebar's channel scrub. Colours scrub 0..1; vectors over
+    /// their declared range. Anchored on `start_value = base[channel]` via
+    /// `press_origin_x` so a long drag doesn't accumulate float error.
+    VecScrub {
+        node_id: u32,
+        param_name: String,
+        kind: crate::graph_view::ParamSnapshotKind,
+        channel: usize,
+        base: [f32; 4],
+        range: (f32, f32),
+        press_origin_x: f32,
+    },
     /// Rubber-band selection from a Shift+empty-canvas press. `origin_screen`
     /// is the press point; the live rect spans it to the current cursor. On
     /// release, the nodes the box intersects become the selection (replace).
@@ -60,9 +76,33 @@ impl DragMode {
             DragMode::WireFrom { .. } => "wire",
             DragMode::NodeMove { .. } => "node-move",
             DragMode::ParamScrub { .. } => "param-scrub",
+            DragMode::VecScrub { .. } => "vec-scrub",
             DragMode::Marquee { .. } => "marquee",
         }
     }
+}
+
+/// Pick the `SerializedParamValue` for a multi-component param kind from a full
+/// RGBA/XYZW vector (extra tail components dropped for `Vec2`/`Vec3`). `None` for
+/// non-vec kinds. Mirrors the sidebar's channel-scrub emit, so an on-node and a
+/// sidebar colour/vector edit produce a byte-identical command.
+fn vec_serialized(
+    kind: crate::graph_view::ParamSnapshotKind,
+    full: [f32; 4],
+) -> Option<crate::SerializedParamValue> {
+    use crate::SerializedParamValue as V;
+    use crate::graph_view::ParamSnapshotKind as K;
+    Some(match kind {
+        K::Color => V::Color { value: full },
+        K::Vec4 => V::Vec4 { value: full },
+        K::Vec3 => V::Vec3 {
+            value: [full[0], full[1], full[2]],
+        },
+        K::Vec2 => V::Vec2 {
+            value: [full[0], full[1]],
+        },
+        _ => return None,
+    })
 }
 
 impl GraphCanvas {
@@ -409,6 +449,38 @@ impl GraphCanvas {
                     new_value: crate::SerializedParamValue::Float { value: v },
                 });
             }
+            DragMode::VecScrub {
+                node_id,
+                param_name,
+                kind,
+                channel,
+                base,
+                range,
+                press_origin_x,
+            } => {
+                let node_id = *node_id;
+                let param_name = param_name.clone();
+                let kind = *kind;
+                let channel = *channel;
+                let base = *base;
+                let (min, max) = *range;
+                let press_origin_x = *press_origin_x;
+                let span = (max - min).max(f32::EPSILON);
+                let delta_px = sx - press_origin_x;
+                let v =
+                    (base[channel] + delta_px * (span / PARAM_SCRUB_FULL_RANGE_PX)).clamp(min, max);
+                // Overwrite the dragged channel; emit the whole colour/vector so
+                // the other channels carry through unchanged (sidebar parity).
+                let mut full = base;
+                full[channel] = v;
+                if let Some(new_value) = vec_serialized(kind, full) {
+                    self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
+                        node_id,
+                        param_name,
+                        new_value,
+                    });
+                }
+            }
             DragMode::None => {
                 self.hovered = self.node_under(viewport, sx, sy);
             }
@@ -458,6 +530,53 @@ impl GraphCanvas {
                 return; // pressed the list edge — swallow, stay closed
             }
             // Pressed outside the list: dismissed, continue with normal dispatch.
+        }
+        // An open Color/Vec editor is modal like the enum dropdown, but its rows
+        // are draggable: a press on a channel row starts a scrub (the panel stays
+        // open so you can grab another channel), a press elsewhere inside swallows,
+        // and a press outside dismisses and falls through to normal handling.
+        if self.vec_editor.is_some() {
+            let (ch, inside, node_id, param_name, is_color) = {
+                let ed = self.vec_editor.as_ref().unwrap();
+                (
+                    ed.channel_at(sx, sy),
+                    ed.contains(sx, sy),
+                    ed.node_id,
+                    ed.param_name.clone(),
+                    ed.is_color,
+                )
+            };
+            if let Some(ch) = ch {
+                // Seed the drag from the param's live vector + range at press.
+                if let Some((base, range, kind)) = self
+                    .find_node(node_id)
+                    .and_then(|n| n.params.iter().find(|p| p.name == param_name))
+                    .map(|p| {
+                        let range = if is_color {
+                            (0.0, 1.0)
+                        } else {
+                            p.range.unwrap_or((-1.0, 1.0))
+                        };
+                        (p.vec_value, range, p.kind)
+                    })
+                {
+                    self.drag_mode = DragMode::VecScrub {
+                        node_id,
+                        param_name,
+                        kind,
+                        channel: ch,
+                        base,
+                        range,
+                        press_origin_x: sx,
+                    };
+                }
+                return;
+            }
+            if inside {
+                return; // header / padding — swallow, stay open
+            }
+            // Pressed outside the panel: dismiss and continue with normal dispatch.
+            self.vec_editor = None;
         }
         // Breadcrumb bar (header chrome) — jump to a shallower scope. Gets
         // first crack like the reset button since it sits above the canvas
@@ -558,6 +677,7 @@ impl GraphCanvas {
                         {
                             let last = enum_labels.len() - 1;
                             let cur_idx = (current.round().max(0.0) as usize).min(last);
+                            self.vec_editor = None;
                             self.enum_dropdown = Some(super::EnumDropdown {
                                 node_id,
                                 param_name,
@@ -565,6 +685,15 @@ impl GraphCanvas {
                                 current: cur_idx,
                                 anchor,
                             });
+                        }
+                    }
+                    // Color / Vec → open the channel editor anchored on this row;
+                    // dragging a channel row emits the SetGraphNodeParam.
+                    K::Color | K::Vec2 | K::Vec3 | K::Vec4 => {
+                        if let Some(anchor) = self.param_row_rect(viewport, node_id, pi) {
+                            self.enum_dropdown = None;
+                            self.vec_editor =
+                                Some(super::VecEditor::new(node_id, param_name, kind, anchor));
                         }
                     }
                     _ => {}
@@ -762,8 +891,9 @@ impl GraphCanvas {
                 }
             }
             // The scrub emitted its value on each pointer move; nothing to
-            // finalize on release.
-            DragMode::ParamScrub { .. } => {}
+            // finalize on release. The Color/Vec editor stays open on release so
+            // the next channel can be grabbed — only a press outside it dismisses.
+            DragMode::ParamScrub { .. } | DragMode::VecScrub { .. } => {}
             DragMode::Marquee { origin_screen } => {
                 // A shift-press with no real drag leaves the selection alone —
                 // don't let a zero-area box wipe it.

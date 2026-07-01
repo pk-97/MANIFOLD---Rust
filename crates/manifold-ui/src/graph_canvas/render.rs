@@ -182,6 +182,7 @@ impl GraphCanvas {
         ui.push_depth(Depth::POPOVER);
         self.mapping_popover.render(ui);
         self.render_enum_dropdown(ui);
+        self.render_vec_editor(ui);
         ui.pop_depth();
         ui.push_immediate_clip(viewport.x, viewport.y, viewport.w, viewport.h);
 
@@ -652,6 +653,28 @@ impl GraphCanvas {
                         // Value, right-aligned. Measured first so the label
                         // truncates against the space it leaves.
                         let value_w = text_width(&p.value, text_size);
+                        // A colour param gets a small swatch chip just left of its
+                        // hex value, so the row reads as a colour at a glance (the
+                        // "swatch on the face"); clicking the value opens the
+                        // channel editor. `right_w` reserves the swatch so the
+                        // label truncates clear of it.
+                        let mut right_w = value_w;
+                        if matches!(p.kind, crate::graph_view::ParamSnapshotKind::Color) {
+                            let chip = text_size;
+                            let gap = 4.0 * self.zoom;
+                            let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                            let c = p.vec_value;
+                            let col = Color32::new(to_u8(c[0]), to_u8(c[1]), to_u8(c[2]), 255);
+                            ui.draw_rounded_rect(
+                                sx + sw - pad_x - value_w - gap - chip,
+                                text_y,
+                                chip,
+                                chip,
+                                col,
+                                2.0 * self.zoom,
+                            );
+                            right_w += gap + chip;
+                        }
                         ui.draw_text(
                             sx + sw - pad_x - value_w,
                             text_y,
@@ -667,7 +690,7 @@ impl GraphCanvas {
                         // Label, indented past the socket + checkbox column.
                         let label_x = sx + PARAM_LABEL_X * self.zoom;
                         let label_budget =
-                            (sx + sw - pad_x - value_w - 6.0 * self.zoom - label_x).max(0.0);
+                            (sx + sw - pad_x - right_w - 6.0 * self.zoom - label_x).max(0.0);
                         let label = elide_to_width(&p.label, text_size, label_budget);
                         ui.draw_text(label_x, text_y, &label, text_size, TEXT_SECONDARY);
                         // Fill bar under ranged values — the inline "slider",
@@ -730,6 +753,89 @@ impl GraphCanvas {
             }
             let text = elide_to_width(label, text_size, (r.w - 2.0 * pad_x).max(0.0));
             ui.draw_text(r.x + pad_x, r.y + 2.0 * self.zoom, &text, text_size, TEXT_PRIMARY);
+        }
+    }
+
+    /// Draw the open Color / Vec channel editor (Phase 3): a floating panel under
+    /// the param row, with a colour-swatch header for colours and one channel row
+    /// per component — label (R/G/B/A or X/Y/Z/W), value, and a fill bar you drag
+    /// to scrub. The channel values + swatch are read live from the node's
+    /// `ParamView`, so an edit round-tripping through the snapshot keeps the panel
+    /// current. Screen-space (anchor captured at open), POPOVER depth over the
+    /// nodes. No-op when closed or the node/param has gone.
+    fn render_vec_editor(&self, ui: &mut dyn Painter) {
+        let Some(ed) = self.vec_editor.as_ref() else {
+            return;
+        };
+        let Some(node) = self.find_node(ed.node_id) else {
+            return;
+        };
+        let Some(p) = node.params.iter().find(|p| p.name == ed.param_name) else {
+            return;
+        };
+        let vals = p.vec_value;
+        let (min, max) = if ed.is_color {
+            (0.0, 1.0)
+        } else {
+            p.range.unwrap_or((-1.0, 1.0))
+        };
+        let span = (max - min).max(f32::EPSILON);
+        let panel = ed.panel_rect();
+        ui.draw_bordered_rect(
+            panel.x, panel.y, panel.w, panel.h, TOOLTIP_BG, 3.0, 1.0, TOOLTIP_BORDER,
+        );
+        let text_size = 9.0 * self.zoom;
+        let pad_x = 8.0 * self.zoom;
+        let (cx, cy) = self.cursor;
+        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+
+        // Colour swatch header: the live colour + its hex, so the panel shows
+        // what you're editing at a glance.
+        if let Some(sw) = ed.swatch_rect() {
+            let col = Color32::new(to_u8(vals[0]), to_u8(vals[1]), to_u8(vals[2]), 255);
+            let inset = 3.0 * self.zoom;
+            let chip = (sw.h - 2.0 * inset).max(0.0);
+            ui.draw_rounded_rect(sw.x + pad_x, sw.y + inset, chip, chip, col, 2.0 * self.zoom);
+            let hex = format_color_hex(vals);
+            ui.draw_text(
+                sw.x + pad_x + chip + 6.0 * self.zoom,
+                sw.y + 2.0 * self.zoom,
+                &hex,
+                text_size,
+                TEXT_PRIMARY,
+            );
+        }
+
+        // One row per channel: label left, value right, fill bar under (the
+        // inline "slider" you drag to scrub the channel).
+        let labels = vec_channel_labels(ed.kind);
+        for (ch, &cval) in vals.iter().enumerate().take(ed.components) {
+            let r = ed.channel_rect(ch);
+            if cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h {
+                ui.draw_rect(r.x, r.y, r.w, r.h, ENUM_DD_HOVER_BG);
+            }
+            let text_y = r.y + 2.0 * self.zoom;
+            let lab = labels.get(ch).copied().unwrap_or("");
+            ui.draw_text(r.x + pad_x, text_y, lab, text_size, TEXT_SECONDARY);
+            let val_str = format!("{cval:.3}");
+            let vw = text_width(&val_str, text_size);
+            ui.draw_text(
+                r.x + r.w - pad_x - vw,
+                text_y,
+                &val_str,
+                text_size,
+                TEXT_PRIMARY,
+            );
+            let frac = ((cval - min) / span).clamp(0.0, 1.0);
+            let bar_h = 2.0 * self.zoom;
+            let bar_y = r.y + r.h - bar_h - 2.0 * self.zoom;
+            let bar_x = r.x + pad_x;
+            let bar_w = (r.x + r.w - pad_x - bar_x).max(0.0);
+            ui.draw_rounded_rect(bar_x, bar_y, bar_w, bar_h, PARAM_FILL_BG, bar_h * 0.5);
+            let fw = bar_w * frac;
+            if fw > 0.0 {
+                ui.draw_rounded_rect(bar_x, bar_y, fw, bar_h, PARAM_FILL_FG, bar_h * 0.5);
+            }
         }
     }
 

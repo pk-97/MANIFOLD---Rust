@@ -303,8 +303,21 @@ the node; the top performance card stays.
    toggle / trigger fire reads the fresh number. Tests in `graph_canvas/tests.rs`
    (`clicking_bool_value_*`, `clicking_trigger_value_*`, `clicking_enum_value_opens_dropdown_*`,
    `picking_enum_option_*`, `pressing_outside_open_enum_dropdown_*`); render verified headless.
-3. ⬜ **Color / Vec editing** — swatch + channel editor on the face (a small popover, or
-   inline channel rows). `Color`/`Vec2..4` currently read-only on the face.
+3. ✅ **Color / Vec editing on the face.** DONE 2026-07-01. A `Color` param row now carries a
+   small **swatch chip** beside its `#RRGGBB` value; clicking the value of any `Color` /
+   `Vec2..4` param opens a canvas-owned **`VecEditor`** panel anchored under the row (same modal
+   pattern as `EnumDropdown`): for a colour, a swatch + hex header, then one **draggable channel
+   row per component** (RGBA / XYZW) with a label, value, and fill bar. Dragging a channel row
+   scrubs that component (`DragMode::VecScrub`) and emits the WHOLE colour/vector as one
+   `SetGraphNodeParam` with the other channels held — byte-for-byte the sidebar's channel scrub
+   (colours scrub 0..1, vectors over their declared range or ±1). The panel stays open across a
+   scrub (grab another channel); a press elsewhere inside swallows, a press outside dismisses.
+   Channel values + swatch are read live from the node's `ParamView` (`vec_value` added), so an
+   edit round-tripping through the snapshot keeps the panel current. Hit-tested modally in
+   `on_left_button_down`, drawn at `POPOVER` depth in `render_vec_editor`; no app plumbing.
+   Tests in `graph_canvas/tests.rs` (`clicking_color_value_opens_editor_*`, `dragging_a_color_channel_*`,
+   `color_channel_scrub_clamps_*`, `vec2_editor_*`, `dragging_a_vec2_channel_*`,
+   `pressing_outside_open_vec_editor_*`, `pressing_inside_vec_editor_header_*`); render verified headless.
 4. ⬜ **String / path + Table + WGSL** — `EditGraphNodeStringParam` (text input),
    `BrowseGraphNodePath` (native dialog), `EditGraphNodeTableCell` (grid), `EditGraphNodeWgsl`
    (multiline editor). These open editors anchored on the node row.

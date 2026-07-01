@@ -420,6 +420,11 @@ pub(crate) struct ParamView {
     /// Enum option labels, needed as the outer binding's `value_labels` when an
     /// enum param is exposed. Empty for non-enum params (`unwrap_or_default`).
     pub(crate) enum_labels: Vec<String>,
+    /// Live multi-component value (RGBA / XYZW, zero-padded tail) for
+    /// `Color` / `Vec2..4` params — the source both the on-face swatch and the
+    /// on-node channel editor ([`GraphCanvas::vec_editor`]) read. `[0.0; 4]` for
+    /// scalar kinds.
+    pub(crate) vec_value: [f32; 4],
 }
 
 /// The param kinds that can be exposed onto the outer performance card — the
@@ -547,6 +552,37 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
         exposed: p.exposed,
         default_value: p.default_value,
         enum_labels: p.enum_labels.clone().unwrap_or_default(),
+        vec_value: p.vec_value.unwrap_or([0.0; 4]),
+    }
+}
+
+/// Component count for a multi-component param kind: `Color`/`Vec4` → 4,
+/// `Vec3` → 3, `Vec2` → 2, `0` for scalar kinds. Mirrors the sidebar's
+/// `GraphEditorParamKind::vec_components`, so the on-node channel editor and the
+/// sidebar's agree on how many rows a colour/vector has.
+pub(crate) fn vec_components(kind: crate::graph_view::ParamSnapshotKind) -> usize {
+    use crate::graph_view::ParamSnapshotKind as K;
+    match kind {
+        K::Color | K::Vec4 => 4,
+        K::Vec3 => 3,
+        K::Vec2 => 2,
+        _ => 0,
+    }
+}
+
+/// Per-channel labels for the multi-component editor: `Color` reads RGBA,
+/// vectors XYZW. Empty for scalar kinds. Mirrors the sidebar's
+/// `GraphEditorParamKind::channel_labels`.
+pub(crate) fn vec_channel_labels(
+    kind: crate::graph_view::ParamSnapshotKind,
+) -> &'static [&'static str] {
+    use crate::graph_view::ParamSnapshotKind as K;
+    match kind {
+        K::Color => &["R", "G", "B", "A"],
+        K::Vec2 => &["X", "Y"],
+        K::Vec3 => &["X", "Y", "Z"],
+        K::Vec4 => &["X", "Y", "Z", "W"],
+        _ => &[],
     }
 }
 

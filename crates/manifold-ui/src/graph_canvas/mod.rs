@@ -82,7 +82,8 @@ pub use mapping_popover::MappingPopover;
 pub use model::{node_preview_target, resolve_card_param_node_id, resolve_level};
 pub(crate) use model::{
     NodeRow, NodeView, PortHit, WireView, elide_to_width, expose_glyph_bounds, find_node_scope,
-    kind_is_exposable, param_convert_for_kind, spark_has_variation, text_width, wrap_text,
+    format_color_hex, kind_is_exposable, param_convert_for_kind, spark_has_variation, text_width,
+    vec_channel_labels, wrap_text,
 };
 
 const HEADER_HEIGHT: f32 = 28.0;
@@ -424,6 +425,12 @@ pub struct GraphCanvas {
     /// an option or dismiss). `None` when closed. Canvas-owned, drawn on top of
     /// the nodes and hit-tested first in `on_left_button_down`.
     pub(crate) enum_dropdown: Option<EnumDropdown>,
+    /// Open Color / Vec channel editor, if any (Phase 3 on-node editing). Set by
+    /// a click on a `Color` / `Vec2..4` param's value; its channel rows scrub in
+    /// place (a press elsewhere inside swallows, a press outside dismisses).
+    /// `None` when closed. Canvas-owned, drawn on top of the nodes and hit-tested
+    /// (modally) in `on_left_button_down`, same pattern as `enum_dropdown`.
+    pub(crate) vec_editor: Option<VecEditor>,
 }
 
 impl GraphCanvas {
@@ -460,6 +467,7 @@ impl GraphCanvas {
             // +/- toggle to fold them.
             default_collapsed: false,
             enum_dropdown: None,
+            vec_editor: None,
         }
     }
 
@@ -575,5 +583,107 @@ impl EnumDropdown {
         }
         let i = ((sy - (self.anchor.y + self.anchor.h)) / self.option_h()) as usize;
         (i < self.options.len()).then_some(i)
+    }
+}
+
+/// An open Color / Vec channel editor on the node face (Phase 3). Clicking the
+/// value of a `Color` / `Vec2..4` param row opens this panel directly under the
+/// row: for a colour a swatch header, then one draggable channel row per
+/// component (RGBA / XYZW). Dragging a channel row scrubs that component and
+/// emits the WHOLE colour/vector as one `SetGraphNodeParam` (the other channels
+/// held) — byte-for-byte the sidebar's channel scrub. Canvas-owned and modal in
+/// `on_left_button_down`, same pattern as [`EnumDropdown`]; the live channel
+/// values + swatch are read from the node's `ParamView` each frame, so an edit
+/// round-tripping through the snapshot keeps the panel current.
+#[derive(Debug, Clone)]
+pub(crate) struct VecEditor {
+    /// Runtime (doc) id of the node whose param this drives.
+    pub(crate) node_id: u32,
+    /// Inner param name — the `param_name` the emitted command carries.
+    pub(crate) param_name: String,
+    /// The param kind — picks the emitted `SerializedParamValue` variant and
+    /// the channel labels.
+    pub(crate) kind: crate::graph_view::ParamSnapshotKind,
+    /// `true` for a `Color` (RGBA, 0..1 channels, swatch header), `false` for a
+    /// plain vector (XYZW, ranged channels, no header).
+    pub(crate) is_color: bool,
+    /// Editable component count (2/3/4).
+    pub(crate) components: usize,
+    /// Screen-space rect of the param row it opened from. The panel stacks
+    /// directly below it, one row per (header +) channel at the same height/width.
+    pub(crate) anchor: Rect,
+}
+
+impl VecEditor {
+    pub(crate) fn new(
+        node_id: u32,
+        param_name: String,
+        kind: crate::graph_view::ParamSnapshotKind,
+        anchor: Rect,
+    ) -> Self {
+        Self {
+            node_id,
+            param_name,
+            kind,
+            is_color: matches!(kind, crate::graph_view::ParamSnapshotKind::Color),
+            components: model::vec_components(kind),
+            anchor,
+        }
+    }
+
+    /// Height of one panel row — matches the param row it opened from.
+    fn row_h(&self) -> f32 {
+        self.anchor.h
+    }
+
+    /// Non-channel header rows above the channel rows: the colour-swatch line for
+    /// a `Color`, none for a plain vector.
+    fn header_rows(&self) -> usize {
+        self.is_color as usize
+    }
+
+    /// Screen-space rect of the whole panel, stacked below the anchor row.
+    pub(crate) fn panel_rect(&self) -> Rect {
+        let rows = self.header_rows() + self.components;
+        Rect::new(
+            self.anchor.x,
+            self.anchor.y + self.anchor.h,
+            self.anchor.w,
+            self.row_h() * rows as f32,
+        )
+    }
+
+    /// Screen-space rect of the colour-swatch header row, or `None` for a vector.
+    pub(crate) fn swatch_rect(&self) -> Option<Rect> {
+        self.is_color.then(|| {
+            Rect::new(
+                self.anchor.x,
+                self.anchor.y + self.anchor.h,
+                self.anchor.w,
+                self.row_h(),
+            )
+        })
+    }
+
+    /// Screen-space rect of channel-row `ch` (0-based, past any header row).
+    pub(crate) fn channel_rect(&self, ch: usize) -> Rect {
+        let h = self.row_h();
+        let top = self.anchor.y + self.anchor.h + (self.header_rows() + ch) as f32 * h;
+        Rect::new(self.anchor.x, top, self.anchor.w, h)
+    }
+
+    /// True when `(sx, sy)` is anywhere inside the open panel.
+    pub(crate) fn contains(&self, sx: f32, sy: f32) -> bool {
+        let r = self.panel_rect();
+        sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h
+    }
+
+    /// The channel index under `(sx, sy)`, or `None` if the cursor isn't on a
+    /// channel row (header / outside the panel).
+    pub(crate) fn channel_at(&self, sx: f32, sy: f32) -> Option<usize> {
+        (0..self.components).find(|&ch| {
+            let r = self.channel_rect(ch);
+            sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h
+        })
     }
 }
