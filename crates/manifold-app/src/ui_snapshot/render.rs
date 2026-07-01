@@ -396,6 +396,12 @@ pub fn render_graph_editor_to_png(
     renderer.begin_frame();
     canvas.render(&mut renderer as &mut dyn Painter, viewport);
     renderer.render_tree(&tree, None);
+    // Column dividers, same as the runtime present pass — default widths (this
+    // headless path has no interactive drag state).
+    manifold_ui::Dock::editor().draw(
+        UiRect::new(0.0, 0.0, logical_w, logical_h),
+        &mut renderer as &mut dyn Painter,
+    );
     let drew = renderer.prepare(&device, tex_w, tex_h, dpi);
     {
         let mut enc = device.create_encoder("ui-snap-editor");

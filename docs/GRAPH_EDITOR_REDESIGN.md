@@ -55,31 +55,50 @@ Applied here, with our video-tool needs kept:
 8. **A bottom mini-timeline** — scrub time + a clip minimap — because generators/effects
    animate over time and you author to a frame.
 
-## New: the `dock_*` splitter widget
+## The `Dock` widget — SHIPPED (build step 1, 2026-07-01)
 
-A real GUI-crate widget, not a copied pattern. Each panel owns **one px number**; the
-canvas absorbs the rest. Window-resize just works (no ratios to re-clamp).
+A real GUI-crate widget ([`manifold-ui/src/dock.rs`](../crates/manifold-ui/src/dock.rs)),
+not a copied pattern. Each panel owns **one px number**; the canvas absorbs the rest.
+Window-resize just works (no ratios to re-clamp).
+
+**Shape refinement vs the original sketch.** The sketch was three chained
+`dock_left/right/bottom(area, &mut w) -> (panel, rest)` calls. What shipped is a
+single **`rects(area) -> DockRects`** that returns every panel + canvas + handle
+rect together. The chaining form's whole value was consistency; a bundled `rects()`
+delivers that more directly — it can't be called in the wrong order, and all five
+consumer sites (render, `editor_canvas_viewport`, the headless PNG path, and the two
+pointer handlers) get identical geometry from one method. In a two-pass
+(render/input) architecture that's strictly harder to misuse than three chained calls
+repeated across three files. Same spirit ("one API you can't fuck up"), better fit.
 
 ```rust
-// draws the drag handle, sets the cursor, clamps, updates size on drag.
-// returns (panel_rect, remaining_rect).
-ui.dock_left  (id, area, &mut width,  min, max) -> (Rect, Rect)
-ui.dock_right (id, area, &mut width,  min, max) -> (Rect, Rect)
-ui.dock_bottom(id, area, &mut height, min, max) -> (Rect, Rect)
+// Geometry — one call, every rect:
+dock.rects(area) -> DockRects { left, right, bottom, canvas,
+                                left_handle, right_handle, bottom_handle }
+dock.canvas(area) -> Rect      // convenience for viewport-only consumers
+
+// Interaction — mirrors the main split's triad:
+dock.hit_test(area, pos) -> Option<DockEdge>
+dock.set_hover_from(area, pos)          // hover highlight + resize cursor
+dock.begin(edge) / dock.drag(area, pos) / dock.end()
+dock.cursor() -> Option<TimelineCursor>
+
+// Draw — one call from the render pass:
+dock.draw(area, &mut dyn Painter)       // thin seam always, band on hover/drag
 ```
 
-Editor scene = 4 lines:
+Editor use: state is one `manifold_ui::Dock` on the editor `Workspace`
+([workspace.rs](../crates/manifold-app/src/workspace.rs)), seeded by `Dock::editor()`.
+Render + both pointer handlers read `ws.dock.rects(area)`; the old fixed
+`SIDEBAR_WIDTH` / `EDITOR_CARD_LANE_WIDTH` constants are now just the default seed
+(single number in `dock.rs`). Left + right columns are live; the **bottom edge is
+built but disabled** (`show_bottom = false`) until the mini-timeline (step 6) fills it.
 
-```rust
-let (left,  a)         = ui.dock_left  (id!(), scene, &mut s.left_w,  140.0, 420.0);
-let (right, b)         = ui.dock_right (id!(), a,     &mut s.right_w, 220.0, 480.0);
-let (timeline, canvas) = ui.dock_bottom(id!(), b,     &mut s.tl_h,     80.0, 360.0);
-```
-
-Reuse from the main UI, no new theme: `RESIZE_HANDLE_IDLE/HOVER/DRAG`, `DIVIDER_COLOR`,
-`INSPECTOR_RESIZE_HANDLE_WIDTH`, `Cursors::ResizeHorizontal/Vertical`. State = three
-`f32`s on the editor scene. The main UI's `timeline_split_ratio` / `inspector_width` splits
-([layout.rs](../crates/manifold-ui/src/layout.rs)) can migrate onto the same widget later.
+Reused from the main UI, no new theme: `RESIZE_HANDLE_IDLE/HOVER/DRAG`,
+`DIVIDER_COLOR`, `INSPECTOR_RESIZE_HANDLE_WIDTH`, `TimelineCursor::ResizeHorizontal/
+Vertical`. The main UI's `timeline_split_ratio` / `inspector_width` splits
+([layout.rs](../crates/manifold-ui/src/layout.rs)) can migrate onto the same widget
+later.
 
 ## New: the mini-timeline
 
@@ -156,8 +175,9 @@ from existing parts:
 
 ## Build order (proposed)
 
-1. **`dock_*` splitter widget** in the GUI crate + editor scene consuming it (resizable
-   columns). Self-contained, immediately useful, no graph-render risk.
+1. ✅ **`Dock` splitter widget** in the GUI crate + editor consuming it (resizable
+   columns). **DONE 2026-07-01** — `dock.rs` + `Workspace.dock`; render/input/headless
+   all read `dock.rects(area)`; left+right live, bottom stubbed for step 6.
 2. **Compact content-sized nodes** + **hide-unused sockets** + **gate port labels by LOD**
    (this is the mush fix). Biggest legibility win.
 3. **Filmstrip LOD** (previews stay + enlarge, text drops).

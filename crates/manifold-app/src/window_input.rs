@@ -75,6 +75,26 @@ impl Application {
         Vec2::new(position.x as f32 / scale as f32, position.y as f32 / scale as f32)
     }
 
+    /// Push the cursor-manager's pending shape to `window_id` if it changed.
+    /// The one place the `TimelineCursor → winit::CursorIcon` mapping lives;
+    /// both the primary timeline cursor track and the editor's divider-hover
+    /// cursor go through it.
+    pub(crate) fn apply_pending_cursor(&mut self, window_id: WindowId) {
+        if self.cursor_manager.needs_update()
+            && let Some(ws) = self.window_registry.get(&window_id)
+        {
+            let icon = match self.cursor_manager.pending_cursor_icon() {
+                TimelineCursor::Default => winit::window::CursorIcon::Default,
+                TimelineCursor::ResizeHorizontal => winit::window::CursorIcon::ColResize,
+                TimelineCursor::ResizeVertical => winit::window::CursorIcon::RowResize,
+                TimelineCursor::Move => winit::window::CursorIcon::Move,
+                TimelineCursor::Blocked => winit::window::CursorIcon::NotAllowed,
+            };
+            ws.window.set_cursor(icon);
+            self.cursor_manager.mark_applied();
+        }
+    }
+
     // ── Dispatchers: the single owner entry per winit input event ──────────
     // `window_event` calls exactly one of these per arm; the primary / editor /
     // output-window split lives here, not in the match.
@@ -195,20 +215,7 @@ impl Application {
             self.update_cursor_for_position();
         }
 
-        // Apply cursor to window if changed
-        if self.cursor_manager.needs_update()
-            && let Some(ws) = self.window_registry.get(&window_id)
-        {
-            let icon = match self.cursor_manager.pending_cursor_icon() {
-                TimelineCursor::Default => winit::window::CursorIcon::Default,
-                TimelineCursor::ResizeHorizontal => winit::window::CursorIcon::ColResize,
-                TimelineCursor::ResizeVertical => winit::window::CursorIcon::RowResize,
-                TimelineCursor::Move => winit::window::CursorIcon::Move,
-                TimelineCursor::Blocked => winit::window::CursorIcon::NotAllowed,
-            };
-            ws.window.set_cursor(icon);
-            self.cursor_manager.mark_applied();
-        }
+        self.apply_pending_cursor(window_id);
     }
 
     /// `MouseInput` in the timeline/inspector window (`is_primary`) or the output
@@ -506,21 +513,60 @@ impl Application {
             .unwrap_or((1.0, 1.0, 1.0));
         let logical_x = position.x as f32 / scale as f32;
         let logical_y = position.y as f32 / scale as f32;
-        // Preview sidebar on the left, card lane on the right (matches the
-        // main timeline's inspector docking right).
-        let preview_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
-        let card_x = window_w - manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
-        // Canvas viewport matches the render-time slice
-        // (offset by preview_width); without this the
-        // canvas's `to_graph` would treat screen x=0 as the
-        // canvas left edge and node hit-tests would be off
-        // by `preview_width` to the left.
-        let viewport = crate::graph_canvas::Rect::new(
-            preview_width,
-            0.0,
-            (card_x - preview_width).max(0.0),
-            window_h,
-        );
+        let area = manifold_ui::Rect::new(0.0, 0.0, window_w, window_h);
+        let pos = Vec2::new(logical_x, logical_y);
+
+        // Column-divider drag / hover takes precedence over the canvas +
+        // panels. A live drag resizes the dock and consumes the move; otherwise
+        // update the hover highlight (repaint only when it changes).
+        let mut dock_dragging = false;
+        let mut dock_cursor = TimelineCursor::Default;
+        if let Some(ed) = self.graph_editor.as_mut() {
+            if ed.dock.is_dragging() {
+                ed.dock.drag(area, pos);
+                ed.offscreen_dirty = true;
+                dock_dragging = true;
+            } else {
+                let before = ed.dock.highlighted();
+                ed.dock.set_hover_from(area, pos);
+                if ed.dock.highlighted() != before {
+                    ed.offscreen_dirty = true;
+                }
+            }
+            dock_cursor = ed.dock.cursor().unwrap_or(TimelineCursor::Default);
+        }
+        self.cursor_manager.set(dock_cursor);
+        self.apply_pending_cursor(window_id);
+        if dock_dragging {
+            return;
+        }
+
+        // Preview sidebar on the left, card lane on the right (matches the main
+        // timeline's inspector docking right). Geometry from the same `Dock` the
+        // present pass reads, so the canvas viewport tracks the dragged columns.
+        let (preview_width, card_x, viewport) = self
+            .graph_editor
+            .as_ref()
+            .map(|ed| {
+                let r = ed.dock.rects(area);
+                (
+                    r.left.width,
+                    r.right.x,
+                    // Canvas viewport matches the render-time slice (offset by
+                    // preview_width); without this the canvas's `to_graph` would
+                    // treat screen x=0 as the canvas left edge and node
+                    // hit-tests would be off by `preview_width` to the left.
+                    crate::graph_canvas::Rect::new(
+                        r.canvas.x,
+                        r.canvas.y,
+                        r.canvas.width,
+                        r.canvas.height,
+                    ),
+                )
+            })
+            .unwrap_or_else(|| {
+                (0.0, window_w, crate::graph_canvas::Rect::new(0.0, 0.0, window_w, window_h))
+            });
         // Always update canvas cursor — graph-space coords
         // need it even for clicks that land in the sidebar.
         if let Some(canvas) = self.graph_canvas.as_mut() {
@@ -607,6 +653,47 @@ impl Application {
             }
             return;
         }
+        // Column-divider drag takes precedence over the canvas + panels: a
+        // press on a handle begins the drag, a release ends it. Handled on the
+        // `graph_editor` workspace (a field disjoint from `graph_canvas`), so
+        // the canvas never sees these clicks.
+        {
+            let (cx, cy) = self
+                .graph_canvas
+                .as_ref()
+                .map(|c| c.cursor())
+                .unwrap_or((0.0, 0.0));
+            let (ww, wh) = self
+                .window_registry
+                .get(&window_id)
+                .map(|ws| {
+                    let s = ws.window.scale_factor();
+                    let sz = ws.window.inner_size();
+                    (sz.width as f32 / s as f32, sz.height as f32 / s as f32)
+                })
+                .unwrap_or((1.0, 1.0));
+            let area = manifold_ui::Rect::new(0.0, 0.0, ww, wh);
+            if button == MouseButton::Left
+                && let Some(ed) = self.graph_editor.as_mut()
+            {
+                match state {
+                    ElementState::Pressed => {
+                        if let Some(edge) = ed.dock.hit_test(area, Vec2::new(cx, cy)) {
+                            ed.dock.begin(edge);
+                            ed.offscreen_dirty = true;
+                            return;
+                        }
+                    }
+                    ElementState::Released => {
+                        if ed.dock.is_dragging() {
+                            ed.dock.end();
+                            ed.offscreen_dirty = true;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         // The UI-local graph snapshot for the jump-to-node path below — taken
         // before the `&mut self.graph_canvas` borrow (it returns an owned `Arc`).
         let editor_ui_snap = self.editor_ui_snapshot();
@@ -621,26 +708,40 @@ impl Application {
                 })
                 .unwrap_or((1.0, 1.0));
             let (cx, cy) = canvas.cursor();
-            let preview_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
-            let card_x =
-                window_size.0 - manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
-            // The UITree spans the whole editor window — both
-            // the left preview sidebar and the right card lane
-            // live in it. Route any click in either margin to
-            // it; the canvas only sees clicks in the center
-            // column.
+            // Geometry from the same `Dock` the present pass reads, so column
+            // resizes move the canvas viewport + panel split in lockstep.
+            let area = manifold_ui::Rect::new(0.0, 0.0, window_size.0, window_size.1);
+            let (preview_width, card_x, viewport) = self
+                .graph_editor
+                .as_ref()
+                .map(|ed| {
+                    let r = ed.dock.rects(area);
+                    (
+                        r.left.width,
+                        r.right.x,
+                        // Canvas viewport matches the render-time slice: origin
+                        // at the left column, width is the center column. Passing
+                        // this (not the full window) is what makes `to_graph`
+                        // translate cursor coords correctly.
+                        crate::graph_canvas::Rect::new(
+                            r.canvas.x,
+                            r.canvas.y,
+                            r.canvas.width,
+                            r.canvas.height,
+                        ),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    (
+                        0.0,
+                        window_size.0,
+                        crate::graph_canvas::Rect::new(0.0, 0.0, window_size.0, window_size.1),
+                    )
+                });
+            // The UITree spans the whole editor window — both the left preview
+            // sidebar and the right card lane live in it. Route any click in
+            // either margin to it; the canvas only sees clicks in the center.
             let in_panel = cx < preview_width || cx >= card_x;
-            // Canvas viewport matches the render-time slice:
-            // origin at preview_width, width is the remaining
-            // center column. Passing this (not the full window)
-            // is what makes `to_graph` translate cursor coords
-            // into the canvas's coordinate system correctly.
-            let viewport = crate::graph_canvas::Rect::new(
-                preview_width,
-                0.0,
-                (card_x - preview_width).max(0.0),
-                window_size.1,
-            );
             match (button, state) {
                 (MouseButton::Left, ElementState::Pressed) => {
                     // The editor card's mapping drawer floats over

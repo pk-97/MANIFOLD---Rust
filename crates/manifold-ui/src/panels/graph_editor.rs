@@ -222,21 +222,23 @@ pub struct NodeInspector {
     pub outputs: Vec<(String, f32)>,
 }
 
-/// Preview-sidebar width inside the graph-editor window — docks on the LEFT.
-/// The sidebar is monitors-only (the inner-node param list lives under the
-/// card lane), so the width is set by the two stacked 16:9 preview panes —
-/// wider here means bigger, more usable Node Output / Master Out monitors.
-pub const SIDEBAR_WIDTH: f32 = 460.0;
+/// Preview-sidebar DEFAULT width inside the graph-editor window — docks on the
+/// LEFT. The live width is now owned by the editor workspace's [`manifold_ui::Dock`]
+/// (the user can drag the divider); this constant is just the seed. The sidebar
+/// is monitors-only (the inner-node param list lives under the card lane), so the
+/// width sizes the two stacked 16:9 preview panes — wider means bigger Node
+/// Output / Master Out monitors. Single source of the number: [`crate::dock`].
+pub const SIDEBAR_WIDTH: f32 = crate::dock::EDITOR_LEFT_DEFAULT;
 
-/// Card-lane width inside the graph-editor window — docks on the RIGHT (same
-/// side as the main timeline's inspector). The lane that renders the real
-/// `ParamCardPanel` for the edited effect/generator. Wide enough to fit the
-/// full card (label + slider + value + the E/→ row buttons) without the
-/// cramping the 200px mirror lane had. SINGLE SOURCE OF TRUTH: both the render
-/// path (`present_graph_editor_window`) and the canvas input-mapping path (the
-/// editor window's pointer handlers) must read this same constant, or the
-/// canvas origin and click hit-testing desync.
-pub const EDITOR_CARD_LANE_WIDTH: f32 = 340.0;
+/// Card-lane DEFAULT width inside the graph-editor window — docks on the RIGHT
+/// (same side as the main timeline's inspector). The lane renders the real
+/// `ParamCardPanel` for the edited effect/generator. Wide enough to fit the full
+/// card (label + slider + value + the E/→ row buttons). The live width is now
+/// owned by the editor workspace's [`manifold_ui::Dock`]; render and input both
+/// read `dock.rects(area)`, so the canvas origin and click hit-testing can no
+/// longer desync (they used to share this constant by hand). Single source of
+/// the number: [`crate::dock`].
+pub const EDITOR_CARD_LANE_WIDTH: f32 = crate::dock::EDITOR_RIGHT_DEFAULT;
 
 const ROW_H: f32 = 28.0;
 const PADDING: f32 = 12.0;

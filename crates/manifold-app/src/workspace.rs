@@ -58,6 +58,14 @@ pub struct Workspace {
     /// drawable pool may be reconfiguring). Offscreen render still
     /// runs; blit skipped.
     pub surface_resized_this_frame: bool,
+
+    /// Resizable-panel layout for this window. Only the graph-editor
+    /// workspace uses it today (left preview column + right card lane, and
+    /// eventually a bottom mini-timeline); the main window drives its splits
+    /// through `ui_root.layout` and leaves this at its default. Single source
+    /// of truth for the editor's column geometry — render and input both read
+    /// `dock.rects(area)`, so hit-testing can't drift from what's drawn.
+    pub dock: manifold_ui::Dock,
 }
 
 impl Workspace {
@@ -70,6 +78,7 @@ impl Workspace {
             ui_display_link: None,
             offscreen_dirty: true,
             surface_resized_this_frame: false,
+            dock: manifold_ui::Dock::editor(),
         }
     }
 }

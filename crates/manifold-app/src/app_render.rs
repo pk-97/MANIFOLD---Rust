@@ -2930,13 +2930,11 @@ impl Application {
         let scale = win_state.window.scale_factor();
         let logical_w = (surface.width as f64 / scale).max(1.0) as f32;
         let logical_h = (surface.height as f64 / scale).max(1.0) as f32;
-        let card_width = manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
-        let preview_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
-        let canvas_x = preview_width;
-        let canvas_width = (logical_w - preview_width - card_width).max(0.0);
-        Some(crate::graph_canvas::Rect::new(
-            canvas_x, 0.0, canvas_width, logical_h,
-        ))
+        // Same `Dock` the present pass reads, so this mapping viewport tracks
+        // whatever the user dragged the columns to.
+        let area = manifold_ui::Rect::new(0.0, 0.0, logical_w, logical_h);
+        let c = self.graph_editor.as_ref()?.dock.canvas(area);
+        Some(crate::graph_canvas::Rect::new(c.x, c.y, c.width, c.height))
     }
 
     /// The current editor graph as the UI-local view-model the canvas reads,
@@ -3070,14 +3068,18 @@ impl Application {
         // timeline's inspector (`inspector_width` docks at `screen_width -
         // inspector_width`). Built BEFORE rendering so the tree's nodes
         // (panels + buttons + labels) are ready to draw alongside the canvas.
-        // Width comes from the single EDITOR_CARD_LANE_WIDTH / SIDEBAR_WIDTH
-        // constants the canvas input path also reads, so the canvas origin and
-        // click hit-testing stay in lockstep.
-        let card_width = manifold_ui::panels::graph_editor::EDITOR_CARD_LANE_WIDTH;
-        let preview_width = manifold_ui::panels::graph_editor::SIDEBAR_WIDTH;
-        let canvas_x = preview_width;
-        let canvas_width = (logical_w as f32 - preview_width - card_width).max(0.0);
-        let card_x = canvas_x + canvas_width;
+        // Column geometry comes from the workspace's resizable `Dock` (left
+        // preview column + right card lane). One `rects()` call feeds render,
+        // `editor_canvas_viewport`, and the pointer handlers alike, so the
+        // canvas origin and click hit-testing stay in lockstep no matter how
+        // the user drags the dividers.
+        let editor_area = manifold_ui::Rect::new(0.0, 0.0, logical_w as f32, logical_h as f32);
+        let dock = ws.dock.rects(editor_area);
+        let preview_width = dock.left.width;
+        let card_width = dock.right.width;
+        let canvas_x = dock.canvas.x;
+        let canvas_width = dock.canvas.width;
+        let card_x = dock.right.x;
         // When a node is being previewed, the preview pane occupies the top of
         // the sidebar; the expose/param rows start below it so they don't
         // overlap. Logical units; the present pass draws the pane to match.
@@ -3430,6 +3432,10 @@ impl Application {
             // Layer the sidebar UITree on top of the canvas's immediate-mode
             // draws (the flush protocol covers them with their own batches).
             ui.render_tree_range(&ws.ui_root.tree, 0, usize::MAX);
+            // Column dividers: a thin seam always, a highlight band on
+            // hover/drag. Drawn after the panels so the seam reads on top of
+            // both the canvas and the sidebar backgrounds.
+            ws.dock.draw(editor_area, ui);
             // The mapping drawer floats over the composited canvas + sidebar:
             // it draws inline at POPOVER depth (above the CONTENT-depth nodes),
             // unclipped.

@@ -9,6 +9,7 @@ pub mod coordinate_mapper;
 pub mod cursor_nav;
 pub mod cursors;
 pub mod drag;
+pub mod dock;
 pub mod draw;
 pub mod driver_waveform_icons;
 pub mod fmt;
@@ -41,6 +42,7 @@ pub mod widget_layout;
 
 pub use bitmap_renderer::LayerBitmapRenderer;
 pub use coordinate_mapper::CoordinateMapper;
+pub use dock::{Dock, DockEdge};
 pub use draw::{Depth, Painter};
 pub use graph_canvas::{GraphCanvas, MappingPopover};
 pub use graph_edit::GraphEditCommand;
