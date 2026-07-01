@@ -440,6 +440,25 @@ impl GraphCanvas {
         now: f32,
         shift: bool,
     ) {
+        // An open enum dropdown is modal over the canvas — it gets first crack.
+        // Any press closes it (taken here); a press on an option sets the value,
+        // a press elsewhere just dismisses and falls through to normal handling.
+        if let Some(dd) = self.enum_dropdown.take() {
+            if let Some(idx) = dd.option_at(sx, sy) {
+                if idx != dd.current {
+                    self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
+                        node_id: dd.node_id,
+                        param_name: dd.param_name.clone(),
+                        new_value: crate::SerializedParamValue::Enum { value: idx as u32 },
+                    });
+                }
+                return;
+            }
+            if dd.contains(sx, sy) {
+                return; // pressed the list edge — swallow, stay closed
+            }
+            // Pressed outside the list: dismissed, continue with normal dispatch.
+        }
         // Breadcrumb bar (header chrome) — jump to a shallower scope. Gets
         // first crack like the reset button since it sits above the canvas
         // surface. No-op return value means the click wasn't on a crumb.
@@ -488,16 +507,23 @@ impl GraphCanvas {
             }
             return;
         }
-        // Param row on the node face → start a value scrub for numeric
-        // params with a range; for non-scrubbable params just select the
-        // node so the inspector sidebar can edit them.
+        // Param row on the node face. Numeric params with a range start a value
+        // scrub; discrete params edit in place (bool toggle, trigger fire, enum
+        // dropdown); the rest (color / vec / string / table) just select — their
+        // editors land in later phases.
         if let Some((node_id, pi)) = self.param_row_under(viewport, sx, sy) {
-            let info = self
-                .nodes
-                .iter()
-                .find(|n| n.id == node_id)
-                .and_then(|n| n.params.get(pi).map(|p| (p.name.clone(), p.scrub)));
-            if let Some((param_name, scrub)) = info {
+            let info = self.nodes.iter().find(|n| n.id == node_id).and_then(|n| {
+                n.params.get(pi).map(|p| {
+                    (
+                        p.name.clone(),
+                        p.scrub,
+                        p.kind,
+                        p.current_value,
+                        p.enum_labels.clone(),
+                    )
+                })
+            });
+            if let Some((param_name, scrub, kind, current, enum_labels)) = info {
                 self.select_single(node_id);
                 if let Some(s) = scrub {
                     self.drag_mode = DragMode::ParamScrub {
@@ -508,6 +534,40 @@ impl GraphCanvas {
                         is_int: s.is_int,
                         press_origin_x: sx,
                     };
+                    return;
+                }
+                use crate::graph_view::ParamSnapshotKind as K;
+                match kind {
+                    // Bool → flip; Trigger → fire (+1). Both emit an absolute
+                    // SetGraphNodeParam, parity with the sidebar's value cell.
+                    K::Bool => self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
+                        node_id,
+                        param_name,
+                        new_value: crate::SerializedParamValue::Bool { value: current < 0.5 },
+                    }),
+                    K::Trigger => self.pending_actions.push(GraphEditCommand::SetGraphNodeParam {
+                        node_id,
+                        param_name,
+                        new_value: crate::SerializedParamValue::Float { value: current + 1.0 },
+                    }),
+                    // Enum → open a dropdown anchored on this row; picking an
+                    // option emits the SetGraphNodeParam (handled at the top).
+                    K::Enum => {
+                        if !enum_labels.is_empty()
+                            && let Some(anchor) = self.param_row_rect(viewport, node_id, pi)
+                        {
+                            let last = enum_labels.len() - 1;
+                            let cur_idx = (current.round().max(0.0) as usize).min(last);
+                            self.enum_dropdown = Some(super::EnumDropdown {
+                                node_id,
+                                param_name,
+                                options: enum_labels,
+                                current: cur_idx,
+                                anchor,
+                            });
+                        }
+                    }
+                    _ => {}
                 }
                 return;
             }

@@ -388,6 +388,11 @@ pub(crate) struct ParamView {
     /// fill bar exactly as the structural snapshot did, without re-snapshotting.
     pub(crate) kind: crate::graph_view::ParamSnapshotKind,
     pub(crate) range: Option<(f32, f32)>,
+    /// Raw current value as an `f32`, kept alongside the formatted `value`
+    /// string so a discrete on-face edit (bool toggle, trigger fire, enum
+    /// dropdown highlight) can read the number without re-parsing the label.
+    /// Refreshed by [`GraphCanvas::apply_live_values`] for the kinds it touches.
+    pub(crate) current_value: f32,
     pub(crate) value: String,
     /// `Some(0..1)` position of the current value within its declared
     /// range, for the fill bar. `None` for params with no numeric range
@@ -532,6 +537,7 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
         label: p.label.clone(),
         kind: p.kind,
         range: p.range,
+        current_value: p.current_value,
         value,
         fill,
         scrub,
@@ -1090,6 +1096,7 @@ impl GraphCanvas {
                 };
                 pv.value = value_str;
                 pv.fill = fill;
+                pv.current_value = value;
                 if let Some(scrub) = pv.scrub.as_mut() {
                     scrub.current_value = value;
                 }

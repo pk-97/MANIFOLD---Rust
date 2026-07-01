@@ -287,13 +287,22 @@ the node; the top performance card stays.
    empty canvas at 100% zoom). Verified via `ui-snap graph --preset Bloom` +
    `ui-snap editor --preset OilyFluid` (headless snapshot now flips `set_default_expanded`
    so the PNG shows the rows). Tests in `graph_canvas/tests.rs`.
-2. ⬜ **Enum / Bool / Trigger editing on the face** — clicking the value cell:
-   - **Enum → dropdown** (Peter's call 2026-07-01), NOT click-to-cycle. Clicking the cell
-     opens a popover listing every option (from `ParamView.enum_labels`); pick one to set it.
-     Cycling is bad UX once there are more than a couple of options. Model the popover on the
-     existing `graph_canvas::mapping_popover` (same open/hit/dismiss lifecycle).
-   - **Bool → flip**, **Trigger → fire** — discrete single-click, no popover.
-   All three emit `SetGraphNodeParam` (parity with the sidebar's `value_cell_click_to_param`).
+2. ✅ **Enum / Bool / Trigger editing on the face.** DONE 2026-07-01. Clicking a param
+   row's value (past the left-edge expose checkbox):
+   - **Enum → dropdown** (Peter's call), NOT click-to-cycle. Opens `EnumDropdown` — a
+     canvas-owned floating list of the param's `enum_labels`, anchored under the row via
+     `param_row_rect`; the current option reads with an accent wash. Clicking an option emits
+     `SetGraphNodeParam { Enum(idx) }` and closes; re-picking the current option is a no-op;
+     a press anywhere else dismisses. Hit-tested first in `on_left_button_down` (modal),
+     drawn at `POPOVER` depth in `render_enum_dropdown`, fully inside the canvas — no
+     app-level input plumbing (same pattern as the row scrub / expose checkbox).
+   - **Bool → flip**, **Trigger → fire (+1)** — discrete single-click, emit `SetGraphNodeParam`
+     ({Bool} / {Float}) directly.
+   All three carry the same command + values the sidebar's `value_cell_click_to_param` used
+   (parity). `ParamView` gained `current_value` (kept live by `apply_live_values`) so a bool
+   toggle / trigger fire reads the fresh number. Tests in `graph_canvas/tests.rs`
+   (`clicking_bool_value_*`, `clicking_trigger_value_*`, `clicking_enum_value_opens_dropdown_*`,
+   `picking_enum_option_*`, `pressing_outside_open_enum_dropdown_*`); render verified headless.
 3. ⬜ **Color / Vec editing** — swatch + channel editor on the face (a small popover, or
    inline channel rows). `Color`/`Vec2..4` currently read-only on the face.
 4. ⬜ **String / path + Table + WGSL** — `EditGraphNodeStringParam` (text input),

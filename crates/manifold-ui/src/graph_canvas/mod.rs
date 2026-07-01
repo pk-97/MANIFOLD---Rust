@@ -272,6 +272,10 @@ const PARAM_FILL_FG: Color32 = Color32::new(128, 199, 255, 140);
 /// the performance surface it feeds.
 const PARAM_EXPOSE_ON: Color32 = Color32::new(128, 199, 255, 240);
 const PARAM_EXPOSE_OFF: Color32 = Color32::new(150, 150, 165, 130);
+// Enum dropdown (Phase 2 on-node editing): the selected row reads with an accent
+// wash, the cursor row with a faint white lift, over the floating menu backing.
+const ENUM_DD_CURRENT_BG: Color32 = Color32::new(128, 199, 255, 46);
+const ENUM_DD_HOVER_BG: Color32 = Color32::new(255, 255, 255, 22);
 /// Sparkline trace colour — the same soft cyan as the fill bar, a touch brighter
 /// so the moving line reads against the node body without shouting.
 const SPARKLINE_COLOR: Color32 = Color32::new(140, 209, 255, 217);
@@ -415,6 +419,11 @@ pub struct GraphCanvas {
     /// param rows. Set before `set_snapshot` so the first layout uses the right
     /// node heights.
     pub(crate) default_collapsed: bool,
+    /// Open enum-param dropdown, if any (Phase 2 on-node editing). Set by a
+    /// click on an `Enum` param's value; any subsequent press resolves it (pick
+    /// an option or dismiss). `None` when closed. Canvas-owned, drawn on top of
+    /// the nodes and hit-tested first in `on_left_button_down`.
+    pub(crate) enum_dropdown: Option<EnumDropdown>,
 }
 
 impl GraphCanvas {
@@ -450,6 +459,7 @@ impl GraphCanvas {
             // Nodes default expanded (params visible), Blender-style — there's no
             // +/- toggle to fold them.
             default_collapsed: false,
+            enum_dropdown: None,
         }
     }
 
@@ -500,5 +510,70 @@ pub struct Rect {
 impl Rect {
     pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self { x, y, w, h }
+    }
+}
+
+/// An open enum-param dropdown on the node face. Clicking the value of an `Enum`
+/// param row opens this list of the param's options, anchored directly under the
+/// row; clicking an option emits `SetGraphNodeParam` with the chosen index and
+/// closes it. Peter's call (2026-07-01): pick from a list, never click-to-cycle.
+/// Canvas-owned and hit-tested inside the canvas's own press handler — no
+/// app-level input plumbing, same path as the row scrub + expose checkbox.
+#[derive(Debug, Clone)]
+pub(crate) struct EnumDropdown {
+    /// Runtime (doc) id of the node whose param this drives.
+    pub(crate) node_id: u32,
+    /// Inner param name — the `param_name` the emitted command carries.
+    pub(crate) param_name: String,
+    /// Option labels, in index order (index = the enum value set on pick).
+    pub(crate) options: Vec<String>,
+    /// Currently-selected index, highlighted in the list.
+    pub(crate) current: usize,
+    /// Screen-space rect of the param row it opened from. The list stacks
+    /// directly below it, one row per option at the same height and width.
+    pub(crate) anchor: Rect,
+}
+
+impl EnumDropdown {
+    /// Height of one option row — matches the param row it opened from.
+    fn option_h(&self) -> f32 {
+        self.anchor.h
+    }
+
+    /// Screen-space rect of the whole option list, below the anchor row.
+    pub(crate) fn panel_rect(&self) -> Rect {
+        Rect::new(
+            self.anchor.x,
+            self.anchor.y + self.anchor.h,
+            self.anchor.w,
+            self.option_h() * self.options.len() as f32,
+        )
+    }
+
+    /// Screen-space rect of option `i` in the list.
+    pub(crate) fn option_rect(&self, i: usize) -> Rect {
+        let h = self.option_h();
+        Rect::new(
+            self.anchor.x,
+            self.anchor.y + self.anchor.h + i as f32 * h,
+            self.anchor.w,
+            h,
+        )
+    }
+
+    /// True when `(sx, sy)` is inside the open list.
+    pub(crate) fn contains(&self, sx: f32, sy: f32) -> bool {
+        let r = self.panel_rect();
+        sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h
+    }
+
+    /// The option index under `(sx, sy)`, or `None` if the cursor isn't on the
+    /// list (or the list is empty).
+    pub(crate) fn option_at(&self, sx: f32, sy: f32) -> Option<usize> {
+        if !self.contains(sx, sy) || self.options.is_empty() {
+            return None;
+        }
+        let i = ((sy - (self.anchor.y + self.anchor.h)) / self.option_h()) as usize;
+        (i < self.options.len()).then_some(i)
     }
 }

@@ -611,6 +611,42 @@ fn enum_param(name: &str, current: f32) -> crate::graph_view::ParamSnapshot {
     }
 }
 
+fn bool_param(name: &str, current: f32) -> crate::graph_view::ParamSnapshot {
+    crate::graph_view::ParamSnapshot {
+        name: name.to_string(),
+        label: name.to_string(),
+        kind: crate::graph_view::ParamSnapshotKind::Bool,
+        default_value: 0.0,
+        current_value: current,
+        range: None,
+        enum_labels: None,
+        exposed: false,
+        summary: None,
+        vec_value: None,
+        string_value: None,
+        table_value: None,
+        tooltip: None,
+    }
+}
+
+fn trigger_param(name: &str, current: f32) -> crate::graph_view::ParamSnapshot {
+    crate::graph_view::ParamSnapshot {
+        name: name.to_string(),
+        label: name.to_string(),
+        kind: crate::graph_view::ParamSnapshotKind::Trigger,
+        default_value: 0.0,
+        current_value: current,
+        range: None,
+        enum_labels: None,
+        exposed: false,
+        summary: None,
+        vec_value: None,
+        string_value: None,
+        table_value: None,
+        tooltip: None,
+    }
+}
+
 /// Expand node 1 and return a viewport that culls nothing.
 fn expanded_canvas(param: crate::graph_view::ParamSnapshot) -> (GraphCanvas, Rect) {
     let mut canvas = GraphCanvas::new();
@@ -710,6 +746,101 @@ fn pressing_row_body_scrubs_and_emits_no_expose() {
             .iter()
             .all(|a| !matches!(a, GraphEditCommand::ToggleNodeParamExpose { .. })),
         "row-body press must not toggle exposure"
+    );
+}
+
+// ─── Phase 2: discrete on-face editing (bool / trigger / enum) ───────────────
+
+/// Press the value side of node 1's row `pi` (past the left-edge expose glyph).
+fn press_row_value(canvas: &mut GraphCanvas, vp: Rect, pi: usize) {
+    let row = canvas.param_row_rect(vp, 1, pi).expect("row rect");
+    canvas.on_left_button_down(vp, row.x + row.w * 0.7, row.y + row.h * 0.5, 0.0, false);
+}
+
+fn drained_set_param(canvas: &mut GraphCanvas) -> Option<(u32, String, crate::SerializedParamValue)> {
+    canvas.drain_edits().into_iter().find_map(|a| match a {
+        GraphEditCommand::SetGraphNodeParam { node_id, param_name, new_value } => {
+            Some((node_id, param_name, new_value))
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn clicking_bool_value_toggles_via_set_graph_node_param() {
+    // false → true
+    let (mut canvas, vp) = expanded_canvas(bool_param("on", 0.0));
+    press_row_value(&mut canvas, vp, 0);
+    let (nid, name, val) = drained_set_param(&mut canvas).expect("bool click emits SetGraphNodeParam");
+    assert_eq!((nid, name.as_str()), (1, "on"));
+    assert!(matches!(val, crate::SerializedParamValue::Bool { value: true }));
+
+    // true → false
+    let (mut canvas, vp) = expanded_canvas(bool_param("on", 1.0));
+    press_row_value(&mut canvas, vp, 0);
+    let (_, _, val) = drained_set_param(&mut canvas).expect("emits");
+    assert!(matches!(val, crate::SerializedParamValue::Bool { value: false }));
+}
+
+#[test]
+fn clicking_trigger_value_fires_via_set_graph_node_param() {
+    let (mut canvas, vp) = expanded_canvas(trigger_param("fire", 3.0));
+    press_row_value(&mut canvas, vp, 0);
+    let (nid, name, val) = drained_set_param(&mut canvas).expect("trigger click emits");
+    assert_eq!((nid, name.as_str()), (1, "fire"));
+    match val {
+        crate::SerializedParamValue::Float { value } => assert!((value - 4.0).abs() < 1e-6),
+        other => panic!("expected Float(+1), got {other:?}"),
+    }
+}
+
+#[test]
+fn clicking_enum_value_opens_dropdown_without_a_command() {
+    let (mut canvas, vp) = expanded_canvas(enum_param("mode", 1.0));
+    press_row_value(&mut canvas, vp, 0);
+    // No value command yet — the dropdown is now open, seeded from the param.
+    assert!(drained_set_param(&mut canvas).is_none(), "opening the list emits nothing");
+    let dd = canvas.enum_dropdown.as_ref().expect("dropdown open");
+    assert_eq!(dd.node_id, 1);
+    assert_eq!(dd.param_name, "mode");
+    assert_eq!(dd.options, vec!["A", "B", "C"]);
+    assert_eq!(dd.current, 1, "current index seeded from current_value");
+}
+
+#[test]
+fn picking_enum_option_emits_set_and_closes() {
+    let (mut canvas, vp) = expanded_canvas(enum_param("mode", 0.0));
+    press_row_value(&mut canvas, vp, 0);
+    // Click option index 2 in the open list.
+    let opt = canvas.enum_dropdown.as_ref().unwrap().option_rect(2);
+    canvas.on_left_button_down(vp, opt.x + opt.w * 0.5, opt.y + opt.h * 0.5, 0.0, false);
+    let (nid, name, val) = drained_set_param(&mut canvas).expect("pick emits SetGraphNodeParam");
+    assert_eq!((nid, name.as_str()), (1, "mode"));
+    assert!(matches!(val, crate::SerializedParamValue::Enum { value: 2 }));
+    assert!(canvas.enum_dropdown.is_none(), "picking closes the list");
+}
+
+#[test]
+fn picking_current_enum_option_emits_nothing_and_closes() {
+    let (mut canvas, vp) = expanded_canvas(enum_param("mode", 1.0));
+    press_row_value(&mut canvas, vp, 0);
+    let opt = canvas.enum_dropdown.as_ref().unwrap().option_rect(1); // == current
+    canvas.on_left_button_down(vp, opt.x + opt.w * 0.5, opt.y + opt.h * 0.5, 0.0, false);
+    assert!(drained_set_param(&mut canvas).is_none(), "re-picking current is a no-op");
+    assert!(canvas.enum_dropdown.is_none(), "still closes");
+}
+
+#[test]
+fn pressing_outside_open_enum_dropdown_dismisses_it() {
+    let (mut canvas, vp) = expanded_canvas(enum_param("mode", 0.0));
+    press_row_value(&mut canvas, vp, 0);
+    assert!(canvas.enum_dropdown.is_some());
+    // Press far from both the row and the list — empty canvas.
+    canvas.on_left_button_down(vp, 1000.0, 700.0, 0.0, false);
+    assert!(canvas.enum_dropdown.is_none(), "outside press dismisses");
+    assert!(
+        drained_set_param(&mut canvas).is_none(),
+        "dismissal emits no value command"
     );
 }
 

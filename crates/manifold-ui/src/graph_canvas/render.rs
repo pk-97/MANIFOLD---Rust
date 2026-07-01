@@ -181,6 +181,7 @@ impl GraphCanvas {
         ui.pop_immediate_clip();
         ui.push_depth(Depth::POPOVER);
         self.mapping_popover.render(ui);
+        self.render_enum_dropdown(ui);
         ui.pop_depth();
         ui.push_immediate_clip(viewport.x, viewport.y, viewport.w, viewport.h);
 
@@ -700,6 +701,36 @@ impl GraphCanvas {
     /// Draw a port socket dot centred at `(cx, cy)` with diameter `d`.
     fn draw_port_dot(&self, ui: &mut dyn Painter, cx: f32, cy: f32, d: f32, color: Color32) {
         ui.draw_rounded_rect(cx - d * 0.5, cy - d * 0.5, d, d, color, d * 0.5);
+    }
+
+    /// Draw the open enum dropdown (Phase 2): a floating option list anchored
+    /// under the param row it opened from. The selected option reads with an
+    /// accent wash, the option under the cursor with a faint lift. Screen-space
+    /// (the anchor was captured at open time), drawn at POPOVER depth over the
+    /// nodes. No-op when no dropdown is open.
+    fn render_enum_dropdown(&self, ui: &mut dyn Painter) {
+        let Some(dd) = self.enum_dropdown.as_ref() else {
+            return;
+        };
+        let panel = dd.panel_rect();
+        // Backing + frame so the list reads as one floating menu.
+        ui.draw_bordered_rect(
+            panel.x, panel.y, panel.w, panel.h, TOOLTIP_BG, 3.0, 1.0, TOOLTIP_BORDER,
+        );
+        let text_size = 9.0 * self.zoom;
+        let pad_x = 8.0 * self.zoom;
+        let (cx, cy) = self.cursor;
+        for (i, label) in dd.options.iter().enumerate() {
+            let r = dd.option_rect(i);
+            if i == dd.current {
+                ui.draw_rect(r.x, r.y, r.w, r.h, ENUM_DD_CURRENT_BG);
+            }
+            if cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h {
+                ui.draw_rect(r.x, r.y, r.w, r.h, ENUM_DD_HOVER_BG);
+            }
+            let text = elide_to_width(label, text_size, (r.w - 2.0 * pad_x).max(0.0));
+            ui.draw_text(r.x + pad_x, r.y + 2.0 * self.zoom, &text, text_size, TEXT_PRIMARY);
+        }
     }
 
     /// Draw a param row's expose checkbox in the node's left column: an empty
