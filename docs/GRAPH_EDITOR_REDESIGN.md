@@ -287,9 +287,13 @@ the node; the top performance card stays.
    empty canvas at 100% zoom). Verified via `ui-snap graph --preset Bloom` +
    `ui-snap editor --preset OilyFluid` (headless snapshot now flips `set_default_expanded`
    so the PNG shows the rows). Tests in `graph_canvas/tests.rs`.
-2. ⬜ **Enum / Bool / Trigger editing on the face** — cycle enum, flip bool, fire trigger
-   by clicking the value cell (discrete, no drag). The sidebar's `value_cell_click_to_param`
-   is the parity source; emits `SetGraphNodeParam`.
+2. ⬜ **Enum / Bool / Trigger editing on the face** — clicking the value cell:
+   - **Enum → dropdown** (Peter's call 2026-07-01), NOT click-to-cycle. Clicking the cell
+     opens a popover listing every option (from `ParamView.enum_labels`); pick one to set it.
+     Cycling is bad UX once there are more than a couple of options. Model the popover on the
+     existing `graph_canvas::mapping_popover` (same open/hit/dismiss lifecycle).
+   - **Bool → flip**, **Trigger → fire** — discrete single-click, no popover.
+   All three emit `SetGraphNodeParam` (parity with the sidebar's `value_cell_click_to_param`).
 3. ⬜ **Color / Vec editing** — swatch + channel editor on the face (a small popover, or
    inline channel rows). `Color`/`Vec2..4` currently read-only on the face.
 4. ⬜ **String / path + Table + WGSL** — `EditGraphNodeStringParam` (text input),
