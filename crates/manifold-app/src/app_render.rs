@@ -2317,6 +2317,7 @@ impl Application {
                 }
                 manifold_ui::GraphEditCommand::ToggleNodeParamExpose {
                     node_id,
+                    node_u32_id,
                     node_handle,
                     inner_param,
                     expose,
@@ -2332,10 +2333,17 @@ impl Application {
                         self.watched_graph_target.as_ref(),
                         self.watched_catalog_default.as_ref(),
                     ) {
+                        // Address the node exactly like every other graph command:
+                        // the canvas scope (current view depth) plus the node's
+                        // u32 doc id, so `descend_level` reaches a node nested in
+                        // a group. Matching by the stable `node_id` alone failed
+                        // — it's empty on bundled-preset nodes and the old command
+                        // only scanned the top level.
                         let cmd =
                             manifold_editing::commands::graph::ToggleNodeParamExposeCommand::new(
                                 target.clone(),
                                 node_id.clone(),
+                                *node_u32_id,
                                 node_handle.clone(),
                                 inner_param.clone(),
                                 *expose,
@@ -2347,7 +2355,8 @@ impl Application {
                                 crate::ui_translate::param_convert_to_core(*convert),
                                 *is_angle,
                                 value_labels.clone(),
-                            );
+                            )
+                            .with_scope(canvas_scope.clone());
                         self.send_content_cmd(ContentCommand::Execute(Box::new(cmd)));
                     }
                     continue;

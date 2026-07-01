@@ -1040,11 +1040,21 @@ impl Command for RevertEffectGraphCommand {
 #[derive(Debug)]
 pub struct ToggleNodeParamExposeCommand {
     target: GraphTarget,
-    /// Stable [`NodeId`] of the inner node — the addressing identity for
-    /// every stored write this command makes (the def node's
-    /// `exposed_params`, the preset `BindingTarget::Node`, the
-    /// `UserParamBinding.node_id`). Invariant under grouping.
+    /// Stable [`NodeId`] of the inner node — the identity the *mirror* side
+    /// stores (the preset `BindingTarget::Node`, the `UserParamBinding.node_id`).
+    /// NOT used to locate the node in the graph: it's empty on bundled-preset
+    /// nodes, so the graph-side `exposed_params` write addresses by
+    /// `(scope_path, node_u32_id)` instead — see [`Self::node_u32_id`].
     node_id: NodeId,
+    /// Runtime (doc) id of the inner node, addressed at [`Self::scope_path`] —
+    /// the same `(scope, id)` key every other graph command uses to reach a
+    /// node (nested groups included). Always populated, so it locates the node
+    /// where the stable `node_id` can't.
+    node_u32_id: u32,
+    /// View depth this edit targets — a path of group ids (empty = document
+    /// root). Lets exposure reach a param on a node the user has descended
+    /// into. See [`descend_level`].
+    scope_path: Vec<u32>,
     /// Current display handle, used only to mint readable
     /// `user.<handle>.<param>.<n>` ids. Not an addressing role.
     node_handle: String,
@@ -1152,9 +1162,11 @@ enum EffectMirrorReverse {
 
 impl ToggleNodeParamExposeCommand {
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         target: GraphTarget,
         node_id: NodeId,
+        node_u32_id: u32,
         node_handle: String,
         inner_param: String,
         expose: bool,
@@ -1170,6 +1182,8 @@ impl ToggleNodeParamExposeCommand {
         Self {
             target,
             node_id,
+            node_u32_id,
+            scope_path: Vec::new(),
             node_handle,
             inner_param,
             expose,
@@ -1184,31 +1198,28 @@ impl ToggleNodeParamExposeCommand {
             reverse: NodeExposeReverse::None,
         }
     }
+
+    /// Target a nested group level instead of the document root. Matches the
+    /// `with_scope` builder every other graph command exposes.
+    pub fn with_scope(mut self, scope_path: Vec<u32>) -> Self {
+        self.scope_path = scope_path;
+        self
+    }
 }
 
-/// Flip `inner_param` membership in the matching `EffectGraphNode`'s
-/// `exposed_params` set. Returns the previous membership for undo.
-/// `None` if the def has no node with that handle.
-fn flip_graph_exposed(
-    def: &mut EffectGraphDef,
-    node_id: &NodeId,
+/// Flip `inner_param` membership in the `exposed_params` set of the node with
+/// doc id `node_u32_id` within `nodes` (a single, already-descended graph
+/// level). Returns the previous membership for undo, or `None` if the level has
+/// no node with that id. Matches by the always-populated u32 doc id — the same
+/// key `SetGraphNodeParamCommand` uses — because a bundled node's stable
+/// `node_id` is empty and can't locate anything.
+fn flip_node_exposed(
+    nodes: &mut [EffectGraphNode],
+    node_u32_id: u32,
     inner_param: &str,
     expose: bool,
 ) -> Option<bool> {
-    // First materialise the preset-binding-driven exposure defaults
-    // into the def. This converts the def from "implicit (use preset
-    // bindings as the default exposure set)" into "explicit (the set
-    // IS the exposure state)". After this call, absence from
-    // `exposed_params` means "user explicitly unset" — which is what
-    // the persistence + snapshot path needs for unchecks to stick.
-    // Idempotent: re-running adds nothing new because the bindings
-    // map to the same node/param pairs every time.
-    materialize_binding_exposures(def);
-
-    let node = def
-        .nodes
-        .iter_mut()
-        .find(|n| &n.node_id == node_id)?;
+    let node = nodes.iter_mut().find(|n| n.id == node_u32_id)?;
     let was = node.exposed_params.contains(inner_param);
     if expose {
         node.exposed_params.insert(inner_param.to_string());
@@ -1220,7 +1231,7 @@ fn flip_graph_exposed(
 
 /// Walk every binding in `def.preset_metadata.bindings` and ensure
 /// the matching node's `exposed_params` set contains the target param.
-/// Used by [`flip_graph_exposed`] to materialise the implicit
+/// Called by the expose command to materialise the implicit
 /// preset-driven defaults before applying a user toggle. After the
 /// first materialisation, `into_graph`'s binding backfill becomes a
 /// no-op (it short-circuits when the def already carries explicit
@@ -1249,16 +1260,16 @@ fn materialize_binding_exposures(def: &mut EffectGraphDef) {
     }
 }
 
-/// Restore `inner_param` membership in the matching node's
-/// `exposed_params` set to `prev_in_set`. Idempotent — silently no-ops
-/// if the node is gone.
-fn restore_graph_exposed(
-    def: &mut EffectGraphDef,
-    node_id: &NodeId,
+/// Restore `inner_param` membership in the `exposed_params` set of the node with
+/// doc id `node_u32_id` within `nodes` (an already-descended level) to
+/// `prev_in_set`. Idempotent — silently no-ops if the node is gone.
+fn restore_node_exposed(
+    nodes: &mut [EffectGraphNode],
+    node_u32_id: u32,
     inner_param: &str,
     prev_in_set: bool,
 ) {
-    if let Some(node) = def.nodes.iter_mut().find(|n| &n.node_id == node_id) {
+    if let Some(node) = nodes.iter_mut().find(|n| n.id == node_u32_id) {
         if prev_in_set {
             node.exposed_params.insert(inner_param.to_string());
         } else {
@@ -1301,8 +1312,20 @@ fn static_slot_for(
 
 impl Command for ToggleNodeParamExposeCommand {
     fn execute(&mut self, project: &mut Project) {
-        let node_id = self.node_id.clone();
         let node_handle = self.node_handle.clone();
+        // Mirror-side identity for the card binding: apply the same "node_id
+        // defaults to handle" convention the runtime graph loader uses
+        // (`graph_loader.rs`), so a binding minted here targets the SAME
+        // identity the chain resolves the node to. Bundled-preset nodes ship
+        // with an empty stable `node_id`; without this the card slider would
+        // bind to nothing and never drive the inner param. (The graph-side
+        // `exposed_params` flip is located by `node_u32_id` below and doesn't
+        // rely on this.)
+        let node_id = if self.node_id.is_empty() {
+            NodeId::new(node_handle.as_str())
+        } else {
+            self.node_id.clone()
+        };
         let inner_param = self.inner_param.clone();
         let expose = self.expose;
         let inner_label = self.inner_label.clone();
@@ -1316,22 +1339,32 @@ impl Command for ToggleNodeParamExposeCommand {
         // Graph-side write — flip the node's `exposed_params` membership and
         // locate the static-block slot (if any). Identical for both kinds:
         // `with_target_graph_mut` resolves the target's graph (an effect's, or
-        // a layer generator's `gen_params.graph`).
-        let graph_result = with_target_graph_mut(
+        // a layer generator's `gen_params.graph`). The node is located by
+        // `(scope_path, node_u32_id)` — `descend_level` walks into the group the
+        // user is viewing, then matches the always-populated doc id — because a
+        // bundled node's stable `node_id` is empty and won't locate anything.
+        let scope = self.scope_path.clone();
+        let node_u32_id = self.node_u32_id;
+        let graph_result: Option<(bool, Option<usize>)> = with_target_graph_mut(
             project,
             &self.target,
             &self.catalog_default,
             true,
             |def| {
-                let prev_in_set = flip_graph_exposed(def, &node_id, &inner_param, expose)
-                    .unwrap_or(false);
+                // Materialise bundled binding exposures + resolve the static slot
+                // at the def level (both read `preset_metadata`, which is
+                // document-global), then descend to flip the target node.
+                materialize_binding_exposures(def);
                 let static_slot = static_slot_for(def, &node_id, &inner_param);
-                (prev_in_set, static_slot)
+                let (nodes, _wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
+                let prev_in_set = flip_node_exposed(nodes, node_u32_id, &inner_param, expose)?;
+                Some((prev_in_set, static_slot))
             },
-        );
+        )
+        .flatten();
 
         let Some((prev_in_set, static_slot)) = graph_result else {
-            // Target didn't resolve — nothing to undo.
+            // Target / scope / node didn't resolve — nothing to undo.
             self.reverse = NodeExposeReverse::None;
             return;
         };
@@ -1388,7 +1421,6 @@ impl Command for ToggleNodeParamExposeCommand {
             return;
         };
 
-        let node_id = self.node_id.clone();
         let inner_param = self.inner_param.clone();
 
         // Mirror collapse: restore the target's `&mut PresetInstance` through
@@ -1405,8 +1437,12 @@ impl Command for ToggleNodeParamExposeCommand {
         if let Some(inst) = instance {
             unmirror_effect_side(inst, mirror);
         }
+        let scope = self.scope_path.clone();
+        let node_u32_id = self.node_u32_id;
         let _ = with_existing_target_graph_mut(project, &self.target, true, |def| {
-            restore_graph_exposed(def, &node_id, &inner_param, prev_in_set);
+            if let Some((nodes, _wires)) = descend_level(&mut def.nodes, &mut def.wires, &scope) {
+                restore_node_exposed(nodes, node_u32_id, &inner_param, prev_in_set);
+            }
         });
     }
 
@@ -3120,6 +3156,7 @@ mod tests {
         let mut cmd = ToggleNodeParamExposeCommand::new(
             GraphTarget::Generator(lid.clone()),
             manifold_core::NodeId::new("uv_transform"),
+            1,
             "uv_transform".to_string(),
             "rotation".to_string(),
             true,
@@ -3159,6 +3196,106 @@ mod tests {
         assert!(
             !node.exposed_params.contains("rotation"),
             "undo restores prior exposed_params state"
+        );
+    }
+
+    /// Regression (the on-node expose checkbox bug): exposing a param on a node
+    /// *nested inside a group* — addressed the way the canvas actually addresses
+    /// it, by `(scope_path, node_u32_id)` with an EMPTY stable `node_id` (bundled
+    /// nodes ship empty) — must flip `exposed_params` on that nested node, NOT a
+    /// top-level one. The old command scanned only the document root and matched
+    /// by the empty `node_id`, so it hit the wrong node (or none): the checkbox
+    /// never reflected the state and couldn't be unchecked. It must also mint the
+    /// card binding with `node_id` defaulted to the handle — the same convention
+    /// the runtime graph loader uses — so the slider actually drives the param.
+    #[test]
+    fn exposing_a_nested_node_param_targets_the_body_node_and_binds_by_handle() {
+        let (mut project, fx) = project_with_graph(mirror_catalog_default());
+
+        // Collapse `uv_transform` (doc id 1, empty stable node_id) into a group.
+        let mut group = GroupNodesCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            vec![],
+            vec![1],
+            "g".to_string(),
+            (0.0, 0.0),
+            mirror_catalog_default(),
+        );
+        group.execute(&mut project);
+        let g_id = graph_of(&project, &fx)
+            .nodes
+            .iter()
+            .find(|n| n.handle.as_deref() == Some("g"))
+            .unwrap()
+            .id;
+
+        // Expose `rotation` exactly as the canvas would: empty stable node_id,
+        // located by u32 doc id 1 at scope [g_id].
+        let mut expose = ToggleNodeParamExposeCommand::new(
+            GraphTarget::Effect(fx.clone()),
+            manifold_core::NodeId::default(),
+            1,
+            "uv_transform".to_string(),
+            "rotation".to_string(),
+            true,
+            mirror_catalog_default(),
+            "Rotation".to_string(),
+            -180.0,
+            180.0,
+            0.0,
+            manifold_core::effects::ParamConvert::Float,
+            false,
+            Vec::new(),
+        )
+        .with_scope(vec![g_id]);
+        expose.execute(&mut project);
+
+        // The NESTED node carries the exposure.
+        let body_has_rotation = |project: &Project| {
+            graph_of(project, &fx)
+                .nodes
+                .iter()
+                .find(|n| n.id == g_id)
+                .unwrap()
+                .group
+                .as_deref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|n| n.handle.as_deref() == Some("uv_transform"))
+                .unwrap()
+                .exposed_params
+                .contains("rotation")
+        };
+        assert!(
+            body_has_rotation(&project),
+            "expose flipped the nested body node's exposed_params"
+        );
+        // No ROOT node absorbed it (the old empty-node_id top-level scan bug).
+        assert!(
+            graph_of(&project, &fx)
+                .nodes
+                .iter()
+                .all(|n| !n.exposed_params.contains("rotation")),
+            "no top-level node was wrongly exposed"
+        );
+
+        // The card binding targets the handle-defaulted id, so it resolves to
+        // the runtime node (`graph_loader` applies the same default) — not a
+        // dead empty-id binding.
+        let fx_inst = project.find_effect_by_id(&fx).unwrap();
+        let ub = fx_inst.user_param_bindings();
+        assert_eq!(ub.len(), 1, "one user binding minted");
+        assert_eq!(
+            ub[0].node_id, "uv_transform",
+            "binding node_id defaults to the handle"
+        );
+
+        // Undo clears the nested exposure.
+        expose.undo(&mut project);
+        assert!(
+            !body_has_rotation(&project),
+            "undo restored the nested node's exposed_params"
         );
     }
 
@@ -3301,6 +3438,7 @@ mod tests {
         let mut expose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Generator(lid.clone()),
             manifold_core::NodeId::new("render"),
+            0,
             "render".to_string(),
             "animate".to_string(),
             true,
@@ -3572,6 +3710,7 @@ mod tests {
         let mut unexpose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Generator(lid.clone()),
             manifold_core::NodeId::new("render"),
+            0,
             "render".to_string(),
             "animate".to_string(),
             false,
@@ -3660,6 +3799,7 @@ mod tests {
         let mut expose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Effect(effect_id.clone()),
             manifold_core::NodeId::new("uv_transform"),
+            1,
             "uv_transform".to_string(),
             "rotation".to_string(),
             true,
@@ -3724,6 +3864,7 @@ mod tests {
         let mut unexpose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Effect(effect_id.clone()),
             manifold_core::NodeId::new("uv_transform"),
+            1,
             "uv_transform".to_string(),
             "rotation".to_string(),
             false,
@@ -3794,6 +3935,7 @@ mod tests {
         let mut expose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Effect(effect_id.clone()),
             manifold_core::NodeId::new("uv_transform"),
+            1,
             "uv_transform".to_string(),
             "rotation".to_string(),
             true,
@@ -3825,6 +3967,7 @@ mod tests {
         let mut unexpose = ToggleNodeParamExposeCommand::new(
             GraphTarget::Effect(effect_id.clone()),
             manifold_core::NodeId::new("uv_transform"),
+            1,
             "uv_transform".to_string(),
             "rotation".to_string(),
             false,
@@ -3951,6 +4094,7 @@ mod tests {
         let mut cmd = ToggleNodeParamExposeCommand::new(
             GraphTarget::Generator(lid.clone()),
             manifold_core::NodeId::new("gen"),
+            0,
             "gen".to_string(),
             "pattern".to_string(),
             false,
@@ -4010,6 +4154,7 @@ mod tests {
         let mut cmd = ToggleNodeParamExposeCommand::new(
             GraphTarget::Effect(effect_id.clone()),
             manifold_core::NodeId::new("uv_transform"),
+            1,
             "uv_transform".to_string(),
             "rotation".to_string(),
             true,

@@ -1400,6 +1400,7 @@ impl GraphEditorPanel {
                         Gesture::Click,
                         GraphEditCommand::ToggleNodeParamExpose {
                             node_id: row_node_id.clone(),
+                            node_u32_id: *node_runtime_id,
                             node_handle: node_handle.clone(),
                             inner_param: inner_param.clone(),
                             expose: !currently_exposed,

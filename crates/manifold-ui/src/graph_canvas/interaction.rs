@@ -740,21 +740,13 @@ impl GraphCanvas {
         let node = self.find_node(node_id)?;
         let handle = node.handle.clone()?;
         let p = node.params.get(pi)?;
-        // Diagnostic (GRAPH_EXPOSE_LOG=1): what the canvas reads at click time. If
-        // `was_exposed` never flips to true across repeated clicks on one param,
-        // the snapshot isn't delivering the toggled state back (backend/refresh),
-        // not a render bug.
-        if std::env::var_os("GRAPH_EXPOSE_LOG").is_some() {
-            eprintln!(
-                "[expose-click] handle={handle} param={} was_exposed={} -> expose={}",
-                p.name,
-                p.exposed,
-                !p.exposed
-            );
-        }
         let (min, max) = p.range.unwrap_or((0.0, 1.0));
         Some(GraphEditCommand::ToggleNodeParamExpose {
             node_id: node.node_id.clone(),
+            // `node_id` (the u32 arg) IS this node's doc id — the reliable key
+            // the command locates by, since `node.node_id` (stable) is empty on
+            // bundled-preset nodes.
+            node_u32_id: node_id,
             node_handle: handle,
             inner_param: p.name.clone(),
             expose: !p.exposed,

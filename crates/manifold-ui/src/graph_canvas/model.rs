@@ -527,7 +527,7 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
         }
     };
     let scrub = scrub_for(p.kind, p.current_value, p.range);
-    let pv = ParamView {
+    ParamView {
         name: p.name.clone(),
         label: p.label.clone(),
         kind: p.kind,
@@ -541,14 +541,7 @@ pub(crate) fn format_param_for_node(p: &crate::graph_view::ParamSnapshot) -> Par
         exposed: p.exposed,
         default_value: p.default_value,
         enum_labels: p.enum_labels.clone().unwrap_or_default(),
-    };
-    // Diagnostic (GRAPH_EXPOSE_LOG=1): does a fresh snapshot ever carry
-    // exposed=true into the canvas? If the checkbox never fills after exposing
-    // and this never prints, the toggled state isn't reaching the UI snapshot.
-    if pv.exposed && std::env::var_os("GRAPH_EXPOSE_LOG").is_some() {
-        eprintln!("[expose-snap] param {} arrived exposed=true", pv.name);
     }
-    pv
 }
 
 /// Format the value string + fill fraction for the param kinds the on-node face

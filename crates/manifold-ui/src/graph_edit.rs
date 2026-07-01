@@ -137,6 +137,14 @@ pub enum GraphEditCommand {
     /// at panel-build time (kept off the renderer registry on the click path).
     ToggleNodeParamExpose {
         node_id: manifold_foundation::NodeId,
+        /// Runtime (doc) id of the inner node at the current view depth — the
+        /// SAME addressing key every other graph command uses (`n.id`). Always
+        /// populated, unlike `node_id`, whose stable `NodeId` is empty for
+        /// bundled-preset nodes. The app pairs this with the canvas scope so
+        /// `ToggleNodeParamExposeCommand` can `descend_level` + match by id and
+        /// reach a node nested inside a group. `node_id` stays for the mirror
+        /// side's binding identity only.
+        node_u32_id: u32,
         node_handle: String,
         inner_param: String,
         expose: bool,
