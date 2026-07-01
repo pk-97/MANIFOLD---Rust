@@ -85,3 +85,30 @@ pub trait Painter {
     /// Pop the innermost depth.
     fn pop_depth(&mut self);
 }
+
+/// The bitmap font's advance width as a fraction of the em (font) size. One
+/// estimate for every immediate-mode caller (the canvas, [`crate::slider::BitmapSlider::draw`])
+/// that needs to measure or truncate text without a `UITree` on hand.
+pub const CHAR_W_RATIO: f32 = 0.55;
+
+/// Screen width (logical px) of `text` rendered at `font_size`, via the shared
+/// [`CHAR_W_RATIO`] estimate.
+pub fn text_width(text: &str, font_size: f32) -> f32 {
+    text.chars().count() as f32 * font_size * CHAR_W_RATIO
+}
+
+/// Trim `text` to fit `budget_px` at `font_size`, appending an ellipsis when
+/// it's clipped; returns the original (borrowed) when it already fits.
+pub fn elide_to_width(text: &str, font_size: f32, budget_px: f32) -> std::borrow::Cow<'_, str> {
+    let char_w = (font_size * CHAR_W_RATIO).max(0.01);
+    let max_chars = (budget_px / char_w) as usize;
+    if text.chars().count() > max_chars && max_chars > 1 {
+        let take = max_chars.saturating_sub(1);
+        std::borrow::Cow::Owned(format!(
+            "{}…",
+            text.chars().take(take).collect::<String>()
+        ))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}

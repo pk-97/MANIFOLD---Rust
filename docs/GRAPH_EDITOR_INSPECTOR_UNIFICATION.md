@@ -101,30 +101,41 @@ node greys), `param_slider_shared` for the slider + value cell, `color::FONT_*`
 sizes, the same T/~/A glyph set and hit-targets. Any new node-face control starts
 from the card widgets, never a fork.
 
-### Where the code is (start here post-compaction)
+### Shipped (2026-07-01) — full widget parity for ranged params
 
-- **Node-face param rows:** `crates/manifold-ui/src/graph_canvas/render.rs` — the
-  row renderers around L680–760 (value/slider row) and the parallel blocks at
-  ~L818, ~L862, ~L939 (enum / other row kinds). Today they draw with:
-  - `text_size = 9.0 * self.zoom` (bespoke 9px, zoom-scaled) — the card uses
-    `color::FONT_*` (≈12). Mismatch #1.
-  - an inline "slider" that's a 2px `draw_rounded_rect` fill bar with canvas-local
-    `PARAM_FILL_BG` / `PARAM_FILL_FG` — NOT the card's `param_slider_shared`
-    track+thumb+value-cell. Mismatch #2.
-  - `TEXT_PRIMARY` / `TEXT_SECONDARY` canvas-local colours + `PARAM_LABEL_X`
-    layout. Should be `color::` tokens. Mismatch #3.
-- **Card widget (the target look):**
-  `crates/manifold-ui/src/panels/param_slider_shared.rs` +
-  `crates/manifold-ui/src/panels/param_card.rs`.
-- **Key constraint — the two render models differ.** The node face draws in
-  **immediate mode** through the `Painter` trait (`ui.draw_*`), zoom-scaled; the
-  card builds **UITree** nodes. So unification is NOT literal widget reuse — it's
-  matching the *tokens, typography, and slider geometry/proportions* so a node
-  slider and a card slider read as one system. Best structural move: extract the
-  slider fill/track drawing (and the value-cell) into a shared painter helper that
-  both the card and the node face call, keyed off one set of `color::` tokens, so
-  they can't drift again. Verify with the headless `ui-snap editor` PNG (this
-  session's render) + an `ui-snap graph` PNG side by side.
+Ranged numeric node-face params (`Float`/`Angle`/`Frequency`/`Int` with a
+range — anywhere `p.fill.is_some()`) now draw the **exact same** track/fill/
+thumb/value-cell widget the inspector card uses, not a token-matched
+lookalike:
+
+- `crates/manifold-ui/src/slider.rs` — `BitmapSlider::draw`, an immediate-mode
+  twin of the card's tree-building `BitmapSlider::build`. Both share the same
+  parameterized geometry math (`compute_fill_width`/`compute_thumb_rect` now
+  take `fill_inset`/`thumb_width`/`thumb_inset` instead of hardcoding the
+  consts), so `draw` — the canvas's zoom-scaled renderer — and `build` — the
+  card's fixed-size renderer — can't drift apart. `draw` reads `SliderColors`
+  (from `chrome::Theme::slider_colors()`) exactly like `build` does; cards
+  never call `draw`, so their pixels are untouched.
+- `crates/manifold-ui/src/graph_canvas/render.rs` — the `NodeRow::Param` block
+  now branches on `p.fill`: ranged params call `BitmapSlider::draw`
+  (`Theme::INSPECTOR.slider_colors()`, text swapped to `TEXT_DIMMED_C32` when
+  wire-driven so the whole row dims as one unit); everything else (enum /
+  bool / colour / string / table — never had a fill bar) keeps the plain
+  label+value text row, just re-tokened onto `color::TEXT_PRIMARY_C32` /
+  `TEXT_DIMMED_C32` and `color::FONT_BODY`-based sizing. Building dropdown-chip
+  / toggle-switch canvas widgets for those kinds is explicitly out of scope —
+  a separate, bigger project than "sliders, fonts, text sizes".
+- `crates/manifold-ui/src/graph_canvas/mod.rs` — `PARAM_ROW_H` 18→24 (matches
+  the card's `ROW_HEIGHT`); `PARAM_FILL_BG`/`FG` now only back the unrelated
+  Color/Vec channel-editor popover bar, not the node row.
+- `crates/manifold-ui/src/draw.rs` — `text_width`/`elide_to_width` moved here
+  from `graph_canvas::model` (were canvas-only; now the shared text-metric
+  home for any immediate-mode `Painter` consumer, `slider::draw` included).
+- Interaction is untouched by design: `DragMode::ParamScrub` is a
+  relative-delta scrub from the press origin, independent of what's drawn in
+  the row — this was a render-only change. Verified against `ui-snap graph`
+  and `ui-snap editor` headless PNGs; 468 `manifold-ui` + 73 `manifold-app`
+  tests and workspace clippy all pass.
 
 ## Goal
 

@@ -1,5 +1,6 @@
 use crate::color;
 use crate::drag::DragController;
+use crate::draw::{Painter, elide_to_width, text_width};
 use crate::node::*;
 use crate::tree::UITree;
 
@@ -169,7 +170,7 @@ impl BitmapSlider {
         );
 
         // ── Fill (child of track, non-interactive) ──
-        let fill_w = compute_fill_width(track_w, normalized_value);
+        let fill_w = compute_fill_width(track_w, normalized_value, FILL_INSET);
         let fill_rect = Rect::new(
             track_rect.x + FILL_INSET,
             track_rect.y + FILL_INSET,
@@ -190,7 +191,7 @@ impl BitmapSlider {
         );
 
         // ── Thumb (child of track, non-interactive) ──
-        let thumb_rect = compute_thumb_rect(track_rect, normalized_value);
+        let thumb_rect = compute_thumb_rect(track_rect, normalized_value, FILL_INSET, THUMB_WIDTH, THUMB_INSET);
         ids.thumb = tree.add_node(
             Some(ids.track),
             thumb_rect,
@@ -242,7 +243,7 @@ impl BitmapSlider {
         let track_rect = tree.get_bounds(ids.track);
 
         // Fill
-        let fill_w = compute_fill_width(track_rect.width, normalized_value);
+        let fill_w = compute_fill_width(track_rect.width, normalized_value, FILL_INSET);
         let fill_rect = Rect::new(
             track_rect.x + FILL_INSET,
             track_rect.y + FILL_INSET,
@@ -252,10 +253,93 @@ impl BitmapSlider {
         tree.set_bounds(ids.fill, fill_rect);
 
         // Thumb
-        tree.set_bounds(ids.thumb, compute_thumb_rect(track_rect, normalized_value));
+        tree.set_bounds(
+            ids.thumb,
+            compute_thumb_rect(track_rect, normalized_value, FILL_INSET, THUMB_WIDTH, THUMB_INSET),
+        );
 
         // Value text
         tree.set_text(ids.value_text, value_text);
+    }
+
+    /// Immediate-mode twin of [`Self::build`] — draws the identical widget
+    /// (track / fill / thumb / value cell, right-aligned label) through a
+    /// [`Painter`] instead of building `UITree` nodes, for callers (the graph
+    /// canvas) with no tree to build into. Shares `build`'s exact geometry math
+    /// ([`compute_fill_width`], [`compute_thumb_rect`]) so the two renderers
+    /// can't drift apart — `scale` (the canvas's zoom) multiplies every
+    /// geometry constant; cards always call `build` and never this, so their
+    /// look is untouched. Purely visual: no hover/pressed states, since the
+    /// canvas has no per-row hover treatment to drive them.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw(
+        ui: &mut dyn Painter,
+        rect: Rect,
+        label: Option<&str>,
+        normalized_value: f32,
+        value_text: &str,
+        colors: &SliderColors,
+        font_size: f32,
+        label_width: f32,
+        scale: f32,
+    ) {
+        let fill_inset = FILL_INSET * scale;
+        let thumb_width = THUMB_WIDTH * scale;
+        let thumb_inset = THUMB_INSET * scale;
+        let track_radius = TRACK_RADIUS * scale;
+        let value_box_w = VALUE_BOX_W * scale;
+        let value_gap = VALUE_GAP * scale;
+        let gap = GAP * scale;
+
+        let mut x = rect.x;
+        let y = rect.y;
+        let h = rect.height;
+
+        if let Some(label_text) = label
+            && !label_text.is_empty()
+        {
+            let text = elide_to_width(label_text, font_size, label_width);
+            let tw = text_width(&text, font_size);
+            let text_x = x + (label_width - tw).max(0.0);
+            let text_y = y + (h - font_size) * 0.5;
+            ui.draw_text(text_x, text_y, &text, font_size, colors.text.to_array());
+            x += label_width + gap;
+        }
+
+        let value_box_x = rect.x + rect.width - value_box_w;
+        let track_right = value_box_x - value_gap;
+        let track_w = (track_right - x).max(1.0);
+        let track_rect = Rect::new(x, y, track_w, h);
+
+        ui.draw_rounded_rect(
+            track_rect.x, track_rect.y, track_rect.width, track_rect.height,
+            colors.track, track_radius,
+        );
+
+        let fill_w = compute_fill_width(track_w, normalized_value, fill_inset);
+        if fill_w > 0.0 {
+            ui.draw_rounded_rect(
+                track_rect.x + fill_inset,
+                track_rect.y + fill_inset,
+                fill_w,
+                track_rect.height - fill_inset * 2.0,
+                colors.fill,
+                (track_radius - fill_inset).max(0.0),
+            );
+        }
+
+        let thumb_rect =
+            compute_thumb_rect(track_rect, normalized_value, fill_inset, thumb_width, thumb_inset);
+        ui.draw_rounded_rect(
+            thumb_rect.x, thumb_rect.y, thumb_rect.width, thumb_rect.height,
+            colors.thumb, thumb_width * 0.5,
+        );
+
+        ui.draw_rounded_rect(value_box_x, y, value_box_w, h, colors.track, track_radius);
+        let vw = text_width(value_text, font_size);
+        let vx = value_box_x + (value_box_w - vw) * 0.5;
+        let vy = y + (h - font_size) * 0.5;
+        ui.draw_text(vx, vy, value_text, font_size, colors.text.to_array());
     }
 
     // ── Math ────────────────────────────────────────────────────────
@@ -484,23 +568,35 @@ impl SliderDragState {
 
 // ── Internal ────────────────────────────────────────────────────────
 
-fn compute_fill_width(track_width: f32, normalized_value: f32) -> f32 {
-    let usable = track_width - FILL_INSET * 2.0;
+/// `fill_inset` is a parameter (not the module `FILL_INSET` const directly) so
+/// [`BitmapSlider::draw`] can call this with a zoom-scaled inset and get the
+/// exact same math the tree-building `build()` path uses — one geometry
+/// function, two renderers, can't drift apart.
+fn compute_fill_width(track_width: f32, normalized_value: f32, fill_inset: f32) -> f32 {
+    let usable = track_width - fill_inset * 2.0;
     if usable <= 0.0 {
         return 0.0;
     }
     (normalized_value * usable).clamp(0.0, usable)
 }
 
-fn compute_thumb_rect(track_rect: Rect, normalized_value: f32) -> Rect {
-    let usable = track_rect.width - FILL_INSET * 2.0;
+/// See [`compute_fill_width`] on why `fill_inset`/`thumb_width`/`thumb_inset`
+/// are parameters rather than the module consts.
+fn compute_thumb_rect(
+    track_rect: Rect,
+    normalized_value: f32,
+    fill_inset: f32,
+    thumb_width: f32,
+    thumb_inset: f32,
+) -> Rect {
+    let usable = track_rect.width - fill_inset * 2.0;
     // Right-align the trim to the fill's end: its right edge lands on the value
     // position, so the bright marker caps the fill instead of straddling the
     // boundary into empty track. `(======|)` reads as one bar + trim.
-    let fill_right = track_rect.x + FILL_INSET + normalized_value * usable;
-    let thumb_x = fill_right - THUMB_WIDTH;
-    let clamp_min = track_rect.x + FILL_INSET;
-    let clamp_max = track_rect.x_max() - FILL_INSET - THUMB_WIDTH;
+    let fill_right = track_rect.x + fill_inset + normalized_value * usable;
+    let thumb_x = fill_right - thumb_width;
+    let clamp_min = track_rect.x + fill_inset;
+    let clamp_max = track_rect.x_max() - fill_inset - thumb_width;
     // Guard against tracks too narrow for the thumb
     let thumb_x = if clamp_min <= clamp_max {
         thumb_x.clamp(clamp_min, clamp_max)
@@ -509,9 +605,9 @@ fn compute_thumb_rect(track_rect: Rect, normalized_value: f32) -> Rect {
     };
     Rect::new(
         thumb_x,
-        track_rect.y + THUMB_INSET,
-        THUMB_WIDTH,
-        track_rect.height - THUMB_INSET * 2.0,
+        track_rect.y + thumb_inset,
+        thumb_width,
+        track_rect.height - thumb_inset * 2.0,
     )
 }
 

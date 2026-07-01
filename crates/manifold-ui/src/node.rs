@@ -142,6 +142,12 @@ impl Color32 {
         Self { r: self.r, g: self.g, b: self.b, a }
     }
 
+    /// Byte components as `[r, g, b, a]` — bridges to APIs (e.g.
+    /// `Painter::draw_text`) typed on the raw array instead of `Color32`.
+    pub const fn to_array(self) -> [u8; 4] {
+        [self.r, self.g, self.b, self.a]
+    }
+
     /// The inverse of [`Self::from_f32`]: the sRGB bytes as `[0,1]` floats with
     /// NO gamma decode (unlike [`Self::to_f32`], which converts to linear light).
     /// For serialization boundaries that store a plain sRGB float array — e.g. a

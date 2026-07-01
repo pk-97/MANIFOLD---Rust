@@ -4,7 +4,9 @@
 //! through `to_screen`/`to_graph` (camera) — it never recomputes layout.
 
 use super::*;
+use crate::chrome::Theme;
 use crate::draw::{Depth, Painter};
+use crate::slider::BitmapSlider;
 
 impl GraphCanvas {
     // ── Render ──────────────────────────────────────────────────────
@@ -545,7 +547,10 @@ impl GraphCanvas {
         let body_top = sy + header_h + preview_h;
 
         let row_h = PARAM_ROW_H * self.zoom;
-        let text_size = 9.0 * self.zoom;
+        // Same base size the inspector card's sliders/params use
+        // (`color::FONT_BODY`), just zoom-scaled — the canvas is the one
+        // context where text has to shrink/grow with the view.
+        let text_size = color::FONT_BODY as f32 * self.zoom;
         let pad_x = 8.0 * self.zoom;
         let inner_w = sw - 2.0 * pad_x;
 
@@ -673,46 +678,6 @@ impl GraphCanvas {
                             let (psx, psy) = self.to_screen(viewport, px, py);
                             self.draw_port_dot(ui, psx, psy, port_d, port.color);
                         }
-                        // Value, right-aligned. Measured first so the label
-                        // truncates against the space it leaves.
-                        let value_w = text_width(&p.value, text_size);
-                        // A colour param gets a small swatch chip just left of its
-                        // hex value, so the row reads as a colour at a glance (the
-                        // "swatch on the face"); clicking the value opens the
-                        // channel editor. `right_w` reserves the swatch so the
-                        // label truncates clear of it.
-                        let mut right_w = value_w;
-                        if matches!(p.kind, crate::graph_view::ParamSnapshotKind::Color) {
-                            let chip = text_size;
-                            let gap = 4.0 * self.zoom;
-                            let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                            let c = p.vec_value;
-                            let col = Color32::new(to_u8(c[0]), to_u8(c[1]), to_u8(c[2]), 255);
-                            ui.draw_rounded_rect(
-                                sx + sw - pad_x - value_w - gap - chip,
-                                text_y,
-                                chip,
-                                chip,
-                                col,
-                                2.0 * self.zoom,
-                            );
-                            right_w += gap + chip;
-                        }
-                        // A wire-driven param is read-only (a same-named input
-                        // wire feeds it), so its value reads dimmed — the number
-                        // is live but you can't scrub it here.
-                        let value_color = if p.wire_driven {
-                            TEXT_SECONDARY
-                        } else {
-                            TEXT_PRIMARY
-                        };
-                        ui.draw_text(
-                            sx + sw - pad_x - value_w,
-                            text_y,
-                            &p.value,
-                            text_size,
-                            value_color,
-                        );
                         // Expose checkbox (exposable kinds only): empty box = not
                         // on the card, filled cyan + tick = exposed. Click toggles.
                         // Wire-driven params can't be exposed (the wire owns them),
@@ -722,14 +687,11 @@ impl GraphCanvas {
                                 ui, sx, row_y, row_h, p.exposed, !p.wire_driven,
                             );
                         }
-                        // Label, indented past the socket + checkbox column, with a
-                        // driver hint appended: "← wired" when an input wire shadows
-                        // the param (read-only), else "↳ <outer>" when an outer card
-                        // slider routes in (still editable). Wire wins when both
-                        // apply (parity with the sidebar's precedence).
-                        let label_x = sx + PARAM_LABEL_X * self.zoom;
-                        let label_budget =
-                            (sx + sw - pad_x - right_w - 6.0 * self.zoom - label_x).max(0.0);
+                        // Driver hint appended to the label: "← wired" when an
+                        // input wire shadows the param (read-only), else
+                        // "↳ <outer>" when an outer card slider routes in (still
+                        // editable). Wire wins when both apply (parity with the
+                        // sidebar's precedence).
                         let label_text: std::borrow::Cow<str> = if p.wire_driven {
                             format!("{}  ← wired", p.label).into()
                         } else if let Some(outer) = &p.outer_driver {
@@ -737,22 +699,81 @@ impl GraphCanvas {
                         } else {
                             p.label.as_str().into()
                         };
-                        let label = elide_to_width(&label_text, text_size, label_budget);
-                        ui.draw_text(label_x, text_y, &label, text_size, TEXT_SECONDARY);
-                        // Fill bar under ranged values — the inline "slider",
-                        // spanning from the label indent to the row's right edge.
+                        let slider_x = sx + PARAM_LABEL_X * self.zoom;
+                        let row_right = sx + sw - pad_x;
                         if let Some(frac) = p.fill {
-                            let bar_h = 2.0 * self.zoom;
-                            let bar_y = row_y + row_h - bar_h - 2.0 * self.zoom;
-                            let bar_x = label_x;
-                            let bar_w = (sx + sw - pad_x - bar_x).max(0.0);
-                            ui.draw_rounded_rect(bar_x, bar_y, bar_w, bar_h, PARAM_FILL_BG, bar_h * 0.5);
-                            let fill_w = bar_w * frac;
-                            if fill_w > 0.0 {
-                                ui.draw_rounded_rect(
-                                    bar_x, bar_y, fill_w, bar_h, PARAM_FILL_FG, bar_h * 0.5,
-                                );
+                            // Ranged numeric param — the same track/fill/thumb/
+                            // value-cell widget the inspector card draws
+                            // (`BitmapSlider::draw`, the immediate-mode twin of
+                            // the card's tree-building `build`), reading the
+                            // same `Theme`. A wire-driven row is read-only, so
+                            // both its label and value dim as one unit instead
+                            // of just the number.
+                            let mut colors = Theme::INSPECTOR.slider_colors();
+                            if p.wire_driven {
+                                colors.text = color::TEXT_DIMMED_C32;
                             }
+                            let slider_rect = crate::node::Rect::new(
+                                slider_x, row_y, (row_right - slider_x).max(0.0), row_h,
+                            );
+                            BitmapSlider::draw(
+                                ui,
+                                slider_rect,
+                                Some(label_text.as_ref()),
+                                frac,
+                                &p.value,
+                                &colors,
+                                text_size,
+                                PARAM_SLIDER_LABEL_W * self.zoom,
+                                self.zoom,
+                            );
+                        } else {
+                            // Non-ranged param (enum / bool / colour / string /
+                            // table): label + value text, no track — these
+                            // kinds aren't scalars you'd drag, and their editors
+                            // live in the floating popovers below.
+                            let value_w = text_width(&p.value, text_size);
+                            // A colour param gets a small swatch chip just left
+                            // of its hex value, so the row reads as a colour at
+                            // a glance; clicking the value opens the channel
+                            // editor. `right_w` reserves the swatch so the label
+                            // truncates clear of it.
+                            let mut right_w = value_w;
+                            if matches!(p.kind, crate::graph_view::ParamSnapshotKind::Color) {
+                                let chip = text_size;
+                                let gap = 4.0 * self.zoom;
+                                let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                                let c = p.vec_value;
+                                let col = Color32::new(to_u8(c[0]), to_u8(c[1]), to_u8(c[2]), 255);
+                                ui.draw_rounded_rect(
+                                    row_right - value_w - gap - chip,
+                                    text_y,
+                                    chip,
+                                    chip,
+                                    col,
+                                    2.0 * self.zoom,
+                                );
+                                right_w += gap + chip;
+                            }
+                            // A wire-driven param is read-only (a same-named
+                            // input wire feeds it), so its value reads dimmed —
+                            // the number is live but you can't scrub it here.
+                            let value_color = if p.wire_driven {
+                                TEXT_SECONDARY
+                            } else {
+                                TEXT_PRIMARY
+                            };
+                            ui.draw_text(
+                                row_right - value_w,
+                                text_y,
+                                &p.value,
+                                text_size,
+                                value_color,
+                            );
+                            let label_budget =
+                                (row_right - right_w - 6.0 * self.zoom - slider_x).max(0.0);
+                            let label = elide_to_width(&label_text, text_size, label_budget);
+                            ui.draw_text(slider_x, text_y, &label, text_size, TEXT_SECONDARY);
                         }
                     }
                 }
@@ -815,7 +836,7 @@ impl GraphCanvas {
         ui.draw_bordered_rect(
             panel.x, panel.y, panel.w, panel.h, TOOLTIP_BG, 3.0, 1.0, TOOLTIP_BORDER,
         );
-        let text_size = 9.0 * self.zoom;
+        let text_size = color::FONT_BODY as f32 * self.zoom;
         let pad_x = 8.0 * self.zoom;
         let (cx, cy) = self.cursor;
         for (i, label) in dd.options.iter().enumerate() {
@@ -859,7 +880,7 @@ impl GraphCanvas {
         ui.draw_bordered_rect(
             panel.x, panel.y, panel.w, panel.h, TOOLTIP_BG, 3.0, 1.0, TOOLTIP_BORDER,
         );
-        let text_size = 9.0 * self.zoom;
+        let text_size = color::FONT_BODY as f32 * self.zoom;
         let pad_x = 8.0 * self.zoom;
         let (cx, cy) = self.cursor;
         let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -936,7 +957,7 @@ impl GraphCanvas {
         ui.draw_bordered_rect(
             panel.x, panel.y, panel.w, panel.h, TOOLTIP_BG, 3.0, 1.0, TOOLTIP_BORDER,
         );
-        let text_size = 9.0 * self.zoom;
+        let text_size = color::FONT_BODY as f32 * self.zoom;
         let pad_x = 6.0 * self.zoom;
         let (cx, cy) = self.cursor;
         // Header line: "<label>  rows×cols", left-aligned like the sidebar grid.

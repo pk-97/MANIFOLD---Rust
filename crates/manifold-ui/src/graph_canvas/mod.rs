@@ -17,6 +17,7 @@
 //! / Panel infrastructure. Pan via middle-mouse drag, zoom via scroll
 //! wheel, hover highlights. No editing yet.
 
+use crate::color;
 use crate::graph_view::{
     GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID, GraphSnapshot, GroupSnapshot,
     NodeSnapshot, PortKindSnapshot, PortSnapshot, WireSnapshot,
@@ -80,10 +81,11 @@ pub use mapping_popover::MappingPopover;
 // App-facing structural-walk helpers — the editor present path resolves the
 // canvas scope level + preview targets off the same UI snapshot the canvas reads.
 pub use model::{node_preview_target, resolve_card_param_node_id, resolve_level};
+pub(crate) use crate::draw::{elide_to_width, text_width};
 pub(crate) use model::{
-    NodeRow, NodeView, PortHit, WireView, elide_to_width, expose_glyph_bounds, find_node_scope,
+    NodeRow, NodeView, PortHit, WireView, expose_glyph_bounds, find_node_scope,
     fmt_table_cell, format_color_hex, kind_is_exposable, param_convert_for_kind,
-    spark_has_variation, text_width, vec_channel_labels, wrap_text,
+    spark_has_variation, vec_channel_labels, wrap_text,
 };
 
 const HEADER_HEIGHT: f32 = 28.0;
@@ -134,11 +136,13 @@ pub(crate) fn preview_screen_size(aspect: f32) -> (f32, f32) {
         (PREVIEW_MAX_H * aspect, PREVIEW_MAX_H)
     }
 }
-/// Height of one on-node parameter row: label + value on one line, with a
-/// thin fill bar underneath for ranged values. Nodes carry their params on
-/// their face so you read (and, in a later pass, tune) them where you are,
-/// instead of darting to a side panel.
-const PARAM_ROW_H: f32 = 18.0;
+/// Height of one on-node parameter row. Ranged params draw the same
+/// track/fill/thumb/value-cell slider widget the inspector card uses
+/// (`slider::BitmapSlider::draw`); matches the card's `ROW_HEIGHT` (24) so
+/// the widget isn't squeezed into a shorter box than it was drawn for. Nodes
+/// carry their params on their face so you read (and tune) them where you
+/// are, instead of darting to a side panel.
+const PARAM_ROW_H: f32 = 24.0;
 /// Left padding (graph units) before a param row's content. The expose glyph
 /// sits here; the label starts past it. Shared by render + hit so glyph draw and
 /// click agree. Matches the value/label rows' `pad_x`.
@@ -149,6 +153,10 @@ const PARAM_EXPOSE_D: f32 = 7.0;
 /// Left inset (graph units) of a param row's label — past the expose glyph plus
 /// a small gap, so the label never overlaps the dot.
 const PARAM_LABEL_X: f32 = PARAM_PAD_X + PARAM_EXPOSE_D + 4.0;
+/// Label-cell width (graph units) for a ranged param's slider widget — the
+/// node-face analogue of `slider::DEFAULT_LABEL_WIDTH` (60), a touch narrower
+/// since the node has a lot less width to give the track and value cell.
+const PARAM_SLIDER_LABEL_W: f32 = 52.0;
 /// Pixels of horizontal drag that scrub a value across its full min..max
 /// range when editing a param on the node face. Matches the inspector
 /// sidebar's feel (`DRAG_FULL_RANGE_PX`).
@@ -267,8 +275,9 @@ const BREADCRUMB_FONT: f32 = 12.0;
 /// Rubber-band selection rectangle: a faint blue wash with a brighter border.
 const MARQUEE_FILL: Color32 = Color32::new(128, 199, 255, 31);
 const MARQUEE_BORDER: Color32 = Color32::new(128, 199, 255, 204);
-/// On-node param fill bar: a faint track plus a brighter fill showing where
-/// a ranged value sits between its declared min and max.
+/// Inline scrub bar in the floating Color/Vec channel editor popover
+/// (`render_vec_editor`) — a faint translucent track + fill, distinct from the
+/// node-row slider widget (which reads `Theme::slider_colors()` instead).
 const PARAM_FILL_BG: Color32 = Color32::new(255, 255, 255, 18);
 const PARAM_FILL_FG: Color32 = Color32::new(128, 199, 255, 140);
 /// Expose glyph: a filled bright-cyan dot when the param is on the outer card,
@@ -291,8 +300,10 @@ const REVEAL_CHIP_BG: Color32 = Color32::new(0, 0, 0, 70);
 /// Sparkline trace colour — the same soft cyan as the fill bar, a touch brighter
 /// so the moving line reads against the node body without shouting.
 const SPARKLINE_COLOR: Color32 = Color32::new(140, 209, 255, 217);
-const TEXT_PRIMARY: [u8; 4] = [220, 220, 230, 255];
-const TEXT_SECONDARY: [u8; 4] = [150, 150, 165, 255];
+/// Reads from the same `color::` tokens the inspector card uses — not a
+/// bespoke canvas palette that happens to look similar and can drift from it.
+const TEXT_PRIMARY: [u8; 4] = color::TEXT_PRIMARY_C32.to_array();
+const TEXT_SECONDARY: [u8; 4] = color::TEXT_DIMMED_C32.to_array();
 const TEXT_HEADER: [u8; 4] = [240, 240, 250, 255];
 /// Hover-tooltip chrome: a near-opaque dark card with a faint border,
 /// drawn above the nodes so the help line reads cleanly over any graph.
