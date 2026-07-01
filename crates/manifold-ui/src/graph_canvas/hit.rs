@@ -85,16 +85,19 @@ impl GraphCanvas {
         let row_h = PARAM_ROW_H * self.zoom;
         let sw = NODE_WIDTH * self.zoom;
         for node in self.nodes.iter().rev() {
-            if node.collapsed || node.params.is_empty() {
+            // Expanded only — collapsed nodes show a port band, not param rows.
+            if node.collapsed || node.rows.is_empty() {
                 continue;
             }
             let (nx, ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
             let block_top = ny + header_h + node.preview_h() * self.zoom;
-            let block_bottom = block_top + node.params.len() as f32 * row_h;
+            let block_bottom = block_top + node.rows.len() as f32 * row_h;
             if sx >= nx && sx <= nx + sw && sy >= block_top && sy < block_bottom {
                 let idx = ((sy - block_top) / row_h) as usize;
-                if idx < node.params.len() {
-                    return Some((node.id, idx));
+                // A row is a param only if it's a Param row; output / input
+                // socket rows return no param hit (they scrub nothing).
+                if let Some(crate::graph_canvas::NodeRow::Param { param, .. }) = node.rows.get(idx) {
+                    return Some((node.id, *param));
                 }
             }
         }
@@ -137,14 +140,16 @@ impl GraphCanvas {
     /// for a missing node / out-of-range index.
     pub(crate) fn param_row_rect(&self, viewport: Rect, node_id: u32, pi: usize) -> Option<Rect> {
         let node = self.find_node(node_id)?;
-        if pi >= node.params.len() {
-            return None;
-        }
+        // Find which body row draws param `pi`, so the rect lands on the right
+        // line now that params, outputs, and inputs share one row column.
+        let row_idx = node.rows.iter().position(|r| {
+            matches!(r, crate::graph_canvas::NodeRow::Param { param, .. } if *param == pi)
+        })?;
         let header_h = NODE_HEADER_HEIGHT * self.zoom;
         let row_h = PARAM_ROW_H * self.zoom;
         let sw = NODE_WIDTH * self.zoom;
         let (nx, ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
-        let row_top = ny + header_h + node.preview_h() * self.zoom + pi as f32 * row_h;
+        let row_top = ny + header_h + node.preview_h() * self.zoom + row_idx as f32 * row_h;
         Some(Rect::new(nx, row_top, sw, row_h))
     }
 

@@ -81,7 +81,7 @@ pub use mapping_popover::MappingPopover;
 // canvas scope level + preview targets off the same UI snapshot the canvas reads.
 pub use model::{node_preview_target, resolve_card_param_node_id, resolve_level};
 pub(crate) use model::{
-    NodeView, ParamView, PortHit, WireView, elide_to_width, expose_glyph_bounds, find_node_scope,
+    NodeRow, NodeView, PortHit, WireView, elide_to_width, expose_glyph_bounds, find_node_scope,
     kind_is_exposable, param_convert_for_kind, spark_has_variation, text_width, wrap_text,
 };
 
@@ -409,6 +409,12 @@ pub struct GraphCanvas {
     /// are sized to. Defaults to 16:9; the host refreshes it each frame from the
     /// live compositor dimensions via [`Self::set_preview_aspect`].
     pub(crate) preview_aspect: f32,
+    /// Collapse state a node gets on first appearance (no entry in `collapsed`
+    /// yet). Default `true` — a fresh graph reads cleanly, expand the one you're
+    /// tuning. The headless snapshot flips this so a PNG can show the on-node
+    /// param rows. Set before `set_snapshot` so the first layout uses the right
+    /// node heights.
+    pub(crate) default_collapsed: bool,
 }
 
 impl GraphCanvas {
@@ -441,7 +447,16 @@ impl GraphCanvas {
             node_search: String::new(),
             preview_aspect: 16.0 / 9.0,
             debug_overlay: false,
+            default_collapsed: true,
         }
+    }
+
+    /// Choose whether nodes appearing for the first time start expanded (all
+    /// param rows visible) rather than collapsed. Call before `set_snapshot` so
+    /// the first auto-layout uses the expanded node heights. Used by the headless
+    /// snapshot to show the on-node param rows.
+    pub fn set_default_expanded(&mut self, on: bool) {
+        self.default_collapsed = !on;
     }
 
     /// Tell the canvas whether the watched effect is currently on its

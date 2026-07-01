@@ -268,15 +268,25 @@ the node; the top performance card stays.
 
 ### Phases (each shippable)
 
-1. ✅ **Expose toggle on the node face.** DONE 2026-07-01. A small dot at each exposable
-   param row's left edge — bright cyan = on the outer card, dim = exposable but not.
-   Clicking it emits `ToggleNodeParamExpose`, byte-identical to the old sidebar checkbox
-   (same convert/min/max/default/value_labels), through the same app handler. Row-body
+1. ✅ **Node-anatomy rebuild — Blender-style rows.** DONE 2026-07-01. Peter's call after
+   seeing the first cut: **ports and params share one row**, and expose is a **checkbox**,
+   not a dot. Each expanded node lays out via a precomputed `NodeRow` list (the single
+   geometry source render + hit + port-position all read): outputs first (dot on the right),
+   then one row per param (its shadowing same-named input socket inline on the left +
+   an expose checkbox + value + fill-bar "slider"), then any leftover inputs (textures /
+   arrays) as their own left-dot rows. Port-shadows-param matched by exact name (the
+   `node.math` convention). Collapsed nodes keep the compact port band. Clicking the
+   checkbox emits `ToggleNodeParamExpose`, byte-identical to the old sidebar checkbox
+   (same convert/min/max/default/value_labels), through the same app handler; row-body
    click still scrubs. `ParamView` gained `exposed`/`default_value`/`enum_labels`; shared
-   geometry via `expose_glyph_bounds` (render + hit read one source); parity map via
-   `param_convert_for_kind`. Only the scalar-ish "supported" kinds draw a glyph (Color /
-   Vec / String / Table are never single-slot exposable — matches the old `supported` gate).
-   Tests in `graph_canvas/tests.rs`.
+   geometry via `expose_glyph_bounds` + `NodeView::expanded_row_center`; parity map via
+   `param_convert_for_kind`; only the scalar-ish "supported" kinds draw a checkbox.
+   **Gotcha burned in:** `input_port_offset`/`output_port_offset` must compute the row
+   offset directly and NEVER through `pos_graph` — auto-layout calls them while positions
+   are still `NaN`, and `NaN - NaN = NaN` silently poisons the whole layout (symptom: an
+   empty canvas at 100% zoom). Verified via `ui-snap graph --preset Bloom` +
+   `ui-snap editor --preset OilyFluid` (headless snapshot now flips `set_default_expanded`
+   so the PNG shows the rows). Tests in `graph_canvas/tests.rs`.
 2. ⬜ **Enum / Bool / Trigger editing on the face** — cycle enum, flip bool, fire trigger
    by clicking the value cell (discrete, no drag). The sidebar's `value_cell_click_to_param`
    is the parity source; emits `SetGraphNodeParam`.

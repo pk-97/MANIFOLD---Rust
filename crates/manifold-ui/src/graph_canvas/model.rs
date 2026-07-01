@@ -43,6 +43,31 @@ impl PortView {
     }
 }
 
+/// One row in an **expanded** node's body, in top-to-bottom draw order. The
+/// single geometry source: render draws it, hit-test reads it, and the port
+/// position helpers resolve a socket's y from it — so a click target, a drawn
+/// dot, and a wire endpoint can never disagree. Blender-style: outputs first
+/// (dot on the right), then each param on its own row (with its shadowing input
+/// socket inline on the left when one exists), then any input ports that don't
+/// shadow a param (textures / arrays) as their own rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NodeRow {
+    /// An output port: dot on the right edge, name right-aligned. Field is the
+    /// index into `NodeView::outputs`.
+    Output { port: usize },
+    /// A parameter row. `param` indexes `NodeView::params`; `input_port` is the
+    /// index into `NodeView::inputs` of the same-named scalar input that shadows
+    /// it (port-shadows-param), drawn as a socket dot on the row's left edge, or
+    /// `None` for a param with no input port (e.g. an enum).
+    Param {
+        param: usize,
+        input_port: Option<usize>,
+    },
+    /// A non-param input port (texture / array / any input with no same-named
+    /// param): dot on the left edge, name. Field indexes `NodeView::inputs`.
+    Input { port: usize },
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct NodeView {
     pub(crate) id: u32,
@@ -60,6 +85,11 @@ pub(crate) struct NodeView {
     /// the node is expanded, so you can read and tune each one in place.
     /// Empty if the node has no params.
     pub(crate) params: Vec<ParamView>,
+    /// Expanded-body row layout (outputs, param rows with inline input sockets,
+    /// leftover inputs) — see [`NodeRow`]. Recomputed on topology rebuild from
+    /// `inputs`/`outputs`/`params`; unused while collapsed (which keeps its
+    /// compact port band). The one source render / hit / port-position read.
+    pub(crate) rows: Vec<NodeRow>,
     /// One-line summary of the node's key param (e.g. "Mode: FoldX"), shown
     /// when the node is collapsed so a folded node still tells you its most
     /// important value at a glance. `None` if the node has no params.
@@ -178,8 +208,17 @@ pub(crate) fn group_output_producer(body: &GroupSnapshot, port: &str) -> Option<
 
 impl NodeView {
     pub(crate) fn height(&self) -> f32 {
-        let port_rows = self.inputs.len().max(self.outputs.len()) as f32;
-        NODE_HEADER_HEIGHT + self.preview_h() + self.body_h() + port_rows * PORT_ROW_HEIGHT + 6.0
+        let base = NODE_HEADER_HEIGHT + self.preview_h();
+        if self.collapsed {
+            // Collapsed: summary line + the compact port band (inputs left /
+            // outputs right, one row per port index).
+            let port_rows = self.inputs.len().max(self.outputs.len()) as f32;
+            base + self.body_h() + port_rows * PORT_ROW_HEIGHT + 6.0
+        } else {
+            // Expanded: one uniform row per NodeRow — ports live inline, so no
+            // separate band.
+            base + self.rows.len() as f32 * PARAM_ROW_H + 6.0
+        }
     }
 
     /// Height of the output-preview band below the header: the project-aspect
@@ -192,67 +231,146 @@ impl NodeView {
         }
     }
 
-    /// Height of the body block below the header: collapsed shows the single
-    /// summary line (if any), expanded shows every param row. Zoom-independent
-    /// so port positions stay put as you zoom (the LOD cull is draw-only).
+    /// Height of the collapsed body block below the header: the single summary
+    /// line (if any). Expanded bodies lay out per-row via [`Self::rows`], so this
+    /// is only consulted on the collapsed path (the port band sits below it).
     pub(crate) fn body_h(&self) -> f32 {
-        if self.collapsed {
-            if self.summary.is_some() {
-                PARAM_ROW_H
-            } else {
-                0.0
-            }
+        if self.summary.is_some() {
+            PARAM_ROW_H
         } else {
-            self.params.len() as f32 * PARAM_ROW_H
+            0.0
         }
     }
 
-    /// Y offset where port rows start, below the header, preview band, and body
-    /// block. Ports live in their own band beneath the preview, so the strip and
-    /// the port dots/labels never overlap.
+    /// Y offset (from the node top) where the **collapsed** port band starts —
+    /// below the header, preview band, and summary line.
     pub(crate) fn ports_y_offset(&self) -> f32 {
         NODE_HEADER_HEIGHT + self.preview_h() + self.body_h()
     }
 
+    /// Y offset (from the node top) of the centre of expanded body row `row`.
+    /// Rows begin right below the preview band (no separate param/port split).
+    pub(crate) fn expanded_row_center(&self, row: usize) -> f32 {
+        NODE_HEADER_HEIGHT + self.preview_h() + row as f32 * PARAM_ROW_H + PARAM_ROW_H * 0.5
+    }
+
+    /// Row index of input port `idx` in the expanded layout — the param row it
+    /// shadows, or its own leftover-input row. `None` if it isn't laid out
+    /// (shouldn't happen for a live port).
+    pub(crate) fn input_row_of(&self, idx: usize) -> Option<usize> {
+        self.rows.iter().position(|r| match r {
+            NodeRow::Param {
+                input_port: Some(ii),
+                ..
+            } => *ii == idx,
+            NodeRow::Input { port } => *port == idx,
+            _ => false,
+        })
+    }
+
+    /// Row index of output port `idx` in the expanded layout.
+    pub(crate) fn output_row_of(&self, idx: usize) -> Option<usize> {
+        self.rows
+            .iter()
+            .position(|r| matches!(r, NodeRow::Output { port } if *port == idx))
+    }
+
     pub(crate) fn input_port_pos_graph(&self, idx: usize) -> (f32, f32) {
         let (x, y) = self.pos_graph;
-        (
-            x,
-            y + self.ports_y_offset() + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5,
-        )
+        if self.collapsed {
+            (
+                x,
+                y + self.ports_y_offset() + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5,
+            )
+        } else {
+            let row = self.input_row_of(idx).unwrap_or(0);
+            (x, y + self.expanded_row_center(row))
+        }
     }
 
     pub(crate) fn output_port_pos_graph(&self, idx: usize) -> (f32, f32) {
         let (x, y) = self.pos_graph;
-        (
-            x + NODE_WIDTH,
-            y + self.ports_y_offset() + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5,
-        )
+        if self.collapsed {
+            (
+                x + NODE_WIDTH,
+                y + self.ports_y_offset() + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5,
+            )
+        } else {
+            let row = self.output_row_of(idx).unwrap_or(0);
+            (x + NODE_WIDTH, y + self.expanded_row_center(row))
+        }
     }
 
     /// Y-offset (from the node's top edge) of the named input port's centre.
     /// Used by auto-layout to align a node so this wire's two ports line up,
     /// rather than aligning box-centre to box-centre. Falls back to the node
     /// mid-height for an unknown name (shouldn't happen for a live wire).
+    ///
+    /// Computed from the row layout directly, NEVER via `pos_graph` — auto-layout
+    /// calls this while positions are still `NaN` (it's computing them), and
+    /// routing the offset through the node origin would make `NaN - NaN = NaN`
+    /// poison the whole layout.
     pub(crate) fn input_port_offset(&self, name: &str) -> f32 {
         match self.inputs.iter().position(|p| p.name == name) {
             Some(idx) => {
-                self.ports_y_offset() + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5
+                if self.collapsed {
+                    self.ports_y_offset() + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5
+                } else {
+                    self.expanded_row_center(self.input_row_of(idx).unwrap_or(0))
+                }
             }
             None => self.height() * 0.5,
         }
     }
 
     /// Y-offset (from the node's top edge) of the named output port's centre.
-    /// Companion to [`input_port_offset`](Self::input_port_offset).
+    /// Companion to [`input_port_offset`](Self::input_port_offset) — same
+    /// `pos_graph`-free rule.
     pub(crate) fn output_port_offset(&self, name: &str) -> f32 {
         match self.outputs.iter().position(|p| p.name == name) {
             Some(idx) => {
-                self.ports_y_offset() + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5
+                if self.collapsed {
+                    self.ports_y_offset() + idx as f32 * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT * 0.5
+                } else {
+                    self.expanded_row_center(self.output_row_of(idx).unwrap_or(0))
+                }
             }
             None => self.height() * 0.5,
         }
     }
+}
+
+/// Compute the expanded-body [`NodeRow`] layout for a node: outputs first, then
+/// one row per param (carrying the same-named input port as its inline socket),
+/// then any input ports that don't shadow a param. Port-shadows-param is matched
+/// by exact name — the renderer's convention (see the `node.math` primitive:
+/// input ports `a`/`b` shadow params `a`/`b`).
+pub(crate) fn compute_node_rows(
+    inputs: &[PortView],
+    outputs: &[PortView],
+    params: &[ParamView],
+) -> Vec<NodeRow> {
+    let mut rows = Vec::with_capacity(outputs.len() + params.len() + inputs.len());
+    for i in 0..outputs.len() {
+        rows.push(NodeRow::Output { port: i });
+    }
+    let mut shadowed = vec![false; inputs.len()];
+    for (pi, p) in params.iter().enumerate() {
+        let input_port = inputs.iter().position(|ip| ip.name == p.name);
+        if let Some(ii) = input_port {
+            shadowed[ii] = true;
+        }
+        rows.push(NodeRow::Param {
+            param: pi,
+            input_port,
+        });
+    }
+    for (ii, sh) in shadowed.iter().enumerate() {
+        if !sh {
+            rows.push(NodeRow::Input { port: ii });
+        }
+    }
+    rows
 }
 
 /// One parameter as shown on the node face: its label, the formatted
@@ -789,8 +907,15 @@ impl GraphCanvas {
                 handle: n.node_handle.clone(),
                 title: n.title.clone(),
                 params: n.parameters.iter().map(format_param_for_node).collect(),
+                // Filled from inputs/outputs/params once the struct is built
+                // (they aren't in scope as slices inside this literal).
+                rows: Vec::new(),
                 summary: node_summary(&n.parameters),
-                collapsed: self.collapsed.get(&n.id).copied().unwrap_or(true),
+                collapsed: self
+                    .collapsed
+                    .get(&n.id)
+                    .copied()
+                    .unwrap_or(self.default_collapsed),
                 // Category + tooltips are baked into the snapshot at translation
                 // time (the renderer's `descriptor_for`/`tooltip_for`), so the
                 // catalog stays renderer-side and the canvas just reads them.
@@ -826,6 +951,11 @@ impl GraphCanvas {
             })
             .collect();
         self.nodes = new_nodes;
+        // Expanded-body row layout (outputs / param+socket / leftover inputs),
+        // computed once per topology from each node's ports + params.
+        for node in &mut self.nodes {
+            node.rows = compute_node_rows(&node.inputs, &node.outputs, &node.params);
+        }
         self.wires = level_wires
             .iter()
             .map(|w| WireView {

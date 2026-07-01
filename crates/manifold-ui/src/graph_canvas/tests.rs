@@ -713,6 +713,62 @@ fn pressing_row_body_scrubs_and_emits_no_expose() {
     );
 }
 
+#[test]
+fn expanded_rows_merge_shadowing_ports_onto_param_rows() {
+    use crate::graph_canvas::NodeRow;
+    // Math-like node: inputs a,b shadow params a,b (port-shadows-param); param
+    // `op` has no input; a texture input `tex` has no param.
+    let mut n = node(1, "node.math", Some("m"));
+    n.inputs = vec![port("a"), port("b"), port("tex")];
+    n.outputs = vec![port("out")];
+    n.parameters = vec![
+        float_param("a", 5.0),
+        float_param("b", 2.0),
+        enum_param("op", 2.0),
+    ];
+    let snap = GraphSnapshot {
+        nodes: vec![n],
+        wires: Vec::new(),
+        outer_routings: Vec::new(),
+    };
+    let mut canvas = GraphCanvas::new();
+    canvas.collapsed.insert(1, false);
+    canvas.set_snapshot(&snap);
+    let node = canvas.find_node(1).unwrap();
+
+    // Blender order: output, then param rows (a/b carry their input socket, op
+    // has none), then the leftover texture input as its own row.
+    assert_eq!(
+        node.rows,
+        vec![
+            NodeRow::Output { port: 0 },
+            NodeRow::Param {
+                param: 0,
+                input_port: Some(0)
+            },
+            NodeRow::Param {
+                param: 1,
+                input_port: Some(1)
+            },
+            NodeRow::Param {
+                param: 2,
+                input_port: None
+            },
+            NodeRow::Input { port: 2 },
+        ]
+    );
+
+    // The `a` input socket sits on param-a's row (row 1), not a separate band.
+    let off_a = node.input_port_pos_graph(0).1 - node.pos_graph.1;
+    assert!((off_a - node.expanded_row_center(1)).abs() < 1e-3);
+    // The leftover texture input sits on the last row (row 4).
+    let off_tex = node.input_port_pos_graph(2).1 - node.pos_graph.1;
+    assert!((off_tex - node.expanded_row_center(4)).abs() < 1e-3);
+    // The output sits on row 0.
+    let off_out = node.output_port_pos_graph(0).1 - node.pos_graph.1;
+    assert!((off_out - node.expanded_row_center(0)).abs() < 1e-3);
+}
+
 // ── Connection type feedback ────────────────────────────────────
 
 #[test]

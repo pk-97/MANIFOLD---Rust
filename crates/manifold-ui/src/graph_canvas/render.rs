@@ -567,105 +567,136 @@ impl GraphCanvas {
             }
         }
 
-        // Expanded: every param row — label + value with a fill bar under
-        // ranged values, each draggable in place (see ParamScrub).
-        let expanded_params: &[ParamView] = if node.collapsed { &[] } else { &node.params };
-        for (i, p) in expanded_params.iter().enumerate() {
-            let row_y = body_top + i as f32 * row_h;
-            let text_y = row_y + 2.0 * self.zoom;
+        // Port label metrics, shared by the collapsed band and the expanded
+        // rows. Labels elide to half the node width so a long name clips instead
+        // of crossing into the opposite column.
+        let port_label_size = 10.0 * self.zoom;
+        let port_label_budget = (sw * 0.5 - (PORT_COL_WIDTH + 2.0) * self.zoom).max(0.0);
+        let port_d = PORT_RADIUS * 2.0 * self.zoom;
 
-            // Value, right-aligned. Measured first so the label can be
-            // truncated against the space the value leaves.
-            let value_w = text_width(&p.value, text_size);
-            ui.draw_text(
-                sx + sw - pad_x - value_w,
-                text_y,
-                &p.value,
-                text_size,
-                TEXT_PRIMARY,
-            );
-
-            // Expose glyph at the row's left edge (exposable kinds only): a
-            // bright cyan dot when the param feeds the outer performance card, a
-            // dim dot when it's exposable but not yet exposed. Clicking it flips
-            // the exposure (see `on_left_button_down`). The label indents past
-            // the glyph column uniformly, so non-exposable rows stay aligned.
-            if kind_is_exposable(p.kind) {
-                let (gx, gy, gd) = expose_glyph_bounds(sx, row_y, row_h, self.zoom);
-                let col = if p.exposed {
-                    PARAM_EXPOSE_ON
-                } else {
-                    PARAM_EXPOSE_OFF
-                };
-                ui.draw_rounded_rect(gx, gy, gd, gd, col, gd * 0.5);
+        if node.collapsed {
+            // ── Collapsed: the compact port band (inputs left / outputs right).
+            // Params are hidden; you still need the sockets to wire a folded node.
+            for (i, port) in node.inputs.iter().enumerate() {
+                let (px, py) = node.input_port_pos_graph(i);
+                let (psx, psy) = self.to_screen(viewport, px, py);
+                self.draw_port_dot(ui, psx, psy, port_d, port.color);
+                let name = elide_to_width(&port.name, port_label_size, port_label_budget);
+                ui.draw_text(
+                    psx + PORT_COL_WIDTH * self.zoom,
+                    psy - port_label_size * 0.5,
+                    &name,
+                    port_label_size,
+                    TEXT_PRIMARY,
+                );
             }
-
-            // Label, left (indented past the glyph column), truncated so it
-            // can't collide with the value.
-            let label_x = sx + PARAM_LABEL_X * self.zoom;
-            let label_budget = (sx + sw - pad_x - value_w - 6.0 * self.zoom - label_x).max(0.0);
-            let label = elide_to_width(&p.label, text_size, label_budget);
-            ui.draw_text(label_x, text_y, &label, text_size, TEXT_SECONDARY);
-
-            // Fill bar under the row for ranged values.
-            if let Some(frac) = p.fill {
-                let bar_h = 2.0 * self.zoom;
-                let bar_y = row_y + row_h - bar_h - 2.0 * self.zoom;
-                ui.draw_rounded_rect(sx + pad_x, bar_y, inner_w, bar_h, PARAM_FILL_BG, bar_h * 0.5);
-                let fill_w = inner_w * frac;
-                if fill_w > 0.0 {
-                    ui.draw_rounded_rect(sx + pad_x, bar_y, fill_w, bar_h, PARAM_FILL_FG, bar_h * 0.5);
+            for (i, port) in node.outputs.iter().enumerate() {
+                let (px, py) = node.output_port_pos_graph(i);
+                let (psx, psy) = self.to_screen(viewport, px, py);
+                self.draw_port_dot(ui, psx, psy, port_d, port.color);
+                let name = elide_to_width(&port.name, port_label_size, port_label_budget);
+                let approx_w = text_width(&name, port_label_size);
+                ui.draw_text(
+                    psx - PORT_COL_WIDTH * self.zoom - approx_w,
+                    psy - port_label_size * 0.5,
+                    &name,
+                    port_label_size,
+                    TEXT_PRIMARY,
+                );
+            }
+        } else {
+            // ── Expanded: one row per NodeRow, Blender-style. Outputs (dot on
+            // the right), then params (their shadowing input socket inline on the
+            // left + an expose checkbox + value + fill bar), then leftover inputs.
+            for (i, row) in node.rows.iter().enumerate() {
+                let row_y = body_top + i as f32 * row_h;
+                let text_y = row_y + 2.0 * self.zoom;
+                match *row {
+                    NodeRow::Output { port } => {
+                        let Some(p) = node.outputs.get(port) else {
+                            continue;
+                        };
+                        let (px, py) = node.output_port_pos_graph(port);
+                        let (psx, psy) = self.to_screen(viewport, px, py);
+                        self.draw_port_dot(ui, psx, psy, port_d, p.color);
+                        let name = elide_to_width(&p.name, port_label_size, port_label_budget);
+                        let approx_w = text_width(&name, port_label_size);
+                        ui.draw_text(
+                            psx - PORT_COL_WIDTH * self.zoom - approx_w,
+                            psy - port_label_size * 0.5,
+                            &name,
+                            port_label_size,
+                            TEXT_PRIMARY,
+                        );
+                    }
+                    NodeRow::Input { port } => {
+                        let Some(p) = node.inputs.get(port) else {
+                            continue;
+                        };
+                        let (px, py) = node.input_port_pos_graph(port);
+                        let (psx, psy) = self.to_screen(viewport, px, py);
+                        self.draw_port_dot(ui, psx, psy, port_d, p.color);
+                        let name = elide_to_width(&p.name, port_label_size, port_label_budget);
+                        ui.draw_text(
+                            psx + PORT_COL_WIDTH * self.zoom,
+                            psy - port_label_size * 0.5,
+                            &name,
+                            port_label_size,
+                            TEXT_PRIMARY,
+                        );
+                    }
+                    NodeRow::Param { param, input_port } => {
+                        let Some(p) = node.params.get(param) else {
+                            continue;
+                        };
+                        // Inline input socket on the left edge when this param is
+                        // shadowed by a same-named scalar input (port-shadows-param).
+                        if let Some(ii) = input_port
+                            && let Some(port) = node.inputs.get(ii)
+                        {
+                            let (px, py) = node.input_port_pos_graph(ii);
+                            let (psx, psy) = self.to_screen(viewport, px, py);
+                            self.draw_port_dot(ui, psx, psy, port_d, port.color);
+                        }
+                        // Value, right-aligned. Measured first so the label
+                        // truncates against the space it leaves.
+                        let value_w = text_width(&p.value, text_size);
+                        ui.draw_text(
+                            sx + sw - pad_x - value_w,
+                            text_y,
+                            &p.value,
+                            text_size,
+                            TEXT_PRIMARY,
+                        );
+                        // Expose checkbox (exposable kinds only): empty box = not
+                        // on the card, filled cyan + tick = exposed. Click toggles.
+                        if kind_is_exposable(p.kind) {
+                            self.draw_expose_checkbox(ui, sx, row_y, row_h, p.exposed);
+                        }
+                        // Label, indented past the socket + checkbox column.
+                        let label_x = sx + PARAM_LABEL_X * self.zoom;
+                        let label_budget =
+                            (sx + sw - pad_x - value_w - 6.0 * self.zoom - label_x).max(0.0);
+                        let label = elide_to_width(&p.label, text_size, label_budget);
+                        ui.draw_text(label_x, text_y, &label, text_size, TEXT_SECONDARY);
+                        // Fill bar under ranged values — the inline "slider",
+                        // spanning from the label indent to the row's right edge.
+                        if let Some(frac) = p.fill {
+                            let bar_h = 2.0 * self.zoom;
+                            let bar_y = row_y + row_h - bar_h - 2.0 * self.zoom;
+                            let bar_x = label_x;
+                            let bar_w = (sx + sw - pad_x - bar_x).max(0.0);
+                            ui.draw_rounded_rect(bar_x, bar_y, bar_w, bar_h, PARAM_FILL_BG, bar_h * 0.5);
+                            let fill_w = bar_w * frac;
+                            if fill_w > 0.0 {
+                                ui.draw_rounded_rect(
+                                    bar_x, bar_y, fill_w, bar_h, PARAM_FILL_FG, bar_h * 0.5,
+                                );
+                            }
+                        }
+                    }
                 }
             }
-        }
-
-        // Port dots and their labels always draw and scale with zoom — the
-        // labels are the wire vocabulary, never dropped. Each label is elided
-        // to half the node width (minus the port column) so a long name clips
-        // instead of running across into the opposite column.
-        let port_label_size = 10.0 * self.zoom;
-        let label_budget = (sw * 0.5 - (PORT_COL_WIDTH + 2.0) * self.zoom).max(0.0);
-        let port_d = PORT_RADIUS * 2.0 * self.zoom;
-        for (i, port) in node.inputs.iter().enumerate() {
-            let (px, py) = node.input_port_pos_graph(i);
-            let (psx, psy) = self.to_screen(viewport, px, py);
-            ui.draw_rounded_rect(
-                psx - PORT_RADIUS * self.zoom,
-                psy - PORT_RADIUS * self.zoom,
-                port_d,
-                port_d,
-                port.color,
-                PORT_RADIUS * self.zoom,
-            );
-            let name = elide_to_width(&port.name, port_label_size, label_budget);
-            ui.draw_text(
-                psx + PORT_COL_WIDTH * self.zoom,
-                psy - port_label_size * 0.5,
-                &name,
-                port_label_size,
-                TEXT_PRIMARY,
-            );
-        }
-        for (i, port) in node.outputs.iter().enumerate() {
-            let (px, py) = node.output_port_pos_graph(i);
-            let (psx, psy) = self.to_screen(viewport, px, py);
-            ui.draw_rounded_rect(
-                psx - PORT_RADIUS * self.zoom,
-                psy - PORT_RADIUS * self.zoom,
-                port_d,
-                port_d,
-                port.color,
-                PORT_RADIUS * self.zoom,
-            );
-            let name = elide_to_width(&port.name, port_label_size, label_budget);
-            let approx_w = text_width(&name, port_label_size);
-            ui.draw_text(
-                psx - PORT_COL_WIDTH * self.zoom - approx_w,
-                psy - port_label_size * 0.5,
-                &name,
-                port_label_size,
-                TEXT_PRIMARY,
-            );
         }
 
         // Find-a-node: dim nodes that don't match the active search so the
@@ -673,6 +704,46 @@ impl GraphCanvas {
         // node's own content.
         if !self.node_search.is_empty() && !self.node_matches_search(node) {
             ui.draw_rect(sx, sy, sw, sh, Color32::new(13, 13, 18, 168)); // 0.66 alpha dim
+        }
+    }
+
+    /// Draw a port socket dot centred at `(cx, cy)` with diameter `d`.
+    fn draw_port_dot(&self, ui: &mut dyn Painter, cx: f32, cy: f32, d: f32, color: Color32) {
+        ui.draw_rounded_rect(cx - d * 0.5, cy - d * 0.5, d, d, color, d * 0.5);
+    }
+
+    /// Draw a param row's expose checkbox in the node's left column: an empty
+    /// dark box when the param isn't exposed, a filled cyan box with a tick when
+    /// it feeds the outer performance card. Geometry via `expose_glyph_bounds`,
+    /// the same source `expose_glyph_under` hit-tests, so the drawn box and the
+    /// click target can't drift.
+    fn draw_expose_checkbox(
+        &self,
+        ui: &mut dyn Painter,
+        node_x: f32,
+        row_y: f32,
+        row_h: f32,
+        exposed: bool,
+    ) {
+        let (bx, by, bd) = expose_glyph_bounds(node_x, row_y, row_h, self.zoom);
+        let r = 2.0 * self.zoom;
+        if exposed {
+            ui.draw_rounded_rect(bx, by, bd, bd, PARAM_EXPOSE_ON, r);
+            ui.draw_text(bx + bd * 0.16, by - bd * 0.06, "✓", bd * 0.95, [20, 24, 33, 255]);
+        } else {
+            // Outer box tint, then a near-black inner fill so it reads as an
+            // empty checkbox regardless of the node's hover state.
+            ui.draw_rounded_rect(bx, by, bd, bd, PARAM_EXPOSE_OFF, r);
+            let inset = 1.5 * self.zoom;
+            let iw = (bd - 2.0 * inset).max(0.0);
+            ui.draw_rounded_rect(
+                bx + inset,
+                by + inset,
+                iw,
+                iw,
+                PREVIEW_SCREEN_BG,
+                (r - inset * 0.5).max(0.0),
+            );
         }
     }
 

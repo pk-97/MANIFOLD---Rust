@@ -171,6 +171,10 @@ pub fn render_graph_to_png(
     // type (distinct from the UITree `manifold_ui::Rect`).
     let viewport = CanvasRect::new(0.0, 0.0, tex_w as f32 / scale, tex_h as f32 / scale);
     let mut canvas = GraphCanvas::new();
+    // Show the on-node param rows (the Blender-style layout) in the PNG — a live
+    // canvas starts nodes collapsed for legibility, but the snapshot is a
+    // verification surface, so expand them.
+    canvas.set_default_expanded(true);
     canvas.set_snapshot(snapshot);
     canvas.apply_pending_fit(viewport);
 
@@ -386,6 +390,10 @@ pub fn render_graph_editor_to_png(
     // same per-node-dump machinery as `render_graph_to_png`.
     let viewport = CanvasRect::new(canvas_x, 0.0, canvas_width, canvas_height);
     let mut canvas = GraphCanvas::new();
+    // Show the on-node param rows (the Blender-style layout) in the PNG — a live
+    // canvas starts nodes collapsed for legibility, but the snapshot is a
+    // verification surface, so expand them.
+    canvas.set_default_expanded(true);
     canvas.set_snapshot(snapshot);
     canvas.apply_pending_fit(viewport);
     let node_textures = render_graph_node_textures(&device, def);
