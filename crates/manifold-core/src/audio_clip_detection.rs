@@ -162,7 +162,6 @@ pub struct AudioClipDetection {
 }
 
 impl AudioClipDetection {
-    /// A fresh detection state with default settings and no analysis yet.
     pub fn new() -> Self {
         Self::default()
     }

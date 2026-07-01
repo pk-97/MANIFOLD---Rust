@@ -57,8 +57,6 @@ pub struct StringParamDef {
     pub use_dropdown: bool,
 }
 
-// ─── Static registries ───
-
 // ─── Static registries (hot-reloadable, step 10) ───
 //
 // The two stores used to be `LazyLock<HashMap<_, PresetDef>>` borrowed for

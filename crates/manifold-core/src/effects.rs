@@ -1732,7 +1732,6 @@ impl PresetInstance {
         s
     }
 
-    /// True for a generator-kind instance.
     #[inline]
     pub fn is_generator(&self) -> bool {
         matches!(self.kind, crate::preset_def::PresetKind::Generator)
@@ -1899,7 +1898,6 @@ impl PresetInstance {
         }
     }
 
-    /// Find the driver for a given param id, or None.
     pub fn find_driver(&self, param_id: &str) -> Option<&ParameterDriver> {
         self.drivers
             .as_ref()?
@@ -2754,14 +2752,12 @@ impl PresetInstance {
         self.audio_mods.as_mut().unwrap()
     }
 
-    /// Find the audio modulation for a given param id, if any.
     pub fn find_audio_mod(&self, param_id: &str) -> Option<&crate::audio_mod::ParameterAudioMod> {
         self.audio_mods
             .as_ref()
             .and_then(|v| v.iter().find(|a| a.param_id == param_id))
     }
 
-    /// True if this instance carries any audio modulation.
     pub fn has_audio_mods(&self) -> bool {
         self.audio_mods.as_ref().is_some_and(|v| !v.is_empty())
     }
@@ -2846,12 +2842,12 @@ impl PresetInstance {
         }
     }
 
-    /// Find the envelope for a given param id, or None (generator-only home).
+    /// Generator-only home.
     pub fn find_envelope(&self, param_id: &str) -> Option<&ParamEnvelope> {
         self.envelopes.as_ref()?.iter().find(|e| e.param_id == param_id)
     }
 
-    /// True if this instance has generator envelopes (no-alloc check).
+    /// No-alloc check.
     pub fn has_envelopes(&self) -> bool {
         self.envelopes.as_ref().is_some_and(|e| !e.is_empty())
     }
@@ -3240,7 +3236,6 @@ impl Serialize for ParameterDriver {
 }
 
 impl ParameterDriver {
-    /// Constructor.
     pub fn new(
         param_id: impl Into<ParamId>,
         division: BeatDivision,

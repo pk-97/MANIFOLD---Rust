@@ -115,36 +115,30 @@ impl TempoMap {
         }
     }
 
-    /// Read-only access to tempo points.
     #[inline]
     pub fn points(&self) -> &[TempoPoint] {
         &self.points
     }
 
-    /// Number of tempo points.
     #[inline]
     pub fn point_count(&self) -> usize {
         self.points.len()
     }
 
-    /// Clear all tempo points.
     pub fn clear(&mut self) {
         self.points.clear();
         self.is_sorted = true;
     }
 
-    /// Clone all tempo points.
     pub fn clone_points(&self) -> Vec<TempoPoint> {
         self.points.clone()
     }
 
-    /// Get sorted reference to points.
     pub fn get_sorted_points(&mut self) -> &[TempoPoint] {
         self.ensure_sorted();
         &self.points
     }
 
-    /// Replace all points.
     pub fn set_points(&mut self, points: Vec<TempoPoint>) {
         self.points = points;
         self.is_sorted = false;

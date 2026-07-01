@@ -271,13 +271,12 @@ impl Layer {
         Self::new(name, LayerType::Audio, index)
     }
 
-    /// Whether this is an audio layer.
     #[inline]
     pub fn is_audio(&self) -> bool {
         self.layer_type == LayerType::Audio
     }
 
-    /// Whether this is a video layer. Image clips may only be dropped here.
+    /// Image clips may only be dropped here.
     #[inline]
     pub fn is_video(&self) -> bool {
         self.layer_type == LayerType::Video
@@ -298,13 +297,11 @@ impl Layer {
         10f32.powf(self.audio_gain_db / 20.0)
     }
 
-    /// Read-only access to generator params.
     #[inline]
     pub fn gen_params(&self) -> Option<&PresetInstance> {
         self.gen_params.as_ref()
     }
 
-    /// Mutable access to generator params.
     #[inline]
     pub fn gen_params_mut(&mut self) -> Option<&mut PresetInstance> {
         self.gen_params.as_mut()
@@ -667,7 +664,6 @@ impl Layer {
         self.clips.iter_mut().find(|c| c.id == clip_id)
     }
 
-    /// Find clip index by ID.
     pub fn find_clip_index(&self, clip_id: &str) -> Option<usize> {
         self.clips.iter().position(|c| c.id == clip_id)
     }

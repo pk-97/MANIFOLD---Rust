@@ -54,7 +54,6 @@ impl SelectionRegion {
         beat >= self.start_beat && beat < self.end_beat
     }
 
-    /// Check if a layer is in this region by LayerId (HashSet lookup).
     pub fn contains_layer_id(&self, id: &LayerId) -> bool {
         self.selected_layer_ids.contains(id)
     }
@@ -95,7 +94,6 @@ impl SelectionRegion {
         self.end_layer_id = Some(end_layer_id);
     }
 
-    /// Clear the selection region.
     pub fn clear(&mut self) {
         self.start_beat = Beats::ZERO;
         self.end_beat = Beats::ZERO;

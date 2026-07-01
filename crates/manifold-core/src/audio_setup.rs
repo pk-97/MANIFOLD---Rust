@@ -411,7 +411,6 @@ impl AudioSetup {
         self.device.as_ref().map(|d| d.name.as_str())
     }
 
-    /// Find a send by id.
     pub fn find_send(&self, id: &AudioSendId) -> Option<&AudioSend> {
         self.sends.iter().find(|s| &s.id == id)
     }
@@ -450,7 +449,6 @@ impl AudioSetup {
         }
     }
 
-    /// Find a send by id (mutable).
     pub fn find_send_mut(&mut self, id: &AudioSendId) -> Option<&mut AudioSend> {
         self.sends.iter_mut().find(|s| &s.id == id)
     }
