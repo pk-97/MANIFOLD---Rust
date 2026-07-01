@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MANIFOLD — Graph Editor v4 (resizable + mini timeline)</title>
+<style>
+  :root{
+    --bg:#0a0b0d;--panel:#121418;--panel2:#0f1115;--line:#22262e;
+    --node-bg:#1a1d23;--node-br:#31363f;--node-sel:#4f9dff;
+    --txt:#e7eaf0;--dim:#8b929e;--dim2:#5b626d;
+    --cat-input:#14b8a6;--cat-gen:#a855f7;--cat-sim:#f59e0b;--cat-color:#3b82f6;--cat-output:#22c55e;
+    --t-tex:#4f9dff;--t-scalar:#b9c0cb;--t-trigger:#ec4899;--t-vector:#a855f7;--t-color:#eab308;
+    --teal:#14b8a6;--amber:#f59e0b;--accent:#4f9dff;--handle:#3a4150;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);overflow:hidden;font-size:13px;}
+  .app{display:flex;height:100vh;width:100vw;}
+  .left{width:230px;background:var(--panel2);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0;}
+  .right{width:308px;background:var(--panel);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0;}
+  .lsec{padding:12px;} .lsec h4{margin:0 0 8px;font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);font-weight:600;}
+  .previewbox{width:100%;aspect-ratio:16/9;border:1px solid var(--line);border-radius:5px;background:#000;overflow:hidden;position:relative;}
+  .previewbox .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim2);font-size:12px;}
+  .lsel{font-size:11px;color:var(--dim);margin-top:6px;min-height:14px;}
+
+  /* the Splitter widget: a draggable divider */
+  .vsplit{width:5px;background:var(--line);cursor:col-resize;flex-shrink:0;}
+  .vsplit:hover,.vsplit.drag{background:var(--handle);}
+  .hsplit{height:5px;background:var(--line);cursor:row-resize;flex-shrink:0;}
+  .hsplit:hover,.hsplit.drag{background:var(--handle);}
+
+  .center{flex:1;display:flex;flex-direction:column;min-width:0;}
+  .topbar{height:40px;min-height:40px;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);}
+  .title{font-size:13px;font-weight:600;} .spacer{flex:1;}
+  .tierpill{font-size:11px;font-weight:600;padding:3px 8px;border-radius:99px;background:#1b1f26;border:1px solid var(--node-br);color:var(--dim);}
+  .btn{background:#1b1f26;border:1px solid var(--node-br);color:var(--txt);font-size:12px;padding:5px 10px;border-radius:5px;cursor:pointer;} .btn:hover{background:#232833;} .btn.on{background:#1e293b;border-color:var(--accent);color:#cfe0ff;}
+  .zoomread{font-size:12px;color:var(--dim);width:78px;text-align:right;font-variant-numeric:tabular-nums;} #zoom{width:150px;accent-color:var(--accent);}
+  .canvasarea{flex:1;position:relative;display:flex;flex-direction:column;min-height:0;}
+  .canvas{flex:1;position:relative;overflow:hidden;background-color:#0a0b0d;background-image:radial-gradient(circle,#171a20 1px,transparent 1px);background-size:26px 26px;cursor:grab;}
+  .canvas.panning{cursor:grabbing;}
+  .world{position:absolute;left:0;top:0;transform-origin:0 0;}
+  .world svg{position:absolute;left:0;top:0;overflow:visible;z-index:1;pointer-events:none;}
+
+  .node{position:absolute;width:184px;background:var(--node-bg);border:1px solid var(--node-br);border-radius:6px;z-index:2;box-shadow:0 2px 7px rgba(0,0,0,.4);cursor:pointer;}
+  .node.sel{border-color:var(--node-sel);box-shadow:0 0 0 1px var(--node-sel),0 4px 14px rgba(0,0,0,.55);}
+  .nhead{height:22px;display:flex;align-items:center;gap:6px;padding:0 6px;font-size:12px;font-weight:600;border-radius:5px 5px 0 0;border-bottom:1px solid rgba(0,0,0,.35);}
+  .cdot{width:8px;height:8px;border-radius:99px;flex-shrink:0;}
+  .ntitle{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;} .nsub{font-weight:500;color:var(--dim);font-size:10px;}
+  .hbtn{color:var(--dim);font-size:12px;width:14px;text-align:center;cursor:pointer;} .hbtn:hover{color:var(--txt);}
+  .cat-input .nhead{background:#0f2b28;} .cat-input .cdot{background:var(--cat-input);}
+  .cat-gen .nhead{background:#241436;} .cat-gen .cdot{background:var(--cat-gen);}
+  .cat-sim .nhead{background:#33260a;} .cat-sim .cdot{background:var(--cat-sim);}
+  .cat-color .nhead{background:#132140;} .cat-color .cdot{background:var(--cat-color);}
+  .cat-output .nhead{background:#0d2c17;} .cat-output .cdot{background:var(--cat-output);}
+  .nprev{margin:5px 6px 3px;height:88px;border-radius:4px;overflow:hidden;position:relative;background:#000;border:1px solid #23272f;}
+  .node.collapsed .nprev,.node.collapsed .nbody{display:none;} .node.collapsed .nhead{border-radius:5px;border-bottom:0;}
+  .nbody{padding:3px 0 4px;}
+  .row{position:relative;height:20px;display:flex;align-items:center;padding:0 9px;font-size:11px;}
+  .row.out{justify-content:flex-end;} .rl{color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} .row.out .rl{color:#c3c9d3;}
+  .sock{position:absolute;width:9px;height:9px;border-radius:3px;top:50%;transform:translate(-50%,-50%);border:1px solid rgba(0,0,0,.5);}
+  .row.out .sock{left:auto;right:0;transform:translate(50%,-50%);}
+  .sock.hollow{background:var(--node-bg)!important;}
+  .sock.tex{background:var(--t-tex);border-color:var(--t-tex);} .sock.scalar{background:var(--t-scalar);border-color:var(--t-scalar);} .sock.trigger{background:var(--t-trigger);border-color:var(--t-trigger);}
+  .widget{margin-left:auto;height:15px;border-radius:3px;position:relative;cursor:ew-resize;user-select:none;}
+  .wslider{width:80px;background:#0d0f13;border:1px solid #262b34;overflow:hidden;}
+  .wfill{position:absolute;left:0;top:0;bottom:0;background:#39557f;opacity:.75;}
+  .wval{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-variant-numeric:tabular-nums;color:#dfe4ec;}
+  .row.driven .wfill{background:var(--teal);opacity:.55;}
+  .wdrop{width:80px;background:#0d0f13;border:1px solid #262b34;display:flex;align-items:center;justify-content:space-between;padding:0 6px;font-size:10px;color:#dfe4ec;}
+  .chip{font-size:10px;color:var(--dim2);padding-left:9px;cursor:pointer;} .chip:hover{color:var(--txt);}
+  .world.lod-far .rl,.world.lod-far .widget,.world.lod-far .chip,.world.lod-far .hbtn{display:none;}
+  .world.lod-far .row{height:12px;} .world.lod-far .nprev{margin:5px 5px 4px;height:96px;}
+
+  .rhead{height:40px;min-height:40px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#182545;border-bottom:1px solid var(--line);font-weight:600;font-size:13px;}
+  .rhead .dot{width:9px;height:9px;border-radius:99px;background:var(--cat-gen);}
+  .rnote{font-size:11px;color:var(--dim);padding:8px 12px 4px;}
+  .rbody{flex:1;overflow-y:auto;padding:4px 12px 12px;}
+  .irow{display:flex;align-items:center;gap:7px;height:30px;font-size:12px;}
+  .il{width:92px;color:var(--dim);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;}
+  .isld{flex:1;height:17px;background:#0d0f13;border:1px solid #222732;border-radius:4px;position:relative;overflow:hidden;cursor:ew-resize;}
+  .isld .fill{position:absolute;left:0;top:0;bottom:0;background:#3b6fd4;opacity:.85;}
+  .iv{width:42px;font-size:11px;text-align:right;font-variant-numeric:tabular-nums;}
+  .imod{display:flex;gap:2px;} .imod b{width:17px;height:17px;font-size:9px;font-weight:600;display:flex;align-items:center;justify-content:center;background:#1b1f26;border:1px solid #2b303a;border-radius:3px;color:var(--dim);cursor:pointer;} .imod b.a{border-color:var(--teal);color:var(--teal);}
+
+  /* mini timeline */
+  .timeline{height:150px;background:var(--panel);border-top:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0;}
+  .tltop{height:28px;min-height:28px;display:flex;align-items:center;gap:12px;padding:0 10px;border-bottom:1px solid var(--line);font-size:11px;color:var(--dim);}
+  .playbtn{width:24px;height:19px;display:flex;align-items:center;justify-content:center;background:#1b1f26;border:1px solid var(--node-br);border-radius:4px;cursor:pointer;color:var(--txt);font-size:10px;}
+  .playbtn:hover{background:#232833;}
+  .tread{font-variant-numeric:tabular-nums;color:var(--txt);}
+  .tlbody{flex:1;position:relative;overflow:hidden;user-select:none;cursor:ew-resize;}
+  .ruler{height:15px;position:relative;border-bottom:1px solid #1c2028;background:#0e1015;}
+  .rmark{position:absolute;top:0;height:100%;border-left:1px solid #262b34;font-size:9px;color:var(--dim2);padding-left:3px;}
+  .mini{position:absolute;left:0;right:0;top:15px;bottom:0;display:flex;flex-direction:column;}
+  .mlayer{flex:1;position:relative;border-bottom:1px solid #14171d;min-height:0;}
+  .mlabel{position:absolute;left:4px;top:1px;font-size:8px;color:var(--dim2);z-index:2;pointer-events:none;}
+  .clip{position:absolute;top:2px;bottom:2px;border-radius:2px;opacity:.9;}
+  .phead{position:absolute;top:0;bottom:0;width:2px;background:#ff5a5a;z-index:5;pointer-events:none;}
+  .phead::before{content:'';position:absolute;top:0;left:-4px;border:5px solid transparent;border-top-color:#ff5a5a;}
+
+  .legend{position:absolute;left:14px;bottom:12px;z-index:20;background:rgba(15,17,21,.92);border:1px solid var(--line);border-radius:7px;padding:9px 11px;font-size:11px;line-height:1.5;}
+  .legend .swk{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px;vertical-align:middle;}
+  .hint{position:absolute;right:14px;bottom:12px;z-index:20;font-size:11px;color:var(--dim2);}
+  .badge{position:absolute;left:14px;top:12px;z-index:20;font-size:11px;background:rgba(15,17,21,.9);border:1px solid var(--line);border-radius:6px;padding:5px 9px;color:var(--dim);}
+  .thm{position:absolute;inset:0;}
+  .thm-noise{background:radial-gradient(60% 80% at 30% 40%,#2b7a3a 0,transparent 60%),radial-gradient(50% 60% at 70% 65%,#7a2b2b 0,transparent 60%),#050805;}
+  .thm-vel{background:radial-gradient(40% 55% at 25% 35%,#e11d1d 0,transparent 55%),radial-gradient(45% 60% at 65% 60%,#1ea81e 0,transparent 55%),radial-gradient(35% 45% at 85% 25%,#111 0,transparent 60%),#0a0f0a;}
+  .thm-fluid{background:radial-gradient(50% 60% at 30% 40%,#7c3aed 0,transparent 60%),radial-gradient(45% 55% at 72% 55%,#06b6d4 0,transparent 60%),radial-gradient(40% 50% at 55% 80%,#ec4899 0,transparent 60%),#0a0814;}
+  .thm-render{background:linear-gradient(120deg,#9aa3ad,#3d434c 40%,#c8ccd2 70%,#4a4f57);opacity:.9;}
+  .thm-grade{background:radial-gradient(70% 90% at 40% 50%,#1e3a8a 0,#020617 70%),radial-gradient(40% 50% at 70% 40%,#2563eb 0,transparent 60%);}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="left" id="left">
+    <div class="lsec"><h4>Node Output</h4><div class="previewbox" id="nodeout"><div class="empty">Select a node</div></div><div class="lsel" id="lsel"></div></div>
+    <div class="lsec"><h4>Master Out</h4><div class="previewbox"><div class="thm thm-grade"></div></div></div>
+  </aside>
+  <div class="vsplit" id="vsL"></div>
+
+  <section class="center">
+    <div class="topbar">
+      <span class="title">Live Graph</span>
+      <span class="tierpill" id="pill">full detail</span>
+      <span class="spacer"></span>
+      <button class="btn" id="panelBtn">Hide panels</button>
+      <button class="btn" onclick="fit()">Fit</button>
+      <input type="range" id="zoom" min="0.35" max="1.4" step="0.01" value="0.82">
+      <span class="zoomread" id="zoomread">Zoom 82%</span>
+    </div>
+    <div class="canvasarea">
+      <div class="canvas" id="canvas">
+        <div class="badge">Drag any divider to resize · scrub the strip below</div>
+        <div class="world" id="world"><svg id="wires"></svg></div>
+        <div class="legend">
+          <div><span class="swk" style="background:var(--t-tex)"></span>texture / image</div>
+          <div><span class="swk" style="background:var(--t-scalar)"></span>scalar</div>
+          <div><span class="swk" style="background:var(--t-trigger)"></span>trigger</div>
+          <div style="color:var(--dim);margin-top:4px">wire = source color · dashed = feedback</div>
+        </div>
+        <div class="hint">drag bg = pan · wheel/slider = zoom · zoom out → filmstrip · click = big preview + card</div>
+      </div>
+      <div class="hsplit" id="hs"></div>
+      <div class="timeline" id="timeline">
+        <div class="tltop">
+          <div class="playbtn" id="playbtn">▶</div>
+          <span class="tread" id="tread">Bar 1.0 · 00:00.0</span>
+          <span>120 BPM · 4/4</span>
+          <span class="spacer"></span>
+          <span style="color:var(--dim2)">mini timeline — scrub + clip overview</span>
+        </div>
+        <div class="tlbody" id="tlbody">
+          <div class="ruler" id="ruler"></div>
+          <div class="mini" id="mini"></div>
+          <div class="phead" id="phead"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="vsplit" id="vsR"></div>
+  <aside class="right" id="right">
+    <div class="rhead"><span class="dot"></span>Oily Fluid</div>
+    <div class="rnote">The live instrument — drag any slider while you build.</div>
+    <div class="rbody" id="inspector"></div>
+  </aside>
+</div>
+<script>
+/* ---------------- graph (from v3) ---------------- */
+const W=184;
+const N=[
+ {id:'gen',t:'Generator Input',cat:'input',x:30,y:290,img:null,hide:1,in:[],out:['time','frame_delta','frame_count','aspect','trigger','width','height']},
+ {id:'noise',t:'Inject Noise',cat:'gen',x:284,y:20,img:'noise',in:[['time','c'],['Scale','s',3,8],['Detail','s',16,16],['Roughness','s',.6,1]],out:['noiseInjection']},
+ {id:'fbv',t:'Feedback',sub:'velocity',cat:'sim',x:284,y:250,img:'vel',in:[['in','c'],['seed','c'],['reset','t'],['Decay','s',.98,1]],out:['out']},
+ {id:'fbc',t:'Feedback',sub:'color',cat:'sim',x:284,y:500,img:'fluid',in:[['in','c'],['seed','c'],['reset','t'],['Decay','s',1,1]],out:['out']},
+ {id:'curl',t:'Curl Forcing',cat:'sim',x:538,y:270,img:'vel',in:[['color','c'],['Curl','s',1,2,1]],out:['curlForce']},
+ {id:'smooth',t:'Smooth Velocity',cat:'sim',x:538,y:500,img:'vel',in:[['velocity','c'],['Radius','s',2,8]],out:['blurredVelocity']},
+ {id:'advV',t:'Advect Velocity',cat:'sim',x:792,y:280,img:'vel',in:[['blurred','c'],['velField','c'],['curlForce','c'],['Damp','s',1,2],['Displace','s',10,20]],out:['advectedVelocity']},
+ {id:'advC',t:'Advect Color',cat:'gen',x:1046,y:280,img:'fluid',in:[['colorField','c'],['newVelocity','c'],['noiseInj','c'],['Chroma','s',8,16],['Contrast','s',3,6],['Hue','s',0,1]],out:['newColor']},
+ {id:'render',t:'Render Modes',cat:'color',x:1300,y:300,img:'render',in:[['color','c'],['velocity','c'],['Mode','d','PBR'],['Relief','s',.01,.1]],out:['rendered']},
+ {id:'grade',t:'Color Grade',cat:'color',x:1554,y:300,img:'grade',in:[['rendered','c'],['Saturation','s',1,2,1],['Brightness','s',1,2],['Hue','s',0,1]],out:['graded']},
+ {id:'out',t:'Final Output',cat:'output',x:1808,y:340,img:'grade',in:[['in','c']],out:[]},
+];
+const WIRES=[['gen','time','noise','time'],['gen','aspect','fbv','seed'],['gen','aspect','fbc','seed'],['noise','noiseInjection','advC','noiseInj'],['fbv','out','smooth','velocity'],['fbv','out','advV','velField'],['fbc','out','curl','color'],['fbc','out','advC','colorField'],['curl','curlForce','advV','curlForce'],['smooth','blurredVelocity','advV','blurred'],['advV','advectedVelocity','advC','newVelocity'],['advV','advectedVelocity','render','velocity'],['advC','newColor','render','color'],['render','rendered','grade','rendered'],['grade','graded','out','in'],['advC','newColor','fbc','in',1],['advV','advectedVelocity','fbv','in',1]];
+const SCAL=new Set(['time','frame_delta','frame_count','aspect','width','height','seed']);
+function ptype(n){if(n==='reset'||n==='trigger')return'trigger';if(SCAL.has(n))return'scalar';return'tex';}
+const TCOL={tex:'#4f9dff',scalar:'#b9c0cb',trigger:'#ec4899',vector:'#a855f7',color:'#eab308'};
+const world=document.getElementById('world'),svg=document.getElementById('wires'),canvas=document.getElementById('canvas');
+const byId={},sock={}; let sel=null;
+function connectedInputs(id){return WIRES.filter(w=>w[2]===id).map(w=>w[3]);}
+function hasWire(id,port,side){return WIRES.some(w=> side==='out'?(w[0]===id&&w[1]===port):(w[2]===id&&w[3]===port));}
+function fmt(v){return Math.abs(v)>=10?v.toFixed(1):v.toFixed(2);}
+function build(){N.forEach(n=>{byId[n.id]=n;const conns=new Set(connectedInputs(n.id));
+  const el=document.createElement('div');el.className='node cat-'+n.cat;el.style.left=n.x+'px';el.style.top=n.y+'px';el.style.width=W+'px';
+  let h=`<div class="nhead"><span class="cdot"></span><span class="ntitle">${n.t}${n.sub?` <span class="nsub">${n.sub}</span>`:''}</span><span class="hbtn" data-act="col">▾</span></div>`;
+  if(n.img)h+=`<div class="nprev"><div class="thm thm-${n.img}"></div></div>`;
+  h+='<div class="nbody">';
+  const outs=n.hide?n.out.filter(o=>hasWire(n.id,o,'out')):n.out;
+  outs.forEach(o=>{h+=`<div class="row out" data-sk="${n.id}|${o}|out"><span class="rl">${o}</span><span class="sock ${ptype(o)}"></span></div>`;});
+  if(n.hide&&outs.length<n.out.length)h+=`<div class="row"><span class="chip">+${n.out.length-outs.length} hidden</span></div>`;
+  n.in.forEach(p=>{const name=p[0],kind=p[1];const isConn=kind==='c'||conns.has(name);const type=kind==='t'?'trigger':(kind==='c'?ptype(name):'scalar');const hollow=isConn?'':'hollow';let w='';
+    if(kind==='s'){const fr=Math.max(0,Math.min(1,p[2]/p[3]));w=`<span class="widget wslider" data-max="${p[3]}"><span class="wfill" style="width:${fr*100}%"></span><span class="wval">${fmt(p[2])}</span></span>`;}
+    else if(kind==='d'){w=`<span class="widget wdrop">${p[2]} <span style="opacity:.6">▾</span></span>`;}
+    const drv=p[4]?' driven':'';h+=`<div class="row${drv}" data-sk="${n.id}|${name}|in"><span class="sock ${type} ${hollow}"></span><span class="rl">${name}</span>${w}</div>`;});
+  h+='</div>';el.innerHTML=h;n._el=el;n.collapsed=false;
+  el.addEventListener('mousedown',e=>{if(!e.target.closest('.widget')&&!e.target.closest('.hbtn'))e.stopPropagation();});
+  el.addEventListener('click',e=>{if(e.target.closest('.widget'))return;
+    if(e.target.closest('.hbtn')?.dataset.act==='col'){n.collapsed=!n.collapsed;el.classList.toggle('collapsed',n.collapsed);relayout();e.stopPropagation();return;}
+    if(e.target.closest('.chip')){n.hide=0;rebuild();e.stopPropagation();return;} select(n.id);e.stopPropagation();});
+  world.appendChild(el);
+  el.querySelectorAll('[data-sk]').forEach(r=>sock[r.dataset.sk]={node:n,rowEl:r});
+  el.querySelectorAll('.wslider').forEach(ws=>{const val=ws.querySelector('.wval'),fill=ws.querySelector('.wfill'),mx=parseFloat(ws.dataset.max);dragX(ws,f=>{val.textContent=fmt(f*mx);fill.style.width=(f*100)+'%';});});
+});}
+function endpoint(id,port,side){const s=sock[`${id}|${port}|${side}`],n=byId[id];if(!s||n.collapsed)return[n.x+(side==='out'?W:0),n.y+11];return[n.x+(side==='out'?W:0),n.y+s.rowEl.offsetTop+s.rowEl.offsetHeight/2];}
+function drawWires(){let defs='',paths='';WIRES.forEach((w,i)=>{const[fn,fp,tn,tp,fb]=w;const[x1,y1]=endpoint(fn,fp,'out'),[x2,y2]=endpoint(tn,tp,'in');const c1=TCOL[ptype(fp)],c2=TCOL[ptype(tp)];
+  defs+=`<linearGradient id="g${i}" gradientUnits="userSpaceOnUse" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient>`;
+  const co=Math.max(45,Math.abs(x2-x1)*0.45);
+  if(fb){const my=Math.max(y1,y2)+130;paths+=`<path d="M${x1} ${y1} C ${x1+co} ${my},${x2-co} ${my},${x2} ${y2}" fill="none" stroke="url(#g${i})" stroke-width="1.7" stroke-dasharray="6 5" vector-effect="non-scaling-stroke" opacity=".62"/>`;}
+  else paths+=`<path d="M${x1} ${y1} C ${x1+co} ${y1},${x2-co} ${y2},${x2} ${y2}" fill="none" stroke="url(#g${i})" stroke-width="1.8" vector-effect="non-scaling-stroke" opacity=".9"/>`;});
+  let mx=0,my=0;N.forEach(n=>{mx=Math.max(mx,n.x+W);my=Math.max(my,n.y+n._el.offsetHeight);});svg.setAttribute('width',mx+60);svg.setAttribute('height',my+160);svg.innerHTML='<defs>'+defs+'</defs>'+paths;}
+function relayout(){requestAnimationFrame(drawWires);}
+function rebuild(){world.querySelectorAll('.node').forEach(e=>e.remove());for(const k in sock)delete sock[k];build();relayout();}
+let z=0.82,px=30,py=16;const LODZ=0.62;
+function apply(){world.style.transform=`translate(${px}px,${py}px) scale(${z})`;const far=z<LODZ;world.classList.toggle('lod-far',far);document.getElementById('pill').textContent=far?'filmstrip — previews + colour':'full detail';document.getElementById('zoomread').textContent='Zoom '+Math.round(z*100)+'%';relayout();}
+document.getElementById('zoom').addEventListener('input',e=>{const nz=parseFloat(e.target.value);const cx=canvas.clientWidth/2,cy=canvas.clientHeight/2;px=cx-(cx-px)*(nz/z);py=cy-(cy-py)*(nz/z);z=nz;apply();});
+canvas.addEventListener('wheel',e=>{e.preventDefault();const f=Math.exp(-e.deltaY*0.0015);const nz=Math.min(1.4,Math.max(0.35,z*f));const r=canvas.getBoundingClientRect(),cx=e.clientX-r.left,cy=e.clientY-r.top;px=cx-(cx-px)*(nz/z);py=cy-(cy-py)*(nz/z);z=nz;document.getElementById('zoom').value=z;apply();},{passive:false});
+let pan=null;
+canvas.addEventListener('mousedown',e=>{if(e.target.closest('.node'))return;pan={x:e.clientX-px,y:e.clientY-py};canvas.classList.add('panning');});
+window.addEventListener('mousemove',e=>{if(pan){px=e.clientX-pan.x;py=e.clientY-pan.y;apply();}});
+window.addEventListener('mouseup',()=>{pan=null;canvas.classList.remove('panning');});
+function fit(){let mnx=1e9,mny=1e9,mxx=0,mxy=0;N.forEach(n=>{mnx=Math.min(mnx,n.x);mny=Math.min(mny,n.y);mxx=Math.max(mxx,n.x+W);mxy=Math.max(mxy,n.y+n._el.offsetHeight);});const cw=canvas.clientWidth-60,ch=canvas.clientHeight-60;z=Math.max(0.35,Math.min(cw/(mxx-mnx),ch/(mxy-mny),1.4));px=(canvas.clientWidth-(mxx-mnx)*z)/2-mnx*z;py=(canvas.clientHeight-(mxy-mny)*z)/2-mny*z;document.getElementById('zoom').value=z;apply();}
+function select(id){sel=id;N.forEach(n=>n._el.classList.toggle('sel',n.id===id));const n=byId[id];document.getElementById('nodeout').innerHTML=n.img?`<div class="thm thm-${n.img}"></div>`:'<div class="empty">no image output</div>';document.getElementById('lsel').textContent=n.t+(n.sub?' · '+n.sub:'');}
+canvas.addEventListener('click',e=>{if(e.target.closest('.node'))return;sel=null;N.forEach(n=>n._el.classList.remove('sel'));document.getElementById('nodeout').innerHTML='<div class="empty">Select a node</div>';document.getElementById('lsel').textContent='';});
+function dragX(el,onFrac){let d=false;const u=e=>{const r=el.getBoundingClientRect();let f=(e.clientX-r.left)/r.width;f=Math.max(0,Math.min(1,f));onFrac(f);};el.addEventListener('mousedown',e=>{d=true;u(e);e.preventDefault();e.stopPropagation();});window.addEventListener('mousemove',e=>{if(d)u(e);});window.addEventListener('mouseup',()=>d=false);}
+const INSP=[['Speed',4,10,1],['Feedback',1,2,0],['Noise',.01,1,0],['Velocity Damp',1,2,0],['Curl',1,2,1],['Relief',.01,1,0],['Chroma',8,16,0],['Contrast',3,6,0],['Hue',0,1,0],['Saturation',1,2,1],['Brightness',1,2,0],['Velocity Displace',10,20,0],['Color Displace',.1,1,0]];
+document.getElementById('inspector').innerHTML=INSP.map((r,i)=>{const fr=Math.max(0,Math.min(1,r[1]/r[2])),c=r[3]?'var(--teal)':'#3b6fd4';return `<div class="irow"><span class="il">${r[0]}</span><span class="isld" data-i="${i}" data-max="${r[2]}"><span class="fill" style="width:${fr*100}%;background:${c}"></span></span><span class="iv" id="iv${i}">${fmt(r[1])}</span><span class="imod"><b>T</b><b>~</b><b class="${r[3]?'a':''}">A</b></span></div>`;}).join('')+`<div class="irow"><span class="il">Mode</span><span class="isld" style="justify-content:center;display:flex;align-items:center;cursor:pointer"><span style="font-size:11px;color:#dfe4ec">PBR ▾</span></span><span class="iv"></span><span class="imod"><b>T</b><b>~</b><b>A</b></span></div>`;
+document.querySelectorAll('#inspector .isld[data-i]').forEach(s=>{const i=+s.dataset.i,mx=+s.dataset.max,fill=s.querySelector('.fill'),val=document.getElementById('iv'+i);dragX(s,f=>{fill.style.width=(f*100)+'%';val.textContent=fmt(f*mx);});});
+
+/* ---------------- Splitter widget (dock_left/right/bottom) ---------------- */
+const left=document.getElementById('left'),right=document.getElementById('right'),timeline=document.getElementById('timeline');
+const vsL=document.getElementById('vsL'),vsR=document.getElementById('vsR'),hs=document.getElementById('hs');
+let LW=230,RW=308,TH=150,hidden=false;
+function layoutPanels(){left.style.width=(hidden?0:LW)+'px';right.style.width=(hidden?0:RW)+'px';
+  vsL.style.display=hidden?'none':'block';vsR.style.display=hidden?'none':'block';timeline.style.height=TH+'px';}
+function divider(handle,axis,get,set,min,max){
+  handle.addEventListener('mousedown',e=>{e.preventDefault();handle.classList.add('drag');
+    const start=axis==='x'?e.clientX:e.clientY,v0=get();
+    const mv=ev=>{const cur=axis==='x'?ev.clientX:ev.clientY;set(Math.max(min,Math.min(max,v0+(cur-start))));layoutPanels();relayout();};
+    const up=()=>{handle.classList.remove('drag');window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);};
+    window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);});
+}
+divider(vsL,'x',()=>LW,v=>LW=v,140,440);                 // drag right = wider left
+// vsR grows the RIGHT panel when dragged left, so invert the delta:
+vsR.addEventListener('mousedown',e=>{e.preventDefault();vsR.classList.add('drag');const sx=e.clientX,v0=RW;
+  const mv=ev=>{RW=Math.max(220,Math.min(480,v0-(ev.clientX-sx)));layoutPanels();relayout();};
+  const up=()=>{vsR.classList.remove('drag');window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);};
+  window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);},true);
+hs.addEventListener('mousedown',e=>{e.preventDefault();hs.classList.add('drag');const sy=e.clientY,v0=TH;
+  const mv=ev=>{TH=Math.max(80,Math.min(360,v0-(ev.clientY-sy)));layoutPanels();relayout();updatePhead();};
+  const up=()=>{hs.classList.remove('drag');window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);};
+  window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);});
+document.getElementById('panelBtn').addEventListener('click',e=>{hidden=!hidden;e.target.textContent=hidden?'Show panels':'Hide panels';e.target.classList.toggle('on',hidden);layoutPanels();relayout();});
+
+/* ---------------- mini timeline (scrub + clip minimap) ---------------- */
+const TOTAL=32; let pos=0,playing=false,last=0;
+const LAYERS=[
+ {n:'BG',h:210,c:[[0,8],[9,7],[18,14]]},{n:'Fluid',h:280,c:[[2,12],[16,9],[26,6]]},
+ {n:'Text',h:45,c:[[4,4],[12,3],[20,5]]},{n:'FX',h:150,c:[[0,5],[8,7],[24,7]]},
+ {n:'Cam',h:0,c:[[3,18]]},{n:'LED',h:330,c:[[14,9],[25,7]]},
+];
+const ruler=document.getElementById('ruler'),mini=document.getElementById('mini'),phead=document.getElementById('phead'),tlbody=document.getElementById('tlbody'),tread=document.getElementById('tread');
+ruler.innerHTML=Array.from({length:TOTAL/4+1},(_,i)=>i*4).map(b=>`<span class="rmark" style="left:${b/TOTAL*100}%">${b+1}</span>`).join('');
+mini.innerHTML=LAYERS.map(l=>`<div class="mlayer"><span class="mlabel">${l.n}</span>${l.c.map(c=>`<span class="clip" style="left:${c[0]/TOTAL*100}%;width:${c[1]/TOTAL*100}%;background:hsl(${l.h},52%,46%)"></span>`).join('')}</div>`).join('');
+function mmss(s){const m=Math.floor(s/60),r=(s%60);return String(m).padStart(2,'0')+':'+r.toFixed(1).padStart(4,'0');}
+function updatePhead(){phead.style.left=(pos/TOTAL*100)+'%';tread.textContent=`Bar ${(pos+1).toFixed(1)} · ${mmss(pos*2)}`;}
+function scrub(e){const r=tlbody.getBoundingClientRect();pos=Math.max(0,Math.min(TOTAL,(e.clientX-r.left)/r.width*TOTAL));updatePhead();}
+tlbody.addEventListener('mousedown',e=>{scrub(e);const mv=ev=>scrub(ev);const up=()=>{window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);};window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);});
+document.getElementById('playbtn').addEventListener('click',e=>{playing=!playing;e.target.textContent=playing?'⏸':'▶';last=performance.now();if(playing)requestAnimationFrame(tick);});
+function tick(t){if(!playing)return;const dt=t-last;last=t;pos+=dt/1000*0.5;if(pos>=TOTAL)pos=0;updatePhead();requestAnimationFrame(tick);}
+
+layoutPanels();build();apply();updatePhead();
+</script>
+</body>
+</html>
