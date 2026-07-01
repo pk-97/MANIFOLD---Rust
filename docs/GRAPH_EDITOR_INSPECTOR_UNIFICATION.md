@@ -101,6 +101,31 @@ node greys), `param_slider_shared` for the slider + value cell, `color::FONT_*`
 sizes, the same T/~/A glyph set and hit-targets. Any new node-face control starts
 from the card widgets, never a fork.
 
+### Where the code is (start here post-compaction)
+
+- **Node-face param rows:** `crates/manifold-ui/src/graph_canvas/render.rs` — the
+  row renderers around L680–760 (value/slider row) and the parallel blocks at
+  ~L818, ~L862, ~L939 (enum / other row kinds). Today they draw with:
+  - `text_size = 9.0 * self.zoom` (bespoke 9px, zoom-scaled) — the card uses
+    `color::FONT_*` (≈12). Mismatch #1.
+  - an inline "slider" that's a 2px `draw_rounded_rect` fill bar with canvas-local
+    `PARAM_FILL_BG` / `PARAM_FILL_FG` — NOT the card's `param_slider_shared`
+    track+thumb+value-cell. Mismatch #2.
+  - `TEXT_PRIMARY` / `TEXT_SECONDARY` canvas-local colours + `PARAM_LABEL_X`
+    layout. Should be `color::` tokens. Mismatch #3.
+- **Card widget (the target look):**
+  `crates/manifold-ui/src/panels/param_slider_shared.rs` +
+  `crates/manifold-ui/src/panels/param_card.rs`.
+- **Key constraint — the two render models differ.** The node face draws in
+  **immediate mode** through the `Painter` trait (`ui.draw_*`), zoom-scaled; the
+  card builds **UITree** nodes. So unification is NOT literal widget reuse — it's
+  matching the *tokens, typography, and slider geometry/proportions* so a node
+  slider and a card slider read as one system. Best structural move: extract the
+  slider fill/track drawing (and the value-cell) into a shared painter helper that
+  both the card and the node face call, keyed off one set of `color::` tokens, so
+  they can't drift again. Verify with the headless `ui-snap editor` PNG (this
+  session's render) + an `ui-snap graph` PNG side by side.
+
 ## Goal
 
 Keep the graph editor as a **separate window** (Peter finds it useful). But stop
