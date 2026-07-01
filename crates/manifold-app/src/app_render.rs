@@ -930,14 +930,21 @@ impl Application {
                     self.editor_card_intents.clear();
                     self.editor_card
                         .register_intents(&mut self.editor_card_intents);
-                    // Right-sidebar inspector clicks fold through the shared
-                    // intent registry too now (Phase 6.2). Refresh from the
-                    // panel's current rows — the sidebar built into
-                    // `ed.ui_root.tree` last present, so the row ids match this
-                    // frame's events, exactly like the card above.
+                    // Post on-node-params migration the only editor-panel intent
+                    // left is the node-output "Smart preview" toggle (drawn in the
+                    // left preview pane last present). Register its flip on the
+                    // button id captured during that render; every param control
+                    // now lives on the node face and dispatches through the canvas.
                     self.editor_sidebar_intents.clear();
-                    self.graph_editor_panel
-                        .register_intents(&mut self.editor_sidebar_intents);
+                    if let Some(id) = self.editor_smart_preview_toggle_id {
+                        self.editor_sidebar_intents.on(
+                            id,
+                            manifold_ui::intent::Gesture::Click,
+                            manifold_ui::GraphEditCommand::SetNodePreviewNormalize(
+                                !self.node_preview_normalize,
+                            ),
+                        );
+                    }
                 }
                 for event in &events {
                     // Left-lane card: map editor pointer events to the card's
@@ -982,20 +989,18 @@ impl Application {
                             other => editor_card_actions.push(other),
                         }
                     }
-                    // Right-sidebar inspector dispatch (Phase 6.2): discrete
-                    // clicks (toggle / cycle / open-editor) resolve through the
-                    // shared intent registry; the stateful DragBegin/Drag/DragEnd
-                    // numeric scrub stays on the panel's `handle_event`.
-                    if let UIEvent::Click { node_id, .. } = event {
-                        if let Some(cmd) = self.editor_sidebar_intents.resolve(
+                    // The only editor-panel intent left is the node-output
+                    // "Smart preview" toggle — a discrete click resolved through
+                    // the shared registry. All param authoring moved onto the node
+                    // face, so there are no sidebar drags to handle here anymore.
+                    if let UIEvent::Click { node_id, .. } = event
+                        && let Some(cmd) = self.editor_sidebar_intents.resolve(
                             &ed.ui_root.tree,
                             Some(*node_id),
                             manifold_ui::intent::Gesture::Click,
-                        ) {
-                            graph_edits.push(cmd);
-                        }
-                    } else {
-                        graph_edits.extend(self.graph_editor_panel.handle_event(event));
+                        )
+                    {
+                        graph_edits.push(cmd);
                     }
                 }
             }
@@ -3196,56 +3201,12 @@ impl Application {
         let master_img_y = master_title_y + preview_title_h;
         let card_viewport = manifold_ui::Rect::new(card_x, 0.0, card_width, canvas_height);
 
-        // Resolve which `PresetInstance` is being edited and build the
-        // panel inputs. An open editor without a resolvable
-        // `watched_graph_target` is a degenerate state — show the panel's
-        // empty placeholder.
+        // The graph-editor panel is now just the node-output inspector + the
+        // Smart-preview toggle (all param authoring moved onto the node face in
+        // the canvas), so it needs only the preview state + the value-inspector
+        // for a non-image node. `snap_arc` still feeds the value inspector's node
+        // title lookup and the effect card below.
         let snap_arc = self.content_state.active_graph_snapshot.as_ref().cloned();
-        let (selected_node_u32, panel_scope) = self
-            .graph_canvas
-            .as_ref()
-            .map(|c| (c.selected_node_id(), c.scope_path().to_vec()))
-            .unwrap_or((None, Vec::new()));
-        let view_for_panel =
-            build_graph_editor_view(selected_node_u32, editor_ui_snap.as_deref(), &panel_scope);
-        // V2 unification: the right-sidebar's top "Effect Parameters"
-        // list is a read-only summary of every inner-node param
-        // currently exposed on the effect card (static-block + user-
-        // bindings, merged); the per-node section's checkbox is the
-        // single toggle entry point.
-        //
-        // `static_block_targets` is computed once and reused by both
-        // `build_card_exposures` (for the per-node checked state) and
-        // by the panel itself (for routing the click to the right
-        // command — `EffectStaticParamExpose` vs `EffectParamExpose`).
-        let static_block_targets = build_static_block_targets(
-            self.watched_graph_target.as_ref(),
-            snap_arc.as_deref(),
-            &self.local_project,
-        );
-        let exposed_keys = build_card_exposures(snap_arc.as_deref());
-        // Outer→inner routings declared by the effect (Mirror's
-        // `Amount` → `Mix.amount`, `Mode` → `Transform.mode`, etc.).
-        // The panel uses this to disable inner-param rows the outer
-        // card slider drives every frame.
-        let outer_driven = build_outer_driven_map(snap_arc.as_deref());
-        // Wire-driven set: (handle, inner_param) for every inner param
-        // shadowed by an incoming wire on the same-named scalar input
-        // port. The panel disables the checkbox + value cell for these
-        // rows; clicks on either short-circuit to no-op.
-        let wire_driven_keys = build_wire_driven_keys(snap_arc.as_deref());
-        // The editor targets its effect by identity (`watched_graph_target`),
-        // never by index. This panel field is vestigial — stored, never read —
-        // so the positional index is gone now that targeting is id-based.
-        let effect_index: Option<usize> = None;
-        self.graph_editor_panel.configure(
-            effect_index,
-            view_for_panel.as_ref(),
-            exposed_keys,
-            outer_driven,
-            static_block_targets,
-            wire_driven_keys,
-        );
         self.graph_editor_panel
             .set_node_preview_normalize(self.node_preview_normalize);
         // Value inspector for a previewed node with no image: its description
@@ -3347,31 +3308,11 @@ impl Application {
             self.editor_card_config_hash = None;
             self.editor_mapping_popover.close();
         }
-        // Inner-node param list: docked under the card in the RIGHT lane now
-        // (the left column is monitors-only). A thin divider sets it off from
-        // the card.
-        let panel_top = if card_h > 0.0 { card_h + 5.0 } else { 0.0 };
-        if card_h > 0.0 {
-            ws.ui_root.tree.add_panel(
-                None,
-                card_x,
-                card_h + 2.0,
-                card_width,
-                1.0,
-                manifold_ui::node::UIStyle {
-                    bg_color: manifold_ui::color::DIVIDER_COLOR,
-                    ..manifold_ui::node::UIStyle::default()
-                },
-            );
-        }
-        let panel_viewport = manifold_ui::Rect::new(
-            card_x,
-            panel_top,
-            card_width,
-            (canvas_height - panel_top).max(0.0),
-        );
-        self.graph_editor_panel
-            .build(&mut ws.ui_root.tree, panel_viewport);
+        // The right lane holds only the effect/generator performance card now.
+        // The inner-node param authoring list that used to dock under it is gone —
+        // every param control lives on the node face in the canvas (the on-node
+        // params migration), so the space below the card is reclaimed.
+        let _ = (card_h, card_x, card_width);
 
         // Pinned preview monitors in the left column: a backing panel, the two pane
         // titles, and — for a non-image node — the value inspector text in the
@@ -3414,6 +3355,13 @@ impl Application {
             let inspector_drawn = self
                 .graph_editor_panel
                 .render_node_inspector(&mut ws.ui_root.tree, node_region);
+            // The "Smart preview" auto-gain toggle relocated here from the deleted
+            // param sidebar: it belongs beside the node-output monitor it controls.
+            // Only meaningful when a node-output IMAGE is on screen (a value-
+            // inspector node has no gain to normalize), so draw it in the title row
+            // alongside "Node Output". Capture its id so the input pass can hang the
+            // SetNodePreviewNormalize intent on it.
+            self.editor_smart_preview_toggle_id = None;
             if !inspector_drawn {
                 ws.ui_root.tree.add_label(
                     None,
@@ -3424,6 +3372,19 @@ impl Application {
                     "Node Output",
                     title_style,
                 );
+                if show_image {
+                    // Right-aligned toggle in the title row: "[✓] Smart preview".
+                    let toggle_region = manifold_ui::Rect::new(
+                        title_x + preview_w * 0.42,
+                        node_title_y,
+                        preview_w * 0.58,
+                        preview_title_h,
+                    );
+                    let id = self
+                        .graph_editor_panel
+                        .render_smart_preview_toggle(&mut ws.ui_root.tree, toggle_region);
+                    self.editor_smart_preview_toggle_id = Some(id);
+                }
                 if !show_image {
                     // Nothing selected — the image body stays empty; hint it.
                     ws.ui_root.tree.add_label(
@@ -4897,67 +4858,6 @@ fn fmt_table_cell_seed(v: f32) -> String {
     }
 }
 
-fn build_graph_editor_view(
-    selected_node: Option<u32>,
-    snapshot: Option<&manifold_ui::graph_view::GraphSnapshot>,
-    scope: &[u32],
-) -> Option<manifold_ui::panels::graph_editor::GraphEditorNodeView> {
-    use manifold_ui::graph_view::ParamSnapshotKind;
-    use manifold_ui::panels::graph_editor::{
-        GraphEditorNodeView, GraphEditorParam, GraphEditorParamKind,
-    };
-
-    let id = selected_node?;
-    let snap = snapshot?;
-    // The selected id is level-local: when the canvas has descended into a
-    // group, the node lives in that group's body, not the document root. Resolve
-    // the level the canvas is showing before searching, or its params come back
-    // empty for every node inside a group.
-    let level_nodes = crate::graph_canvas::resolve_level(snap, scope)
-        .map(|(nodes, _)| nodes)
-        .unwrap_or(snap.nodes.as_slice());
-    let node = level_nodes.iter().find(|n| n.id == id)?;
-    let parameters = node
-        .parameters
-        .iter()
-        .map(|p| GraphEditorParam {
-            name: p.name.clone(),
-            label: p.label.clone(),
-            kind: match p.kind {
-                ParamSnapshotKind::Float => GraphEditorParamKind::Float,
-                ParamSnapshotKind::Angle => GraphEditorParamKind::Angle,
-                ParamSnapshotKind::Frequency => GraphEditorParamKind::Frequency,
-                ParamSnapshotKind::Int => GraphEditorParamKind::Int,
-                ParamSnapshotKind::Bool => GraphEditorParamKind::Bool,
-                ParamSnapshotKind::Enum => GraphEditorParamKind::Enum,
-                ParamSnapshotKind::Trigger => GraphEditorParamKind::Trigger,
-                ParamSnapshotKind::Color => GraphEditorParamKind::Color,
-                ParamSnapshotKind::Vec2 => GraphEditorParamKind::Vec2,
-                ParamSnapshotKind::Vec3 => GraphEditorParamKind::Vec3,
-                ParamSnapshotKind::Vec4 => GraphEditorParamKind::Vec4,
-                ParamSnapshotKind::String => GraphEditorParamKind::String,
-                ParamSnapshotKind::Other => GraphEditorParamKind::Other,
-            },
-            default_value: p.default_value,
-            current_value: p.current_value,
-            range: p.range,
-            enum_labels: p.enum_labels.clone(),
-            summary: p.summary.clone(),
-            vec_value: p.vec_value.unwrap_or([0.0; 4]),
-            string_value: p.string_value.clone(),
-            table_value: p.table_value.clone(),
-        })
-        .collect();
-    Some(GraphEditorNodeView {
-        runtime_node_id: node.id,
-        node_id: node.node_id.clone(),
-        node_handle: node.node_handle.clone(),
-        title: node.title.clone(),
-        parameters,
-        wgsl_source: node.wgsl_source.clone(),
-    })
-}
-
 /// Resolve the selected canvas node — which may be a *boundary* node that has
 /// no runtime instance of its own — to a concrete preview-target [`NodeId`] the
 /// content thread can capture. Walks the hierarchical snapshot at the canvas
@@ -5148,122 +5048,11 @@ pub(crate) fn resolve_canvas_binding(
     ))
 }
 
-/// Build the unified set of `(node_handle, inner_param)` keys for every
-/// inner-node param currently exposed on the outer card. Reads ONLY
-/// the snapshot's per-param `exposed` flag — the graph is the single
-/// source of truth for exposure state, identical for Effect-hosted
-/// and Generator-hosted graphs.
-///
-/// Drives the per-node "Expose to card" checkbox state in the
-/// graph-editor sidebar.
-fn build_card_exposures(
-    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
-) -> std::collections::HashSet<(String, String)> {
-    let Some(snap) = snapshot else {
-        return Default::default();
-    };
-    let mut out = std::collections::HashSet::new();
-    for node in &snap.nodes {
-        let Some(handle) = node.node_handle.as_deref() else {
-            continue;
-        };
-        for p in &node.parameters {
-            if p.exposed {
-                out.insert((handle.to_string(), p.name.clone()));
-            }
-        }
-    }
-    out
-}
-
-/// Flatten the snapshot's outer→inner routings into a
-/// `(node_handle, inner_param) → outer_label` map. Empty when the
-/// snapshot is `None` or no effect declares outer routings. Drives
-/// the "↳ <outer>" hint on the per-node rows so the user can see
-/// which outer slider drives each inner param.
-fn build_outer_driven_map(
-    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
-) -> std::collections::HashMap<(String, String), String> {
-    let Some(snap) = snapshot else {
-        return Default::default();
-    };
-    snap.outer_routings
-        .iter()
-        .map(|r| {
-            (
-                (r.node_handle.clone(), r.inner_param.clone()),
-                r.outer_label.clone(),
-            )
-        })
-        .collect()
-}
-
-/// `(node_handle, inner_param)` keys for every inner param shadowed
-/// by a wire on the node's same-named scalar input port (port-
-/// shadows-param convention). Built by walking the snapshot's live
-/// `wires` and joining each `to_node` to its `node_handle` via the
-/// snapshot's node table. Empty when the snapshot is `None`, when
-/// the graph has no wires, or when no wire lands on a handled node.
-///
-/// Drives the graph-editor sidebar's "← wired" hint and disables the
-/// per-row checkbox + value cell so local edits and card-exposure
-/// toggles can't lie about what controls a wire-driven param.
-fn build_wire_driven_keys(
-    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
-) -> std::collections::HashSet<(String, String)> {
-    let Some(snap) = snapshot else {
-        return Default::default();
-    };
-    let handles: std::collections::HashMap<u32, &str> = snap
-        .nodes
-        .iter()
-        .filter_map(|n| n.node_handle.as_deref().map(|h| (n.id, h)))
-        .collect();
-    snap.wires
-        .iter()
-        .filter_map(|w| handles.get(&w.to_node).map(|h| ((*h).to_string(), w.to_port.clone())))
-        .collect()
-}
-
-/// `(node_handle, inner_param) → static-block slot index` map for the
-/// active effect. Built by resolving each snapshot
-/// `OuterParamRouting.outer_param_id` through the def's `id_to_index`
-/// table. Empty when there's no active effect or no snapshot.
-///
-/// Used by the graph-editor sidebar so the per-node "Expose to card"
-/// checkbox can route through `EffectStaticParamExpose` (flipping the
-/// slot's `exposed` flag) when the inner param is already driven by
-/// a static-block routing — instead of stacking a redundant
-/// `UserParamBinding` on top of an already-routed param.
-fn build_static_block_targets(
-    target: Option<&manifold_core::GraphTarget>,
-    snapshot: Option<&manifold_renderer::node_graph::GraphSnapshot>,
-    project: &manifold_core::project::Project,
-) -> std::collections::HashMap<(String, String), usize> {
-    let Some(snap) = snapshot else {
-        return Default::default();
-    };
-    // Only effect editors have a static-block routing; a generator target (or a
-    // closed editor) has no outer→inner param routings to map.
-    let Some(manifold_core::GraphTarget::Effect(eid)) = target else {
-        return Default::default();
-    };
-    let Some(fx) = project.find_effect_by_id(eid) else {
-        return Default::default();
-    };
-    let Some(def) = manifold_core::preset_definition_registry::try_get(fx.effect_type()) else {
-        return Default::default();
-    };
-    snap.outer_routings
-        .iter()
-        .filter_map(|r| {
-            def.id_to_index
-                .get(&r.outer_param_id)
-                .copied()
-                .map(|slot| ((r.node_handle.clone(), r.inner_param.clone()), slot))
-        })
-        .collect()
-}
+// The `build_card_exposures` / `build_outer_driven_map` / `build_wire_driven_keys`
+// / `build_static_block_targets` joins that fed the deleted inner-node param
+// sidebar are gone: the canvas now derives exposed / wire-driven / outer-driven
+// state itself from the snapshot (see `GraphCanvas::apply_driven_state`), and the
+// per-node expose checkbox lives on the node face.
 
 
 

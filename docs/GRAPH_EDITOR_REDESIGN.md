@@ -365,9 +365,27 @@ the node; the top performance card stays.
      `wire_driven_row_is_read_only_*`, `wire_driven_row_expose_glyph_is_dead`,
      `outer_routing_marks_param_outer_driven_*`, `wire_wins_when_both_*`, `removing_the_wire_reclaims_*`;
      render verified headless (SNAP_P5 — "← wired" + "↳ Macro 1" hints draw, wire arcs into the shadow socket).
-6. ⬜ **Delete the bottom sidebar** (`GraphEditorPanel` param stack + `GraphEditorNodeView`
-   plumbing). Relocate the "Smart preview" toggle + the scalar-node value inspector (fold
-   into the node face / header). Reclaim the dock space for the canvas.
+6. ✅ **Delete the bottom sidebar.** DONE 2026-07-01. The inner-node param authoring picker
+   that docked under the right-lane performance card is **gone** — ~2960 lines deleted from
+   `panels/graph_editor.rs` (the whole `build()` param stack, `GraphEditorParam*` /
+   `GraphEditorNodeView` types, `configure` / `register_intents` / `handle_event`, every
+   `build_*_param`, all the param RowState variants + drag state, and their tests), plus the
+   app-side plumbing that fed only the picker (`build_graph_editor_view`, `build_card_exposures`,
+   `build_outer_driven_map`, `build_wire_driven_keys`, `build_static_block_targets`). All param
+   authoring now lives on the node face (Phases 1–5); the canvas derives exposed / wire / outer
+   state itself (`apply_driven_state`), so none of that join is needed anymore.
+   - **`GraphEditorPanel` is now the node-output inspector** — it keeps only the two
+     preview-side jobs: the **scalar value inspector** (`render_node_inspector`, drawn into the
+     left node-output pane for a node that emits no image) and the **Smart-preview toggle**,
+     relocated next to the "Node Output" monitor title it controls (`render_smart_preview_toggle`
+     returns the button id; the host hangs the `SetNodePreviewNormalize` intent on it — one
+     entry in `editor_smart_preview_toggle_id` + `editor_sidebar_intents`, the only sidebar
+     intent left).
+   - **Reclaimed dock space:** the right lane holds only the performance card; the space below
+     is free (the user can drag the dock divider to widen the canvas). The left column stays
+     monitors-only.
+   - Verified: `ui-snap editor --preset OilyFluid` shows the card with no param picker beneath
+     it; 462 ui-lib + 4 app preview-target tests pass; both build configs + clippy clean.
 
 ### Invariants for this work
 

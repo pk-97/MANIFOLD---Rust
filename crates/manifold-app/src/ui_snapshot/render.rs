@@ -268,9 +268,7 @@ pub fn render_graph_editor_to_png(
     use manifold_ui::draw::Painter;
     use manifold_ui::graph_canvas::{GraphCanvas, Rect as CanvasRect};
     use manifold_ui::node::{TextAlign, UIStyle};
-    use manifold_ui::panels::graph_editor::{
-        GraphEditorPanel, EDITOR_CARD_LANE_WIDTH, SIDEBAR_WIDTH,
-    };
+    use manifold_ui::panels::graph_editor::{EDITOR_CARD_LANE_WIDTH, SIDEBAR_WIDTH};
     use manifold_ui::panels::param_card::ParamCardPanel;
     use manifold_ui::{Rect as UiRect, UITree};
 
@@ -305,30 +303,10 @@ pub fn render_graph_editor_to_png(
         card.sync_values(&mut tree, &crate::ui_translate::param_slots_to_ui(&values));
         card_h = card.compute_height();
     }
-    if card_h > 0.0 {
-        tree.add_panel(
-            None,
-            card_x,
-            card_h + 2.0,
-            EDITOR_CARD_LANE_WIDTH,
-            1.0,
-            UIStyle { bg_color: manifold_ui::color::DIVIDER_COLOR, ..UIStyle::default() },
-        );
-    }
-    let panel_top = if card_h > 0.0 { card_h + 5.0 } else { 0.0 };
-    let mut inner_panel = GraphEditorPanel::new();
-    inner_panel.configure(
-        None,
-        None,
-        std::collections::HashSet::new(),
-        std::collections::HashMap::new(),
-        std::collections::HashMap::new(),
-        std::collections::HashSet::new(),
-    );
-    inner_panel.build(
-        &mut tree,
-        UiRect::new(card_x, panel_top, EDITOR_CARD_LANE_WIDTH, (canvas_height - panel_top).max(0.0)),
-    );
+    // The right lane holds only the performance card now — the inner-node param
+    // authoring picker that used to dock under it was deleted (params live on the
+    // node face). No divider, no picker.
+    let _ = card_h;
 
     // Left sidebar: backing panel + the two monitor titles + an empty-state
     // hint, laid out with the same math `present_graph_editor_window` uses (16:9

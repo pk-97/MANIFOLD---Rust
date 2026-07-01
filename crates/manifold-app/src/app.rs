@@ -383,10 +383,18 @@ pub struct Application {
     /// (the generic `IntentRegistry<A>` from Phase 6.1). Discrete sidebar clicks
     /// fold through this registry exactly like every chrome panel, replacing the
     /// panel's old per-row click loop (Phase 6.2). Repopulated from the panel's
-    /// rows each editor frame that has events; stateful drags stay on
-    /// `GraphEditorPanel::handle_event`.
+    /// after the on-node-params migration this registry carries a single intent —
+    /// the node-output "Smart preview" toggle — resolved each editor frame that
+    /// has events. Every param control now lives on the node face and dispatches
+    /// through the canvas.
     pub(crate) editor_sidebar_intents:
         manifold_ui::intent::IntentRegistry<manifold_ui::GraphEditCommand>,
+    /// Tree id of the "Smart preview" toggle button captured during the last
+    /// editor render (the button is drawn in the left preview pane by
+    /// `GraphEditorPanel::render_smart_preview_toggle`). The input pass registers
+    /// the toggle's `SetNodePreviewNormalize` intent on it. `None` when the toggle
+    /// wasn't drawn (a non-image node fills the pane with its value inspector).
+    pub(crate) editor_smart_preview_toggle_id: Option<manifold_ui::node::NodeId>,
     /// Hash of the editor card's last-applied `ParamCardConfig`. `configure`
     /// rebuilds the card's transient UI state (open driver/envelope drawers,
     /// the mapping drawer), so — exactly like the inspector, whose
@@ -626,6 +634,7 @@ impl Application {
             editor_card_config_hash: None,
             editor_card_intents: manifold_ui::intent::IntentRegistry::new(),
             editor_sidebar_intents: manifold_ui::intent::IntentRegistry::new(),
+            editor_smart_preview_toggle_id: None,
             editor_mapping_popover: crate::mapping_popover::MappingPopover::new(),
             graph_node_clipboard: None,
             palette_atoms_cache: {
