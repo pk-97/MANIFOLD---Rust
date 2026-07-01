@@ -633,20 +633,34 @@ impl Application {
             // appears in the header only when there's something to
             // revert. Polled each frame off `local_project`. Works
             // for both effect and generator targets.
-            let has_mod = self
-                .watched_graph_target
-                .as_ref()
-                .is_some_and(|target| match target {
+            // "MODIFIED" must mean the graph diverges from its bundled preset
+            // in a way that changes what it renders — NOT that a node was
+            // nudged. Moving nodes materialises the per-instance override
+            // (editor_pos has nowhere else to persist), so `graph.is_some()`
+            // goes true after any drag. Compare against the cached catalog
+            // default *ignoring layout* so the badge only lights on a real edit.
+            let has_mod = self.watched_graph_target.as_ref().is_some_and(|target| {
+                let instance_graph = match target {
                     manifold_core::GraphTarget::Effect(eid) => self
                         .local_project
                         .find_effect_by_id(eid)
-                        .is_some_and(|fx| fx.graph.is_some()),
+                        .and_then(|fx| fx.graph.as_ref()),
                     manifold_core::GraphTarget::Generator(lid) => self
                         .local_project
                         .timeline
                         .find_layer_by_id(lid)
-                        .is_some_and(|(_, l)| l.generator_graph().is_some()),
-                });
+                        .and_then(|(_, l)| l.generator_graph()),
+                };
+                match (instance_graph, self.watched_catalog_default.as_ref()) {
+                    // Diverged from the bundled preset beyond mere layout.
+                    (Some(g), Some(base)) => g.diverges_ignoring_layout(base),
+                    // Override present but no catalog base to compare against —
+                    // can't prove it's layout-only, so treat as modified.
+                    (Some(_), None) => true,
+                    // Still on the catalog default: nothing to reset.
+                    (None, _) => false,
+                }
+            });
             canvas.set_has_graph_mod(has_mod);
             if let Some(ed) = self.graph_editor.as_mut() {
                 ed.offscreen_dirty = true;

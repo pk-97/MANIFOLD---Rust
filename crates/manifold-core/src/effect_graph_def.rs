@@ -328,6 +328,33 @@ impl EffectGraphDef {
         self.preset_metadata = Some(metadata);
         self
     }
+
+    /// True if this graph differs from `base` in any way that changes what
+    /// the effect renders — i.e. everything *except* purely cosmetic canvas
+    /// layout (`editor_pos`). A node drag or an auto-tidy rewrites positions
+    /// without touching a single param, wire, or binding, so it must NOT read
+    /// as "modified" (this drives the MOD badge / Reset-to-Default pill).
+    ///
+    /// Moving a node materialises the per-instance override — that's the only
+    /// place `editor_pos` can persist — so a bare `graph.is_some()` check goes
+    /// true after any drag. Comparing against the catalog `base` with layout
+    /// normalised out keeps the badge honest. Recurses through group bodies,
+    /// since a node inside a group has its own `editor_pos` too.
+    pub fn diverges_ignoring_layout(&self, base: &EffectGraphDef) -> bool {
+        fn strip_nodes(nodes: &mut [EffectGraphNode]) {
+            for n in nodes {
+                n.editor_pos = None;
+                if let Some(g) = n.group.as_mut() {
+                    strip_nodes(&mut g.nodes);
+                }
+            }
+        }
+        let mut a = self.clone();
+        let mut b = base.clone();
+        strip_nodes(&mut a.nodes);
+        strip_nodes(&mut b.nodes);
+        a != b
+    }
 }
 
 // ─── v2 preset metadata ─────────────────────────────────────────────
@@ -1071,5 +1098,111 @@ mod tests {
     fn skip_mode_default_is_never() {
         let s = SkipModeDef::default();
         assert!(matches!(s, SkipModeDef::Never));
+    }
+
+    /// The MOD badge must ignore pure canvas layout. Moving a node (only
+    /// `editor_pos` changes) must not read as diverged; changing a param must.
+    #[test]
+    fn diverges_ignores_layout_but_catches_edits() {
+        fn node(pos: Option<(f32, f32)>, level: f32) -> EffectGraphNode {
+            let mut params = BTreeMap::new();
+            params.insert(
+                "level".to_string(),
+                SerializedParamValue::Float { value: level },
+            );
+            EffectGraphNode {
+                id: 0,
+                node_id: crate::NodeId::default(),
+                type_id: "node.threshold".to_string(),
+                handle: Some("thresh".to_string()),
+                params,
+                exposed_params: BTreeSet::new(),
+                editor_pos: pos,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            }
+        }
+        let def = |n: EffectGraphNode| EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![n],
+            wires: Vec::new(),
+        };
+
+        let base = def(node(Some((0.0, 0.0)), 0.5));
+
+        // Same graph, node dragged to a new position → NOT modified.
+        let moved = def(node(Some((640.0, 480.0)), 0.5));
+        assert!(!moved.diverges_ignoring_layout(&base));
+
+        // Position also cleared (auto-tidy edge) → still NOT modified.
+        let no_pos = def(node(None, 0.5));
+        assert!(!no_pos.diverges_ignoring_layout(&base));
+
+        // A real param change → modified, regardless of position.
+        let edited = def(node(Some((640.0, 480.0)), 0.9));
+        assert!(edited.diverges_ignoring_layout(&base));
+    }
+
+    /// Layout normalisation must recurse into group bodies — a node nudged
+    /// *inside* a group is still just layout.
+    #[test]
+    fn diverges_ignores_layout_inside_groups() {
+        fn inner(pos: Option<(f32, f32)>) -> EffectGraphNode {
+            EffectGraphNode {
+                id: 1,
+                node_id: crate::NodeId::default(),
+                type_id: "node.mix".to_string(),
+                handle: Some("mix".to_string()),
+                params: BTreeMap::new(),
+                exposed_params: BTreeSet::new(),
+                editor_pos: pos,
+                wgsl_source: None,
+                title: None,
+                output_formats: BTreeMap::new(),
+                output_canvas_scales: BTreeMap::new(),
+                group: None,
+            }
+        }
+        let group_node = |inner_pos: Option<(f32, f32)>| EffectGraphNode {
+            id: 0,
+            node_id: crate::NodeId::default(),
+            type_id: GROUP_TYPE_ID.to_string(),
+            handle: Some("grp".to_string()),
+            params: BTreeMap::new(),
+            exposed_params: BTreeSet::new(),
+            editor_pos: Some((0.0, 0.0)),
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: Some(Box::new(GroupDef {
+                interface: GroupInterface {
+                    inputs: Vec::new(),
+                    outputs: Vec::new(),
+                    params: Vec::new(),
+                },
+                nodes: vec![inner(inner_pos)],
+                wires: Vec::new(),
+                tint: None,
+            })),
+        };
+        let def = |n: EffectGraphNode| EffectGraphDef {
+            version: EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![n],
+            wires: Vec::new(),
+        };
+
+        let base = def(group_node(Some((10.0, 10.0))));
+        let inner_moved = def(group_node(Some((99.0, 99.0))));
+        assert!(!inner_moved.diverges_ignoring_layout(&base));
     }
 }
