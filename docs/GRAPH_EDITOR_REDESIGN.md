@@ -230,13 +230,25 @@ from existing parts:
    - ✅ gate port labels by LOD (51a32b8a) — dots stay, labels drop below 0.5 zoom.
    - ✅ compact nodes: `NODE_WIDTH` 300→210, `COL_SPACING` 360→270 (fb22348c) —
      FluidSimulation now fits at 51% (was 38%), so labels are legible at default fit.
-   - ⬜ **hide-unused sockets** + "+N" reveal chip — still TODO. The "Inputs" node
-     shows 9 outputs when ~2 are wired; filter unused at `NodeView` construction
-     (`set_snapshot` has `level_wires` in scope; ports are name-keyed so indices stay
-     safe), with a per-node reveal toggle so you can still wire a currently-unwired
-     input. This is the last height lever + has real chip interaction surface.
-   - ⬜ true per-node content-sizing (width from longest label) — refinement past
-     the uniform 210.
+   - ✅ **hide-unused sockets** + "+N" reveal chip — DONE 2026-07-01. An expanded node
+     hides an unwired socket **once a same-kind sibling is wired** (you've shown your
+     intent, so the rest is noise) — Generator Input drops from 9 outputs to its 1 wired
+     `time` output, Feedback nodes shed their unwired seed/reset inputs. A fresh node with
+     nothing wired still shows every socket (so it can be connected). A header **"+N" chip**
+     (per hideable count) reveals them all for wiring; clicking again ("−") re-hides.
+     Filtered in `rebuild_rows` (runs after the level's wires are in `self.wires`, on both
+     `set_snapshot` and a chip toggle) via per-port visibility fed to `compute_node_rows`;
+     wired sockets always keep a row, so wire endpoints never point at a hidden port, and
+     `port_under` skips hidden sockets so they're not stray wire-drag targets. Reveal state
+     is per-node (`GraphCanvas::revealed_ports`, keyed by runtime id like `collapsed`).
+     `NodeView` gained `hideable_ports` + `revealed`; chip geometry via `reveal_chip_rect`
+     (one source for render + hit). Tests: `unused_outputs_hide_once_a_sibling_is_wired`,
+     `fresh_node_shows_all_sockets`, `revealing_shows_all_sockets_*`,
+     `clicking_reveal_chip_toggles_*`, `no_reveal_chip_when_nothing_hideable`,
+     `hidden_outputs_have_no_row_*`; verified headless (Generator Input shows "+8").
+   - ⬜ true per-node content-sizing (width from longest label) — still a refinement past
+     the uniform 210; deferred (it touches COL_SPACING + layout + wire routing, lower
+     priority than the mush fix, which the hide-unused pass already resolves).
 3. **Filmstrip LOD** (previews stay + enlarge, text drops).
 4. **Typed-color wires** (keep hover-dim + arc routing).
 5. **Inline param slider restyle** + connected/param socket distinction.

@@ -1315,6 +1315,115 @@ fn ports_compatible_is_colour_category_equality() {
     assert!(!ports_compatible(PORT_SCALAR_COLOR, PORT_ARRAY_COLOR));
 }
 
+// ─── Hide-unused sockets + reveal chip ───────────────────────────────────────
+
+/// A distributor node (id 1, outputs a/b/c, no inputs) feeding a sink (id 2)
+/// from output `a` only. `wired` gates whether the wire exists.
+fn distributor_snapshot(wired: bool) -> GraphSnapshot {
+    let mut dist = node(1, "system.generator_input", Some("dist"));
+    dist.inputs = vec![];
+    dist.outputs = vec![port("a"), port("b"), port("c")];
+    dist.parameters = vec![];
+    let mut sink = node(2, "node.blur", Some("sink"));
+    sink.inputs = vec![port("in")];
+    sink.outputs = vec![port("out")];
+    GraphSnapshot {
+        nodes: vec![dist, sink],
+        wires: if wired { vec![wire(1, "a", 2, "in")] } else { Vec::new() },
+        outer_routings: Vec::new(),
+    }
+}
+
+fn expanded_dist(wired: bool) -> (GraphCanvas, Rect) {
+    let mut canvas = GraphCanvas::new();
+    canvas.collapsed.insert(1, false);
+    canvas.collapsed.insert(2, false);
+    canvas.set_snapshot(&distributor_snapshot(wired));
+    (canvas, Rect::new(0.0, 0.0, 1200.0, 800.0))
+}
+
+#[test]
+fn unused_outputs_hide_once_a_sibling_is_wired() {
+    use crate::graph_canvas::NodeRow;
+    let (canvas, _vp) = expanded_dist(true);
+    let dist = canvas.find_node(1).unwrap();
+    // Only the wired output `a` (index 0) keeps a row; b/c drop.
+    assert_eq!(dist.rows, vec![NodeRow::Output { port: 0 }]);
+    assert_eq!(dist.hideable_ports, 2, "b + c are hideable");
+    assert!(!dist.revealed);
+}
+
+#[test]
+fn fresh_node_shows_all_sockets() {
+    use crate::graph_canvas::NodeRow;
+    let (canvas, _vp) = expanded_dist(false);
+    let dist = canvas.find_node(1).unwrap();
+    // Nothing wired → every output shown, nothing hideable.
+    assert_eq!(
+        dist.rows,
+        vec![
+            NodeRow::Output { port: 0 },
+            NodeRow::Output { port: 1 },
+            NodeRow::Output { port: 2 },
+        ]
+    );
+    assert_eq!(dist.hideable_ports, 0);
+}
+
+#[test]
+fn revealing_shows_all_sockets_but_keeps_hideable_count() {
+    use crate::graph_canvas::NodeRow;
+    let (mut canvas, _vp) = expanded_dist(true);
+    canvas.revealed_ports.insert(1, true);
+    canvas.rebuild_rows();
+    let dist = canvas.find_node(1).unwrap();
+    assert_eq!(
+        dist.rows,
+        vec![
+            NodeRow::Output { port: 0 },
+            NodeRow::Output { port: 1 },
+            NodeRow::Output { port: 2 },
+        ],
+        "revealed → all outputs shown"
+    );
+    assert!(dist.revealed);
+    assert_eq!(dist.hideable_ports, 2, "chip still knows 2 can be re-hidden");
+}
+
+#[test]
+fn clicking_reveal_chip_toggles_and_rebuilds() {
+    let (mut canvas, vp) = expanded_dist(true);
+    let chip = canvas.reveal_chip_rect(vp, 1).expect("chip shows when hideable > 0");
+    canvas.on_left_button_down(vp, chip.x + chip.w * 0.5, chip.y + chip.h * 0.5, 0.0, false);
+    assert_eq!(canvas.revealed_ports.get(&1).copied(), Some(true), "chip revealed");
+    assert_eq!(canvas.find_node(1).unwrap().rows.len(), 3, "all outputs now shown");
+    // Click again → re-hide.
+    let chip2 = canvas.reveal_chip_rect(vp, 1).expect("chip still shows (hideable)");
+    canvas.on_left_button_down(vp, chip2.x + chip2.w * 0.5, chip2.y + chip2.h * 0.5, 0.0, false);
+    assert_eq!(canvas.revealed_ports.get(&1).copied(), Some(false), "chip re-hidden");
+    assert_eq!(canvas.find_node(1).unwrap().rows.len(), 1, "back to the wired output");
+}
+
+#[test]
+fn no_reveal_chip_when_nothing_hideable() {
+    let (canvas, vp) = expanded_dist(false);
+    assert!(
+        canvas.reveal_chip_rect(vp, 1).is_none(),
+        "a fresh node hides nothing, so no chip"
+    );
+}
+
+#[test]
+fn hidden_outputs_have_no_row_so_hit_test_skips_them() {
+    // `port_under` skips an expanded socket whose `output_row_of` is `None`; with
+    // `a` wired, only `a` keeps a row, so b/c can't be wire-drag targets.
+    let (canvas, _vp) = expanded_dist(true);
+    let dist = canvas.find_node(1).unwrap();
+    assert!(dist.output_row_of(0).is_some(), "wired output a keeps its row");
+    assert!(dist.output_row_of(1).is_none(), "hidden output b has no row");
+    assert!(dist.output_row_of(2).is_none(), "hidden output c has no row");
+}
+
 // ─── Phase 5: wire-driven / outer-driven state + read-only lockout ───────────
 
 /// Expand node 1 of an arbitrary snapshot and return a generous viewport.

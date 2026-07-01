@@ -146,6 +146,16 @@ pub(crate) struct NodeView {
     /// Mirrors [`crate::graph_view::NodeSnapshot::wgsl_source`]; stable per node,
     /// so it's set once on the topology rebuild. (Phase 4.)
     pub(crate) wgsl_source: Option<String>,
+    /// Count of ports that CAN be hidden as unused (reveal-independent) — an
+    /// unwired socket whose same-kind sibling is wired. Drives the header chip:
+    /// `> 0` means the chip shows ("+N" to reveal when hidden, "▾" to re-hide when
+    /// revealed). `0` means no chip (a fresh node, or every socket wired). Set by
+    /// [`GraphCanvas::rebuild_rows`] alongside [`Self::rows`].
+    pub(crate) hideable_ports: usize,
+    /// Whether this node is currently showing its hideable sockets (the reveal
+    /// chip was toggled on). Mirrors `GraphCanvas::revealed_ports` for this node
+    /// so render/hit read it off the view. Set by [`GraphCanvas::rebuild_rows`].
+    pub(crate) revealed: bool,
 }
 
 /// Whether a port carries an image (the only kind the thumbnail atlas captures).
@@ -375,14 +385,24 @@ impl NodeView {
 /// then any input ports that don't shadow a param. Port-shadows-param is matched
 /// by exact name — the renderer's convention (see the `node.math` primitive:
 /// input ports `a`/`b` shadow params `a`/`b`).
+/// Compute the expanded body layout. A port gets a row when it's *visible* —
+/// `output_visible[i]` / `input_visible[ii]`, index-aligned to the port lists
+/// (the caller folds wired-ness + reveal into these). Params always get a row
+/// (their shadowing input socket rides the param row, wired or not); a leftover
+/// input (no param) or an output is dropped when not visible. Pure over its
+/// inputs, so it's unit-tested directly.
 pub(crate) fn compute_node_rows(
     inputs: &[PortView],
     outputs: &[PortView],
     params: &[ParamView],
+    output_visible: &[bool],
+    input_visible: &[bool],
 ) -> Vec<NodeRow> {
     let mut rows = Vec::with_capacity(outputs.len() + params.len() + inputs.len());
     for i in 0..outputs.len() {
-        rows.push(NodeRow::Output { port: i });
+        if output_visible.get(i).copied().unwrap_or(true) {
+            rows.push(NodeRow::Output { port: i });
+        }
     }
     let mut shadowed = vec![false; inputs.len()];
     for (pi, p) in params.iter().enumerate() {
@@ -396,7 +416,9 @@ pub(crate) fn compute_node_rows(
         });
     }
     for (ii, sh) in shadowed.iter().enumerate() {
-        if !sh {
+        // Shadowed inputs ride their param row (always shown); a leftover input is
+        // dropped when not visible.
+        if !sh && input_visible.get(ii).copied().unwrap_or(true) {
             rows.push(NodeRow::Input { port: ii });
         }
     }
@@ -1081,14 +1103,12 @@ impl GraphCanvas {
                 preview_screen: node_preview_target(n)
                     .map(|_| crate::graph_canvas::preview_screen_size(preview_aspect)),
                 wgsl_source: n.wgsl_source.clone(),
+                // Filled by `rebuild_rows` below (needs the level's wires).
+                hideable_ports: 0,
+                revealed: false,
             })
             .collect();
         self.nodes = new_nodes;
-        // Expanded-body row layout (outputs / param+socket / leftover inputs),
-        // computed once per topology from each node's ports + params.
-        for node in &mut self.nodes {
-            node.rows = compute_node_rows(&node.inputs, &node.outputs, &node.params);
-        }
         self.wires = level_wires
             .iter()
             .map(|w| WireView {
@@ -1098,6 +1118,10 @@ impl GraphCanvas {
                 to_port: w.to_port.clone(),
             })
             .collect();
+        // Expanded-body row layout (outputs / param+socket / leftover inputs) with
+        // unused (unwired, unrevealed) sockets hidden. Needs `self.wires`, so it
+        // runs after they're built.
+        self.rebuild_rows();
         // Now that this level's wires are in `self.wires`, tag each param's
         // wire / outer-driven state (drives the read-only lockout + row hints).
         self.apply_driven_state(&snap.outer_routings);
@@ -1197,6 +1221,70 @@ impl GraphCanvas {
                         .map(|r| r.outer_label.clone())
                 });
             }
+        }
+    }
+
+    /// Recompute every node's expanded-body [`NodeRow`] layout from the current
+    /// wires + per-node reveal state, hiding ports that carry no wire (unless the
+    /// node is revealed). Sets each node's `rows` + `hidden_ports`. Reads
+    /// `self.wires`, so call it after they're set. Cheap enough to re-run on a
+    /// reveal-chip toggle (which doesn't change topology, so `set_snapshot`'s
+    /// hash-gate wouldn't otherwise rebuild the rows).
+    pub(crate) fn rebuild_rows(&mut self) {
+        // Split the borrow: read `wires` / `revealed_ports`, mutate `nodes`.
+        let Self {
+            wires,
+            nodes,
+            revealed_ports,
+            ..
+        } = self;
+        for node in nodes.iter_mut() {
+            let reveal = revealed_ports.get(&node.id).copied().unwrap_or(false);
+            let id = node.id;
+            let out_wired = |name: &str| wires.iter().any(|w| w.from_node == id && w.from_port == name);
+            let in_wired = |name: &str| wires.iter().any(|w| w.to_node == id && w.to_port == name);
+            // Hide unwired sockets only once a sibling of the same kind is already
+            // wired — you've shown your intent, so the rest is noise (a distributor
+            // like Generator Input drops to its 2 used outputs). A fresh node with
+            // nothing wired shows every socket so it can be connected in the first
+            // place. `reveal` overrides and shows all.
+            let any_out_wired = node.outputs.iter().any(|p| out_wired(&p.name));
+            let any_in_wired = node.inputs.iter().any(|p| in_wired(&p.name));
+            let output_visible: Vec<bool> = node
+                .outputs
+                .iter()
+                .map(|p| reveal || !any_out_wired || out_wired(&p.name))
+                .collect();
+            let input_visible: Vec<bool> = node
+                .inputs
+                .iter()
+                .map(|p| reveal || !any_in_wired || in_wired(&p.name))
+                .collect();
+            node.rows = compute_node_rows(
+                &node.inputs,
+                &node.outputs,
+                &node.params,
+                &output_visible,
+                &input_visible,
+            );
+            // Reveal-independent count of sockets the node CAN hide (for the chip):
+            // an unwired output whose sibling is wired, plus an unwired *leftover*
+            // input (one that doesn't ride a param row) whose sibling is wired.
+            let hideable_out = node
+                .outputs
+                .iter()
+                .filter(|p| any_out_wired && !out_wired(&p.name))
+                .count();
+            let hideable_in = node
+                .inputs
+                .iter()
+                .filter(|p| {
+                    let shadowed = node.params.iter().any(|pr| pr.name == p.name);
+                    !shadowed && any_in_wired && !in_wired(&p.name)
+                })
+                .count();
+            node.hideable_ports = hideable_out + hideable_in;
+            node.revealed = reveal;
         }
     }
 

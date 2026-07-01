@@ -285,6 +285,9 @@ const ENUM_DD_HOVER_BG: Color32 = Color32::new(255, 255, 255, 22);
 /// fill, brighter on hover, so the kernel-editor affordance reads as a button.
 const WGSL_FOOTER_BG: Color32 = Color32::new(255, 255, 255, 16);
 const WGSL_FOOTER_HOVER_BG: Color32 = Color32::new(255, 255, 255, 32);
+/// Header "reveal unused sockets" chip fill — a faint raised pill so the "+N" /
+/// "−" toggle reads as a control against the coloured node header.
+const REVEAL_CHIP_BG: Color32 = Color32::new(0, 0, 0, 70);
 /// Sparkline trace colour — the same soft cyan as the fill bar, a touch brighter
 /// so the moving line reads against the node body without shouting.
 const SPARKLINE_COLOR: Color32 = Color32::new(140, 209, 255, 217);
@@ -351,6 +354,12 @@ pub struct GraphCanvas {
     /// hides its on-face param rows but keeps its header and ports, so it
     /// can still be wired. Absent = expanded.
     pub(crate) collapsed: ahash::AHashMap<u32, bool>,
+    /// Per-node "reveal unused sockets" state (UI-only, keyed by runtime node id
+    /// so it survives snapshot rebuilds). By default an expanded node hides ports
+    /// with no wire (a distributor like Generator Input shows only its *wired*
+    /// outputs, not all nine), with a "+N" chip to reveal the rest so you can wire
+    /// a currently-unwired one. `true` = show every port. Absent = hide unused.
+    pub(crate) revealed_ports: ahash::AHashMap<u32, bool>,
     /// In-place mapping editor for a card binding, anchored on the param
     /// row it was right-clicked from. Surface-agnostic widget; the canvas
     /// just hosts it, draws it on top of the nodes, and forwards pointer
@@ -464,6 +473,7 @@ impl GraphCanvas {
             has_graph_mod: false,
             pending_actions: Vec::new(),
             collapsed: ahash::AHashMap::new(),
+            revealed_ports: ahash::AHashMap::new(),
             mapping_popover: MappingPopover::new(),
             last_click_time: None,
             last_click_pos: (0.0, 0.0),

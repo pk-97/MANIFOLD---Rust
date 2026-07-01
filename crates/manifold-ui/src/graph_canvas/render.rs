@@ -494,6 +494,28 @@ impl GraphCanvas {
             );
         }
 
+        // "Reveal unused sockets" chip: "+N" when the node is hiding N unwired
+        // sockets, "−" when they're revealed (click to re-hide). Only when the
+        // node has something hideable. Geometry via `reveal_chip_rect`, the same
+        // source the hit-test reads, so the drawn chip and click target agree.
+        if let Some(chip) = self.reveal_chip_rect(viewport, node.id) {
+            ui.draw_rounded_rect(chip.x, chip.y, chip.w, chip.h, REVEAL_CHIP_BG, 3.0 * self.zoom);
+            let cs = 9.0 * self.zoom;
+            let label = if node.revealed {
+                "−".to_string()
+            } else {
+                format!("+{}", node.hideable_ports)
+            };
+            let lw = text_width(&label, cs);
+            ui.draw_text(
+                chip.x + (chip.w - lw) * 0.5,
+                chip.y + (chip.h - cs) * 0.5,
+                &label,
+                cs,
+                TEXT_PRIMARY,
+            );
+        }
+
         // Output-preview screen — a recessed "screen" directly under the header
         // that the present pass blits this node's atlas thumbnail over. Sized to
         // the project aspect ratio (portrait shows get a portrait screen), so a

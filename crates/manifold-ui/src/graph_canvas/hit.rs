@@ -153,6 +153,30 @@ impl GraphCanvas {
         Some(Rect::new(nx, row_top, sw, row_h))
     }
 
+    /// Screen-space rect of a node's header "reveal sockets" chip — the small
+    /// "+N" (hidden) / "−" (revealed) toggle at the header's right edge that
+    /// shows / hides the node's unused sockets. `None` for a collapsed node or one
+    /// with nothing hideable. Single geometry source for render + hit, and shifted
+    /// left of the group-enter chevron on a group so they don't overlap.
+    pub(crate) fn reveal_chip_rect(&self, viewport: Rect, node_id: u32) -> Option<Rect> {
+        let node = self.find_node(node_id)?;
+        if node.collapsed || node.hideable_ports == 0 {
+            return None;
+        }
+        let (nx, ny) = self.to_screen(viewport, node.pos_graph.0, node.pos_graph.1);
+        let sw = NODE_WIDTH * self.zoom;
+        let header_h = NODE_HEADER_HEIGHT * self.zoom;
+        let chip_w = 24.0 * self.zoom;
+        let chip_h = header_h * 0.72;
+        let right_margin = if node.is_group { 20.0 } else { 6.0 } * self.zoom;
+        Some(Rect::new(
+            nx + sw - right_margin - chip_w,
+            ny + (header_h - chip_h) * 0.5,
+            chip_w,
+            chip_h,
+        ))
+    }
+
     /// Screen-space rect of an expanded `wgsl_compute` node's "Edit Code…"
     /// footer strip, or `None` for any node without a custom kernel (or a
     /// collapsed one). Built from [`NodeView::wgsl_footer_offset`] — the same
@@ -180,6 +204,12 @@ impl GraphCanvas {
         let (gx, gy) = self.to_graph(viewport, sx, sy);
         for node in self.nodes.iter().rev() {
             for (i, port) in node.outputs.iter().enumerate() {
+                // Skip a socket hidden as unused on an expanded node — it isn't
+                // drawn, so it must not be a wire-drag target (its position would
+                // otherwise fall back to row 0 and steal clicks there).
+                if !node.collapsed && node.output_row_of(i).is_none() {
+                    continue;
+                }
                 let (px, py) = node.output_port_pos_graph(i);
                 let dx = gx - px;
                 let dy = gy - py;
@@ -192,6 +222,9 @@ impl GraphCanvas {
                 }
             }
             for (i, port) in node.inputs.iter().enumerate() {
+                if !node.collapsed && node.input_row_of(i).is_none() {
+                    continue;
+                }
                 let (px, py) = node.input_port_pos_graph(i);
                 let dx = gx - px;
                 let dy = gy - py;

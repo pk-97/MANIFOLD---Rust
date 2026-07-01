@@ -823,6 +823,24 @@ impl GraphCanvas {
             });
             return;
         }
+        // "Reveal / hide unused sockets" chip on the node header → flip this
+        // node's reveal state and rebuild its rows in place (reveal isn't a
+        // topology change, so `set_snapshot`'s hash-gate wouldn't rebuild them).
+        // Checked before the header-drag so a click on the chip toggles rather
+        // than starting a move.
+        if let Some(node_id) = self.node_under(viewport, sx, sy)
+            && let Some(r) = self.reveal_chip_rect(viewport, node_id)
+            && sx >= r.x
+            && sx <= r.x + r.w
+            && sy >= r.y
+            && sy <= r.y + r.h
+        {
+            let now_revealed = !self.revealed_ports.get(&node_id).copied().unwrap_or(false);
+            self.revealed_ports.insert(node_id, now_revealed);
+            self.rebuild_rows();
+            self.select_single(node_id);
+            return;
+        }
         // Double-click on a group node descends into it. Checked before the
         // header-drag path so entering doesn't also start a move; a single
         // click on a group falls through to select / header-drag below.
