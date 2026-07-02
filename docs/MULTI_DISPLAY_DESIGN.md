@@ -341,6 +341,13 @@ lighting craft stays with the LD. Three integration levels:
 
 1. **Sync** — timecode/MIDI/OSC cue exchange with the console. Rides existing
    infrastructure (OSC, MIDI, Ableton sync, timecode).
+   *Console-owned cables are not triggers-only:* grandMA-class desks accept network
+   DMX as **input** — the LD can map it to remote faders/executors (continuous control
+   over their looks) or patch fixture color attributes to MANIFOLD's input universes
+   (full per-fixture color, console acting as the network→cable node, LD priority on
+   top). All grades are the same sACN output on MANIFOLD's side — the bridging is
+   console-side patching. Verify MA2/MA3 input-merge specifics when this phase is
+   specced.
 2. **Cooperative pixel control — sACN with priority.** sACN's per-source priority
    field lets the house rig merge MANIFOLD's color with the LD's control, LD holding
    override. Art-Net has no priority; **sACN output in manifold-led is the ticket into
