@@ -563,7 +563,8 @@ Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra)
 
 - **Warp meshes + edge blending — FIRST post-v1 item** (raised from the bottom of this
   list per §7.4: projectors are the likely primary rig). Output-stage transforms in
-  §6.2; no impact on islands/domains.
+  §6.2; no impact on islands/domains. **Designed: `docs/PROJECTION_MAPPING_DESIGN.md`**
+  (corner-pin/grid warp, masks, slices, blend; phases assume P1–P3 here).
 - **Camera-assisted auto-calibration** (after warp/blend exist as data): structured-
   light scan — project gray-code patterns, any camera watches, solve projector↔surface
   correspondence → warp mesh + edge blend + surface mask filled automatically. Proven
