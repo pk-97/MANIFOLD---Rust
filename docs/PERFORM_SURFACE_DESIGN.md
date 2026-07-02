@@ -118,6 +118,11 @@ drawer does today. Zero new styling infra.
 
 ## 7. Deferred layers, in order
 
+0. **Gig-resilience arming widgets** — GIG_RESILIENCE_DESIGN P3 adds the Cmd+Q
+   hold-progress indicator and understudy status strip (later the thermal glyph) as
+   widgets on this surface. Its state hooks ride the perform enter/exit lifecycle and
+   don't touch this design; the widgets land right after P1 (sequencing:
+   `docs/DESIGN_BUILD_ORDER.md` §2).
 1. **Builder v1** — arrange/resize/add/remove widgets on the grid, per-project persistence,
    undoable commands, `WidgetTarget` for param/macro/layer widgets. Trigger: after session
    perform has proven the widget set.

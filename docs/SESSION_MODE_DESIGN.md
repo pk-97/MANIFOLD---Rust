@@ -4,6 +4,11 @@ Ableton-style scene/clip launching as a second performance surface. Users who ne
 
 Status: design approved, not implemented. Written 2026-07-02 against `feat/timeline-ui-redesign`.
 
+Companion: `docs/PERFORM_SURFACE_DESIGN.md` — **session perform** (this grid at stage
+scale, launch gestures as `ContentCommand`s) ships as that design's P2 together with
+this build; one Perform button routes by context (its D1). Sequencing:
+`docs/DESIGN_BUILD_ORDER.md`.
+
 ## 1. The core insight
 
 MANIFOLD already runs two clip sources through one authority:

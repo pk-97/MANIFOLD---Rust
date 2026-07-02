@@ -11,7 +11,10 @@ stops (Ableton keeps playing through any MANIFOLD crash); the job is to keep
 pixels on the wall and rejoin the running show without human hands.
 
 Companion designs: `docs/ABLETON_SHOW_SYNC_DESIGN.md` (the score that makes
-rejoin exact), `docs/SESSION_MODE_DESIGN.md` (perform surface).
+rejoin exact), `docs/SESSION_MODE_DESIGN.md` (the second performance surface),
+`docs/PERFORM_SURFACE_DESIGN.md` (perform mode becomes chrome-hosted — P3's
+visible arming indicators are widgets on that surface; sequencing in
+`docs/DESIGN_BUILD_ORDER.md` §2).
 
 ---
 
@@ -264,6 +267,14 @@ On entering perform mode: spawn understudy · Cmd+Q (and Cmd+W on output
 windows) require holding the key combo ~2 s with visible progress · "set
 start" snapshot · autosave parks · crash counter resets. On exit: reverse.
 No new mode, no separate toggle, no preference.
+
+Where this attaches (verified 2026-07-03): the arming hooks ride perform
+mode's enter/exit lifecycle (`perform_mode/mod.rs` `pending_enter` /
+`pending_exit`), which survives the chrome-hosting rebuild in
+`PERFORM_SURFACE_DESIGN` P1 unchanged. The *visible* pieces — hold-progress
+indicator, understudy status strip, thermal glyph (§8) — are chrome widgets
+on the perform surface, not hand-drawn HUD. Build P3 after PERFORM_SURFACE
+P1 (`docs/DESIGN_BUILD_ORDER.md` §2) so they're built once.
 
 ## 8. Peripheral resilience (the degraders)
 
