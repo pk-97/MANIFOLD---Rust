@@ -1,10 +1,13 @@
 # Multi-Display / Totem Canvas Model
 
-**Status: APPROVED design, not implemented.** Written 2026-07-02 (Fable). Execution is a
-Sonnet apply pass — every decision needed to build this is in here; don't reopen §11.
+**Status: APPROVED design, not implemented.** Written 2026-07-02 (Fable). **v2, same
+day:** the v1 "render the gaps" pixel canvas was rejected by Peter — a super-wide stage
+must not spend its frame budget on invisible air. v2 replaces it with the island atlas
+model. Execution is a Sonnet apply pass — every decision needed is in here; don't
+reopen §11.
 
 The driving use case: two vertical LED totems on stage, meters apart. Content chases
-between them, bounces off them, spans the gap — the physical setup is part of the
+between them, bounces off them, crosses the gap — the physical setup is part of the
 instrument, not a routing detail.
 
 ---
@@ -21,6 +24,8 @@ extends that to N physical outputs (displays, projectors, LED processors) with:
 3. **Zero mapping busywork** — no slice editors, no pixel-rect entry, no output routing
    matrices. The user arranges pictures of their displays on a stage plan. Everything
    else is derived.
+4. **Zero dead pixels** — render cost scales with the displays you own, never with the
+   air between them. A 50m-wide stage with two totems costs the same as the two totems.
 
 Non-goals: projection mapping onto 3D geometry, hardware genlock, per-display
 independent compositions (that's just running the content twice).
@@ -35,92 +40,122 @@ The presentation layer is mostly built. Do not redesign these; extend them.
 | Direct present: content thread acquires drawable + blits + presents in its own CB | `content_pipeline.rs` (`render_content_native`, "Direct present to output drawable" block) | Single `output_surface: Option<GpuSurface>`, triple-buffered, `presents_with_transaction(false)` |
 | Content-thread pacing | `mach_wait_until` + 2ms spin at project FPS | SETTLED — do not touch |
 | UI vsync | `UiDisplayLink` (CVDisplayLink per workspace window) | Content thread does NOT use display links |
-| Canvas dimensions | `ProjectSettings::output_width/output_height` + `render_scale` (internal render res → output res upscale exists) | The canvas already has a scale relief valve |
+| Canvas dimensions | `ProjectSettings::output_width/output_height` + `render_scale` | Legacy single-canvas path; becomes the one-island case |
 | EDR per-display headroom | `edr_surface.rs` (event-driven headroom re-query on screen change) | Already per-window |
 | LED output samples the final texture | `manifold-led` (blit + readback → Art-Net) | Already "a sampler of the canvas" |
 | Display ID lookup | `display_link.rs::display_id_for_window` (CGDirectDisplayID via NSScreen) | Runtime only — IDs are NOT stable across reboots |
 
-The missing piece is the **mapping model**: one canvas → N physical outputs, plus the
-physical layout as data the content can read.
+The missing piece is the **mapping model**: one composition → N physical outputs, plus
+the physical layout as data the content can read.
 
 ## 3. Core model
 
-### D1 — One virtual canvas; outputs are samplers of it
+### D1 — One composition; outputs are samplers of it
 
-The content thread renders one canvas per tick, exactly as today. Every output —
-display window, LED strip, future NDI/recording — owns a mapping: *source rect on the
-canvas → transform → device*. There are no per-display pipelines: they would double GPU
-cost, duplicate state, and make boundary-spanning effects impossible.
+The content thread renders once per tick, exactly as today. Every output — display
+window, LED strip, future NDI/recording — owns a mapping: *region of the render
+target → transform → device*. There are no per-display content pipelines: they would
+duplicate state and make cross-display behavior unauthorable.
 
-### D2 — The canvas is a pixel rect; gaps are rendered
+### D2 — Islands: contiguous pixels only where continuity is visible
 
-Two candidate models were weighed:
+The key observation (Peter's catch, v2): pixel continuity between displays only
+matters where displays **abut** — a panel wall, where a seam-crossing blur or feedback
+trail is actually visible. Across a real physical gap, neighborhood continuity is
+invisible; rendering the gap preserves nothing and costs real GPU time.
 
-- **(a) Resolume model (CHOSEN):** the canvas is one big pixel rect. Displays are crops
-  placed on it, with real gaps between them. Gap pixels are rendered and never shown.
-  Screen-space effects (blur, feedback, convolution) work across the boundary because
-  the boundary isn't one — it's just canvas.
-- **(b) Packed atlas (REJECTED):** render only display pixels, remap coordinates per
-  region. Saves the gap pixels but screen-space effects break at atlas seams — which
-  kills exactly the boundary-spanning behavior this design exists to enable.
+So:
 
-The waste in (a) is bounded, honest, and user-visible (§9). Density control is the
-mitigation, not topology tricks.
+- **An island is a cluster of abutting displays**, derived automatically from the stage
+  layout: placements whose rects touch (within a small snap tolerance) merge into one
+  contiguous pixel region. A 3×2 panel wall = one island. Two totems meters apart =
+  two islands. A single display = one island (the legacy case, byte-identical
+  behavior).
+- **The render target is a packed atlas of islands.** One texture, one frame graph
+  pass structure, containing only display pixels plus small gutters (16px) between
+  regions. Gaps between islands are never allocated and never rendered.
+- **The stage is a coordinate frame, not pixels.** Physical positions exist as data
+  (mm, in the layout uniform §7) — content computes with them; nothing rasterizes air.
 
-### D3 — The canvas is derived, never authored
+Rejected alternatives, for the record:
 
-The user authors a **stage layout** (physical placements, §4–5). From it the engine
-derives:
+- **Rendered-gap pixel canvas (v1 / Resolume model):** canvas = bounding box of the
+  stage, gap pixels rendered and discarded. Rejected — cost scales with stage width,
+  not owned hardware; a wide stage drowns the frame budget in black pixels. Its one
+  advantage (seam-free neighborhood ops across displays) only matters for abutting
+  displays, which island merging preserves anyway.
+- **One canvas texture per island:** same semantics as the atlas, but multiplies
+  render-target allocations and breaks the one-texture assumptions in preview, LED
+  sampling, and export paths. The atlas keeps one texture; regions do the same job.
 
-- `px_per_mm` — canvas density. Default: the highest native density among placed
-  displays (no display undersampled), clamped by a user density cap (§9).
-- Canvas rect — the bounding box of all placement rects in mm, times `px_per_mm`,
-  rounded up to even dimensions.
-- Each output's source rect on the canvas — its placement rect in canvas pixels.
+### D3 — Everything is derived, never authored
 
-The user never sees px/m, crop rects, or canvas size as things to edit. Move a totem on
-the stage plan → the mapping and canvas re-derive. Canvas re-derivation is per-action
-(reallocates render targets), never per-frame.
+From the stage layout (§5) the engine derives: island clustering, per-island pixel
+density (native density of its densest display, optionally capped per island §9),
+atlas packing (region rects + gutters), each output's source region, and the layout
+uniform. The user never sees the atlas, px/mm, crops, or packing. Move a totem →
+everything re-derives. Re-derivation is per-action (may reallocate render targets),
+never per-frame.
 
-**Legacy / single-display:** a project with no stage layout keeps today's behavior
-byte-identically — canvas = `output_width × output_height`, one implicit full-canvas
-mapping to the output window. `output_width/height` stay authoritative until the first
-placement is added; after that they become derived values (kept in sync for export and
-older code paths).
+**Legacy / single-display:** a project with no stage layout = one island of
+`output_width × output_height`, one implicit full-region mapping to the output window.
+Today's behavior, byte-identical. `render_scale` keeps working (it scales island
+render resolution).
 
-## 4. Stage view UX
+## 4. Per-layer spatial domain — the one new performer-facing concept
+
+With multiple islands, "where does this layer's content live?" needs an answer. It is
+a per-layer toggle with two values:
+
+- **Stage** (default): the layer's content is mapped across physical space. Each
+  island rasterizes its window of the stage. A generator sweep travels the real stage;
+  a particle crossing the gap exists in stage coordinates and simply isn't rasterized
+  while it's in the air — correct, and free. A video clip spanning both totems shows
+  its left part on Totem L and right part on Totem R, gap omitted.
+- **Every display**: the layer's content repeats on each island (each island is its
+  own 0–1 canvas). Mirrored totems, same pattern everywhere — the other most common
+  live look.
+
+On a single island the two are identical, so single-display users never see the
+concept. Effects on a layer follow the layer's domain trivially because effects always
+run island-locally (§6.1).
+
+This is a `Layer` field + UI toggle, mutated through `EditingService` like everything
+else.
+
+## 5. Stage view UX + data model
+
+### UX
 
 The mental model is **macOS display arrangement, on a stage plan, in real units**.
-Everyone who has plugged in a second monitor already knows this UI.
 
 - A 2D top-of-stage view. Each output is a rectangle labeled with its name.
-- Connected displays are detected and offered; physical size pre-filled from EDID
-  (often right, sometimes garbage — always editable). LED processors that lie about
-  size get corrected by typing the real panel dimensions.
-- Drag to position. The gap you leave between two totems is the *real* gap — enter it
-  numerically or drag until the readout matches the stage measurement.
+- Connected displays detected and offered; physical size pre-filled from EDID (often
+  right, sometimes garbage — always editable). LED processors that lie get corrected
+  by typing real panel dimensions.
+- Drag to position. Displays that touch snap together and visibly merge into an island
+  (subtle shared outline). The gap you leave between islands is the *real* gap — enter
+  it numerically or drag until the readout matches the stage measurement.
 - Rotation per placement: 0/90/180/270. Vertical totems are usually landscape panels
-  rotated; the rotation applies in the output blit (§6), not in content.
-- Live readout: derived canvas resolution + estimated cost tint (§9). The user sees
-  "3200×1920" change as they drag, not a surprise at showtime.
+  rotated; rotation applies in the output blit (§6.2), not in content.
+- Live readout: total rendered pixels (sum of islands — dragging displays *apart*
+  never changes it) + per-island resolutions.
 - **Advanced flap, per output, closed by default:** 4-corner keystone (homography —
-  covers projectors), RGB gain/lift color trim, EDR/tonemap override. Warp meshes are
-  deferred (§12). Most users never open this.
+  covers projectors), RGB gain/lift color trim, EDR/tonemap override, per-island
+  density cap. Most users never open this.
 
-The fiddly slicing layer still exists internally (§5) — it is **generated from the
-stage view, never hand-edited**.
+The slicing/packing layer exists internally — **generated from the stage view, never
+hand-edited**.
 
-## 5. Data model
+### Data model
 
 New module `manifold-core/src/stage.rs`. Serialized inside `ProjectSettings` (serde
-conventions per the codebase; all fields `#[serde(default)]` so old projects load).
+conventions; all fields `#[serde(default)]` so old projects load).
 
 ```rust
 /// Physical arrangement of outputs on the stage plan. Millimetres.
 pub struct StageLayout {
     pub placements: Vec<DisplayPlacement>,
-    /// User density cap in px/mm; None = native density of the densest display.
-    pub density_cap: Option<f32>,
 }
 
 pub struct DisplayPlacement {
@@ -132,7 +167,8 @@ pub struct DisplayPlacement {
     pub rotation: Rotation,              // R0 | R90 | R180 | R270
     pub identity: Option<DisplayIdentity>, // which physical monitor
     pub enabled: bool,
-    pub advanced: OutputAdvanced,        // keystone quad, color trim, tonemap override
+    pub advanced: OutputAdvanced,        // keystone quad, color trim, tonemap override,
+                                         // density cap (px/mm, None = native)
 }
 
 /// Stable identity for re-matching a physical display across launches/reboots.
@@ -144,52 +180,74 @@ pub struct DisplayIdentity {
 }
 ```
 
-Derivation lives next to the model as pure functions with unit tests:
-`derive_canvas(&StageLayout) -> DerivedCanvas { size_px, px_per_mm, source_rects }`.
+Islands are **not stored** — they are derived (pure function, unit-tested):
+`derive_stage(&StageLayout) -> DerivedStage { islands: Vec<Island>, atlas_size }`,
+where `Island { display_ids, stage_rect_mm, px_per_mm, atlas_region_px }`. Clustering =
+union of placements whose post-rotation rects touch within snap tolerance (5mm).
 
 **Display identity rules (gig-critical):** CGDirectDisplayIDs shuffle across reboots.
 Match placements to live displays by UUID, then by name, else mark **unassigned** —
-never silently guess. Unassigned placements render into the canvas as normal (content
-is unaffected) but present nowhere, and the stage view shows a one-click "assign"
-picker. Plugging in the totems at the venue must be: open project → two clicks → done.
+never silently guess. Unassigned placements still render (content unaffected) but
+present nowhere; the stage view shows a one-click "assign" picker. Plugging in at the
+venue must be: open project → two clicks → done.
 
-**Mutations:** stage edits go through `EditingService` like everything else
-(`ContentCommand::Execute` / commands with undo). Canvas re-derivation happens on
-command apply.
+**Mutations:** stage edits go through `EditingService` (commands with undo). Derivation
+runs on command apply.
 
-## 6. Present architecture
+## 6. Rendering + present architecture
+
+### 6.1 Per-island execution — today's shader semantics, unchanged
+
+Effects and compositing execute **once per island**, as a scissored viewport pass into
+that island's atlas region. Inside the viewport, a shader sees a contiguous,
+aspect-correct local canvas: local UV, local resolution — exactly today's semantics.
+**Zero shader changes.** This is what makes neighborhood ops (blur, convolution,
+feedback advection) well-defined: they operate within an island, clamped by the
+viewport, and never bleed across a gap that doesn't physically exist. For abutting
+panels — where bleed *is* visible — they're one island, so continuity is preserved
+where it matters.
+
+Consequences, stated honestly:
+
+- **Encoder/dispatch work multiplies by island count.** Total pixel work does not (sum
+  of island pixels = the content you own). Two islands ≈ 2× dispatches — fine. Many
+  islands (6+ totem stages) will want the pointwise-fusion path to collapse per-island
+  loops into single atlas-wide dispatches for pointwise nodes; that's the existing
+  fusion-compiler direction, noted as the optimization escape hatch, not v1.
+- **Stateful effect state keys extend to (node, island)** — the state store and chain
+  caches key per island. Per-island feedback/trails are semantically correct
+  (physically separate surfaces). Reset paths must walk both caches per the existing
+  two-cache rule.
+- Layer domain (§4) enters as the content coordinate mapping per island: Stage domain
+  = island's stage window drives generator coordinates / clip placement; Every-display
+  domain = island-local 0–1. Pointwise/compositing behavior is identical either way.
+
+### 6.2 Present
 
 Extends today's direct-present path from one surface to N. The content thread stays
 the only clock (mach_wait_until pacing, SETTLED); **no display links are added** —
 outputs vsync via their own `CAMetalLayer` at present time. This respects the
-never-unify-CVDisplayLinks rule: no heavy GPU work ever runs in a vsync callback
-because no vsync callback exists on this path.
+never-unify-CVDisplayLinks rule: no vsync callback exists on this path at all.
 
 - `ContentPipeline` replaces `output_surface: Option<GpuSurface>` with a small vec of
-  `(OutputId, GpuSurface, InFlightCounter)`. Attach/detach flows mirror today's
-  `AttachOutputSurface` command (windows are created on the UI thread as now; surfaces
-  handed to the content thread).
+  `(OutputId, GpuSurface, InFlightCounter)`. Attach/detach mirrors today's flow
+  (windows created on the UI thread as now; surfaces handed to the content thread).
 - Per tick, per attached output: **non-blocking drawable acquire**. `next_drawable()`
-  blocks when the layer's queue is full — with two displays at different refresh rates
-  the slower one would stall the content tick and starve the faster one. Guard: an
-  atomic in-flight counter per surface, incremented at present-schedule, decremented in
-  the drawable's presented handler; skip this output this tick when the counter says
-  the queue is full. A skipped output simply keeps showing its previous frame.
-- The per-output present pass is one cheap draw appended to the compositor CB, exactly
-  like today's single-output blit: sample the final canvas texture with the output's
-  source rect UVs, apply rotation (UV swizzle), keystone homography if set, color trim,
-  per-output tonemap/EDR mapping (headroom already tracked per window). Rgba16Float
-  drawables as today.
+  blocks when the layer's queue is full — with displays at different refresh rates the
+  slower one would stall the content tick. Guard: an atomic in-flight counter per
+  surface (incremented at present-schedule, decremented in the presented handler);
+  skip the output this tick when full. A skipped output keeps showing its last frame.
+- The per-output present pass is one cheap draw appended to the compositor CB, like
+  today's single-output blit: sample the output's atlas region, apply rotation (UV
+  swizzle), keystone homography if set, color trim, per-output tonemap/EDR mapping
+  (headroom already tracked per window). Rgba16Float drawables as today.
 - **Cadence decision:** outputs run at independent cadence. Two totems on different
   clocks may occasionally show frames one apart (~16ms at 60Hz). Across meters of
-  physical separation this is imperceptible. Frame-locking displays in software is the
-  never-unify trap and is rejected; true genlock is display-hardware territory.
-- Workspace preview + perform HUD show the full canvas with placement outlines and
-  ghosted gap regions (render as overlay in the existing preview pane; no new pipeline).
-
-**What this means on stage:** the laptop drives UI + 2 totem windows. UI present
-already contends with content GPU (`ui-present-content-gpu-contention`); the two output
-presents are trivial blits but the *canvas* is bigger — see §9.
+  physical separation this is imperceptible. Software frame-locking is the never-unify
+  trap and is rejected; true genlock is display-hardware territory.
+- **Preview:** the workspace preview composites island textures at their stage-plan
+  positions over the panel background — the gap is literal empty UI, costing nothing.
+  Placement outlines drawn on top. Perform HUD same.
 
 ## 7. Display-aware content
 
@@ -201,23 +259,31 @@ else.
 
 Extend the frame globals that already carry time/resolution into graph execution
 (`FrameTime` in `node_graph/effect_node.rs` is the carrier; the uniform build follows
-the existing pattern). Fixed-capacity array, `MAX_DISPLAYS = 8`, WGSL-aligned (vec4
-fields only — respect the vec3-alignment rule):
+the existing pattern). Fixed capacity `MAX_DISPLAYS = 8`, `MAX_ISLANDS = 8`,
+WGSL-aligned (vec4 fields only — respect the vec3-alignment rule):
 
 ```wgsl
-struct DisplayLayout {
-    count: u32,               // + padding to 16B
+struct StageUniform {
+    counts: vec4<u32>,           // x = displays, y = islands, z = current island id
+    stage_rect_mm: vec4<f32>,    // whole-stage bounding box (for normalization)
     displays: array<DisplayEntry, 8>,
+    islands: array<IslandEntry, 8>,
 }
 struct DisplayEntry {
-    rect_uv: vec4<f32>,       // canvas-UV rect: xy = min, zw = max
-    center_size_uv: vec4<f32>,// xy = center, zw = size (canvas UV)
-    physical_mm: vec4<f32>,   // xy = center, zw = size (stage plan mm)
+    physical_mm: vec4<f32>,      // xy = center, zw = size (stage plan mm)
+    island_local: vec4<f32>,     // rect within its island's local 0–1 space
+    meta: vec4<u32>,             // x = island id
+}
+struct IslandEntry {
+    physical_mm: vec4<f32>,      // xy = center, zw = size
+    atlas_region: vec4<f32>,     // atlas UV rect (for advanced/wgsl_compute use)
 }
 ```
 
-Built per-frame from the cached derived layout — no allocation, no derivation on the
-hot path. Also exposed to `wgsl_compute` (it's a live-show authoring surface).
+`current island id` is what makes per-island execution composable: a node knows which
+island it's rendering and can look up its stage window. Built per-frame from the
+cached derived stage — no allocation, no derivation on the hot path. Also exposed to
+`wgsl_compute` (it's a live-show authoring surface).
 
 ### 7.2 Three primitives (atoms, not monoliths)
 
@@ -227,96 +293,111 @@ completeness gate applies.
 
 | type_id | label | one dispatch, one purpose |
 |---|---|---|
-| `node.display_mask` | Display Mask | White inside display N's canvas rect, black elsewhere (soft edge param). Per-totem strobe/isolate. |
-| `node.display_uv` | Display UV | UV field remapping each display region to its own 0–1 space (mirror X/Y params). Same or mirrored pattern per totem. |
-| `node.display_info` | Display Info | CPU/value node: count, plus display N's center/size in canvas UV and mm. Wire `displays[1].center` into an emitter → bounce between totems. |
+| `node.display_mask` | Display Mask | White where display N intersects the current island, black elsewhere (soft edge param). Per-totem strobe/isolate within a wall or across the stage. |
+| `node.stage_uv` | Stage UV | UV field in normalized stage space for the current island's window — the coordinate handle for Stage-domain looks in graphs that want it explicitly. |
+| `node.display_info` | Display Info | CPU/value node: counts, display or island N's center/size in mm and normalized stage space. Wire `islands[1].center` into an emitter → bounce between totems. |
 
-Gap-spanning behavior needs none of these — it falls out of D2(a). The primitives are
-only for *display-indexed* behavior. Later sugar like layer→display routing is a
-transform preset over the same data, not a new mechanism.
+Cross-gap behavior needs no gap pixels — Stage domain (§4) plus these coordinates
+cover it. Later sugar like layer→display routing is a preset over the same data, not a
+new mechanism.
 
 **MCP note:** `get_project_overview` should include the stage layout summary so agents
-can author display-aware content ("two portrait displays, 3.2m gap").
+can author display-aware content ("two portrait islands, 3.2m apart").
 
 ## 8. What it buys on stage
 
 - A particle system flies off Totem L, crosses 3m of real air at real speed, lands on
-  Totem R on beat — authored once, in physical space.
-- Alternate-totem strobe = Display Mask × LFO. Chase = anything driven by
-  Display Info centers.
+  Totem R on beat — authored once, in physical space, with zero pixels spent on the
+  air.
+- Alternate-totem strobe = Display Mask × LFO. Chase = anything driven by Display Info
+  centers. Mirrored totems = flip the layer to Every-display.
 - Rearrange the venue, drag the stage view to match, content adapts — no re-authoring.
 - Plug-in at the venue is two clicks (identity re-matching, §5), not a mapping session.
+- A super-wide stage is free: cost follows the hardware you own, not the meters
+  between it.
 
 ## 9. Performance
 
-The honest cost of D2(a): canvas pixels scale with **physical span × density**, and gap
-pixels are rendered.
-
-- Baseline content render today: 4.5–5.5ms at 1080p-class canvas; 4K margin is an OPEN
-  campaign. A wide canvas spends from the same budget.
-- Example: two portrait 1080×1920 displays 0.6m wide, 3m gap, at native density
-  (1800px/m) → canvas ≈ 7560×1920 ≈ 14.5MP ≈ 7× a 1080p canvas. **Not viable.**
-  Same layout with density cap at 500px/m → 2640×960 ≈ 2.5MP, totems upscaled ~3.6× at
-  the blit. LED totems are physically low-res; upscale is usually invisible on them.
-- Mitigations, in order: **density cap** (§5, the primary knob — stage view shows the
-  derived resolution live and tints it red past a budget threshold), existing
-  `render_scale` (uniform relief valve), and future dirty-region/scissor optimization
-  (§12 — explicitly out of v1).
-- Present cost: two extra fullscreen-triangle blits per tick — noise. The real watch
-  items are canvas size (content render) and the known UI-present/content-GPU
-  contention with three windows on one GPU. The perf campaign owns the budget; this
-  design's job is to make cost visible before showtime, not to hide it.
+- **Pixel work = sum of display pixels.** Two portrait 1080×1920 totems ≈ 4.1MP ≈ 2×
+  1080p — regardless of whether they're 1m or 40m apart. (The rejected v1 model hit
+  14.5MP at native density for a 3m gap.)
+- **Dispatch overhead × island count** (§6.1). Two islands is noise; the fusion
+  compiler is the escape hatch for many-island stages. Baseline content render today
+  is 4.5–5.5ms; the 4K-margin campaign owns the budget — this design's job is to keep
+  cost proportional to owned hardware and visible in the stage view readout.
+- **Density knobs:** per-island density defaults to the densest member display's
+  native; the per-output advanced flap can cap it (LED walls with absurd processor
+  modes), and `render_scale` still applies globally. These are quality knobs now, not
+  survival knobs — gaps no longer create cost.
+- **Present cost:** N fullscreen-triangle blits per tick — noise. Watch item: the
+  known UI-present/content-GPU contention with three windows on one GPU.
+- **Hot-path discipline:** stage derivation is per-action; the per-frame uniform build
+  copies from a cached struct. No per-frame allocation.
 
 ## 10. Phasing (Sonnet-executable)
 
 Each phase lands alone, is testable alone, and doesn't break single-display flow.
 
 - **P1 — core model.** `stage.rs` (StageLayout, DisplayPlacement, identity, OutputId),
-  `derive_canvas` + unit tests (density cap, rotation, bounding box, empty layout =
-  legacy), serde defaults, EditingService commands. No behavior change with empty
-  layout.
-- **P2 — multi-output present.** Surface vec + in-flight counters + non-blocking
-  acquire; per-output blit with rotation/trim/keystone; attach/detach commands; output
+  `derive_stage` + unit tests (clustering/snap, rotation, packing, density, empty
+  layout = legacy single island), serde defaults, EditingService commands. No behavior
+  change with empty layout.
+- **P2 — island rendering.** Atlas render target, per-island scissored execution loop,
+  (node, island) state keying, layer `spatial_domain` field (Stage | EveryDisplay) +
+  coordinate mapping. Single-island path must be provably identical to today
+  (headless PNG diff on existing presets).
+- **P3 — multi-output present.** Surface vec + in-flight counters + non-blocking
+  acquire; per-output blit with region/rotation/trim/keystone; attach/detach; output
   window creation per placement ("Output" menu); identity matching + unassigned state.
   Test: two windows on one Mac (external monitor), skew accepted.
-- **P3 — layout uniform + primitives.** DisplayLayout uniform into frame globals +
-  `wgsl_compute`; the three atoms with descriptors; gpu_tests for mask/uv (value-level:
-  exact rect edges), display_info is CPU (plain unit test).
-- **P4 — stage view UI.** Arrangement panel (drag, numeric fields, EDID prefill,
-  rotation, live canvas readout + cost tint, assign picker), advanced flap (keystone,
-  trim). Uses existing panel/scroll infra; headless PNG verification applies.
-- **P5 — later.** LED strips become placements (manifold-led samples via the same
-  source-rect model), NDI/Syphon outputs, per-display export stems.
+- **P4 — stage uniform + primitives.** StageUniform into frame globals +
+  `wgsl_compute`; the three atoms with descriptors; gpu_tests for mask/stage_uv
+  (value-level: exact rect edges), display_info is CPU (plain unit test).
+- **P5 — stage view UI.** Arrangement panel (drag, snap-to-island with visible merge,
+  numeric fields, EDID prefill, rotation, live pixel readout, assign picker), advanced
+  flap (keystone, trim, density cap). Uses existing panel/scroll infra; headless PNG
+  verification applies.
+- **P6 — later.** LED strips become placements (manifold-led samples atlas regions via
+  the same model), NDI/Syphon outputs, per-island export stems.
 
-Full workspace test sweep gates P2 and P3 (present path + graph runtime = infra).
+Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra).
 
 ## 11. Decided — do not reopen
 
-1. One virtual canvas; every output is a sampler of it. No per-display pipelines.
-2. Pixel canvas with rendered gaps (Resolume model). Packed atlas rejected — breaks
-   screen-space effects at seams.
-3. Canvas is derived from the stage layout. Users never hand-edit slices, crops, px/m.
-   Density cap is the one exposed cost knob.
-4. Stage view = macOS-display-arrangement mental model, real units, EDID prefill,
-   advanced flap closed by default.
-5. Outputs present at independent cadence from the content thread's direct-present
+1. One composition; every output is a sampler of it. No per-display content pipelines.
+2. **Islands, not a stage-sized canvas.** Contiguous pixels only where displays abut;
+   packed atlas; gaps are never allocated or rendered. The v1 rendered-gap model is
+   rejected (Peter, 2026-07-02): render cost must scale with owned hardware, never
+   with stage width.
+3. Everything derived from the stage layout — islands, packing, density, mappings.
+   Users never hand-edit slices, crops, or px/mm.
+4. Per-layer spatial domain: **Stage** (default) | **Every display**. The only new
+   performer-facing concept; invisible on single-display projects.
+5. Effects execute per-island with viewport scissor — today's shader semantics, zero
+   shader changes; state keyed by (node, island). Cross-gap neighborhood bleed is
+   intentionally impossible; abutting continuity is preserved by island merging.
+6. Stage view = macOS-display-arrangement mental model, real units, EDID prefill,
+   snap-to-merge islands, advanced flap closed by default.
+7. Outputs present at independent cadence from the content thread's direct-present
    path. No new display links, no software frame-locking, no genlock.
-6. Display awareness = one layout uniform + three atoms. No new runtime, no new
-   modulation path, no special node kinds.
-7. Display identity = CGDisplay UUID, name fallback, explicit unassigned state with
+8. Display awareness = one StageUniform + three atoms (`display_mask`, `stage_uv`,
+   `display_info`). No new runtime, no new modulation path.
+9. Display identity = CGDisplay UUID, name fallback, explicit unassigned state with
    one-click reassign. Never silently guess.
-8. Master effects apply to the full canvas, before per-output sampling. Per-output
-   stage is crop/rotate/keystone/trim/tonemap only — no content processing.
-9. Non-blocking drawable acquire via in-flight counters; a full queue skips the output
-   for that tick.
-10. Export/recording = full canvas in v1.
+10. Master effects apply per-island like all effects, before per-output sampling.
+    Per-output stage is region/rotate/keystone/trim/tonemap only — no content
+    processing.
+11. Non-blocking drawable acquire via in-flight counters; a full queue skips the
+    output for that tick.
+12. Export/recording = per-island in v1 (single-island projects: unchanged full-frame
+    export).
 
 ## 12. Open (deferred, not blocking)
 
+- Pointwise-fusion of per-island loops into atlas-wide dispatches (many-island
+  stages) — rides the existing fusion-compiler direction.
 - Warp meshes beyond 4-corner keystone (projection-mapping territory).
-- Dirty-region/scissor rendering to skip gap pixels when no spanning effect is active —
-  an optimization with correctness traps (feedback reads gap pixels); only worth it if
-  the perf campaign demands it.
-- LED placement unification details (P5) — strip geometry on the stage plan.
-- Per-display export stems; NDI/Syphon.
-- >8 displays (bump MAX_DISPLAYS; uniform layout allows it trivially).
+- Bezel compensation for abutting panels (island merge with dead-zone offsets).
+- LED placement unification details (P6) — strip geometry on the stage plan.
+- Multi-island export composites (stage-plan-arranged proxy video for offline review).
+- >8 displays/islands (bump the uniform capacities; layout allows it trivially).
