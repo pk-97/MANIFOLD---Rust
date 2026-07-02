@@ -19,7 +19,7 @@ The debt is exactly four things:
 1. **`type_id` = `node.` + snake_case of the display label.** One name, three surfaces (palette, JSON, docs). Parenthetical label qualifiers drop from the id unless needed to disambiguate (`Add Burst (3D, radial)` → `node.add_burst_3d`).
 2. **Name the visual outcome, not the implementation.** Algorithm names move to `purpose` + `aliases` (`euler_step`, `midas`, `9tap`, `ffi`, `lic`) — *except* where the algorithm is the user-facing identity (Gaussian Blur, LFO, PBR, Reinhard, One Euro Filter).
 3. **Domain suffixes only for real collisions:** `_3d`, `_value`/`_image`, `_array`/`_texture` variants of the same concept.
-4. **"List" is the user word for array-typed data** in labels (List Math, List Feedback, Split XY). "Copies" is the user word for instances (Arrange Copies, Blend Copies, per-copy).
+4. **"Array" is the user word for array-typed data** in labels (Array Math, Array Feedback) — decided by Peter 2026-07-02: it matches the port type system's own name (`Array(...)`), so labels, wire tooltips, and ids all agree. "Copies" is the user word for instances (Arrange Copies, Blend Copies, per-copy).
 5. **Old ids never get reused** for a different node. The migration table is permanent.
 6. **`purpose` must state the math**: operation/formula, coordinate space, range conventions, boundary behavior. It's the technical register serving expert users and agents (via MCP `get_node_docs`); `summary` never contains math.
 7. `system.*` ids are exempt (auto-wired plumbing, invisible to users).
@@ -78,8 +78,8 @@ Unlisted nodes keep their current id (already aligned). Aliases always gain the 
 | `node.smoothstep_texture` | `node.smoothstep` | Smoothstep |
 | `node.scale_offset_texture` | `node.scale_offset_image` | Scale + Offset (image) |
 | `node.affine_scalar` | `node.scale_offset_value` | Scale + Offset (value) |
-| `node.array_math` | `node.list_math` | List Math |
-| `node.array_feedback` | `node.list_feedback` | **List Feedback** (label harmonized) |
+| `node.array_math` | *(keep)* | **Array Math** (label changes from "List Math") |
+| `node.array_feedback` | *(keep)* | Array Feedback |
 | `node.array_unpack_vec2` | `node.split_xy` | Split XY |
 | `node.array_connect_nearest` | `node.connect_nearest` | Connect Nearest |
 | `node.pack_curve_xy` | `node.combine_xy` | Combine XY (curve) |
@@ -168,7 +168,7 @@ Unlisted nodes keep their current id (already aligned). Aliases always gain the 
 | `node.depth_estimate_midas` | `node.depth_map` | Depth Map |
 | `node.optical_flow_estimate` | `node.optical_flow` | Optical Flow |
 | `node.person_segment` | `node.person_mask` | Person Mask |
-| `node.mux_array` | `node.switch_array` | Switch (array) |
+| `node.mux_array` | `node.switch_array` | Switch (Array) |
 | `node.mux_scalar` | `node.switch_value` | Switch (value) |
 | `node.mux_texture` | `node.switch_texture` | Switch (texture) |
 
@@ -209,6 +209,11 @@ Same migration table (PresetTypeId choke point). `osc_prefix` unchanged, so OSC/
 
 Sampled purposes are genuinely good ("Per-pixel abs(input.rgb). Alpha passes through…"). Rule pinned in §2.6; the apply pass does a linear read of all 212 purposes and upgrades any that fail the "states the math" bar — expected to be a minority. No structural work.
 
+## 8b. Two cheap wins (added after review with Peter)
+
+1. **Auto-populate `examples`.** The descriptor's `examples` field ("which presets use this node") is empty across all 212 nodes — yet it's the few-shot pointer humans and agents need most. Fully automatable: extend `gen_node_catalog` (or a sibling pass) to scan the 45 bundled preset graphs for node usage and emit the field. Zero judgment, high value for the MCP catalog.
+2. **Resolume alias pass.** Aliases cover TouchDesigner vocabulary well (Blur TOP, Math CHOP) but no Resolume terms — the other main migration audience. One pass adding Resolume effect-name equivalents (and common After Effects terms) to matching nodes.
+
 ## 9. Apply-pass order (Sonnet)
 
 1. Migration infra (§3) + tests — land alone first.
@@ -220,4 +225,4 @@ Sampled purposes are genuinely good ("Per-pixel abs(input.rgb). Alpha passes thr
 
 ## 10. Review checklist for Peter
 
-The **bolded rows** in §4 change the label too, not just the id: Variable Blur, Transform, List Feedback, Vector Length, Rotate Coordinates, Slice Volume. Plus two taste calls: generator category regrouping (§6) and the "List"/"Copies" vocabulary rule (§2.4). Everything else is mechanical alignment — id catches up to the label you already approved by shipping it.
+The **bolded rows** in §4 change the label too, not just the id: Variable Blur, Transform, Array Math, Vector Length, Rotate Coordinates, Slice Volume. Plus one taste call: generator category regrouping (§6). ("Array" as the user word: decided by Peter, §2.4.) Everything else is mechanical alignment — id catches up to the label you already approved by shipping it.
