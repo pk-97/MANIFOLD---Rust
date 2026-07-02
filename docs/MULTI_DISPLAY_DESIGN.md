@@ -391,7 +391,14 @@ programming; grandMA3 exports sequence XML, theater desks speak USITT ASCII, oth
 are proprietary). The table is ~a dozen rows — manual entry is fine, and the MCP
 agent path ("paste the LD's email, fill the venue profile") covers every console
 brand with zero parsers. Do NOT build per-console importers unless demand proves
-them.
+them — with one exception worth building when this phase lands: grandMA3's XMLs.
+Sequence XML (cue numbers/names/notes/fade times) auto-fills the trigger table; and
+**timecode XML is an *export* target**: MANIFOLD renders the arrangement's trigger
+clips as a grandMA3 timecode file, the LD imports it before doors, and the desk
+chases timecode during the show — every hit pre-loaded console-side, network reduced
+to a clock signal. Third-party tools already generate these files in the field
+(Myelin Director, GMA Toolbox, MATools), so the format is import-proven. The most
+gig-proof trigger path of the three.
 
 **Lighting looks are clips, not cues.** Because fixtures sample the composition,
 strobes/chases/washes are authored as ordinary visual content: a strobe = a
