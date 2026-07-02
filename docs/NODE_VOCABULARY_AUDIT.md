@@ -1,6 +1,6 @@
 # Node Vocabulary Audit — type_id Renames, Fills, Conventions
 
-**Status:** Audit complete, awaiting Peter's review of flagged rows. Apply pass is Sonnet-executable after sign-off.
+**Status:** APPROVED in full (Peter, 2026-07-02) — including the six label changes in §10. Apply pass is Sonnet-executable; run §9 order.
 **Decided:** 2026-07-02. Companion: `NODE_CATALOG.md` (generated index), `MCP_INTERFACE_DESIGN.md` (the catalog's main future consumer).
 
 ## 1. Verdict
@@ -246,4 +246,4 @@ Principle: **one source of truth (code-side descriptors, co-located with the nod
 
 ## 10. Review checklist for Peter
 
-The **bolded rows** in §4 change the label too, not just the id: Variable Blur, Transform, Array Math, Vector Length, Rotate Coordinates, Slice Volume. ("Array" as the user word and the generator category regrouping: both decided by Peter 2026-07-02 — §2.4, §6.) Everything else is mechanical alignment — id catches up to the label you already approved by shipping it.
+**APPROVED 2026-07-02.** The **bolded rows** in §4 change the label too, not just the id: Variable Blur, Transform, Array Math, Vector Length, Rotate Coordinates, Slice Volume — Peter said yes to all six. ("Array" as the user word and the generator category regrouping: both decided by Peter 2026-07-02 — §2.4, §6.) Everything else is mechanical alignment — id catches up to the label you already approved by shipping it. Nothing in this doc awaits review.
