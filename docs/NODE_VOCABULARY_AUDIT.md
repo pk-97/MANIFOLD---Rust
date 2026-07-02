@@ -211,8 +211,19 @@ Sampled purposes are genuinely good ("Per-pixel abs(input.rgb). Alpha passes thr
 
 ## 8b. Two cheap wins (added after review with Peter)
 
-1. **Auto-populate `examples`.** The descriptor's `examples` field ("which presets use this node") is empty across all 212 nodes — yet it's the few-shot pointer humans and agents need most. Fully automatable: extend `gen_node_catalog` (or a sibling pass) to scan the 45 bundled preset graphs for node usage and emit the field. Zero judgment, high value for the MCP catalog.
-2. **Resolume alias pass.** Aliases cover TouchDesigner vocabulary well (Blur TOP, Math CHOP) but no Resolume terms — the other main migration audience. One pass adding Resolume effect-name equivalents (and common After Effects terms) to matching nodes.
+1. **Auto-populate `examples` — approved.** The descriptor's `examples` field ("which presets use this node") is empty across all 212 nodes — yet it's the few-shot pointer humans and agents need most. Generated, never hand-written: the catalog build scans the 45 bundled preset graphs for node usage and emits the field. Because it's derived at generation time, it cannot go stale.
+2. **Cross-tool alias pass — approved.** Aliases cover TouchDesigner well (Blur TOP, Math CHOP) but nothing else. One pass adding **Resolume, Blender, and After Effects** equivalents to matching nodes. One-time work — §8c's completeness gate keeps future nodes from shipping alias-less.
+
+## 8c. Anti-staleness architecture (how this system stays honest)
+
+Principle: **one source of truth (code-side descriptors, co-located with the node), everything else generated, and a build gate on emptiness.** Four drift classes, four mechanisms:
+
+| Drift class | Mechanism | Status |
+|---|---|---|
+| **Existence** — node ships, catalog doesn't know | Generated index fails `cargo test` on unregenerated registry change | Already built |
+| **Emptiness** — node ships with blank vocabulary (how the 5 uncategorized nodes happened) | **Completeness gate**: extend the drift test so any palette-visible node with empty label / summary / category / aliases fails the build. Vocabulary becomes a merge requirement paid by the node's author, when context is richest. Hidden/legacy/`system.*` nodes exempt. | Build in apply pass |
+| **Derived data** — examples, node_catalog.json, doc tables | Never hand-write anything derivable. `examples` generated from preset scan; MCP serves the live registry at runtime (per `MCP_INTERFACE_DESIGN.md` §5) — both stale-proof by construction. | Build in apply pass |
+| **Truth** — kernel changes, description now lies | No full automation exists. Mitigations: purpose lives in the same file as the node (macro field — on screen during edits); rule added to `ADDING_PRIMITIVES.md`: *touch the kernel, re-read the purpose*; parity tests flag behavior changes in the same PR, which is the natural re-read prompt. | Convention + doc line |
 
 ## 9. Apply-pass order (Sonnet)
 
@@ -221,7 +232,8 @@ Sampled purposes are genuinely good ("Per-pixel abs(input.rgb). Alpha passes thr
 3. Preset renames + `NodeGraphTest` hide (§6).
 4. Fills (§5) + legacy folds (§7, after their verify steps).
 5. Generator recategorization (§6) once Peter picks the grouping.
-6. Regenerate NODE_CATALOG (`cargo run -p manifold-renderer --bin gen_node_catalog`) + docs index; Liveschool fixture green; clippy clean.
+6. §8b/§8c: examples auto-population, cross-tool alias pass, completeness gate, `ADDING_PRIMITIVES.md` touch-rule line.
+7. Regenerate NODE_CATALOG (`cargo run -p manifold-renderer --bin gen_node_catalog`) + docs index; Liveschool fixture green; clippy clean.
 
 ## 10. Review checklist for Peter
 
