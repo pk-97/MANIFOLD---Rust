@@ -2,6 +2,8 @@
 
 **Status:** APPROVED in full (Peter, 2026-07-02) — including the six label changes in §10. Apply pass is Sonnet-executable; run §9 order.
 **Decided:** 2026-07-02. Companion: `NODE_CATALOG.md` (generated index), `MCP_INTERFACE_DESIGN.md` (the catalog's main future consumer).
+**Prerequisites:** none — this is the FIRST item in `docs/DESIGN_BUILD_ORDER.md` (renames get dearer with every preset/binding written on old ids).
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.
 
 ## 1. Verdict
 
@@ -234,15 +236,53 @@ Principle: **one source of truth (code-side descriptors, co-located with the nod
 | **Derived data** — examples, node_catalog.json, doc tables | Never hand-write anything derivable. `examples` generated from preset scan; MCP serves the live registry at runtime (per `MCP_INTERFACE_DESIGN.md` §5) — both stale-proof by construction. | Build in apply pass |
 | **Truth** — kernel changes, description now lies | No full automation exists. Mitigations: purpose lives in the same file as the node (macro field — on screen during edits); rule added to `ADDING_PRIMITIVES.md`: *touch the kernel, re-read the purpose*; parity tests flag behavior changes in the same PR, which is the natural re-read prompt. | Convention + doc line |
 
-## 9. Apply-pass order (Sonnet)
+## 9. Apply-pass phases (Sonnet)
 
-1. Migration infra (§3) + tests — land alone first.
-2. Atom renames (§4): registrations, descriptors, bundled preset JSONs, tests, migration entries. One commit per category group is fine; workspace sweep at end.
-3. Preset renames + `NodeGraphTest` hide (§6).
-4. Fills (§5) + legacy folds (§7, after their verify steps).
-5. Generator recategorization (§6) once Peter picks the grouping.
-6. §8b/§8c: examples auto-population, cross-tool alias pass, completeness gate, `ADDING_PRIMITIVES.md` touch-rule line.
-7. Regenerate NODE_CATALOG (`cargo run -p manifold-renderer --bin gen_node_catalog`) + docs index; Liveschool fixture green; clippy clean.
+**Pre-flight (before phase 1 — the §4/§6 tables are a 2026-07-02 snapshot):**
+regenerate the catalog (`cargo run -p manifold-renderer --bin gen_node_catalog`),
+then for every OLD id in §4: `rg -c '"<old_id>"' crates/manifold-renderer/src/node_graph/primitives/`
+must hit — an old id that no longer exists means the node was renamed/deleted since
+this doc was written: **stop and list it, don't guess**. Also scan the catalog for
+nodes added since 2026-07-02 whose ids violate §2 conventions — list them for Peter
+as table additions before starting; don't silently rename unlisted nodes.
+
+**Forbidden moves, all phases:** no partial application (an id renamed in
+registration but not presets/tests is a broken build — good, the compiler is the
+checklist; a rename skipped entirely is the failure); no renaming anything not in
+§4/§6; no "improving" labels/summaries beyond what §4/§5/§10 specify; old ids never
+reused (§2.5).
+
+- **P1 — Migration infra (§3), landed alone.** Deliverables:
+  `type_id_migration.rs` (both tables + `migrate_type_id`), choke-point wiring
+  (`instantiate_def` pre-flatten; `PresetTypeId` at project load), the four §3
+  tests. Gate: `cargo test -p manifold-core --lib`, fixture tests green, Liveschool
+  fixture green. Table is EMPTY at this point except a test entry — infra first,
+  content later.
+- **P2 — Atom renames (§4).** Compiler-driven per category group: change the
+  `primitive!` registration id first, then fix every red site (descriptors, bundled
+  preset JSONs, parity/gpu tests), add the migration entry, commit per group. Gate
+  per group: `cargo run --bin check_presets` equivalent (lib `bundled_presets`
+  tests) + focused parity for touched presets. **Negative gate at end of P2:** for
+  every old id in §4, `rg -n '"<old_id>"' crates/ assets/` hits ONLY
+  `type_id_migration.rs` (loop the table; zero exceptions). Full workspace sweep
+  (registry change = infrastructure).
+- **P3 — Preset renames + `NodeGraphTest` hide (§6).** Same technique, same
+  negative gate for the 8 preset ids. OSC prefixes must be byte-identical before/
+  after (`rg 'osc_prefix'` diff).
+- **P4 — Fills (§5) + legacy folds (§7).** Each §7 item has a verify step — run it,
+  record the result in the commit message; a failed verify (ports don't match) is
+  an escalation, not an adaptation.
+- **P5 — Generator recategorization (§6).** The grouping is DECIDED (Peter,
+  2026-07-02 — the §6 table, including the two † verify-at-apply rows). Run the two
+  † checks; swap per the stated rule if they come out opposite.
+- **P6 — §8b/§8c:** examples auto-population, cross-tool alias pass, completeness
+  gate wired into the drift test, `ADDING_PRIMITIVES.md` touch-rule line. Gate: the
+  completeness gate itself fails the build when any palette-visible node has empty
+  label/summary/category/aliases — prove it with a deliberate temporary violation,
+  then remove it.
+- **P7 — Regenerate + sweep.** NODE_CATALOG regen, docs index regen, Liveschool
+  fixture green, `cargo clippy --workspace -- -D warnings`, full workspace test
+  sweep. Report the final rename count vs the table (must match exactly).
 
 ## 10. Review checklist for Peter
 

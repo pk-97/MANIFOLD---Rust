@@ -1,6 +1,8 @@
 # Gig Resilience — Red-Teaming the Live Show
 
 **Status: APPROVED design, not implemented. Sonnet-executable. Phases in §9.**
+**Prerequisites: none for P1–P2. P3 after PERFORM_SURFACE_DESIGN P1 (`docs/DESIGN_BUILD_ORDER.md` §2).**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
 MANIFOLD is a live instrument. This doc is the operational failure audit of the
 whole gig — pre-show, mid-show, recovery — and the design that makes failure
@@ -301,22 +303,51 @@ forever → seamless re-attach. Result-hardened per D7.
 
 ## 9. Phasing (Sonnet-executable)
 
+Entry state for every phase: re-verify the §1 anchors the phase touches (the
+audit is a 2026-07-02 snapshot). Forbidden across all phases: catch_unwind as a
+fix (dead code under `panic = "abort"` — D7 means Result-hardening, not
+catching); in-process recovery of any kind (D1); new `Arc<Mutex>`/`Arc<RwLock>`
+(baseline the count with `rg -c 'Arc<Mutex|Arc<RwLock' crates/` first — it must
+not grow); any rung that needs human input mid-set (D3).
+
 - **P1 — Don't lose work.** Autosave wiring + background serialization +
   history browser + save/load error surfacing + crash.log rotation & banner.
-  Touches `manifold-io` save path = infrastructure → full workspace sweep.
+  Read-back: §6 whole, `archive.rs:45,143,341`, `app_lifecycle.rs:58`,
+  `project_io.rs:323-404`. Forbidden: a new save path — everything routes
+  through the existing `saver::save_project(…, is_auto=true)`; serializing on
+  the content or UI thread (snapshot → background thread, §6). Gate: test —
+  edit, wait debounce, assert history entry appears + prune caps hold; save to
+  a full/readonly volume surfaces a UI event (manual check); touches
+  `manifold-io` save path = infrastructure → full workspace sweep.
 - **P2 — Come back fast.** Breadcrumb sidecar + `--resume` boot path + output
   window topology restore + transport rejoin (Ableton-first, breadcrumb
-  fallback) + panic-hook beat stamp. Testable with plain manual relaunch — no
-  watchdog needed yet. Profile crash-to-picture; report the number.
+  fallback) + panic-hook beat stamp. Read-back: §5 whole. Forbidden:
+  per-frame breadcrumb writes (cadence = integer-beat + transport changes,
+  §5.1); blocking IO on the content tick (pre-serialized buffer, background
+  write). Gate: kill the app while playing, relaunch `--resume` by hand →
+  correct project, correct beat, correct output display; **profile
+  crash-to-picture and report the measured number** (target: low single-digit
+  seconds at canonical scale — 2 928 clips). No watchdog needed yet.
 - **P3 — The understudy.** New `manifold-understudy` crate + socket protocol +
   heartbeat from content tick + cover/relaunch/handback + ladder governor +
   fallback-asset setting + perform-mode arming (spawn/disarm, Cmd+Q hold
-  guard). Acceptance: `kill -9` mid-show → fallback pixels <100 ms, full show
-  back autonomously; `SIGSTOP` → same via hang detection; 3-crash script →
-  loop plays, no relaunch spam.
+  guard — visible indicators are perform-surface widgets, §7). Read-back: §4
+  whole, §7, PERFORM_SURFACE_DESIGN §4. Forbidden: ANY manifold-* dependency
+  in the understudy (negative gate: `cargo tree -p manifold-understudy` shows
+  AppKit/AVFoundation bindings only — the independence rule is the design);
+  heartbeat from the UI thread (it must be the content tick, §4.1). Gate =
+  the drills, scripted in `scripts/gig_drill.sh`: `kill -9` mid-show →
+  fallback pixels <100 ms + full show back autonomously; `SIGSTOP` → same via
+  hang detection; 3-crash script → cover stays, no relaunch spam. Ladder
+  table §4.2 is the test surface.
 - **P4 — Peripherals + polish.** MIDI hotplug, audio rebuild/device-follow,
   GPU CB status wiring, thermal glyph, quarantine heuristic (§5.3),
-  Result-hardening pass on worker threads (D7).
+  Result-hardening pass on worker threads (D7). Read-back: §8, the
+  Ableton-bridge template (`ableton_bridge.rs:564,675,702`). Forbidden:
+  quarantine cleverness beyond the two §5.3 heuristics. Gate: focused
+  per-crate tests + manual unplug/replug drill per peripheral; for D7, `rg -n
+  'unwrap\(\)|expect\(' ` over the three named worker threads' fallible paths
+  returns only cases with a stated infallibility reason.
 
 Testing note: P3's drills belong in a script (`scripts/gig_drill.sh`): launch,
 enter perform mode, kill/-STOP the process, assert understudy state

@@ -3,6 +3,8 @@
 Ableton-style scene/clip launching as a second performance surface. Users who never touch the timeline can drop content into a grid (layers × scenes) and launch slots/scenes quantized to the beat. Timeline users can slice arrangement sections into scenes and back.
 
 Status: design approved, not implemented. Written 2026-07-02 against `feat/timeline-ui-redesign`.
+Prerequisites: none. Unblocks PERFORM_SURFACE_DESIGN P2 (`docs/DESIGN_BUILD_ORDER.md`).
+Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.
 
 Companion: `docs/PERFORM_SURFACE_DESIGN.md` — **session perform** (this grid at stage
 scale, launch gestures as `ContentCommand`s) ships as that design's P2 together with
@@ -204,6 +206,17 @@ New dock panel "Session" — grid of layers (columns, arrangement order) × scen
 - Hot path: per-tick resolution is scratch-buffer only; `AHashMap`/`AHashSet` keyed by ids; no allocation.
 
 ## 10. Phasing
+
+Entry state, every phase: re-verify this doc's line anchors before relying on them
+(`engine.rs:838,1094,1118,1138`, `live_clip_manager.rs:209`, `clip.rs:183` — audited
+2026-07-02; a moved anchor is a re-check, a missing one is an escalation).
+
+Forbidden moves, all phases: a second playback authority (`sync_clips_to_time` gains
+an input, never a sibling — §9) · branching on clip content kind anywhere in
+session/grid/launch/resolution code (§11 guard) · shared `ClipId`s between grid and
+timeline (always `duplicated()`, both directions — §7) · serializing or undo-wrapping
+`SessionRuntime` (§4) · per-tick allocation in resolution (§9) · a parallel recorder
+if phantom-commit reuse resists (cut recording from v1 and file it — §7).
 
 | Phase | Scope | Test gate |
 |---|---|---|

@@ -5,6 +5,8 @@ day:** the v1 "render the gaps" pixel canvas was rejected by Peter — a super-w
 must not spend its frame budget on invisible air. v2 replaces it with the island atlas
 model. Execution is a Sonnet apply pass — every decision needed is in here; don't
 reopen §11.
+**Prerequisites: none. P1–P3 unblock PROJECTION_MAPPING and LED_STRIPS P2 (`docs/DESIGN_BUILD_ORDER.md`).**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
 The driving use case: two vertical LED totems on stage, meters apart. Content chases
 between them, bounces off them, crosses the gap — the physical setup is part of the
@@ -493,29 +495,55 @@ to content, requiring no change to islands or domains.
 
 Each phase lands alone, is testable alone, and doesn't break single-display flow.
 
+Entry state for every phase: re-verify the §2 anchors it touches (audited
+2026-07-02). Forbidden across all phases: display links anywhere on the content
+path (never-unify rule — §6.2 has no vsync callback at all); software
+frame-locking; storing derived data (islands/packing are re-derived, never
+serialized — D3); shader changes for island support (§6.1's whole point is zero);
+`vec3` fields in any new uniform (alignment rule — vec4 only, §7.1).
+
 - **P1 — core model.** `stage.rs` (StageLayout, DisplayPlacement, identity, OutputId),
   `derive_stage` + unit tests (clustering/snap, rotation, packing, density, empty
-  layout = legacy single island), serde defaults, EditingService commands. No behavior
-  change with empty layout.
+  layout = legacy single island), serde defaults, EditingService commands, venue-file
+  export/import (it's serialization — lands here). Read-back: §3, §5 whole. Gate:
+  derive_stage unit tests; empty-layout project loads and renders byte-identically
+  (existing tests green); `cargo test -p manifold-core --lib`.
 - **P2 — island rendering.** Atlas render target, per-island scissored execution loop,
   (node, island) state keying, layer `spatial_domain` field (Stage | EveryDisplay) +
-  coordinate mapping. Single-island path must be provably identical to today
-  (headless PNG diff on existing presets).
+  coordinate mapping. Read-back: §6.1 whole + `feedback_effect_chain_state_caches`
+  (reset walks BOTH caches, now per island) + `feedback_state_capture_is_per_port`.
+  Seam: state keys widen from node-scoped to (node, island) — re-derive the key
+  sites with `rg -n 'StateStore|state_cache' crates/manifold-renderer/` before
+  touching them; count in the session, escalate on surprises. Gate: **single-island
+  path provably identical to today — headless PNG diff over the bundled presets,
+  zero diffs**; full workspace sweep (graph runtime = infrastructure).
 - **P3 — multi-output present.** Surface vec + in-flight counters + non-blocking
   acquire; per-output blit with region/rotation/trim/keystone; attach/detach; output
-  window creation per placement ("Output" menu); identity matching + unassigned state.
-  Test: two windows on one Mac (external monitor), skew accepted.
+  window creation per placement ("Output" menu); identity matching + unassigned
+  state; test patterns + Identify (they need output windows — land here). Read-back:
+  §6.2 whole, `content_pipeline.rs` direct-present block. Seam: `output_surface:
+  Option<GpuSurface>` → the vec — re-derive call sites with `rg -n 'output_surface'
+  crates/manifold-app/` first; the old field is deleted, negative gate `rg -c
+  'output_surface' crates/manifold-app/` = 0 after. Forbidden: blocking
+  `next_drawable()` (D11 — skip the output when its in-flight counter is full).
+  Gate: two windows on one Mac (external monitor), skew accepted; single-output
+  projects present exactly as before; full workspace sweep (present path = infra).
 - **P4 — stage uniform + primitives.** StageUniform into frame globals +
-  `wgsl_compute`; the three atoms with descriptors; gpu_tests for mask/stage_uv
-  (value-level: exact rect edges), display_info is CPU (plain unit test).
+  `wgsl_compute`; the three atoms with full descriptors (§7.2 — completeness gate
+  applies). Read-back: §7.1–7.2, `node_graph/effect_node.rs` (FrameTime carrier),
+  `feedback_wgsl_vec3_alignment`. Forbidden: fusing the three atoms into one
+  "stage info" monolith. Gate: gpu_tests for mask/stage_uv (value-level: exact rect
+  edges), display_info plain unit test; focused `manifold-renderer` lib tests.
 - **P5 — stage view UI.** Arrangement panel (drag, snap-to-island with visible merge,
   numeric fields, EDID prefill, rotation, live pixel readout, assign picker), advanced
-  flap (keystone, trim, density cap). Uses existing panel/scroll infra; headless PNG
-  verification applies.
+  flap (keystone, trim, density cap). Read-back: §5 UX whole; existing panel/scroll
+  infra (inventory first — `ScrollContainer`, chrome panels). Gate: headless PNG
+  verification (`reference_ui_headless_png_verification`); stage edits are undoable
+  commands (test undo/redo round-trip).
 - **P6 — later.** LED strips *and DMX fixtures* become placements (manifold-led
   samples atlas regions / stage positions via the same model; add sACN alongside
-  Art-Net), MVR/GDTF rig import, NDI/Syphon outputs, per-island export stems,
-  rehearsal view.
+  Art-Net — detail now in `docs/LED_STRIPS_DESIGN.md`), MVR/GDTF rig import,
+  NDI/Syphon outputs, per-island export stems, rehearsal view.
 
 Venue-profile export/import lands in P1 (it's serialization); test patterns +
 Identify land in P3 (output windows exist there).

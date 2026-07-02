@@ -3,6 +3,7 @@
 **Status: APPROVED design, not built · 2026-07-03 · Fable queue (perform surface builder, steal-pass S2)**
 **Prerequisites: none for P1. P2 (session perform) requires `docs/SESSION_MODE_DESIGN.md` to be built.
 P4 (editor workspaces) gets its own design pass when scheduled — this doc only pins its direction.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
 Peter's scope (2026-07-03): **"let's just keep it simple for now, doesn't need to be complex at
 all to start"** — plus two extensions: **"the timeline mode should also reuse the UI widget
@@ -138,13 +139,22 @@ drawer does today. Zero new styling infra.
 
 ## 8. Phasing (Sonnet-executable)
 
+Entry state, every phase: re-verify the §1 anchors (`perform_mode/render.rs`,
+`state.rs`, `macros.rs`/`cue.rs`/`tracks.rs` snapshot structs, `panels/mod.rs:777` —
+audited 2026-07-03).
+
 - **P1 — Widget substrate + timeline perform migration.** `SurfaceDef`/`WidgetKind`/registry;
   `PerformSurfacePanel`; wrap sync/cue/macros/exit as widgets (reusing the existing snapshot
-  structs); bundled `timeline-perform-default` def; **delete the hand-drawn path in
-  `render.rs` in the same phase.** Gate: headless PNG comparison against the current HUD
-  (visual parity within layout tolerance — see `reference_ui_headless_png_verification`),
-  all three exit paths verified, focused `manifold-ui` tests. This is UI-infrastructure:
-  full workspace sweep before merge.
+  structs — inventory them first, invent no new data plumbing); bundled
+  `timeline-perform-default` def; **delete the hand-drawn path in `render.rs` in the same
+  phase.** Forbidden: keeping the hand-drawn path behind a flag "just in case" (the named
+  wrong turn — no parallel render paths, D2); widgets importing `manifold-core` (D3
+  boundary); touching the content thread from perform UI (safety rules, §1). Gate:
+  headless PNG comparison against the current HUD (visual parity within layout
+  tolerance — see `reference_ui_headless_png_verification`); all three exit paths
+  verified; **negative gate:** `rg -c 'draw_sync_indicators|draw_cue_hud|draw_macros_column' crates/manifold-app/`
+  = 0 (the hand-painted functions are gone, not bypassed); focused `manifold-ui` tests.
+  This is UI-infrastructure: full workspace sweep before merge.
 - **P2 — Session perform.** Ships with the session-mode build: SessionGrid widget (launch
   gestures → `ContentCommand`), `session-perform-default` def, Perform-button context routing
   (D1). Gate: launch quantization behavior matches session-mode spec; grid readable at stage

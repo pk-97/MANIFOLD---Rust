@@ -3,6 +3,7 @@
 **Status: APPROVED design, not built · 2026-07-02 · Fable queue (media backend)**
 **Prerequisites: none for Metal-era P1–P3. The Vulkan-era handoff (§6) pairs with
 `docs/VULKAN_BACKEND_DESIGN.md` §8 — this is the biggest single port item after the GPU.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
 Peter's directive: "move all of that stuff behind a proper GPU API like everything
 else." Plus (2026-07-02): **"HAP and DXV are important"** and stills "seem to have a
@@ -68,6 +69,10 @@ pub struct DecodedFrame {
 
 `MediaError` is a real enum surfaced to the failure-reporting path from
 `docs/GIG_RESILIENCE_DESIGN.md` §6 (no log-only errors on the media path).
+`⚠ VERIFY-AT-IMPL`: that surfacing path is itself unbuilt (gig-resilience P1). If it
+hasn't landed yet, route every `MediaError` through ONE central reporting function
+(log-only body for now) so gig P1 has a single site to wire — never scatter
+`log::error` calls the later phase would have to hunt.
 
 ## 4. TextureCodec backend — HAP and DXV
 
@@ -138,17 +143,35 @@ discipline), not the symptom.
 
 ## 8. Phasing (Sonnet-executable)
 
+Entry state, every phase: re-verify the §1 anchors (`decoder_ffi.rs:12`,
+`decode_scheduler.rs`, `metal_encoder.rs`, `image_renderer.rs` — audited 2026-07-02).
+
 - **P1 — Trait extraction.** Define traits + `DecodedFrame`; wrap the existing VT
-  plugin and metal encoder as impls; scheduler/export unchanged. Zero behavior change —
-  gate: full workspace sweep (media path = infrastructure) + existing export tests.
+  plugin and metal encoder as impls; scheduler/export unchanged. Seam: enumerate the
+  FFI call sites first — `rg -n 'VideoDecoder_|MetalEncoder_' crates/manifold-media/`
+  — every one moves behind a trait impl; the negative gate is that same `rg` scoped
+  outside the backend modules returning zero. Forbidden: scheduler/policy
+  "improvements" while wrapping (zero behavior change is the gate); pixel-format or
+  plane logic above the trait (D2 boundary); the objc2 rewrite (explicitly not this
+  design). Gate: full workspace sweep (media path = infrastructure) + existing export
+  tests, byte-identical outputs.
 - **P2 — TextureCodec decode.** HAP (all variants) + DXV3 decode, probe routing,
   parity vs FFmpeg-decoded reference frames (value-level: exact BC payloads for
-  direct variants). Peter's Resolume-world clips are the acceptance fixture.
-- **P3 — Stills.** Measure, then prefetch/cache per §7. Acceptance: no visible delay
-  triggering a still clip live.
+  direct variants). Forbidden: linking FFmpeg into TextureCodec (mirror its `dxv`
+  source as reference, dependency-free rule §4); more than the single Hap Q
+  conversion dispatch. Negative gate: existing non-HAP clips still probe-route to VT
+  (regression test on routing). Peter's Resolume-world clips are the acceptance
+  fixture.
+- **P3 — Stills.** Measure FIRST — instrument `image_renderer.rs` open→first-texture
+  and record the numbers in the session before touching anything (D5/§7; speculative
+  fixes are the named forbidden move). Then prefetch/cache per §7. Acceptance: no
+  visible delay triggering a still clip live, and the measurement diff proving which
+  slice shrank.
 - **P4 — FFmpeg backend.** Decode first (codec coverage on Mac), encode with the
-  Vulkan/Windows port. LGPL build plumbing (dynamic link, dylib shipping).
-- **P5 — HAP encode** (with the export/encode work, or when first needed).
+  Vulkan/Windows port. LGPL build plumbing (dynamic link, dylib shipping — verify the
+  license posture: no static FFmpeg anywhere).
+- **P5 — HAP encode** (with the export/encode work, or when first needed). DXV encode
+  per §9.8 — check FFmpeg's encoder status at that time, never reverse-engineer.
 
 ## 9. Decided — do not reopen
 
