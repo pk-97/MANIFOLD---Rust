@@ -304,6 +304,19 @@ new mechanism.
 **MCP note:** `get_project_overview` should include the stage layout summary so agents
 can author display-aware content ("two portrait islands, 3.2m apart").
 
+### 7.3 Projectors
+
+A projector placement is the **projected image** on the stage plan, not the projector:
+`physical_size_mm` = measured throw size, typed by the user (EDID prefill is
+meaningless for projectors and is skipped). Everything else is identical — a projected
+wall is an island like any panel. Consequence for priorities (Peter, 2026-07-02:
+projectors are the likely primary rig — cheap large surfaces for small-scale artists):
+**warp meshes and edge blending move to the front of the post-v1 queue** (§12).
+4-corner keystone in the v1 advanced flap covers a flat, square-ish throw only; real
+mapping (uneven surfaces, set pieces, overlapping projectors) needs warp + blend. The
+per-output stage in §6.2 is where both slot in — they are output transforms, invisible
+to content, requiring no change to islands or domains.
+
 ## 8. What it buys on stage
 
 - A particle system flies off Totem L, crosses 3m of real air at real speed, lands on
@@ -394,9 +407,11 @@ Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra)
 
 ## 12. Open (deferred, not blocking)
 
+- **Warp meshes + edge blending — FIRST post-v1 item** (raised from the bottom of this
+  list per §7.3: projectors are the likely primary rig). Output-stage transforms in
+  §6.2; no impact on islands/domains.
 - Pointwise-fusion of per-island loops into atlas-wide dispatches (many-island
   stages) — rides the existing fusion-compiler direction.
-- Warp meshes beyond 4-corner keystone (projection-mapping territory).
 - Bezel compensation for abutting panels (island merge with dead-zone offsets).
 - LED placement unification details (P6) — strip geometry on the stage plan.
 - Multi-island export composites (stage-plan-arranged proxy video for offline review).
