@@ -82,27 +82,12 @@ manifold-gpu/
 
 ## Windows / Linux Backend
 
-**Goal:** Native Vulkan backend for industry-competitive performance on Windows and Linux. MANIFOLD is a professional tool competing with Resolume Arena and TouchDesigner — wgpu overhead is not acceptable if it costs frames.
-
-**Strategy:** wgpu serves as an interim fallback to get Windows running quickly. The `manifold-gpu` API boundary is designed so the wgpu backend can be replaced with native Vulkan without touching any effect or generator code. Profile on Windows with wgpu first — if performance is insufficient (likely for complex projects), build the native Vulkan backend.
-
-**Native Vulkan backend scope:**
-
-- Same ~15 method API as Metal backend
-- VMA (Vulkan Memory Allocator) for memory management
-- Vulkan descriptor sets + push descriptors for bindings
-- SPIR-V shaders via naga (WGSL→SPIR-V, same as WGSL→MSL for Metal)
-- VK_KHR_dynamic_rendering (no render pass objects)
-- Linux support comes free with Vulkan
-
-**Platform-specific equivalents:**
-
-- MTLHeap → VMA pool allocations
-- MPS blur/Sobel → compute shader fallbacks (no Vulkan equivalent)
-- MetalFX → FSR (AMD FidelityFX) or DLSS (NVIDIA) if available
-- Memoryless → VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT
-- Lossy compression → vendor-specific extensions (VK_EXT_image_compression_control)
-- MTLBinaryArchive → VkPipelineCache (pipeline caching to disk)
+Cross-platform (Mac, Windows, Linux) is a hard requirement as of 2026-07-02. The full
+design — policy decisions, API contract, hazard-tracking architecture, phasing, and
+platform-services inventory — lives in **`docs/VULKAN_BACKEND_DESIGN.md`**. Native `ash`
+Vulkan; there is no wgpu interim step (an earlier version of this section proposed one —
+superseded). Phase 0 scaffolding (`vulkan/` module, cfg-gated backend selection, shared
+WGSL→SPIR-V pipeline) already ships in the crate.
 
 
 
