@@ -132,9 +132,11 @@ Statelessness rule: everything except `playing`/`pending`/`session_override`/`la
 
 Large seeks currently clear live slots (`clear_on_seek`, live_clip_manager.rs:209). Session slots are the opposite: they are beat-anchored and stateless, so **seeking does not stop them** — `elapsed` just changes. This is correct for the Ableton-sync case (timeline jumps while session clips keep looping). Pending launches DO get retargeted: on seek, recompute each `target_beat` to the next quantize boundary after the new position.
 
-### Transport stop
+### Transport stop / start
 
 Transport stop stops all session playback and clears `pending` (Ableton behavior). `session_override` is NOT cleared — layers stay detached until explicit Back to Arrangement.
+
+Launching a slot or scene while the transport is stopped **starts the transport** (Ableton behavior) and launches immediately (beat clock starts at the launch, so the quantize boundary is now). Without this, the grid is dead on first click for timeline-free users.
 
 ## 5. Launch semantics
 
@@ -177,6 +179,8 @@ Normal undoable `Command`s (`crates/manifold-editing/src/commands/`), one file `
   2. Build `ClipSequence { length_beats: end - start, clips }` per layer → `SessionSlot`.
   3. `None` scene_id = append a new scene named from the nearest `TimelineMarker` at/before `start_beat`, else "Scene N".
 - `PasteSlotToTimelineCommand { layer_id, scene_id, at_beat }` — reverse: clone sequence clips, `start_beat += at_beat`, insert into the layer lane (`enforce_non_overlap` handles collisions). Fresh clip ids via the existing `duplicated()` path (clip.rs:183) — REQUIRED both directions; shared `ClipId`s across timeline and grid would collide in `clip_lookup` and effect resolution.
+
+Grid integrity: layer deletion must remove that layer's slots inside the same command (restored on undo) — orphaned `LayerId` slots are a bug, not a tolerated state. Extend the existing layer-delete command; add a debug assertion that every slot's `layer_id` resolves.
 
 `CaptureRangeToSceneCommand` also clones with `duplicated()` — a slot never shares clip ids with the lane it came from.
 
