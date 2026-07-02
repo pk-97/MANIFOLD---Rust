@@ -380,7 +380,12 @@ switch. Ableton's division: racks author, the mixer routes.
 ("Go Executor 3") — MANIFOLD's timeline fires the console's pre-programmed looks. A
 mapping table on existing OSC/MIDI infra, not a new system. Also the universal
 fallback at venues that won't expose their rig: sync via triggers with zero fixture
-mapping.
+mapping. Three details, decided: **(a)** clips reference stable friendly names
+("Strobe", "Blackout"); the **name → cue-ID table lives in the venue profile**, so a
+touring show re-points to each desk by loading the venue file, never by editing the
+composition. **(b)** clip start sends the go, **clip end sends the release** — a
+strobe's duration is the clip's length, like a note. **(c)** an unmapped name is a
+visible warning in the stage view, not a silent no-op at showtime.
 
 **Lighting looks are clips, not cues.** Because fixtures sample the composition,
 strobes/chases/washes are authored as ordinary visual content: a strobe = a
