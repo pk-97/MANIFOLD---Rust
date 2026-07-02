@@ -1,0 +1,332 @@
+# Gig Resilience — Red-Teaming the Live Show
+
+**Status: APPROVED design, not implemented. Sonnet-executable. Phases in §9.**
+
+MANIFOLD is a live instrument. This doc is the operational failure audit of the
+whole gig — pre-show, mid-show, recovery — and the design that makes failure
+survivable. The governing insight, settled with Peter (2026-07-02): **crash-only
+software**. We do not try to survive a panic in-process; we make death-and-rebirth
+so fast and so automatic that the audience never learns it happened. Music never
+stops (Ableton keeps playing through any MANIFOLD crash); the job is to keep
+pixels on the wall and rejoin the running show without human hands.
+
+Companion designs: `docs/ABLETON_SHOW_SYNC_DESIGN.md` (the score that makes
+rejoin exact), `docs/SESSION_MODE_DESIGN.md` (perform surface).
+
+---
+
+## 1. Audit — what exists today
+
+Verified against the codebase 2026-07-02. File references are load-bearing:
+re-verify at implementation time.
+
+### Already solid (shipped hardening)
+
+| Concern | Where | Behavior |
+|---|---|---|
+| Panic logging | `manifold-app/src/main.rs:67` | Panic hook → `~/Library/Logs/com.latentspace.manifold/crash.log` with backtrace. Installed before anything else. |
+| Process hygiene | `main.rs` (10.x block) | SIGPIPE ignored, single-instance file lock, IOPMAssertion (no display sleep), App Nap suppressed. |
+| Ableton bridge | `manifold-playback/src/ableton_bridge.rs:564,675,702` | Recv thread wrapped in catch_unwind; thread death → automatic teardown + reconnect; connection timeout → marked disconnected; playback freewheels at last tempo. **The template for every other peripheral.** |
+| Display disconnect | `manifold-app/src/app.rs:315-320,2604` | Pending-flag clear + safety net when a display link never fires (display unplugged); EDR surface re-reads display properties on change. |
+| Output continuity on stall | `manifold-app/src/shared_texture.rs` | IOSurface triple buffer: if content stops publishing, the UI keeps presenting `front_index` — output holds last frame by construction. |
+| Save history | `manifold-io/src/archive.rs:45,143,341` | Every V2 save pushes the previous state into `history/` inside the archive, with manifest entries and auto-save pruning (all manual saves kept, autosaves capped). |
+| Nothing-scheduled blackout | `manifold-app/src/content_thread.rs:752` | Empty timeline region renders deliberate black, not garbage. |
+
+### Gaps (the red-team findings)
+
+| # | Finding | Evidence | Consequence on stage |
+|---|---|---|---|
+| G1 | `panic = "abort"` in release — any panic on any thread kills the whole process. Also silently disables every `catch_unwind` (the bridge's isolation is dev-only). | `Cargo.toml:113` | The show-ending event is "process dies," not "thread dies." Decided: this is CORRECT (§2 D1) — but it makes G2/G3 mandatory, and worker threads must stop relying on catch_unwind (D7). |
+| G2 | Autosave machinery exists but is never triggered — every `save_project` call passes `is_auto=false`; no timer anywhere. | `manifold-app/src/app_lifecycle.rs:58`, `project_io.rs:348,404` | Crash = everything since last Cmd+S gone. |
+| G3 | No relaunch-into-show path. Reopen, transport, bridge reconnect, output window placement: all manual. | — | Crash-to-picture measured in minutes, in the dark, mid-set. |
+| G4 | Save and load failures are log-only. No dialog, no toast. | `project_io.rs:323,358` | Disk full at soundcheck → you believe you saved; you didn't. |
+| G5 | MIDI: scan at `start()` + device-filter change only. No hotplug rescan, no reconnect. | `manifold-playback/src/midi_input.rs:216,238` | Controller cable knocked out → dead until app restart. |
+| G6 | No Cmd+Q guard, no unsaved-changes prompt anywhere. | (no `unsaved`/confirm hits in `manifold-app`) | One wrong keystroke ends the show instantly. |
+| G7 | Audio capture: stream error → `log::error` only. No rebuild, no default-device-change follow. | `manifold-audio/src/capture/cpal_input.rs:127` | Interface unplugged → audio-reactive layers go statue, silently. |
+| G8 | Content-thread hang (GPU stall, graph cycle) is invisible: UI stays live, output holds last frame, nothing detects it. | — | Frozen show with a healthy-looking laptop. |
+| G9 | GPU command-buffer error status checked only on the compositor encoder; no recovery anywhere. | `manifold-app/src/content_pipeline.rs` (single `add_completed_handler_with_status`) | AGX faults (see `agx-setvertextexture-0x78-crash` memory) surface as mystery freezes. |
+| G10 | `crash.log` is a single file, overwritten each crash; never surfaced in-app. | `main.rs:85` (`fs::write`) | Second crash destroys evidence of the first; nobody reads it. |
+| G11 | Zero thermal awareness. | (no hits) | Hot stage → throttle → frame drops with no explanation. |
+| G12 | Output window topology (which display, fullscreen state) not restored on relaunch. | `window_registry.rs` (runtime only) | Even a fast relaunch lands windowed on the laptop screen. |
+
+---
+
+## 2. Decisions (settled with Peter 2026-07-02 — don't reopen)
+
+- **D1 — Crash-only. `panic = "abort"` stays.** A panic means an invariant broke;
+  the content thread owns the `Project`, so post-panic in-memory state is never
+  trustworthy. The only known-good state is the last save on disk — so real
+  recovery is always relaunch-and-reload. Abort makes that explicit and removes
+  the temptation to limp on poisoned state. **Never restart the content thread
+  in-process.**
+- **D2 — The watchdog ("understudy") is REQUIRED, not optional.** A separate
+  tiny process that covers the output display the instant the main app dies or
+  hangs, plays fallback content, relaunches MANIFOLD behind itself, and hands
+  the display back on first good frame. Spec in §4. Peter: "the watchdog idea
+  is fantastic."
+- **D3 — Every rung of the recovery ladder is autonomous.** Peter: "driving
+  manually does not work, it defeats the purpose." No rung may require human
+  input mid-set. The floor is not a dialog — it is the watchdog playing the
+  fallback loop for the rest of the set.
+- **D4 — Autosave = versioned full snapshots via the existing `history/`
+  mechanism.** No diff format — projects compress to a few MB; diffs are
+  complexity for nothing. Peter asked for versioned revert: the archive already
+  stores it; what's missing is the trigger and the browser UI (§6).
+- **D5 — Show mode is not a separate toggle: entering perform mode arms the
+  protections** (watchdog spawn, Cmd+Q guard, set-start snapshot, autosave
+  timer parks). Exiting disarms. Editor mode never runs the watchdog — there,
+  a crash is an ordinary crash and autosave protects the work.
+- **D6 — Crash-to-picture: "as fast as possible within reason."** Two-tier:
+  fallback pixels within ~100 ms (watchdog cover), full show back in low
+  single-digit seconds (relaunch + load + rejoin). No hard SLA; every phase
+  should shave it.
+- **D7 — Worker threads must not panic, by construction.** Under abort,
+  catch_unwind is dead code in release. The bridge recv thread, audio analysis
+  worker, and background save thread get Result-hardened (no unwrap/expect on
+  fallible paths; errors → log + degrade). The content thread is exempt: its
+  panics are *supposed* to kill the process (D1).
+- **D8 — Rejoin authority: Ableton transport when connected, breadcrumb beat
+  otherwise.** When synced, position comes from the still-running Ableton set
+  (the bridge already tracks song time + play state — `ableton_bridge.rs`
+  `PendingTransportState`); rejoin is exact because the show-sync score is
+  beat-anchored. Standalone: resume playing from the last breadcrumb beat.
+- **D9 — Deterministic-crash quarantine targets the *next* occurrence, not the
+  current one.** Because rejoin follows live transport, the crash beat is
+  already behind you when you're back — the risk is the same content re-firing
+  at the next section repeat. Quarantine = disable the suspect content for the
+  rest of the show (§5.3).
+- **D10 — Cover content: black.** Peter: "just black is fine if it's going to
+  recover within a few seconds." A few seconds of black reads as a lighting
+  choice; recovery makes it a blink. Optional per-project fallback loop
+  (AVPlayerLayer) exists for the rung-3 case — if relaunch keeps failing, a
+  loop for the rest of the set beats a black wall — but it is opt-in polish,
+  not required setup. Either way the understudy carries zero manifold-gpu
+  code, so it cannot share a failure mode with the thing it's covering for.
+
+---
+
+## 3. Failure-mode catalog (ranked)
+
+**Show-ending** (audience sees it, no recovery without this design):
+process panic (G1) · process hang (G8) · accidental Cmd+Q (G6) · relaunch
+lands wrong (G3, G12).
+
+**Show-degrading** (performance continues, capability lost):
+MIDI controller loss (G5) · audio capture loss (G7) · Ableton link loss
+(already handled — freewheel + auto-reconnect) · display unplug (partially
+handled) · GPU fault on one encoder (G9) · thermal throttle (G11).
+
+**Work-destroying** (nobody sees it until later):
+no autosave (G2) · silent save failure (G4) · crash.log overwrite (G10).
+
+The design attacks them in that order: §4–5 kill the show-enders, §6 the
+work-destroyers, §7–8 the degraders.
+
+---
+
+## 4. The watchdog — `manifold-understudy`
+
+A separate minimal binary (own crate, `crates/manifold-understudy`), spawned by
+the main app on entering perform mode, killed on exit.
+
+**Independence rule:** the understudy links AppKit + AVFoundation only. No
+manifold-gpu, no manifold-core, no shared code that could carry the same bug
+that killed the main app. It must be boring enough to trust.
+
+### 4.1 What it does
+
+1. **Cover.** Owns a borderless window per output display at
+   `NSScreenSaverWindowLevel`, initially hidden (alpha 0 / ordered out). On
+   trigger, orders it front instantly: black (D10; optional loop asset if the
+   project sets one).
+2. **Watch.** Two signals:
+   - *Death:* it spawned the app process (or was handed its PID) — `SIGCHLD` /
+     kqueue `EVFILT_PROC` fires on exit. Covers panic-abort, Cmd+Q that slipped
+     through, the OS killing us.
+   - *Hang:* heartbeat over a unix domain socket. The **content thread** (not
+     the UI thread — it's the one that matters) writes a heartbeat every tick.
+     Stall > 2 s while transport is playing → treat as hang: cover, `SIGKILL`,
+     ladder. This unifies panic and hang into one recovery path (kills G8).
+3. **Relaunch.** `manifold --resume <breadcrumb-path>` per the ladder (§5).
+4. **Hand back.** Main app signals "first output frame presented" on the same
+   socket → understudy fades its cover over ~300 ms and rearms.
+
+### 4.2 Ladder governor
+
+The understudy owns the crash counter (per show — reset when the main app exits
+cleanly or the operator disarms perform mode):
+
+| Crash # this show | Action |
+|---|---|
+| 1 | Cover → relaunch `--resume` → hand back. Transient crashes (races, driver hiccups) are the common case; this covers them in seconds. |
+| 2 | Same, plus pass `--quarantine <crash-report-path>` — main app disables suspect content on load (§5.3). Still fully autonomous. |
+| 3+ | Stop relaunching. Cover stays up (black, or the loop if set) for the rest of the set. The operator decides at the next natural break — never a dialog on the output. |
+
+### 4.3 Protocol notes
+
+- Socket protocol is 3 message types (`HEARTBEAT beat=<f64>`, `PRESENTED`,
+  `DISARM`) — plain text, versioned by a hello line. Keep it OS-neutral: the
+  Vulkan-era Windows/Linux understudy reimplements the window + player layer,
+  not the protocol.
+- The understudy never draws attention on the *control* display — status goes
+  to a small strip the main app renders when connected, plus its own log file.
+- Testing: `kill -9` drills and `SIGSTOP` (hang simulation) against a running
+  perform session are the acceptance tests. See §9.
+
+---
+
+## 5. Resume path — `manifold --resume`
+
+### 5.1 Breadcrumb sidecar
+
+The content thread writes a tiny state file (atomic tmp+rename, same dir as the
+project archive: `<project>.manifold.breadcrumb`):
+
+- project path, show/perform-mode flag
+- current beat + wall clock + transport playing flag
+- active generator/effect `type_id`s and the clip IDs scheduled *right now*
+- output window topology: display UUIDs, fullscreen state, per-display bounds
+  (closes G12)
+
+Cadence: on integer-beat change while playing, plus on any transport change —
+never per frame, never on the hot path (a few writes per second, background
+thread, pre-serialized buffer). The panic hook also appends current beat (from
+an atomic the content thread keeps fresh) to the crash log, so crash reports
+are score-addressed.
+
+### 5.2 Boot fast path
+
+`--resume` skips everything that isn't pixels:
+
+1. Parse breadcrumb → open project (normal open already yields last-saved
+   state, which includes autosaves — §6).
+2. Restore output windows from breadcrumb topology (display UUID match;
+   missing display → fall back to largest non-primary, then primary).
+3. Enter perform mode (which re-arms protections, D5), connect Ableton bridge.
+4. Rejoin transport per D8: Ableton position if connected within a short
+   window (~2 s), else breadcrumb beat. Start playing without waiting for the
+   bridge — re-seek when it connects (the score is beat-anchored; a re-seek is
+   a snap, not a scrub — see `timecode-locks-score-not-render` memory).
+5. First frame presented → `PRESENTED` to the understudy.
+
+Engineering the number: project load at canonical scale (2 928 clips, 53
+layers) is JSON-in-ZIP + texture warmup; MSL binary cache
+(`manifold-gpu/src/metal/msl_cache.rs`) already exists. Target low
+single-digit seconds; profile in P2 and shave the biggest slice, don't
+gold-plate.
+
+### 5.3 Quarantine (second crash, autonomous)
+
+Goal per D9: stop the *next* re-fire. On `--quarantine`:
+
+1. Read the crash log backtrace. Symbol-match against primitive / preset
+   module paths (`node_graph/primitives/*`, preset names). Hit → disable every
+   clip whose generator/effect chain references that `type_id` (mute the clip,
+   keep the layer; the mute is an ordinary undoable edit tagged in the sync
+   report style, so post-show cleanup is one selection).
+2. No backtrace hit → fall back to the breadcrumb's "scheduled right now" clip
+   IDs at crash beat: mute those clips only.
+3. Surface what was quarantined on the control display (toast + list), never
+   on the output.
+
+This is a heuristic and stays one: v1 does not attempt binary search, layer
+bisection, or beat-window inference. If quarantine guesses wrong and crash 3
+arrives, the fallback loop is the floor and it is show-safe.
+
+---
+
+## 6. Autosave + versioned revert
+
+- **Trigger:** dirty-debounced — N seconds (default 60) after the last edit,
+  only if `EditingService` reports dirty. No blind wall-clock saves.
+- **Zero-hitch:** serialize from the UI's `Arc<Project>` snapshot on a
+  background thread (the snapshot channel already exists; a save must never
+  block the content tick or the UI frame). Write via the existing
+  `saver::save_project(…, is_auto=true)` → history entry + pruning for free.
+- **Perform mode (D5):** on entry, take one labeled "set start" snapshot; then
+  the autosave timer **parks** — no mid-set disk surprises, and mid-set edits
+  are performance gestures, not compositions. On exit, one "set end" autosave.
+- **Revert UI:** a history browser over the archive's existing `history/`
+  entries (timestamp, label, auto/manual) → open-as-copy or restore. This is
+  the "versioned diffs" ask (D4): the storage half already ships; this is the
+  missing half.
+- **Failure surfacing (G4):** save/load errors become UI events (toast on the
+  control surface + dialog in editor mode), never log-only. Disk-full is a
+  soundcheck problem only if soundcheck can see it.
+- **crash.log rotation (G10):** timestamped files, keep last 20. On next
+  *editor-mode* launch after an unclean exit: one quiet banner — "MANIFOLD
+  crashed last session — crash log + last autosave available." Never shown on
+  a `--resume` boot.
+
+## 7. Perform-mode arming (D5)
+
+On entering perform mode: spawn understudy · Cmd+Q (and Cmd+W on output
+windows) require holding the key combo ~2 s with visible progress · "set
+start" snapshot · autosave parks · crash counter resets. On exit: reverse.
+No new mode, no separate toggle, no preference.
+
+## 8. Peripheral resilience (the degraders)
+
+All follow the Ableton-bridge template: detect → log + surface → auto-retry
+forever → seamless re-attach. Result-hardened per D7.
+
+- **MIDI (G5):** CoreMIDI `MIDINotifyProc` (or 2 s poll of `ports()` as the
+  simple v1) → new matching device appears → register it; known device
+  vanishes → drop it and keep watching. Controller re-plug mid-set just works.
+- **Audio capture (G7):** stream error callback sets a failed flag → owner
+  rebuilds the stream next tick; follow default-device changes for the
+  default-input path; output taps revalidate on CoreAudio device-list change
+  (`docs/AUDIO_INFRASTRUCTURE.md` §11). Analysis worker already tolerates
+  silence; the fix is reattachment, not analysis.
+- **GPU faults (G9):** wire `add_completed_handler_with_status` on every
+  submitted command buffer in the content pipeline (label = pass name). On
+  error status: log with label + increment a HUD-visible fault counter. No
+  in-process recovery attempts (D1) — persistent faults escalate to the
+  heartbeat/hang path naturally.
+- **Thermal (G11):** read `NSProcessInfo.thermalState` on a slow timer;
+  surface as a perform-HUD glyph (nominal/fair/serious/critical). Telemetry
+  only, v1 — no auto-degradation; the operator sees it coming instead of
+  guessing.
+
+## 9. Phasing (Sonnet-executable)
+
+- **P1 — Don't lose work.** Autosave wiring + background serialization +
+  history browser + save/load error surfacing + crash.log rotation & banner.
+  Touches `manifold-io` save path = infrastructure → full workspace sweep.
+- **P2 — Come back fast.** Breadcrumb sidecar + `--resume` boot path + output
+  window topology restore + transport rejoin (Ableton-first, breadcrumb
+  fallback) + panic-hook beat stamp. Testable with plain manual relaunch — no
+  watchdog needed yet. Profile crash-to-picture; report the number.
+- **P3 — The understudy.** New `manifold-understudy` crate + socket protocol +
+  heartbeat from content tick + cover/relaunch/handback + ladder governor +
+  fallback-asset setting + perform-mode arming (spawn/disarm, Cmd+Q hold
+  guard). Acceptance: `kill -9` mid-show → fallback pixels <100 ms, full show
+  back autonomously; `SIGSTOP` → same via hang detection; 3-crash script →
+  loop plays, no relaunch spam.
+- **P4 — Peripherals + polish.** MIDI hotplug, audio rebuild/device-follow,
+  GPU CB status wiring, thermal glyph, quarantine heuristic (§5.3),
+  Result-hardening pass on worker threads (D7).
+
+Testing note: P3's drills belong in a script (`scripts/gig_drill.sh`): launch,
+enter perform mode, kill/-STOP the process, assert understudy state
+transitions from its log. The ladder table in §4.2 is the load-bearing test
+surface.
+
+## 10. Ops checklist (no code — the laptop is part of the instrument)
+
+Pre-show, every show: black desktop wallpaper on all displays · Dock +
+menu bar auto-hide · Do Not Disturb / Focus on · notifications off ·
+auto-updates off · nothing else running · power adapter + "prevent sleep" ·
+`caffeinate` unnecessary (IOPMAssertion ships) · one `kill -9` drill at
+soundcheck — if you haven't drilled it, you don't have it.
+
+## 11. Deferred (explicitly not v1)
+
+- Auto-degradation on thermal/perf pressure (drop resolution before dropping
+  frames) — needs the perf-gate work; telemetry first.
+- Understudy on Windows/Linux — protocol is ready; lands with the Vulkan
+  platform work (`docs/VULKAN_BACKEND_DESIGN.md` §8).
+- Quarantine beyond the two heuristics (bisection, beat-window inference).
+- A/B dual-machine failover (two laptops, one show) — different tier of rig;
+  the understudy protocol is deliberately not designed for it.
+- Crash-loop telemetry upload / remote diagnostics.
