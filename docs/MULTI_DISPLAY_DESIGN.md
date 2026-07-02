@@ -400,6 +400,14 @@ to a clock signal. Third-party tools already generate these files in the field
 (Myelin Director, GMA Toolbox, MATools), so the format is import-proven. The most
 gig-proof trigger path of the three.
 
+**Lasers (Pangolin): trigger tier ONLY — decided.** BEYOND/FB4 natively accept OSC,
+MIDI, timecode chase, and DMX/Art-Net cue triggers, so laser hits are ordinary trigger
+clips with venue-profile mappings ("Laser Burst" → BEYOND cue 12), including
+continuous parameter rides (size/rotation/color over OSC). MANIFOLD never generates
+laser frames directly: vector/galvo rendering is a separate art, and **audience-scan
+safety zones live in Pangolin's software — MANIFOLD must never sit between the safety
+layer and the hardware.** Never the console; never the safety authority.
+
 **Lighting looks are clips, not cues.** Because fixtures sample the composition,
 strobes/chases/washes are authored as ordinary visual content: a strobe = a
 white-flash clip over the fixture positions; a chase = a bright bar sweeping in Stage
