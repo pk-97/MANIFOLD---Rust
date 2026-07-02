@@ -74,8 +74,8 @@ Read verbs execute against the content thread's `Project` (via the request chann
 | `set_params` | `target` (effect instance / generator clip), `values: {param_id: value}` | ok / per-param errors |
 | `get_output_snapshot` | `width?` | PNG of the current program output |
 | `transport` | `action: "play" \| "stop" \| "seek"`, `beat?` | ok |
-| `get_mood_board` | — | all entries: notes as text, images as 256px thumbnails + captions + tags (§8) |
-| `get_mood_reference` | `entry_id`, `max_dim?` | one image at up to 1024px, for close reading |
+| `get_mood_board` | — | all entries: notes as text, links as URLs, images/videos as 256px thumbnails + captions + tags (§8) |
+| `get_mood_reference` | `entry_id`, `max_dim?` | image at up to 1024px, or multi-frame contact sheet for a video entry |
 | `add_mood_note` | `text`, `tags?` | entry id (agent-authored note, undoable) |
 
 Gated by `allow_structure_edits`: `preview_graph`, `save_preset`, `transport`. Everything else always on.
@@ -127,14 +127,24 @@ pub struct MoodBoard { pub entries: Vec<MoodEntry> }  // #[serde(default, skip_s
 
 pub struct MoodEntry {
     pub id: MoodEntryId,
-    pub kind: MoodEntryKind,   // Image { path: String } | Note { text: String }
+    pub kind: MoodEntryKind,
     pub caption: String,
     pub tags: Vec<String>,
     pub agent_authored: bool,  // agent notes are visibly marked in the UI
 }
+
+pub enum MoodEntryKind {
+    Image { path: String },  // dropped or pasted
+    Video { path: String },  // local file; motion reference
+    Link { url: String },    // web reference — inert string to MANIFOLD
+    Note { text: String },
+}
 ```
 
-- **Images are path references, like all other project media** (video clips). No new asset-embedding mechanism — the V2 ZIP stores project JSON snapshots, not media; portability is the same problem video clips already have and gets solved once for all media if ever.
+- **Images and videos are path references, like all other project media** (video clips). No new asset-embedding mechanism — the V2 ZIP stores project JSON snapshots, not media; portability is the same problem video clips already have and gets solved once for all media if ever.
+- **Paste support:** pasteboard images have no path, so the app writes the bytes to a managed directory (`~/Library/Application Support/MANIFOLD/moodboard/<content-hash>.png`) and stores that path. The data model stays paths-only.
+- **Video entries** show a poster-frame thumbnail on the board; `get_mood_reference` on a video returns a multi-frame contact sheet (existing `manifold-media` decode path, same frame-grab used for clip thumbnails) so the agent reads *motion character*, not one frame. Caps: max 8 frames, 1024px long edge.
+- **Link entries are inert.** `get_mood_board` returns the URL + caption; the agent's own web tools fetch it if its client allows. **MANIFOLD never makes outbound network requests** — no thumbnail scraping, no oEmbed. This is a security posture, not a missing feature: the MCP layer keeps zero outbound network surface.
 - Board edits go through `EditingService` like everything else — undoable. UI is a simple panel (drag-drop images, type notes); UI detail is out of scope for this doc.
 - `add_mood_note` is how agreed direction from a conversation gets captured into the project ("settled: monochrome, heavy grain, pulse on the kick") — the next session's agent reads the board and continues from the same brief. It is a shared memory between user, agent, and future agents. Ungated by `allow_structure_edits` (a note, not structure).
 
@@ -183,4 +193,4 @@ The stress-test (Fable authors presets cold using only what `list_nodes`/`get_no
 10. Plugin substrate = WASM + capability manifests; native FFI = gated escape hatch; agents author, humans grant.
 11. Content thread services at most one MCP request per tick; PNG encode off the content thread.
 12. `manifold-mcp` crate isolates tokio; depends on `manifold-core` only among workspace crates.
-13. Mood boards are inspiration-only context: reference images never enter the render path (no img2img, no style transfer). Images are path references like all other project media.
+13. Mood boards are inspiration-only context: reference images/videos never enter the render path (no img2img, no style transfer). Media entries are path references like all other project media; pasted images are written to a managed dir first. Link entries are inert URLs — MANIFOLD never makes outbound network requests.
