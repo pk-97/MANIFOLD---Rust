@@ -36,6 +36,7 @@ prerequisites aren't shipped, stop.
 | VULKAN_BACKEND_DESIGN | none (Phase 0 scaffold shipped 0c5dde17) | conformance |
 | MATERIAL_SYSTEM_DESIGN | VOCAB apply (renames its renderer ids) | conformance |
 | REALTIME_3D_DESIGN | MATERIAL_SYSTEM M1–M5 (its P0); VOCAB apply | full (written to standard 2026-07-03) |
+| SIMULATIONS_DESIGN | MATERIAL M1–M5; REALTIME_3D P1 for scene composition | full (written to standard 2026-07-03) |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is IN PROGRESS (phases 0–6 done) — finish
 in flight, don't re-queue. **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -50,6 +51,7 @@ SESSION_MODE ─────────→ PERFORM_SURFACE P2  (P1 is free)
 PERFORM_SURFACE P1 ───→ GIG_RESILIENCE P3   (arming targets the chrome-hosted mode)
 VULKAN ───────────────→ ML_NODES ONNX tier · MEDIA_BACKEND §6 (Vulkan-era handoff)
 MATERIAL_SYSTEM ──────→ REALTIME_3D  (its P0; glTF import later rides REALTIME_3D)
+REALTIME_3D P1 ───────→ SIMULATIONS  (sims render into render_scene; cloth can smoke-test earlier)
 ```
 
 Everything else is edge-free and orders by judgment only.
@@ -111,12 +113,13 @@ Grouped in waves; within a wave, items are independent and order is free.
 
 The hold on MATERIAL_SYSTEM is resolved: the 3D-scene discussion produced
 `docs/REALTIME_3D_DESIGN.md`, which consumes the material contract unchanged.
-Sequence within the track: MATERIAL M1–M5 → REALTIME_3D P1–P7. The track is
-independent of waves 0–3 (renderer-internal) and can run parallel to them once
-VOCAB apply has landed; Peter ranks when it starts. glTF/Blender import
-(strategic, per Peter) gets its own design when scheduled and lands on top of
-REALTIME_3D. The queued realtime-simulations discussion feeds the same track
-(vertex-cache playback bridge).
+Sequence within the track: MATERIAL M1–M5 → REALTIME_3D P1–P7 →
+SIMULATIONS P1–P4 (`docs/SIMULATIONS_DESIGN.md` — XPBD cloth/liquids; its lane-1
+baked playback lives in the future import design). The track is independent of
+waves 0–3 (renderer-internal) and can run parallel to them once VOCAB apply has
+landed; Peter ranks when it starts. glTF/Blender import (strategic, per Peter)
+gets its own design when scheduled and lands on top of REALTIME_3D +
+SIMULATIONS lane 1.
 
 ## 5. Maintenance
 
