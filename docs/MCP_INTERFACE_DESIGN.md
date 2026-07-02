@@ -82,6 +82,8 @@ Gated by `allow_structure_edits`: `preview_graph`, `save_preset`, `transport`. E
 
 **Surface growth rule:** grow by nouns (session grid, timeline, displays), not by per-feature tool piles. The surface must stay small enough for an agent to hold entirely in context.
 
+**Amendment (2026-07-02):** the component tier (`docs/COMPONENT_LIBRARY_DESIGN.md`) extends this surface — `list_nodes` gains `tier: "atom" | "component"`, `get_node_docs` serves component interfaces, and `save_component` joins the gated verbs. Agents compose components first, atoms to glue, raw WGSL last.
+
 ### Catalog = the live registry. Single source of truth.
 
 `list_nodes` / `get_node_docs` serve **the primitive registry directly** — the same data that drives the app. Never a separately maintained AI-facing document: doc drift silently degrades every agent's output quality, and if AI is the main interface, the vocabulary *is* the product.
