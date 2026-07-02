@@ -410,6 +410,14 @@ Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra)
 - **Warp meshes + edge blending — FIRST post-v1 item** (raised from the bottom of this
   list per §7.3: projectors are the likely primary rig). Output-stage transforms in
   §6.2; no impact on islands/domains.
+- **Camera-assisted auto-calibration** (after warp/blend exist as data): structured-
+  light scan — project gray-code patterns, any camera watches, solve projector↔surface
+  correspondence → warp mesh + edge blend + surface mask filled automatically. Proven
+  tech (MadMapper spatial scanner, TD CamSchnappr), no ML required. Optional tiers on
+  top: depth/segmentation models for scene understanding (shares ML-nodes infra +
+  existing `DepthEstimator`), phone LiDAR venue scan to auto-populate the stage plan.
+  Key property: calibration is a setup-time tool that *writes* the §6.2 data
+  structures — never a runtime path. Natural MCP-driven flow.
 - Pointwise-fusion of per-island loops into atlas-wide dispatches (many-island
   stages) — rides the existing fusion-compiler direction.
 - Bezel compensation for abutting panels (island merge with dead-zone offsets).
