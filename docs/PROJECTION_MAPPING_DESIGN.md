@@ -2,6 +2,10 @@
 
 **Status: APPROVED design, not built · 2026-07-02 · Fable queue #11**
 **Prerequisites: MULTI_DISPLAY_DESIGN P1–P3 (stage model, island rendering, multi-output present).**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
+phase. Conformance-hardened: this executes AFTER multi-display reshapes the present path —
+every claim about the per-output blit and `content_pipeline.rs` is `⚠ VERIFY-AT-IMPL`
+against the as-built multi-display code. Run the §8.3 pre-flight first.**
 
 Expands the "first post-v1 item" from `docs/MULTI_DISPLAY_DESIGN.md` §12. Mapping is an
 **output transform in the per-output present pass** (§6.2 there) — invisible to content,

@@ -1,6 +1,10 @@
 # Automation Lanes — Design
 
 **Status: APPROVED (Peter, 2026-07-02). Not implemented.** Sonnet-executable; phases in §10.
+**Prerequisites: none. Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3. Note: SESSION_MODE_DESIGN §2 reserves a serde-optional field slot on `ClipSequence` for this feature — fill that slot, don't invent a second home.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
+phase. Conformance-hardened: audit claims are a 2026-07-02 snapshot — run the §8.3
+pre-flight before each phase.**
 
 Timeline automation for effect/generator params, modeled on Ableton arrangement
 automation. One sentence: **a lane is a beat-indexed base writer** — it records

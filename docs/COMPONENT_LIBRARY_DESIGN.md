@@ -3,6 +3,8 @@
 **Status:** Approved design, not implemented. Sonnet-executable.
 **Decided:** 2026-07-02. Decided questions in §12 — do not reopen them.
 **Companions:** `NODE_GROUPS_DESIGN.md` (the substrate), `GROUPING_GRAPHS.md`, `MCP_INTERFACE_DESIGN.md` (the main consumer), `NODE_CATALOG.md`.
+**Prerequisites:** NODE_VOCABULARY_AUDIT apply pass (components are named in the post-rename vocabulary — building them on old ids doubles the migration). Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 3.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase. Conformance-hardened: run the §8.3 pre-flight before each phase — node-groups backend and catalog will have moved by execution time.
 
 ---
 

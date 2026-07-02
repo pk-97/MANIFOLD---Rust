@@ -6,6 +6,9 @@
 
 This document is the implementation contract for a Sonnet-class agent. Every judgment call is already made — the tables below say what to build, in what order, and what the oracle is at each step. Where the doc says DECIDED, do not re-litigate; where it says VERIFY, the parity suite is the referee.
 
+**Prerequisites:** none (Phase 0 scaffold shipped). Background track in `docs/DESIGN_BUILD_ORDER.md` — nothing in waves 0–3 waits on this; its dependents (ML ONNX tier, MEDIA_BACKEND §6) are explicitly later.
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase. Conformance-hardened: the `manifold-gpu` inventory here is a 2026-07-02 snapshot and this is the deepest doc in the build order — run the §8.3 pre-flight (re-derive the API-surface inventory) at the start of every phase.
+
 ---
 
 ## 1. Where the port actually starts (audit, 2026-07-02)

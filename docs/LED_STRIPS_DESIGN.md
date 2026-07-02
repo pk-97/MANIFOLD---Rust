@@ -3,6 +3,10 @@
 **Status: APPROVED design, not built · 2026-07-03 · Fable (from the live-rig discussions)**
 **Prerequisites: none for P1 (patch generalization works against today's path). P2 (strip
 island) rides the island model from `docs/MULTI_DISPLAY_DESIGN.md` P1–P3.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
+phase. Conformance-hardened: §1 is a 2026-07-03 snapshot — run the §8.3 pre-flight
+(re-verify `manifold-led` anchors, e.g. `rg -n 'LedSettings' crates/manifold-led/`)
+before each phase; P2 runs after multi-display lands, so expect drift.**
 
 Peter's directives (2026-07-02/03): strips get **"full strip control and going full blast …
 they should accent the visuals"** (stage-content pass-through REJECTED: "not dense enough and

@@ -3,6 +3,10 @@
 # Ableton Show-Sync — Design & Implementation Contract
 
 **Status: APPROVED (Peter, 2026-07-02). Not implemented. Sonnet-executable.**
+**Prerequisites: none (rides existing bridge + trigger-clip infra). Sequencing: `docs/DESIGN_BUILD_ORDER.md` wave 2.**
+**Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any
+phase. Conformance-hardened: audit claims are a 2026-07-02 snapshot — run the §8.3
+pre-flight (re-verify bridge/timeline anchors) before each phase.**
 
 One gesture: *File → Import Ableton Set…* → pick an `.als` → MANIFOLD builds the
 show's score on the timeline — tempo map, a layer per track, cues from locators,

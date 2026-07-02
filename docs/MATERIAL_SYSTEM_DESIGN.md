@@ -1,8 +1,9 @@
 # Material System — Design Doc
 
-**Status:** Design accepted 2026-05-27, awaiting implementation. Written as the contract for the implementation tranches that follow the Light + Shadow design audit.
+**Status:** Design accepted 2026-05-27, awaiting implementation — **HELD** (`docs/DESIGN_BUILD_ORDER.md` §4): a realtime 3D-scene design discussion is queued with Peter (first-class lights, camera ergonomics, usable defaults) and may extend this contract. Do not start implementation until that discussion lands.
 
 **Companion docs:** [`NODE_CATALOG.md`](NODE_CATALOG.md), [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md), [`ADDING_PRIMITIVES.md`](ADDING_PRIMITIVES.md).
+**Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase. Conformance-hardened: written 2026-05-27, the oldest active design — `render_3d_mesh`/`render_instanced_3d_mesh` are renamed to `node.render_mesh`/`node.render_copies` by the vocab-audit apply; run the §8.3 pre-flight and read the migration table before touching any node id in this doc.
 
 ---
 
