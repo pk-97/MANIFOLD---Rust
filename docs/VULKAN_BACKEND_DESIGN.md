@@ -142,6 +142,7 @@ Mechanics:
 
 **P1 — headless compute core.** `vulkan/{device,encoder,types}.rs`: device bring-up, allocator, buffers/textures/samplers, compute pipelines + caches, dispatch + copies + clears + upload, hazard tracker, timeline events + waiter thread, `TexturePool` port.
 *Oracle:* per-primitive gpu_tests + compute-path parity tests, `cargo test -p manifold-renderer --features manifold-gpu/vulkan` under MoltenVK on the dev box. Every parity failure is a Vulkan-backend bug until proven otherwise — never adjust tolerances or shared WGSL to pass (per `shared-shader-topology`, `value-level-parity`).
+*Mandatory from P1 on:* the parity suite must also run with the **Khronos synchronization validation layer** enabled (`VK_LAYER_KHRONOS_validation` + sync-val setting), zero errors. MoltenVK sits on Metal, whose implicit ordering can visually mask a missing barrier that would corrupt frames on NVIDIA/AMD — sync-val catches those at the API level regardless of the hardware underneath. A green parity run without sync-val proves nothing about the hazard tracker.
 
 **P2 — render + profiling.** Graphics pipelines (dynamic rendering), the `draw_*` family, depth/MSAA/mipmaps/scissor, negative-viewport Y-flip, timestamp profiling.
 *Oracle:* full parity suite + `ui_color_swatches` + headless-PNG goldens (`reference_ui_headless_png_verification` memory). Explicitly check orientation (Y-flip) and winding on `render_3d_mesh`.
