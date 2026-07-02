@@ -345,6 +345,22 @@ lighting craft stays with the LD. Three integration levels:
    arriving, rehearsed in rehearsal view. The industry's own format feeding the
    "everything derives from the stage plan" doctrine.
 
+**Routing is a bus, never a graph node.** Fixture placements select a source: **Master**
+(default — lights follow the composition) or a **specific layer/group** (the "lighting
+bus"). One dropdown on the perform surface, like the layer domain toggle. Device
+output never lives inside a content graph — graph effects are per-clip instanced,
+undoable, state-cached authoring objects, and hardware ownership inside one is
+ambiguous by construction (same doctrine that keeps audio I/O off the graph). The
+creative half stays fully graph-shaped: a lighting-bus layer is a normal layer with
+full effect graphs — author what the lights see with any graph; route it with a
+switch. Ableton's division: racks author, the mixer routes.
+
+**Clip → console triggers.** Clip start/stop events map to outbound OSC/MIDI messages
+("Go Executor 3") — MANIFOLD's timeline fires the console's pre-programmed looks. A
+mapping table on existing OSC/MIDI infra, not a new system. Also the universal
+fallback at venues that won't expose their rig: sync via triggers with zero fixture
+mapping.
+
 **Lighting looks are clips, not cues.** Because fixtures sample the composition,
 strobes/chases/washes are authored as ordinary visual content: a strobe = a
 white-flash clip over the fixture positions; a chase = a bright bar sweeping in Stage
