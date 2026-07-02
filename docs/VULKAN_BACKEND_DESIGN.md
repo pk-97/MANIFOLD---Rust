@@ -154,6 +154,11 @@ Mechanics:
 
 **CI matrix from P1 onward:** macOS-Metal (existing) · macOS-MoltenVK (parity on real Apple GPU) · Linux with lavapipe (Mesa software Vulkan 1.3 — CI-only; expect a small tolerance profile for software rasterization, kept separate from GPU tolerances) · Windows when hardware runners exist.
 
+**Perf-portability watch items** (correct on all hardware; these are about not losing frames on discrete GPUs):
+
+- **Readbacks cross PCIe on discrete GPUs.** Apple Silicon unified memory makes GPU→CPU readback ~free; on a discrete card `copy_texture_to_buffer` + wait is a PCIe round trip. The per-frame readback paths — LED/Art-Net sampling (`manifold-led`), audio-reactive analysis, thumbnails — must stay **async with a frame of latency** (the `GpuEvent` pattern the LED path already uses). Never "simplify" a readback into a synchronous commit-and-wait on the frame loop; that's a per-frame stall on every PC.
+- **Windows presentation must reach independent flip.** The DWM compositor adds a frame of latency and pacing jitter unless borderless-fullscreen presentation qualifies for independent flip (correct swapchain size/format/alpha, no occlusion). This is the Windows twin of the macOS Direct Display work (`direct-display-cadence`) and is show-critical — verify with PresentMon during P3, not by eyeball.
+
 ---
 
 ## 7. Guardrails for the implementing agent
