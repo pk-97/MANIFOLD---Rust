@@ -328,6 +328,13 @@ at its physical position. A sweep crosses Totem L → the fixtures in the air be
 Totem R. Visuals and lighting from one composition. For a small artist this replaces a
 lighting operator; lands with the LED unification phase (§10).
 
+**Who each tier is for (Peter, 2026-07-02):** most clubs are console-owned DMX cables
+with no network — the house rig is physically unreachable (and club desks often can't
+even receive triggers). So the *primary* lighting story for the target user is the
+**artist-owned package**: your fixtures + one Art-Net/sACN node in your case, MANIFOLD
+as the entire lighting brain, no console anywhere. Console cooperation below is the
+growth path (theatres, festivals, real LDs) — not the entry point.
+
 At venues with a house rig and console (grandMA is the industry standard), MANIFOLD is
 the **media server / position-aware color engine — never the console.** Cue-based
 lighting craft stays with the LD. Three integration levels:
