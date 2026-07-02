@@ -255,9 +255,18 @@ arrives, the fallback loop is the floor and it is show-safe.
   entries (timestamp, label, auto/manual) → open-as-copy or restore. This is
   the "versioned diffs" ask (D4): the storage half already ships; this is the
   missing half.
-- **Failure surfacing (G4):** save/load errors become UI events (toast on the
-  control surface + dialog in editor mode), never log-only. Disk-full is a
-  soundcheck problem only if soundcheck can see it.
+- **Undo-history persistence (Peter, 2026-07-03):** "it would be nice to also
+  save the undo and redo history so if a project crashes you can still undo
+  what work was done." Two shapes, decide at P1: **(a)** serialize the undo
+  stack itself — Cmd+Z/Shift-Cmd+Z work across relaunch, but requires
+  `Serialize` across every `Command` type in `manifold-editing` (large
+  surface, ~all commands); **(b)** denser `history/` granularity — the
+  debounced autosave already journals edit bursts as full snapshots, so the
+  history browser gives step-back/step-forward through recent states with
+  zero new serde. Recommendation: ship (b) with P1 (it's free — it IS the
+  autosave), then assess whether (a)'s true-undo UX justifies the serde pass
+  as a follow-on. Don't half-build (a): partial command coverage means an
+  undo stack that lies.
 - **crash.log rotation (G10):** timestamped files, keep last 20. On next
   *editor-mode* launch after an unclean exit: one quiet banner — "MANIFOLD
   crashed last session — crash log + last autosave available." Never shown on

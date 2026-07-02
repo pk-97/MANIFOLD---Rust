@@ -34,7 +34,8 @@ prerequisites aren't shipped, stop.
 | MCP_INTERFACE_DESIGN | VOCAB apply; wants COMPONENT_LIBRARY (its authoring surface) | conformance |
 | ML_NODES_DESIGN | none for Vision/CoreML tier; ONNX tier needs VULKAN | conformance |
 | VULKAN_BACKEND_DESIGN | none (Phase 0 scaffold shipped 0c5dde17) | conformance |
-| MATERIAL_SYSTEM_DESIGN | none — but HELD, see §4 | conformance |
+| MATERIAL_SYSTEM_DESIGN | VOCAB apply (renames its renderer ids) | conformance |
+| REALTIME_3D_DESIGN | MATERIAL_SYSTEM M1–M5 (its P0); VOCAB apply | full (written to standard 2026-07-03) |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is IN PROGRESS (phases 0–6 done) — finish
 in flight, don't re-queue. **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -48,6 +49,7 @@ MULTI_DISPLAY P1–P3 ──→ LED_STRIPS P2   (LED P1 is free)
 SESSION_MODE ─────────→ PERFORM_SURFACE P2  (P1 is free)
 PERFORM_SURFACE P1 ───→ GIG_RESILIENCE P3   (arming targets the chrome-hosted mode)
 VULKAN ───────────────→ ML_NODES ONNX tier · MEDIA_BACKEND §6 (Vulkan-era handoff)
+MATERIAL_SYSTEM ──────→ REALTIME_3D  (its P0; glTF import later rides REALTIME_3D)
 ```
 
 Everything else is edge-free and orders by judgment only.
@@ -105,12 +107,16 @@ Grouped in waves; within a wave, items are independent and order is free.
 - VULKAN phases 1–4. Start when Peter says; nothing in waves 0–3 waits on it, and
   its two dependents (ML ONNX, MEDIA_BACKEND §6) are explicitly later-tier.
 
-## 4. Held
+## 4. The 3D track (added 2026-07-03)
 
-- **MATERIAL_SYSTEM_DESIGN** — accepted 2026-05-27, but a **realtime 3D scene
-  design discussion is queued with Peter** (lights as first-class objects, camera
-  ergonomics, usable defaults). That discussion may extend or reshape the material
-  contract. Hold implementation until it happens; the doc stays approved.
+The hold on MATERIAL_SYSTEM is resolved: the 3D-scene discussion produced
+`docs/REALTIME_3D_DESIGN.md`, which consumes the material contract unchanged.
+Sequence within the track: MATERIAL M1–M5 → REALTIME_3D P1–P7. The track is
+independent of waves 0–3 (renderer-internal) and can run parallel to them once
+VOCAB apply has landed; Peter ranks when it starts. glTF/Blender import
+(strategic, per Peter) gets its own design when scheduled and lands on top of
+REALTIME_3D. The queued realtime-simulations discussion feeds the same track
+(vertex-cache playback bridge).
 
 ## 5. Maintenance
 
