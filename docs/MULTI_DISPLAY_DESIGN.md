@@ -337,7 +337,14 @@ lighting craft stays with the LD. Three integration levels:
 2. **Cooperative pixel control — sACN with priority.** sACN's per-source priority
    field lets the house rig merge MANIFOLD's color with the LD's control, LD holding
    override. Art-Net has no priority; **sACN output in manifold-led is the ticket into
-   pro rooms.**
+   pro rooms.** Direct-to-fixture output (bypassing the console) is standard media-
+   server practice, not exotic — the transport is a stateless ~44Hz value refresh, and
+   MANIFOLD already ships it for LED strips. **Failure semantics (gig-critical,
+   decided):** MANIFOLD always transmits below the console's priority; on exit or
+   crash it must *stop transmitting cleanly* (socket teardown, no frozen last frame)
+   so fixtures revert to the console or their own dark state — never freeze
+   mid-strobe. Best practice split: washes/chases on the direct path (a blip is
+   invisible), make-or-break cues on the console via triggers.
 3. **Pre-mapping — MVR/GDTF import.** The lighting industry's open exchange formats:
    GDTF describes a fixture, MVR describes a whole rig (positions + patch). grandMA3
    exports MVR. Import → the stage plan auto-populates with the venue's fixtures at
