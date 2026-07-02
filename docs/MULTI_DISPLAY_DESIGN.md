@@ -140,6 +140,9 @@ The mental model is **macOS display arrangement, on a stage plan, in real units*
   rotated; rotation applies in the output blit (§6.2), not in content.
 - Live readout: total rendered pixels (sum of islands — dragging displays *apart*
   never changes it) + per-island resolutions.
+- **Test patterns + Identify (v1, non-negotiable):** per-output grid, focus chart,
+  white field, and an Identify button that flashes the output's number/name on the
+  physical device. The first five minutes at every venue.
 - **Advanced flap, per output, closed by default:** 4-corner keystone (homography —
   covers projectors), RGB gain/lift color trim, EDR/tonemap override, per-island
   density cap. Most users never open this.
@@ -189,7 +192,17 @@ union of placements whose post-rotation rects touch within snap tolerance (5mm).
 Match placements to live displays by UUID, then by name, else mark **unassigned** —
 never silently guess. Unassigned placements still render (content unaffected) but
 present nowhere; the stage view shows a one-click "assign" picker. Plugging in at the
-venue must be: open project → two clicks → done.
+venue must be: open project → two clicks → done. **Hot-replug mid-show:** a display
+that disappears (kicked cable) degrades gracefully — content keeps rendering, output
+marked unassigned; when a display with the *same UUID* reappears, reattach silently
+with zero clicks. The two-click flow is for new hardware only.
+
+**Venue profiles:** the show and the venue are different lifetimes. The composition is
+per-show; stage layout + assignments + advanced-flap data (keystone, warp, trim,
+calibration) are per-venue. `StageLayout` stays serialized in the project (single
+source at runtime), but is **exportable/importable as a standalone venue file**
+(JSON) — "load `corner-hotel.venue`, play the same set." Decided now because
+retrofitting separability after projects bake layouts in is painful.
 
 **Mutations:** stage edits go through `EditingService` (commands with undo). Derivation
 runs on command apply.
@@ -247,7 +260,9 @@ never-unify-CVDisplayLinks rule: no vsync callback exists on this path at all.
   trap and is rejected; true genlock is display-hardware territory.
 - **Preview:** the workspace preview composites island textures at their stage-plan
   positions over the panel background — the gap is literal empty UI, costing nothing.
-  Placement outlines drawn on top. Perform HUD same.
+  Placement outlines drawn on top. Perform HUD same. **Rehearsal view** (deferred,
+  §12) elevates this into an audience-eye mode — islands glowing in a dark stage,
+  fixtures rendered as points — so a show is authorable at home with zero hardware.
 
 ## 7. Display-aware content
 
@@ -304,7 +319,33 @@ new mechanism.
 **MCP note:** `get_project_overview` should include the stage layout summary so agents
 can author display-aware content ("two portrait islands, 3.2m apart").
 
-### 7.3 Projectors
+### 7.3 Lighting: fixtures as placements, consoles as peers
+
+The stage plan doesn't stop at screens. `manifold-led` already outputs Art-Net;
+extending the placement model to **DMX fixtures** (pars, strips, moving-head colors)
+puts lights on the same map: a fixture placement samples the Stage-domain composition
+at its physical position. A sweep crosses Totem L → the fixtures in the air between →
+Totem R. Visuals and lighting from one composition. For a small artist this replaces a
+lighting operator; lands with the LED unification phase (§10).
+
+At venues with a house rig and console (grandMA is the industry standard), MANIFOLD is
+the **media server / position-aware color engine — never the console.** Cue-based
+lighting craft stays with the LD. Three integration levels:
+
+1. **Sync** — timecode/MIDI/OSC cue exchange with the console. Rides existing
+   infrastructure (OSC, MIDI, Ableton sync, timecode).
+2. **Cooperative pixel control — sACN with priority.** sACN's per-source priority
+   field lets the house rig merge MANIFOLD's color with the LD's control, LD holding
+   override. Art-Net has no priority; **sACN output in manifold-led is the ticket into
+   pro rooms.**
+3. **Pre-mapping — MVR/GDTF import.** The lighting industry's open exchange formats:
+   GDTF describes a fixture, MVR describes a whole rig (positions + patch). grandMA3
+   exports MVR. Import → the stage plan auto-populates with the venue's fixtures at
+   real positions/addresses → Stage-domain content maps onto the house rig before
+   arriving, rehearsed in rehearsal view. The industry's own format feeding the
+   "everything derives from the stage plan" doctrine.
+
+### 7.4 Projectors
 
 A projector placement is the **projected image** on the stage plan, not the projector:
 `physical_size_mm` = measured throw size, typed by the user (EDID prefill is
@@ -370,8 +411,13 @@ Each phase lands alone, is testable alone, and doesn't break single-display flow
   numeric fields, EDID prefill, rotation, live pixel readout, assign picker), advanced
   flap (keystone, trim, density cap). Uses existing panel/scroll infra; headless PNG
   verification applies.
-- **P6 — later.** LED strips become placements (manifold-led samples atlas regions via
-  the same model), NDI/Syphon outputs, per-island export stems.
+- **P6 — later.** LED strips *and DMX fixtures* become placements (manifold-led
+  samples atlas regions / stage positions via the same model; add sACN alongside
+  Art-Net), MVR/GDTF rig import, NDI/Syphon outputs, per-island export stems,
+  rehearsal view.
+
+Venue-profile export/import lands in P1 (it's serialization); test patterns +
+Identify land in P3 (output windows exist there).
 
 Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra).
 
@@ -404,11 +450,18 @@ Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra)
     output for that tick.
 12. Export/recording = per-island in v1 (single-island projects: unchanged full-frame
     export).
+13. Stage layout + assignments + calibration are exportable/importable as a standalone
+    **venue file**; the composition never contains venue-specific data it can't shed.
+14. Hot-replug with a matching UUID reattaches silently mid-show; manual assignment is
+    for new hardware only.
+15. Consoles: MANIFOLD is media server / position-aware color engine, never the
+    lighting console. Cooperation = sync (timecode/OSC), sACN priority merge, MVR/GDTF
+    import — in that order.
 
 ## 12. Open (deferred, not blocking)
 
 - **Warp meshes + edge blending — FIRST post-v1 item** (raised from the bottom of this
-  list per §7.3: projectors are the likely primary rig). Output-stage transforms in
+  list per §7.4: projectors are the likely primary rig). Output-stage transforms in
   §6.2; no impact on islands/domains.
 - **Camera-assisted auto-calibration** (after warp/blend exist as data): structured-
   light scan — project gray-code patterns, any camera watches, solve projector↔surface
@@ -423,4 +476,9 @@ Full workspace test sweep gates P2 and P3 (graph runtime + present path = infra)
 - Bezel compensation for abutting panels (island merge with dead-zone offsets).
 - LED placement unification details (P6) — strip geometry on the stage plan.
 - Multi-island export composites (stage-plan-arranged proxy video for offline review).
+- **Rehearsal view** — audience-eye preview mode (islands + fixture points in a dark
+  stage); author a show with zero hardware. Builds on the §6.2 preview compositing.
+- **Per-output frame delay** — hybrid rigs mix device latencies (projector ≈ 1–3
+  frames, LED processors vary); a delay offset per output re-syncs them. Costs
+  buffered frames per output, so post-v1 — but the advanced flap reserves the slot.
 - >8 displays/islands (bump the uniform capacities; layout allows it trivially).
