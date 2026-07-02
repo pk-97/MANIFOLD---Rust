@@ -208,7 +208,19 @@ P2 is the risk concentration: the wrap-restart rule (§4) and suppression intera
 
 Full `cargo test --workspace` gates P2 (engine/scheduler are infrastructure per the testing-scope rule); P1/P3/P4 use focused crate tests.
 
-## 11. Decided questions (do not reopen)
+## 11. Future: MIDI / piano-roll compatibility (decided — do not redesign for it)
+
+Clip-boundaries-as-triggers is the native surface on purpose. The Ableton analogy: video/generator layers are **audio tracks** (clip = content = trigger), not MIDI tracks (notes drive an instrument). MIDI-native triggering would add a note→content mapping, a piano-roll editor, and event-driven resolution (losing stateless scrub-safety) with no payoff for monophonic layers.
+
+The DAW pipedream (MIDI tracks, VSTs) composes later without touching this design:
+
+- **MIDI clip kind**: a future `LayerType::Midi` clip with a notes field joins the existing mutually-exclusive content discriminants on `TimelineClip` (`video_clip_id` / `audio_file_path` / `image_path` / generator). `ClipSequence` never inspects content kind, so MIDI clips inherit the whole grid (slots, quantize, loop, scenes) for free.
+- **Sequenced note-triggering of layers**: hardware MIDI already triggers layers via `LiveClipManager` (NoteOn → phantom clip). A sequenced MIDI clip is just another producer of the same note stream into the same receiver. Routing feature, not a trigger-model change.
+- **Velocity/expression**: per-launch modifiers on slots (velocity → opacity/param), if ever needed.
+
+Implementation guard: session/grid/launch/resolution code must stay **content-agnostic** — never branch on clip kind. Content kind is resolved where clips already resolve today (`start_clip` and downstream).
+
+## 12. Decided questions (do not reopen)
 
 - Real per-layer session grid, not quantized-jump-on-one-playhead. It's a product surface for timeline-free users.
 - Slots are per-layer; scenes are rows. 1:1 Ableton mapping, keyed by `LayerId` not index.
