@@ -99,7 +99,7 @@ Every primitive ships a tiny working example graph, openable from the node brows
 
 ## 3. Rejects — logged so they stay rejected
 
-- **R1 · Build-your-own modular UI everything (VDMX).** The whole app as movable panels. Take the layout layer only (S2); reject the toolkit. MANIFOLD's fixed editor + arrangeable perform surface is the right split — DIY workspaces tax every user to serve power users.
+- **R1 · Build-your-own modular UI everything (VDMX).** The whole app as movable panels. Take the layout layer only (S2); reject the toolkit. MANIFOLD's fixed editor + arrangeable perform surface is the right split — DIY workspaces tax every user to serve power users. *Revised 2026-07-03 (PERFORM_SURFACE_DESIGN.md D8): the DIY UI **toolkit** stays rejected; **workspace arrangement of purpose-built panels** (Ableton/Blender-style) is now an approved future layer. Fixed editor remains the default.*
 - **R2 · Theater cue stacks with GO button (Millumin).** MANIFOLD shows are Ableton-driven; cues + show-sync + trigger clips cover it. A parallel cue-stack entity re-introduces the trigger-lane concept already rejected in show-sync D1.
 - **R3 · Media-server block export (Notch → disguise/d3).** Exporting MANIFOLD content to run inside other servers is a different product. Components + macros give the same authoring concept in-app.
 - **R4 · SMPTE timecode chase.** Already closed — timecode locks the score, never scrubs the render; Art-Net in for lighting-desk integration. See decision log / multi-display tech rider.
@@ -111,8 +111,8 @@ Every primitive ships a tiny working example graph, openable from the node brows
 | Item | Home | Effort tier |
 |---|---|---|
 | S1 mapping | **New design doc — queue #11, next Fable session** | Fable design → Sonnet phases |
-| S2 perform surface builder | Own light design (Fable-quick or strong Sonnet brief) | Small-medium |
-| S3 cue/preview bus | Spec'd enough here; perform-surface widget | Small (Sonnet) |
+| S2 perform surface builder | **DONE — docs/PERFORM_SURFACE_DESIGN.md** (widget substrate P1; builder itself = deferred layer) | Small-medium |
+| S3 cue/preview bus | Spec'd enough here; PERFORM_SURFACE_DESIGN §7.3 widget | Small (Sonnet) |
 | S4 clip transitions | Session mode backlog, spec'd enough here | Small (Sonnet) |
 | S5 follow actions | Session mode v2 backlog | Small (Sonnet) |
 | S6 Link + Link Audio | manifold-audio + clock; **gated on licence (Peter requesting)** | Medium (Sonnet) |
