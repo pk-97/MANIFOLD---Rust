@@ -200,23 +200,49 @@ Addressing follows the unified card-target shape (Effect | Generator | Master
 target + `param_id`), not indices — same discipline as
 `EditUserParamBindingCommand`.
 
-## 7. UI (P4 — brief here, detail at build time)
+## 7. UI / UX (decided: copy Ableton's model — Peter, 2026-07-02)
 
-Copy Ableton's arrangement automation:
+**Placement — automation lives on the layer.** Expanding a layer (the
+existing layer-expand affordance) reveals the advanced layer controls,
+including automation: a param-chooser lane (device/instance dropdown +
+param dropdown, Live's exact pair) with a **"+"** button that breaks out
+additional lanes stacked under the layer. Each automated param gets its own
+lane. Lane rows ride the shipped timeline redesign.
 
-- Automation mode toggle on the timeline (Live's "A" key): lanes draw over
-  clips as the red breakpoint line; click to add, drag points/segments,
-  segment-drag for curvature.
-- Per-layer lane strip: a param chooser (device + param dropdowns, like
-  Live's) with "+" to break out additional lanes under the layer.
-- Overridden lane = grayed line (Live's exact affordance); global **Back to
-  Arrangement** button in the transport bar, lit when any latch is set;
-  **Automation Arm** toggle next to it.
-- Lane rows ride the shipped timeline redesign; rendering through the
-  existing timeline panel infrastructure. Headless-PNG self-verification for
-  the visual pass.
-- Param cards show a small "automated" indicator on params with an enabled
-  lane (Live shows a red dot).
+**Touch-to-select.** Touching any param on the layer (card slider, inspector
+knob) auto-selects that param in the lane's chooser — Live's behavior; it
+makes "wiggle the knob, then draw" the zero-friction path to a new lane.
+
+**Interaction vocabulary — same shortcuts and controls as Live:**
+
+- **Automation mode toggle** (Live's `A`): show/hide automation across the
+  timeline; lanes draw as the red breakpoint line over the layer.
+- **Click on the line** adds a breakpoint (dot); **drag** moves it (snapped
+  to the timeline grid); **double-click a dot** deletes it; **Delete** removes
+  the selection.
+- **Drag a segment** vertically to move it; **modifier-drag a segment**
+  (Alt/Option, Live 11 style) bends it into a curve — this is the
+  `Curved(f32)` shape in §2.
+- **Cmd-drag** bypasses grid snap for fine placement (Live's convention);
+  **Shift-drag** for fine value adjustment.
+- **Marquee-select** multiple dots and drag/delete them together.
+- **Draw mode** (Live's `B`): pencil freehand/steps following the grid.
+- Grid snapping follows the existing timeline grid settings.
+- Exact keybindings ride MANIFOLD's shortcut system; where a Live default
+  conflicts with an existing MANIFOLD binding, keep MANIFOLD's and note the
+  remap — the *gestures* are the contract, the letters are configurable.
+
+**State affordances:**
+
+- Overridden lane = **grayed line** (Live's exact affordance); per-lane
+  re-enable click on the lane header.
+- Global **Back to Arrangement** button in the transport bar, lit red when
+  any latch is set; **Automation Arm** toggle next to it.
+- Param cards show a small red "automated" indicator on params with an
+  enabled lane (Live's red dot); the indicator grays when overridden.
+
+Headless-PNG self-verification for the visual pass, per the standing UI
+workflow.
 
 ## 8. Interactions & edge cases
 
@@ -281,6 +307,10 @@ reviewable arc; P3/P4 independent after.
 6. Recording = Automation Arm, gesture punch-over, one undo entry per
    gesture, records the smoothed/applied value.
 7. Per-frame sampling bypasses undo and never bumps `DataVersion`.
+8. UI = Ableton's model: lanes live in the expanded layer's advanced
+   controls, one lane per automated param + "+" to add, touch-to-select in
+   the chooser, Live's gesture vocabulary (click-to-dot, modifier-drag
+   curves, draw mode, grid snap w/ Cmd bypass).
 
 ## 12. Deferred / rejected
 
