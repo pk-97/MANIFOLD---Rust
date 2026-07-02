@@ -385,7 +385,13 @@ mapping. Three details, decided: **(a)** clips reference stable friendly names
 touring show re-points to each desk by loading the venue file, never by editing the
 composition. **(b)** clip start sends the go, **clip end sends the release** — a
 strobe's duration is the clip's length, like a note. **(c)** an unmapped name is a
-visible warning in the stage view, not a silent no-op at showtime.
+visible warning in the stage view, not a silent no-op at showtime. **(d)** filling the
+table: no universal cue-list exchange format exists (MVR carries the rig, not the
+programming; grandMA3 exports sequence XML, theater desks speak USITT ASCII, others
+are proprietary). The table is ~a dozen rows — manual entry is fine, and the MCP
+agent path ("paste the LD's email, fill the venue profile") covers every console
+brand with zero parsers. Do NOT build per-console importers unless demand proves
+them.
 
 **Lighting looks are clips, not cues.** Because fixtures sample the composition,
 strobes/chases/washes are authored as ordinary visual content: a strobe = a
