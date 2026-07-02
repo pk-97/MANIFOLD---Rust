@@ -38,11 +38,23 @@ strip array, not per-strip 1D.
   constants). SK9822 = APA102-class SPI pixels, high PWM rate — strobes and fast chases
   read cleanly ("very bright and responsive").
 - **Controller: Suntech H807SA** (manual on file) — Ethernet Art-Net in, SPI pixel out;
-  per-port IC type / pixel count / universe mapping configured **on the unit**. MANIFOLD's
-  only job is to emit the universes the patch declares; controller internals never leak
-  into the data model.
+  8 ports × 1024 px (960 used ≈ 12%); per-port IC type / pixel count / universe mapping
+  configured **on the unit**. MANIFOLD's only job is to emit the universes the patch
+  declares; controller internals never leak into the data model. **Art-Net only — no sACN**
+  (manual mentions no E1.31); the design's sACN output exists for other rigs. SK9822 is
+  not in the chip list — run it as **APA102** (protocol-compatible, standard pairing).
+  Global brightness on the unit is a 6-bit master dimmer (the SK9822 current control) —
+  the hardware ceiling; MANIFOLD content stays full-range and never fights it.
 - Channel math: 120 px × 3 ch = 360 ch → **one universe per strip** (`PerUniverse`
   addressing, already the default). 8 strips = 8 universes.
+- **UDP side-channel (port 8216, `0xA8` opcodes):** switch SD file, set global
+  brightness/RGBW (0–63), query program — separate from Art-Net. `brightness=0` is a
+  **hardware blackout** that works even if the Art-Net path is what broke; wire it as the
+  understudy's second blackout rung (D8). SD standalone playback (64 DAT files) doubles as
+  a computer-dead fallback. **Verify at rig bring-up:** what the unit does when the
+  Art-Net stream stops (hold last frame / SD fallback / dark) — this decides how critical
+  the dying-breath blackout is. The unit's Net2 frame-rate test menu can confirm
+  MANIFOLD's delivered fps from the LCD.
 
 ## 3. Decisions
 
