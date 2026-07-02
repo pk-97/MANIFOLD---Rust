@@ -400,6 +400,27 @@ to a clock signal. Third-party tools already generate these files in the field
 (Myelin Director, GMA Toolbox, MATools), so the format is import-proven. The most
 gig-proof trigger path of the three.
 
+**Timecode OUT — required for the pre-loaded chase workflows, does not exist yet.**
+MANIFOLD today only *receives* sync (Ableton, MIDI clock, OSC). The console/BEYOND
+timecode-chase stories need MANIFOLD to *broadcast* timecode derived from its
+transport. Decided master chain: **Ableton → MANIFOLD → timecode out → console +
+lasers** — one clock for music, video, lights, lasers, MANIFOLD as relay. Start with
+MTC (cheap, MIDI infra exists); SMPTE/LTC (an audio-channel signal) only if a venue
+demands it.
+
+**Remote control IN — Art-Net/DMX input.** The reverse direction: at venues where the
+LD runs the show, they ride MANIFOLD parameters (master intensity, clip fire) from
+their desk. One more remote-control input beside the existing MIDI/OSC-in — same
+mapping surface, no new concept. Makes MANIFOLD a well-behaved media server when it
+isn't the boss.
+
+**Hazers/foggers are fixtures.** Intensity-only placements — zero new design. Haze
+level as a clip: fog builds four bars before the drop, on the grid.
+
+**Tech rider / advance email as an MCP flow.** Power, universes, IPs, MVR request,
+cue-list request — all derivable from stage plan + venue profile. An agent drafts the
+venue advance from it. Near-zero cost once MCP lands.
+
 **Lasers (Pangolin): trigger tier ONLY — decided.** BEYOND/FB4 natively accept OSC,
 MIDI, timecode chase, and DMX/Art-Net cue triggers, so laser hits are ordinary trigger
 clips with venue-profile mappings ("Laser Burst" → BEYOND cue 12), including
