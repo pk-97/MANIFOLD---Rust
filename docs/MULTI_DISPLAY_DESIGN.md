@@ -345,6 +345,23 @@ lighting craft stays with the LD. Three integration levels:
    arriving, rehearsed in rehearsal view. The industry's own format feeding the
    "everything derives from the stage plan" doctrine.
 
+**Lighting looks are clips, not cues.** Because fixtures sample the composition,
+strobes/chases/washes are authored as ordinary visual content: a strobe = a
+white-flash clip over the fixture positions; a chase = a bright bar sweeping in Stage
+domain (fixtures fire in physical order); a wash = a slow gradient clip. All existing
+machinery applies for free — beat quantization, timeline, session cells, MIDI/phantom
+triggers, Ableton sync. **No lighting-cue system is ever built** (no 5th modulation
+silo). v1 boundary: color/intensity sampling only — covers pars, washes, strips,
+matrices. Moving-head pan/tilt, gobos, hardware shutter channels are channel-level
+control, explicitly deferred (console/LD territory until a dedicated design says
+otherwise).
+
+**Implementation notes for P6:** both formats are zip+XML (`manifold-io` already ships
+zip infra). Specs are open (GDTF = DIN SPEC 15800, MVR = DIN SPEC 15801;
+github.com/mvrdevelopment/spec). Fixture files: gdtf-share.com (~12k files, free
+account, REST API). Realistic test venues: grandMA3 onPC (free) builds a rig and
+exports MVR.
+
 ### 7.4 Projectors
 
 A projector placement is the **projected image** on the stage plan, not the projector:
