@@ -197,7 +197,16 @@ Unlisted nodes keep their current id (already aligned). Aliases always gain the 
 
 Same migration table (PresetTypeId choke point). `osc_prefix` unchanged, so OSC/Ableton mappings survive.
 
-**Also:** `NodeGraphTest` → hide from picker (diagnostic). **Generator categories are muddled** ("Procedural" ×12, "Generator" ×5, "Source" ×2 — "Generator" as a category of generators says nothing). Proposed regrouping: **Sim** (FluidSim2D/3D, OilyFluid, MetallicGlass), **Geometry** (Tesseract, NestedCubes, Duocylinder, Wireframe, Lissajous, DigitalPlants, StarField, ConcentricTunnel), **Texture** (Plasma, BasicShapes, Voronoi-family, BlackHole, StrangeAttractor), **Media/Text** (Text, MRI Volume, ParticleText). Flagged for Peter — it's taste, not correctness.
+**Also:** `NodeGraphTest` → hide from picker (diagnostic). **Generator categories — regrouping decided with Peter 2026-07-02.** Rule: category = what the engine is doing (Sim = stateful, evolves frame to frame; Geometry = shapes/meshes/wireframes; Pattern = stateless shader math; Text & Media = typography/external content) — except when user search intent is content-shaped, content wins.
+
+| Category | Presets |
+|---|---|
+| **Sim** | Fluid Sim 2D, Fluid Sim 3D, Oily Fluid, Metallic Glass†, Black Hole, Strange Attractor |
+| **Geometry** | Tesseract, Nested Cubes, Duocylinder, Wireframe, Digital Plants, Lissajous |
+| **Pattern** | Plasma, Concentric Tunnel, Basic Shapes, Star Field† |
+| **Text & Media** | Text, Particle Text (a sim, but content intent wins — aliases: particles, sim), MRI Volume |
+
+† Verify at apply: Star Field assumed stateless (→ Pattern); Metallic Glass assumed stateful feedback (→ Sim). If wrong, swap accordingly.
 
 ## 7. Legacy trio (decisions)
 
@@ -237,4 +246,4 @@ Principle: **one source of truth (code-side descriptors, co-located with the nod
 
 ## 10. Review checklist for Peter
 
-The **bolded rows** in §4 change the label too, not just the id: Variable Blur, Transform, Array Math, Vector Length, Rotate Coordinates, Slice Volume. Plus one taste call: generator category regrouping (§6). ("Array" as the user word: decided by Peter, §2.4.) Everything else is mechanical alignment — id catches up to the label you already approved by shipping it.
+The **bolded rows** in §4 change the label too, not just the id: Variable Blur, Transform, Array Math, Vector Length, Rotate Coordinates, Slice Volume. ("Array" as the user word and the generator category regrouping: both decided by Peter 2026-07-02 — §2.4, §6.) Everything else is mechanical alignment — id catches up to the label you already approved by shipping it.
