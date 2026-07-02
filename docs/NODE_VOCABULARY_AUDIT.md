@@ -1,0 +1,223 @@
+# Node Vocabulary Audit — type_id Renames, Fills, Conventions
+
+**Status:** Audit complete, awaiting Peter's review of flagged rows. Apply pass is Sonnet-executable after sign-off.
+**Decided:** 2026-07-02. Companion: `NODE_CATALOG.md` (generated index), `MCP_INTERFACE_DESIGN.md` (the catalog's main future consumer).
+
+## 1. Verdict
+
+The descriptor layer is in better shape than expected: 212 nodes, most with display labels, VJ-voice summaries, technical purposes, categories, roles, and aliases already filled. The three registers Peter asked for **already exist** — `label` (stage voice), `summary` (friendly one-liner), `purpose` (technical: formula, algorithm, conventions). No schema work needed.
+
+The debt is exactly four things:
+
+1. **~75 stale type_ids** that no longer match their display labels (`node.gain` shows as "Exposure", `node.radial_fold_uv` as "Kaleidoscope", `node.uv_strip_clamp` as "Edge Stretch"). §4.
+2. **13 unfilled stragglers** — missing labels, 5 fully uncategorized nodes, 3 empty alias sets. §5.
+3. **8 stale preset ids** + a muddled generator category scheme. §6.
+4. **3 legacy nodes** needing a fold-or-hide decision. §7.
+
+## 2. Conventions (pinned)
+
+1. **`type_id` = `node.` + snake_case of the display label.** One name, three surfaces (palette, JSON, docs). Parenthetical label qualifiers drop from the id unless needed to disambiguate (`Add Burst (3D, radial)` → `node.add_burst_3d`).
+2. **Name the visual outcome, not the implementation.** Algorithm names move to `purpose` + `aliases` (`euler_step`, `midas`, `9tap`, `ffi`, `lic`) — *except* where the algorithm is the user-facing identity (Gaussian Blur, LFO, PBR, Reinhard, One Euro Filter).
+3. **Domain suffixes only for real collisions:** `_3d`, `_value`/`_image`, `_array`/`_texture` variants of the same concept.
+4. **"List" is the user word for array-typed data** in labels (List Math, List Feedback, Split XY). "Copies" is the user word for instances (Arrange Copies, Blend Copies, per-copy).
+5. **Old ids never get reused** for a different node. The migration table is permanent.
+6. **`purpose` must state the math**: operation/formula, coordinate space, range conventions, boundary behavior. It's the technical register serving expert users and agents (via MCP `get_node_docs`); `summary` never contains math.
+7. `system.*` ids are exempt (auto-wired plumbing, invisible to users).
+
+## 3. Migration infrastructure (build first)
+
+- **`crates/manifold-core/src/type_id_migration.rs`** *(new)*: one static table `&[(old, new)]` + `pub fn migrate_type_id(&str) -> &str` (identity for unknown ids). A second small table supports **param-seeding folds**: `(old_id, new_id, seed_params: &[(name, value)])` for legacy nodes folded into a parameterized successor (§7).
+- **One choke point per document kind:** applied immediately after deserialization — `EffectGraphDef` nodes (all loaders route through `instantiate_def`; migrate before flatten), and `PresetTypeId` on clips (`generator_type`) + effect instances at project load. The runtime, registry, editor, and catalog only ever see new ids.
+- **Not affected:** `BindingTarget` (targets `NodeId`, not type_id), OSC (`osc_prefix` is its own field), WGSL sources, param names.
+- **In-repo rewrites (not migration):** bundled preset JSONs, parity/gpu tests, `hand_descriptor!` entries, `primitive!` registrations — all mechanically renamed to new ids in the same commit.
+- **Tests:** (a) fixture graph written with old ids loads structurally identical to its new-id twin; (b) a project fixture with old `generator_type` values loads; (c) Liveschool canonical fixture green; (d) full workspace sweep (registry change = infrastructure per CLAUDE.md).
+
+## 4. Rename table — atoms (~75)
+
+Unlisted nodes keep their current id (already aligned). Aliases always gain the old id's tail as a search synonym.
+
+### Color & Tone / Composite
+| Old | New | Label |
+|---|---|---|
+| `node.gain` | `node.exposure` | Exposure |
+| `node.color_ramp` | `node.gradient_map` | Gradient Map |
+| `node.channel_mix` | `node.channel_mixer` | Channel Mixer |
+| `node.clamp_texture` | `node.clamp` | Clamp |
+| `node.hdr_retention_mix` | `node.hdr_mix` | HDR Mix |
+
+### Blur / Distort / Stylize
+| Old | New | Label |
+|---|---|---|
+| `node.blur_3d_separable` | `node.blur_3d` | Blur (3D) |
+| `node.convolution_2d_9tap` | `node.custom_convolution` | Custom Convolution |
+| `node.gaussian_blur_variable_width` | `node.variable_blur` | **Variable Blur** (label simplified too) |
+| `node.chromatic_displace` | `node.rgb_split` | RGB Split |
+| `node.mirror_axis` | `node.flip` | Flip |
+| `node.mirror_fold_uv` | `node.mirror` | Mirror |
+| `node.radial_fold_uv` | `node.kaleidoscope` | Kaleidoscope |
+| `node.uv_strip_clamp` | `node.edge_stretch` | Edge Stretch |
+| `node.affine_transform` | `node.transform` | **Transform** (label was missing) |
+
+### Generate / Mask / Noise
+| Old | New | Label |
+|---|---|---|
+| `node.gradient_ramp` | `node.gradient` | Gradient |
+| `node.render_filled_rects` | `node.draw_rectangles` | Draw Rectangles |
+| `node.render_lines` | `node.draw_lines` | Draw Lines |
+| `node.render_value_overlay` | `node.value_overlay` | Value Overlay |
+| `node.box_mask` | `node.rectangle_mask` | Rectangle Mask |
+| `node.ellipse_mask` | `node.circle_mask` | Circle Mask |
+
+### Math & Convert
+| Old | New | Label |
+|---|---|---|
+| `node.abs_texture` | `node.absolute_value` | Absolute Value |
+| `node.fract_texture` | `node.wrap` | Wrap |
+| `node.power_texture` | `node.power` | Power |
+| `node.trig_texture` | `node.sine_cosine` | Sine / Cosine |
+| `node.smoothstep_texture` | `node.smoothstep` | Smoothstep |
+| `node.scale_offset_texture` | `node.scale_offset_image` | Scale + Offset (image) |
+| `node.affine_scalar` | `node.scale_offset_value` | Scale + Offset (value) |
+| `node.array_math` | `node.list_math` | List Math |
+| `node.array_feedback` | `node.list_feedback` | **List Feedback** (label harmonized) |
+| `node.array_unpack_vec2` | `node.split_xy` | Split XY |
+| `node.array_connect_nearest` | `node.connect_nearest` | Connect Nearest |
+| `node.pack_curve_xy` | `node.combine_xy` | Combine XY (curve) |
+| `node.pack_vec4` | `node.combine_xyzw` | Combine XYZW |
+| `node.pack_channels` | `node.pack_rgba` | Pack RGBA |
+| `node.length_vec2` | `node.vector_length` | **Vector Length** (label clarified) |
+| `node.normalize_vec2` | `node.normalize` | Normalize |
+| `node.generate_range` | `node.range` | Range |
+| `node.scalar_array_accumulator` | `node.sum_into_bins` | Sum Into Bins |
+| `node.resolve_accumulator` | `node.resolve_scatter` | Resolve Scatter |
+| `node.resolve_3d_accumulator` | `node.resolve_scatter_3d` | Resolve Scatter (3D) |
+| `node.texture_dimensions` | `node.texture_size` | Texture Size |
+
+### Fields & Coordinates
+| Old | New | Label |
+|---|---|---|
+| `node.gradient_central_diff` | `node.edge_slope` | Edge Slope |
+| `node.gradient_central_diff_3d` | `node.edge_slope_3d` | Edge Slope (3D) |
+| `node.lic_integrate` | `node.flow_lines` | Flow Lines |
+| `node.rotate_2d` | `node.rotate_coordinates` | **Rotate Coordinates** (label clarified — it spins the warp coordinates, not the image; avoids confusion with Rotate 3D/4D which move geometry) |
+| `node.rotate_vec2_by_angle` | `node.rotate_vector` | Rotate Vector |
+| `node.sin_term` | `node.sine_wave` | Sine Wave (projected) |
+| `node.sample_volume_2d` | `node.slice_volume` | **Slice Volume** (label clarified — avoids collision with "Sample Volume for Particles") |
+
+### 3D Geometry / Materials
+| Old | New | Label |
+|---|---|---|
+| `node.camera_orbit` | `node.orbit_camera` | Orbit Camera |
+| `node.consecutive_edges` | `node.edge_pairs` | Edge Pairs |
+| `node.displace_mesh` | `node.push_mesh` | Push Mesh |
+| `node.edges_from_grid_uv` | `node.grid_edges` | Grid Edges |
+| `node.edges_from_hypercube` | `node.hypercube_edges` | Hypercube Edges (4D) |
+| `node.hypercube_vertices` | `node.hypercube_points` | Hypercube Points (4D) |
+| `node.generate_cube_mesh` | `node.cube_mesh` | Cube Mesh |
+| `node.generate_grid_mesh` | `node.grid_mesh` | Grid Mesh |
+| `node.generate_grid_uv` | `node.grid_points` | Grid Points (UV) |
+| `node.generate_instance_transforms` | `node.arrange_copies` | Arrange Copies |
+| `node.polytope_edges` | `node.platonic_solid_edges` | Platonic Solid Edges |
+| `node.polytope_vertices` | `node.platonic_solid_points` | Platonic Solid Points |
+| `node.project_3d` | `node.flatten_3d` | Flatten 3D → 2D |
+| `node.project_4d` | `node.flatten_4d` | Flatten 4D → 3D |
+| `node.render_3d_mesh` | `node.render_mesh` | Render Mesh |
+| `node.render_instanced_3d_mesh` | `node.render_copies` | Render Copies |
+| `node.triangulate_grid` | `node.make_triangles` | Make Triangles |
+| `node.array_replicate_polyline_rings` | `node.repeat_outline` | Repeat Outline (rings) |
+| `node.bake_equirect_envmap` | `node.bake_environment` | Bake Environment (equirect) |
+| `node.blinn_specular` | `node.shininess` | Shininess (Blinn) |
+| `node.fresnel_rim` | `node.rim_light` | Rim Light (Fresnel) |
+| `node.lambert_directional` | `node.basic_light` | Basic Light (Lambert) |
+| `node.heightmap_to_normal` | `node.surface_bumps` | Surface Bumps |
+
+### Particles (2D + 3D)
+| Old | New | Label |
+|---|---|---|
+| `node.apply_radial_burst_to_particles` | `node.add_burst` | Add Burst (radial) |
+| `node.apply_radial_burst_3d_to_particles` | `node.add_burst_3d` | Add Burst (3D, radial) |
+| `node.array_diffuse_particles` | `node.spread_out` | Spread Out (diffuse) |
+| `node.diffuse_force_3d_at_particles` | `node.spread_out_3d` | Spread Out (3D diffuse) |
+| `node.euler_step_particles` | `node.move_particles` | Move Particles |
+| `node.euler_step_particles_3d` | `node.move_particles_3d` | Move Particles (3D) |
+| `node.seed_particles` | `node.spawn_particles` | Spawn Particles |
+| `node.seed_particles_from_texture` | `node.spawn_from_image` | Spawn From Image |
+| `node.scatter_particles` | `node.draw_particles` | Draw Particles (scatter) |
+| `node.scatter_particles_3d` | `node.draw_particles_3d` | Draw Particles (3D scatter) |
+| `node.scatter_particles_camera` | `node.draw_particles_camera` | Draw Particles (camera) |
+| `node.simplex_noise_force_at_particles` | `node.turbulence` | Turbulence (simplex) |
+| `node.simplex_noise_force_3d_at_particles` | `node.turbulence_3d` | Turbulence (3D, simplex) |
+| `node.curl_slope_force_3d` | `node.swirl_force_3d` | Swirl Force (3D, curl) |
+| `node.container_bounds_3d` | `node.keep_in_box_3d` | Keep In Box (3D) |
+| `node.container_repel_force_3d` | `node.push_from_walls_3d` | Push From Walls (3D) |
+| `node.radial_burst_force_field` | `node.explosion_force` | Explosion Force |
+| `node.wrap_particles_torus` | `node.wrap_around` | Wrap Around (torus) |
+| `node.fbm_per_instance` | `node.fractal_noise_per_copy` | Fractal Noise (per copy) |
+| `node.simplex_per_instance` | `node.simplex_noise_per_copy` | Simplex Noise (per copy) |
+| `node.instance_position_jitter` | `node.position_jitter` | Position Jitter |
+| `node.instance_rotation_jitter` | `node.rotation_jitter` | Rotation Jitter |
+| `node.lerp_instance_fields` | `node.blend_copies` | Blend Copies |
+| `node.sample_texture_at_particles` | `node.sample_image_at_particles` | Sample Image for Particles |
+| `node.sample_texture_3d_at_particles` | `node.sample_volume_at_particles` | Sample Volume for Particles |
+
+### Detection / Routing
+| Old | New | Label |
+|---|---|---|
+| `node.blob_detect_ffi` | `node.blob_tracker` | Blob Tracker |
+| `node.blob_overlay_render` | `node.blob_overlay` | Blob Overlay |
+| `node.depth_estimate_midas` | `node.depth_map` | Depth Map |
+| `node.optical_flow_estimate` | `node.optical_flow` | Optical Flow |
+| `node.person_segment` | `node.person_mask` | Person Mask |
+| `node.mux_array` | `node.switch_array` | Switch (array) |
+| `node.mux_scalar` | `node.switch_value` | Switch (value) |
+| `node.mux_texture` | `node.switch_texture` | Switch (texture) |
+
+**Deliberately NOT renamed (pending decomposition — renaming a to-be-deleted node is churn):** `node.cylinder_wrap_field`, `node.torus_wrap_field`, `node.digital_plants_render`, `node.nested_cubes_geometry`, `node.watercolor`. They get migration entries when their decompositions land.
+
+## 5. Fills (missing metadata)
+
+**Missing labels** (id stays): `node.chroma_key` → "Chroma Key" · `node.color_lut` → "Color LUT" · `node.edge_detect` → "Edge Detect" · `node.invert` → "Invert" · `node.masked_mix` → "Masked Mix" · `node.watercolor` → "Watercolor".
+
+**Fully uncategorized (5):** `node.fbm_2d`, `node.hash_noise_field_2d`, `node.perlin_noise_2d`, `node.simplex_noise_2d`, `node.multi_blend`. The four noise atoms look superseded by the unified `node.noise` (Type param). **Verify at apply:** if they're the internal implementations behind the mux, hide them from the palette (descriptor `available`-equivalent) and document; if independently useful, fill descriptors properly. `node.multi_blend` is live (supersedes `texture_sum_5`) — needs category (Composite), role (Filter), summary, aliases.
+
+**Empty aliases:** `node.radial_offset_field` (add: push field, radial displace, zoom warp) · `node.saturation` (add: vibrance, desaturate, Level TOP) · `node.voronoi_2d` (add: cellular, worley, cells, mosaic).
+
+## 6. Presets
+
+| Old id | New id | Notes |
+|---|---|---|
+| `EdgeGlow` | `EdgeDetect` | name is "Edge Detect" |
+| `HdrBoost` | `HighlightBoost` | name is "Highlight Boost" |
+| `InvertColors` | `Invert` | name is "Invert" |
+| `WireframeZoo` | `Wireframe` | name is "Wireframe" |
+| `SoftFocusGraph` | `SoftFocus` | "Graph" suffix is migration residue |
+| `ComputeStrangeAttractor` | `StrangeAttractor` | "Compute" is implementation |
+| `FluidSimulation` | `FluidSim2D` | name is "Fluid Sim 2D" |
+| `FluidSimulation3D` | `FluidSim3D` | symmetry |
+
+Same migration table (PresetTypeId choke point). `osc_prefix` unchanged, so OSC/Ableton mappings survive.
+
+**Also:** `NodeGraphTest` → hide from picker (diagnostic). **Generator categories are muddled** ("Procedural" ×12, "Generator" ×5, "Source" ×2 — "Generator" as a category of generators says nothing). Proposed regrouping: **Sim** (FluidSim2D/3D, OilyFluid, MetallicGlass), **Geometry** (Tesseract, NestedCubes, Duocylinder, Wireframe, Lissajous, DigitalPlants, StarField, ConcentricTunnel), **Texture** (Plasma, BasicShapes, Voronoi-family, BlackHole, StrangeAttractor), **Media/Text** (Text, MRI Volume, ParticleText). Flagged for Peter — it's taste, not correctness.
+
+## 7. Legacy trio (decisions)
+
+1. **`node.rotate_vec2_90`** → fold into `node.rotate_vector` via the param-seeding migration (`angle = 90`). Verify port parity at apply; then delete the node.
+2. **`node.fluid_project_scatter_2d`** → verify it's port-identical to `node.draw_particles_camera` (catalog says it's "the older name"); if so, plain rename-table entry and delete.
+3. **`node.texture_sum_5`** → stays hidden-legacy (fixed 5 ports vs multi_blend's dynamic ports — a wire-rewriting migration isn't worth it). Revisit only if it blocks something.
+
+## 8. Purpose (technical register) — spot-audit result
+
+Sampled purposes are genuinely good ("Per-pixel abs(input.rgb). Alpha passes through…"). Rule pinned in §2.6; the apply pass does a linear read of all 212 purposes and upgrades any that fail the "states the math" bar — expected to be a minority. No structural work.
+
+## 9. Apply-pass order (Sonnet)
+
+1. Migration infra (§3) + tests — land alone first.
+2. Atom renames (§4): registrations, descriptors, bundled preset JSONs, tests, migration entries. One commit per category group is fine; workspace sweep at end.
+3. Preset renames + `NodeGraphTest` hide (§6).
+4. Fills (§5) + legacy folds (§7, after their verify steps).
+5. Generator recategorization (§6) once Peter picks the grouping.
+6. Regenerate NODE_CATALOG (`cargo run -p manifold-renderer --bin gen_node_catalog`) + docs index; Liveschool fixture green; clippy clean.
+
+## 10. Review checklist for Peter
+
+The **bolded rows** in §4 change the label too, not just the id: Variable Blur, Transform, List Feedback, Vector Length, Rotate Coordinates, Slice Volume. Plus two taste calls: generator category regrouping (§6) and the "List"/"Copies" vocabulary rule (§2.4). Everything else is mechanical alignment — id catches up to the label you already approved by shipping it.
