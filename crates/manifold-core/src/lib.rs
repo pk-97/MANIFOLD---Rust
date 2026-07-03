@@ -33,6 +33,7 @@ pub mod preset_type_registry;
 pub mod project;
 pub mod recording;
 pub mod selection;
+pub mod session;
 pub mod settings;
 pub mod stage;
 pub mod tempo;
@@ -53,7 +54,7 @@ pub use audio_setup::{
     AudioDeviceRef, AudioSend, AudioSendSource, AudioSetup, AudioSourceKind, SendAnalysisConfig,
 };
 pub use audio_trigger::TriggerRoute;
-pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId};
+pub use id::{AudioSendId, ClipId, EffectGroupId, EffectId, LayerId, MarkerId, NodeId, SceneId};
 pub use layer::OverlapAction;
 pub use macro_bank::{
     MACRO_COUNT, MacroBank, MacroCurve, MacroMapping, MacroMappingTarget, MacroSlot,
@@ -61,6 +62,7 @@ pub use macro_bank::{
 pub use marker::TimelineMarker;
 pub use math::{BeatQuantizer, MathUtils, short_id};
 pub use selection::{SelectionRegion, SelectionRegionTarget};
+pub use session::{ClipSequence, Scene, SessionGrid, SessionSlot};
 pub use stage::{
     DerivedStage, DisplayIdentity, DisplayPlacement, Island, OutputAdvanced, OutputId, Rotation,
     StageLayout, derive_stage,
