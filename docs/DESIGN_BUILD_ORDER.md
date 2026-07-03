@@ -20,7 +20,7 @@ prerequisites aren't shipped, stop.
 
 | Design doc | Hard prerequisites | Hardening level (§DESIGN_DOC_STANDARD §9) |
 |---|---|---|
-| GIG_RESILIENCE_DESIGN (P1 SHIPPED 2026-07-03; P2–P4 remain) | none for P2; P3 after PERFORM_SURFACE P1 (see §3) | full |
+| GIG_RESILIENCE_DESIGN (P1–P2 SHIPPED 2026-07-03; P3–P4 remain) | P3 after PERFORM_SURFACE P1 (see §3) | full |
 | MULTI_DISPLAY_DESIGN | none | full |
 | SESSION_MODE_DESIGN | none | full |
 | MEDIA_BACKEND_DESIGN | none for P1–P3; §6 pairs with VULKAN §8 | full |
