@@ -1,8 +1,9 @@
 //! `node.rotate_vector` — rotate the RG vec2 field by an
 //! arbitrary angle (radians).
 //!
-//! Generalisation of the older `node.rotate_vec2_90` (now a type-ID
-//! alias). `angle` is port-shadow-param so a control wire — LFO, audio
+//! Generalisation of the older `node.rotate_vec2_90` (retired; a load-time
+//! migration folds it into this primitive with `angle` seeded to PI/2,
+//! docs/NODE_VOCABULARY_AUDIT.md §7.1). `angle` is port-shadow-param so a control wire — LFO, audio
 //! envelope, clip-trigger driver, manual slider — can sweep the
 //! rotation continuously. Defaults to `angle = PI/2` so existing
 //! presets that simply replaced `rotate_vec2_90` with this primitive
@@ -51,7 +52,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "BA of the input are ignored; output BA = (0, 1). Chain order for fluid-sim curl: `gradient_central_diff(scale_mode=UV, wrap_mode=Repeat) → scale_offset_texture(slope_strength * area_scale) → rotate_vec2_by_angle(angle)` — the decomposed shape of the legacy `fluid_gradient_rotate` bundle. For the oily-fluid divergence-free curl pattern, leave angle at the default PI/2 and wire a normalized gradient into `in`. For larger rotations of a UV-space transform use `node.rotate_coordinates` (different operation — that's a UV-space coordinate transform, not a per-pixel vec2 rotation). Legacy type-ID `node.rotate_vec2_90` aliases to this primitive; saved projects keep working with the default PI/2 angle.",
+    composition_notes: "BA of the input are ignored; output BA = (0, 1). Chain order for fluid-sim curl: `gradient_central_diff(scale_mode=UV, wrap_mode=Repeat) → scale_offset_texture(slope_strength * area_scale) → rotate_vec2_by_angle(angle)` — the decomposed shape of the legacy `fluid_gradient_rotate` bundle. For the oily-fluid divergence-free curl pattern, leave angle at the default PI/2 and wire a normalized gradient into `in`. For larger rotations of a UV-space transform use `node.rotate_coordinates` (different operation — that's a UV-space coordinate transform, not a per-pixel vec2 rotation). The retired `node.rotate_vec2_90` type-ID folds into this primitive at load time with `angle` seeded to PI/2 (docs/NODE_VOCABULARY_AUDIT.md §7.1); saved projects keep working unchanged.",
     examples: [],
     picker: { label: "Rotate Vector", category: Atom },
     summary: "Rotates a 2D vector field by an angle, turning every arrow in a flow or gradient field by the same amount.",
@@ -65,19 +66,6 @@ crate::primitive! {
         // intermediate/output inside a feedback loop so fused == unfused.
         output_format_override: Option<manifold_gpu::GpuTextureFormat> = None,
     },
-}
-
-// Type-ID alias so saved projects referencing the legacy
-// `node.rotate_vec2_90` keep working. The new primitive's default
-// angle (PI/2 = +90° CCW) matches the legacy direction=0 default. The
-// alias hides from the palette (picker: None) — new graphs pick the
-// canonical `node.rotate_vector` name from the picker.
-inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
-        type_id: "node.rotate_vec2_90",
-        create: || Box::new(RotateVec2ByAngle::new()),
-        picker: None,
-    }
 }
 
 impl Primitive for RotateVec2ByAngle {

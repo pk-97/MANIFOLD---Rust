@@ -100,6 +100,7 @@ crate::primitive! {
     summary: "Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields.",
     category: Noise,
     role: Source,
+    aliases: ["cellular", "worley", "cells", "mosaic"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/voronoi_2d_body.wgsl"),
 }

@@ -135,18 +135,6 @@ crate::primitive! {
     atomic_outputs: ["accum"],
 }
 
-// Legacy type-ID alias — projects authored before the rename from
-// `node.fluid_project_scatter_2d` → `node.draw_particles_camera` still
-// load. Hidden from the palette (`picker: None`) so the new name is the
-// only visible choice.
-inventory::submit! {
-    crate::node_graph::persistence::PrimitiveFactory {
-        type_id: "node.fluid_project_scatter_2d",
-        create: || Box::new(ScatterParticlesCamera::new()),
-        picker: None,
-    }
-}
-
 impl Primitive for ScatterParticlesCamera {
     /// Display accumulator is sized to the host canvas — same shape as
     /// `scatter_particles` (2D). The chain builder allocates `canvas_w ×
@@ -311,19 +299,6 @@ mod tests {
         let prim = ScatterParticlesCamera::new();
         let node: &dyn EffectNode = &prim;
         assert_eq!(node.type_id().as_str(), "node.draw_particles_camera");
-    }
-
-    #[test]
-    fn legacy_type_id_alias_resolves_to_scatter_particles_camera() {
-        let registry = crate::node_graph::persistence::PrimitiveRegistry::with_builtin();
-        let node = registry
-            .construct("node.fluid_project_scatter_2d")
-            .expect("legacy alias must be registered");
-        assert_eq!(
-            node.type_id().as_str(),
-            "node.draw_particles_camera",
-            "legacy alias should construct the new primitive",
-        );
     }
 }
 

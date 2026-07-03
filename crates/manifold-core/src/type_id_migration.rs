@@ -173,6 +173,14 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("ComputeStrangeAttractor", "StrangeAttractor"),
     ("FluidSimulation", "FluidSim2D"),
     ("FluidSimulation3D", "FluidSim3D"),
+    // --- VOCAB P4: Legacy trio folds (docs/NODE_VOCABULARY_AUDIT.md §7) ---
+    // node.rotate_vec2_90 -> node.rotate_vector: port-identical (the legacy
+    // id constructs the exact same RotateVec2ByAngle struct); the fold only
+    // needs the angle seeded (see PARAM_SEED_MIGRATIONS below).
+    ("node.rotate_vec2_90", "node.rotate_vector"),
+    // node.fluid_project_scatter_2d -> node.draw_particles_camera:
+    // port-identical (verified §7.2), plain rename, no param seed needed.
+    ("node.fluid_project_scatter_2d", "node.draw_particles_camera"),
 ];
 
 /// One legacy-fold entry: `(old_id, new_id, seed_params)` — the params to
@@ -183,10 +191,19 @@ pub type ParamSeedMigration = (&'static str, &'static str, &'static [(&'static s
 
 /// Param-seeding table for §7 legacy folds: a retired node (`old_id`) with no
 /// direct id-for-id equivalent folds into a parameterized successor
-/// (`new_id`), seeding the params a plain rename can't express. Empty until
-/// P4 — folding is content work, not infrastructure, and each fold needs its
-/// §7 port-parity verification run first.
-pub static PARAM_SEED_MIGRATIONS: &[ParamSeedMigration] = &[];
+/// (`new_id`), seeding the params a plain rename can't express.
+pub static PARAM_SEED_MIGRATIONS: &[ParamSeedMigration] = &[(
+    "node.rotate_vec2_90",
+    "node.rotate_vector",
+    // Stored value is RADIANS (see `ParamSnapshotKind::Angle`) — the UI
+    // converts to degrees only at the slider boundary. FRAC_PI_2 = 90°,
+    // matching the retired node's fixed +90° CCW rotation and
+    // `node.rotate_vector`'s own `angle` default, so this seed is
+    // technically redundant with the successor's default but pins the
+    // value explicitly per docs/NODE_VOCABULARY_AUDIT.md §7.1 rather than
+    // relying on the coincidence.
+    &[("angle", SerializedParamValue::Float { value: std::f32::consts::FRAC_PI_2 })],
+)];
 
 /// Map an old `type_id`/[`crate::PresetTypeId`] string to its current name.
 /// Identity for any id not in [`TYPE_ID_MIGRATIONS`] — covers every current

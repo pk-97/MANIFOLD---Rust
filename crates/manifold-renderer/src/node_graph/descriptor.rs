@@ -304,6 +304,16 @@ hand_descriptor!(
     aliases: ["blur", "gaussian", "soft", "Blur TOP"],
 );
 
+// Compositing (multi_blend.rs)
+hand_descriptor!(
+    "node.multi_blend",
+    "Dynamic N-input per-pixel weighted sum: out = (in_0 + in_1 + … + in_{N-1}) / divisor, all channels. `num_inputs` reconfigures how many Texture2D ports the node exposes; unwired inputs drop out of the sum. Supersedes the fixed five-input node.texture_sum_5.",
+    summary: "Adds together any number of images and divides by a shared amount, collapsing a long chain of Mix(Add) nodes into one. Divisor 1 sums, divisor N averages.",
+    category: Composite,
+    role: Filter,
+    aliases: ["multi blend", "sum", "add", "weighted sum", "texture sum"],
+);
+
 // Routing (mux_texture.rs)
 hand_descriptor!(
     "node.switch_texture",
@@ -382,25 +392,46 @@ hand_descriptor!(
     aliases: ["trigger ease", "glide", "ease to", "ramp to"],
 );
 
-// Vector field (rotate_vec2_by_angle.rs — legacy alias)
+// Noise legacy aliases (noise.rs — merged into node.noise's `type` param)
 hand_descriptor!(
-    "node.rotate_vec2_90",
-    "Rotate the RG vec2 field by 90 degrees. Legacy type-ID alias of node.rotate_vector (which generalises to an arbitrary angle), retained so older presets load.",
-    summary: "Rotates a 2D vector field by 90 degrees. The fixed-angle older version of Rotate Vector.",
-    category: FieldsAndCoordinates,
-    role: Map,
-    aliases: ["rotate vector", "90 degrees", "turn"],
+    "node.perlin_noise_2d",
+    "Legacy type-ID alias of node.noise (Perlin, Detail 1). Constructs the unified noise primitive pre-set to the Perlin branch at single-octave, retained so older presets load unchanged.",
+    summary: "Classic Perlin gradient noise. The single-octave Perlin branch of the unified Noise node.",
+    category: Noise,
+    role: Source,
+    aliases: ["noise", "perlin", "gradient noise"],
+);
+hand_descriptor!(
+    "node.simplex_noise_2d",
+    "Legacy type-ID alias of node.noise (Simplex, Detail 1). Constructs the unified noise primitive pre-set to the Simplex branch at single-octave, retained so older presets load unchanged.",
+    summary: "Cleaner gradient noise with fewer directional artifacts than Perlin. The single-octave Simplex branch of the unified Noise node.",
+    category: Noise,
+    role: Source,
+    aliases: ["noise", "simplex", "gradient noise"],
+);
+hand_descriptor!(
+    "node.fbm_2d",
+    "Legacy type-ID alias of node.noise (Perlin, Detail 4). fBM is octave-summed Perlin, so it's a Detail value on the unified node rather than a separate type; constructs the unified primitive pre-set to 4 octaves, retained so older presets load unchanged.",
+    summary: "Octave-summed Perlin noise for rich fractal texture. The 4-octave Perlin branch of the unified Noise node.",
+    category: Noise,
+    role: Source,
+    aliases: ["noise", "fbm", "fractal", "fractal noise", "clouds"],
+);
+hand_descriptor!(
+    "node.hash_noise_field_2d",
+    "Legacy type-ID alias of node.noise (Random). Constructs the unified noise primitive pre-set to the per-pixel hash branch (R-only output, no octaves), retained so older presets load unchanged.",
+    summary: "Uncorrelated per-pixel white noise, grain and dust and LIC ink. The Random branch of the unified Noise node.",
+    category: Noise,
+    role: Source,
+    aliases: ["noise", "hash", "random", "white noise", "grain"],
 );
 
-// Particle simulation (scatter_particles_camera.rs — legacy alias)
-hand_descriptor!(
-    "node.fluid_project_scatter_2d",
-    "Legacy type-ID alias of node.draw_particles_camera (FluidSim3D's camera-projection + 2D scatter display path), retained so older projects load.",
-    summary: "Projects 3D particles through a camera and splats them to 2D. The older name for Draw Particles (camera).",
-    category: Particles3D,
-    role: Filter,
-    aliases: ["draw particles camera", "project scatter"],
-);
+// node.rotate_vec2_90 and node.fluid_project_scatter_2d: retired
+// docs/NODE_VOCABULARY_AUDIT.md §7.1/§7.2 — folded into node.rotate_vector /
+// node.draw_particles_camera via the load-time migration table
+// (manifold_core::type_id_migration) rather than a live PrimitiveFactory
+// registration, so they carry no descriptor here (a descriptor documents a
+// registered node; these ids no longer are one).
 
 // Legacy fused wrappers (pending decomposition)
 hand_descriptor!(

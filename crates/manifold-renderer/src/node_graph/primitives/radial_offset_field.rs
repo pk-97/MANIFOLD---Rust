@@ -72,6 +72,7 @@ crate::primitive! {
     summary: "Makes a push outward from a centre point that other nodes use to shift pixels. It has no look of its own, so wire it into a displace or remap node.",
     category: DistortAndWarp,
     role: Map,
+    aliases: ["push field", "radial displace", "zoom warp"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/radial_offset_field_body.wgsl"),
 }

@@ -226,17 +226,39 @@ pub struct NodeInstantiation {
 ///   endpoint and is not connected. All other wires remap normally.
 ///
 /// Migrate every node's `type_id` (recursing into group bodies) via
-/// [`manifold_core::type_id_migration::migrate_type_id`]. Returns `Some`
-/// only when at least one id actually changed, so the overwhelmingly common
-/// already-current document — every bundled preset, every project saved
-/// since its last rename — passes through borrowed rather than cloned.
+/// [`manifold_core::type_id_migration::migrate_type_id`], then apply any
+/// matching [`manifold_core::type_id_migration::PARAM_SEED_MIGRATIONS`]
+/// entry — a rename whose retired node had no direct id-for-id equivalent
+/// (e.g. `node.rotate_vec2_90`'s fixed 90° folding into `node.rotate_vector`'s
+/// general `angle` param) writes the params that reproduce the retired
+/// node's fixed behavior, keyed by the ORIGINAL id so group-internal nodes
+/// get seeded exactly like top-level ones. Seeding never overwrites a param
+/// key already present on the node (`entry().or_insert()`), matching
+/// "seed the default", not "force the value" — a document that already
+/// carries an explicit value for that param (from a later hand edit)
+/// keeps it. Returns `Some` only when at least one id actually changed, so
+/// the overwhelmingly common already-current document — every bundled
+/// preset, every project saved since its last rename — passes through
+/// borrowed rather than cloned.
 fn migrate_def_type_ids(def: &EffectGraphDef) -> Option<EffectGraphDef> {
     fn migrate_nodes(nodes: &mut [EffectGraphNode], changed: &mut bool) {
         for n in nodes {
-            let new_id = manifold_core::type_id_migration::migrate_type_id(&n.type_id);
-            if new_id != n.type_id {
+            let old_id = n.type_id.clone();
+            let new_id = manifold_core::type_id_migration::migrate_type_id(&old_id);
+            if new_id != old_id {
                 n.type_id = new_id.to_string();
                 *changed = true;
+                for (seed_old, seed_new, seed_params) in
+                    manifold_core::type_id_migration::PARAM_SEED_MIGRATIONS
+                {
+                    if *seed_old == old_id && *seed_new == new_id {
+                        for (param_name, param_value) in *seed_params {
+                            n.params
+                                .entry((*param_name).to_string())
+                                .or_insert_with(|| param_value.clone());
+                        }
+                    }
+                }
             }
             if let Some(group) = &mut n.group {
                 migrate_nodes(&mut group.nodes, changed);
@@ -1686,6 +1708,97 @@ mod tests {
         // A document already on current ids needs no migration at all —
         // the cheap-clone-free common-case path `instantiate_def` relies on.
         assert!(migrate_def_type_ids(&new_twin).is_none());
+    }
+
+    /// docs/NODE_VOCABULARY_AUDIT.md §7.1: the retired `node.rotate_vec2_90`
+    /// folds into `node.rotate_vector` AND seeds `angle = PI/2` (radians —
+    /// the stored representation, not the UI's degrees) via
+    /// `PARAM_SEED_MIGRATIONS`, reproducing the retired node's fixed +90°
+    /// rotation. A node buried in a group body gets seeded exactly like a
+    /// top-level one (same recursion the plain id-rewrite uses).
+    #[test]
+    fn migrate_def_type_ids_seeds_params_for_legacy_fold() {
+        let old_def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![
+                bare_node(0, "node.rotate_vec2_90"),
+                grouped_node(1, "node.rotate_vec2_90"),
+            ],
+            wires: vec![],
+        };
+
+        let migrated = migrate_def_type_ids(&old_def)
+            .expect("old id present, migration must produce Some");
+
+        let top = &migrated.nodes[0];
+        assert_eq!(top.type_id, "node.rotate_vector");
+        assert_eq!(
+            top.params.get("angle"),
+            Some(&manifold_core::effect_graph_def::SerializedParamValue::Float {
+                value: std::f32::consts::FRAC_PI_2
+            })
+        );
+
+        let inner = &migrated.nodes[1].group.as_ref().unwrap().nodes[0];
+        assert_eq!(inner.type_id, "node.rotate_vector");
+        assert_eq!(
+            inner.params.get("angle"),
+            Some(&manifold_core::effect_graph_def::SerializedParamValue::Float {
+                value: std::f32::consts::FRAC_PI_2
+            })
+        );
+    }
+
+    /// Seeding never overwrites a param key the document already carries —
+    /// "seed the default", not "force the value" (see the doc comment on
+    /// `migrate_def_type_ids`).
+    #[test]
+    fn migrate_def_type_ids_seed_does_not_overwrite_existing_param() {
+        let mut node = bare_node(0, "node.rotate_vec2_90");
+        node.params.insert(
+            "angle".to_string(),
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value: 1.0 },
+        );
+        let old_def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![node],
+            wires: vec![],
+        };
+
+        let migrated = migrate_def_type_ids(&old_def)
+            .expect("old id present, migration must produce Some");
+        assert_eq!(
+            migrated.nodes[0].params.get("angle"),
+            Some(&manifold_core::effect_graph_def::SerializedParamValue::Float { value: 1.0 }),
+            "explicit stored value must survive the fold unseeded"
+        );
+    }
+
+    /// docs/NODE_VOCABULARY_AUDIT.md §7.2: the retired
+    /// `node.fluid_project_scatter_2d` is a plain rename fold (port-identical
+    /// to `node.draw_particles_camera`, no param seed) — proves the rename
+    /// side of the same choke point still works with zero
+    /// `PARAM_SEED_MIGRATIONS` entries matching.
+    #[test]
+    fn migrate_def_type_ids_plain_rename_seeds_no_params() {
+        let old_def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![bare_node(0, "node.fluid_project_scatter_2d")],
+            wires: vec![],
+        };
+        let migrated = migrate_def_type_ids(&old_def)
+            .expect("old id present, migration must produce Some");
+        assert_eq!(migrated.nodes[0].type_id, "node.draw_particles_camera");
+        assert!(migrated.nodes[0].params.is_empty());
     }
 
     /// (a, continued) The same fixture through the real `instantiate_def`
