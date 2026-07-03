@@ -94,6 +94,50 @@ def append_telemetry(record):
         pass
 
 
+def observer_alive(session_id):
+    try:
+        with open(os.path.join(VERDICTS_DIR, f"{session_id}.pid"), encoding="utf-8") as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)  # signal 0: existence check only
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def ensure_observer(session_id, transcript_path):
+    """Spawn the observer daemon if one isn't already running for this
+    session. Called by SessionStart (initial spawn) and by both valve hooks
+    (revive): the daemon exits after 10 idle minutes, and session activity
+    itself is what brings it back — catchup rebuilds its window state from
+    the transcript, so nothing is lost but the idle gap. Cost when the
+    daemon is alive: one pidfile read + one signal-0 check. Fails open."""
+    try:
+        if not session_id or not transcript_path:
+            return
+        if observer_alive(session_id):
+            return
+        observer = os.path.join(SUBSTRATE_DIR, "observer.py")
+        if not os.path.exists(observer):
+            return
+        import subprocess
+        import sys
+
+        os.makedirs(VERDICTS_DIR, exist_ok=True)
+        log_path = os.path.join(VERDICTS_DIR, f"{session_id}.log")
+        with open(log_path, "a", encoding="utf-8") as log:
+            subprocess.Popen(
+                [sys.executable, os.path.join(SUBSTRATE_DIR, "observer.py"), "--session-id", session_id, "--transcript", transcript_path],
+                stdout=log,
+                stderr=log,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                cwd=SUBSTRATE_DIR,
+            )
+        append_telemetry({"ts": time.time(), "session_id": session_id, "event": "observer_spawn"})
+    except Exception:
+        pass
+
+
 def pending_injection(session_id):
     """Returns (block_text, seq) for an unconsumed, valid, fresh flag, or
     (None, None) if there's nothing to deliver. Never raises."""

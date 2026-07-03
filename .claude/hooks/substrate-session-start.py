@@ -9,40 +9,19 @@ per DESIGN.md invariant 1 (fail open, always).
 """
 import json
 import os
-import subprocess
 import sys
 
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
 SUBSTRATE_DIR = os.path.normpath(os.path.join(HOOKS_DIR, "..", "substrate"))
-VERDICTS_DIR = os.path.join(SUBSTRATE_DIR, "verdicts")
+sys.path.insert(0, SUBSTRATE_DIR)
 
 
 def main():
     try:
+        import valve
+
         data = json.load(sys.stdin)
-    except Exception:
-        return
-    session_id = data.get("session_id")
-    transcript_path = data.get("transcript_path")
-    if not session_id or not transcript_path:
-        return
-
-    observer = os.path.join(SUBSTRATE_DIR, "observer.py")
-    if not os.path.exists(observer):
-        return
-
-    try:
-        os.makedirs(VERDICTS_DIR, exist_ok=True)
-        log_path = os.path.join(VERDICTS_DIR, f"{session_id}.log")
-        with open(log_path, "a", encoding="utf-8") as log:
-            subprocess.Popen(
-                [sys.executable, observer, "--session-id", session_id, "--transcript", transcript_path],
-                stdout=log,
-                stderr=log,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-                cwd=SUBSTRATE_DIR,
-            )
+        valve.ensure_observer(data.get("session_id"), data.get("transcript_path"))
     except Exception:
         pass
 

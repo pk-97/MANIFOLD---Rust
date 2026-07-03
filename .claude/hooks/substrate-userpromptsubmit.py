@@ -28,6 +28,9 @@ def main():
         session_id = data.get("session_id")
         if not session_id:
             return
+        # Revive the observer if it idle-exited — a new prompt after a long
+        # break is exactly when observation must be back.
+        valve.ensure_observer(session_id, data.get("transcript_path"))
         block, seq = valve.pending_injection(session_id)
         if not block:
             return
