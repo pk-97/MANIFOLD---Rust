@@ -1,4 +1,4 @@
-//! `node.hypercube_vertices` — emit the 16 corner vertices of a 4D
+//! `node.hypercube_points` — emit the 16 corner vertices of a 4D
 //! hypercube as `Array<Vec4Vertex>`, with a continuous `dimension`
 //! control that collapses the higher axes toward zero so the shape
 //! morphs **point → line → square → cube → tesseract** as `dimension`
@@ -6,7 +6,7 @@
 //!
 //! The 4D-side counterpart of [`super::polytope_vertices`]; pair with
 //! [`super::edges_from_hypercube`] for the matching wireframe topology
-//! and feed both into `node.rotate_4d → node.project_4d →
+//! and feed both into `node.rotate_4d → node.flatten_4d →
 //! node.draw_lines` (with the `edges` input wired).
 //!
 //! Vertex `i` has coordinates `(sx, sy, sz, sw) * 0.125 * present(axis)`
@@ -50,8 +50,8 @@ struct Uniforms {
 
 crate::primitive! {
     name: HypercubeVertices,
-    type_id: "node.hypercube_vertices",
-    purpose: "Emit the 16 corner vertices of a 4D hypercube as Array<Vec4Vertex>, with a continuous `dimension` control (1..4) that collapses the higher axes toward zero so the shape morphs point → line → square → cube → tesseract. At dimension=4 it is the full tesseract. Pair with node.edges_from_hypercube and feed both into node.rotate_4d → node.project_4d → node.draw_lines (with the `edges` input wired). The 4D counterpart of node.polytope_vertices.",
+    type_id: "node.hypercube_points",
+    purpose: "Emit the 16 corner vertices of a 4D hypercube as Array<Vec4Vertex>, with a continuous `dimension` control (1..4) that collapses the higher axes toward zero so the shape morphs point → line → square → cube → tesseract. At dimension=4 it is the full tesseract. Pair with node.hypercube_edges and feed both into node.rotate_4d → node.flatten_4d → node.draw_lines (with the `edges` input wired). The 4D counterpart of node.platonic_solid_points.",
     inputs: {
         // Port-shadows the `dimension` param. Wire an LFO / envelope /
         // macro here to animate the square→cube→tesseract morph live;
@@ -77,7 +77,7 @@ crate::primitive! {
     summary: "Builds the corner points of a hypercube. The Dimension knob morphs it from a flat square up through a cube to a full 4D tesseract — wire it to an LFO to animate the reveal.",
     category: Geometry3D,
     role: Source,
-    aliases: ["tesseract", "hypercube", "4d cube", "polytope", "dimension morph"],
+    aliases: ["tesseract", "hypercube", "hypercube vertices", "4d cube", "polytope", "dimension morph"],
 }
 
 impl Primitive for HypercubeVertices {
@@ -101,7 +101,7 @@ impl Primitive for HypercubeVertices {
 
         let Some(vert_dst) = ctx.outputs.array("vertices") else {
             log::warn!(
-                "node.hypercube_vertices: no GpuBuffer bound to output port `vertices` — \
+                "node.hypercube_points: no GpuBuffer bound to output port `vertices` — \
                  the chain build did not pre-allocate the Array<Vec4Vertex> output.",
             );
             return;
@@ -117,7 +117,7 @@ impl Primitive for HypercubeVertices {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/hypercube_vertices.wgsl"),
                 "cs_main",
-                "node.hypercube_vertices",
+                "node.hypercube_points",
             )
         });
 
@@ -142,7 +142,7 @@ impl Primitive for HypercubeVertices {
                 },
             ],
             [vert_capacity.div_ceil(64), 1, 1],
-            "node.hypercube_vertices",
+            "node.hypercube_points",
         );
     }
 }
@@ -157,7 +157,7 @@ mod tests {
     fn declares_dimension_input_and_vec4_array_output() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let vec4_layout = ArrayType::of_known::<Vec4Vertex>();
-        assert_eq!(HypercubeVertices::TYPE_ID, "node.hypercube_vertices");
+        assert_eq!(HypercubeVertices::TYPE_ID, "node.hypercube_points");
         assert_eq!(HypercubeVertices::INPUTS.len(), 1);
         assert_eq!(HypercubeVertices::INPUTS[0].name, "dimension");
         assert!(!HypercubeVertices::INPUTS[0].required);
@@ -202,7 +202,7 @@ mod tests {
     fn registers_with_palette() {
         let prim = HypercubeVertices::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.hypercube_vertices");
+        assert_eq!(node.type_id().as_str(), "node.hypercube_points");
     }
 }
 

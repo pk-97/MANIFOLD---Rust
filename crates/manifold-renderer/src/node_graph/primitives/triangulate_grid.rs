@@ -1,10 +1,10 @@
-//! `node.triangulate_grid` — convert a positions-only NxM
+//! `node.make_triangles` — convert a positions-only NxM
 //! `Array<MeshVertex>` grid into a triangle-list (N-1)×(M-1)×6
 //! vertex stream with per-vertex normals computed from
 //! finite-difference tangents.
 //!
-//! Adapter primitive that lets `node.generate_grid_mesh`'s
-//! positions feed cleanly into `node.render_3d_mesh` (which expects
+//! Adapter primitive that lets `node.grid_mesh`'s
+//! positions feed cleanly into `node.render_mesh` (which expects
 //! triangle-list topology). The source grid is read in row-major
 //! order (`row * cols + col`); the output is laid out as six
 //! consecutive vertices per quad in the canonical
@@ -31,8 +31,8 @@ struct TriangulateUniforms {
 
 crate::primitive! {
     name: TriangulateGrid,
-    type_id: "node.triangulate_grid",
-    purpose: "Convert a positions-only NxM Array<MeshVertex> grid into a triangle-list (N-1)*(M-1)*6 vertex stream with finite-difference normals. The adapter primitive between node.generate_grid_mesh (positions) and node.render_3d_mesh (triangle list). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
+    type_id: "node.make_triangles",
+    purpose: "Convert a positions-only NxM Array<MeshVertex> grid into a triangle-list (N-1)*(M-1)*6 vertex stream with finite-difference normals. The adapter primitive between node.grid_mesh (positions) and node.render_mesh (triangle list). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
     inputs: {
         in: Array(MeshVertex) required,
     },
@@ -63,7 +63,7 @@ crate::primitive! {
     summary: "Turns a grid of points into a solid mesh of triangles, so a flat field of points becomes a surface you can render.",
     category: Geometry3D,
     role: Filter,
-    aliases: ["triangulate", "make triangles", "mesh", "surface"],
+    aliases: ["triangulate", "make triangles", "triangulate grid", "mesh", "surface"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/triangulate_grid_body.wgsl"),
     input_access: [BufferGather],
@@ -119,9 +119,9 @@ impl Primitive for TriangulateGrid {
             // is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.triangulate_grid standalone codegen"),
+                    .expect("node.make_triangles standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.triangulate_grid",
+                "node.make_triangles",
             )
         });
 
@@ -151,7 +151,7 @@ impl Primitive for TriangulateGrid {
                 },
             ],
             [dst_capacity.div_ceil(256), 1, 1],
-            "node.triangulate_grid",
+            "node.make_triangles",
         );
     }
 }
@@ -166,7 +166,7 @@ mod tests {
     fn triangulate_grid_declares_mesh_array_in_and_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let layout = ArrayType::of_known::<MeshVertex>();
-        assert_eq!(TriangulateGrid::TYPE_ID, "node.triangulate_grid");
+        assert_eq!(TriangulateGrid::TYPE_ID, "node.make_triangles");
         assert_eq!(TriangulateGrid::INPUTS.len(), 1);
         assert_eq!(TriangulateGrid::INPUTS[0].ty, PortType::Array(layout));
         assert_eq!(TriangulateGrid::OUTPUTS.len(), 1);
@@ -183,7 +183,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = TriangulateGrid::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.triangulate_grid");
+        assert_eq!(node.type_id().as_str(), "node.make_triangles");
     }
 }
 

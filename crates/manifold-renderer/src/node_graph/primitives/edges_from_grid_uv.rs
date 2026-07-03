@@ -1,6 +1,6 @@
-//! `node.edges_from_grid_uv` — emit the u-wrap + v-wrap wireframe edge
+//! `node.grid_edges` — emit the u-wrap + v-wrap wireframe edge
 //! topology for an `n × n` parametric grid as `Array<EdgePair>`. Pairs
-//! with `node.generate_grid_uv` / `node.combine_xyzw` to author any
+//! with `node.grid_points` / `node.combine_xyzw` to author any
 //! (u, v)-parametric surface in the graph.
 //!
 //! Each (iu, iv) cell emits two edges: one toward the next u (with
@@ -10,7 +10,7 @@
 //!
 //! Drive `grid_size` from the same scalar source as the paired
 //! `generate_grid_uv` so vertex layout and edge indices agree. The
-//! atom is the topology counterpart of `node.polytope_edges`: closed
+//! atom is the topology counterpart of `node.platonic_solid_edges`: closed
 //! mathematical structure, sentinel-padded inactive tail, CPU-write
 //! into shared MTLBuffer for downstream CPU consumption by
 //! `node.draw_lines`.
@@ -26,8 +26,8 @@ pub use crate::node_graph::primitives::generate_grid_uv::{
 
 crate::primitive! {
     name: EdgesFromGridUv,
-    type_id: "node.edges_from_grid_uv",
-    purpose: "Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. Pairs with node.generate_grid_uv + node.combine_xyzw to author any (u, v)-parametric surface in the graph (Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh). Each (iu, iv) cell emits two edges: one toward the next u (with modular wrap) and one toward the next v (with modular wrap). Total edge count = n² × 2. Vertex indexing matches generate_grid_uv's row-major convention (idx = iu * n + iv) so the same grid_size scalar should drive both atoms. CPU-write — sentinel-padded inactive tail, same pattern as node.polytope_edges.",
+    type_id: "node.grid_edges",
+    purpose: "Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. Pairs with node.grid_points + node.combine_xyzw to author any (u, v)-parametric surface in the graph (Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh). Each (iu, iv) cell emits two edges: one toward the next u (with modular wrap) and one toward the next v (with modular wrap). Total edge count = n² × 2. Vertex indexing matches generate_grid_uv's row-major convention (idx = iu * n + iv) so the same grid_size scalar should drive both atoms. CPU-write — sentinel-padded inactive tail, same pattern as node.platonic_solid_edges.",
     inputs: {
         grid_size: ScalarF32 optional,
     },
@@ -50,7 +50,7 @@ crate::primitive! {
     summary: "Outputs the wireframe edges that connect a grid of points, so you can draw the grid as a mesh of lines.",
     category: Geometry3D,
     role: Source,
-    aliases: ["grid edges", "wireframe", "topology"],
+    aliases: ["grid edges", "edges from grid uv", "wireframe", "topology"],
     extra_fields: {
         scratch: Vec<EdgePair> = Vec::new(),
     },
@@ -100,7 +100,7 @@ impl Primitive for EdgesFromGridUv {
 
         let Some(edge_dst) = ctx.outputs.array("edges") else {
             log::warn!(
-                "node.edges_from_grid_uv: no GpuBuffer bound to output port `edges` — \
+                "node.grid_edges: no GpuBuffer bound to output port `edges` — \
                  the chain build did not pre-allocate this Array<EdgePair>.",
             );
             return;
@@ -163,7 +163,7 @@ mod tests {
     fn declares_grid_size_input_and_edge_pair_output() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
 
-        assert_eq!(EdgesFromGridUv::TYPE_ID, "node.edges_from_grid_uv");
+        assert_eq!(EdgesFromGridUv::TYPE_ID, "node.grid_edges");
         assert_eq!(EdgesFromGridUv::INPUTS.len(), 1);
         assert_eq!(EdgesFromGridUv::INPUTS[0].name, "grid_size");
         assert!(!EdgesFromGridUv::INPUTS[0].required);
@@ -209,6 +209,6 @@ mod tests {
     fn registers_as_palette_atom() {
         let prim = EdgesFromGridUv::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.edges_from_grid_uv");
+        assert_eq!(node.type_id().as_str(), "node.grid_edges");
     }
 }

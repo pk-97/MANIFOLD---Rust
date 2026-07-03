@@ -1,4 +1,4 @@
-//! `node.project_4d` — project an `Array<Vec4Vertex>` to
+//! `node.flatten_4d` — project an `Array<Vec4Vertex>` to
 //! `Array<CurvePoint>` via two-stage perspective (4D → 3D → 2D).
 //!
 //! Bit-exact WGSL port of `generators::generator_math::project_4d`.
@@ -29,8 +29,8 @@ struct Project4DUniforms {
 
 crate::primitive! {
     name: Project4D,
-    type_id: "node.project_4d",
-    purpose: "Project an Array<Vec4Vertex> to Array<CurvePoint> via two-stage perspective (4D → 3D collapse with f = proj_dist / (proj_dist - w), then 3D → 2D with s = proj_dist / (proj_dist + p3z)). Bit-exact port of generator_math::project_4d. The 4D-equivalent of node.project_3d for Tesseract / Duocylinder decomposition.",
+    type_id: "node.flatten_4d",
+    purpose: "Project an Array<Vec4Vertex> to Array<CurvePoint> via two-stage perspective (4D → 3D collapse with f = proj_dist / (proj_dist - w), then 3D → 2D with s = proj_dist / (proj_dist + p3z)). Bit-exact port of generator_math::project_4d. The 4D-equivalent of node.flatten_3d for Tesseract / Duocylinder decomposition.",
     inputs: {
         in: Array(Vec4Vertex) required,
     },
@@ -116,9 +116,9 @@ impl Primitive for Project4D {
             // test compares against generator_math::project_4d).
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.project_4d standalone codegen"),
+                    .expect("node.flatten_4d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.project_4d",
+                "node.flatten_4d",
             )
         });
 
@@ -148,7 +148,7 @@ impl Primitive for Project4D {
                 },
             ],
             [out_capacity.div_ceil(256), 1, 1],
-            "node.project_4d",
+            "node.flatten_4d",
         );
     }
 }
@@ -164,7 +164,7 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType};
         let vec4_layout = ArrayType::of_known::<Vec4Vertex>();
         let point_layout = ArrayType::of_known::<CurvePoint>();
-        assert_eq!(Project4D::TYPE_ID, "node.project_4d");
+        assert_eq!(Project4D::TYPE_ID, "node.flatten_4d");
         assert_eq!(Project4D::INPUTS.len(), 1);
         assert_eq!(Project4D::INPUTS[0].ty, PortType::Array(vec4_layout));
         assert_eq!(Project4D::OUTPUTS.len(), 1);
@@ -181,7 +181,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = Project4D::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.project_4d");
+        assert_eq!(node.type_id().as_str(), "node.flatten_4d");
     }
 }
 

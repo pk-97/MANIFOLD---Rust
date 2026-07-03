@@ -1,4 +1,4 @@
-//! `node.polytope_vertices` — emit the vertex set of one of the five
+//! `node.platonic_solid_points` — emit the vertex set of one of the five
 //! Platonic solids as `Array<MeshVertex>`. Curated-enum atom: a single
 //! GPU compute dispatch with closed-form per-shape coordinates baked
 //! into WGSL.
@@ -66,8 +66,8 @@ pub(crate) fn read_shape(ctx: &EffectNodeContext<'_, '_>) -> u32 {
 
 crate::primitive! {
     name: PolytopeVertices,
-    type_id: "node.polytope_vertices",
-    purpose: "Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. Curated-enum atom — one GPU dispatch with closed-form per-shape coordinates baked into WGSL, normalised to magnitude 0.25 (the legacy screen-friendly default). Pair with node.polytope_edges (driving both from the same shape scalar) and feed both into node.rotate_3d → node.project_3d → node.draw_lines for a 3D wireframe.",
+    type_id: "node.platonic_solid_points",
+    purpose: "Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. Curated-enum atom — one GPU dispatch with closed-form per-shape coordinates baked into WGSL, normalised to magnitude 0.25 (the legacy screen-friendly default). Pair with node.platonic_solid_edges (driving both from the same shape scalar) and feed both into node.rotate_3d → node.flatten_3d → node.draw_lines for a 3D wireframe.",
     inputs: {
         // Port-shadows the `shape` enum param. Wire a scalar here to
         // drive the shape from a mux / clip_trigger_cycle / external
@@ -88,13 +88,13 @@ crate::primitive! {
             enum_values: PLATONIC_SHAPES,
         },
     ],
-    composition_notes: "Output capacity is fixed at PLATONIC_MAX_VERTS (20 — the dodecahedron count); slots past the active shape's vertex count are zero-padded so a downstream rotate/project chain never reads garbage. Indices written are stable per shape and match the paired `node.polytope_edges` topology — wire the same `shape` scalar to both atoms so vertices and edges agree.",
+    composition_notes: "Output capacity is fixed at PLATONIC_MAX_VERTS (20 — the dodecahedron count); slots past the active shape's vertex count are zero-padded so a downstream rotate/project chain never reads garbage. Indices written are stable per shape and match the paired `node.platonic_solid_edges` topology — wire the same `shape` scalar to both atoms so vertices and edges agree.",
     examples: [],
     picker: { label: "Platonic Solid Points", category: Atom },
     summary: "Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry.",
     category: Geometry3D,
     role: Source,
-    aliases: ["platonic solid", "polytope", "vertices", "points"],
+    aliases: ["platonic solid", "polytope vertices", "polytope", "vertices", "points"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/polytope_vertices_body.wgsl"),
 }
@@ -122,7 +122,7 @@ impl Primitive for PolytopeVertices {
 
         let Some(vert_dst) = ctx.outputs.array("vertices") else {
             log::warn!(
-                "node.polytope_vertices: no GpuBuffer bound to output port `vertices` — \
+                "node.platonic_solid_points: no GpuBuffer bound to output port `vertices` — \
                  the chain build did not pre-allocate the Array<MeshVertex> output.",
             );
             return;
@@ -141,9 +141,9 @@ impl Primitive for PolytopeVertices {
             // the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.polytope_vertices standalone codegen"),
+                    .expect("node.platonic_solid_points standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.polytope_vertices",
+                "node.platonic_solid_points",
             )
         });
 
@@ -168,7 +168,7 @@ impl Primitive for PolytopeVertices {
                 },
             ],
             [vert_capacity.div_ceil(256), 1, 1],
-            "node.polytope_vertices",
+            "node.platonic_solid_points",
         );
     }
 }
@@ -183,7 +183,7 @@ mod tests {
     fn declares_shape_input_and_mesh_vertex_array_output() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let vert_layout = ArrayType::of_known::<MeshVertex>();
-        assert_eq!(PolytopeVertices::TYPE_ID, "node.polytope_vertices");
+        assert_eq!(PolytopeVertices::TYPE_ID, "node.platonic_solid_points");
         assert_eq!(PolytopeVertices::INPUTS.len(), 1);
         assert_eq!(PolytopeVertices::INPUTS[0].name, "shape");
         assert!(!PolytopeVertices::INPUTS[0].required);
@@ -229,7 +229,7 @@ mod tests {
     fn registers_as_palette_atom() {
         let prim = PolytopeVertices::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.polytope_vertices");
+        assert_eq!(node.type_id().as_str(), "node.platonic_solid_points");
     }
 }
 

@@ -3971,7 +3971,7 @@ mod gpu_tests {
             ("node.edge_slope", "gradient_central_diff.wgsl", grad_bytes.as_slice()),
             ("node.custom_convolution", "convolution_2d_9tap.wgsl", conv_bytes.as_slice()),
             ("node.flip", "mirror_axis.wgsl", mirror_bytes.as_slice()),
-            ("node.heightmap_to_normal", "heightmap_to_normal.wgsl", heightmap_bytes.as_slice()),
+            ("node.surface_bumps", "heightmap_to_normal.wgsl", heightmap_bytes.as_slice()),
         ];
         for (type_id, shader_file, bytes) in cases {
             let node = registry.construct(type_id).unwrap();

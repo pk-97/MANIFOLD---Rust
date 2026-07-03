@@ -361,7 +361,7 @@
         "light_intensity": { "type": "Float", "value": 2.0 }
       } },
 
-    { "id": 37, "typeId": "node.camera_orbit", "handle": "cam_orbit_node", "nodeId": "cam_orbit_node",
+    { "id": 37, "typeId": "node.orbit_camera", "handle": "cam_orbit_node", "nodeId": "cam_orbit_node",
       "params": {
         "orbit":    { "type": "Float", "value": 1.57079632679 },
         "tilt":     { "type": "Float", "value": 0.26179938779 },

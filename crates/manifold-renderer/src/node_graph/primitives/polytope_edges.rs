@@ -1,4 +1,4 @@
-//! `node.polytope_edges` — emit the wireframe edge topology of one
+//! `node.platonic_solid_edges` — emit the wireframe edge topology of one
 //! of the five Platonic solids as `Array<EdgePair>`. Curated-enum
 //! atom paired with [`super::polytope_vertices`]; same `shape` scalar
 //! drives both so vertices and edges agree per frame.
@@ -19,11 +19,11 @@ use crate::node_graph::primitives::polytope_vertices::read_shape;
 
 crate::primitive! {
     name: PolytopeEdges,
-    type_id: "node.polytope_edges",
-    purpose: "Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. Curated-enum atom — one CPU write of a static per-shape adjacency table, sentinel-padded for the inactive tail. Pair with node.polytope_vertices (driving both from the same shape scalar) and feed both into node.draw_lines (vertices → points, edges → edges) for a 3D wireframe.",
+    type_id: "node.platonic_solid_edges",
+    purpose: "Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. Curated-enum atom — one CPU write of a static per-shape adjacency table, sentinel-padded for the inactive tail. Pair with node.platonic_solid_points (driving both from the same shape scalar) and feed both into node.draw_lines (vertices → points, edges → edges) for a 3D wireframe.",
     inputs: {
         // Port-shadows the `shape` enum param. Wire the same scalar
-        // here that drives `node.polytope_vertices.shape` so the two
+        // here that drives `node.platonic_solid_points.shape` so the two
         // atoms stay in sync.
         shape: ScalarF32 optional,
     },
@@ -40,13 +40,13 @@ crate::primitive! {
             enum_values: PLATONIC_SHAPES,
         },
     ],
-    composition_notes: "Output capacity is fixed at PLATONIC_MAX_EDGES (30 — Icosa / Dodeca have the most edges); slots past the active shape's edge count are EdgePair::SENTINEL so node.draw_lines's `build_instances_from_edges` filter skips them without drawing a line. Indices are stable per shape and reference the paired `node.polytope_vertices` slot ordering — drive both atoms' `shape` input from the same scalar so vertices and edges always agree.",
+    composition_notes: "Output capacity is fixed at PLATONIC_MAX_EDGES (30 — Icosa / Dodeca have the most edges); slots past the active shape's edge count are EdgePair::SENTINEL so node.draw_lines's `build_instances_from_edges` filter skips them without drawing a line. Indices are stable per shape and reference the paired `node.platonic_solid_points` slot ordering — drive both atoms' `shape` input from the same scalar so vertices and edges always agree.",
     examples: [],
     picker: { label: "Platonic Solid Edges", category: Atom },
     summary: "Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe.",
     category: Geometry3D,
     role: Source,
-    aliases: ["platonic solid", "polytope", "edges", "wireframe"],
+    aliases: ["platonic solid", "polytope edges", "polytope", "edges", "wireframe"],
 }
 
 impl Primitive for PolytopeEdges {
@@ -70,7 +70,7 @@ impl Primitive for PolytopeEdges {
 
         let Some(edge_dst) = ctx.outputs.array("edges") else {
             log::warn!(
-                "node.polytope_edges: no GpuBuffer bound to output port `edges` — \
+                "node.platonic_solid_edges: no GpuBuffer bound to output port `edges` — \
                  the chain build did not pre-allocate the Array<EdgePair> output.",
             );
             return;
@@ -106,7 +106,7 @@ mod tests {
     fn declares_shape_input_and_edge_pair_output() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let edge_layout = ArrayType::of_known::<EdgePair>();
-        assert_eq!(PolytopeEdges::TYPE_ID, "node.polytope_edges");
+        assert_eq!(PolytopeEdges::TYPE_ID, "node.platonic_solid_edges");
         assert_eq!(PolytopeEdges::INPUTS.len(), 1);
         assert_eq!(PolytopeEdges::INPUTS[0].name, "shape");
         assert!(!PolytopeEdges::INPUTS[0].required);
@@ -184,6 +184,6 @@ mod tests {
     fn registers_as_palette_atom() {
         let prim = PolytopeEdges::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.polytope_edges");
+        assert_eq!(node.type_id().as_str(), "node.platonic_solid_edges");
     }
 }

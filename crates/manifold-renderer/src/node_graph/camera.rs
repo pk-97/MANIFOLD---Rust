@@ -1,6 +1,6 @@
 //! `Camera` — port-data type carried on [`PortType::Camera`](crate::node_graph::ports::PortType::Camera) wires.
 //!
-//! One `Camera` source primitive (`node.camera_orbit` today, free-look / Euler
+//! One `Camera` source primitive (`node.orbit_camera` today, free-look / Euler
 //! variants in the future) emits a fully-populated struct each frame; every 3D
 //! consumer primitive (mesh renderers, particle-camera splat) takes it as a
 //! single `camera: Camera` input and reads position + basis vectors + view
@@ -35,7 +35,7 @@ pub enum CameraMode {
 
 /// Camera struct flowing through `PortType::Camera` wires.
 ///
-/// Built once per frame in `node.camera_orbit::run()` (or future camera
+/// Built once per frame in `node.orbit_camera::run()` (or future camera
 /// sources), passed by value to every downstream consumer. ~96 bytes —
 /// trivially cheap to clone per wire per frame.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -1,4 +1,4 @@
-//! `node.heightmap_to_normal` — scalar height field → unit normal map via
+//! `node.surface_bumps` — scalar height field → unit normal map via
 //! central-difference gradient.
 //!
 //! Reads `in.r` as height per pixel, computes `(dh/dx, dh/dy)` via
@@ -40,7 +40,7 @@ struct HeightmapNormalUniforms {
 
 crate::primitive! {
     name: HeightmapToNormal,
-    type_id: "node.heightmap_to_normal",
+    type_id: "node.surface_bumps",
     purpose: "Scalar height field (read from `in.r`) → unit normal map (RGB) via central-difference gradient. Coord_space picks the output convention: TangentZ for flat-surface tangent-space shading (OilyFluid lambert/matcap/blinn), WorldYUp for 3D meshes laid out in the XZ plane with Y up (MetallicGlass full-resolution-reflection trick). Larger `z_scale` flattens the normal; smaller steepens it. `aspect` scales the Y-axis gradient for non-square world quads. Output is SIGNED (range [-1, 1] per channel).",
     inputs: {
         in: Texture2D required,
@@ -76,13 +76,13 @@ crate::primitive! {
             enum_values: &["TangentZ", "WorldYUp"],
         },
     ],
-    composition_notes: "Height is read from the R channel only. If your height is a derived quantity (e.g. `length(color.rg)` in the oily-fluid family) wire `node.vector_length` upstream first. TangentZ (default) pairs with `node.lambert_directional`, `node.matcap_two_tone`, `node.fresnel_rim`, `node.blinn_specular` for the flat-surface screen-space shading family. WorldYUp feeds `node.render_3d_mesh`'s `normal_map` input for full PBR on a 3D mesh laid out in the XZ plane (the renderer's `node.pbr_material` owns the Cook-Torrance + IBL shading) — the MetallicGlass pattern. The `aspect` input is normally wired from `system.generator_input.aspect` so reflections stay correct across canvas aspect ratios.",
+    composition_notes: "Height is read from the R channel only. If your height is a derived quantity (e.g. `length(color.rg)` in the oily-fluid family) wire `node.vector_length` upstream first. TangentZ (default) pairs with `node.basic_light`, `node.matcap_two_tone`, `node.rim_light`, `node.shininess` for the flat-surface screen-space shading family. WorldYUp feeds `node.render_mesh`'s `normal_map` input for full PBR on a 3D mesh laid out in the XZ plane (the renderer's `node.pbr_material` owns the Cook-Torrance + IBL shading) — the MetallicGlass pattern. The `aspect` input is normally wired from `system.generator_input.aspect` so reflections stay correct across canvas aspect ratios.",
     examples: [],
     picker: { label: "Surface Bumps", category: Atom },
     summary: "Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture.",
     category: MaterialsAndLighting,
     role: Filter,
-    aliases: ["surface bumps", "normal map", "bump map", "heightmap"],
+    aliases: ["surface bumps", "heightmap to normal", "normal map", "bump map", "heightmap"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/heightmap_to_normal_body.wgsl"),
     input_access: [Gather],
@@ -124,9 +124,9 @@ impl Primitive for HeightmapToNormal {
             // texel step from dims. heightmap_to_normal.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.heightmap_to_normal standalone codegen"),
+                    .expect("node.surface_bumps standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.heightmap_to_normal",
+                "node.surface_bumps",
             )
         });
         let sampler = self
@@ -161,7 +161,7 @@ impl Primitive for HeightmapToNormal {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.heightmap_to_normal",
+            "node.surface_bumps",
         );
     }
 }

@@ -325,6 +325,155 @@
     },
     {
       "aliases": [
+        "arrange copies",
+        "generate instance transforms",
+        "instance layout",
+        "scatter",
+        "place"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [],
+      "label": "Arrange Copies",
+      "outputs": [
+        {
+          "name": "instances",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "65536",
+          "label": "Max Capacity",
+          "name": "max_capacity",
+          "range": [
+            "1",
+            "1000000"
+          ],
+          "tooltip": "The largest number of copies this node can ever hold. It sets the memory allocation, so size it for your worst case and leave it.",
+          "type": "int"
+        },
+        {
+          "default": "64",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "1000000"
+          ],
+          "tooltip": "How many copies to actually place this frame, default 64. Slide it freely up to the max capacity to thin out or fill the field.",
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Grid",
+            "Ring",
+            "Spiral",
+            "Random"
+          ],
+          "label": "Layout",
+          "name": "layout",
+          "tooltip": "The pattern the copies fall into, Grid, Ring, Spiral, or Random.",
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "label": "Seed",
+          "name": "seed",
+          "range": [
+            "0",
+            "1000000"
+          ],
+          "tooltip": "Changes the random layout. Move it to get a different spread. Only matters when the layout is set to Random.",
+          "type": "int"
+        },
+        {
+          "default": "4",
+          "label": "Extent X",
+          "name": "extent_x",
+          "range": [
+            "0",
+            "100"
+          ],
+          "tooltip": "How far the layout reaches along X, default 4. Larger values spread the copies wider apart.",
+          "type": "float"
+        },
+        {
+          "default": "4",
+          "label": "Extent Y",
+          "name": "extent_y",
+          "range": [
+            "0",
+            "100"
+          ],
+          "tooltip": "How far the layout reaches along Y, default 4. Larger values spread the copies wider apart.",
+          "type": "float"
+        },
+        {
+          "default": "4",
+          "label": "Extent Z",
+          "name": "extent_z",
+          "range": [
+            "0",
+            "100"
+          ],
+          "tooltip": "How far the layout reaches along Z, default 4. Larger values spread the copies wider apart.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Base Scale",
+          "name": "base_scale",
+          "range": [
+            "0",
+            "10"
+          ],
+          "tooltip": "The size every copy starts at. 1 leaves the base mesh at its native size, higher grows them all together.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Rotation X",
+          "name": "rot_x",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Tilts every copy around the X axis by the same amount, in degrees.",
+          "type": "angle"
+        },
+        {
+          "default": "0",
+          "label": "Rotation Y",
+          "name": "rot_y",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Spins every copy around the Y axis by the same amount, in degrees.",
+          "type": "angle"
+        },
+        {
+          "default": "0",
+          "label": "Rotation Z",
+          "name": "rot_z",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Rolls every copy around the Z axis by the same amount, in degrees.",
+          "type": "angle"
+        }
+      ],
+      "purpose": "Emit an Array<InstanceTransform> filled with a procedural layout (grid / ring / spiral / random). Pair with node.render_copies to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies.",
+      "type_id": "node.arrange_copies"
+    },
+    {
+      "aliases": [
         "spread out",
         "diffuse",
         "jitter",
@@ -670,63 +819,8 @@
     },
     {
       "aliases": [
-        "repeat outline",
-        "rings",
-        "concentric",
-        "replicate"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "outline",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "edges",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "scales",
-          "required": true,
-          "type": "Array"
-        }
-      ],
-      "label": "Repeat Outline (rings)",
-      "outputs": [
-        {
-          "name": "outline",
-          "type": "Array"
-        },
-        {
-          "name": "edges",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "16",
-          "label": "Max Rings",
-          "name": "max_rings",
-          "range": [
-            "1",
-            "32"
-          ],
-          "tooltip": "The most copies this node will stack, from 1 up to 32. The actual count is whatever is smaller, this ceiling or the number of scales fed in.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Stack K transformed copies of a polyline (outline + edge topology) into one concatenated polyline. Per-ring uniform scale on the outline; per-ring index shift on the edges (sentinel-preserving). The K-fold replication atom for line-based generators: pair a single polygon / Lissajous / Rose curve outline + edges with a `scales` Array<f32> (from generate_range + array_math) to produce concentric, parallax, or stacked variations of the source polyline. The ring count is `min(scales.capacity, max_rings)`; output capacity is `input.capacity * max_rings` so the chain build pre-allocates the full stack at plan time.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings.",
-      "type_id": "node.array_replicate_polyline_rings"
-    },
-    {
-      "aliases": [
         "environment map",
+        "bake equirect envmap",
         "equirect",
         "ibl",
         "reflection map"
@@ -787,11 +881,112 @@
           "type": "float"
         }
       ],
-      "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). Defaults match the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. Output is HDR — wire into `node.render_3d_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
+      "purpose": "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). Defaults match the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting.",
-      "type_id": "node.bake_equirect_envmap"
+      "type_id": "node.bake_environment"
+    },
+    {
+      "aliases": [
+        "lambert",
+        "lambert directional",
+        "diffuse",
+        "matte",
+        "basic light"
+      ],
+      "category": "Materials & Lighting",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "normal",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "light",
+          "required": false,
+          "type": "Light"
+        },
+        {
+          "name": "light_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "light_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "light_z",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "ambient",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Basic Light (Lambert)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.4",
+          "label": "Light X",
+          "name": "light_x",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "Horizontal direction the light comes from. Positive lights the surface from the right, negative from the left.",
+          "type": "float"
+        },
+        {
+          "default": "0.6",
+          "label": "Light Y",
+          "name": "light_y",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "Vertical direction the light comes from. Positive lights from above, negative from below.",
+          "type": "float"
+        },
+        {
+          "default": "0.7",
+          "label": "Light Z",
+          "name": "light_z",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "How much the light points straight out of the screen toward the surface. The direction is normalised so only the balance between the three axes matters.",
+          "type": "float"
+        },
+        {
+          "default": "0.1",
+          "label": "Ambient",
+          "name": "ambient",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "A flat fill that keeps the unlit side from going fully black. 0 gives hard shadows, higher values lift the whole surface toward flat.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multiplied by the light's colour. The basic directional-lighting atom — pair with `node.gradient_map` to tint further, or sum with `node.rim_light` / `node.shininess` for stylized PBR. Two ways to drive the light: scattered `light_x/y/z` scalars (output grayscale, white tint), or wire a `node.light` into `light` (output picks up the light's premultiplied colour). The scalar fallback keeps every existing OilyFluid-shaped consumer working unchanged.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Shades a surface from its normal map and a single direction, brightest where it faces the light. The plain matte lighting term.",
+      "type_id": "node.basic_light"
     },
     {
       "aliases": [
@@ -1050,161 +1245,6 @@
       "stratum": "driver",
       "summary": "Rises from 0 to 1 across each beat then snaps back, a sawtooth locked to the tempo. Wire it into anything you want to sweep in time with the music.",
       "type_id": "node.beat_ramp"
-    },
-    {
-      "aliases": [
-        "specular",
-        "shininess",
-        "highlight",
-        "blinn"
-      ],
-      "category": "Materials & Lighting",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "normal",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "light",
-          "required": false,
-          "type": "Light"
-        },
-        {
-          "name": "light_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "light_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "light_z",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "view_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "view_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "view_z",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "power",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Shininess (Blinn)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.35",
-          "label": "Light X",
-          "name": "light_x",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The X part of the light direction, from -1 to 1. Wiring a Light into the light port overrides this and the other two direction knobs.",
-          "type": "float"
-        },
-        {
-          "default": "0.55",
-          "label": "Light Y",
-          "name": "light_y",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The Y part of the light direction, from -1 to 1. The direction is normalised in the shader so only the ratio between X, Y, and Z matters.",
-          "type": "float"
-        },
-        {
-          "default": "0.75",
-          "label": "Light Z",
-          "name": "light_z",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The Z part of the light direction, from -1 to 1. Default 0.75 points the light mostly toward the camera for a forward-facing highlight.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "View X",
-          "name": "view_x",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The X part of the viewing direction, from -1 to 1. This is where the camera sits relative to the surface.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "View Y",
-          "name": "view_y",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The Y part of the viewing direction, from -1 to 1.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "View Z",
-          "name": "view_z",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The Z part of the viewing direction, from -1 to 1. Default 1 looks straight on, which puts the highlight where the light reflects back at the camera.",
-          "type": "float"
-        },
-        {
-          "default": "48",
-          "label": "Power",
-          "name": "power",
-          "range": [
-            "1",
-            "256"
-          ],
-          "tooltip": "How tight the highlight is. Higher values give a small pinpoint glint while lower values spread it into a broad sheen.",
-          "type": "float"
-        },
-        {
-          "default": "[1, 0.95, 1, 1]",
-          "label": "Color",
-          "name": "color",
-          "tooltip": "The colour of the highlight. Alpha is ignored, and a wired light tints this further by multiplying its own colour in.",
-          "type": "color"
-        }
-      ],
-      "purpose": "Blinn-Phong specular from a tangent-space normal map + directional light + view: `h = normalize(light + view); spec = pow(max(dot(n, h), 0), power)`. ADDITIVE — sum with a base shading via `node.compose` mode=Add. Defaults match oily-fluid PBR (light=(0.35,0.55,0.75), view=(0,0,1), power=48, near-white tint). Wire a `node.light` into `light` to drive direction + colour from one source instead of scattered scalars; the wired light's colour multiplies the `color` tint param.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Adds a tight highlight where the surface catches the light, set by a shininess amount. The glossy hotspot on top of basic lighting.",
-      "type_id": "node.blinn_specular"
     },
     {
       "aliases": [
@@ -1625,162 +1665,6 @@
       "stratum": "atom",
       "summary": "Multiplies the image brightness up or down. A plain brightness control.",
       "type_id": "node.brightness"
-    },
-    {
-      "aliases": [
-        "orbit camera",
-        "camera",
-        "viewpoint",
-        "Camera COMP"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "orbit",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "tilt",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "distance",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "fov_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "look_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "roll",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Orbit Camera",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Camera"
-        },
-        {
-          "name": "pos_x",
-          "type": "f32"
-        },
-        {
-          "name": "pos_y",
-          "type": "f32"
-        },
-        {
-          "name": "pos_z",
-          "type": "f32"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.7",
-          "label": "Orbit",
-          "name": "orbit",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Swings the camera left and right around the target, in degrees. This is the horizontal angle of the orbit.",
-          "type": "angle"
-        },
-        {
-          "default": "0.3",
-          "label": "Tilt",
-          "name": "tilt",
-          "range": [
-            "-1.5",
-            "1.5"
-          ],
-          "tooltip": "Raises and lowers the camera over the target, in degrees. Positive looks down from above, negative looks up from below.",
-          "type": "angle"
-        },
-        {
-          "default": "4",
-          "label": "Distance",
-          "name": "distance",
-          "range": [
-            "0.01",
-            "100"
-          ],
-          "tooltip": "How far the camera sits from the target. Larger values pull back for a wider view, smaller values move in close.",
-          "type": "float"
-        },
-        {
-          "default": "0.9",
-          "label": "FOV Y",
-          "name": "fov_y",
-          "range": [
-            "0.05",
-            "2.5"
-          ],
-          "tooltip": "The vertical field of view in degrees. Wider angles take in more of the scene and exaggerate perspective, narrower angles flatten it.",
-          "type": "angle"
-        },
-        {
-          "default": "0",
-          "label": "Look Y",
-          "name": "look_y",
-          "range": [
-            "-10",
-            "10"
-          ],
-          "tooltip": "Raises or lowers the point the camera looks at, shifting the whole framing up or down in the scene.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Roll",
-          "name": "roll",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Tilts the camera sideways around its own view direction, in degrees, so the horizon leans. 0 keeps it level.",
-          "type": "angle"
-        },
-        {
-          "default": "0.05",
-          "label": "Near",
-          "name": "near",
-          "range": [
-            "0.001",
-            "10"
-          ],
-          "tooltip": "Closest distance the camera can see. Anything nearer is clipped away. Leave it small unless the scene has extreme depth.",
-          "type": "float"
-        },
-        {
-          "default": "200",
-          "label": "Far",
-          "name": "far",
-          "range": [
-            "1",
-            "10000"
-          ],
-          "tooltip": "Furthest distance the camera can see. Anything beyond is clipped away. Leave the default unless the scene is very deep.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Orbit-style perspective camera source. Emits one Camera on `out` from five port-shadowed scalar inputs (orbit/tilt/distance/fov_y/look_y) — matches the inline orbit formula every legacy 3D renderer used. Also exposes pos_x/pos_y/pos_z scalar outputs for PBR shading atoms that need the camera world position per pixel. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, digital_plants_render, scatter_particles_camera) that takes a `camera: Camera` input — replaces N separate camera scalar params per primitive with one wire.",
-      "role": "Source",
-      "stratum": "driver",
-      "summary": "A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering.",
-      "type_id": "node.camera_orbit"
     },
     {
       "aliases": [
@@ -3077,65 +2961,6 @@
     },
     {
       "aliases": [
-        "edge pairs",
-        "connect points",
-        "polyline"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Edge Pairs",
-      "outputs": [
-        {
-          "name": "edges",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "4",
-          "label": "Vertex Count",
-          "name": "count",
-          "range": [
-            "2",
-            "64"
-          ],
-          "tooltip": "How many points to connect in order. Wire it from a variable point source to grow or shrink the shape live.",
-          "type": "int"
-        },
-        {
-          "default": "true",
-          "label": "Closed",
-          "name": "closed",
-          "tooltip": "When on, joins the last point back to the first to close the loop, giving a full polygon. Turn it off for an open line that leaves the ends apart.",
-          "type": "bool"
-        },
-        {
-          "default": "64",
-          "label": "Edge Buffer Capacity",
-          "name": "max_capacity",
-          "range": [
-            "2",
-            "64"
-          ],
-          "tooltip": "The most points this can ever connect, which sizes the buffer. Set it once to cover your largest shape and leave it alone.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Generate consecutive-pair edge topology [(0,1), (1,2), …, (N-2, N-1)] from a vertex count, optionally closed via (N-1, 0). The polyline-topology atom: pair with a points source (generate_range + array_math + pack_curve_xy, or any custom CurvePoint producer) and node.draw_lines to draw a closed regular polygon, an open polyline, or any topology where edges connect consecutive vertex indices. `count` is port-shadow-param so an upstream variable-N source (e.g. a mux driving the active polygon side count) drives the active edge count. Output capacity is `max_capacity`; slots beyond the active count are EdgePair::SENTINEL so downstream draw_lines filters them out — drawing exactly the active topology, never garbage from the inactive tail.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start.",
-      "type_id": "node.consecutive_edges"
-    },
-    {
-      "aliases": [
         "keep in box",
         "bounds",
         "contain",
@@ -3341,6 +3166,54 @@
       "stratum": "atom",
       "summary": "Pushes the lights and darks apart for a punchier image, or pulls them together for a flatter one. It pivots around mid grey.",
       "type_id": "node.contrast"
+    },
+    {
+      "aliases": [
+        "cube mesh",
+        "generate cube mesh",
+        "box",
+        "cube",
+        "Box SOP"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [],
+      "label": "Cube Mesh",
+      "outputs": [
+        {
+          "name": "vertices",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "36",
+          "label": "Max Capacity",
+          "name": "max_capacity",
+          "range": [
+            "36",
+            "4096"
+          ],
+          "tooltip": "How much room to reserve in the vertex buffer, set when the effect is built. 36 holds exactly one cube, and larger values only help if a downstream node expects a bigger buffer.",
+          "type": "int"
+        },
+        {
+          "default": "1",
+          "label": "Size",
+          "name": "size",
+          "range": [
+            "0.01",
+            "100"
+          ],
+          "tooltip": "Scales the cube. 1 is the default unit cube, smaller shrinks it, larger grows it.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Emit a unit cube as 36 triangle-list MeshVertex entries (6 faces × 2 triangles × 3 vertices) with per-face outward normals. The cube-shape building block for NestedCubes / DigitalPlants and any instanced-cube graph: pair with node.arrange_copies + node.render_copies to draw a field of cubes.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry.",
+      "type_id": "node.cube_mesh"
     },
     {
       "aliases": [
@@ -3999,91 +3872,11 @@
           "type": "float"
         }
       ],
-      "purpose": "Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-tap PCF shadow sampling. Hardcoded 36-vert cube geometry (no Array<MeshVertex> input). Pair upstream with node.generate_instance_transforms (or any procedural compute that produces InstanceTransforms — DigitalPlants's procedural compute is one such producer).",
+      "purpose": "Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-tap PCF shadow sampling. Hardcoded 36-vert cube geometry (no Array<MeshVertex> input). Pair upstream with node.arrange_copies (or any procedural compute that produces InstanceTransforms — DigitalPlants's procedural compute is one such producer).",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed.",
       "type_id": "node.digital_plants_render"
-    },
-    {
-      "aliases": [
-        "displace mesh",
-        "push mesh",
-        "height",
-        "terrain"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "height",
-          "required": true,
-          "type": "Texture2D"
-        }
-      ],
-      "label": "Push Mesh",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "256",
-          "label": "Columns",
-          "name": "cols",
-          "range": [
-            "2",
-            "4096"
-          ],
-          "tooltip": "How many columns are in the source grid. This must match the grid the mesh came from or the height image will sample at the wrong spots.",
-          "type": "int"
-        },
-        {
-          "default": "256",
-          "label": "Rows",
-          "name": "rows",
-          "range": [
-            "2",
-            "4096"
-          ],
-          "tooltip": "How many rows are in the source grid. This must match the grid the mesh came from.",
-          "type": "int"
-        },
-        {
-          "default": "0.2",
-          "label": "Displacement",
-          "name": "displacement",
-          "range": [
-            "-10",
-            "10"
-          ],
-          "tooltip": "How far the height image pushes each point up or down. 0 leaves the mesh flat, and negative values push the other way.",
-          "type": "float"
-        },
-        {
-          "default": "0.5",
-          "label": "Height Bias",
-          "name": "height_bias",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "The grey level that counts as no movement, from 0 to 1. At the default 0.5, mid grey stays put while brighter pixels rise and darker ones sink.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Perturb the Y component of an Array<MeshVertex> positions grid by sampling a height Texture2D at each vertex's UV. cols/rows describe the source grid topology; UV = (col / (cols-1), row / (rows-1)). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement.",
-      "type_id": "node.displace_mesh"
     },
     {
       "aliases": [
@@ -5187,6 +4980,66 @@
     },
     {
       "aliases": [
+        "edge pairs",
+        "consecutive edges",
+        "connect points",
+        "polyline"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Edge Pairs",
+      "outputs": [
+        {
+          "name": "edges",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "4",
+          "label": "Vertex Count",
+          "name": "count",
+          "range": [
+            "2",
+            "64"
+          ],
+          "tooltip": "How many points to connect in order. Wire it from a variable point source to grow or shrink the shape live.",
+          "type": "int"
+        },
+        {
+          "default": "true",
+          "label": "Closed",
+          "name": "closed",
+          "tooltip": "When on, joins the last point back to the first to close the loop, giving a full polygon. Turn it off for an open line that leaves the ends apart.",
+          "type": "bool"
+        },
+        {
+          "default": "64",
+          "label": "Edge Buffer Capacity",
+          "name": "max_capacity",
+          "range": [
+            "2",
+            "64"
+          ],
+          "tooltip": "The most points this can ever connect, which sizes the buffer. Set it once to cover your largest shape and leave it alone.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Generate consecutive-pair edge topology [(0,1), (1,2), …, (N-2, N-1)] from a vertex count, optionally closed via (N-1, 0). The polyline-topology atom: pair with a points source (generate_range + array_math + pack_curve_xy, or any custom CurvePoint producer) and node.draw_lines to draw a closed regular polygon, an open polyline, or any topology where edges connect consecutive vertex indices. `count` is port-shadow-param so an upstream variable-N source (e.g. a mux driving the active polygon side count) drives the active edge count. Output capacity is `max_capacity`; slots beyond the active count are EdgePair::SENTINEL so downstream draw_lines filters them out — drawing exactly the active topology, never garbage from the inactive tail.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start.",
+      "type_id": "node.edge_pairs"
+    },
+    {
+      "aliases": [
         "gradient",
         "edge slope",
         "gradient central diff",
@@ -5363,72 +5216,6 @@
       "stratum": "atom",
       "summary": "Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap.",
       "type_id": "node.edge_stretch"
-    },
-    {
-      "aliases": [
-        "grid edges",
-        "wireframe",
-        "topology"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "grid_size",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Grid Edges",
-      "outputs": [
-        {
-          "name": "edges",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "24",
-          "label": "Grid Size",
-          "name": "grid_size",
-          "range": [
-            "2",
-            "64"
-          ],
-          "tooltip": "How many points across each side of the grid. Drive this from the same value as the matching grid points node so the layout and the edges agree.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. Pairs with node.generate_grid_uv + node.combine_xyzw to author any (u, v)-parametric surface in the graph (Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh). Each (iu, iv) cell emits two edges: one toward the next u (with modular wrap) and one toward the next v (with modular wrap). Total edge count = n² × 2. Vertex indexing matches generate_grid_uv's row-major convention (idx = iu * n + iv) so the same grid_size scalar should drive both atoms. CPU-write — sentinel-padded inactive tail, same pattern as node.polytope_edges.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Outputs the wireframe edges that connect a grid of points, so you can draw the grid as a mesh of lines.",
-      "type_id": "node.edges_from_grid_uv"
-    },
-    {
-      "aliases": [
-        "tesseract",
-        "hypercube",
-        "4d cube",
-        "edges",
-        "wireframe"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [],
-      "label": "Hypercube Edges (4D)",
-      "outputs": [
-        {
-          "name": "edges",
-          "type": "Array"
-        }
-      ],
-      "params": [],
-      "purpose": "Emit the wireframe edge topology of a 4D hypercube as Array<EdgePair> — the constant 32-edge bit-flip table. The 4D counterpart of node.polytope_edges. Pair with node.hypercube_vertices and feed both into node.draw_lines (vertices → points, edges → edges) for a 4D wireframe. No params: a hypercube has one topology; the dimension-morph lives in the vertex positions.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Builds the wireframe edges of a hypercube — which corners connect. Feed it with the matching hypercube points to draw the 4D cube.",
-      "type_id": "node.edges_from_hypercube"
     },
     {
       "aliases": [
@@ -6208,6 +5995,132 @@
     },
     {
       "aliases": [
+        "project 3d",
+        "flatten",
+        "perspective",
+        "camera projection"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "proj_scale",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "proj_dist",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Flatten 3D → 2D",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "enum_values": [
+            "Orthographic",
+            "Perspective"
+          ],
+          "label": "Projection",
+          "name": "mode",
+          "tooltip": "How the 3D points flatten to 2D. Orthographic keeps a flat scale and ignores depth, while Perspective shrinks far points toward a vanishing point.",
+          "type": "enum"
+        },
+        {
+          "default": "0.25",
+          "label": "Projection Scale",
+          "name": "proj_scale",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "How much the flattened shape is zoomed. Higher values fill more of the frame.",
+          "type": "float"
+        },
+        {
+          "default": "3",
+          "label": "Projection Distance",
+          "name": "proj_dist",
+          "range": [
+            "0.5",
+            "100"
+          ],
+          "tooltip": "The camera distance in Perspective mode. Closer distances exaggerate the depth foreshortening, farther ones flatten it out. Orthographic mode ignores it.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For WireframeZoo-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering.",
+      "type_id": "node.flatten_3d"
+    },
+    {
+      "aliases": [
+        "project 4d",
+        "flatten",
+        "4d to 3d"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        }
+      ],
+      "label": "Flatten 4D → 3D",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.25",
+          "label": "Projection Scale",
+          "name": "proj_scale",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "How large the flattened shape comes out, default 0.25. Higher fills more of the frame.",
+          "type": "float"
+        },
+        {
+          "default": "3",
+          "label": "Projection Distance",
+          "name": "proj_dist",
+          "range": [
+            "0.5",
+            "100"
+          ],
+          "tooltip": "How far the 4D camera sits from the shape, default 3. Small values exaggerate the four-dimensional warp, large values flatten it out.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Project an Array<Vec4Vertex> to Array<CurvePoint> via two-stage perspective (4D → 3D collapse with f = proj_dist / (proj_dist - w), then 3D → 2D with s = proj_dist / (proj_dist + p3z)). Bit-exact port of generator_math::project_4d. The 4D-equivalent of node.flatten_3d for Tesseract / Duocylinder decomposition.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape.",
+      "type_id": "node.flatten_4d"
+    },
+    {
+      "aliases": [
         "flatten to camera",
         "squash",
         "billboard",
@@ -6622,108 +6535,6 @@
     },
     {
       "aliases": [
-        "rim light",
-        "fresnel",
-        "edge glow",
-        "backlight"
-      ],
-      "category": "Materials & Lighting",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "normal",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "view_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "view_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "view_z",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "power",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Rim Light (Fresnel)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "label": "View X",
-          "name": "view_x",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The X part of the viewing direction the rim is measured against, from -1 to 1. The default looks straight down the Z axis at the surface.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "View Y",
-          "name": "view_y",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The Y part of the viewing direction the rim is measured against, from -1 to 1.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "View Z",
-          "name": "view_z",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The Z part of the viewing direction the rim is measured against, from -1 to 1. Default of 1 points the camera straight at the surface.",
-          "type": "float"
-        },
-        {
-          "default": "3",
-          "label": "Power",
-          "name": "power",
-          "range": [
-            "0.5",
-            "16"
-          ],
-          "tooltip": "How tight the glowing edge is, from 0.5 for a wide soft rim up to 16 for a thin sharp line right at the silhouette.",
-          "type": "float"
-        },
-        {
-          "default": "[0.55, 0.3, 0.85, 1]",
-          "label": "Color",
-          "name": "color",
-          "tooltip": "The colour of the rim glow. This output is additive, so wire it onto your base shading with a Mix in Add mode.",
-          "type": "color"
-        }
-      ],
-      "purpose": "Fresnel-based edge highlight from a tangent-space normal map: `f = pow(1 - max(dot(n, view), 0), power)`, output = color.rgb * f. ADDITIVE rim term — black at face-on, `color`-tinted at grazing. Sum with a base shading (matcap, lambert) via `node.compose` mode=Add to layer the rim onto the surface. Defaults match oily-fluid PBR (view=(0,0,1), power=3, color=iridescent magenta).",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects.",
-      "type_id": "node.fresnel_rim"
-    },
-    {
-      "aliases": [
         "gaussian blur",
         "blur",
         "soft",
@@ -6852,364 +6663,6 @@
     },
     {
       "aliases": [
-        "cube mesh",
-        "box",
-        "cube",
-        "Box SOP"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [],
-      "label": "Cube Mesh",
-      "outputs": [
-        {
-          "name": "vertices",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "36",
-          "label": "Max Capacity",
-          "name": "max_capacity",
-          "range": [
-            "36",
-            "4096"
-          ],
-          "tooltip": "How much room to reserve in the vertex buffer, set when the effect is built. 36 holds exactly one cube, and larger values only help if a downstream node expects a bigger buffer.",
-          "type": "int"
-        },
-        {
-          "default": "1",
-          "label": "Size",
-          "name": "size",
-          "range": [
-            "0.01",
-            "100"
-          ],
-          "tooltip": "Scales the cube. 1 is the default unit cube, smaller shrinks it, larger grows it.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Emit a unit cube as 36 triangle-list MeshVertex entries (6 faces × 2 triangles × 3 vertices) with per-face outward normals. The cube-shape building block for NestedCubes / DigitalPlants and any instanced-cube graph: pair with node.generate_instance_transforms + node.render_instanced_3d_mesh to draw a field of cubes.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry.",
-      "type_id": "node.generate_cube_mesh"
-    },
-    {
-      "aliases": [
-        "grid mesh",
-        "plane",
-        "terrain",
-        "Grid SOP"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "size_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "size_y",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Grid Mesh",
-      "outputs": [
-        {
-          "name": "vertices",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "2097152",
-          "label": "Max Capacity",
-          "name": "max_capacity",
-          "range": [
-            "1024",
-            "16000000"
-          ],
-          "tooltip": "The most vertices the grid can ever hold. Set it once when building the effect since changing it rebuilds the graph, and keep it at or above resolution X times resolution Y.",
-          "type": "int"
-        },
-        {
-          "default": "256",
-          "label": "Resolution X",
-          "name": "resolution_x",
-          "range": [
-            "2",
-            "4096"
-          ],
-          "tooltip": "How many points across the grid. More points give finer detail at the cost of memory.",
-          "type": "int"
-        },
-        {
-          "default": "256",
-          "label": "Resolution Y",
-          "name": "resolution_y",
-          "range": [
-            "2",
-            "4096"
-          ],
-          "tooltip": "How many points down the grid. More points give finer detail at the cost of memory.",
-          "type": "int"
-        },
-        {
-          "default": "2",
-          "label": "Size X",
-          "name": "size_x",
-          "range": [
-            "0.01",
-            "100"
-          ],
-          "tooltip": "The width of the grid in world units.",
-          "type": "float"
-        },
-        {
-          "default": "2",
-          "label": "Size Y",
-          "name": "size_y",
-          "range": [
-            "0.01",
-            "100"
-          ],
-          "tooltip": "The depth of the grid in world units.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Emit a regular NxM grid of MeshVertex items in the XZ plane, sized in world units. Pair with a displacement primitive that perturbs Y from a Texture2D, then route to node.render_3d_mesh. The unlock for MetallicGlass-shaped graphs where the displacement source is wire-controlled.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh.",
-      "type_id": "node.generate_grid_mesh"
-    },
-    {
-      "aliases": [
-        "grid points",
-        "uv grid",
-        "parametric"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "u_max",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "v_max",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Grid Points (UV)",
-      "outputs": [
-        {
-          "name": "u_values",
-          "type": "Array"
-        },
-        {
-          "name": "v_values",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "24",
-          "label": "Grid Size",
-          "name": "grid_size",
-          "range": [
-            "2",
-            "64"
-          ],
-          "tooltip": "How many steps to sample along each axis, giving you that many points squared. Changing it rebuilds the chain, so set it while authoring rather than driving it live.",
-          "type": "int"
-        },
-        {
-          "default": "6.2831855",
-          "label": "U Max",
-          "name": "u_max",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "The end of the U range that gets sampled. Defaults to a full turn, which is the right shape for closed surfaces like a torus, or set it to 1 for flat UV meshes.",
-          "type": "float"
-        },
-        {
-          "default": "6.2831855",
-          "label": "V Max",
-          "name": "v_max",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "The end of the V range that gets sampled. Defaults to a full turn, or set it to 1 for flat UV meshes.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Emit two Array<f32> outputs (u_values, v_values) sampling a 2D parameter domain [0, u_max) × [0, v_max) at grid_size steps along each axis, flattened to grid_size² entries in row-major order (idx = iu * grid_size + iv). The parametric-surface authoring atom: pair with array_math (Cos / Sin / ScaleOffset) + pack_vec4 + edges_from_grid_uv to author any (u, v)-parametric surface in the graph — Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh — without a per-surface Rust atom. End-exclusive sampling matches periodic-surface conventions where the wrap edge is supplied by edges_from_grid_uv. CPU-only — runs on the content thread so downstream CPU readers see same-frame writes.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Outputs a grid of U and V values sampling a parametric surface, the input for building curved meshes and wireframes.",
-      "type_id": "node.generate_grid_uv"
-    },
-    {
-      "aliases": [
-        "arrange copies",
-        "instance layout",
-        "scatter",
-        "place"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [],
-      "label": "Arrange Copies",
-      "outputs": [
-        {
-          "name": "instances",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "65536",
-          "label": "Max Capacity",
-          "name": "max_capacity",
-          "range": [
-            "1",
-            "1000000"
-          ],
-          "tooltip": "The largest number of copies this node can ever hold. It sets the memory allocation, so size it for your worst case and leave it.",
-          "type": "int"
-        },
-        {
-          "default": "64",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "1000000"
-          ],
-          "tooltip": "How many copies to actually place this frame, default 64. Slide it freely up to the max capacity to thin out or fill the field.",
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "Grid",
-            "Ring",
-            "Spiral",
-            "Random"
-          ],
-          "label": "Layout",
-          "name": "layout",
-          "tooltip": "The pattern the copies fall into, Grid, Ring, Spiral, or Random.",
-          "type": "enum"
-        },
-        {
-          "default": "0",
-          "label": "Seed",
-          "name": "seed",
-          "range": [
-            "0",
-            "1000000"
-          ],
-          "tooltip": "Changes the random layout. Move it to get a different spread. Only matters when the layout is set to Random.",
-          "type": "int"
-        },
-        {
-          "default": "4",
-          "label": "Extent X",
-          "name": "extent_x",
-          "range": [
-            "0",
-            "100"
-          ],
-          "tooltip": "How far the layout reaches along X, default 4. Larger values spread the copies wider apart.",
-          "type": "float"
-        },
-        {
-          "default": "4",
-          "label": "Extent Y",
-          "name": "extent_y",
-          "range": [
-            "0",
-            "100"
-          ],
-          "tooltip": "How far the layout reaches along Y, default 4. Larger values spread the copies wider apart.",
-          "type": "float"
-        },
-        {
-          "default": "4",
-          "label": "Extent Z",
-          "name": "extent_z",
-          "range": [
-            "0",
-            "100"
-          ],
-          "tooltip": "How far the layout reaches along Z, default 4. Larger values spread the copies wider apart.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "Base Scale",
-          "name": "base_scale",
-          "range": [
-            "0",
-            "10"
-          ],
-          "tooltip": "The size every copy starts at. 1 leaves the base mesh at its native size, higher grows them all together.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Rotation X",
-          "name": "rot_x",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Tilts every copy around the X axis by the same amount, in degrees.",
-          "type": "angle"
-        },
-        {
-          "default": "0",
-          "label": "Rotation Y",
-          "name": "rot_y",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Spins every copy around the Y axis by the same amount, in degrees.",
-          "type": "angle"
-        },
-        {
-          "default": "0",
-          "label": "Rotation Z",
-          "name": "rot_z",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Rolls every copy around the Z axis by the same amount, in degrees.",
-          "type": "angle"
-        }
-      ],
-      "purpose": "Emit an Array<InstanceTransform> filled with a procedural layout (grid / ring / spiral / random). Pair with node.render_instanced_3d_mesh to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies.",
-      "type_id": "node.generate_instance_transforms"
-    },
-    {
-      "aliases": [
         "gradient",
         "gradient ramp",
         "color ramp",
@@ -7304,6 +6757,213 @@
       "stratum": "atom",
       "summary": "Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second.",
       "type_id": "node.gradient_map"
+    },
+    {
+      "aliases": [
+        "grid edges",
+        "edges from grid uv",
+        "wireframe",
+        "topology"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "grid_size",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Grid Edges",
+      "outputs": [
+        {
+          "name": "edges",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "24",
+          "label": "Grid Size",
+          "name": "grid_size",
+          "range": [
+            "2",
+            "64"
+          ],
+          "tooltip": "How many points across each side of the grid. Drive this from the same value as the matching grid points node so the layout and the edges agree.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. Pairs with node.grid_points + node.combine_xyzw to author any (u, v)-parametric surface in the graph (Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh). Each (iu, iv) cell emits two edges: one toward the next u (with modular wrap) and one toward the next v (with modular wrap). Total edge count = n² × 2. Vertex indexing matches generate_grid_uv's row-major convention (idx = iu * n + iv) so the same grid_size scalar should drive both atoms. CPU-write — sentinel-padded inactive tail, same pattern as node.platonic_solid_edges.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Outputs the wireframe edges that connect a grid of points, so you can draw the grid as a mesh of lines.",
+      "type_id": "node.grid_edges"
+    },
+    {
+      "aliases": [
+        "grid mesh",
+        "generate grid mesh",
+        "plane",
+        "terrain",
+        "Grid SOP"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "size_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "size_y",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Grid Mesh",
+      "outputs": [
+        {
+          "name": "vertices",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "2097152",
+          "label": "Max Capacity",
+          "name": "max_capacity",
+          "range": [
+            "1024",
+            "16000000"
+          ],
+          "tooltip": "The most vertices the grid can ever hold. Set it once when building the effect since changing it rebuilds the graph, and keep it at or above resolution X times resolution Y.",
+          "type": "int"
+        },
+        {
+          "default": "256",
+          "label": "Resolution X",
+          "name": "resolution_x",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "tooltip": "How many points across the grid. More points give finer detail at the cost of memory.",
+          "type": "int"
+        },
+        {
+          "default": "256",
+          "label": "Resolution Y",
+          "name": "resolution_y",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "tooltip": "How many points down the grid. More points give finer detail at the cost of memory.",
+          "type": "int"
+        },
+        {
+          "default": "2",
+          "label": "Size X",
+          "name": "size_x",
+          "range": [
+            "0.01",
+            "100"
+          ],
+          "tooltip": "The width of the grid in world units.",
+          "type": "float"
+        },
+        {
+          "default": "2",
+          "label": "Size Y",
+          "name": "size_y",
+          "range": [
+            "0.01",
+            "100"
+          ],
+          "tooltip": "The depth of the grid in world units.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Emit a regular NxM grid of MeshVertex items in the XZ plane, sized in world units. Pair with a displacement primitive that perturbs Y from a Texture2D, then route to node.render_mesh. The unlock for MetallicGlass-shaped graphs where the displacement source is wire-controlled.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh.",
+      "type_id": "node.grid_mesh"
+    },
+    {
+      "aliases": [
+        "grid points",
+        "generate grid uv",
+        "uv grid",
+        "parametric"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "u_max",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "v_max",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Grid Points (UV)",
+      "outputs": [
+        {
+          "name": "u_values",
+          "type": "Array"
+        },
+        {
+          "name": "v_values",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "24",
+          "label": "Grid Size",
+          "name": "grid_size",
+          "range": [
+            "2",
+            "64"
+          ],
+          "tooltip": "How many steps to sample along each axis, giving you that many points squared. Changing it rebuilds the chain, so set it while authoring rather than driving it live.",
+          "type": "int"
+        },
+        {
+          "default": "6.2831855",
+          "label": "U Max",
+          "name": "u_max",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "The end of the U range that gets sampled. Defaults to a full turn, which is the right shape for closed surfaces like a torus, or set it to 1 for flat UV meshes.",
+          "type": "float"
+        },
+        {
+          "default": "6.2831855",
+          "label": "V Max",
+          "name": "v_max",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "The end of the V range that gets sampled. Defaults to a full turn, or set it to 1 for flat UV meshes.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Emit two Array<f32> outputs (u_values, v_values) sampling a 2D parameter domain [0, u_max) × [0, v_max) at grid_size steps along each axis, flattened to grid_size² entries in row-major order (idx = iu * grid_size + iv). The parametric-surface authoring atom: pair with array_math (Cos / Sin / ScaleOffset) + pack_vec4 + edges_from_grid_uv to author any (u, v)-parametric surface in the graph — Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh — without a per-surface Rust atom. End-exclusive sampling matches periodic-surface conventions where the wrap edge is supplied by edges_from_grid_uv. CPU-only — runs on the content thread so downstream CPU readers see same-frame writes.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Outputs a grid of U and V values sampling a parametric surface, the input for building curved meshes and wireframes.",
+      "type_id": "node.grid_points"
     },
     {
       "aliases": [
@@ -7594,80 +7254,6 @@
     },
     {
       "aliases": [
-        "surface bumps",
-        "normal map",
-        "bump map",
-        "heightmap"
-      ],
-      "category": "Materials & Lighting",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "z_scale",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "aspect",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Surface Bumps",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.5",
-          "label": "Z Scale",
-          "name": "z_scale",
-          "range": [
-            "0.001",
-            "4"
-          ],
-          "tooltip": "How pronounced the surface detail reads. Larger values flatten the bumps out, smaller values make them steeper and more dramatic.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "Aspect",
-          "name": "aspect",
-          "range": [
-            "0.1",
-            "10"
-          ],
-          "tooltip": "Scales the vertical slope so non-square frames keep the right shape. Leave it at 1 unless your canvas is stretched, then wire the frame aspect in.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "TangentZ",
-            "WorldYUp"
-          ],
-          "label": "Coord Space",
-          "name": "coord_space",
-          "tooltip": "Which normal convention to output. TangentZ suits flat screen-space shading, while WorldYUp suits a 3D mesh lying flat with Y pointing up.",
-          "type": "enum"
-        }
-      ],
-      "purpose": "Scalar height field (read from `in.r`) → unit normal map (RGB) via central-difference gradient. Coord_space picks the output convention: TangentZ for flat-surface tangent-space shading (OilyFluid lambert/matcap/blinn), WorldYUp for 3D meshes laid out in the XZ plane with Y up (MetallicGlass full-resolution-reflection trick). Larger `z_scale` flattens the normal; smaller steepens it. `aspect` scales the Y-axis gradient for non-square world quads. Output is SIGNED (range [-1, 1] per channel).",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture.",
-      "type_id": "node.heightmap_to_normal"
-    },
-    {
-      "aliases": [
         "hue",
         "saturation",
         "hsv",
@@ -7752,6 +7338,33 @@
       "aliases": [
         "tesseract",
         "hypercube",
+        "edges from hypercube",
+        "4d cube",
+        "edges",
+        "wireframe"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [],
+      "label": "Hypercube Edges (4D)",
+      "outputs": [
+        {
+          "name": "edges",
+          "type": "Array"
+        }
+      ],
+      "params": [],
+      "purpose": "Emit the wireframe edge topology of a 4D hypercube as Array<EdgePair> — the constant 32-edge bit-flip table. The 4D counterpart of node.platonic_solid_edges. Pair with node.hypercube_points and feed both into node.draw_lines (vertices → points, edges → edges) for a 4D wireframe. No params: a hypercube has one topology; the dimension-morph lives in the vertex positions.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Builds the wireframe edges of a hypercube — which corners connect. Feed it with the matching hypercube points to draw the 4D cube.",
+      "type_id": "node.hypercube_edges"
+    },
+    {
+      "aliases": [
+        "tesseract",
+        "hypercube",
+        "hypercube vertices",
         "4d cube",
         "polytope",
         "dimension morph"
@@ -7784,11 +7397,11 @@
           "type": "float"
         }
       ],
-      "purpose": "Emit the 16 corner vertices of a 4D hypercube as Array<Vec4Vertex>, with a continuous `dimension` control (1..4) that collapses the higher axes toward zero so the shape morphs point → line → square → cube → tesseract. At dimension=4 it is the full tesseract. Pair with node.edges_from_hypercube and feed both into node.rotate_4d → node.project_4d → node.draw_lines (with the `edges` input wired). The 4D counterpart of node.polytope_vertices.",
+      "purpose": "Emit the 16 corner vertices of a 4D hypercube as Array<Vec4Vertex>, with a continuous `dimension` control (1..4) that collapses the higher axes toward zero so the shape morphs point → line → square → cube → tesseract. At dimension=4 it is the full tesseract. Pair with node.hypercube_edges and feed both into node.rotate_4d → node.flatten_4d → node.draw_lines (with the `edges` input wired). The 4D counterpart of node.platonic_solid_points.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Builds the corner points of a hypercube. The Dimension knob morphs it from a flat square up through a cube to a full 4D tesseract — wire it to an LFO to animate the reveal.",
-      "type_id": "node.hypercube_vertices"
+      "type_id": "node.hypercube_points"
     },
     {
       "aliases": [
@@ -8212,106 +7825,6 @@
       "stratum": "atom",
       "summary": "Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to apply them.",
       "type_id": "node.kaleidoscope"
-    },
-    {
-      "aliases": [
-        "lambert",
-        "diffuse",
-        "matte",
-        "basic light"
-      ],
-      "category": "Materials & Lighting",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "normal",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "light",
-          "required": false,
-          "type": "Light"
-        },
-        {
-          "name": "light_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "light_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "light_z",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "ambient",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Basic Light (Lambert)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.4",
-          "label": "Light X",
-          "name": "light_x",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "Horizontal direction the light comes from. Positive lights the surface from the right, negative from the left.",
-          "type": "float"
-        },
-        {
-          "default": "0.6",
-          "label": "Light Y",
-          "name": "light_y",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "Vertical direction the light comes from. Positive lights from above, negative from below.",
-          "type": "float"
-        },
-        {
-          "default": "0.7",
-          "label": "Light Z",
-          "name": "light_z",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "How much the light points straight out of the screen toward the surface. The direction is normalised so only the balance between the three axes matters.",
-          "type": "float"
-        },
-        {
-          "default": "0.1",
-          "label": "Ambient",
-          "name": "ambient",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "A flat fill that keeps the unlit side from going fully black. 0 gives hard shadows, higher values lift the whole surface toward flat.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multiplied by the light's colour. The basic directional-lighting atom — pair with `node.gradient_map` to tint further, or sum with `node.fresnel_rim` / `node.blinn_specular` for stylized PBR. Two ways to drive the light: scattered `light_x/y/z` scalars (output grayscale, white tint), or wire a `node.light` into `light` (output picks up the light's premultiplied colour). The scalar fallback keeps every existing OilyFluid-shaped consumer working unchanged.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Shades a surface from its normal map and a single direction, brightest where it faces the light. The plain matte lighting term.",
-      "type_id": "node.lambert_directional"
     },
     {
       "aliases": [
@@ -8871,7 +8384,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, blinn_specular, etc.) and shadow-aware mesh renderers (the PBR path lives inside node.render_3d_mesh's material). All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage.",
+      "purpose": "Single light source for 3D lighting pipelines. Mode enum picks Sun (parallel rays, ortho shadow frustum) or Point (omnidirectional, perspective shadow frustum). Outputs a Light wire consumed by shading atoms (lambert_directional, blinn_specular, etc.) and shadow-aware mesh renderers (the PBR path lives inside node.render_mesh's material). All scalar params are port-shadow so the light can be animated by LFOs, MIDI, or other control sources. Colour is premultiplied with intensity at emission. Industry-standard Blender / TouchDesigner shape — one node per light, shadow-mapping is a property of the light not a separate pipeline stage.",
       "role": "Source",
       "stratum": "driver",
       "summary": "A single light source for 3D scenes, set to a sun for parallel rays or a point for a local glow. Wire it into a material or a mesh renderer.",
@@ -8996,6 +8509,58 @@
       "stratum": "driver",
       "summary": "Measures the average brightness of the image and outputs it as a single number. Wire it into a knob to make an effect react to how bright the picture is.",
       "type_id": "node.luminance"
+    },
+    {
+      "aliases": [
+        "triangulate",
+        "make triangles",
+        "triangulate grid",
+        "mesh",
+        "surface"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        }
+      ],
+      "label": "Make Triangles",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "256",
+          "label": "Source Columns",
+          "name": "src_cols",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "256",
+          "label": "Source Rows",
+          "name": "src_rows",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "type": "int"
+        }
+      ],
+      "purpose": "Convert a positions-only NxM Array<MeshVertex> grid into a triangle-list (N-1)*(M-1)*6 vertex stream with finite-difference normals. The adapter primitive between node.grid_mesh (positions) and node.render_mesh (triangle list). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Turns a grid of points into a solid mesh of triangles, so a flat field of points becomes a surface you can render.",
+      "type_id": "node.make_triangles"
     },
     {
       "aliases": [
@@ -10120,6 +9685,163 @@
     },
     {
       "aliases": [
+        "orbit camera",
+        "camera orbit",
+        "camera",
+        "viewpoint",
+        "Camera COMP"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "orbit",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "tilt",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "distance",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "fov_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "look_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "roll",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Orbit Camera",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Camera"
+        },
+        {
+          "name": "pos_x",
+          "type": "f32"
+        },
+        {
+          "name": "pos_y",
+          "type": "f32"
+        },
+        {
+          "name": "pos_z",
+          "type": "f32"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.7",
+          "label": "Orbit",
+          "name": "orbit",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Swings the camera left and right around the target, in degrees. This is the horizontal angle of the orbit.",
+          "type": "angle"
+        },
+        {
+          "default": "0.3",
+          "label": "Tilt",
+          "name": "tilt",
+          "range": [
+            "-1.5",
+            "1.5"
+          ],
+          "tooltip": "Raises and lowers the camera over the target, in degrees. Positive looks down from above, negative looks up from below.",
+          "type": "angle"
+        },
+        {
+          "default": "4",
+          "label": "Distance",
+          "name": "distance",
+          "range": [
+            "0.01",
+            "100"
+          ],
+          "tooltip": "How far the camera sits from the target. Larger values pull back for a wider view, smaller values move in close.",
+          "type": "float"
+        },
+        {
+          "default": "0.9",
+          "label": "FOV Y",
+          "name": "fov_y",
+          "range": [
+            "0.05",
+            "2.5"
+          ],
+          "tooltip": "The vertical field of view in degrees. Wider angles take in more of the scene and exaggerate perspective, narrower angles flatten it.",
+          "type": "angle"
+        },
+        {
+          "default": "0",
+          "label": "Look Y",
+          "name": "look_y",
+          "range": [
+            "-10",
+            "10"
+          ],
+          "tooltip": "Raises or lowers the point the camera looks at, shifting the whole framing up or down in the scene.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Roll",
+          "name": "roll",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Tilts the camera sideways around its own view direction, in degrees, so the horizon leans. 0 keeps it level.",
+          "type": "angle"
+        },
+        {
+          "default": "0.05",
+          "label": "Near",
+          "name": "near",
+          "range": [
+            "0.001",
+            "10"
+          ],
+          "tooltip": "Closest distance the camera can see. Anything nearer is clipped away. Leave it small unless the scene has extreme depth.",
+          "type": "float"
+        },
+        {
+          "default": "200",
+          "label": "Far",
+          "name": "far",
+          "range": [
+            "1",
+            "10000"
+          ],
+          "tooltip": "Furthest distance the camera can see. Anything beyond is clipped away. Leave the default unless the scene is very deep.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Orbit-style perspective camera source. Emits one Camera on `out` from five port-shadowed scalar inputs (orbit/tilt/distance/fov_y/look_y) — matches the inline orbit formula every legacy 3D renderer used. Also exposes pos_x/pos_y/pos_z scalar outputs for PBR shading atoms that need the camera world position per pixel. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, digital_plants_render, scatter_particles_camera) that takes a `camera: Camera` input — replaces N separate camera scalar params per primitive with one wire.",
+      "role": "Source",
+      "stratum": "driver",
+      "summary": "A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering.",
+      "type_id": "node.orbit_camera"
+    },
+    {
+      "aliases": [
         "pack rgba",
         "pack channels",
         "combine channels",
@@ -10851,6 +10573,98 @@
     },
     {
       "aliases": [
+        "platonic solid",
+        "polytope edges",
+        "polytope",
+        "edges",
+        "wireframe"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "shape",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Platonic Solid Edges",
+      "outputs": [
+        {
+          "name": "edges",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "enum_values": [
+            "Tetrahedron",
+            "Cube",
+            "Octahedron",
+            "Icosahedron",
+            "Dodecahedron"
+          ],
+          "label": "Shape",
+          "name": "shape",
+          "tooltip": "Which of the five Platonic solids to outline, from Tetra and Cube through to Icosa and Dodeca. Drive the matching points node from the same value so corners and edges agree.",
+          "type": "enum"
+        }
+      ],
+      "purpose": "Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. Curated-enum atom — one CPU write of a static per-shape adjacency table, sentinel-padded for the inactive tail. Pair with node.platonic_solid_points (driving both from the same shape scalar) and feed both into node.draw_lines (vertices → points, edges → edges) for a 3D wireframe.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe.",
+      "type_id": "node.platonic_solid_edges"
+    },
+    {
+      "aliases": [
+        "platonic solid",
+        "polytope vertices",
+        "polytope",
+        "vertices",
+        "points"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "shape",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Platonic Solid Points",
+      "outputs": [
+        {
+          "name": "vertices",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "enum_values": [
+            "Tetrahedron",
+            "Cube",
+            "Octahedron",
+            "Icosahedron",
+            "Dodecahedron"
+          ],
+          "label": "Shape",
+          "name": "shape",
+          "tooltip": "Which of the five Platonic solids to build, from Tetrahedron through Cube, Octahedron, Icosahedron, to Dodecahedron. Drive the same choice into the matching edges node so corners and lines agree.",
+          "type": "enum"
+        }
+      ],
+      "purpose": "Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. Curated-enum atom — one GPU dispatch with closed-form per-shape coordinates baked into WGSL, normalised to magnitude 0.25 (the legacy screen-friendly default). Pair with node.platonic_solid_edges (driving both from the same shape scalar) and feed both into node.rotate_3d → node.flatten_3d → node.draw_lines for a 3D wireframe.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry.",
+      "type_id": "node.platonic_solid_points"
+    },
+    {
+      "aliases": [
         "polar",
         "angle distance",
         "radial coordinates"
@@ -10894,96 +10708,6 @@
       "stratum": "atom",
       "summary": "Outputs each pixel's angle and distance from a centre instead of its X and Y. The base for spirals, tunnels, and kaleidoscopes.",
       "type_id": "node.polar_field"
-    },
-    {
-      "aliases": [
-        "platonic solid",
-        "polytope",
-        "edges",
-        "wireframe"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "shape",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Platonic Solid Edges",
-      "outputs": [
-        {
-          "name": "edges",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "enum_values": [
-            "Tetrahedron",
-            "Cube",
-            "Octahedron",
-            "Icosahedron",
-            "Dodecahedron"
-          ],
-          "label": "Shape",
-          "name": "shape",
-          "tooltip": "Which of the five Platonic solids to outline, from Tetra and Cube through to Icosa and Dodeca. Drive the matching points node from the same value so corners and edges agree.",
-          "type": "enum"
-        }
-      ],
-      "purpose": "Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. Curated-enum atom — one CPU write of a static per-shape adjacency table, sentinel-padded for the inactive tail. Pair with node.polytope_vertices (driving both from the same shape scalar) and feed both into node.draw_lines (vertices → points, edges → edges) for a 3D wireframe.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe.",
-      "type_id": "node.polytope_edges"
-    },
-    {
-      "aliases": [
-        "platonic solid",
-        "polytope",
-        "vertices",
-        "points"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "shape",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Platonic Solid Points",
-      "outputs": [
-        {
-          "name": "vertices",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "enum_values": [
-            "Tetrahedron",
-            "Cube",
-            "Octahedron",
-            "Icosahedron",
-            "Dodecahedron"
-          ],
-          "label": "Shape",
-          "name": "shape",
-          "tooltip": "Which of the five Platonic solids to build, from Tetrahedron through Cube, Octahedron, Icosahedron, to Dodecahedron. Drive the same choice into the matching edges node so corners and lines agree.",
-          "type": "enum"
-        }
-      ],
-      "purpose": "Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. Curated-enum atom — one GPU dispatch with closed-form per-shape coordinates baked into WGSL, normalised to magnitude 0.25 (the legacy screen-friendly default). Pair with node.polytope_edges (driving both from the same shape scalar) and feed both into node.rotate_3d → node.project_3d → node.draw_lines for a 3D wireframe.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry.",
-      "type_id": "node.polytope_vertices"
     },
     {
       "aliases": [
@@ -11083,10 +10807,10 @@
     },
     {
       "aliases": [
-        "project 3d",
-        "flatten",
-        "perspective",
-        "camera projection"
+        "displace mesh",
+        "push mesh",
+        "height",
+        "terrain"
       ],
       "category": "3D Geometry",
       "examples": [],
@@ -11097,80 +10821,12 @@
           "type": "Array"
         },
         {
-          "name": "proj_scale",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "proj_dist",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Flatten 3D → 2D",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "enum_values": [
-            "Orthographic",
-            "Perspective"
-          ],
-          "label": "Projection",
-          "name": "mode",
-          "tooltip": "How the 3D points flatten to 2D. Orthographic keeps a flat scale and ignores depth, while Perspective shrinks far points toward a vanishing point.",
-          "type": "enum"
-        },
-        {
-          "default": "0.25",
-          "label": "Projection Scale",
-          "name": "proj_scale",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "How much the flattened shape is zoomed. Higher values fill more of the frame.",
-          "type": "float"
-        },
-        {
-          "default": "3",
-          "label": "Projection Distance",
-          "name": "proj_dist",
-          "range": [
-            "0.5",
-            "100"
-          ],
-          "tooltip": "The camera distance in Perspective mode. Closer distances exaggerate the depth foreshortening, farther ones flatten it out. Orthographic mode ignores it.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For WireframeZoo-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering.",
-      "type_id": "node.project_3d"
-    },
-    {
-      "aliases": [
-        "project 4d",
-        "flatten",
-        "4d to 3d"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
+          "name": "height",
           "required": true,
-          "type": "Array"
+          "type": "Texture2D"
         }
       ],
-      "label": "Flatten 4D → 3D",
+      "label": "Push Mesh",
       "outputs": [
         {
           "name": "out",
@@ -11179,33 +10835,55 @@
       ],
       "params": [
         {
-          "default": "0.25",
-          "label": "Projection Scale",
-          "name": "proj_scale",
+          "default": "256",
+          "label": "Columns",
+          "name": "cols",
           "range": [
-            "0",
-            "4"
+            "2",
+            "4096"
           ],
-          "tooltip": "How large the flattened shape comes out, default 0.25. Higher fills more of the frame.",
+          "tooltip": "How many columns are in the source grid. This must match the grid the mesh came from or the height image will sample at the wrong spots.",
+          "type": "int"
+        },
+        {
+          "default": "256",
+          "label": "Rows",
+          "name": "rows",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "tooltip": "How many rows are in the source grid. This must match the grid the mesh came from.",
+          "type": "int"
+        },
+        {
+          "default": "0.2",
+          "label": "Displacement",
+          "name": "displacement",
+          "range": [
+            "-10",
+            "10"
+          ],
+          "tooltip": "How far the height image pushes each point up or down. 0 leaves the mesh flat, and negative values push the other way.",
           "type": "float"
         },
         {
-          "default": "3",
-          "label": "Projection Distance",
-          "name": "proj_dist",
+          "default": "0.5",
+          "label": "Height Bias",
+          "name": "height_bias",
           "range": [
-            "0.5",
-            "100"
+            "0",
+            "1"
           ],
-          "tooltip": "How far the 4D camera sits from the shape, default 3. Small values exaggerate the four-dimensional warp, large values flatten it out.",
+          "tooltip": "The grey level that counts as no movement, from 0 to 1. At the default 0.5, mid grey stays put while brighter pixels rise and darker ones sink.",
           "type": "float"
         }
       ],
-      "purpose": "Project an Array<Vec4Vertex> to Array<CurvePoint> via two-stage perspective (4D → 3D collapse with f = proj_dist / (proj_dist - w), then 3D → 2D with s = proj_dist / (proj_dist + p3z)). Bit-exact port of generator_math::project_4d. The 4D-equivalent of node.project_3d for Tesseract / Duocylinder decomposition.",
+      "purpose": "Perturb the Y component of an Array<MeshVertex> positions grid by sampling a height Texture2D at each vertex's UV. cols/rows describe the source grid topology; UV = (col / (cols-1), row / (rows-1)). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape.",
-      "type_id": "node.project_4d"
+      "summary": "Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement.",
+      "type_id": "node.push_mesh"
     },
     {
       "aliases": [
@@ -11739,75 +11417,8 @@
     },
     {
       "aliases": [
-        "render mesh",
-        "draw 3d",
-        "rasterize",
-        "Render TOP"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "vertices",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "camera",
-          "required": true,
-          "type": "Camera"
-        },
-        {
-          "name": "material",
-          "required": true,
-          "type": "Material"
-        },
-        {
-          "name": "light",
-          "required": false,
-          "type": "Light"
-        },
-        {
-          "name": "envmap",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "normal_map",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "roughness_map",
-          "required": false,
-          "type": "Texture2D"
-        }
-      ],
-      "label": "Render Mesh",
-      "outputs": [
-        {
-          "name": "color",
-          "type": "Texture2D"
-        },
-        {
-          "name": "world_pos",
-          "type": "Texture2D"
-        },
-        {
-          "name": "world_normal",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [],
-      "purpose": "Bundled 3D mesh renderer (TouchDesigner / Blender shape). Reads an Array<MeshVertex> as a triangle list, takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), and emits a shaded `color` Texture2D plus optional G-buffer outputs (`world_pos`, `world_normal`). The material's MaterialKind picks the fragment shader — Unlit / Phong / PBR / Cel. Per-kind requirements: Unlit needs no light. Phong / Cel need `light`. PBR needs `light` AND `envmap`. Surface textures sample at each fragment's mesh UV (the per-vertex `uv` channel interpolated through the rasterizer), so the texture sticks to the geometry as the camera moves — the industry-standard mesh-UV pattern. normal_map is interpreted as a world-space signed normal; roughness_map's red channel replaces the material's scalar roughness when wired.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image.",
-      "type_id": "node.render_3d_mesh"
-    },
-    {
-      "aliases": [
         "render copies",
+        "render instanced 3d mesh",
         "instancing",
         "instances",
         "Geometry COMP"
@@ -11876,11 +11487,80 @@
           "type": "int"
         }
       ],
-      "purpose": "Bundled instanced 3D mesh renderer. Draws N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), picks the matching per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel), and emits a shaded `color` Texture2D. Surface textures sample at the base mesh's per-vertex UV (the same channel as render_3d_mesh) — the texture is shared across every instance and stays locked to the geometry as the camera moves. Pair with node.generate_instance_transforms to drive NestedCubes / DigitalPlants graphs. Per-kind requirements mirror render_3d_mesh: Unlit needs no light; Phong / Cel need light; PBR needs light + envmap.",
+      "purpose": "Bundled instanced 3D mesh renderer. Draws N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), picks the matching per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel), and emits a shaded `color` Texture2D. Surface textures sample at the base mesh's per-vertex UV (the same channel as render_3d_mesh) — the texture is shared across every instance and stays locked to the geometry as the camera moves. Pair with node.arrange_copies to drive NestedCubes / DigitalPlants graphs. Per-kind requirements mirror render_3d_mesh: Unlit needs no light; Phong / Cel need light; PBR needs light + envmap.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects.",
-      "type_id": "node.render_instanced_3d_mesh"
+      "type_id": "node.render_copies"
+    },
+    {
+      "aliases": [
+        "render mesh",
+        "render 3d mesh",
+        "draw 3d",
+        "rasterize",
+        "Render TOP"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "vertices",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "camera",
+          "required": true,
+          "type": "Camera"
+        },
+        {
+          "name": "material",
+          "required": true,
+          "type": "Material"
+        },
+        {
+          "name": "light",
+          "required": false,
+          "type": "Light"
+        },
+        {
+          "name": "envmap",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "normal_map",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "roughness_map",
+          "required": false,
+          "type": "Texture2D"
+        }
+      ],
+      "label": "Render Mesh",
+      "outputs": [
+        {
+          "name": "color",
+          "type": "Texture2D"
+        },
+        {
+          "name": "world_pos",
+          "type": "Texture2D"
+        },
+        {
+          "name": "world_normal",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [],
+      "purpose": "Bundled 3D mesh renderer (TouchDesigner / Blender shape). Reads an Array<MeshVertex> as a triangle list, takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), and emits a shaded `color` Texture2D plus optional G-buffer outputs (`world_pos`, `world_normal`). The material's MaterialKind picks the fragment shader — Unlit / Phong / PBR / Cel. Per-kind requirements: Unlit needs no light. Phong / Cel need `light`. PBR needs `light` AND `envmap`. Surface textures sample at each fragment's mesh UV (the per-vertex `uv` channel interpolated through the rasterizer), so the texture sticks to the geometry as the camera moves — the industry-standard mesh-UV pattern. normal_map is interpreted as a world-space signed normal; roughness_map's red channel replaces the material's scalar roughness when wired.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image.",
+      "type_id": "node.render_mesh"
     },
     {
       "aliases": [
@@ -12094,6 +11774,63 @@
     },
     {
       "aliases": [
+        "repeat outline",
+        "array replicate polyline rings",
+        "rings",
+        "concentric",
+        "replicate"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "outline",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "edges",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "scales",
+          "required": true,
+          "type": "Array"
+        }
+      ],
+      "label": "Repeat Outline (rings)",
+      "outputs": [
+        {
+          "name": "outline",
+          "type": "Array"
+        },
+        {
+          "name": "edges",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "16",
+          "label": "Max Rings",
+          "name": "max_rings",
+          "range": [
+            "1",
+            "32"
+          ],
+          "tooltip": "The most copies this node will stack, from 1 up to 32. The actual count is whatever is smaller, this ceiling or the number of scales fed in.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Stack K transformed copies of a polyline (outline + edge topology) into one concatenated polyline. Per-ring uniform scale on the outline; per-ring index shift on the edges (sentinel-preserving). The K-fold replication atom for line-based generators: pair a single polygon / Lissajous / Rose curve outline + edges with a `scales` Array<f32> (from generate_range + array_math) to produce concentric, parallax, or stacked variations of the source polyline. The ring count is `min(scales.capacity, max_rings)`; output capacity is `input.capacity * max_rings` so the chain build pre-allocates the full stack at plan time.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings.",
+      "type_id": "node.repeat_outline"
+    },
+    {
+      "aliases": [
         "resolve scatter",
         "resolve accumulator",
         "accumulator",
@@ -12239,6 +11976,109 @@
       "stratum": "atom",
       "summary": "Pulls the red and blue channels apart along a direction you feed in, for a chromatic-aberration or glitchy colour-fringe look. The amount is in pixels and can go negative to swap which way they shift.",
       "type_id": "node.rgb_split"
+    },
+    {
+      "aliases": [
+        "rim light",
+        "fresnel rim",
+        "fresnel",
+        "edge glow",
+        "backlight"
+      ],
+      "category": "Materials & Lighting",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "normal",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "view_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "view_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "view_z",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "power",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Rim Light (Fresnel)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "label": "View X",
+          "name": "view_x",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The X part of the viewing direction the rim is measured against, from -1 to 1. The default looks straight down the Z axis at the surface.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "View Y",
+          "name": "view_y",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The Y part of the viewing direction the rim is measured against, from -1 to 1.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "View Z",
+          "name": "view_z",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The Z part of the viewing direction the rim is measured against, from -1 to 1. Default of 1 points the camera straight at the surface.",
+          "type": "float"
+        },
+        {
+          "default": "3",
+          "label": "Power",
+          "name": "power",
+          "range": [
+            "0.5",
+            "16"
+          ],
+          "tooltip": "How tight the glowing edge is, from 0.5 for a wide soft rim up to 16 for a thin sharp line right at the silhouette.",
+          "type": "float"
+        },
+        {
+          "default": "[0.55, 0.3, 0.85, 1]",
+          "label": "Color",
+          "name": "color",
+          "tooltip": "The colour of the rim glow. This output is additive, so wire it onto your base shading with a Mix in Add mode.",
+          "type": "color"
+        }
+      ],
+      "purpose": "Fresnel-based edge highlight from a tangent-space normal map: `f = pow(1 - max(dot(n, view), 0), power)`, output = color.rgb * f. ADDITIVE rim term — black at face-on, `color`-tinted at grazing. Sum with a base shading (matcap, lambert) via `node.compose` mode=Add to layer the rim onto the surface. Defaults match oily-fluid PBR (view=(0,0,1), power=3, color=iridescent magenta).",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects.",
+      "type_id": "node.rim_light"
     },
     {
       "aliases": [
@@ -13490,6 +13330,162 @@
     },
     {
       "aliases": [
+        "specular",
+        "shininess",
+        "blinn specular",
+        "highlight",
+        "blinn"
+      ],
+      "category": "Materials & Lighting",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "normal",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "light",
+          "required": false,
+          "type": "Light"
+        },
+        {
+          "name": "light_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "light_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "light_z",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "view_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "view_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "view_z",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "power",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Shininess (Blinn)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.35",
+          "label": "Light X",
+          "name": "light_x",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The X part of the light direction, from -1 to 1. Wiring a Light into the light port overrides this and the other two direction knobs.",
+          "type": "float"
+        },
+        {
+          "default": "0.55",
+          "label": "Light Y",
+          "name": "light_y",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The Y part of the light direction, from -1 to 1. The direction is normalised in the shader so only the ratio between X, Y, and Z matters.",
+          "type": "float"
+        },
+        {
+          "default": "0.75",
+          "label": "Light Z",
+          "name": "light_z",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The Z part of the light direction, from -1 to 1. Default 0.75 points the light mostly toward the camera for a forward-facing highlight.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "View X",
+          "name": "view_x",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The X part of the viewing direction, from -1 to 1. This is where the camera sits relative to the surface.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "View Y",
+          "name": "view_y",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The Y part of the viewing direction, from -1 to 1.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "View Z",
+          "name": "view_z",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The Z part of the viewing direction, from -1 to 1. Default 1 looks straight on, which puts the highlight where the light reflects back at the camera.",
+          "type": "float"
+        },
+        {
+          "default": "48",
+          "label": "Power",
+          "name": "power",
+          "range": [
+            "1",
+            "256"
+          ],
+          "tooltip": "How tight the highlight is. Higher values give a small pinpoint glint while lower values spread it into a broad sheen.",
+          "type": "float"
+        },
+        {
+          "default": "[1, 0.95, 1, 1]",
+          "label": "Color",
+          "name": "color",
+          "tooltip": "The colour of the highlight. Alpha is ignored, and a wired light tints this further by multiplying its own colour in.",
+          "type": "color"
+        }
+      ],
+      "purpose": "Blinn-Phong specular from a tangent-space normal map + directional light + view: `h = normalize(light + view); spec = pow(max(dot(n, h), 0), power)`. ADDITIVE — sum with a base shading via `node.compose` mode=Add. Defaults match oily-fluid PBR (light=(0.35,0.55,0.75), view=(0,0,1), power=48, near-white tint). Wire a `node.light` into `light` to drive direction + colour from one source instead of scattered scalars; the wired light's colour multiplies the `color` tint param.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Adds a tight highlight where the surface catches the light, set by a shininess amount. The glossy hotspot on top of basic lighting.",
+      "type_id": "node.shininess"
+    },
+    {
+      "aliases": [
         "simplex field",
         "noise field",
         "flow"
@@ -14597,6 +14593,81 @@
     },
     {
       "aliases": [
+        "surface bumps",
+        "heightmap to normal",
+        "normal map",
+        "bump map",
+        "heightmap"
+      ],
+      "category": "Materials & Lighting",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "z_scale",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "aspect",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Surface Bumps",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.5",
+          "label": "Z Scale",
+          "name": "z_scale",
+          "range": [
+            "0.001",
+            "4"
+          ],
+          "tooltip": "How pronounced the surface detail reads. Larger values flatten the bumps out, smaller values make them steeper and more dramatic.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Aspect",
+          "name": "aspect",
+          "range": [
+            "0.1",
+            "10"
+          ],
+          "tooltip": "Scales the vertical slope so non-square frames keep the right shape. Leave it at 1 unless your canvas is stretched, then wire the frame aspect in.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "TangentZ",
+            "WorldYUp"
+          ],
+          "label": "Coord Space",
+          "name": "coord_space",
+          "tooltip": "Which normal convention to output. TangentZ suits flat screen-space shading, while WorldYUp suits a 3D mesh lying flat with Y pointing up.",
+          "type": "enum"
+        }
+      ],
+      "purpose": "Scalar height field (read from `in.r`) → unit normal map (RGB) via central-difference gradient. Coord_space picks the output convention: TangentZ for flat-surface tangent-space shading (OilyFluid lambert/matcap/blinn), WorldYUp for 3D meshes laid out in the XZ plane with Y up (MetallicGlass full-resolution-reflection trick). Larger `z_scale` flattens the normal; smaller steepens it. `aspect` scales the Y-axis gradient for non-square world quads. Output is SIGNED (range [-1, 1] per channel).",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture.",
+      "type_id": "node.surface_bumps"
+    },
+    {
+      "aliases": [
         "advect",
         "transport",
         "flow",
@@ -15156,57 +15227,6 @@
       "stratum": "atom",
       "summary": "Moves, scales, and rotates the whole image around its centre. The basic transform for repositioning a layer.",
       "type_id": "node.transform"
-    },
-    {
-      "aliases": [
-        "triangulate",
-        "make triangles",
-        "mesh",
-        "surface"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        }
-      ],
-      "label": "Make Triangles",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "256",
-          "label": "Source Columns",
-          "name": "src_cols",
-          "range": [
-            "2",
-            "4096"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "256",
-          "label": "Source Rows",
-          "name": "src_rows",
-          "range": [
-            "2",
-            "4096"
-          ],
-          "type": "int"
-        }
-      ],
-      "purpose": "Convert a positions-only NxM Array<MeshVertex> grid into a triangle-list (N-1)*(M-1)*6 vertex stream with finite-difference normals. The adapter primitive between node.generate_grid_mesh (positions) and node.render_3d_mesh (triangle list). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Turns a grid of points into a solid mesh of triangles, so a flat field of points becomes a surface you can render.",
-      "type_id": "node.triangulate_grid"
     },
     {
       "aliases": [

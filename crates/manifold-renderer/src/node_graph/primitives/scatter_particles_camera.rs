@@ -3,7 +3,7 @@
 //! `generators/shaders/fluid_scatter_3d.wgsl`'s `splat_projected` entry via
 //! include_str.
 //!
-//! Takes a `camera: Camera` input (typically from `node.camera_orbit`) and
+//! Takes a `camera: Camera` input (typically from `node.orbit_camera`) and
 //! reads its basis vectors + position to project each 3D particle through
 //! orthographic (with toroidal wrap) or perspective camera math, then atomic-
 //! adds `scaled_energy` into a 2D u32 accumulator buffer sized

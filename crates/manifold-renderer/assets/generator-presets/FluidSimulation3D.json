@@ -680,7 +680,7 @@
           {
             "id": 2,
             "nodeId": "cam_orbit_node",
-            "typeId": "node.camera_orbit",
+            "typeId": "node.orbit_camera",
             "handle": "cam_orbit_node",
             "params": {
               "distance": {

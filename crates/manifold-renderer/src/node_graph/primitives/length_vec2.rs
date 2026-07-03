@@ -1,7 +1,7 @@
 //! `node.vector_length` — per-pixel `length(in.rg)` as a scalar field
 //! in the R channel. Turns a signed flow / displacement / gradient
 //! texture into a positive scalar magnitude field. Pair with
-//! `node.heightmap_to_normal` (height = vec2 magnitude) for the
+//! `node.surface_bumps` (height = vec2 magnitude) for the
 //! oily-fluid color → normal pipeline, with `node.smoothstep`
 //! for thresholding, or with a tonemap for visualisation.
 

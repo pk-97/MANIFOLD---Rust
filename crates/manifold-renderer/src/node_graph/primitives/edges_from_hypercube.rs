@@ -1,4 +1,4 @@
-//! `node.edges_from_hypercube` — emit the wireframe edge topology of a
+//! `node.hypercube_edges` — emit the wireframe edge topology of a
 //! 4D hypercube as `Array<EdgePair>`. The 4D-side counterpart of
 //! [`super::polytope_edges`], paired with [`super::hypercube_vertices`].
 //!
@@ -48,20 +48,20 @@ pub const HYPERCUBE_EDGES: [EdgePair; HYPERCUBE_EDGE_COUNT as usize] = hypercube
 
 crate::primitive! {
     name: EdgesFromHypercube,
-    type_id: "node.edges_from_hypercube",
-    purpose: "Emit the wireframe edge topology of a 4D hypercube as Array<EdgePair> — the constant 32-edge bit-flip table. The 4D counterpart of node.polytope_edges. Pair with node.hypercube_vertices and feed both into node.draw_lines (vertices → points, edges → edges) for a 4D wireframe. No params: a hypercube has one topology; the dimension-morph lives in the vertex positions.",
+    type_id: "node.hypercube_edges",
+    purpose: "Emit the wireframe edge topology of a 4D hypercube as Array<EdgePair> — the constant 32-edge bit-flip table. The 4D counterpart of node.platonic_solid_edges. Pair with node.hypercube_points and feed both into node.draw_lines (vertices → points, edges → edges) for a 4D wireframe. No params: a hypercube has one topology; the dimension-morph lives in the vertex positions.",
     inputs: {},
     outputs: {
         edges: Array(EdgePair),
     },
     params: [],
-    composition_notes: "Output capacity is fixed at 32 (the hypercube edge count). Edges connect (i, i^bit) for bit ∈ {1,2,4,8} where j > i. The table is constant across `dimension` — when node.hypercube_vertices collapses an axis, the affected edges become zero-length and node.draw_lines skips/dots them. Drive the paired node.hypercube_vertices for the matching corners.",
+    composition_notes: "Output capacity is fixed at 32 (the hypercube edge count). Edges connect (i, i^bit) for bit ∈ {1,2,4,8} where j > i. The table is constant across `dimension` — when node.hypercube_points collapses an axis, the affected edges become zero-length and node.draw_lines skips/dots them. Drive the paired node.hypercube_points for the matching corners.",
     examples: [],
     picker: { label: "Hypercube Edges (4D)", category: Atom },
     summary: "Builds the wireframe edges of a hypercube — which corners connect. Feed it with the matching hypercube points to draw the 4D cube.",
     category: Geometry3D,
     role: Source,
-    aliases: ["tesseract", "hypercube", "4d cube", "edges", "wireframe"],
+    aliases: ["tesseract", "hypercube", "edges from hypercube", "4d cube", "edges", "wireframe"],
 }
 
 impl Primitive for EdgesFromHypercube {
@@ -81,7 +81,7 @@ impl Primitive for EdgesFromHypercube {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let Some(edge_dst) = ctx.outputs.array("edges") else {
             log::warn!(
-                "node.edges_from_hypercube: no GpuBuffer bound to output port `edges` — \
+                "node.hypercube_edges: no GpuBuffer bound to output port `edges` — \
                  the chain build did not pre-allocate the Array<EdgePair> output.",
             );
             return;
@@ -117,7 +117,7 @@ mod tests {
     fn declares_zero_inputs_and_edge_pair_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let edge_layout = ArrayType::of_known::<EdgePair>();
-        assert_eq!(EdgesFromHypercube::TYPE_ID, "node.edges_from_hypercube");
+        assert_eq!(EdgesFromHypercube::TYPE_ID, "node.hypercube_edges");
         assert!(EdgesFromHypercube::INPUTS.is_empty());
         assert_eq!(EdgesFromHypercube::OUTPUTS.len(), 1);
         assert_eq!(EdgesFromHypercube::OUTPUTS[0].name, "edges");
@@ -165,6 +165,6 @@ mod tests {
     fn registers_as_palette_atom() {
         let prim = EdgesFromHypercube::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.edges_from_hypercube");
+        assert_eq!(node.type_id().as_str(), "node.hypercube_edges");
     }
 }

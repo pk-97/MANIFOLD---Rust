@@ -1,7 +1,7 @@
-//! `node.bake_equirect_envmap` — procedurally bake an HDR studio
+//! `node.bake_environment` — procedurally bake an HDR studio
 //! environment map at a configurable resolution. Outputs an
 //! equirectangular Rgba16Float Texture2D suitable for wiring into
-//! `node.render_3d_mesh`'s `envmap` input for PBR-IBL rendering.
+//! `node.render_mesh`'s `envmap` input for PBR-IBL rendering.
 //!
 //! The studio aesthetic — ambient floor + bright horizon band + overhead
 //! softbox + floor fill + two strip lights + azimuthal modulation — is
@@ -27,8 +27,8 @@ struct EnvmapUniforms {
 
 crate::primitive! {
     name: BakeEquirectEnvmap,
-    type_id: "node.bake_equirect_envmap",
-    purpose: "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). Defaults match the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. Output is HDR — wire into `node.render_3d_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
+    type_id: "node.bake_environment",
+    purpose: "Procedurally bake an HDR studio environment map at the given resolution. Equirectangular layout (longitude × latitude). Defaults match the legacy MetallicGlass envmap at 512×256: ambient floor + bright horizon band + overhead softbox + floor fill + two strip lights + azimuthal modulation. Output is HDR — wire into `node.render_mesh`'s `envmap` input (PBR material) for IBL reflections, or `node.tone_map` if displaying directly.",
     inputs: {},
     outputs: {
         envmap: Texture2D,
@@ -73,7 +73,7 @@ crate::primitive! {
     summary: "Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting.",
     category: MaterialsAndLighting,
     role: Source,
-    aliases: ["environment map", "equirect", "ibl", "reflection map"],
+    aliases: ["environment map", "bake equirect envmap", "equirect", "ibl", "reflection map"],
 }
 
 impl Primitive for BakeEquirectEnvmap {
@@ -130,7 +130,7 @@ impl Primitive for BakeEquirectEnvmap {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/bake_equirect_envmap.wgsl"),
                 "cs_main",
-                "node.bake_equirect_envmap",
+                "node.bake_environment",
             )
         });
 
@@ -154,7 +154,7 @@ impl Primitive for BakeEquirectEnvmap {
                 },
             ],
             [tex_width.div_ceil(16), tex_height.div_ceil(16), 1],
-            "node.bake_equirect_envmap",
+            "node.bake_environment",
         );
     }
 }
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn declares_zero_inputs_and_envmap_output() {
         use crate::node_graph::ports::PortType;
-        assert_eq!(BakeEquirectEnvmap::TYPE_ID, "node.bake_equirect_envmap");
+        assert_eq!(BakeEquirectEnvmap::TYPE_ID, "node.bake_environment");
         assert!(BakeEquirectEnvmap::INPUTS.is_empty());
         assert_eq!(BakeEquirectEnvmap::OUTPUTS.len(), 1);
         assert_eq!(BakeEquirectEnvmap::OUTPUTS[0].name, "envmap");
@@ -204,6 +204,6 @@ mod tests {
     fn registers_as_atom() {
         let prim = BakeEquirectEnvmap::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.bake_equirect_envmap");
+        assert_eq!(node.type_id().as_str(), "node.bake_environment");
     }
 }

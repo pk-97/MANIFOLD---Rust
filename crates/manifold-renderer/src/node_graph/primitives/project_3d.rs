@@ -1,4 +1,4 @@
-//! `node.project_3d` — project an `Array<MeshVertex>` (3D positions)
+//! `node.flatten_3d` — project an `Array<MeshVertex>` (3D positions)
 //! to an `Array<CurvePoint>` (2D pre-aspect curve space) via either
 //! orthographic or perspective projection.
 //!
@@ -40,7 +40,7 @@ struct Project3DUniforms {
 
 crate::primitive! {
     name: Project3D,
-    type_id: "node.project_3d",
+    type_id: "node.flatten_3d",
     purpose: "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For WireframeZoo-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
     inputs: {
         in: Array(MeshVertex) required,
@@ -139,9 +139,9 @@ impl Primitive for Project3D {
             // project_3d.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.project_3d standalone codegen"),
+                    .expect("node.flatten_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.project_3d",
+                "node.flatten_3d",
             )
         });
 
@@ -175,7 +175,7 @@ impl Primitive for Project3D {
                 },
             ],
             [out_capacity.div_ceil(256), 1, 1],
-            "node.project_3d",
+            "node.flatten_3d",
         );
     }
 }
@@ -191,7 +191,7 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType};
         let mesh_layout = ArrayType::of_known::<MeshVertex>();
         let point_layout = ArrayType::of_known::<CurvePoint>();
-        assert_eq!(Project3D::TYPE_ID, "node.project_3d");
+        assert_eq!(Project3D::TYPE_ID, "node.flatten_3d");
         assert_eq!(Project3D::INPUTS.len(), 3);
         assert_eq!(Project3D::INPUTS[0].name, "in");
         assert!(Project3D::INPUTS[0].required);
@@ -218,7 +218,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = Project3D::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.project_3d");
+        assert_eq!(node.type_id().as_str(), "node.flatten_3d");
     }
 }
 

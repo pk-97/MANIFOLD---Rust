@@ -1,4 +1,4 @@
-//! `node.lambert_directional` — Lambert (diffuse) lighting from a
+//! `node.basic_light` — Lambert (diffuse) lighting from a
 //! tangent-space normal map + directional light + ambient floor.
 //!
 //! Output is RGB [0, 1] — grayscale when no `light` wire is bound (or
@@ -45,8 +45,8 @@ struct LambertUniforms {
 
 crate::primitive! {
     name: LambertDirectional,
-    type_id: "node.lambert_directional",
-    purpose: "Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multiplied by the light's colour. The basic directional-lighting atom — pair with `node.gradient_map` to tint further, or sum with `node.fresnel_rim` / `node.blinn_specular` for stylized PBR. Two ways to drive the light: scattered `light_x/y/z` scalars (output grayscale, white tint), or wire a `node.light` into `light` (output picks up the light's premultiplied colour). The scalar fallback keeps every existing OilyFluid-shaped consumer working unchanged.",
+    type_id: "node.basic_light",
+    purpose: "Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multiplied by the light's colour. The basic directional-lighting atom — pair with `node.gradient_map` to tint further, or sum with `node.rim_light` / `node.shininess` for stylized PBR. Two ways to drive the light: scattered `light_x/y/z` scalars (output grayscale, white tint), or wire a `node.light` into `light` (output picks up the light's premultiplied colour). The scalar fallback keeps every existing OilyFluid-shaped consumer working unchanged.",
     inputs: {
         normal: Texture2D required,
         light: Light optional,
@@ -92,13 +92,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Light direction is normalised in-shader so any non-zero (x, y, z) works. Default light is over-the-shoulder camera (0.4, 0.6, 0.7). Port-shadowed components let you wire an LFO or `node.color_compass` to orbit the light at performance time. If a `node.light` is wired into `light`, its direction + colour override the scattered `light_x/y/z` scalars; `ambient` still comes from the scalar param so an unwired Light input doesn't strand it. Point lights wire-in as a single direction (no per-pixel attenuation in this flat-screen atom) — for per-pixel attenuation and full PBR, use `node.render_3d_mesh` with a `node.pbr_material` (the material node owns the lighting model).",
+    composition_notes: "Light direction is normalised in-shader so any non-zero (x, y, z) works. Default light is over-the-shoulder camera (0.4, 0.6, 0.7). Port-shadowed components let you wire an LFO or `node.color_compass` to orbit the light at performance time. If a `node.light` is wired into `light`, its direction + colour override the scattered `light_x/y/z` scalars; `ambient` still comes from the scalar param so an unwired Light input doesn't strand it. Point lights wire-in as a single direction (no per-pixel attenuation in this flat-screen atom) — for per-pixel attenuation and full PBR, use `node.render_mesh` with a `node.pbr_material` (the material node owns the lighting model).",
     examples: [],
     picker: { label: "Basic Light (Lambert)", category: Atom },
     summary: "Shades a surface from its normal map and a single direction, brightest where it faces the light. The plain matte lighting term.",
     category: MaterialsAndLighting,
     role: Filter,
-    aliases: ["lambert", "diffuse", "matte", "basic light"],
+    aliases: ["lambert", "lambert directional", "diffuse", "matte", "basic light"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/lambert_directional_body.wgsl"),
 }
@@ -151,7 +151,7 @@ impl Primitive for LambertDirectional {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/lambert_directional.wgsl"),
                 "cs_main",
-                "node.lambert_directional",
+                "node.basic_light",
             )
         });
         let sampler = self
@@ -190,7 +190,7 @@ impl Primitive for LambertDirectional {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.lambert_directional",
+            "node.basic_light",
         );
     }
 }

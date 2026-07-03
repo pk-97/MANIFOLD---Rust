@@ -1,4 +1,4 @@
-//! `node.camera_orbit` — orbit-style perspective camera source. Emits a
+//! `node.orbit_camera` — orbit-style perspective camera source. Emits a
 //! single [`Camera`] on the `out` port; consumers (3D mesh renderers,
 //! particle-camera splat) take it as one input port instead of N separate
 //! scalar params.
@@ -26,7 +26,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: CameraOrbit,
-    type_id: "node.camera_orbit",
+    type_id: "node.orbit_camera",
     purpose: "Orbit-style perspective camera source. Emits one Camera on `out` from five port-shadowed scalar inputs (orbit/tilt/distance/fov_y/look_y) — matches the inline orbit formula every legacy 3D renderer used. Also exposes pos_x/pos_y/pos_z scalar outputs for PBR shading atoms that need the camera world position per pixel. CPU-only, no GPU dispatch. Pair downstream with any 3D consumer (render_3d_mesh, render_instanced_3d_mesh, digital_plants_render, scatter_particles_camera) that takes a `camera: Camera` input — replaces N separate camera scalar params per primitive with one wire.",
     inputs: {
         orbit: ScalarF32 optional,
@@ -108,13 +108,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "orbit / tilt / roll / fov_y are angle params, so the editor and outer-card sliders display and edit them in degrees natively while storage stays in radians. Expose them directly. Older presets like DigitalPlants / MetallicGlass instead wire a `node.scale_offset_value` (scale = π/180) ahead of each angle input to turn a degrees-valued driver into radians, which still works. `near` / `far` rarely need outer-card control — leave defaults unless the scene has extreme depth. The output Camera carries the view matrix and projection-mode params; the projection matrix is built consumer-side via `cam.proj(target_aspect)` because the aspect depends on the consumer's render target. `pos_x`/`pos_y`/`pos_z` outputs are the camera's world position — `node.render_3d_mesh` takes the Camera directly and derives the per-pixel view vector (V = camera_pos - world_pos) internally for its PBR material.",
+    composition_notes: "orbit / tilt / roll / fov_y are angle params, so the editor and outer-card sliders display and edit them in degrees natively while storage stays in radians. Expose them directly. Older presets like DigitalPlants / MetallicGlass instead wire a `node.scale_offset_value` (scale = π/180) ahead of each angle input to turn a degrees-valued driver into radians, which still works. `near` / `far` rarely need outer-card control — leave defaults unless the scene has extreme depth. The output Camera carries the view matrix and projection-mode params; the projection matrix is built consumer-side via `cam.proj(target_aspect)` because the aspect depends on the consumer's render target. `pos_x`/`pos_y`/`pos_z` outputs are the camera's world position — `node.render_mesh` takes the Camera directly and derives the per-pixel view vector (V = camera_pos - world_pos) internally for its PBR material.",
     examples: [],
     picker: { label: "Orbit Camera", category: Driver },
     summary: "A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering.",
     category: Geometry3D,
     role: Source,
-    aliases: ["orbit camera", "camera", "viewpoint", "Camera COMP"],
+    aliases: ["orbit camera", "camera orbit", "camera", "viewpoint", "Camera COMP"],
 }
 
 impl Primitive for CameraOrbit {
@@ -153,7 +153,7 @@ mod tests {
     fn camera_orbit_declares_six_scalar_inputs_and_camera_output() {
         use crate::node_graph::ports::{PortType, ScalarType};
 
-        assert_eq!(CameraOrbit::TYPE_ID, "node.camera_orbit");
+        assert_eq!(CameraOrbit::TYPE_ID, "node.orbit_camera");
         let in_names: Vec<&str> = CameraOrbit::INPUTS.iter().map(|p| p.name).collect();
         assert_eq!(in_names, vec!["orbit", "tilt", "distance", "fov_y", "look_y", "roll"]);
         for input in CameraOrbit::INPUTS {
@@ -182,6 +182,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = CameraOrbit::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.camera_orbit");
+        assert_eq!(node.type_id().as_str(), "node.orbit_camera");
     }
 }

@@ -1,10 +1,10 @@
-//! `node.generate_instance_transforms` — emit an
+//! `node.arrange_copies` — emit an
 //! `Array<InstanceTransform>` filled with a procedural layout.
 //!
 //! Phase B of `BUFFER_PORT_PLAN`. The instance-side companion
-//! to `node.generate_grid_mesh` — produces N transforms in one
+//! to `node.grid_mesh` — produces N transforms in one
 //! of grid / ring / spiral / random patterns, paired with
-//! `node.render_instanced_3d_mesh` to draw N copies of a base
+//! `node.render_copies` to draw N copies of a base
 //! mesh. Unlocks NestedCubes, DigitalPlants, and any future
 //! "many small objects in a pattern" generator.
 
@@ -42,8 +42,8 @@ struct InstanceUniforms {
 
 crate::primitive! {
     name: GenerateInstanceTransforms,
-    type_id: "node.generate_instance_transforms",
-    purpose: "Emit an Array<InstanceTransform> filled with a procedural layout (grid / ring / spiral / random). Pair with node.render_instanced_3d_mesh to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
+    type_id: "node.arrange_copies",
+    purpose: "Emit an Array<InstanceTransform> filled with a procedural layout (grid / ring / spiral / random). Pair with node.render_copies to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
     inputs: {},
     outputs: {
         instances: Array(InstanceTransform),
@@ -144,7 +144,7 @@ crate::primitive! {
     summary: "Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies.",
     category: Geometry3D,
     role: Source,
-    aliases: ["arrange copies", "instance layout", "scatter", "place"],
+    aliases: ["arrange copies", "generate instance transforms", "instance layout", "scatter", "place"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/generate_instance_transforms_body.wgsl"),
 }
@@ -212,9 +212,9 @@ impl Primitive for GenerateInstanceTransforms {
             // is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.generate_instance_transforms standalone codegen"),
+                    .expect("node.arrange_copies standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.generate_instance_transforms",
+                "node.arrange_copies",
             )
         });
 
@@ -247,7 +247,7 @@ impl Primitive for GenerateInstanceTransforms {
                 },
             ],
             [capacity.div_ceil(256), 1, 1],
-            "node.generate_instance_transforms",
+            "node.arrange_copies",
         );
     }
 }
@@ -264,7 +264,7 @@ mod tests {
         let layout = ArrayType::of_known::<InstanceTransform>();
         assert_eq!(
             GenerateInstanceTransforms::TYPE_ID,
-            "node.generate_instance_transforms"
+            "node.arrange_copies"
         );
         assert!(GenerateInstanceTransforms::INPUTS.is_empty());
         assert_eq!(GenerateInstanceTransforms::OUTPUTS.len(), 1);
@@ -289,7 +289,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = GenerateInstanceTransforms::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.generate_instance_transforms");
+        assert_eq!(node.type_id().as_str(), "node.arrange_copies");
     }
 }
 

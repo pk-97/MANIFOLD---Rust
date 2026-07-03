@@ -1,4 +1,4 @@
-//! `node.generate_grid_mesh` — emit a regular NxM grid of
+//! `node.grid_mesh` — emit a regular NxM grid of
 //! `MeshVertex` items laid out as a flat plane in XZ.
 //!
 //! Phase B of `BUFFER_PORT_PLAN`. First primitive in the mesh
@@ -7,8 +7,8 @@
 //! pre-allocates `max_capacity` vertices and the runtime
 //! initialises `resolution_x * resolution_y` of them per frame.
 //!
-//! Downstream pairing: feed into `node.render_3d_mesh` for direct
-//! rendering, or into a future `node.displace_mesh` primitive
+//! Downstream pairing: feed into `node.render_mesh` for direct
+//! rendering, or into a future `node.push_mesh` primitive
 //! that perturbs Y by a Texture2D sample (the path that unlocks
 //! MetallicGlass-style feedback-displacement on arbitrary
 //! source textures).
@@ -35,8 +35,8 @@ struct GridUniforms {
 
 crate::primitive! {
     name: GenerateGridMesh,
-    type_id: "node.generate_grid_mesh",
-    purpose: "Emit a regular NxM grid of MeshVertex items in the XZ plane, sized in world units. Pair with a displacement primitive that perturbs Y from a Texture2D, then route to node.render_3d_mesh. The unlock for MetallicGlass-shaped graphs where the displacement source is wire-controlled.",
+    type_id: "node.grid_mesh",
+    purpose: "Emit a regular NxM grid of MeshVertex items in the XZ plane, sized in world units. Pair with a displacement primitive that perturbs Y from a Texture2D, then route to node.render_mesh. The unlock for MetallicGlass-shaped graphs where the displacement source is wire-controlled.",
     inputs: {
         size_x: ScalarF32 optional,
         size_y: ScalarF32 optional,
@@ -92,7 +92,7 @@ crate::primitive! {
     summary: "Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh.",
     category: Geometry3D,
     role: Source,
-    aliases: ["grid mesh", "plane", "terrain", "Grid SOP"],
+    aliases: ["grid mesh", "generate grid mesh", "plane", "terrain", "Grid SOP"],
 }
 
 impl Primitive for GenerateGridMesh {
@@ -121,7 +121,7 @@ impl Primitive for GenerateGridMesh {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/generate_grid_mesh.wgsl"),
                 "cs_main",
-                "node.generate_grid_mesh",
+                "node.grid_mesh",
             )
         });
 
@@ -150,7 +150,7 @@ impl Primitive for GenerateGridMesh {
                 },
             ],
             [capacity.div_ceil(64), 1, 1],
-            "node.generate_grid_mesh",
+            "node.grid_mesh",
         );
     }
 }
@@ -166,7 +166,7 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let mesh_vertex_layout = ArrayType::of_known::<MeshVertex>();
 
-        assert_eq!(GenerateGridMesh::TYPE_ID, "node.generate_grid_mesh");
+        assert_eq!(GenerateGridMesh::TYPE_ID, "node.grid_mesh");
         assert_eq!(GenerateGridMesh::INPUTS.len(), 2);
         assert_eq!(GenerateGridMesh::INPUTS[0].name, "size_x");
         assert!(!GenerateGridMesh::INPUTS[0].required);
@@ -201,6 +201,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = GenerateGridMesh::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.generate_grid_mesh");
+        assert_eq!(node.type_id().as_str(), "node.grid_mesh");
     }
 }

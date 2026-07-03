@@ -19,7 +19,7 @@ use crate::node_graph::channel_names::well_known;
 use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
 /// A 3D mesh vertex with surface normal and UV. Used by
-/// `node.generate_grid_mesh` and consumed by `node.render_3d_mesh`.
+/// `node.grid_mesh` and consumed by `node.render_mesh`.
 ///
 /// Layout (48 bytes, std430 / 16-byte aligned):
 /// - position(12) + pad(4)
@@ -218,11 +218,11 @@ pub const PLATONIC_SHAPES: &[&str] = &[
 pub const PLATONIC_SHAPE_COUNT: u32 = 5;
 
 /// Maximum vertex count across the five shapes (Dodecahedron = 20).
-/// Array<MeshVertex> output capacity for `node.polytope_vertices`.
+/// Array<MeshVertex> output capacity for `node.platonic_solid_points`.
 pub const PLATONIC_MAX_VERTS: u32 = 20;
 
 /// Maximum edge count across the five shapes (Icosa / Dodeca = 30).
-/// Array<EdgePair> output capacity for `node.polytope_edges`.
+/// Array<EdgePair> output capacity for `node.platonic_solid_edges`.
 pub const PLATONIC_MAX_EDGES: u32 = 30;
 
 const TETRA_EDGES: [EdgePair; 6] = [

@@ -414,7 +414,7 @@
     {
       "id": 16,
       "nodeId": "project",
-      "typeId": "node.project_4d",
+      "typeId": "node.flatten_4d",
       "handle": "project",
       "params": {
         "proj_dist": {
@@ -515,7 +515,7 @@
           {
             "id": 4,
             "nodeId": "grid",
-            "typeId": "node.generate_grid_uv",
+            "typeId": "node.grid_points",
             "handle": "grid",
             "params": {
               "grid_size": {
@@ -679,7 +679,7 @@
           {
             "id": 14,
             "nodeId": "edges",
-            "typeId": "node.edges_from_grid_uv",
+            "typeId": "node.grid_edges",
             "handle": "edges",
             "params": {
               "grid_size": {

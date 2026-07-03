@@ -367,7 +367,7 @@
     {
       "id": 32,
       "nodeId": "envmap",
-      "typeId": "node.bake_equirect_envmap",
+      "typeId": "node.bake_environment",
       "handle": "envmap",
       "params": {
         "azimuth_variation": {
@@ -392,7 +392,7 @@
     {
       "id": 50,
       "nodeId": "geometry_pass",
-      "typeId": "node.render_3d_mesh",
+      "typeId": "node.render_mesh",
       "handle": "geometry_pass",
       "title": "3D Geometry Pass"
     },
@@ -1705,7 +1705,7 @@
           {
             "id": 33,
             "nodeId": "grid_mesh",
-            "typeId": "node.generate_grid_mesh",
+            "typeId": "node.grid_mesh",
             "handle": "grid_mesh",
             "params": {
               "max_capacity": {
@@ -1734,7 +1734,7 @@
           {
             "id": 34,
             "nodeId": "displace_mesh_node",
-            "typeId": "node.displace_mesh",
+            "typeId": "node.push_mesh",
             "handle": "displace_mesh_node",
             "params": {
               "cols": {
@@ -1759,7 +1759,7 @@
           {
             "id": 35,
             "nodeId": "triangulated",
-            "typeId": "node.triangulate_grid",
+            "typeId": "node.make_triangles",
             "handle": "triangulated",
             "params": {
               "src_cols": {
@@ -1885,7 +1885,7 @@
           {
             "id": 51,
             "nodeId": "surface_normal",
-            "typeId": "node.heightmap_to_normal",
+            "typeId": "node.surface_bumps",
             "handle": "surface_normal",
             "params": {
               "aspect": {
@@ -2040,7 +2040,7 @@
           {
             "id": 43,
             "nodeId": "cam_orbit_node",
-            "typeId": "node.camera_orbit",
+            "typeId": "node.orbit_camera",
             "handle": "cam_orbit_node",
             "params": {
               "distance": {

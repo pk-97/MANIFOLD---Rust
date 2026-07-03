@@ -1,4 +1,4 @@
-//! `node.generate_grid_uv` — emit two `Array<f32>` outputs sampling
+//! `node.grid_points` — emit two `Array<f32>` outputs sampling
 //! a 2D parameter domain `[0, u_max) × [0, v_max)` at `grid_size`
 //! steps along each axis, flattened to `grid_size²` entries in
 //! row-major order: `idx = iu * grid_size + iv`.
@@ -34,7 +34,7 @@ pub const TAU: f32 = std::f32::consts::TAU;
 
 crate::primitive! {
     name: GenerateGridUv,
-    type_id: "node.generate_grid_uv",
+    type_id: "node.grid_points",
     purpose: "Emit two Array<f32> outputs (u_values, v_values) sampling a 2D parameter domain [0, u_max) × [0, v_max) at grid_size steps along each axis, flattened to grid_size² entries in row-major order (idx = iu * grid_size + iv). The parametric-surface authoring atom: pair with array_math (Cos / Sin / ScaleOffset) + pack_vec4 + edges_from_grid_uv to author any (u, v)-parametric surface in the graph — Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh — without a per-surface Rust atom. End-exclusive sampling matches periodic-surface conventions where the wrap edge is supplied by edges_from_grid_uv. CPU-only — runs on the content thread so downstream CPU readers see same-frame writes.",
     inputs: {
         u_max: ScalarF32 optional,
@@ -76,7 +76,7 @@ crate::primitive! {
     summary: "Outputs a grid of U and V values sampling a parametric surface, the input for building curved meshes and wireframes.",
     category: Geometry3D,
     role: Source,
-    aliases: ["grid points", "uv grid", "parametric"],
+    aliases: ["grid points", "generate grid uv", "uv grid", "parametric"],
 }
 
 /// Read `grid_size` from the params bag, clamped to the valid range.
@@ -111,14 +111,14 @@ impl Primitive for GenerateGridUv {
 
         let Some(u_buf) = ctx.outputs.array("u_values") else {
             log::warn!(
-                "node.generate_grid_uv: no GpuBuffer bound to output port `u_values` — \
+                "node.grid_points: no GpuBuffer bound to output port `u_values` — \
                  the chain build did not pre-allocate this Array<f32>.",
             );
             return;
         };
         let Some(v_buf) = ctx.outputs.array("v_values") else {
             log::warn!(
-                "node.generate_grid_uv: no GpuBuffer bound to output port `v_values` — \
+                "node.grid_points: no GpuBuffer bound to output port `v_values` — \
                  the chain build did not pre-allocate this Array<f32>.",
             );
             return;
@@ -169,7 +169,7 @@ mod tests {
     fn declares_optional_umax_vmax_inputs_and_two_f32_outputs() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
 
-        assert_eq!(GenerateGridUv::TYPE_ID, "node.generate_grid_uv");
+        assert_eq!(GenerateGridUv::TYPE_ID, "node.grid_points");
         assert_eq!(GenerateGridUv::INPUTS.len(), 2);
         for port in GenerateGridUv::INPUTS {
             assert!(!port.required, "{} must be optional", port.name);
@@ -223,6 +223,6 @@ mod tests {
     fn registers_as_palette_atom() {
         let prim = GenerateGridUv::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.generate_grid_uv");
+        assert_eq!(node.type_id().as_str(), "node.grid_points");
     }
 }

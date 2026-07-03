@@ -1,4 +1,4 @@
-//! `node.render_instanced_3d_mesh` — bundled instanced 3D mesh
+//! `node.render_copies` — bundled instanced 3D mesh
 //! renderer. Sibling to [`render_3d_mesh`](super::render_3d_mesh):
 //! same per-MaterialKind dispatch, same Material/Light/envmap input
 //! shape, but applies a per-instance `pos/scale/Euler-rotation`
@@ -54,8 +54,8 @@ const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
 
 crate::primitive! {
     name: RenderInstanced3DMesh,
-    type_id: "node.render_instanced_3d_mesh",
-    purpose: "Bundled instanced 3D mesh renderer. Draws N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), picks the matching per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel), and emits a shaded `color` Texture2D. Surface textures sample at the base mesh's per-vertex UV (the same channel as render_3d_mesh) — the texture is shared across every instance and stays locked to the geometry as the camera moves. Pair with node.generate_instance_transforms to drive NestedCubes / DigitalPlants graphs. Per-kind requirements mirror render_3d_mesh: Unlit needs no light; Phong / Cel need light; PBR needs light + envmap.",
+    type_id: "node.render_copies",
+    purpose: "Bundled instanced 3D mesh renderer. Draws N copies of an Array<MeshVertex> base mesh, each transformed by an Array<InstanceTransform> entry. Takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), picks the matching per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel), and emits a shaded `color` Texture2D. Surface textures sample at the base mesh's per-vertex UV (the same channel as render_3d_mesh) — the texture is shared across every instance and stays locked to the geometry as the camera moves. Pair with node.arrange_copies to drive NestedCubes / DigitalPlants graphs. Per-kind requirements mirror render_3d_mesh: Unlit needs no light; Phong / Cel need light; PBR needs light + envmap.",
     inputs: {
         vertices: Array(MeshVertex) required,
         instances: Array(InstanceTransform) required,
@@ -79,13 +79,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Vertex count must be a multiple of 3 (trailing partial triangle truncated). instance_count is clamped to the wired instance buffer's capacity. The instance Array dictates how many copies are drawn. Wire a `node.{unlit,phong,pbr,cel}_material` into `material` to pick the shading model; pair with `node.light` (required for Phong/PBR/Cel) and `node.bake_equirect_envmap` (required for PBR).",
+    composition_notes: "Vertex count must be a multiple of 3 (trailing partial triangle truncated). instance_count is clamped to the wired instance buffer's capacity. The instance Array dictates how many copies are drawn. Wire a `node.{unlit,phong,pbr,cel}_material` into `material` to pick the shading model; pair with `node.light` (required for Phong/PBR/Cel) and `node.bake_environment` (required for PBR).",
     examples: [],
     picker: { label: "Render Copies", category: Atom },
     summary: "Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects.",
     category: Geometry3D,
     role: Filter,
-    aliases: ["render copies", "instancing", "instances", "Geometry COMP"],
+    aliases: ["render copies", "render instanced 3d mesh", "instancing", "instances", "Geometry COMP"],
     extra_fields: {
         pipelines: AHashMap<MaterialKind, manifold_gpu::GpuRenderPipeline> = AHashMap::new(),
         depth_stencil: Option<manifold_gpu::GpuDepthStencilState> = None,
@@ -111,7 +111,7 @@ impl RenderInstanced3DMesh {
             format: manifold_gpu::GpuTextureFormat::Depth32Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
-            label: "node.render_instanced_3d_mesh depth",
+            label: "node.render_copies depth",
             mip_levels: 1,
         }));
         self.depth_width = width;
@@ -141,7 +141,7 @@ impl RenderInstanced3DMesh {
                 format: manifold_gpu::GpuTextureFormat::Rgba16Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
-                label: "node.render_instanced_3d_mesh dummy envmap",
+                label: "node.render_copies dummy envmap",
                 mip_levels: 1,
             }));
         }
@@ -167,7 +167,7 @@ impl RenderInstanced3DMesh {
                 manifold_gpu::GpuTextureFormat::Depth32Float,
                 None,
                 1,
-                "node.render_instanced_3d_mesh",
+                "node.render_copies",
             )
         })
     }
@@ -384,7 +384,7 @@ impl Primitive for RenderInstanced3DMesh {
             vertex_count,
             instance_count,
             GpuLoadAction::Clear,
-            "node.render_instanced_3d_mesh",
+            "node.render_copies",
         );
     }
 }
@@ -403,7 +403,7 @@ mod tests {
 
         assert_eq!(
             RenderInstanced3DMesh::TYPE_ID,
-            "node.render_instanced_3d_mesh"
+            "node.render_copies"
         );
         let by_name = |n: &str| {
             RenderInstanced3DMesh::INPUTS
@@ -467,6 +467,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = RenderInstanced3DMesh::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.render_instanced_3d_mesh");
+        assert_eq!(node.type_id().as_str(), "node.render_copies");
     }
 }

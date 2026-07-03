@@ -256,11 +256,11 @@ crate::param_tooltips!("node.texture_sum_5", {
 
 // ─── 3D Geometry ───
 
-crate::param_tooltips!("node.array_replicate_polyline_rings", {
+crate::param_tooltips!("node.repeat_outline", {
     "max_rings" => "The most copies this node will stack, from 1 up to 32. The actual count is whatever is smaller, this ceiling or the number of scales fed in.",
 });
 
-crate::param_tooltips!("node.camera_orbit", {
+crate::param_tooltips!("node.orbit_camera", {
     "orbit" => "Swings the camera left and right around the target, in degrees. This is the horizontal angle of the orbit.",
     "tilt" => "Raises and lowers the camera over the target, in degrees. Positive looks down from above, negative looks up from below.",
     "distance" => "How far the camera sits from the target. Larger values pull back for a wider view, smaller values move in close.",
@@ -271,7 +271,7 @@ crate::param_tooltips!("node.camera_orbit", {
     "far" => "Furthest distance the camera can see. Anything beyond is clipped away. Leave the default unless the scene is very deep.",
 });
 
-crate::param_tooltips!("node.consecutive_edges", {
+crate::param_tooltips!("node.edge_pairs", {
     "count" => "How many points to connect in order. Wire it from a variable point source to grow or shrink the shape live.",
     "closed" => "When on, joins the last point back to the first to close the loop, giving a full polygon. Turn it off for an open line that leaves the ends apart.",
     "max_capacity" => "The most points this can ever connect, which sizes the buffer. Set it once to cover your largest shape and leave it alone.",
@@ -292,23 +292,23 @@ crate::param_tooltips!("node.digital_plants_render", {
     "light_intensity" => "Brightness of the light. 0 leaves the cubes in shadow, and higher values blow out the lit faces.",
 });
 
-crate::param_tooltips!("node.displace_mesh", {
+crate::param_tooltips!("node.push_mesh", {
     "cols" => "How many columns are in the source grid. This must match the grid the mesh came from or the height image will sample at the wrong spots.",
     "rows" => "How many rows are in the source grid. This must match the grid the mesh came from.",
     "displacement" => "How far the height image pushes each point up or down. 0 leaves the mesh flat, and negative values push the other way.",
     "height_bias" => "The grey level that counts as no movement, from 0 to 1. At the default 0.5, mid grey stays put while brighter pixels rise and darker ones sink.",
 });
 
-crate::param_tooltips!("node.edges_from_grid_uv", {
+crate::param_tooltips!("node.grid_edges", {
     "grid_size" => "How many points across each side of the grid. Drive this from the same value as the matching grid points node so the layout and the edges agree.",
 });
 
-crate::param_tooltips!("node.generate_cube_mesh", {
+crate::param_tooltips!("node.cube_mesh", {
     "max_capacity" => "How much room to reserve in the vertex buffer, set when the effect is built. 36 holds exactly one cube, and larger values only help if a downstream node expects a bigger buffer.",
     "size" => "Scales the cube. 1 is the default unit cube, smaller shrinks it, larger grows it.",
 });
 
-crate::param_tooltips!("node.generate_grid_mesh", {
+crate::param_tooltips!("node.grid_mesh", {
     "max_capacity" => "The most vertices the grid can ever hold. Set it once when building the effect since changing it rebuilds the graph, and keep it at or above resolution X times resolution Y.",
     "resolution_x" => "How many points across the grid. More points give finer detail at the cost of memory.",
     "resolution_y" => "How many points down the grid. More points give finer detail at the cost of memory.",
@@ -316,13 +316,13 @@ crate::param_tooltips!("node.generate_grid_mesh", {
     "size_y" => "The depth of the grid in world units.",
 });
 
-crate::param_tooltips!("node.generate_grid_uv", {
+crate::param_tooltips!("node.grid_points", {
     "grid_size" => "How many steps to sample along each axis, giving you that many points squared. Changing it rebuilds the chain, so set it while authoring rather than driving it live.",
     "u_max" => "The end of the U range that gets sampled. Defaults to a full turn, which is the right shape for closed surfaces like a torus, or set it to 1 for flat UV meshes.",
     "v_max" => "The end of the V range that gets sampled. Defaults to a full turn, or set it to 1 for flat UV meshes.",
 });
 
-crate::param_tooltips!("node.generate_instance_transforms", {
+crate::param_tooltips!("node.arrange_copies", {
     "max_capacity" => "The largest number of copies this node can ever hold. It sets the memory allocation, so size it for your worst case and leave it.",
     "active_count" => "How many copies to actually place this frame, default 64. Slide it freely up to the max capacity to thin out or fill the field.",
     "layout" => "The pattern the copies fall into, Grid, Ring, Spiral, or Random.",
@@ -347,26 +347,26 @@ crate::param_tooltips!("node.combine_xy", {
     "scale" => "Rescales the whole curve. At 1 it fills the inner half of the screen, and 4 cancels the built-in screen-fit so the X and Y values land at their raw screen-fractional size.",
 });
 
-crate::param_tooltips!("node.polytope_edges", {
+crate::param_tooltips!("node.platonic_solid_edges", {
     "shape" => "Which of the five Platonic solids to outline, from Tetra and Cube through to Icosa and Dodeca. Drive the matching points node from the same value so corners and edges agree.",
 });
 
-crate::param_tooltips!("node.polytope_vertices", {
+crate::param_tooltips!("node.platonic_solid_points", {
     "shape" => "Which of the five Platonic solids to build, from Tetrahedron through Cube, Octahedron, Icosahedron, to Dodecahedron. Drive the same choice into the matching edges node so corners and lines agree.",
 });
 
-crate::param_tooltips!("node.project_3d", {
+crate::param_tooltips!("node.flatten_3d", {
     "mode" => "How the 3D points flatten to 2D. Orthographic keeps a flat scale and ignores depth, while Perspective shrinks far points toward a vanishing point.",
     "proj_scale" => "How much the flattened shape is zoomed. Higher values fill more of the frame.",
     "proj_dist" => "The camera distance in Perspective mode. Closer distances exaggerate the depth foreshortening, farther ones flatten it out. Orthographic mode ignores it.",
 });
 
-crate::param_tooltips!("node.project_4d", {
+crate::param_tooltips!("node.flatten_4d", {
     "proj_scale" => "How large the flattened shape comes out, default 0.25. Higher fills more of the frame.",
     "proj_dist" => "How far the 4D camera sits from the shape, default 3. Small values exaggerate the four-dimensional warp, large values flatten it out.",
 });
 
-crate::param_tooltips!("node.render_instanced_3d_mesh", {
+crate::param_tooltips!("node.render_copies", {
     "instance_count" => "How many copies of the mesh to draw. It is capped to the size of the transform list you wire in.",
 });
 
@@ -391,14 +391,14 @@ crate::param_tooltips!("node.torus_wrap_field", {
 
 // ─── Materials & Lighting ───
 
-crate::param_tooltips!("node.bake_equirect_envmap", {
+crate::param_tooltips!("node.bake_environment", {
     "width" => "Width of the baked panorama in pixels. Keep it at twice the height for a correct equirect ratio, so 512 wide pairs with 256 tall.",
     "height" => "Height of the baked panorama in pixels. Keep it at half the width so the longitude and latitude mapping stays undistorted.",
     "horizon_strength" => "How bright the horizon band glows. 1 matches the default studio look, higher pushes a stronger rim of light into reflections.",
     "azimuth_variation" => "How much the lighting changes as you turn around the horizon. 0 is perfectly even, higher breaks up the ring so reflections shift with angle.",
 });
 
-crate::param_tooltips!("node.blinn_specular", {
+crate::param_tooltips!("node.shininess", {
     "light_x" => "The X part of the light direction, from -1 to 1. Wiring a Light into the light port overrides this and the other two direction knobs.",
     "light_y" => "The Y part of the light direction, from -1 to 1. The direction is normalised in the shader so only the ratio between X, Y, and Z matters.",
     "light_z" => "The Z part of the light direction, from -1 to 1. Default 0.75 points the light mostly toward the camera for a forward-facing highlight.",
@@ -423,7 +423,7 @@ crate::param_tooltips!("node.cel_material", {
     "emission_intensity" => "How strongly the emission colour glows, from 0 for off up to 10. Leave it at 0 unless you want the material to light itself.",
 });
 
-crate::param_tooltips!("node.fresnel_rim", {
+crate::param_tooltips!("node.rim_light", {
     "view_x" => "The X part of the viewing direction the rim is measured against, from -1 to 1. The default looks straight down the Z axis at the surface.",
     "view_y" => "The Y part of the viewing direction the rim is measured against, from -1 to 1.",
     "view_z" => "The Z part of the viewing direction the rim is measured against, from -1 to 1. Default of 1 points the camera straight at the surface.",
@@ -431,13 +431,13 @@ crate::param_tooltips!("node.fresnel_rim", {
     "color" => "The colour of the rim glow. This output is additive, so wire it onto your base shading with a Mix in Add mode.",
 });
 
-crate::param_tooltips!("node.heightmap_to_normal", {
+crate::param_tooltips!("node.surface_bumps", {
     "z_scale" => "How pronounced the surface detail reads. Larger values flatten the bumps out, smaller values make them steeper and more dramatic.",
     "aspect" => "Scales the vertical slope so non-square frames keep the right shape. Leave it at 1 unless your canvas is stretched, then wire the frame aspect in.",
     "coord_space" => "Which normal convention to output. TangentZ suits flat screen-space shading, while WorldYUp suits a 3D mesh lying flat with Y pointing up.",
 });
 
-crate::param_tooltips!("node.lambert_directional", {
+crate::param_tooltips!("node.basic_light", {
     "light_x" => "Horizontal direction the light comes from. Positive lights the surface from the right, negative from the left.",
     "light_y" => "Vertical direction the light comes from. Positive lights from above, negative from below.",
     "light_z" => "How much the light points straight out of the screen toward the surface. The direction is normalised so only the balance between the three axes matters.",

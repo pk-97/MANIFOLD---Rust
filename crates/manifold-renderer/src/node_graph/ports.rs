@@ -34,7 +34,7 @@ pub enum PortType {
     Scalar(ScalarType),
     Array(ArrayType),
     /// CPU-only struct wire carrying a [`Camera`](crate::node_graph::camera::Camera).
-    /// Produced by `node.camera_orbit` (and future camera-source primitives),
+    /// Produced by `node.orbit_camera` (and future camera-source primitives),
     /// consumed by every 3D rendering primitive as a single `camera: Camera`
     /// input instead of N separate scalar params.
     Camera,

@@ -1,4 +1,4 @@
-//! `node.consecutive_edges` — synthesise the consecutive-pair edge
+//! `node.edge_pairs` — synthesise the consecutive-pair edge
 //! topology `[(0,1), (1,2), …, (N-2, N-1)]` from a vertex count,
 //! optionally closing the loop with `(N-1, 0)`. Pads the tail of the
 //! output buffer with `EdgePair::SENTINEL` so downstream `render_lines`
@@ -29,7 +29,7 @@ pub const CONSECUTIVE_EDGES_MAX_CAPACITY: u32 = 64;
 
 crate::primitive! {
     name: ConsecutiveEdges,
-    type_id: "node.consecutive_edges",
+    type_id: "node.edge_pairs",
     purpose: "Generate consecutive-pair edge topology [(0,1), (1,2), …, (N-2, N-1)] from a vertex count, optionally closed via (N-1, 0). The polyline-topology atom: pair with a points source (generate_range + array_math + pack_curve_xy, or any custom CurvePoint producer) and node.draw_lines to draw a closed regular polygon, an open polyline, or any topology where edges connect consecutive vertex indices. `count` is port-shadow-param so an upstream variable-N source (e.g. a mux driving the active polygon side count) drives the active edge count. Output capacity is `max_capacity`; slots beyond the active count are EdgePair::SENTINEL so downstream draw_lines filters them out — drawing exactly the active topology, never garbage from the inactive tail.",
     inputs: {
         count: ScalarF32 optional,
@@ -69,7 +69,7 @@ crate::primitive! {
     summary: "Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start.",
     category: Geometry3D,
     role: Source,
-    aliases: ["edge pairs", "connect points", "polyline"],
+    aliases: ["edge pairs", "consecutive edges", "connect points", "polyline"],
 }
 
 impl Primitive for ConsecutiveEdges {
@@ -103,7 +103,7 @@ impl Primitive for ConsecutiveEdges {
 
         let Some(edges_dst) = ctx.outputs.array("edges") else {
             log::warn!(
-                "node.consecutive_edges: no GpuBuffer bound to output port `edges` — \
+                "node.edge_pairs: no GpuBuffer bound to output port `edges` — \
                  the chain build did not pre-allocate the Array<EdgePair> output.",
             );
             return;
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn declares_count_input_and_edge_pair_output() {
-        assert_eq!(ConsecutiveEdges::TYPE_ID, "node.consecutive_edges");
+        assert_eq!(ConsecutiveEdges::TYPE_ID, "node.edge_pairs");
         assert_eq!(ConsecutiveEdges::INPUTS.len(), 1);
         assert_eq!(ConsecutiveEdges::INPUTS[0].name, "count");
         assert!(!ConsecutiveEdges::INPUTS[0].required);
@@ -200,6 +200,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = ConsecutiveEdges::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.consecutive_edges");
+        assert_eq!(node.type_id().as_str(), "node.edge_pairs");
     }
 }

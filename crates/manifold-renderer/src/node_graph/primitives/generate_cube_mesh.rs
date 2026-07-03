@@ -1,10 +1,10 @@
-//! `node.generate_cube_mesh` — emit a unit cube as 36 triangle-list
+//! `node.cube_mesh` — emit a unit cube as 36 triangle-list
 //! `MeshVertex` entries (6 faces × 2 triangles × 3 vertices) with
 //! per-face outward normals.
 //!
 //! Vertex data ported from
 //! `generators/shaders/digital_plants_render.wgsl`'s hardcoded
-//! cube constants. Pair with `node.render_instanced_3d_mesh` to
+//! cube constants. Pair with `node.render_copies` to
 //! draw N copies of a cube under different transforms — the
 //! decomposed shape of NestedCubes / DigitalPlants.
 
@@ -34,8 +34,8 @@ struct CubeUniforms {
 
 crate::primitive! {
     name: GenerateCubeMesh,
-    type_id: "node.generate_cube_mesh",
-    purpose: "Emit a unit cube as 36 triangle-list MeshVertex entries (6 faces × 2 triangles × 3 vertices) with per-face outward normals. The cube-shape building block for NestedCubes / DigitalPlants and any instanced-cube graph: pair with node.generate_instance_transforms + node.render_instanced_3d_mesh to draw a field of cubes.",
+    type_id: "node.cube_mesh",
+    purpose: "Emit a unit cube as 36 triangle-list MeshVertex entries (6 faces × 2 triangles × 3 vertices) with per-face outward normals. The cube-shape building block for NestedCubes / DigitalPlants and any instanced-cube graph: pair with node.arrange_copies + node.render_copies to draw a field of cubes.",
     inputs: {},
     outputs: {
         vertices: Array(MeshVertex),
@@ -58,13 +58,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "max_capacity is the chain-build pre-allocation ceiling — defaults to 36 (exactly one cube). Larger values pad the buffer with zero-vertex entries; useful only if downstream consumers expect a multi-mesh buffer. size scales the [-0.5, 0.5] unit cube. For non-cube wireframe shapes use node.polytope_vertices + node.polytope_edges.",
+    composition_notes: "max_capacity is the chain-build pre-allocation ceiling — defaults to 36 (exactly one cube). Larger values pad the buffer with zero-vertex entries; useful only if downstream consumers expect a multi-mesh buffer. size scales the [-0.5, 0.5] unit cube. For non-cube wireframe shapes use node.platonic_solid_points + node.platonic_solid_edges.",
     examples: [],
     picker: { label: "Cube Mesh", category: Atom },
     summary: "Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry.",
     category: Geometry3D,
     role: Source,
-    aliases: ["cube mesh", "box", "cube", "Box SOP"],
+    aliases: ["cube mesh", "generate cube mesh", "box", "cube", "Box SOP"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/generate_cube_mesh_body.wgsl"),
 }
@@ -98,9 +98,9 @@ impl Primitive for GenerateCubeMesh {
             // parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.generate_cube_mesh standalone codegen"),
+                    .expect("node.cube_mesh standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.generate_cube_mesh",
+                "node.cube_mesh",
             )
         });
 
@@ -125,7 +125,7 @@ impl Primitive for GenerateCubeMesh {
                 },
             ],
             [capacity.div_ceil(256), 1, 1],
-            "node.generate_cube_mesh",
+            "node.cube_mesh",
         );
     }
 }
@@ -140,7 +140,7 @@ mod tests {
     fn generate_cube_mesh_declares_zero_inputs_and_mesh_array_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let layout = ArrayType::of_known::<MeshVertex>();
-        assert_eq!(GenerateCubeMesh::TYPE_ID, "node.generate_cube_mesh");
+        assert_eq!(GenerateCubeMesh::TYPE_ID, "node.cube_mesh");
         assert!(GenerateCubeMesh::INPUTS.is_empty());
         assert_eq!(GenerateCubeMesh::OUTPUTS.len(), 1);
         assert_eq!(GenerateCubeMesh::OUTPUTS[0].name, "vertices");
@@ -166,7 +166,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = GenerateCubeMesh::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.generate_cube_mesh");
+        assert_eq!(node.type_id().as_str(), "node.cube_mesh");
     }
 }
 

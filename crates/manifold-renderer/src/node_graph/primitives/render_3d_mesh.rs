@@ -1,4 +1,4 @@
-//! `node.render_3d_mesh` — bundled 3D mesh renderer that dispatches
+//! `node.render_mesh` — bundled 3D mesh renderer that dispatches
 //! a per-MaterialKind fragment shader (Unlit / Phong / PBR / Cel) over
 //! a triangle-list `Array<MeshVertex>` with depth testing.
 //!
@@ -62,7 +62,7 @@ const CONDITIONAL_RULES: &[ConditionalRequirement] = &[
 
 crate::primitive! {
     name: Render3DMesh,
-    type_id: "node.render_3d_mesh",
+    type_id: "node.render_mesh",
     purpose: "Bundled 3D mesh renderer (TouchDesigner / Blender shape). Reads an Array<MeshVertex> as a triangle list, takes a Camera + Material + optional Light + optional envmap + optional surface textures (normal_map / roughness_map), and emits a shaded `color` Texture2D plus optional G-buffer outputs (`world_pos`, `world_normal`). The material's MaterialKind picks the fragment shader — Unlit / Phong / PBR / Cel. Per-kind requirements: Unlit needs no light. Phong / Cel need `light`. PBR needs `light` AND `envmap`. Surface textures sample at each fragment's mesh UV (the per-vertex `uv` channel interpolated through the rasterizer), so the texture sticks to the geometry as the camera moves — the industry-standard mesh-UV pattern. normal_map is interpreted as a world-space signed normal; roughness_map's red channel replaces the material's scalar roughness when wired.",
     inputs: {
         vertices: Array(MeshVertex) required,
@@ -79,13 +79,13 @@ crate::primitive! {
         world_normal: Texture2D,
     },
     params: [],
-    composition_notes: "Vertex count must be a multiple of 3 (trailing partial triangle truncated). Wire a `node.{unlit,phong,pbr,cel}_material` into `material` to pick the shading model. Pair with `node.camera_orbit` for `camera`, `node.light` for `light`, and (PBR only) `node.bake_equirect_envmap` for `envmap`. The G-buffer outputs (`world_pos`, `world_normal`) stay available for downstream deferred-shading-style work; they don't depend on material and won't compile their pipelines unless wired downstream. The `color` output is the primary path. Output formats are Rgba16Float.",
+    composition_notes: "Vertex count must be a multiple of 3 (trailing partial triangle truncated). Wire a `node.{unlit,phong,pbr,cel}_material` into `material` to pick the shading model. Pair with `node.orbit_camera` for `camera`, `node.light` for `light`, and (PBR only) `node.bake_environment` for `envmap`. The G-buffer outputs (`world_pos`, `world_normal`) stay available for downstream deferred-shading-style work; they don't depend on material and won't compile their pipelines unless wired downstream. The `color` output is the primary path. Output formats are Rgba16Float.",
     examples: [],
     picker: { label: "Render Mesh", category: Atom },
     summary: "Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image.",
     category: Geometry3D,
     role: Filter,
-    aliases: ["render mesh", "draw 3d", "rasterize", "Render TOP"],
+    aliases: ["render mesh", "render 3d mesh", "draw 3d", "rasterize", "Render TOP"],
     extra_fields: {
         pipelines: AHashMap<MaterialKind, manifold_gpu::GpuRenderPipeline> = AHashMap::new(),
         world_pos_pipeline: Option<manifold_gpu::GpuRenderPipeline> = None,
@@ -113,7 +113,7 @@ impl Render3DMesh {
             format: manifold_gpu::GpuTextureFormat::Depth32Float,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET,
-            label: "node.render_3d_mesh depth",
+            label: "node.render_mesh depth",
             mip_levels: 1,
         }));
         self.depth_width = width;
@@ -143,7 +143,7 @@ impl Render3DMesh {
                 format: manifold_gpu::GpuTextureFormat::Rgba16Float,
                 dimension: manifold_gpu::GpuTextureDimension::D2,
                 usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
-                label: "node.render_3d_mesh dummy envmap",
+                label: "node.render_mesh dummy envmap",
                 mip_levels: 1,
             }));
         }
@@ -169,7 +169,7 @@ impl Render3DMesh {
                 manifold_gpu::GpuTextureFormat::Depth32Float,
                 None,
                 1,
-                "node.render_3d_mesh",
+                "node.render_mesh",
             )
         })
     }
@@ -410,7 +410,7 @@ impl Primitive for Render3DMesh {
                 vertex_count,
                 1,
                 GpuLoadAction::Clear,
-                "node.render_3d_mesh.color",
+                "node.render_mesh.color",
             );
         }
 
@@ -457,7 +457,7 @@ impl Primitive for Render3DMesh {
                     manifold_gpu::GpuTextureFormat::Depth32Float,
                     None,
                     1,
-                    "node.render_3d_mesh.world_pos",
+                    "node.render_mesh.world_pos",
                 ));
             }
             let pipeline = self.world_pos_pipeline.as_ref().expect("just inserted");
@@ -470,7 +470,7 @@ impl Primitive for Render3DMesh {
                 vertex_count,
                 1,
                 GpuLoadAction::Clear,
-                "node.render_3d_mesh.world_pos",
+                "node.render_mesh.world_pos",
             );
         }
         if let Some(wn_target) = world_normal_target {
@@ -483,7 +483,7 @@ impl Primitive for Render3DMesh {
                     manifold_gpu::GpuTextureFormat::Depth32Float,
                     None,
                     1,
-                    "node.render_3d_mesh.world_normal",
+                    "node.render_mesh.world_normal",
                 ));
             }
             let pipeline = self.world_normal_pipeline.as_ref().expect("just inserted");
@@ -496,7 +496,7 @@ impl Primitive for Render3DMesh {
                 vertex_count,
                 1,
                 GpuLoadAction::Clear,
-                "node.render_3d_mesh.world_normal",
+                "node.render_mesh.world_normal",
             );
         }
     }
@@ -513,7 +513,7 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType};
         let mesh_layout = ArrayType::of_known::<MeshVertex>();
 
-        assert_eq!(Render3DMesh::TYPE_ID, "node.render_3d_mesh");
+        assert_eq!(Render3DMesh::TYPE_ID, "node.render_mesh");
         let by_name = |n: &str| {
             Render3DMesh::INPUTS
                 .iter()
@@ -585,6 +585,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = Render3DMesh::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.render_3d_mesh");
+        assert_eq!(node.type_id().as_str(), "node.render_mesh");
     }
 }

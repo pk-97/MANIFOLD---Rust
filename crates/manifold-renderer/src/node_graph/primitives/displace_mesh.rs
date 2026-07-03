@@ -1,4 +1,4 @@
-//! `node.displace_mesh` — perturb the Y component of an
+//! `node.push_mesh` — perturb the Y component of an
 //! `Array<MeshVertex>` positions grid by sampling a height
 //! Texture2D at each vertex's UV.
 //!
@@ -39,7 +39,7 @@ struct DisplaceUniforms {
 
 crate::primitive! {
     name: DisplaceMesh,
-    type_id: "node.displace_mesh",
+    type_id: "node.push_mesh",
     purpose: "Perturb the Y component of an Array<MeshVertex> positions grid by sampling a height Texture2D at each vertex's UV. cols/rows describe the source grid topology; UV = (col / (cols-1), row / (rows-1)). For MetallicGlass-shaped graphs: GenerateGridMesh → DisplaceMesh → TriangulateGrid → Render3DMesh.",
     inputs: {
         in: Array(MeshVertex) required,
@@ -149,9 +149,9 @@ impl Primitive for DisplaceMesh {
             // displace_mesh.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.displace_mesh standalone codegen"),
+                    .expect("node.push_mesh standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.displace_mesh",
+                "node.push_mesh",
             )
         });
         let sampler = self
@@ -199,7 +199,7 @@ impl Primitive for DisplaceMesh {
                 },
             ],
             [capacity.div_ceil(256), 1, 1],
-            "node.displace_mesh",
+            "node.push_mesh",
         );
     }
 }
@@ -214,7 +214,7 @@ mod tests {
     fn displace_mesh_declares_mesh_and_height_inputs() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let layout = ArrayType::of_known::<MeshVertex>();
-        assert_eq!(DisplaceMesh::TYPE_ID, "node.displace_mesh");
+        assert_eq!(DisplaceMesh::TYPE_ID, "node.push_mesh");
         assert_eq!(DisplaceMesh::INPUTS.len(), 2);
         assert_eq!(DisplaceMesh::INPUTS[0].name, "in");
         assert_eq!(DisplaceMesh::INPUTS[0].ty, PortType::Array(layout));
@@ -234,7 +234,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = DisplaceMesh::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.displace_mesh");
+        assert_eq!(node.type_id().as_str(), "node.push_mesh");
     }
 }
 

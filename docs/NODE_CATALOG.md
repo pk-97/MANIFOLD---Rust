@@ -144,46 +144,46 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 
 | Node | type_id | role | summary |
 |---|---|---|---|
-| Repeat Outline (rings) | `node.array_replicate_polyline_rings` | Filter | Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings. |
-| Orbit Camera | `node.camera_orbit` | Source | A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering. |
+| Arrange Copies | `node.arrange_copies` | Source | Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies. |
 | Combine XY (curve) | `node.combine_xy` | Filter | Zips two number lists, X and Y, into one list of points ready to draw as a line or curve. |
-| Edge Pairs | `node.consecutive_edges` | Source | Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start. |
+| Cube Mesh | `node.cube_mesh` | Source | Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry. |
 | Cylinder Wrap Field | `node.cylinder_wrap_field` | Map | Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry. |
 | Digital Plants Render | `node.digital_plants_render` | Filter | Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed. |
-| Push Mesh | `node.displace_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
-| Grid Edges | `node.edges_from_grid_uv` | Source | Outputs the wireframe edges that connect a grid of points, so you can draw the grid as a mesh of lines. |
-| Hypercube Edges (4D) | `node.edges_from_hypercube` | Source | Builds the wireframe edges of a hypercube — which corners connect. Feed it with the matching hypercube points to draw the 4D cube. |
-| Cube Mesh | `node.generate_cube_mesh` | Source | Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry. |
-| Grid Mesh | `node.generate_grid_mesh` | Source | Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh. |
-| Grid Points (UV) | `node.generate_grid_uv` | Source | Outputs a grid of U and V values sampling a parametric surface, the input for building curved meshes and wireframes. |
-| Arrange Copies | `node.generate_instance_transforms` | Source | Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies. |
-| Hypercube Points (4D) | `node.hypercube_vertices` | Source | Builds the corner points of a hypercube. The Dimension knob morphs it from a flat square up through a cube to a full 4D tesseract — wire it to an LFO to animat… |
+| Edge Pairs | `node.edge_pairs` | Source | Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start. |
+| Flatten 3D → 2D | `node.flatten_3d` | Filter | Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering. |
+| Flatten 4D → 3D | `node.flatten_4d` | Filter | Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape. |
+| Grid Edges | `node.grid_edges` | Source | Outputs the wireframe edges that connect a grid of points, so you can draw the grid as a mesh of lines. |
+| Grid Mesh | `node.grid_mesh` | Source | Builds a flat grid of points as a 3D mesh, the base for terrain, cloth, and displacement looks. Pair it with Surface Bumps or Push Mesh. |
+| Grid Points (UV) | `node.grid_points` | Source | Outputs a grid of U and V values sampling a parametric surface, the input for building curved meshes and wireframes. |
+| Hypercube Edges (4D) | `node.hypercube_edges` | Source | Builds the wireframe edges of a hypercube — which corners connect. Feed it with the matching hypercube points to draw the 4D cube. |
+| Hypercube Points (4D) | `node.hypercube_points` | Source | Builds the corner points of a hypercube. The Dimension knob morphs it from a flat square up through a cube to a full 4D tesseract — wire it to an LFO to animat… |
+| Make Triangles | `node.make_triangles` | Filter | Turns a grid of points into a solid mesh of triangles, so a flat field of points becomes a surface you can render. |
 | Nested Cubes Geometry | `node.nested_cubes_geometry` | Source | Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms. |
-| Platonic Solid Edges | `node.polytope_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
-| Platonic Solid Points | `node.polytope_vertices` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
-| Flatten 3D → 2D | `node.project_3d` | Filter | Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering. |
-| Flatten 4D → 3D | `node.project_4d` | Filter | Flattens 4D geometry like a tesseract down toward 3D, the first step in drawing a four-dimensional shape. |
-| Render Mesh | `node.render_3d_mesh` | Filter | Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image. |
-| Render Copies | `node.render_instanced_3d_mesh` | Filter | Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects. |
+| Orbit Camera | `node.orbit_camera` | Source | A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering. |
+| Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
+| Platonic Solid Points | `node.platonic_solid_points` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
+| Push Mesh | `node.push_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
+| Render Copies | `node.render_copies` | Filter | Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects. |
+| Render Mesh | `node.render_mesh` | Filter | Draws a 3D mesh to the screen with a camera, a light, and a material. The final step that turns geometry into an image. |
+| Repeat Outline (rings) | `node.repeat_outline` | Filter | Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings. |
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
 | Torus Wrap Field | `node.torus_wrap_field` | Map | Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface. |
-| Make Triangles | `node.triangulate_grid` | Filter | Turns a grid of points into a solid mesh of triangles, so a flat field of points becomes a surface you can render. |
 
 ### Materials & Lighting (11)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
-| Bake Environment (equirect) | `node.bake_equirect_envmap` | Source | Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting. |
-| Shininess (Blinn) | `node.blinn_specular` | Filter | Adds a tight highlight where the surface catches the light, set by a shininess amount. The glossy hotspot on top of basic lighting. |
+| Bake Environment (equirect) | `node.bake_environment` | Source | Builds a studio environment map for reflections, laid out as an equirectangular panorama. Feed it into a PBR material for image-based lighting. |
+| Basic Light (Lambert) | `node.basic_light` | Filter | Shades a surface from its normal map and a single direction, brightest where it faces the light. The plain matte lighting term. |
 | Cel Material | `node.cel_material` | Source | A toon material that snaps the lighting into a few flat bands for a cartoon or cel-shaded look. |
-| Rim Light (Fresnel) | `node.fresnel_rim` | Filter | Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects. |
-| Surface Bumps | `node.heightmap_to_normal` | Filter | Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture. |
-| Basic Light (Lambert) | `node.lambert_directional` | Filter | Shades a surface from its normal map and a single direction, brightest where it faces the light. The plain matte lighting term. |
 | Light | `node.light` | Source | A single light source for 3D scenes, set to a sun for parallel rays or a point for a local glow. Wire it into a material or a mesh renderer. |
 | Matcap Two-Tone | `node.matcap_two_tone` | Filter | Shades a surface by mapping its normals into a two-tone sphere lookup, a fast stylised material that needs no real lights. |
 | PBR Material | `node.pbr_material` | Source | A physically based material with roughness, metalness, and environment reflections. The realistic workhorse for 3D surfaces. |
 | Phong Material | `node.phong_material` | Source | A basic shiny material with soft diffuse shading and a sharp highlight. The cheap go-to for lit 3D surfaces. |
+| Rim Light (Fresnel) | `node.rim_light` | Filter | Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects. |
+| Shininess (Blinn) | `node.shininess` | Filter | Adds a tight highlight where the surface catches the light, set by a shininess amount. The glossy hotspot on top of basic lighting. |
+| Surface Bumps | `node.surface_bumps` | Filter | Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture. |
 | Unlit Material | `node.unlit_material` | Source | A flat-colour material with no lighting, so the surface shows its base colour straight. The simplest material, good for solid or glowing looks. |
 
 ### Particles 2D (16)

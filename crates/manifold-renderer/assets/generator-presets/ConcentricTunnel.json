@@ -763,7 +763,7 @@
           {
             "id": 21,
             "nodeId": "edges_topology",
-            "typeId": "node.consecutive_edges",
+            "typeId": "node.edge_pairs",
             "handle": "edges_topology",
             "params": {
               "closed": {
@@ -1062,7 +1062,7 @@
           {
             "id": 27,
             "nodeId": "stack",
-            "typeId": "node.array_replicate_polyline_rings",
+            "typeId": "node.repeat_outline",
             "handle": "stack",
             "params": {
               "max_rings": {

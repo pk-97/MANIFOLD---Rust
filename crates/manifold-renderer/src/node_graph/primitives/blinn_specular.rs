@@ -1,6 +1,6 @@
-//! `node.blinn_specular` — Blinn-Phong specular from a tangent-space
+//! `node.shininess` — Blinn-Phong specular from a tangent-space
 //! normal + light + view. Pair with `node.matcap_two_tone` (base) +
-//! `node.fresnel_rim` (rim) for full stylised PBR layering.
+//! `node.rim_light` (rim) for full stylised PBR layering.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -25,7 +25,7 @@ struct BlinnUniforms {
 
 crate::primitive! {
     name: BlinnSpecular,
-    type_id: "node.blinn_specular",
+    type_id: "node.shininess",
     purpose: "Blinn-Phong specular from a tangent-space normal map + directional light + view: `h = normalize(light + view); spec = pow(max(dot(n, h), 0), power)`. ADDITIVE — sum with a base shading via `node.compose` mode=Add. Defaults match oily-fluid PBR (light=(0.35,0.55,0.75), view=(0,0,1), power=48, near-white tint). Wire a `node.light` into `light` to drive direction + colour from one source instead of scattered scalars; the wired light's colour multiplies the `color` tint param.",
     inputs: {
         normal: Texture2D required,
@@ -113,7 +113,7 @@ crate::primitive! {
     summary: "Adds a tight highlight where the surface catches the light, set by a shininess amount. The glossy hotspot on top of basic lighting.",
     category: MaterialsAndLighting,
     role: Filter,
-    aliases: ["specular", "shininess", "highlight", "blinn"],
+    aliases: ["specular", "shininess", "blinn specular", "highlight", "blinn"],
 }
 
 impl Primitive for BlinnSpecular {
@@ -171,7 +171,7 @@ impl Primitive for BlinnSpecular {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/blinn_specular.wgsl"),
                 "cs_main",
-                "node.blinn_specular",
+                "node.shininess",
             )
         });
         let sampler = self
@@ -211,7 +211,7 @@ impl Primitive for BlinnSpecular {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.blinn_specular",
+            "node.shininess",
         );
     }
 }

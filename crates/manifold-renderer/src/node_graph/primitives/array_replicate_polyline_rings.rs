@@ -1,4 +1,4 @@
-//! `node.array_replicate_polyline_rings` — stack K transformed copies
+//! `node.repeat_outline` — stack K transformed copies
 //! of a polyline (outline + edges) into one concatenated polyline,
 //! with per-ring uniform scale and per-ring index-shifted edges.
 //!
@@ -37,7 +37,7 @@ const REPLICATE_INLINE_SCRATCH: usize = 128;
 
 crate::primitive! {
     name: ArrayReplicatePolylineRings,
-    type_id: "node.array_replicate_polyline_rings",
+    type_id: "node.repeat_outline",
     purpose: "Stack K transformed copies of a polyline (outline + edge topology) into one concatenated polyline. Per-ring uniform scale on the outline; per-ring index shift on the edges (sentinel-preserving). The K-fold replication atom for line-based generators: pair a single polygon / Lissajous / Rose curve outline + edges with a `scales` Array<f32> (from generate_range + array_math) to produce concentric, parallax, or stacked variations of the source polyline. The ring count is `min(scales.capacity, max_rings)`; output capacity is `input.capacity * max_rings` so the chain build pre-allocates the full stack at plan time.",
     inputs: {
         outline: Array(CurvePoint) required,
@@ -64,7 +64,7 @@ crate::primitive! {
     summary: "Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings.",
     category: Geometry3D,
     role: Filter,
-    aliases: ["repeat outline", "rings", "concentric", "replicate"],
+    aliases: ["repeat outline", "array replicate polyline rings", "rings", "concentric", "replicate"],
 }
 
 impl Primitive for ArrayReplicatePolylineRings {
@@ -114,14 +114,14 @@ impl Primitive for ArrayReplicatePolylineRings {
         };
         let Some(outline_out) = ctx.outputs.array("outline") else {
             log::warn!(
-                "node.array_replicate_polyline_rings: no GpuBuffer bound to output port \
+                "node.repeat_outline: no GpuBuffer bound to output port \
                  `outline` — the chain build did not pre-allocate the Array<CurvePoint> output."
             );
             return;
         };
         let Some(edges_out) = ctx.outputs.array("edges") else {
             log::warn!(
-                "node.array_replicate_polyline_rings: no GpuBuffer bound to output port \
+                "node.repeat_outline: no GpuBuffer bound to output port \
                  `edges` — the chain build did not pre-allocate the Array<EdgePair> output."
             );
             return;
@@ -273,7 +273,7 @@ mod tests {
     fn declares_three_array_inputs_and_two_array_outputs() {
         assert_eq!(
             ArrayReplicatePolylineRings::TYPE_ID,
-            "node.array_replicate_polyline_rings"
+            "node.repeat_outline"
         );
 
         let f32_layout = ArrayType::of_known::<f32>();
@@ -334,6 +334,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = ArrayReplicatePolylineRings::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.array_replicate_polyline_rings");
+        assert_eq!(node.type_id().as_str(), "node.repeat_outline");
     }
 }

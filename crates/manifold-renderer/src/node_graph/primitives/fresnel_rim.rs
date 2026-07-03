@@ -1,4 +1,4 @@
-//! `node.fresnel_rim` — fresnel-based edge highlight from a
+//! `node.rim_light` — fresnel-based edge highlight from a
 //! tangent-space normal map. Black at face-on, `color`-tinted at
 //! grazing. ADDITIVE — sum with a base shading via `node.compose`
 //! mode=Add (or mode=Screen for HDR-safe).
@@ -21,7 +21,7 @@ struct FresnelUniforms {
 
 crate::primitive! {
     name: FresnelRim,
-    type_id: "node.fresnel_rim",
+    type_id: "node.rim_light",
     purpose: "Fresnel-based edge highlight from a tangent-space normal map: `f = pow(1 - max(dot(n, view), 0), power)`, output = color.rgb * f. ADDITIVE rim term — black at face-on, `color`-tinted at grazing. Sum with a base shading (matcap, lambert) via `node.compose` mode=Add to layer the rim onto the surface. Defaults match oily-fluid PBR (view=(0,0,1), power=3, color=iridescent magenta).",
     inputs: {
         normal: Texture2D required,
@@ -81,7 +81,7 @@ crate::primitive! {
     summary: "Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects.",
     category: MaterialsAndLighting,
     role: Filter,
-    aliases: ["rim light", "fresnel", "edge glow", "backlight"],
+    aliases: ["rim light", "fresnel rim", "fresnel", "edge glow", "backlight"],
 }
 
 impl Primitive for FresnelRim {
@@ -120,7 +120,7 @@ impl Primitive for FresnelRim {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/fresnel_rim.wgsl"),
                 "cs_main",
-                "node.fresnel_rim",
+                "node.rim_light",
             )
         });
         let sampler = self
@@ -156,7 +156,7 @@ impl Primitive for FresnelRim {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.fresnel_rim",
+            "node.rim_light",
         );
     }
 }

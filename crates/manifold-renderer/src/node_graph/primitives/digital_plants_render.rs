@@ -53,7 +53,7 @@ struct ShadowUniforms {
 crate::primitive! {
     name: DigitalPlantsRender,
     type_id: "node.digital_plants_render",
-    purpose: "Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-tap PCF shadow sampling. Hardcoded 36-vert cube geometry (no Array<MeshVertex> input). Pair upstream with node.generate_instance_transforms (or any procedural compute that produces InstanceTransforms — DigitalPlants's procedural compute is one such producer).",
+    purpose: "Fused two-pass DigitalPlants renderer: shadow pass (depth-only from light POV) into an internal shadow map, then main pass with instanced cel-shaded cubes + 5-tap PCF shadow sampling. Hardcoded 36-vert cube geometry (no Array<MeshVertex> input). Pair upstream with node.arrange_copies (or any procedural compute that produces InstanceTransforms — DigitalPlants's procedural compute is one such producer).",
     inputs: {
         instances: Array(InstanceTransform) required,
         camera: Camera required,
@@ -108,7 +108,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Hardcoded 36-vertex cube geometry — no Array<MeshVertex> input. Pair upstream with node.generate_instance_transforms (Grid/Ring/Spiral/Random layouts) to drive arbitrary cube fields, or use a procedural compute that emits InstanceTransform values (DigitalPlants's noise-driven plant-stalk generator is one). 5-tap PCF shadow sampling with hard-coded 0.003 depth bias matches the legacy DigitalPlants. Shadow map is 2048×2048 internal state.",
+    composition_notes: "Hardcoded 36-vertex cube geometry — no Array<MeshVertex> input. Pair upstream with node.arrange_copies (Grid/Ring/Spiral/Random layouts) to drive arbitrary cube fields, or use a procedural compute that emits InstanceTransform values (DigitalPlants's noise-driven plant-stalk generator is one). 5-tap PCF shadow sampling with hard-coded 0.003 depth bias matches the legacy DigitalPlants. Shadow map is 2048×2048 internal state.",
     examples: [],
     picker: { label: "Digital Plants Render", category: Atom },
     summary: "Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed.",
