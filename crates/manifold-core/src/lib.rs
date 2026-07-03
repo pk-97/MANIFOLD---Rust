@@ -34,6 +34,7 @@ pub mod project;
 pub mod recording;
 pub mod selection;
 pub mod settings;
+pub mod stage;
 pub mod tempo;
 pub mod timeline;
 pub mod type_id_migration;
@@ -60,5 +61,9 @@ pub use macro_bank::{
 pub use marker::TimelineMarker;
 pub use math::{BeatQuantizer, MathUtils, short_id};
 pub use selection::{SelectionRegion, SelectionRegionTarget};
+pub use stage::{
+    DerivedStage, DisplayIdentity, DisplayPlacement, Island, OutputAdvanced, OutputId, Rotation,
+    StageLayout, derive_stage,
+};
 pub use types::*;
 pub use units::{Beats, Bpm, Seconds, beats_to_seconds, seconds_to_beats};

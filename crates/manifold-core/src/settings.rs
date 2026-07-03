@@ -53,6 +53,14 @@ pub struct ProjectSettings {
     #[serde(default)]
     pub tonemap_curve: TonemapCurve,
 
+    /// Physical multi-display / totem arrangement (empty = legacy single
+    /// canvas at `output_width`/`output_height`, today's behavior,
+    /// byte-identical). Skipped on serialize when empty so projects that
+    /// never configured a stage layout round-trip byte-identically, matching
+    /// `audio_setup`'s convention. See `docs/MULTI_DISPLAY_DESIGN.md`.
+    #[serde(default, skip_serializing_if = "crate::stage::StageLayout::is_empty")]
+    pub stage_layout: crate::stage::StageLayout,
+
     #[serde(default = "default_one")]
     pub master_opacity: f32,
     #[serde(default)]
@@ -251,6 +259,7 @@ impl Default for ProjectSettings {
             resolution_preset: ResolutionPreset::FHD1080p,
             render_scale: 1.0,
             tonemap_curve: TonemapCurve::AcesNarkowicz,
+            stage_layout: crate::stage::StageLayout::default(),
             master_opacity: 1.0,
             master_effects: Vec::new(),
             master_effect_groups: None,
