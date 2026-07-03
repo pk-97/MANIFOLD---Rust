@@ -115,6 +115,7 @@ Write code directly in the main context by default. Only spawn an agent for genu
 | `docs/PRIMITIVE_AUDIT_AND_DECOMPOSITION_PLAN.md` | Active 2nd-pass plan: tranche order, per-bundle inventory, atom activation list |
 | `docs/MATERIAL_SYSTEM_DESIGN.md` | Implementation contract for the Material port type + 3D mesh renderer integration (unlit / phong / pbr / cel). Read before any material-related work; supersedes the scattered-scalar shading params on render_3d_mesh / render_instanced_3d_mesh. |
 | `docs/FREEZE_COMPILER_MAP.md` | Any fusion/freeze/graph-compiler work — AUTHORITATIVE current-state map (pipeline, cut rules, marker ABI, precision contract, executor invariants). The older fusion design docs' status sections are stale; this supersedes them. |
+| `docs/CORE_ENGINE_MAP.md` | Any transport/scheduling/sync/MIDI/OSC/timecode work — AUTHORITATIVE current-state map of the core engine (content-thread frame, time model, SyncArbiter, sync_clips_to_time's three ref sources, threshold table; §13 honest edges = bug-hunt lenses). Sibling of FREEZE_COMPILER_MAP. |
 | `docs/EFFECT_RUNTIME_UNIFICATION.md` | EffectChain → graph runtime migration, StateStore design |
 | `docs/PRIMITIVE_LIBRARY_DESIGN.md` | Design rationale and historical context (catalog tables here are historical — current inventory lives in NODE_CATALOG.md) |
 | `docs/ADDING_PRIMITIVES.md` | Authoring new primitives, `primitive!` macro, parity test pattern |
