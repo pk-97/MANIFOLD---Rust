@@ -341,7 +341,7 @@ fn liveschool_ableton_mappings_resolve_to_stable_param_ids() {
     assert_eq!(effect_maps, 12, "expected 12 effect-targeted mappings");
     assert_eq!(gen_maps, 17, "expected 17 generator-targeted mappings");
 
-    // Known parked drop: FluidSimulation's 2D disk preset is currently
+    // Known parked drop: FluidSim2D's 2D disk preset is currently
     // missing the `size` param (ordinal 10) that the Rust inventory metadata
     // still declares (14 params vs the disk's 13). When the disk def wins at
     // load, every param past `clip_trigger_mode` shifts down one, so this
@@ -351,7 +351,7 @@ fn liveschool_ableton_mappings_resolve_to_stable_param_ids() {
     // per-particle radius to bind it to (apparent size comes from `feather`).
     // Until that lands, allow exactly this one orphan; every OTHER mapping
     // must still resolve so a genuine regression is caught.
-    const KNOWN_PARKED_DROPS: &[&str] = &["layer[4].gen.abl[3] (gen=FluidSimulation)"];
+    const KNOWN_PARKED_DROPS: &[&str] = &["layer[4].gen.abl[3] (gen=FluidSim2D)"];
     let unexpected: Vec<&String> = empty
         .iter()
         .filter(|e| !KNOWN_PARKED_DROPS.contains(&e.as_str()))
@@ -359,7 +359,7 @@ fn liveschool_ableton_mappings_resolve_to_stable_param_ids() {
     assert!(
         unexpected.is_empty(),
         "{} Ableton mapping(s) failed to resolve param_id from registry \
-         (beyond the known parked FluidSimulation `size` drop): {:?}",
+         (beyond the known parked FluidSim2D `size` drop): {:?}",
         unexpected.len(),
         unexpected
     );
@@ -440,13 +440,13 @@ fn liveschool_full_registry_resolution() {
         "Liveschool must have exactly 130 drivers"
     );
 
-    // Every orphan in the current snapshot is a FluidSimulation3D
+    // Every orphan in the current snapshot is a FluidSim3D
     // generator driver pointing at paramIndex >= 21 (the generator
     // had ~27 params at save time, was trimmed since). 6 orphans
     // total. New orphans on other types = a real regression.
     let unexpected: Vec<&(String, String)> = orphans
         .iter()
-        .filter(|(_, ty)| ty != "FluidSimulation3D")
+        .filter(|(_, ty)| ty != "FluidSim3D")
         .collect();
     assert!(
         unexpected.is_empty(),

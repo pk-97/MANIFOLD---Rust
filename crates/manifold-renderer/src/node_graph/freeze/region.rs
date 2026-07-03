@@ -927,7 +927,7 @@ fn classify_node(
 
     // Register-heavy body (a bespoke inlined simplex): fusing it raises the
     // whole kernel's register pressure past the occupancy cliff, so the fused
-    // region runs slower than the standalone dispatches (FluidSimulation's
+    // region runs slower than the standalone dispatches (FluidSim2D's
     // euler+wrap+burst: 3.05 ms fused vs 2.43 unfused). Keep it a boundary —
     // its register-light neighbours still fuse around it.
     if n.fusion_register_heavy() {
@@ -2797,7 +2797,7 @@ mod audit {
     #[ignore = "on-demand per-preset fusion WHY report"]
     fn explain_presets() {
         let registry = PrimitiveRegistry::with_builtin();
-        for name in ["MetallicGlass", "OilyFluid", "FluidSimulation"] {
+        for name in ["MetallicGlass", "OilyFluid", "FluidSim2D"] {
             let type_id = manifold_core::PresetTypeId::new(name);
             if let Some(json) = crate::node_graph::bundled_presets::bundled_preset_json(&type_id) {
                 explain_preset(name, &json, &registry);

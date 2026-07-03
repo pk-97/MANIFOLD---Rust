@@ -19,8 +19,8 @@
 use manifold_core::PresetTypeId;
 use crate::harness::{self, Fixture, ParityHarness, assert_bytewise_equal, default_ctx, make_default_effect};
 
-/// Runs `InvertColors` twice on `Fixture::Gradient` and asserts the
-/// two readbacks are identical. InvertColors is the simplest stateless
+/// Runs `Invert` twice on `Fixture::Gradient` and asserts the
+/// two readbacks are identical. Invert is the simplest stateless
 /// effect (one compute pass, no time dependence, no per-owner state),
 /// so a failure here points at the harness, not the effect.
 #[test]

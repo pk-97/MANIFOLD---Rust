@@ -7,7 +7,7 @@
 //! applies the center offset + aspect correction itself; no
 //! producer should pre-shift to (0.5, 0.5).
 //!
-//! Orthographic mode matches WireframeZoo's XY-scale projection
+//! Orthographic mode matches Wireframe's XY-scale projection
 //! bit-for-bit. Perspective mode uses the same projection style as
 //! the 4D→2D stage in generator_math::project_4d (s = proj_dist /
 //! (proj_dist + z)).
@@ -41,7 +41,7 @@ struct Project3DUniforms {
 crate::primitive! {
     name: Project3D,
     type_id: "node.flatten_3d",
-    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For WireframeZoo-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
+    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For Wireframe-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
     inputs: {
         in: Array(MeshVertex) required,
         // Port-shadows-param: control-rate wires take precedence over
@@ -80,7 +80,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Orthographic mode matches WireframeZoo's bit-exact behaviour (PROJ_SCALE = 0.25 by default; scales xy directly, ignores z). Perspective mode applies s = proj_dist / (proj_dist + z) scaling — useful when the upstream geometry has meaningful depth variation. Active count = input buffer's vertex count; output buffer should be at least the same size.",
+    composition_notes: "Orthographic mode matches Wireframe's bit-exact behaviour (PROJ_SCALE = 0.25 by default; scales xy directly, ignores z). Perspective mode applies s = proj_dist / (proj_dist + z) scaling — useful when the upstream geometry has meaningful depth variation. Active count = input buffer's vertex count; output buffer should be at least the same size.",
     examples: [],
     picker: { label: "Flatten 3D → 2D", category: Atom },
     summary: "Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering.",

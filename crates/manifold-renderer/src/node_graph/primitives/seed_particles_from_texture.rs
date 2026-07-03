@@ -410,18 +410,18 @@ mod tests {
     }
 
     /// The gate only saves work if the preset actually wires a trigger into it.
-    /// FluidSimulation routes the clip-trigger counter into seed_spawn.reset_trigger,
+    /// FluidSim2D routes the clip-trigger counter into seed_spawn.reset_trigger,
     /// so the four-pass compaction runs only on a reset edge, not every frame. Guards
     /// against the wire being dropped (which would silently revert to per-frame work).
     #[test]
     fn fluidsim_wires_a_trigger_into_the_seed_reset_trigger() {
         use manifold_core::effect_graph_def::EffectGraphDef;
         let json = crate::node_graph::bundled_presets::bundled_preset_json(
-            &manifold_core::PresetTypeId::new("FluidSimulation"),
+            &manifold_core::PresetTypeId::new("FluidSim2D"),
         )
-        .expect("FluidSimulation bundled");
+        .expect("FluidSim2D bundled");
         let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
-        let flat = manifold_core::flatten::flatten_groups(&def).expect("FluidSimulation flattens");
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("FluidSim2D flattens");
         let seed = flat
             .nodes
             .iter()

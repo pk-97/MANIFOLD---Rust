@@ -164,6 +164,15 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.mux_array", "node.switch_array"),
     ("node.mux_scalar", "node.switch_value"),
     ("node.mux_texture", "node.switch_texture"),
+    // --- VOCAB P3: Preset renames (docs/NODE_VOCABULARY_AUDIT.md §6) ---
+    ("EdgeGlow", "EdgeDetect"),
+    ("HdrBoost", "HighlightBoost"),
+    ("InvertColors", "Invert"),
+    ("WireframeZoo", "Wireframe"),
+    ("SoftFocusGraph", "SoftFocus"),
+    ("ComputeStrangeAttractor", "StrangeAttractor"),
+    ("FluidSimulation", "FluidSim2D"),
+    ("FluidSimulation3D", "FluidSim3D"),
 ];
 
 /// One legacy-fold entry: `(old_id, new_id, seed_params)` — the params to

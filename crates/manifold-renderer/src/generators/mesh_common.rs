@@ -1,7 +1,7 @@
 //! Shared mesh-domain item layouts used by Phase B of
 //! `BUFFER_PORT_PLAN` — the primitives that decompose 3D and
 //! 4D wireframe generators (MetallicGlass, Tesseract,
-//! Duocylinder, WireframeZoo, NestedCubes, DigitalPlants).
+//! Duocylinder, Wireframe, NestedCubes, DigitalPlants).
 //!
 //! Each struct is `#[repr(C)]` + `bytemuck::Pod` so it can flow
 //! through an `Array<T>` wire and be read by both Rust producers
@@ -57,7 +57,7 @@ impl KnownItem for MeshVertex {
 
 /// A 4D vertex in homogeneous hypercube space, before 4D rotation
 /// and projection-to-3D. Used by Tesseract / Duocylinder /
-/// WireframeZoo. 16 bytes.
+/// Wireframe. 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vec4Vertex {

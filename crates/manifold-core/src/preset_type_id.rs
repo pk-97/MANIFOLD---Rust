@@ -57,7 +57,7 @@ impl PresetTypeId {
 
 impl PresetTypeId {
     pub const TRANSFORM: Self = Self(Cow::Borrowed("Transform"));
-    pub const INVERT_COLORS: Self = Self(Cow::Borrowed("InvertColors"));
+    pub const INVERT_COLORS: Self = Self(Cow::Borrowed("Invert"));
     pub const FEEDBACK: Self = Self(Cow::Borrowed("Feedback"));
     pub const PIXEL_SORT: Self = Self(Cow::Borrowed("PixelSort"));
     pub const BLOOM: Self = Self(Cow::Borrowed("Bloom"));
@@ -73,8 +73,7 @@ impl PresetTypeId {
     pub const BLOB_TRACKING: Self = Self(Cow::Borrowed("BlobTracking"));
     pub const CRT: Self = Self(Cow::Borrowed("CRT"));
     pub const FLUID_DISTORTION: Self = Self(Cow::Borrowed("FluidDistortion"));
-    /// Serialized as "EdgeGlow" for backward compatibility with project files.
-    pub const EDGE_DETECT: Self = Self(Cow::Borrowed("EdgeGlow"));
+    pub const EDGE_DETECT: Self = Self(Cow::Borrowed("EdgeDetect"));
     pub const DATAMOSH: Self = Self(Cow::Borrowed("Datamosh"));
     pub const SLIT_SCAN: Self = Self(Cow::Borrowed("SlitScan"));
     pub const COLOR_GRADE: Self = Self(Cow::Borrowed("ColorGrade"));
@@ -88,7 +87,7 @@ impl PresetTypeId {
     pub const SURVEILLANCE: Self = Self(Cow::Borrowed("Surveillance"));
     pub const REDACTION: Self = Self(Cow::Borrowed("Redaction"));
     pub const DEPTH_OF_FIELD: Self = Self(Cow::Borrowed("DepthOfField"));
-    pub const HDR_BOOST: Self = Self(Cow::Borrowed("HdrBoost"));
+    pub const HDR_BOOST: Self = Self(Cow::Borrowed("HighlightBoost"));
     pub const AUTO_GAIN: Self = Self(Cow::Borrowed("AutoGain"));
     pub const WATERCOLOR: Self = Self(Cow::Borrowed("Watercolor"));
 
@@ -98,7 +97,7 @@ impl PresetTypeId {
 
     /// Soft Focus, graph-backed — first graph-backed effect with branching
     /// topology.
-    pub const SOFT_FOCUS_GRAPH: Self = Self(Cow::Borrowed("SoftFocusGraph"));
+    pub const SOFT_FOCUS_GRAPH: Self = Self(Cow::Borrowed("SoftFocus"));
 
     /// Placeholder for unrecognized/removed effect types. Renderers skip this.
     pub const UNKNOWN: Self = Self(Cow::Borrowed("Unknown"));
@@ -116,14 +115,14 @@ impl PresetTypeId {
     pub const PLASMA: Self = Self(Cow::Borrowed("Plasma"));
     pub const LISSAJOUS: Self = Self(Cow::Borrowed("Lissajous"));
     pub const FRACTAL_ZOOM: Self = Self(Cow::Borrowed("FractalZoom"));
-    pub const WIREFRAME_ZOO: Self = Self(Cow::Borrowed("WireframeZoo"));
+    pub const WIREFRAME_ZOO: Self = Self(Cow::Borrowed("Wireframe"));
     pub const REACTION_DIFFUSION: Self = Self(Cow::Borrowed("ReactionDiffusion"));
     pub const FLOWFIELD: Self = Self(Cow::Borrowed("Flowfield"));
     pub const STRANGE_ATTRACTOR: Self = Self(Cow::Borrowed("StrangeAttractor"));
-    pub const FLUID_SIMULATION: Self = Self(Cow::Borrowed("FluidSimulation"));
+    pub const FLUID_SIMULATION: Self = Self(Cow::Borrowed("FluidSim2D"));
     pub const NUMBER_STATION: Self = Self(Cow::Borrowed("NumberStation"));
-    pub const COMPUTE_STRANGE_ATTRACTOR: Self = Self(Cow::Borrowed("ComputeStrangeAttractor"));
-    pub const FLUID_SIMULATION_3D: Self = Self(Cow::Borrowed("FluidSimulation3D"));
+    pub const COMPUTE_STRANGE_ATTRACTOR: Self = Self(Cow::Borrowed("StrangeAttractor"));
+    pub const FLUID_SIMULATION_3D: Self = Self(Cow::Borrowed("FluidSim3D"));
     pub const MRI_VOLUME: Self = Self(Cow::Borrowed("MriVolume"));
     pub const BLACK_HOLE: Self = Self(Cow::Borrowed("BlackHole"));
     pub const METALLIC_GLASS: Self = Self(Cow::Borrowed("MetallicGlass"));
@@ -364,7 +363,7 @@ mod tests {
 
     #[test]
     fn legacy_discriminant_overlap_is_kind_specific() {
-        // 10 means Feedback (effect) but WireframeZoo (generator).
+        // 10 means Feedback (effect) but Wireframe (generator).
         assert_eq!(PresetTypeId::from_legacy_effect_discriminant(10), PresetTypeId::FEEDBACK);
         assert_eq!(PresetTypeId::from_legacy_generator_discriminant(10), PresetTypeId::WIREFRAME_ZOO);
     }

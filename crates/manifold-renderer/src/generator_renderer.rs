@@ -1186,7 +1186,7 @@ mod tests {
         let layer_id = LayerId::new("layer-under-test");
         let other_layer = LayerId::new("other-layer");
         let trivial = PresetTypeId::new("TrivialPassthrough");
-        let strange = PresetTypeId::new("ComputeStrangeAttractor");
+        let strange = PresetTypeId::new("StrangeAttractor");
 
         // Seed a `LayerGeneratorState` for the starting type via the
         // same funnel any production path would use. (Any JSON preset

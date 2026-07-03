@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "name": "SoftFocusGraph",
+  "name": "SoftFocus",
   "description": "A soft-focus effect that blends the source image with a blurred copy at variable intensity. The source image feeds both the Blur node (which softens it using a Gaussian kernel at the Radius parameter) and the Mix node directly. The Blur output and the original then blend at the Mix stage, controlled by the Amount slider. At Amount zero the effect is skipped and the output is the raw input; at Amount one it reaches full softening. Blur mode and Mix mode are both fixed to their defaults, so the only live parameters are Radius and Amount.",
   "presetMetadata": {
-    "id": "SoftFocusGraph",
+    "id": "SoftFocus",
     "displayName": "Soft Focus",
     "category": "Stylize",
     "oscPrefix": "soft_focus_graph",

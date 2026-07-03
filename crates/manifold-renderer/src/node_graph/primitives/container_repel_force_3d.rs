@@ -76,7 +76,7 @@ crate::primitive! {
         },
     ],
     composition_notes: "Aliased Array<[f32; 3]> in/out (one force buffer, in-place subtract). `container` is a mode enum (0 None / 1 Cube / 2 Sphere / 3 Torus) — None makes the dispatch a no-op so the atom is inert at the default. `ctr_scale` is port-shadow (sizes the SDF). Wire upstream of node.move_particles_3d so the cushion is integrated through speed*dt, and pair with node.keep_in_box_3d (post-integration hard wall) downstream.",
-    examples: ["FluidSimulation3D"],
+    examples: ["FluidSim3D"],
     picker: { label: "Push From Walls (3D)", category: Atom },
     summary: "Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce.",
     category: Particles3D,

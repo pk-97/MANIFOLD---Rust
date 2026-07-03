@@ -47,7 +47,7 @@ pub fn run(args: &[String]) {
             render_ui_scene(s, want_dump, false, want_thumbs, None);
         }
         run_graph_preset("Mirror");
-        run_editor_preset("FluidSimulation");
+        run_editor_preset("FluidSim2D");
         return;
     }
 
@@ -63,7 +63,7 @@ pub fn run(args: &[String]) {
     // canvas + sidebar chrome), not just the bare canvas — generator presets
     // only (see `fixtures::generator_editor_fixture`).
     if scene == "editor" {
-        let preset = arg_value(args, "--preset").unwrap_or_else(|| "FluidSimulation".to_string());
+        let preset = arg_value(args, "--preset").unwrap_or_else(|| "FluidSim2D".to_string());
         run_editor_preset(&preset);
         return;
     }

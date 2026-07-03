@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn catalog_default_is_available_for_every_shipping_effect() {
-        // Previously only Mirror + SoftFocusGraph had catalog graphs;
+        // Previously only Mirror + SoftFocus had catalog graphs;
         // the bundled-preset registry now covers every ChainSpec, so
         // per-card divergence works on every effect.
         for type_id in

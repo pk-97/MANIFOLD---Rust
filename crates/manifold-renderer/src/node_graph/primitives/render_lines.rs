@@ -88,7 +88,7 @@ crate::primitive! {
         // topology driven by the `closed_loop` param. `animate` /
         // `speed` / `window` work in both paths — when `edges` is
         // wired the scrolling window walks edges in producer
-        // declaration order (matches legacy WireframeZoo / Tesseract /
+        // declaration order (matches legacy Wireframe / Tesseract /
         // Duocylinder, all of which left projected_z at zero so the
         // legacy depth-sort collapsed to identity).
         edges: Array(EdgePair) optional,
@@ -368,7 +368,7 @@ impl RenderLines {
     /// `(a, b)` becomes one rendered segment with `alpha = 1`. When
     /// `animate=true`, the same scrolling window + fade from the
     /// implicit-strip path walks edges in producer declaration order
-    /// — matches legacy WireframeZoo / Tesseract / Duocylinder, all
+    /// — matches legacy Wireframe / Tesseract / Duocylinder, all
     /// of which left `projected_z` at zero so the depth-sort in the
     /// legacy pipeline collapsed to declaration order anyway. See
     /// `crates/manifold-renderer/src/generators/line_pipeline.rs:277`
@@ -393,7 +393,7 @@ impl RenderLines {
         self.vert_visible.clear();
         // Explicit-edge topology: a vertex is visible iff at least one
         // currently-drawn edge touches it. Even in the non-animated
-        // path this stays `false` (legacy WireframeZoo behaviour:
+        // path this stays `false` (legacy Wireframe behaviour:
         // isolated vertices don't get dots).
         self.vert_visible.resize(num_points as usize, false);
 
@@ -567,7 +567,7 @@ impl Primitive for RenderLines {
 
         // ── Build per-frame instance buffer (CPU side) ──
         // Two paths:
-        //   - `edges` input wired  → topology-driven (e.g. WireframeZoo).
+        //   - `edges` input wired  → topology-driven (e.g. Wireframe).
         //   - `edges` input absent → sequential / closed-loop (e.g. Lissajous).
         let edges_input = ctx.inputs.array("edges");
         let (num_edges, num_dots) = if let Some(edges_buf) = edges_input {
@@ -873,7 +873,7 @@ mod tests {
 
     /// `show_verts` in explicit-edges mode draws a dot at every vertex
     /// that participates in at least one edge — matches the legacy
-    /// WireframeZoo behaviour where unconnected vertices stay hidden.
+    /// Wireframe behaviour where unconnected vertices stay hidden.
     #[test]
     fn explicit_edges_show_verts_dots_only_connected_vertices() {
         let mut prim = RenderLines::new();
@@ -922,11 +922,11 @@ mod tests {
     }
 
     /// Regression for the "Animate / Speed / Window are exposed on
-    /// WireframeZoo's `render_lines` node but do nothing" bug. The
+    /// Wireframe's `render_lines` node but do nothing" bug. The
     /// pre-fix `build_instances_from_edges` ignored animate entirely
     /// because the topology-driven path was thought to need depth-
     /// sorted reveal — but the legacy line_pipeline left `projected_z`
-    /// at zero on every wireframe generator (WireframeZoo, Tesseract,
+    /// at zero on every wireframe generator (Wireframe, Tesseract,
     /// Duocylinder), so the legacy "depth sort" collapsed to identity
     /// and the visible animation was input-order reveal all along.
     ///
@@ -1000,7 +1000,7 @@ mod tests {
 
     /// Without animation, the edges-wired path must emit every valid
     /// edge with alpha=1 (the static-wireframe baseline that legacy
-    /// WireframeZoo defaults to). Guards against an over-eager refactor
+    /// Wireframe defaults to). Guards against an over-eager refactor
     /// later that always runs the animation walk.
     #[test]
     fn edges_wired_static_path_emits_every_valid_edge_full_alpha() {

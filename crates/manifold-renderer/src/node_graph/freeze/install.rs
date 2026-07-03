@@ -1095,7 +1095,7 @@ pub(crate) fn fuse_canonical_def_masked(
     // The finder operates on a FLATTENED graph: `partition_regions` refuses any
     // def still carrying a group node (group boundary nodes would fragment every
     // region), and the live loader (`graph_loader`) flattens before building. So
-    // flatten here too — otherwise a grouped preset (Glitch, FluidSimulation)
+    // flatten here too — otherwise a grouped preset (Glitch, FluidSim2D)
     // silently never fuses even though its flattened form has regions. Flatten
     // PRESERVES each node's stable `node_id` (only the debug handle is prefixed),
     // so the binding retarget downstream — which keys on `node_id` via

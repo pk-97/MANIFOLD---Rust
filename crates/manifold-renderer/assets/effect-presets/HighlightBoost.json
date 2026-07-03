@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "name": "HdrBoost",
+  "name": "HighlightBoost",
   "description": "Highlight boost: a decomposed alternative to the fused highlight_boost kernel. The source passes through a soft-knee threshold to extract the bright pass, which then scales by a gain factor computed from an EV (exposure value) slider. The gain conversion chain is linear: 2^gain - 1 turns EV stops into a multiplicative boost. The scaled highlights blend back into the original source as an additive layer, pushing the result into HDR territory (>1) with no clamp. Bindings reach all four performance parameters: amount controls the final mix weight, gain drives the exponential factor, threshold and knee control the bright-pass extraction. Verified equivalent to the legacy kernel in visual behavior, with one algorithmic delta: the bright-pass uses the shared threshold curve and the boost scales the extracted color directly, rather than the legacy proportional-ramp approach.",
   "presetMetadata": {
-    "id": "HdrBoost",
+    "id": "HighlightBoost",
     "displayName": "Highlight Boost",
     "category": "Filmic",
     "oscPrefix": "hdrBoost",

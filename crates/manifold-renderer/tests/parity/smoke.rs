@@ -73,7 +73,7 @@ fn every_registered_generator_runs_without_panicking_or_nans() {
 
 /// Deterministic `PresetContext` paralleling `default_ctx` for
 /// effects. Time / beat fixed so any time-dependent generator
-/// (FluidSimulation, Plasma) produces reproducible output across runs.
+/// (FluidSim2D, Plasma) produces reproducible output across runs.
 fn default_generator_ctx(width: u32, height: u32) -> PresetContext {
     PresetContext {
         time: 1.234,

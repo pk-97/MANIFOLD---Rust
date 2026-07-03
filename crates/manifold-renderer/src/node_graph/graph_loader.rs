@@ -1017,7 +1017,7 @@ fn pre_allocate_array_buffers(
             // STARTS at zero. Metal's create_buffer* does not zero-init, so a
             // fresh allocation would let frame 0 resolve the splat on top of
             // uninitialized VRAM — garbage that, in a feedback sim, amplifies
-            // into run-to-run non-determinism (see the FluidSimulation
+            // into run-to-run non-determinism (see the FluidSim2D
             // determinism guard in freeze::proof). Zero it once here so the
             // clear-after-read contract holds from the first frame.
             let needs_zero_init = atomic_outputs.contains(port_name);

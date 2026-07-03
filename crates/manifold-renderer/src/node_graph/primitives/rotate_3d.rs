@@ -2,7 +2,7 @@
 //!
 //! WGSL port of `generators::generator_math::rotate_3d` — applies
 //! rotations in X → Y → Z order to position and normal of each
-//! vertex. Used by WireframeZoo-shaped graphs:
+//! vertex. Used by Wireframe-shaped graphs:
 //! polytope_vertices → Rotate3D → (project) → render.
 
 use manifold_gpu::GpuBinding;
@@ -28,7 +28,7 @@ struct Rotate3DUniforms {
 crate::primitive! {
     name: Rotate3D,
     type_id: "node.rotate_3d",
-    purpose: "Apply XYZ Euler rotation to an Array<MeshVertex>. Rotates position and normal of each vertex in X → Y → Z order (matches generator_math::rotate_3d bit-for-bit). The 3D-equivalent of node.rotate_4d, used in WireframeZoo-shaped graphs: polytope_vertices → Rotate3D → (project) → render.",
+    purpose: "Apply XYZ Euler rotation to an Array<MeshVertex>. Rotates position and normal of each vertex in X → Y → Z order (matches generator_math::rotate_3d bit-for-bit). The 3D-equivalent of node.rotate_4d, used in Wireframe-shaped graphs: polytope_vertices → Rotate3D → (project) → render.",
     inputs: {
         in: Array(MeshVertex) required,
         // Port-shadows-param: when a wire is connected, the wired

@@ -57,7 +57,7 @@ crate::primitive! {
         },
     ],
     composition_notes: "Output Texture3D dims follow vol_res / vol_depth (the default texture_3d_output_dims source). The output is the raw 6-tap gradient at integer voxel scale (×0.5) — feed it to node.swirl_force_3d to cross with a rotating reference axis (curl) and combine with slope, exactly as the legacy FluidSim3D force field did. Generic enough for any volumetric gradient need (normals from a heightfield volume, flow from a density field).",
-    examples: ["FluidSimulation3D"],
+    examples: ["FluidSim3D"],
     picker: { label: "Edge Slope (3D)", category: Atom },
     summary: "Measures how fast a value changes through a 3D volume, giving a direction at every point. Used to find flow and forces inside a fluid sim.",
     category: FieldsAndCoordinates,

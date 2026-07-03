@@ -38,7 +38,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "1:1 replacement for legacy InvertColors. Use Invert alone for a single-pass invert; chain with ColorGradeHSV or Threshold for analog-style processing pipelines.",
+    composition_notes: "1:1 replacement for the legacy InvertColorsFX effect. Use Invert alone for a single-pass invert; chain with ColorGradeHSV or Threshold for analog-style processing pipelines.",
     examples: ["preset.effect.invert"],
     summary: "Flips every colour to its opposite, turning a negative of the image. Blend it part-way for a partial invert.",
     category: ColorAndTone,

@@ -3,7 +3,7 @@
 //!
 //! Phase B of `BUFFER_PORT_PLAN`. Mirrors
 //! `generators::generator_math::rotate_4d` so the behaviour is
-//! bit-identical to Tesseract / Duocylinder / WireframeZoo when
+//! bit-identical to Tesseract / Duocylinder / Wireframe when
 //! wired with the same base verts. The transform primitive in
 //! the mesh-family triad: producer → Rotate4D → renderer.
 

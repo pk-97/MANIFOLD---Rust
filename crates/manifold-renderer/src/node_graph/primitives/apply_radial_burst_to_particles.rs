@@ -145,7 +145,7 @@ impl Primitive for ApplyRadialBurstToParticles {
     }
 
     // The bespoke inlined `arb_simplex_noise_2d` makes this body register-heavy:
-    // fused into FluidSimulation's euler+wrap chain the combined kernel measured
+    // fused into FluidSim2D's euler+wrap chain the combined kernel measured
     // 3.05 ms vs 2.43 ms for the three standalone dispatches (occupancy cliff).
     // Standalone it costs ~0.69 ms when firing and skips its dispatch when idle.
     fn fusion_register_heavy(&self) -> bool {

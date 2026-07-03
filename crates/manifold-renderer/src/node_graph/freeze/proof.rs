@@ -1020,7 +1020,7 @@ fn infrared_preset_black_stays_black() {
     );
 }
 
-/// Diagnostic for the "navy background" report: render the REAL WireframeZoo
+/// Diagnostic for the "navy background" report: render the REAL Wireframe
 /// generator through the production `PresetRuntime` path and characterise its
 /// background. The invariant under test is "pure black carries through as pure
 /// black" — if the generator's empty regions come out > 0, the floor is born
@@ -1036,8 +1036,8 @@ fn wireframe_generator_background_is_black() {
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (192u32, 192u32);
 
-    let id = PresetTypeId::new("WireframeZoo");
-    let json = bundled_preset_json(&id).expect("WireframeZoo json");
+    let id = PresetTypeId::new("Wireframe");
+    let json = bundled_preset_json(&id).expect("Wireframe json");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse");
 
     let ctx = PresetContext {
@@ -1099,8 +1099,8 @@ fn wireframe_generator_background_is_black() {
             }
         }
     }
-    eprintln!("WireframeZoo per-channel min = {minc:?}");
-    eprintln!("WireframeZoo per-channel max = {maxc:?}");
+    eprintln!("Wireframe per-channel min = {minc:?}");
+    eprintln!("Wireframe per-channel max = {maxc:?}");
     eprintln!("corner(0,0)     = {:?}", at(0, 0));
     eprintln!("corner(w-1,0)   = {:?}", at(w - 1, 0));
     eprintln!("edge(0,h/2)     = {:?}", at(0, h / 2));
@@ -1778,7 +1778,7 @@ fn fusion_coverage_baseline() {
 /// Grouped presets must fuse. The fuse entry (`fuse_canonical_def`) flattens its
 /// input the way the live loader does — otherwise a preset organised into node
 /// groups silently never fuses (`partition_regions` refuses any def still
-/// carrying a group node). Glitch (a grouped EFFECT) and FluidSimulation (a
+/// carrying a group node). Glitch (a grouped EFFECT) and FluidSim2D (a
 /// grouped GENERATOR) are the two shipped grouped presets whose flattened forms
 /// have regions; both must produce a fused view/def through the real entry
 /// points. Guards the flatten-before-fuse fix against regression.
@@ -1793,8 +1793,8 @@ fn grouped_presets_fuse_through_entry_points() {
          fuse_canonical_def must flatten before partitioning"
     );
     assert!(
-        fused_generator_def_by_id(&PresetTypeId::new("FluidSimulation")).is_some(),
-        "FluidSimulation is a grouped generator with a fusable region once flattened — \
+        fused_generator_def_by_id(&PresetTypeId::new("FluidSim2D")).is_some(),
+        "FluidSim2D is a grouped generator with a fusable region once flattened — \
          the generator fuse path must flatten too"
     );
 }
@@ -2048,7 +2048,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
     );
 }
 
-/// BUFFER-domain fusion with FRAME-DERIVED uniforms: the real FluidSimulation —
+/// BUFFER-domain fusion with FRAME-DERIVED uniforms: the real FluidSim2D —
 /// whose per-particle hot chain (noise force, euler integrate with `dt_scaled`,
 /// wrap, anti-clump with `frame_count`, …) only fuses now that the codegen emits
 /// each member's derived uniform as an `n{i}_<name>` field and the install pass
@@ -2093,12 +2093,12 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     let (w, h) = (256u32, 256u32);
 
     let json = crate::node_graph::bundled_presets::bundled_preset_json(
-        &manifold_core::PresetTypeId::new("FluidSimulation"),
+        &manifold_core::PresetTypeId::new("FluidSim2D"),
     )
-    .expect("FluidSimulation preset bundled");
+    .expect("FluidSim2D preset bundled");
     let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
     let fused_def = fuse_generator_def(&canonical, &registry)
-        .expect("FluidSimulation fuses + builds (derived-uniform buffer region)");
+        .expect("FluidSim2D fuses + builds (derived-uniform buffer region)");
 
     // The build's whole point: a derived-uniform particle atom must actually have
     // fused. Assert the fused def added a generator_input → fused frame wire — if
@@ -2199,7 +2199,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
-            .expect("FluidSimulation builds");
+            .expect("FluidSim2D builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid-fusion");
         for i in 0..8u32 {
             let mut enc = device.create_encoder("freeze-fluid-fusion");
@@ -2222,7 +2222,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
     let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-3, 1.0e-2);
     assert!(
         r.passes(0.002) && r.over_count < 64,
-        "fused FluidSimulation must render like unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        "fused FluidSim2D must render like unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
         r.max_abs,
         r.max_rel,
         r.over_count,
@@ -2256,12 +2256,12 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
     let (w, h) = (256u32, 256u32);
 
     let json = crate::node_graph::bundled_presets::bundled_preset_json(
-        &manifold_core::PresetTypeId::new("FluidSimulation3D"),
+        &manifold_core::PresetTypeId::new("FluidSim3D"),
     )
-    .expect("FluidSimulation3D preset bundled");
+    .expect("FluidSim3D preset bundled");
     let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
     let fused_def = fuse_generator_def(&canonical, &registry)
-        .expect("FluidSimulation3D fuses + builds (3D-sampler buffer region)");
+        .expect("FluidSim3D fuses + builds (3D-sampler buffer region)");
 
     assert!(
         !fused_def.nodes.iter().any(|n| n.type_id == "node.sample_volume_at_particles"),
@@ -2297,7 +2297,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
     };
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
-            .expect("FluidSimulation3D builds");
+            .expect("FluidSim3D builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid3d-fusion");
         for i in 0..8u32 {
             let mut enc = device.create_encoder("freeze-fluid3d-fusion");
@@ -2317,7 +2317,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
     let r = differ.compare(&device, &unfused.texture, &fused.texture, 1.0e-3, 1.0e-2);
     assert!(
         r.passes(0.002) && r.over_count < 64,
-        "fused FluidSimulation3D must render like unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        "fused FluidSim3D must render like unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
         r.max_abs,
         r.max_rel,
         r.over_count,
@@ -2326,7 +2326,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
     );
 }
 
-/// Determinism guard for the FluidSimulation feedback sim. Rendering the SAME
+/// Determinism guard for the FluidSim2D feedback sim. Rendering the SAME
 /// canonical preset twice from fresh state, with an identical frame sequence,
 /// must produce the SAME final image. It did NOT before the storage-layer
 /// zero-init fix: scatter atomic-adds into a `u32` accumulator that
@@ -2353,9 +2353,9 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
     let (w, h) = (256u32, 256u32);
 
     let json = crate::node_graph::bundled_presets::bundled_preset_json(
-        &manifold_core::PresetTypeId::new("FluidSimulation"),
+        &manifold_core::PresetTypeId::new("FluidSim2D"),
     )
-    .expect("FluidSimulation preset bundled");
+    .expect("FluidSim2D preset bundled");
     let canonical: EffectGraphDef = serde_json::from_str(&json).unwrap();
 
     let ctx = |t: f64| PresetContext {
@@ -2379,7 +2379,7 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
     // time to amplify through the density→force→position loop, then capture.
     let render = |def: EffectGraphDef| -> RenderTarget {
         let mut g = PresetRuntime::from_def_with_device(def, &registry, &device, w, h, FMT)
-            .expect("FluidSimulation builds");
+            .expect("FluidSim2D builds");
         let target = RenderTarget::new(&device, w, h, FMT, "freeze-fluid-determinism");
         for i in 0..8u32 {
             let mut enc = device.create_encoder("freeze-fluid");
@@ -2402,7 +2402,7 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
     let r = differ.compare(&device, &run_a.texture, &run_b.texture, 1.0e-3, 1.0e-2);
     assert!(
         r.passes(0.002) && r.over_count < 64,
-        "FluidSimulation must render deterministically from fresh state: \
+        "FluidSim2D must render deterministically from fresh state: \
          max_abs={}, max_rel={}, over={}/{} ({:.4})",
         r.max_abs,
         r.max_rel,
@@ -3517,9 +3517,9 @@ fn fluidsim3d_seed_gate_matches_ungated() {
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (256u32, 256u32);
     let json = crate::node_graph::bundled_presets::bundled_preset_json(
-        &manifold_core::PresetTypeId::new("FluidSimulation3D"),
+        &manifold_core::PresetTypeId::new("FluidSim3D"),
     )
-    .expect("FluidSimulation3D bundled");
+    .expect("FluidSim3D bundled");
     // Flatten so the grouped seed node lifts to the top level; address it by
     // stable node_id (grouping prefixes handles, node_id survives).
     let gated: EffectGraphDef =

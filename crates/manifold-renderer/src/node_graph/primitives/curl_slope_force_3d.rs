@@ -121,7 +121,7 @@ crate::primitive! {
         },
     ],
     composition_notes: "Output Texture3D dims follow vol_res / vol_depth. FluidSim3D computes curl_strength = flow * 500 * sin(curl_angle) and slope_strength = flow * 500 * cos(curl_angle) in graph Math nodes, with ref_axis = a rotating vector (sin/cos of time × 0.3). The primitive normalizes ref_axis internally, then adds a smooth low-frequency wobble keyed on the voxel position so the cross-product swirl has no single global dead direction (a fixed axis pools curl energy in one octant — the swirl vanishes where gradient ∥ axis). Graph wires can emit raw sin/cos components without worrying about unit length (zero-length falls back to (0,1,0) so the cross stays well-defined). Pair upstream with node.edge_slope_3d.",
-    examples: ["FluidSimulation3D"],
+    examples: ["FluidSim3D"],
     picker: { label: "Swirl Force (3D, curl)", category: Atom },
     summary: "Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies.",
     category: Particles3D,

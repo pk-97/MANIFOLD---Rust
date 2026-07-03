@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "name": "InvertColors",
+  "name": "Invert",
   "description": "Invert Colors is a simple, single-stage effect that reads the incoming image and inverts all RGB values per pixel. The Amount slider controls the strength of the inversion applied by the core node: at 0.0 no inversion occurs (effect is skipped); at 1.0 (default) colors are fully inverted. Pass this effect through to the output with the inverted result.",
   "presetMetadata": {
-    "id": "InvertColors",
+    "id": "Invert",
     "displayName": "Invert",
     "category": "Color",
     "oscPrefix": "invert",

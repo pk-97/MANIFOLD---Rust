@@ -79,7 +79,7 @@ inventory::submit! {
 // test binaries that don't link the renderer (e.g.,
 // manifold-editing's `command_roundtrips`) still resolve TESSERACT
 // through `crate::preset_definition_registry::get`. Same pattern as
-// Lissajous and WireframeZoo.
+// Lissajous and Wireframe.
 
 inventory::submit! {
     GeneratorMetadata {
@@ -513,7 +513,7 @@ const SNAP_AND_MODE_ALIASES: &[crate::effect_registration::ParamAlias] = &[
     ("snap_mode", Some("clip_trigger_mode")),
 ];
 
-/// WireframeZoo rename aliases — the legacy outer-card param IDs
+/// Wireframe rename aliases — the legacy outer-card param IDs
 /// (`xy` / `zw` / `xw` / `verts` / `v_size`) are 4D-plane / shorthand
 /// names that don't communicate to general users. The decomposition
 /// pass renamed them to `rotate_x_speed` / `rotate_y_speed` /

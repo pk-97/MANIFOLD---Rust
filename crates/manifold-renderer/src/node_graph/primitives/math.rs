@@ -375,7 +375,7 @@ mod tests {
     }
 
     /// Exp2 is unary 2^a — EV stops / octaves → linear. 2^0=1, 2^1.5≈2.83,
-    /// 2^5=32. The HdrBoost decomposition uses it to turn the EV `gain` knob
+    /// 2^5=32. The HighlightBoost decomposition uses it to turn the EV `gain` knob
     /// into a linear boost factor (`2^gain - 1`).
     #[test]
     fn exp2_converts_ev_stops_to_linear() {

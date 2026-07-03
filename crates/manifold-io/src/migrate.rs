@@ -1120,7 +1120,7 @@ mod tests {
             "timeline": { "layers": [
                 {
                     "layerType": 1,
-                    "genParams": { "effectType": "FluidSimulation", "paramValues": {} },
+                    "genParams": { "effectType": "FluidSim2D", "paramValues": {} },
                     "effects": [ { "effectType": "Bloom" } ]
                 },
                 {
@@ -1135,7 +1135,7 @@ mod tests {
 
         // Corrupted generator: effectType → generatorType, effectType removed.
         let gp0 = &v["timeline"]["layers"][0]["genParams"];
-        assert_eq!(gp0["generatorType"].as_str(), Some("FluidSimulation"));
+        assert_eq!(gp0["generatorType"].as_str(), Some("FluidSim2D"));
         assert!(
             gp0.get("effectType").is_none(),
             "effectType must be removed from genParams"

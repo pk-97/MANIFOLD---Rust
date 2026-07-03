@@ -391,7 +391,7 @@ pub struct PresetMetadata {
     #[serde(default = "default_available")]
     pub available: bool,
     /// Generator-only: whether the generator emits line geometry
-    /// (Lissajous, WireframeZoo, Tesseract, …) rather than a 2D texture.
+    /// (Lissajous, Wireframe, Tesseract, …) rather than a 2D texture.
     /// Drives `is_line_based` plumbing on the renderer side. Ignored
     /// for effect presets — kept on `PresetMetadata` (instead of
     /// forking generator metadata into its own schema) so generators

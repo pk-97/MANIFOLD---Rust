@@ -7,7 +7,7 @@
     "displayName": "Node Graph Test",
     "category": "Diagnostic",
     "oscPrefix": "node_graph_test",
-    "available": true,
+    "available": false,
     "params": [
       {
         "id": "amount",

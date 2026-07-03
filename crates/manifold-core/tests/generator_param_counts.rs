@@ -93,7 +93,7 @@ fn generator_all_types_have_params() {
 
 #[test]
 fn generator_max_param_count() {
-    // FluidSimulation3D has the most params (20).
+    // FluidSim3D has the most params (20).
     use manifold_core::{preset_def::PresetKind, preset_type_registry};
     let max = preset_type_registry::all_of_kind(PresetKind::Generator)
         .iter()

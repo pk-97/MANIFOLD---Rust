@@ -46,8 +46,8 @@ const RESOLUTIONS: &[(u32, u32)] = &[(1920, 1080), (3840, 2160)];
 const PRESETS: &[&str] = &[
     "ColorGrade",
     "Infrared",
-    "HdrBoost",
-    "InvertColors",
+    "HighlightBoost",
+    "Invert",
     "Dither",
     "Glitch",
     "ChromaticAberration",
@@ -57,7 +57,7 @@ const PRESETS: &[&str] = &[
     "VoronoiPrism",
 ];
 
-/// Generator presets spanning particle sims (OilyFluid, FluidSimulation),
+/// Generator presets spanning particle sims (OilyFluid, FluidSim2D),
 /// an array_math geometry gen (DigitalPlants), a cellular gen (StarField),
 /// and a single-dispatch baseline (Plasma).
 const GEN_PRESETS: &[&str] = &[
@@ -65,7 +65,7 @@ const GEN_PRESETS: &[&str] = &[
     "StarField",
     "DigitalPlants",
     "OilyFluid",
-    "FluidSimulation",
+    "FluidSim2D",
 ];
 
 /// Asset roots resolved against the crate manifest dir (baked in at compile
@@ -255,10 +255,10 @@ fn main() {
 fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &GpuDevice) {
     use manifold_renderer::node_graph::StateStore;
     let (w, h) = (1920u32, 1080u32);
-    let path = format!("{GENERATOR_PRESETS_DIR}/FluidSimulation.json");
+    let path = format!("{GENERATOR_PRESETS_DIR}/FluidSim2D.json");
     let def: EffectGraphDef = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
 
-    println!("=== reconcile FluidSimulation @ {w}x{h} ===\n");
+    println!("=== reconcile FluidSim2D @ {w}x{h} ===\n");
 
     // A) Raw executor, FULL plan, accumulating state, vary warmup. If the cost
     //    climbs with warmup -> it's particle-pool/state accumulation in the
@@ -329,7 +329,7 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &GpuDevice) {
     use manifold_renderer::node_graph::StateStore;
     use std::collections::BTreeMap;
 
-    const GENS: &[&str] = &["FluidSimulation", "OilyFluid", "MetallicGlass"];
+    const GENS: &[&str] = &["FluidSim2D", "OilyFluid", "MetallicGlass"];
     const PROF_WARMUP: u32 = 5;
     const PROF_FRAMES: u32 = 30;
     let (w, h) = (1920u32, 1080u32);
@@ -870,7 +870,7 @@ fn profile_attribution(registry: &PrimitiveRegistry, device: &GpuDevice, names: 
     use manifold_renderer::node_graph::freeze::install;
 
     const DEFAULT_NAMES: &[&str] = &[
-        "FluidSimulation",
+        "FluidSim2D",
         "OilyFluid",
         "ParticleText",
         "MetallicGlass",
@@ -1288,7 +1288,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &GpuDevice) {
     }
 }
 
-/// FluidSim cost-decomposition sweep. FluidSimulation's per-frame GPU time
+/// FluidSim cost-decomposition sweep. FluidSim2D's per-frame GPU time
 /// is the sum of two orthogonal workloads:
 ///   - **per-particle** (buffer domain, fusible): seed / noise-force /
 ///     sample / euler-integrate / wrap / anti-clump / scatter — all sized by
@@ -1320,7 +1320,7 @@ fn profile_fluidsim_particle_sweep(registry: &PrimitiveRegistry, device: &GpuDev
     println!("{:<14} {:>11} {:>16}", "pool size", "ms/frame", "ns/particle");
     println!("{}", "-".repeat(44));
 
-    let path = format!("{GENERATOR_PRESETS_DIR}/FluidSimulation.json");
+    let path = format!("{GENERATOR_PRESETS_DIR}/FluidSim2D.json");
     let bytes = match std::fs::read_to_string(&path) {
         Ok(b) => b,
         Err(e) => {

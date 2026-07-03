@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "name": "ComputeStrangeAttractor",
+  "name": "StrangeAttractor",
   "description": "Strange Attractor — particles integrate through one of five chaotic ODEs (Lorenz, Rössler, Aizawa, Thomas, Halvorsen) using a JSON-editable WGSL compute kernel. The graph is organized for legibility: the main pipeline flows from Seed Particles through Particle Integration (the core wgsl_compute kernel), diffusion, rendering particles to texture, tone mapping, and display transformation. Parallel control logic derives the attractor type (clip-trigger cycling plus manual selection via mux), camera angles for 3D projection (time-scaled rotation), and particle count and brightness compensation from canvas size. All groups flatten to the original byte-identical behavior; node IDs are preserved and card bindings reach inner nodes by their stable nodeId unchanged.",
   "presetMetadata": {
-    "id": "ComputeStrangeAttractor",
+    "id": "StrangeAttractor",
     "displayName": "Strange Attractor",
     "category": "Procedural",
     "oscPrefix": "strangeAttractor",

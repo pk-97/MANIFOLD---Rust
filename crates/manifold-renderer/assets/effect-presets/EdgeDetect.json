@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "name": "EdgeGlow",
+  "name": "EdgeDetect",
   "description": "Edge detection effect that finds and highlights boundaries in the input image. The source feeds through a configurable edge detector (choice of Sobel, Laplacian, or Frei-Chen kernels) with selectable sensitivity and blend amount, then outputs the result. Mode switches between three classic edge-detection algorithms, Threshold sets the sensitivity to noise, and Amount controls the final glow intensity.",
   "presetMetadata": {
-    "id": "EdgeGlow",
+    "id": "EdgeDetect",
     "displayName": "Edge Detect",
     "category": "Diagnostic",
     "oscPrefix": "edgeDetect",

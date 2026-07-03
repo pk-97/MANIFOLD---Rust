@@ -764,7 +764,7 @@ impl Layer {
     /// `generator_type` (the `effect_type` field) and, when it runs a
     /// per-instance graph override, that graph's `preset_metadata.id`. These
     /// must agree. When they desync — the graph metadata names a real preset
-    /// (e.g. `FluidSimulation3D`) but `generator_type` is `NONE` — the
+    /// (e.g. `FluidSim3D`) but `generator_type` is `NONE` — the
     /// generator still renders fine (the renderer reads the graph directly),
     /// but every type-keyed consumer breaks: the inspector blanks the
     /// generator card, OSC addressing drops, and the picker shows no
@@ -1157,12 +1157,12 @@ mod tests {
 
     #[test]
     fn reconcile_generator_identity_backfills_from_graph() {
-        let mut layer = desynced_generator(PresetTypeId::new("FluidSimulation3D"));
+        let mut layer = desynced_generator(PresetTypeId::new("FluidSim3D"));
         assert_eq!(*layer.generator_type(), PresetTypeId::NONE);
         assert!(layer.reconcile_generator_identity());
         assert_eq!(
             *layer.generator_type(),
-            PresetTypeId::new("FluidSimulation3D")
+            PresetTypeId::new("FluidSim3D")
         );
         // Idempotent: a second pass is a no-op.
         assert!(!layer.reconcile_generator_identity());

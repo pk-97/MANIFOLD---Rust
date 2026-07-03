@@ -878,7 +878,7 @@ pub trait EffectNode: Send {
     /// bespoke simplex, a large helper suite) that folding it into a
     /// multi-atom kernel pushes register pressure past the occupancy cliff
     /// and the fused region runs SLOWER than its standalone dispatches —
-    /// measured on FluidSimulation, where euler+wrap+burst fused at 3.05 ms
+    /// measured on FluidSim2D, where euler+wrap+burst fused at 3.05 ms
     /// vs the same three atoms at 2.43 ms standalone (burst's inlined
     /// `arb_simplex_noise_2d`). `true` keeps the atom a fusion Boundary (its
     /// own dispatch, exactly its unfused behaviour) so register-light
@@ -893,7 +893,7 @@ pub trait EffectNode: Send {
     /// dispatches by, leaving elements beyond it untouched. A fused buffer
     /// region whose members all agree on the wired source of this param caps
     /// its dispatch at that value instead of the buffer CAPACITY the generic
-    /// `arrayLength` guard implies — FluidSimulation's euler+wrap fused
+    /// `arrayLength` guard implies — FluidSim2D's euler+wrap fused
     /// kernel was iterating the full pool (2.69 ms) while the standalone
     /// dispatches covered only live particles (1.37 ms). Default `None` (no
     /// cap; capacity dispatch as before).

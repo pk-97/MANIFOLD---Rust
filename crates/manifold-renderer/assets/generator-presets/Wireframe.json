@@ -3,7 +3,7 @@
   "name": "Wireframe",
   "description": "Wireframe shapes, running five Platonic solids (Tetrahedron, Cube, Octahedron, Icosahedron, Dodecahedron) rotating continuously on three axes and rendering as line wireframes.\n\nThe system input feeds time and trigger count. Three rotation multipliers (angle_x_mul, angle_y_mul, angle_z_mul) scale incoming time by slider-controlled rotation speeds for each axis. A shape selector (shape_mux) chooses between a static shape set by slider and a clip-triggered shape cycling through the five Platonic solids. Both the polytope_verts and polytope_edges nodes read this shared shape selector so their outputs stay in sync per frame.\n\nThe vertices pass through a 3D rotation stage (rotate) using the three computed angles, then a projection stage (project) that applies perspective scaling, then to the wireframe render node which draws lines (edges) between vertices and optionally draws vertex points. The final color output goes to the system output.\n\nAtom decomposition split the legacy bundled wireframe shape node into platonic_solid_points (GPU dispatch with curated Platonic coordinates) and platonic_solid_edges (CPU write with wireframe adjacency), making the geometry reusable for future loaded meshes and parametric generators. All bindings reach their target nodes by stable nodeId, so the flat graph preserves the live performance surface unchanged.",
   "presetMetadata": {
-    "id": "WireframeZoo",
+    "id": "Wireframe",
     "displayName": "Wireframe",
     "category": "Procedural",
     "oscPrefix": "wireframeZoo",

@@ -4793,7 +4793,7 @@ mod generator_runtime_tests {
         assert_eq!(values[1], 0.75, "the host value slice is never mutated");
     }
 
-    /// Regression for the on-stage FluidSimulation Curl bug: a binding's `scale`
+    /// Regression for the on-stage FluidSim2D Curl bug: a binding's `scale`
     /// must fold into the inner-node param on the generator path.
     #[test]
     fn generator_binding_scale_folds_into_inner_param() {
@@ -4945,7 +4945,7 @@ mod generator_runtime_tests {
     #[test]
     fn bundled_strange_attractor_loads_and_compiles() {
         let device = crate::test_device();
-        let json = include_str!("../assets/generator-presets/ComputeStrangeAttractor.json");
+        let json = include_str!("../assets/generator-presets/StrangeAttractor.json");
         let preset = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
@@ -4954,8 +4954,8 @@ mod generator_runtime_tests {
             1080,
             GpuTextureFormat::Rgba16Float,
         )
-        .expect("bundled ComputeStrangeAttractor must load + compile");
-        assert_eq!(preset.type_id().as_str(), "ComputeStrangeAttractor");
+        .expect("bundled StrangeAttractor must load + compile");
+        assert_eq!(preset.type_id().as_str(), "StrangeAttractor");
     }
 
     #[test]
@@ -5039,7 +5039,7 @@ mod generator_runtime_tests {
     fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
         use crate::node_graph::Backend;
         let device = crate::test_device();
-        let json = include_str!("../assets/generator-presets/ComputeStrangeAttractor.json");
+        let json = include_str!("../assets/generator-presets/StrangeAttractor.json");
         let mut g = PresetRuntime::from_json_str_with_device(
             json,
             &PrimitiveRegistry::with_builtin(),
@@ -5048,7 +5048,7 @@ mod generator_runtime_tests {
             1080,
             GpuTextureFormat::Rgba16Float,
         )
-        .expect("ComputeStrangeAttractor preset must load");
+        .expect("StrangeAttractor preset must load");
 
         let find_node = |type_id: &str| -> NodeInstanceId {
             for step in g.plan.steps() {
@@ -5109,7 +5109,7 @@ mod generator_runtime_tests {
     fn canvas_sized_array_outputs_scale_buffer_with_backend_canvas_dims() {
         use crate::node_graph::Backend;
         let device = crate::test_device();
-        let json = include_str!("../assets/generator-presets/ComputeStrangeAttractor.json");
+        let json = include_str!("../assets/generator-presets/StrangeAttractor.json");
 
         let cases = [(1280u32, 720u32), (3840u32, 2160u32)];
         for (w, h) in cases {
@@ -5195,9 +5195,9 @@ mod generator_runtime_tests {
     /// output. The group → producer map lives on the single segment now.
     #[test]
     fn grouped_generator_preview_resolves_group_to_producer() {
-        let json = include_str!("../assets/generator-presets/FluidSimulation.json");
+        let json = include_str!("../assets/generator-presets/FluidSim2D.json");
         let g = PresetRuntime::from_json_str(json, &PrimitiveRegistry::with_builtin())
-            .expect("FluidSimulation preset must load");
+            .expect("FluidSim2D preset must load");
 
         assert!(
             g.graph
