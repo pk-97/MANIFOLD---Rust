@@ -4,7 +4,7 @@
 //!
 //! Two common source choices:
 //!   - Hash noise (`node.noise` Random) → streamline patterns.
-//!   - Derived scalar (e.g. `length(velocity)` via `node.length_vec2`)
+//!   - Derived scalar (e.g. `length(velocity)` via `node.vector_length`)
 //!     → flow-aligned intensity.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
@@ -53,7 +53,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Steps × dt = effective LIC half-length in pixels (oily Flow Field uses 16×2 ≈ 32px streaks; Lines uses 20×1.5 ≈ 30px streaks). Velocity is normalised per-step (direction-only) — the magnitude scales the *advection rate* through `node.texture_advect`, not the LIC walk length. Output may exceed [0, 1] for sources with high local variance; pair downstream with `node.smoothstep_texture` (thresholding into clean lines) or `node.tone_map` (smooth grade).",
+    composition_notes: "Steps × dt = effective LIC half-length in pixels (oily Flow Field uses 16×2 ≈ 32px streaks; Lines uses 20×1.5 ≈ 30px streaks). Velocity is normalised per-step (direction-only) — the magnitude scales the *advection rate* through `node.texture_advect`, not the LIC walk length. Output may exceed [0, 1] for sources with high local variance; pair downstream with `node.smoothstep` (thresholding into clean lines) or `node.tone_map` (smooth grade).",
     examples: [],
     picker: { label: "Flow Lines (LIC)", category: Atom },
     summary: "Smears noise along a flow field to reveal its streamlines, turning a vector field into a visible flow texture.",

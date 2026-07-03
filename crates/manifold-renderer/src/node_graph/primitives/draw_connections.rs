@@ -1,7 +1,7 @@
 //! `node.draw_connections` — dashed lines between paired detections,
 //! with an optional soft dot at each pair's midpoint, composited
 //! additively onto a source texture. Pairs come in as
-//! `Channels[A_INDEX, B_INDEX]` (node.array_connect_nearest's output)
+//! `Channels[A_INDEX, B_INDEX]` (node.connect_nearest's output)
 //! indexing into the detections array. Lines render at 0.5 intensity
 //! and midpoints at 0.4 (baked, part of the look). Math ported
 //! verbatim from the Blob Track HUD's `dashed_connections` +
@@ -30,7 +30,7 @@ struct ConnectionsUniforms {
 crate::primitive! {
     name: DrawConnections,
     type_id: "node.draw_connections",
-    purpose: "Draw dashed lines between paired detections, additively over the source. Pairs arrive as Channels[A_INDEX, B_INDEX] (wire node.array_connect_nearest) indexing the Channels[X, Y, WIDTH, HEIGHT] detections array; each line runs centre to centre. midpoint_radius_px adds a soft dot at each pair's midpoint (0 turns it off). Pixel params are 1080p-referenced. The relationship layer of a tracking HUD.",
+    purpose: "Draw dashed lines between paired detections, additively over the source. Pairs arrive as Channels[A_INDEX, B_INDEX] (wire node.connect_nearest) indexing the Channels[X, Y, WIDTH, HEIGHT] detections array; each line runs centre to centre. midpoint_radius_px adds a soft dot at each pair's midpoint (0 turns it off). Pixel params are 1080p-referenced. The relationship layer of a tracking HUD.",
     inputs: {
         in: Texture2D required,
         detections: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32] required,
@@ -91,7 +91,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Wire node.array_connect_nearest's edges output into `edges` and the same detections it consumed into `detections`. dash_fill is the OFF fraction of each dash cycle (legacy step semantics); set midpoint_radius_px to 0 for plain lines. Skips to a zero-cost passthrough while no pairs exist.",
+    composition_notes: "Wire node.connect_nearest's edges output into `edges` and the same detections it consumed into `detections`. dash_fill is the OFF fraction of each dash cycle (legacy step semantics); set midpoint_radius_px to 0 for plain lines. Skips to a zero-cost passthrough while no pairs exist.",
     examples: [],
     picker: { label: "Draw Connections", category: Atom },
     summary: "Draws dashed lines linking tracked objects that are near each other, with an optional dot at the middle of each link.",

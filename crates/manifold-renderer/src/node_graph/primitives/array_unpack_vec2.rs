@@ -1,4 +1,4 @@
-//! `node.array_unpack_vec2` — split an `Array<vec2<f32>>` into two
+//! `node.split_xy` — split an `Array<vec2<f32>>` into two
 //! `Array<f32>`s, one per component.
 //!
 //! Composition glue: lets `Array<f32>` math primitives (mirror ramp,
@@ -27,7 +27,7 @@ struct UnpackUniforms {
 
 crate::primitive! {
     name: ArrayUnpackVec2,
-    type_id: "node.array_unpack_vec2",
+    type_id: "node.split_xy",
     purpose: "Split an Array<vec2<f32>> into two Array<f32>s, one per component (`x`, `y`). Composition glue so Array<f32> math primitives can operate on individual axes of a vec2 wire — UV coordinates, 2D positions, 2D velocities — without each scalar-math primitive needing a vec2-input variant.",
     inputs: {
         in: Array([f32; 2]) required,
@@ -43,7 +43,7 @@ crate::primitive! {
     summary: "Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["split xy", "unpack", "unzip"],
+    aliases: ["split xy", "array unpack vec2", "unpack", "unzip"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/array_unpack_vec2_body.wgsl"),
 }
@@ -93,9 +93,9 @@ impl Primitive for ArrayUnpackVec2 {
             // parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.array_unpack_vec2 standalone codegen"),
+                    .expect("node.split_xy standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.array_unpack_vec2",
+                "node.split_xy",
             )
         });
 
@@ -132,7 +132,7 @@ impl Primitive for ArrayUnpackVec2 {
                 },
             ],
             [count.div_ceil(256), 1, 1],
-            "node.array_unpack_vec2",
+            "node.split_xy",
         );
     }
 }
@@ -148,7 +148,7 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType};
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
         let f32_layout = ArrayType::of_known::<f32>();
-        assert_eq!(ArrayUnpackVec2::TYPE_ID, "node.array_unpack_vec2");
+        assert_eq!(ArrayUnpackVec2::TYPE_ID, "node.split_xy");
         assert_eq!(ArrayUnpackVec2::INPUTS.len(), 1);
         assert_eq!(ArrayUnpackVec2::INPUTS[0].name, "in");
         assert!(ArrayUnpackVec2::INPUTS[0].required);
@@ -185,7 +185,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = ArrayUnpackVec2::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.array_unpack_vec2");
+        assert_eq!(node.type_id().as_str(), "node.split_xy");
     }
 }
 

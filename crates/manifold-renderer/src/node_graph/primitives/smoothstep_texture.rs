@@ -1,4 +1,4 @@
-//! `node.smoothstep_texture` — per-pixel WGSL `smoothstep(low, high, x)`
+//! `node.smoothstep` — per-pixel WGSL `smoothstep(low, high, x)`
 //! on RGB. Alpha pass-through.
 //!
 //! The contrast-curve primitive: maps signed scalar fields (a sin sum,
@@ -32,7 +32,7 @@ struct SmoothstepUniforms {
 
 crate::primitive! {
     name: SmoothstepTexture,
-    type_id: "node.smoothstep_texture",
+    type_id: "node.smoothstep",
     purpose: "Per-pixel smoothstep contrast curve on RGB, alpha pass-through. Maps the input through `smoothstep(low, high, x)` per channel — anything below `low` clamps to 0, anything above `high` clamps to 1, and the Hermite polynomial smoothes the transition between them. Both edges are always live; for a symmetric-around-zero curve, wire `node.math(operation=Negate) → low` to mirror `high` into the low edge.",
     inputs: {
         in: Texture2D required,
@@ -69,7 +69,7 @@ crate::primitive! {
     summary: "Eases each value through a smooth S-curve between a low and high edge. Softens a hard threshold into a gentle ramp.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["smoothstep", "ease", "s-curve", "soft threshold"],
+    aliases: ["smoothstep", "smoothstep texture", "ease", "s-curve", "soft threshold"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/smoothstep_texture_body.wgsl"),
 }
@@ -90,11 +90,11 @@ impl Primitive for SmoothstepTexture {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.smoothstep_texture standalone codegen");
+                .expect("node.smoothstep standalone codegen");
             gpu.device.create_compute_pipeline(
                 &wgsl,
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.smoothstep_texture",
+                "node.smoothstep",
             )
         });
         let sampler = self
@@ -129,7 +129,7 @@ impl Primitive for SmoothstepTexture {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.smoothstep_texture",
+            "node.smoothstep",
         );
     }
 }
@@ -173,6 +173,6 @@ mod tests {
     fn smoothstep_texture_registers_as_palette_atom() {
         let prim = SmoothstepTexture::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.smoothstep_texture");
+        assert_eq!(node.type_id().as_str(), "node.smoothstep");
     }
 }

@@ -2330,7 +2330,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
 /// canonical preset twice from fresh state, with an identical frame sequence,
 /// must produce the SAME final image. It did NOT before the storage-layer
 /// zero-init fix: scatter atomic-adds into a `u32` accumulator that
-/// `node.resolve_accumulator` clears *after* reading, so the accumulator must
+/// `node.resolve_scatter` clears *after* reading, so the accumulator must
 /// start at zero — but the pool handed it freshly-`create_buffer_shared`'d VRAM,
 /// which Metal does not zero. Frame 0 therefore resolved the splat ON TOP OF
 /// uninitialized garbage into the density texture, which feeds back into
@@ -2702,7 +2702,7 @@ fn metallicglass_optional_input_fusion_matches_unfused() {
     // unwired-optional path), and some fused kernel must carry the literal
     // unwired argument the new codegen emits.
     assert!(
-        !fused.nodes.iter().any(|n| n.type_id == "node.pack_channels"),
+        !fused.nodes.iter().any(|n| n.type_id == "node.pack_rgba"),
         "pack_channels must fold into the sobel-tail region"
     );
     assert!(
@@ -3684,7 +3684,7 @@ fn fused_control_wired_param_matches_unfused() {
     let json = r#"{
         "version": 1, "name": "ctrl", "nodes": [
             { "id": 0, "typeId": "system.source", "nodeId": "source" },
-            { "id": 1, "typeId": "node.texture_dimensions", "nodeId": "dims" },
+            { "id": 1, "typeId": "node.texture_size", "nodeId": "dims" },
             { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
             { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
             { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }

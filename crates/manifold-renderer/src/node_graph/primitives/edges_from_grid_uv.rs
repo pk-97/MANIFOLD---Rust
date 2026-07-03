@@ -1,6 +1,6 @@
 //! `node.edges_from_grid_uv` — emit the u-wrap + v-wrap wireframe edge
 //! topology for an `n × n` parametric grid as `Array<EdgePair>`. Pairs
-//! with `node.generate_grid_uv` / `node.pack_vec4` to author any
+//! with `node.generate_grid_uv` / `node.combine_xyzw` to author any
 //! (u, v)-parametric surface in the graph.
 //!
 //! Each (iu, iv) cell emits two edges: one toward the next u (with
@@ -27,7 +27,7 @@ pub use crate::node_graph::primitives::generate_grid_uv::{
 crate::primitive! {
     name: EdgesFromGridUv,
     type_id: "node.edges_from_grid_uv",
-    purpose: "Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. Pairs with node.generate_grid_uv + node.pack_vec4 to author any (u, v)-parametric surface in the graph (Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh). Each (iu, iv) cell emits two edges: one toward the next u (with modular wrap) and one toward the next v (with modular wrap). Total edge count = n² × 2. Vertex indexing matches generate_grid_uv's row-major convention (idx = iu * n + iv) so the same grid_size scalar should drive both atoms. CPU-write — sentinel-padded inactive tail, same pattern as node.polytope_edges.",
+    purpose: "Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. Pairs with node.generate_grid_uv + node.combine_xyzw to author any (u, v)-parametric surface in the graph (Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh). Each (iu, iv) cell emits two edges: one toward the next u (with modular wrap) and one toward the next v (with modular wrap). Total edge count = n² × 2. Vertex indexing matches generate_grid_uv's row-major convention (idx = iu * n + iv) so the same grid_size scalar should drive both atoms. CPU-write — sentinel-padded inactive tail, same pattern as node.polytope_edges.",
     inputs: {
         grid_size: ScalarF32 optional,
     },

@@ -7,7 +7,7 @@
 //! configured `scaled_energy` to its nearest texel via `atomicAdd`.
 //!
 //! Frame-to-frame zeroing of the accumulator is owned by the
-//! downstream `node.resolve_accumulator`'s self-clearing pass —
+//! downstream `node.resolve_scatter`'s self-clearing pass —
 //! same pattern as the 3D path (resolve_3d self-clears the
 //! 3D accumulator). Scatter just splats; resolve reads + zeros.
 //! Pair with [`crate::node_graph::primitives::ResolveAccumulator`]
@@ -47,7 +47,7 @@ struct ScatterUniforms {
 crate::primitive! {
     name: ScatterParticles,
     type_id: "node.scatter_particles",
-    purpose: "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). `width` and `height` are required wired inputs — the convention is to drive them from `system.generator_input.output_width / output_height` so the dispatch tracks the host's canvas (the buffer itself is also auto-sized to the canvas via `canvas_sized_array_outputs()`, so allocation and dispatch never disagree). Pair with `node.resolve_accumulator` to read the result as a float texture.",
+    purpose: "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). `width` and `height` are required wired inputs — the convention is to drive them from `system.generator_input.output_width / output_height` so the dispatch tracks the host's canvas (the buffer itself is also auto-sized to the canvas via `canvas_sized_array_outputs()`, so allocation and dispatch never disagree). Pair with `node.resolve_scatter` to read the result as a float texture.",
     inputs: {
         particles: Array(Particle) required,
         width: ScalarF32 required,
@@ -84,7 +84,7 @@ crate::primitive! {
             enum_values: SCATTER_BOUNDARY_MODES,
         },
     ],
-    composition_notes: "Output accumulator buffer is u32 fixed-point sized to the host canvas (width × height u32s) — re-allocated on `Generator::resize` so the splat coords always span the full output texture. `scaled_energy = 4096` ≈ 1.0 in float after Resolve divides by FIXED_POINT_SCALE — matching the FluidSim convention. `boundary = Wrap` (default) keeps the FluidSim toroidal behaviour; `boundary = Discard` is for particle systems that project from 3D space (Strange Attractor, BlackHole) where wrapping creates a visible edge seam. Downstream node.resolve_accumulator self-clears the buffer after reading it — no scatter-side clear needed.",
+    composition_notes: "Output accumulator buffer is u32 fixed-point sized to the host canvas (width × height u32s) — re-allocated on `Generator::resize` so the splat coords always span the full output texture. `scaled_energy = 4096` ≈ 1.0 in float after Resolve divides by FIXED_POINT_SCALE — matching the FluidSim convention. `boundary = Wrap` (default) keeps the FluidSim toroidal behaviour; `boundary = Discard` is for particle systems that project from 3D space (Strange Attractor, BlackHole) where wrapping creates a visible edge seam. Downstream node.resolve_scatter self-clears the buffer after reading it — no scatter-side clear needed.",
     examples: [],
     picker: { label: "Draw Particles (scatter)", category: Atom },
     summary: "Splats a cloud of particles onto a buffer, building up an image from where they land. Pair it with Resolve Scatter to read the result back.",
@@ -172,7 +172,7 @@ impl Primitive for ScatterParticles {
 
         // Atomic-add splat. 256-particle workgroups along x. Generated binding
         // order matches the hand kernel: uniform(0), particles(1), accum(2). The
-        // downstream node.resolve_accumulator self-clears the buffer after
+        // downstream node.resolve_scatter self-clears the buffer after
         // reading it, so no pre-clear is needed here.
         gpu.native_enc.dispatch_compute(
             pipeline_splat,

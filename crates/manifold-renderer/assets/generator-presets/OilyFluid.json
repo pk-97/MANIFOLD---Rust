@@ -423,7 +423,7 @@
           },
           {
             "id": 1,
-            "typeId": "node.abs_texture",
+            "typeId": "node.absolute_value",
             "handle": "abs_color",
             "nodeId": "abs_color"
           },
@@ -453,13 +453,13 @@
           },
           {
             "id": 4,
-            "typeId": "node.normalize_vec2",
+            "typeId": "node.normalize",
             "handle": "norm_r",
             "nodeId": "norm_r"
           },
           {
             "id": 5,
-            "typeId": "node.normalize_vec2",
+            "typeId": "node.normalize",
             "handle": "norm_g",
             "nodeId": "norm_g"
           },
@@ -1223,7 +1223,7 @@
           },
           {
             "id": 1,
-            "typeId": "node.length_vec2",
+            "typeId": "node.vector_length",
             "handle": "heightmap",
             "nodeId": "heightmap"
           },
@@ -1298,7 +1298,7 @@
                 },
                 {
                   "id": 2,
-                  "typeId": "node.abs_texture",
+                  "typeId": "node.absolute_value",
                   "handle": "oilslick_abs",
                   "nodeId": "oilslick_abs"
                 },
@@ -1722,7 +1722,7 @@
                 },
                 {
                   "id": 3,
-                  "typeId": "node.smoothstep_texture",
+                  "typeId": "node.smoothstep",
                   "handle": "lines_threshold",
                   "nodeId": "lines_threshold",
                   "params": {

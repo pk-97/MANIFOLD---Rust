@@ -706,7 +706,7 @@
           {
             "id": 5,
             "nodeId": "resolve",
-            "typeId": "node.resolve_accumulator",
+            "typeId": "node.resolve_scatter",
             "handle": "resolve",
             "params": {
               "fixed_point_scale": {
@@ -931,7 +931,7 @@
           {
             "id": 88,
             "nodeId": "grad_scaled",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "grad_scaled",
             "params": {
               "offset": {
@@ -1784,7 +1784,7 @@
           {
             "id": 20,
             "nodeId": "particle_count_calc",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "particle_count_calc",
             "params": {
               "a": {
@@ -1826,7 +1826,7 @@
           {
             "id": 23,
             "nodeId": "scaled_energy_calc",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "scaled_energy_calc",
             "params": {
               "a": {
@@ -1847,7 +1847,7 @@
           {
             "id": 24,
             "nodeId": "rotation_rad_base",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "rotation_rad_base",
             "params": {
               "a": {
@@ -1897,7 +1897,7 @@
           {
             "id": 26,
             "nodeId": "intensity_calc",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "intensity_calc",
             "params": {
               "a": {
@@ -1960,7 +1960,7 @@
           {
             "id": 61,
             "nodeId": "blur_h_radius_final",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "blur_h_radius_final",
             "params": {
               "a": {
@@ -2002,7 +2002,7 @@
           {
             "id": 63,
             "nodeId": "blur_v_radius_final",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "blur_v_radius_final",
             "params": {
               "a": {
@@ -2987,7 +2987,7 @@
           {
             "id": 110,
             "nodeId": "noise_z",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "noise_z",
             "params": {
               "a": {

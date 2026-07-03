@@ -3,7 +3,7 @@
 //!
 //! The texture-side counterpart of `node.array_math` op `Clamp01`: any
 //! per-pixel math chain that can produce out-of-range values needs a
-//! clamp before consumers that expect bounded input (`node.power_texture`
+//! clamp before consumers that expect bounded input (`node.power`
 //! with non-integer exponent, LUT lookups, displacement scales). Defaults
 //! to `[0, 1]` — the standard `saturate()` shape from shading code.
 

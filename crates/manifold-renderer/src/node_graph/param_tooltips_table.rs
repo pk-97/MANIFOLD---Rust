@@ -168,7 +168,7 @@ crate::param_tooltips!("node.one_euro_filter", {
     "d_cutoff" => "Smoothing on the speed estimate itself. Usually left alone.",
 });
 
-crate::param_tooltips!("node.affine_scalar", {
+crate::param_tooltips!("node.scale_offset_value", {
     "a" => "The value coming in to rescale.",
     "scale" => "Multiplies the value. Set it negative to flip the signal.",
     "offset" => "Adds to the value after scaling, shifting its range.",
@@ -246,7 +246,7 @@ crate::param_tooltips!("node.downsample", {
 
 // ─── Math & Convert ──────────────────────────────────────────────────
 
-crate::param_tooltips!("node.smoothstep_texture", {
+crate::param_tooltips!("node.smoothstep", {
     "low" => "The input value where the output starts rising from 0.",
     "high" => "The input value where the output reaches 1. Below low and above high are flat.",
 });

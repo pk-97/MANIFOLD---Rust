@@ -5,6 +5,7 @@
     {
       "aliases": [
         "absolute value",
+        "abs texture",
         "abs",
         "magnitude"
       ],
@@ -29,81 +30,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Flips every negative value positive, leaving positives alone. Handy after a signed field or a sine to fold it into a V shape.",
-      "type_id": "node.abs_texture"
-    },
-    {
-      "aliases": [
-        "scale offset",
-        "rescale",
-        "map range",
-        "attenuvert"
-      ],
-      "category": "Control",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "a",
-          "required": true,
-          "type": "f32"
-        },
-        {
-          "name": "scale",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "offset",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Scale + Offset (value)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "f32"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "label": "A",
-          "name": "a",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "The value coming in to rescale.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "Scale",
-          "name": "scale",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "Multiplies the value. Set it negative to flip the signal.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Offset",
-          "name": "offset",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "Adds to the value after scaling, shifting its range.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Scalar affine remap: out = a * scale + offset. The scalar counterpart of node.scale_offset_texture — collapses Value+Math+Value+Math derivations like `3 + 5*x` or `0.3 - 0.28*x` into a single node. All three inputs are port-shadows-param: an inline param value drives the op when the wire is unwired.",
-      "role": "Control",
-      "stratum": "driver",
-      "summary": "Multiplies a value by a scale and adds an offset, the everyday way to rescale a control signal into the range a knob wants. Set the scale negative to invert.",
-      "type_id": "node.affine_scalar"
+      "type_id": "node.absolute_value"
     },
     {
       "aliases": [
@@ -398,63 +325,6 @@
     },
     {
       "aliases": [
-        "connect nearest",
-        "nearest neighbour",
-        "constellation"
-      ],
-      "category": "Math & Convert",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "max_distance",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Connect Nearest",
-      "outputs": [
-        {
-          "name": "edges",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.59",
-          "label": "Max Distance",
-          "name": "max_distance",
-          "range": [
-            "0.01",
-            "2"
-          ],
-          "tooltip": "How close two items must be before a line connects them, in the input's own coordinate space which is 0 to 1 for blob detections. Lower values only link items that are nearly touching.",
-          "type": "float"
-        },
-        {
-          "default": "32",
-          "label": "Max Edges",
-          "name": "max_edges",
-          "range": [
-            "1",
-            "256"
-          ],
-          "tooltip": "Caps how many connecting lines can be drawn. Once this many edges exist the rest are skipped, which keeps a busy scene from filling with lines.",
-          "type": "int"
-        }
-      ],
-      "purpose": "For each item in a Channels[X, Y, WIDTH, HEIGHT] array, find its nearest neighbour within max_distance and emit an EdgePair (A_INDEX, B_INDEX). Sparse nearest-neighbour graph generation. Wire detection regions, particle positions, or any sparse-position array; output connects to render_lines edges port for connection-line visualisation.",
-      "role": "Control",
-      "stratum": "driver",
-      "summary": "For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs.",
-      "type_id": "node.array_connect_nearest"
-    },
-    {
-      "aliases": [
         "spread out",
         "diffuse",
         "jitter",
@@ -712,7 +582,7 @@
           "type": "f32"
         }
       ],
-      "label": "List Math",
+      "label": "Array Math",
       "outputs": [
         {
           "name": "out",
@@ -853,39 +723,6 @@
       "stratum": "atom",
       "summary": "Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings.",
       "type_id": "node.array_replicate_polyline_rings"
-    },
-    {
-      "aliases": [
-        "split xy",
-        "unpack",
-        "unzip"
-      ],
-      "category": "Math & Convert",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        }
-      ],
-      "label": "Split XY",
-      "outputs": [
-        {
-          "name": "x",
-          "type": "Array"
-        },
-        {
-          "name": "y",
-          "type": "Array"
-        }
-      ],
-      "params": [],
-      "purpose": "Split an Array<vec2<f32>> into two Array<f32>s, one per component (`x`, `y`). Composition glue so Array<f32> math primitives can operate on individual axes of a vec2 wire — UV coordinates, 2D positions, 2D velocities — without each scalar-math primitive needing a vec2-input variant.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them.",
-      "type_id": "node.array_unpack_vec2"
     },
     {
       "aliases": [
@@ -3002,6 +2839,102 @@
     },
     {
       "aliases": [
+        "combine xy",
+        "pack curve xy",
+        "pack curve",
+        "zip points"
+      ],
+      "category": "3D Geometry",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "x",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "y",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "scale",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Combine XY (curve)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "1",
+          "label": "Scale",
+          "name": "scale",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "Rescales the whole curve. At 1 it fills the inner half of the screen, and 4 cancels the built-in screen-fit so the X and Y values land at their raw screen-fractional size.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. The curve-pipeline counterpart to node.split_xy; the standard way to assemble a curve from independently-built axis chains (generate_range → array_math sweep → pack_curve_xy → render_lines). `scale` is port-shadows-param so an outer slider can rescale the whole curve at performance time. An internal PROJ_SCALE = 0.25 screen-fit constant is folded into the output: at scale = 1.0 the curve fills the inner 50% of the screen — matches the legacy generator_math::PROJ_SCALE convention so existing line-renderer presets stay visually identical. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Zips two number lists, X and Y, into one list of points ready to draw as a line or curve.",
+      "type_id": "node.combine_xy"
+    },
+    {
+      "aliases": [
+        "combine xyzw",
+        "pack vec4",
+        "zip"
+      ],
+      "category": "Math & Convert",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "x",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "y",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "z",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "w",
+          "required": true,
+          "type": "Array"
+        }
+      ],
+      "label": "Combine XYZW",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [],
+      "purpose": "Combine four Array<f32> (x, y, z, w channels) into one Array<Vec4Vertex>. The 4D analogue of node.combine_xy: zips axis-separated channels (built by generate_grid_uv → array_math chains) into the typed wire that node.rotate_4d / project_4d / render_lines consume. Pure structural transformation — no scale bake; per-shape magnitude normalisation is applied upstream via array_math(ScaleOffset) since the constant is shape-specific (0.125 for tesseract, 0.176776695 for duocylinder, …). Pair with generate_grid_uv + array_math(Cos|Sin) + edges_from_grid_uv to author any (u, v)-parametric 4D surface in pure JSON. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve.",
+      "type_id": "node.combine_xyzw"
+    },
+    {
+      "aliases": [
         "compressor",
         "auto gain",
         "envelope",
@@ -3083,6 +3016,64 @@
       "stratum": "driver",
       "summary": "Takes a signal level and produces a gain that ducks when the input is loud, the way an audio compressor rides the volume. Use it for auto-gain on brightness.",
       "type_id": "node.compressor_envelope"
+    },
+    {
+      "aliases": [
+        "connect nearest",
+        "array connect nearest",
+        "nearest neighbour",
+        "constellation"
+      ],
+      "category": "Math & Convert",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "max_distance",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Connect Nearest",
+      "outputs": [
+        {
+          "name": "edges",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.59",
+          "label": "Max Distance",
+          "name": "max_distance",
+          "range": [
+            "0.01",
+            "2"
+          ],
+          "tooltip": "How close two items must be before a line connects them, in the input's own coordinate space which is 0 to 1 for blob detections. Lower values only link items that are nearly touching.",
+          "type": "float"
+        },
+        {
+          "default": "32",
+          "label": "Max Edges",
+          "name": "max_edges",
+          "range": [
+            "1",
+            "256"
+          ],
+          "tooltip": "Caps how many connecting lines can be drawn. Once this many edges exist the rest are skipped, which keeps a busy scene from filling with lines.",
+          "type": "int"
+        }
+      ],
+      "purpose": "For each item in a Channels[X, Y, WIDTH, HEIGHT] array, find its nearest neighbour within max_distance and emit an EdgePair (A_INDEX, B_INDEX). Sparse nearest-neighbour graph generation. Wire detection regions, particle positions, or any sparse-position array; output connects to render_lines edges port for connection-line visualisation.",
+      "role": "Control",
+      "stratum": "driver",
+      "summary": "For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs.",
+      "type_id": "node.connect_nearest"
     },
     {
       "aliases": [
@@ -4445,7 +4436,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Draw dashed lines between paired detections, additively over the source. Pairs arrive as Channels[A_INDEX, B_INDEX] (wire node.array_connect_nearest) indexing the Channels[X, Y, WIDTH, HEIGHT] detections array; each line runs centre to centre. midpoint_radius_px adds a soft dot at each pair's midpoint (0 turns it off). Pixel params are 1080p-referenced. The relationship layer of a tracking HUD.",
+      "purpose": "Draw dashed lines between paired detections, additively over the source. Pairs arrive as Channels[A_INDEX, B_INDEX] (wire node.connect_nearest) indexing the Channels[X, Y, WIDTH, HEIGHT] detections array; each line runs centre to centre. midpoint_radius_px adds a soft dot at each pair's midpoint (0 turns it off). Pixel params are 1080p-referenced. The relationship layer of a tracking HUD.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Draws dashed lines linking tracked objects that are near each other, with an optional dot at the middle of each link.",
@@ -4787,7 +4778,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.pack_curve_xy (for parametric curve graphs built from generate_range + array_math chains) or other curve-source primitives upstream.",
+      "purpose": "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.combine_xy (for parametric curve graphs built from generate_range + array_math chains) or other curve-source primitives upstream.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays.",
@@ -5286,7 +5277,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. Pairs with node.generate_grid_uv + node.pack_vec4 to author any (u, v)-parametric surface in the graph (Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh). Each (iu, iv) cell emits two edges: one toward the next u (with modular wrap) and one toward the next v (with modular wrap). Total edge count = n² × 2. Vertex indexing matches generate_grid_uv's row-major convention (idx = iu * n + iv) so the same grid_size scalar should drive both atoms. CPU-write — sentinel-padded inactive tail, same pattern as node.polytope_edges.",
+      "purpose": "Emit the u-wrap + v-wrap wireframe edge topology for an n × n parametric grid as Array<EdgePair>. Pairs with node.generate_grid_uv + node.combine_xyzw to author any (u, v)-parametric surface in the graph (Duocylinder, torus, Klein bottle, geodesic sphere, terrain mesh). Each (iu, iv) cell emits two edges: one toward the next u (with modular wrap) and one toward the next v (with modular wrap). Total edge count = n² × 2. Vertex indexing matches generate_grid_uv's row-major convention (idx = iu * n + iv) so the same grid_size scalar should drive both atoms. CPU-write — sentinel-padded inactive tail, same pattern as node.polytope_edges.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Outputs the wireframe edges that connect a grid of points, so you can draw the grid as a mesh of lines.",
@@ -6395,48 +6386,6 @@
     },
     {
       "aliases": [
-        "wrap",
-        "fract",
-        "repeat",
-        "tile"
-      ],
-      "category": "Math & Convert",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        }
-      ],
-      "label": "Wrap",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "1",
-          "label": "Scale",
-          "name": "scale",
-          "range": [
-            "0",
-            "256"
-          ],
-          "tooltip": "Multiplies the input before keeping only the fractional part, which sets how many times the gradient repeats. 10 gives ten tiled stripes from 0 to 1.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Per-pixel fract(input.rgb * scale). Returns x - floor(x). Multiplying before fract is the classic 'tile a smooth field into N repeating stripes' trick — e.g. fract(uv.x * 10) → 10 vertical stripes from 0 to 1.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient.",
-      "type_id": "node.fract_texture"
-    },
-    {
-      "aliases": [
         "frequency ratio",
         "harmonic",
         "interval"
@@ -7067,87 +7016,6 @@
       "stratum": "atom",
       "summary": "Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies.",
       "type_id": "node.generate_instance_transforms"
-    },
-    {
-      "aliases": [
-        "range",
-        "linspace",
-        "series",
-        "Pattern CHOP"
-      ],
-      "category": "Math & Convert",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "start",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "end",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Range",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "label": "Start",
-          "name": "start",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "The first number in the list.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "End",
-          "name": "end",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "The last number in the list, or just short of it when End Inclusive is off.",
-          "type": "float"
-        },
-        {
-          "default": "256",
-          "label": "Sample Count",
-          "name": "max_capacity",
-          "range": [
-            "2",
-            "4096"
-          ],
-          "tooltip": "How many evenly spaced numbers to produce between the start and end.",
-          "type": "int"
-        },
-        {
-          "default": "true",
-          "label": "End Inclusive",
-          "name": "end_inclusive",
-          "tooltip": "Whether the last value lands exactly on the end. On is right for closed curves that loop back, off is right for spacing points evenly around a circle.",
-          "type": "bool"
-        }
-      ],
-      "purpose": "Emit an Array<f32> of `count` samples linearly spaced over `[start, end]`. The TouchDesigner Pattern-CHOP analogue. Output is the t-parameter array that drives parametric curve graphs — pair with array_math (ScaleOffset / Sin / Cos) + pack_curve_xy for Lissajous-style curves, or with cycle_table_row + mux for stepped sequences. `start` and `end` are port-shadows-param so an LFO or driver wire can sweep the range dynamically. `active_count` (input-only) overrides the sample count for variable-N curves (regular polygons, variable-resolution sweeps) — when unwired the count is `max_capacity` for backward-compatible fixed-resolution sampling. Output capacity is `max_capacity`. CPU-only — the curve-math atom family runs on the content thread so downstream CPU readers (replicators, polyline stackers) see same-frame writes without a GPU→CPU fence.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Builds a list of evenly spaced numbers between a start and an end. The starting point for laying out copies, rings, or steps.",
-      "type_id": "node.generate_range"
     },
     {
       "aliases": [
@@ -8373,35 +8241,6 @@
       "stratum": "atom",
       "summary": "Shades a surface from its normal map and a single direction, brightest where it faces the light. The plain matte lighting term.",
       "type_id": "node.lambert_directional"
-    },
-    {
-      "aliases": [
-        "length",
-        "magnitude",
-        "vector length"
-      ],
-      "category": "Math & Convert",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        }
-      ],
-      "label": "Length",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [],
-      "purpose": "Per-pixel `length(in.rg)` as a scalar field in the R channel (GBA = 0, 0, 1). The vec2 magnitude atom — converts signed flow / displacement / gradient textures into positive scalar fields. Standard upstream step for heightmap-style ops that need a derived height from a vec2 source.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field.",
-      "type_id": "node.length_vec2"
     },
     {
       "aliases": [
@@ -10118,6 +9957,7 @@
     {
       "aliases": [
         "normalize",
+        "normalize vec2",
         "unit vector",
         "direction"
       ],
@@ -10142,7 +9982,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude.",
-      "type_id": "node.normalize_vec2"
+      "type_id": "node.normalize"
     },
     {
       "aliases": [
@@ -10278,6 +10118,7 @@
     {
       "aliases": [
         "pack rgba",
+        "pack channels",
         "combine channels",
         "merge channels"
       ],
@@ -10362,102 +10203,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart.",
-      "type_id": "node.pack_channels"
-    },
-    {
-      "aliases": [
-        "combine xy",
-        "pack curve",
-        "zip points"
-      ],
-      "category": "3D Geometry",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "x",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "y",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "scale",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Combine XY (curve)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "1",
-          "label": "Scale",
-          "name": "scale",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "Rescales the whole curve. At 1 it fills the inner half of the screen, and 4 cancels the built-in screen-fit so the X and Y values land at their raw screen-fractional size.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. The curve-pipeline counterpart to node.array_unpack_vec2; the standard way to assemble a curve from independently-built axis chains (generate_range → array_math sweep → pack_curve_xy → render_lines). `scale` is port-shadows-param so an outer slider can rescale the whole curve at performance time. An internal PROJ_SCALE = 0.25 screen-fit constant is folded into the output: at scale = 1.0 the curve fills the inner 50% of the screen — matches the legacy generator_math::PROJ_SCALE convention so existing line-renderer presets stay visually identical. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Zips two number lists, X and Y, into one list of points ready to draw as a line or curve.",
-      "type_id": "node.pack_curve_xy"
-    },
-    {
-      "aliases": [
-        "combine xyzw",
-        "pack vec4",
-        "zip"
-      ],
-      "category": "Math & Convert",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "x",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "y",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "z",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "w",
-          "required": true,
-          "type": "Array"
-        }
-      ],
-      "label": "Combine XYZW",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [],
-      "purpose": "Combine four Array<f32> (x, y, z, w channels) into one Array<Vec4Vertex>. The 4D analogue of node.pack_curve_xy: zips axis-separated channels (built by generate_grid_uv → array_math chains) into the typed wire that node.rotate_4d / project_4d / render_lines consume. Pure structural transformation — no scale bake; per-shape magnitude normalisation is applied upstream via array_math(ScaleOffset) since the constant is shape-specific (0.125 for tesseract, 0.176776695 for duocylinder, …). Pair with generate_grid_uv + array_math(Cos|Sin) + edges_from_grid_uv to author any (u, v)-parametric 4D surface in pure JSON. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve.",
-      "type_id": "node.pack_vec4"
+      "type_id": "node.pack_rgba"
     },
     {
       "aliases": [
@@ -11287,6 +11033,7 @@
     {
       "aliases": [
         "power",
+        "power texture",
         "pow",
         "exponent",
         "gamma"
@@ -11329,7 +11076,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Raises each value to a power, which sharpens or softens a 0-to-1 field. Above 1 pushes toward black, below 1 lifts the midtones.",
-      "type_id": "node.power_texture"
+      "type_id": "node.power"
     },
     {
       "aliases": [
@@ -11648,6 +11395,88 @@
       "stratum": "atom",
       "summary": "Makes a push outward from a centre point that other nodes use to shift pixels. It has no look of its own, so wire it into a displace or remap node.",
       "type_id": "node.radial_offset_field"
+    },
+    {
+      "aliases": [
+        "range",
+        "generate range",
+        "linspace",
+        "series",
+        "Pattern CHOP"
+      ],
+      "category": "Math & Convert",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "start",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "end",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Range",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "label": "Start",
+          "name": "start",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "The first number in the list.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "End",
+          "name": "end",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "The last number in the list, or just short of it when End Inclusive is off.",
+          "type": "float"
+        },
+        {
+          "default": "256",
+          "label": "Sample Count",
+          "name": "max_capacity",
+          "range": [
+            "2",
+            "4096"
+          ],
+          "tooltip": "How many evenly spaced numbers to produce between the start and end.",
+          "type": "int"
+        },
+        {
+          "default": "true",
+          "label": "End Inclusive",
+          "name": "end_inclusive",
+          "tooltip": "Whether the last value lands exactly on the end. On is right for closed curves that loop back, off is right for spacing points evenly around a circle.",
+          "type": "bool"
+        }
+      ],
+      "purpose": "Emit an Array<f32> of `count` samples linearly spaced over `[start, end]`. The TouchDesigner Pattern-CHOP analogue. Output is the t-parameter array that drives parametric curve graphs — pair with array_math (ScaleOffset / Sin / Cos) + pack_curve_xy for Lissajous-style curves, or with cycle_table_row + mux for stepped sequences. `start` and `end` are port-shadows-param so an LFO or driver wire can sweep the range dynamically. `active_count` (input-only) overrides the sample count for variable-N curves (regular polygons, variable-resolution sweeps) — when unwired the count is `max_capacity` for backward-compatible fixed-resolution sampling. Output capacity is `max_capacity`. CPU-only — the curve-math atom family runs on the content thread so downstream CPU readers (replicators, polyline stackers) see same-frame writes without a GPU→CPU fence.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Builds a list of evenly spaced numbers between a start and an end. The starting point for laying out copies, rings, or steps.",
+      "type_id": "node.range"
     },
     {
       "aliases": [
@@ -12262,7 +12091,50 @@
     },
     {
       "aliases": [
+        "resolve scatter",
+        "resolve accumulator",
+        "accumulator",
+        "read back"
+      ],
+      "category": "Math & Convert",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "accum",
+          "required": true,
+          "type": "Array"
+        }
+      ],
+      "label": "Resolve Scatter",
+      "outputs": [
+        {
+          "name": "density",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "4096",
+          "label": "Fixed-Point Scale",
+          "name": "fixed_point_scale",
+          "range": [
+            "1",
+            "65536"
+          ],
+          "tooltip": "The divisor that turns the raw counter values back into density. It must match the scale the scatter step wrote with, default 4096, or the brightness comes out wrong.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Read a u32 fixed-point accumulator buffer (produced by node.scatter_particles), divide by `fixed_point_scale`, and write the result as a grayscale density texture. The bridge from Array(u32) back to Texture2D for downstream texture-domain primitives. Dimensions are taken from the output Texture2D — which the backend allocates at canvas size — so resolve always covers every pixel of the density texture, matching whatever scatter wrote (also canvas-sized via `canvas_sized_array_outputs()`).",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Reads back the buffer that Draw Particles wrote into and turns it into a normal image. The pickup step after a particle splat.",
+      "type_id": "node.resolve_scatter"
+    },
+    {
+      "aliases": [
         "resolve scatter 3d",
+        "resolve 3d accumulator",
         "accumulator",
         "volume read back"
       ],
@@ -12310,48 +12182,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Reads back the 3D buffer that a 3D particle scatter wrote into and turns it into a volume you can sample.",
-      "type_id": "node.resolve_3d_accumulator"
-    },
-    {
-      "aliases": [
-        "resolve scatter",
-        "accumulator",
-        "read back"
-      ],
-      "category": "Math & Convert",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "accum",
-          "required": true,
-          "type": "Array"
-        }
-      ],
-      "label": "Resolve Scatter",
-      "outputs": [
-        {
-          "name": "density",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "4096",
-          "label": "Fixed-Point Scale",
-          "name": "fixed_point_scale",
-          "range": [
-            "1",
-            "65536"
-          ],
-          "tooltip": "The divisor that turns the raw counter values back into density. It must match the scale the scatter step wrote with, default 4096, or the brightness comes out wrong.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Read a u32 fixed-point accumulator buffer (produced by node.scatter_particles), divide by `fixed_point_scale`, and write the result as a grayscale density texture. The bridge from Array(u32) back to Texture2D for downstream texture-domain primitives. Dimensions are taken from the output Texture2D — which the backend allocates at canvas size — so resolve always covers every pixel of the density texture, matching whatever scatter wrote (also canvas-sized via `canvas_sized_array_outputs()`).",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Reads back the buffer that Draw Particles wrote into and turns it into a normal image. The pickup step after a particle splat.",
-      "type_id": "node.resolve_accumulator"
+      "type_id": "node.resolve_scatter_3d"
     },
     {
       "aliases": [
@@ -12959,71 +12790,8 @@
     },
     {
       "aliases": [
-        "sum into bins",
-        "accumulator",
-        "histogram"
-      ],
-      "category": "Math & Convert",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "trigger_count",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "increment",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Sum Into Bins",
-      "outputs": [
-        {
-          "name": "accumulated",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "90",
-          "label": "Increment",
-          "name": "increment",
-          "range": [
-            "-360",
-            "360"
-          ],
-          "tooltip": "How much is added to every slot on each trigger. Use 90 to step every value by a quarter turn per hit, negative to count down.",
-          "type": "float"
-        },
-        {
-          "default": "5",
-          "label": "Capacity",
-          "name": "capacity",
-          "range": [
-            "1",
-            "64"
-          ],
-          "tooltip": "How many slots the running list holds. Set it to match the number of values the downstream node expects.",
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "label": "Initial",
-          "name": "initial",
-          "tooltip": "The starting values for the slots, taken from the first row of a table. Left unset, every slot starts at zero.",
-          "type": "table"
-        }
-      ],
-      "purpose": "Add `increment` to every element of an internal Array<f32> accumulator on each clip trigger; emit the accumulator. Generic envelope-mode driver — pair with a trigger_count source to advance N parallel scalars synchronously. NestedCubes envelope mode is the first user.",
-      "role": "Control",
-      "stratum": "driver",
-      "summary": "Adds an amount into each slot of a running list on every trigger, so you can build up a histogram or per-slot counter over time.",
-      "type_id": "node.scalar_array_accumulator"
-    },
-    {
-      "aliases": [
         "scale offset",
+        "scale offset texture",
         "remap",
         "multiply add",
         "re-range"
@@ -13082,7 +12850,82 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step.",
-      "type_id": "node.scale_offset_texture"
+      "type_id": "node.scale_offset_image"
+    },
+    {
+      "aliases": [
+        "scale offset",
+        "affine scalar",
+        "rescale",
+        "map range",
+        "attenuvert"
+      ],
+      "category": "Control",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "a",
+          "required": true,
+          "type": "f32"
+        },
+        {
+          "name": "scale",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "offset",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Scale + Offset (value)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "f32"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "label": "A",
+          "name": "a",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "The value coming in to rescale.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Scale",
+          "name": "scale",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "Multiplies the value. Set it negative to flip the signal.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Offset",
+          "name": "offset",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "Adds to the value after scaling, shifting its range.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Scalar affine remap: out = a * scale + offset. The scalar counterpart of node.scale_offset_image — collapses Value+Math+Value+Math derivations like `3 + 5*x` or `0.3 - 0.28*x` into a single node. All three inputs are port-shadows-param: an inline param value drives the op when the wire is unwired.",
+      "role": "Control",
+      "stratum": "driver",
+      "summary": "Multiplies a value by a scale and adds an offset, the everyday way to rescale a control signal into the range a knob wants. Set the scale negative to invert.",
+      "type_id": "node.scale_offset_value"
     },
     {
       "aliases": [
@@ -13277,7 +13120,7 @@
           "type": "enum"
         }
       ],
-      "purpose": "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). `width` and `height` are required wired inputs — the convention is to drive them from `system.generator_input.output_width / output_height` so the dispatch tracks the host's canvas (the buffer itself is also auto-sized to the canvas via `canvas_sized_array_outputs()`, so allocation and dispatch never disagree). Pair with `node.resolve_accumulator` to read the result as a float texture.",
+      "purpose": "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). `width` and `height` are required wired inputs — the convention is to drive them from `system.generator_input.output_width / output_height` so the dispatch tracks the host's canvas (the buffer itself is also auto-sized to the canvas via `canvas_sized_array_outputs()`, so allocation and dispatch never disagree). Pair with `node.resolve_scatter` to read the result as a float texture.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Splats a cloud of particles onto a buffer, building up an image from where they land. Pair it with Resolve Scatter to read the result back.",
@@ -13362,7 +13205,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Atomic-add splat of an Array<Particle> into a u32 3D accumulator buffer sized vol_res × vol_res × vol_depth. Each live particle's nearest-voxel cell receives `scaled_energy` via atomicAdd. Pair with node.resolve_3d_accumulator to lift the u32 grid into a float Texture3D for downstream volumetric primitives like blur_3d, gradient_curl_3d, project_particles_3d.",
+      "purpose": "Atomic-add splat of an Array<Particle> into a u32 3D accumulator buffer sized vol_res × vol_res × vol_depth. Each live particle's nearest-voxel cell receives `scaled_energy` via atomicAdd. Pair with node.resolve_scatter_3d to lift the u32 grid into a float Texture3D for downstream volumetric primitives like blur_3d, gradient_curl_3d, project_particles_3d.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles.",
@@ -13477,7 +13320,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Fused 3D→2D camera projection + atomic-add scatter. Takes 3D particles and a Camera; projects each particle through orthographic (with toroidal wrap) or perspective camera math; atomic-adds scaled_energy into a 2D u32 accumulator. Pair downstream with node.resolve_accumulator → texture for display. Sibling to node.scatter_particles (2D in/2D out) and node.scatter_particles_3d (3D in/3D out) — this one bridges 3D in to 2D-grid out via a camera. Used by FluidSim3D's display path.",
+      "purpose": "Fused 3D→2D camera projection + atomic-add scatter. Takes 3D particles and a Camera; projects each particle through orthographic (with toroidal wrap) or perspective camera math; atomic-adds scaled_energy into a 2D u32 accumulator. Pair downstream with node.resolve_scatter → texture for display. Sibling to node.scatter_particles (2D in/2D out) and node.scatter_particles_3d (3D in/3D out) — this one bridges 3D in to 2D-grid out via a camera. Used by FluidSim3D's display path.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim.",
@@ -14372,6 +14215,97 @@
     },
     {
       "aliases": [
+        "sine",
+        "cosine",
+        "trig texture",
+        "sin",
+        "cos",
+        "wave"
+      ],
+      "category": "Math & Convert",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "freq",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "phase",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "freq_tex",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "phase_tex",
+          "required": false,
+          "type": "Texture2D"
+        }
+      ],
+      "label": "Sine / Cosine",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "6.2831855",
+          "label": "Frequency",
+          "name": "freq",
+          "range": [
+            "0",
+            "100"
+          ],
+          "tooltip": "Scales the input before the wave is applied, setting how many cycles fit across the range. The default of about 6.28 fits one full cycle across a 0 to 1 input.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Phase",
+          "name": "phase",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Shifts the wave along, in degrees, so you can slide the ripples or animate them by sweeping this value.",
+          "type": "angle"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Sin",
+            "Cos",
+            "Tan"
+          ],
+          "label": "Mode",
+          "name": "mode",
+          "range": [
+            "0",
+            "2"
+          ],
+          "tooltip": "Picks the wave shape from Sin, Cos, or Tan. Sin and Cos stay in the minus one to one range, Tan is clamped to keep the output stable.",
+          "type": "enum"
+        }
+      ],
+      "purpose": "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free. `freq` and `phase` can ALSO be driven per-pixel from optional texture inputs (`freq_tex` / `phase_tex` — R channel) — unlocks per-cell unique trig patterns (per-star twinkle, cellular flicker, etc.) when fed from a per-cell hash source like `node.voronoi_2d` (A channel) routed through `node.channel_mixer`.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient.",
+      "type_id": "node.sine_cosine"
+    },
+    {
+      "aliases": [
         "slope displace",
         "emboss warp",
         "paint"
@@ -14495,6 +14429,7 @@
     {
       "aliases": [
         "smoothstep",
+        "smoothstep texture",
         "ease",
         "s-curve",
         "soft threshold"
@@ -14553,7 +14488,106 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Eases each value through a smooth S-curve between a low and high edge. Softens a hard threshold into a gentle ramp.",
-      "type_id": "node.smoothstep_texture"
+      "type_id": "node.smoothstep"
+    },
+    {
+      "aliases": [
+        "split xy",
+        "array unpack vec2",
+        "unpack",
+        "unzip"
+      ],
+      "category": "Math & Convert",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        }
+      ],
+      "label": "Split XY",
+      "outputs": [
+        {
+          "name": "x",
+          "type": "Array"
+        },
+        {
+          "name": "y",
+          "type": "Array"
+        }
+      ],
+      "params": [],
+      "purpose": "Split an Array<vec2<f32>> into two Array<f32>s, one per component (`x`, `y`). Composition glue so Array<f32> math primitives can operate on individual axes of a vec2 wire — UV coordinates, 2D positions, 2D velocities — without each scalar-math primitive needing a vec2-input variant.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them.",
+      "type_id": "node.split_xy"
+    },
+    {
+      "aliases": [
+        "sum into bins",
+        "scalar array accumulator",
+        "accumulator",
+        "histogram"
+      ],
+      "category": "Math & Convert",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "trigger_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "increment",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Sum Into Bins",
+      "outputs": [
+        {
+          "name": "accumulated",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "90",
+          "label": "Increment",
+          "name": "increment",
+          "range": [
+            "-360",
+            "360"
+          ],
+          "tooltip": "How much is added to every slot on each trigger. Use 90 to step every value by a quarter turn per hit, negative to count down.",
+          "type": "float"
+        },
+        {
+          "default": "5",
+          "label": "Capacity",
+          "name": "capacity",
+          "range": [
+            "1",
+            "64"
+          ],
+          "tooltip": "How many slots the running list holds. Set it to match the number of values the downstream node expects.",
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Initial",
+          "name": "initial",
+          "tooltip": "The starting values for the slots, taken from the first row of a table. Left unset, every slot starts at zero.",
+          "type": "table"
+        }
+      ],
+      "purpose": "Add `increment` to every element of an internal Array<f32> accumulator on each clip trigger; emit the accumulator. Generic envelope-mode driver — pair with a trigger_count source to advance N parallel scalars synchronously. NestedCubes envelope mode is the first user.",
+      "role": "Control",
+      "stratum": "driver",
+      "summary": "Adds an amount into each slot of a running list on every trigger, so you can build up a histogram or per-slot counter over time.",
+      "type_id": "node.sum_into_bins"
     },
     {
       "aliases": [
@@ -14621,6 +14655,7 @@
     {
       "aliases": [
         "texture size",
+        "texture dimensions",
         "dimensions",
         "resolution",
         "aspect"
@@ -14654,7 +14689,7 @@
       "role": "Control",
       "stratum": "driver",
       "summary": "Reads the width, height, and aspect ratio of an image and hands them back as numbers. Wire the aspect into a mask to keep circles round on a wide canvas.",
-      "type_id": "node.texture_dimensions"
+      "type_id": "node.texture_size"
     },
     {
       "aliases": [
@@ -15166,96 +15201,6 @@
       "stratum": "atom",
       "summary": "Turns a grid of points into a solid mesh of triangles, so a flat field of points becomes a surface you can render.",
       "type_id": "node.triangulate_grid"
-    },
-    {
-      "aliases": [
-        "sine",
-        "cosine",
-        "sin",
-        "cos",
-        "wave"
-      ],
-      "category": "Math & Convert",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "freq",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "phase",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "freq_tex",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "phase_tex",
-          "required": false,
-          "type": "Texture2D"
-        }
-      ],
-      "label": "Sine / Cosine",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "6.2831855",
-          "label": "Frequency",
-          "name": "freq",
-          "range": [
-            "0",
-            "100"
-          ],
-          "tooltip": "Scales the input before the wave is applied, setting how many cycles fit across the range. The default of about 6.28 fits one full cycle across a 0 to 1 input.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Phase",
-          "name": "phase",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Shifts the wave along, in degrees, so you can slide the ripples or animate them by sweeping this value.",
-          "type": "angle"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "Sin",
-            "Cos",
-            "Tan"
-          ],
-          "label": "Mode",
-          "name": "mode",
-          "range": [
-            "0",
-            "2"
-          ],
-          "tooltip": "Picks the wave shape from Sin, Cos, or Tan. Sin and Cos stay in the minus one to one range, Tan is clamped to keep the output stable.",
-          "type": "enum"
-        }
-      ],
-      "purpose": "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free. `freq` and `phase` can ALSO be driven per-pixel from optional texture inputs (`freq_tex` / `phase_tex` — R channel) — unlocks per-cell unique trig patterns (per-star twinkle, cellular flicker, etc.) when fed from a per-cell hash source like `node.voronoi_2d` (A channel) routed through `node.channel_mixer`.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient.",
-      "type_id": "node.trig_texture"
     },
     {
       "aliases": [
@@ -15846,6 +15791,35 @@
     },
     {
       "aliases": [
+        "length",
+        "magnitude",
+        "vector length"
+      ],
+      "category": "Math & Convert",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        }
+      ],
+      "label": "Vector Length",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [],
+      "purpose": "Per-pixel `length(in.rg)` as a scalar field in the R channel (GBA = 0, 0, 1). The vec2 magnitude atom — converts signed flow / displacement / gradient textures into positive scalar fields. Standard upstream step for heightmap-style ops that need a derived height from a vec2 source.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field.",
+      "type_id": "node.vector_length"
+    },
+    {
+      "aliases": [
         "vignette",
         "edge fade",
         "border darken"
@@ -16220,6 +16194,49 @@
       "stratum": "atom",
       "summary": "A blank compute node you write your own WGSL shader into. The escape hatch for effects the built-in nodes don't cover, where the shader defines its own inputs and outputs.",
       "type_id": "node.wgsl_compute"
+    },
+    {
+      "aliases": [
+        "wrap",
+        "fract texture",
+        "fract",
+        "repeat",
+        "tile"
+      ],
+      "category": "Math & Convert",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        }
+      ],
+      "label": "Wrap",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "1",
+          "label": "Scale",
+          "name": "scale",
+          "range": [
+            "0",
+            "256"
+          ],
+          "tooltip": "Multiplies the input before keeping only the fractional part, which sets how many times the gradient repeats. 10 gives ten tiled stripes from 0 to 1.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Per-pixel fract(input.rgb * scale). Returns x - floor(x). Multiplying before fract is the classic 'tile a smooth field into N repeating stripes' trick — e.g. fract(uv.x * 10) → 10 vertical stripes from 0 to 1.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient.",
+      "type_id": "node.wrap"
     },
     {
       "aliases": [

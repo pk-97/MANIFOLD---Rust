@@ -882,8 +882,8 @@ mod tests {
                         },
                         "nodes": [
                             { "id": 0, "typeId": "system.group_input" },
-                            { "id": 1, "typeId": "node.scale_offset_texture", "handle": "so1" },
-                            { "id": 2, "typeId": "node.scale_offset_texture", "handle": "so2" },
+                            { "id": 1, "typeId": "node.scale_offset_image", "handle": "so1" },
+                            { "id": 2, "typeId": "node.scale_offset_image", "handle": "so2" },
                             { "id": 3, "typeId": "system.group_output" }
                         ],
                         "wires": [

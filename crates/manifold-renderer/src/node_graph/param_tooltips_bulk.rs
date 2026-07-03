@@ -343,7 +343,7 @@ crate::param_tooltips!("node.nested_cubes_geometry", {
     "decay_rate" => "How fast the rotation kick fades after each trigger, per second. Higher values make a quick snap, lower values let the kick linger.",
 });
 
-crate::param_tooltips!("node.pack_curve_xy", {
+crate::param_tooltips!("node.combine_xy", {
     "scale" => "Rescales the whole curve. At 1 it fills the inner half of the screen, and 4 cancels the built-in screen-fit so the X and Y values land at their raw screen-fractional size.",
 });
 
@@ -740,7 +740,7 @@ crate::param_tooltips!("node.track_persist", {
 
 // ─── Math & Convert ───
 
-crate::param_tooltips!("node.array_connect_nearest", {
+crate::param_tooltips!("node.connect_nearest", {
     "max_distance" => "How close two items must be before a line connects them, in the input's own coordinate space which is 0 to 1 for blob detections. Lower values only link items that are nearly touching.",
     "max_edges" => "Caps how many connecting lines can be drawn. Once this many edges exist the rest are skipped, which keeps a busy scene from filling with lines.",
 });
@@ -753,49 +753,49 @@ crate::param_tooltips!("node.array_math", {
     "bias" => "Shifts the input before the power in ShapePowClip. Only that operation reads it.",
 });
 
-crate::param_tooltips!("node.fract_texture", {
+crate::param_tooltips!("node.wrap", {
     "scale" => "Multiplies the input before keeping only the fractional part, which sets how many times the gradient repeats. 10 gives ten tiled stripes from 0 to 1.",
 });
 
-crate::param_tooltips!("node.generate_range", {
+crate::param_tooltips!("node.range", {
     "start" => "The first number in the list.",
     "end" => "The last number in the list, or just short of it when End Inclusive is off.",
     "max_capacity" => "How many evenly spaced numbers to produce between the start and end.",
     "end_inclusive" => "Whether the last value lands exactly on the end. On is right for closed curves that loop back, off is right for spacing points evenly around a circle.",
 });
 
-crate::param_tooltips!("node.pack_channels", {
+crate::param_tooltips!("node.pack_rgba", {
     "default_r" => "The value the red channel falls back to when nothing is wired into the red input.",
     "default_g" => "The value the green channel falls back to when nothing is wired into the green input.",
     "default_b" => "The value the blue channel falls back to when nothing is wired into the blue input.",
     "default_a" => "The value the alpha channel falls back to when nothing is wired into the alpha input. Defaults to 1 so the result stays fully opaque.",
 });
 
-crate::param_tooltips!("node.power_texture", {
+crate::param_tooltips!("node.power", {
     "exponent" => "Raises each value to this power. Above 1 pushes the midtones toward black for sharper points, and below 1 lifts the darks like a gamma brighten. Negative input is clamped to 0 first.",
 });
 
-crate::param_tooltips!("node.resolve_3d_accumulator", {
+crate::param_tooltips!("node.resolve_scatter_3d", {
     "vol_res" => "Width and height of the volume in cells. This must match the particle scatter that filled the buffer.",
     "vol_depth" => "Depth of the volume in cells. This must match the particle scatter that filled the buffer.",
 });
 
-crate::param_tooltips!("node.resolve_accumulator", {
+crate::param_tooltips!("node.resolve_scatter", {
     "fixed_point_scale" => "The divisor that turns the raw counter values back into density. It must match the scale the scatter step wrote with, default 4096, or the brightness comes out wrong.",
 });
 
-crate::param_tooltips!("node.scalar_array_accumulator", {
+crate::param_tooltips!("node.sum_into_bins", {
     "increment" => "How much is added to every slot on each trigger. Use 90 to step every value by a quarter turn per hit, negative to count down.",
     "capacity" => "How many slots the running list holds. Set it to match the number of values the downstream node expects.",
     "initial" => "The starting values for the slots, taken from the first row of a table. Left unset, every slot starts at zero.",
 });
 
-crate::param_tooltips!("node.scale_offset_texture", {
+crate::param_tooltips!("node.scale_offset_image", {
     "scale" => "Multiplies every colour before the offset is added. 1 leaves it unchanged, and a negative value inverts. Use 2 with offset -1 to turn a 0 to 1 field back into a signed -1 to 1 one.",
     "offset" => "Added to every colour after the scale. 0 leaves it unchanged. Use 0.5 with scale 0.5 to fit a signed -1 to 1 field into the 0 to 1 range.",
 });
 
-crate::param_tooltips!("node.trig_texture", {
+crate::param_tooltips!("node.sine_cosine", {
     "freq" => "Scales the input before the wave is applied, setting how many cycles fit across the range. The default of about 6.28 fits one full cycle across a 0 to 1 input.",
     "phase" => "Shifts the wave along, in degrees, so you can slide the ripples or animate them by sweeping this value.",
     "mode" => "Picks the wave shape from Sin, Cos, or Tan. Sin and Cos stay in the minus one to one range, Tan is clamped to keep the output stable.",

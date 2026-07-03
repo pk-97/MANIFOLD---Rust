@@ -442,7 +442,7 @@
           },
           {
             "id": 2,
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "scaled_energy_calc",
             "nodeId": "scaled_energy_calc",
             "params": {
@@ -490,7 +490,7 @@
           },
           {
             "id": 4,
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "intensity_calc",
             "nodeId": "intensity_calc",
             "params": {
@@ -550,7 +550,7 @@
           },
           {
             "id": 7,
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "blur_h_radius_final",
             "nodeId": "blur_h_radius_final",
             "params": {
@@ -590,7 +590,7 @@
           },
           {
             "id": 9,
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "blur_v_radius_final",
             "nodeId": "blur_v_radius_final",
             "params": {
@@ -1898,7 +1898,7 @@
           },
           {
             "id": 2,
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "grad_scaled",
             "nodeId": "grad_scaled",
             "params": {
@@ -2116,7 +2116,7 @@
           },
           {
             "id": 2,
-            "typeId": "node.resolve_accumulator",
+            "typeId": "node.resolve_scatter",
             "handle": "resolve",
             "nodeId": "resolve",
             "params": {
@@ -2336,7 +2336,7 @@
           },
           {
             "id": 1,
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "noise_z",
             "nodeId": "noise_z",
             "params": {

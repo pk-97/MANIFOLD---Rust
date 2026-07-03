@@ -393,7 +393,7 @@
     {
       "id": 12,
       "nodeId": "window",
-      "typeId": "node.smoothstep_texture",
+      "typeId": "node.smoothstep",
       "handle": "window",
       "params": {
         "high": {

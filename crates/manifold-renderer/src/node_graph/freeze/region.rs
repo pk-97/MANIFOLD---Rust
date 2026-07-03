@@ -2508,7 +2508,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "ctrl", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.texture_dimensions", "nodeId": "dims" },
+                { "id": 1, "typeId": "node.texture_size", "nodeId": "dims" },
                 { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }

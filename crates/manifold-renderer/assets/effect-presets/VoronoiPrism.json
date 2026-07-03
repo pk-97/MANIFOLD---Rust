@@ -262,7 +262,7 @@
           {
             "id": 5,
             "nodeId": "offset",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "offset",
             "params": {
               "offset": {
@@ -347,7 +347,7 @@
           {
             "id": 10,
             "nodeId": "active",
-            "typeId": "node.smoothstep_texture",
+            "typeId": "node.smoothstep",
             "handle": "active",
             "params": {
               "high": {

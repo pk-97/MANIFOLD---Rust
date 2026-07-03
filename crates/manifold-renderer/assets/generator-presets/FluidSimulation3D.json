@@ -721,7 +721,7 @@
           {
             "id": 3,
             "nodeId": "tilt_to_rad",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "tilt_to_rad",
             "params": {
               "a": {
@@ -742,7 +742,7 @@
           {
             "id": 4,
             "nodeId": "orbit_to_rad",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "orbit_to_rad",
             "params": {
               "a": {
@@ -763,7 +763,7 @@
           {
             "id": 5,
             "nodeId": "roll_to_rad",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "roll_to_rad",
             "params": {
               "a": {
@@ -905,7 +905,7 @@
           {
             "id": 22,
             "nodeId": "intensity_calc",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "intensity_calc",
             "params": {
               "a": {
@@ -947,7 +947,7 @@
           {
             "id": 24,
             "nodeId": "particle_count_calc",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "particle_count_calc",
             "params": {
               "a": {
@@ -989,7 +989,7 @@
           {
             "id": 26,
             "nodeId": "scaled_energy_calc",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "scaled_energy_calc",
             "params": {
               "a": {
@@ -1010,7 +1010,7 @@
           {
             "id": 27,
             "nodeId": "diffusion_calc",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "diffusion_calc",
             "params": {
               "a": {
@@ -1031,7 +1031,7 @@
           {
             "id": 28,
             "nodeId": "blur_radius_scaled",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "blur_radius_scaled",
             "params": {
               "a": {
@@ -1560,7 +1560,7 @@
           {
             "id": 41,
             "nodeId": "curl_angle_base",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "curl_angle_base",
             "params": {
               "a": {
@@ -2169,7 +2169,7 @@
           {
             "id": 8,
             "nodeId": "vol_resolve",
-            "typeId": "node.resolve_3d_accumulator",
+            "typeId": "node.resolve_scatter_3d",
             "handle": "vol_resolve",
             "params": {
               "vol_depth": {
@@ -3474,7 +3474,7 @@
           {
             "id": 18,
             "nodeId": "display_resolve",
-            "typeId": "node.resolve_accumulator",
+            "typeId": "node.resolve_scatter",
             "handle": "display_resolve",
             "params": {
               "fixed_point_scale": {

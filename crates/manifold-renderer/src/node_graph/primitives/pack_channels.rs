@@ -1,4 +1,4 @@
-//! `node.pack_channels` — combine four texture inputs into one RGBA
+//! `node.pack_rgba` — combine four texture inputs into one RGBA
 //! texture by reading the R channel of each input into one channel of
 //! the output.
 //!
@@ -17,7 +17,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: PackChannels,
-    type_id: "node.pack_channels",
+    type_id: "node.pack_rgba",
     purpose: "Pack four single-channel textures into one RGBA output by reading the R channel of each input into the matching output channel. Optional inputs default to the constant `default_a` (0.0 for r/g/b, 1.0 for a). Use when an atomic decomposition has computed each channel separately and downstream consumers expect packed data.",
     inputs: {
         r: Texture2D optional,
@@ -62,13 +62,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Each input reads `.r` of the source — to pack a multi-channel input use `node.scale_offset_texture` or `node.field_combine` upstream to project the desired channel onto R. When an input port is unwired the corresponding output channel takes the `default_*` value. All wired inputs must share dimensions; output matches.",
+    composition_notes: "Each input reads `.r` of the source — to pack a multi-channel input use `node.scale_offset_image` or `node.field_combine` upstream to project the desired channel onto R. When an input port is unwired the corresponding output channel takes the `default_*` value. All wired inputs must share dimensions; output matches.",
     examples: [],
     picker: { label: "Pack RGBA", category: Atom },
     summary: "Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["pack rgba", "combine channels", "merge channels"],
+    aliases: ["pack rgba", "pack channels", "combine channels", "merge channels"],
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/pack_channels_body.wgsl"),
 }
@@ -129,9 +129,9 @@ impl Primitive for PackChannels {
             // pack_channels.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.pack_channels standalone codegen"),
+                    .expect("node.pack_rgba standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.pack_channels",
+                "node.pack_rgba",
             )
         });
         let sampler = self
@@ -190,7 +190,7 @@ impl Primitive for PackChannels {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.pack_channels",
+            "node.pack_rgba",
         );
     }
 }
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn declares_four_optional_texture_inputs() {
         use crate::node_graph::ports::PortType;
-        assert_eq!(PackChannels::TYPE_ID, "node.pack_channels");
+        assert_eq!(PackChannels::TYPE_ID, "node.pack_rgba");
         let names: Vec<&str> = PackChannels::INPUTS.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["r", "g", "b", "a"]);
         for input in PackChannels::INPUTS {
@@ -219,6 +219,6 @@ mod tests {
     fn registers_as_atom() {
         let prim = PackChannels::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.pack_channels");
+        assert_eq!(node.type_id().as_str(), "node.pack_rgba");
     }
 }

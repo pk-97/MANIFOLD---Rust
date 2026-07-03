@@ -657,7 +657,7 @@
           {
             "id": 15,
             "nodeId": "angles",
-            "typeId": "node.generate_range",
+            "typeId": "node.range",
             "handle": "angles",
             "params": {
               "end": {
@@ -750,7 +750,7 @@
           {
             "id": 20,
             "nodeId": "pack",
-            "typeId": "node.pack_curve_xy",
+            "typeId": "node.combine_xy",
             "handle": "pack",
             "params": {
               "scale": {
@@ -953,7 +953,7 @@
           {
             "id": 22,
             "nodeId": "i_array",
-            "typeId": "node.generate_range",
+            "typeId": "node.range",
             "handle": "i_array",
             "params": {
               "end": {

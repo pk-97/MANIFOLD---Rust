@@ -1,4 +1,4 @@
-//! `node.scale_offset_texture` — per-pixel affine remap
+//! `node.scale_offset_image` — per-pixel affine remap
 //! `a * x + b` on RGB (alpha pass-through).
 //!
 //! Companion to the per-pixel field generators in Batch 5.5 —
@@ -22,7 +22,7 @@ struct ScaleOffsetUniforms {
 
 crate::primitive! {
     name: ScaleOffsetTexture,
-    type_id: "node.scale_offset_texture",
+    type_id: "node.scale_offset_image",
     purpose: "Per-pixel affine remap `a * x + b` on RGB. Alpha pass-through. The general re-range primitive: use scale=2, offset=-1 to recover signed [-1, 1] noise from a [0, 1] generator; scale=0.5, offset=0.5 to compress signed sin/cos to [0, 1]; scale<0 to invert. Two-scalar version of node.exposure + node.brightness fused.",
     inputs: {
         in: Texture2D required,
@@ -60,7 +60,7 @@ crate::primitive! {
     summary: "Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["scale offset", "remap", "multiply add", "re-range"],
+    aliases: ["scale offset", "scale offset texture", "remap", "multiply add", "re-range"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/scale_offset_texture_body.wgsl"),
     extra_fields: {
@@ -115,11 +115,11 @@ impl Primitive for ScaleOffsetTexture {
             .unwrap_or(manifold_gpu::GpuTextureFormat::Rgba16Float);
         let pipeline = self.pipeline.get_or_insert_with(|| {
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
-                .expect("node.scale_offset_texture standalone codegen");
+                .expect("node.scale_offset_image standalone codegen");
             gpu.device.create_compute_pipeline(
                 &wgsl,
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.scale_offset_texture",
+                "node.scale_offset_image",
             )
         });
         let sampler = self
@@ -154,7 +154,7 @@ impl Primitive for ScaleOffsetTexture {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.scale_offset_texture",
+            "node.scale_offset_image",
         );
     }
 }
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn scale_offset_texture_declares_required_texture_plus_two_optional_scalar_inputs() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(ScaleOffsetTexture::TYPE_ID, "node.scale_offset_texture");
+        assert_eq!(ScaleOffsetTexture::TYPE_ID, "node.scale_offset_image");
         let ins = ScaleOffsetTexture::INPUTS;
         assert_eq!(ins.len(), 3);
         assert_eq!(ins[0].name, "in");
@@ -194,6 +194,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = ScaleOffsetTexture::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.scale_offset_texture");
+        assert_eq!(node.type_id().as_str(), "node.scale_offset_image");
     }
 }

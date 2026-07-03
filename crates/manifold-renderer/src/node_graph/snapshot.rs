@@ -965,7 +965,7 @@ mod tests {
             },
             nodes: vec![
                 mk(0, GROUP_INPUT_TYPE_ID, None),
-                mk(1, "node.scale_offset_texture", Some("so")),
+                mk(1, "node.scale_offset_image", Some("so")),
                 mk(2, GROUP_OUTPUT_TYPE_ID, None),
             ],
             wires: vec![w(0, "src", 1, "in"), w(1, "out", 2, "out")],

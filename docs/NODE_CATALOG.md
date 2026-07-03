@@ -146,6 +146,7 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 |---|---|---|---|
 | Repeat Outline (rings) | `node.array_replicate_polyline_rings` | Filter | Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings. |
 | Orbit Camera | `node.camera_orbit` | Source | A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering. |
+| Combine XY (curve) | `node.combine_xy` | Filter | Zips two number lists, X and Y, into one list of points ready to draw as a line or curve. |
 | Edge Pairs | `node.consecutive_edges` | Source | Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start. |
 | Cylinder Wrap Field | `node.cylinder_wrap_field` | Map | Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry. |
 | Digital Plants Render | `node.digital_plants_render` | Filter | Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed. |
@@ -158,7 +159,6 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Arrange Copies | `node.generate_instance_transforms` | Source | Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies. |
 | Hypercube Points (4D) | `node.hypercube_vertices` | Source | Builds the corner points of a hypercube. The Dimension knob morphs it from a flat square up through a cube to a full 4D tesseract — wire it to an LFO to animat… |
 | Nested Cubes Geometry | `node.nested_cubes_geometry` | Source | Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms. |
-| Combine XY (curve) | `node.pack_curve_xy` | Filter | Zips two number lists, X and Y, into one list of points ready to draw as a line or curve. |
 | Platonic Solid Edges | `node.polytope_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
 | Platonic Solid Points | `node.polytope_vertices` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
 | Flatten 3D → 2D | `node.project_3d` | Filter | Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering. |
@@ -228,7 +228,6 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 
 | Node | type_id | role | summary |
 |---|---|---|---|
-| Scale + Offset (value) | `node.affine_scalar` | Control | Multiplies a value by a scale and adds an offset, the everyday way to rescale a control signal into the range a knob wants. Set the scale negative to invert. |
 | Beat Gate | `node.beat_gate` | Control | A square pulse locked to the tempo, on for part of each beat and off for the rest. The strobe and chop building block. |
 | Beat Ramp | `node.beat_ramp` | Control | Rises from 0 to 1 across each beat then snaps back, a sawtooth locked to the tempo. Wire it into anything you want to sweep in time with the music. |
 | Canvas Area Scale | `node.canvas_area_scale` | Control | Outputs how big the canvas is compared to a reference size, used to keep particle brightness steady when the resolution changes. |
@@ -244,6 +243,7 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Math | `node.math` | Control | Combines two control signals into one with a chosen op, like add, multiply, min, or max. The basic calculator for modulation. |
 | One Euro Filter | `node.one_euro_filter` | Control | Smooths a jittery signal but lets fast moves through cleanly, so it removes noise without the laggy feel of a plain smooth. Great for hand-tracked or sensor in… |
 | Sample & Hold | `node.sample_and_hold` | Control | Grabs the value of a signal at each trigger and holds it steady until the next one. Freezes a moving value so later wiggles don't leak through. |
+| Scale + Offset (value) | `node.scale_offset_value` | Control | Multiplies a value by a scale and adds an offset, the everyday way to rescale a control signal into the range a knob wants. Set the scale negative to invert. |
 | Smoothing | `node.smoothing` | Control | Smooths a jumpy control signal into a gentle glide, with the response time set in seconds. The same feel holds whatever the frame rate. |
 | Trigger Ease To | `node.trigger_ease_to` | Control | On each trigger it eases smoothly from its current value to a new target over a number of beats, then rests. A beat-clocked glide between values. |
 | Trigger Gate | `node.trigger_gate` | Control | Passes a trigger stream through only while it is enabled, so you can switch a clip-trigger source on and off. |
@@ -273,25 +273,25 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 
 | Node | type_id | role | summary |
 |---|---|---|---|
-| Absolute Value | `node.abs_texture` | Filter | Flips every negative value positive, leaving positives alone. Handy after a signed field or a sine to fold it into a V shape. |
-| Connect Nearest | `node.array_connect_nearest` | Control | For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs. |
+| Absolute Value | `node.absolute_value` | Filter | Flips every negative value positive, leaving positives alone. Handy after a signed field or a sine to fold it into a V shape. |
 | Array Feedback | `node.array_feedback` | Filter | Holds a list from the previous frame and hands it back this frame, closing a feedback loop for a particle or instance system without a graph cycle. |
-| List Math | `node.array_math` | Filter | Runs the same math over every number in a list, like add, multiply, sine, or scale. The list-wide version of the Math node. |
-| Split XY | `node.array_unpack_vec2` | Filter | Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them. |
-| Wrap | `node.fract_texture` | Filter | Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient. |
-| Range | `node.generate_range` | Source | Builds a list of evenly spaced numbers between a start and an end. The starting point for laying out copies, rings, or steps. |
-| Length | `node.length_vec2` | Filter | Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field. |
-| Normalize | `node.normalize_vec2` | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
-| Pack RGBA | `node.pack_channels` | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
-| Combine XYZW | `node.pack_vec4` | Filter | Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve. |
-| Power | `node.power_texture` | Filter | Raises each value to a power, which sharpens or softens a 0-to-1 field. Above 1 pushes toward black, below 1 lifts the midtones. |
-| Resolve Scatter (3D) | `node.resolve_3d_accumulator` | Filter | Reads back the 3D buffer that a 3D particle scatter wrote into and turns it into a volume you can sample. |
-| Resolve Scatter | `node.resolve_accumulator` | Filter | Reads back the buffer that Draw Particles wrote into and turns it into a normal image. The pickup step after a particle splat. |
-| Sum Into Bins | `node.scalar_array_accumulator` | Control | Adds an amount into each slot of a running list on every trigger, so you can build up a histogram or per-slot counter over time. |
-| Scale + Offset (image) | `node.scale_offset_texture` | Filter | Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step. |
-| Smoothstep | `node.smoothstep_texture` | Filter | Eases each value through a smooth S-curve between a low and high edge. Softens a hard threshold into a gentle ramp. |
-| Texture Size | `node.texture_dimensions` | Control | Reads the width, height, and aspect ratio of an image and hands them back as numbers. Wire the aspect into a mask to keep circles round on a wide canvas. |
-| Sine / Cosine | `node.trig_texture` | Filter | Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient. |
+| Array Math | `node.array_math` | Filter | Runs the same math over every number in a list, like add, multiply, sine, or scale. The list-wide version of the Math node. |
+| Combine XYZW | `node.combine_xyzw` | Filter | Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve. |
+| Connect Nearest | `node.connect_nearest` | Control | For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs. |
+| Normalize | `node.normalize` | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
+| Pack RGBA | `node.pack_rgba` | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
+| Power | `node.power` | Filter | Raises each value to a power, which sharpens or softens a 0-to-1 field. Above 1 pushes toward black, below 1 lifts the midtones. |
+| Range | `node.range` | Source | Builds a list of evenly spaced numbers between a start and an end. The starting point for laying out copies, rings, or steps. |
+| Resolve Scatter | `node.resolve_scatter` | Filter | Reads back the buffer that Draw Particles wrote into and turns it into a normal image. The pickup step after a particle splat. |
+| Resolve Scatter (3D) | `node.resolve_scatter_3d` | Filter | Reads back the 3D buffer that a 3D particle scatter wrote into and turns it into a volume you can sample. |
+| Scale + Offset (image) | `node.scale_offset_image` | Filter | Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step. |
+| Sine / Cosine | `node.sine_cosine` | Filter | Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient. |
+| Smoothstep | `node.smoothstep` | Filter | Eases each value through a smooth S-curve between a low and high edge. Softens a hard threshold into a gentle ramp. |
+| Split XY | `node.split_xy` | Filter | Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them. |
+| Sum Into Bins | `node.sum_into_bins` | Control | Adds an amount into each slot of a running list on every trigger, so you can build up a histogram or per-slot counter over time. |
+| Texture Size | `node.texture_size` | Control | Reads the width, height, and aspect ratio of an image and hands them back as numbers. Wire the aspect into a mask to keep circles round on a wide canvas. |
+| Vector Length | `node.vector_length` | Filter | Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field. |
+| Wrap | `node.wrap` | Filter | Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient. |
 
 ### Routing (8)
 

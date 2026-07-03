@@ -122,7 +122,7 @@ pub fn palette_atoms() -> Vec<PaletteAtom> {
 }
 
 /// Friendly display label for a node `type_id` — the same name the palette
-/// shows (e.g. "Scale + Offset (value)" for `node.affine_scalar`). Sourced
+/// shows (e.g. "Scale + Offset (value)" for `node.scale_offset_value`). Sourced
 /// from the primitive's `picker` label so canvas node titles match the
 /// palette instead of showing the raw prettified type id. `None` for nodes
 /// with no picker (boundary nodes, internal building blocks); callers fall

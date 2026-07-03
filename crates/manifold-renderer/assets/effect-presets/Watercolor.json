@@ -318,7 +318,7 @@
     {
       "id": 9,
       "nodeId": "mask_map",
-      "typeId": "node.scale_offset_texture",
+      "typeId": "node.scale_offset_image",
       "handle": "mask_map",
       "params": {
         "offset": {

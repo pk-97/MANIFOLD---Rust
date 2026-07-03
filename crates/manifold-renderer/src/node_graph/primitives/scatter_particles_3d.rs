@@ -5,7 +5,7 @@
 //! `splat_3d` entry point via `include_str!`. Each live particle's
 //! `position.xyz` indexes a voxel in the `vol_res × vol_res ×
 //! vol_depth` grid and contributes `scaled_energy` via `atomicAdd`.
-//! Pair with `node.resolve_3d_accumulator` to lift the u32 grid into
+//! Pair with `node.resolve_scatter_3d` to lift the u32 grid into
 //! a float Texture3D for downstream volumetric primitives.
 
 use manifold_gpu::GpuBinding;
@@ -39,7 +39,7 @@ struct Splat3DUniforms {
 crate::primitive! {
     name: ScatterParticles3D,
     type_id: "node.scatter_particles_3d",
-    purpose: "Atomic-add splat of an Array<Particle> into a u32 3D accumulator buffer sized vol_res × vol_res × vol_depth. Each live particle's nearest-voxel cell receives `scaled_energy` via atomicAdd. Pair with node.resolve_3d_accumulator to lift the u32 grid into a float Texture3D for downstream volumetric primitives like blur_3d, gradient_curl_3d, project_particles_3d.",
+    purpose: "Atomic-add splat of an Array<Particle> into a u32 3D accumulator buffer sized vol_res × vol_res × vol_depth. Each live particle's nearest-voxel cell receives `scaled_energy` via atomicAdd. Pair with node.resolve_scatter_3d to lift the u32 grid into a float Texture3D for downstream volumetric primitives like blur_3d, gradient_curl_3d, project_particles_3d.",
     inputs: {
         particles: Array(Particle) required,
         active_count: ScalarF32 optional,

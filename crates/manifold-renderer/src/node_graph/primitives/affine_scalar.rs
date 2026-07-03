@@ -1,4 +1,4 @@
-//! `node.affine_scalar` — `out = a * scale + offset` on a single scalar
+//! `node.scale_offset_value` — `out = a * scale + offset` on a single scalar
 //! wire, with `scale` and `offset` as static params (and port-shadowable
 //! for completeness).
 //!
@@ -13,8 +13,8 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: AffineScalar,
-    type_id: "node.affine_scalar",
-    purpose: "Scalar affine remap: out = a * scale + offset. The scalar counterpart of node.scale_offset_texture — collapses Value+Math+Value+Math derivations like `3 + 5*x` or `0.3 - 0.28*x` into a single node. All three inputs are port-shadows-param: an inline param value drives the op when the wire is unwired.",
+    type_id: "node.scale_offset_value",
+    purpose: "Scalar affine remap: out = a * scale + offset. The scalar counterpart of node.scale_offset_image — collapses Value+Math+Value+Math derivations like `3 + 5*x` or `0.3 - 0.28*x` into a single node. All three inputs are port-shadows-param: an inline param value drives the op when the wire is unwired.",
     inputs: {
         a: ScalarF32 required,
         scale: ScalarF32 optional,
@@ -55,7 +55,7 @@ crate::primitive! {
     summary: "Multiplies a value by a scale and adds an offset, the everyday way to rescale a control signal into the range a knob wants. Set the scale negative to invert.",
     category: Control,
     role: Control,
-    aliases: ["scale offset", "rescale", "map range", "attenuvert"],
+    aliases: ["scale offset", "affine scalar", "rescale", "map range", "attenuvert"],
     pure: true,
 }
 
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn affine_scalar_declares_a_required_and_scale_offset_optional() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(AffineScalar::TYPE_ID, "node.affine_scalar");
+        assert_eq!(AffineScalar::TYPE_ID, "node.scale_offset_value");
         let ins = AffineScalar::INPUTS;
         assert_eq!(ins.len(), 3);
         assert_eq!(ins[0].name, "a");
@@ -102,6 +102,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = AffineScalar::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.affine_scalar");
+        assert_eq!(node.type_id().as_str(), "node.scale_offset_value");
     }
 }

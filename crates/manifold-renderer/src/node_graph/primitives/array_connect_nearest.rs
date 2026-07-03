@@ -1,4 +1,4 @@
-//! `node.array_connect_nearest` — for each item in a
+//! `node.connect_nearest` — for each item in a
 //! `Channels[X, Y, WIDTH, HEIGHT]` array, find its nearest neighbour
 //! within a distance threshold and emit the pair as an edge.
 //!
@@ -18,7 +18,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: ArrayConnectNearest,
-    type_id: "node.array_connect_nearest",
+    type_id: "node.connect_nearest",
     purpose: "For each item in a Channels[X, Y, WIDTH, HEIGHT] array, find its nearest neighbour within max_distance and emit an EdgePair (A_INDEX, B_INDEX). Sparse nearest-neighbour graph generation. Wire detection regions, particle positions, or any sparse-position array; output connects to render_lines edges port for connection-line visualisation.",
     inputs: {
         in: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32] required,
@@ -51,7 +51,7 @@ crate::primitive! {
     summary: "For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs.",
     category: MathAndConvert,
     role: Control,
-    aliases: ["connect nearest", "nearest neighbour", "constellation"],
+    aliases: ["connect nearest", "array connect nearest", "nearest neighbour", "constellation"],
     extra_fields: {
         last_edge_count: Option<usize> = None,
     },
@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn array_connect_nearest_declares_channels_io() {
         use crate::node_graph::ports::PortType;
-        assert_eq!(ArrayConnectNearest::TYPE_ID, "node.array_connect_nearest");
+        assert_eq!(ArrayConnectNearest::TYPE_ID, "node.connect_nearest");
         assert_eq!(ArrayConnectNearest::INPUTS.len(), 2);
         assert_eq!(ArrayConnectNearest::INPUTS[0].name, "in");
         assert!(matches!(ArrayConnectNearest::INPUTS[0].ty, PortType::Array(_)));
@@ -204,6 +204,6 @@ mod tests {
     fn array_connect_nearest_registers() {
         let prim = ArrayConnectNearest::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.array_connect_nearest");
+        assert_eq!(node.type_id().as_str(), "node.connect_nearest");
     }
 }

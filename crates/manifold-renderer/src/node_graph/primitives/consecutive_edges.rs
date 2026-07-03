@@ -63,7 +63,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "`closed = true` emits N edges forming a closed loop ([0,1], [1,2], …, [N-1, 0]); `closed = false` emits N-1 edges as an open strip. Pair with `node.generate_range(end_inclusive=false, active_count=N)` so vertex 0 and vertex N-1 land on geometrically distinct points — the closed (N-1, 0) edge then bridges a real gap rather than collapsing to zero length. Output capacity = `max_capacity` (pre-allocated by chain build); the runtime active count comes from the `count` port-shadow, clamped into `[2, max_capacity]`. Inactive tail = `EdgePair::SENTINEL = (u32::MAX, u32::MAX)` so downstream node.draw_lines's `build_instances_from_edges` filter skips them without drawing a line.",
+    composition_notes: "`closed = true` emits N edges forming a closed loop ([0,1], [1,2], …, [N-1, 0]); `closed = false` emits N-1 edges as an open strip. Pair with `node.range(end_inclusive=false, active_count=N)` so vertex 0 and vertex N-1 land on geometrically distinct points — the closed (N-1, 0) edge then bridges a real gap rather than collapsing to zero length. Output capacity = `max_capacity` (pre-allocated by chain build); the runtime active count comes from the `count` port-shadow, clamped into `[2, max_capacity]`. Inactive tail = `EdgePair::SENTINEL = (u32::MAX, u32::MAX)` so downstream node.draw_lines's `build_instances_from_edges` filter skips them without drawing a line.",
     examples: [],
     picker: { label: "Edge Pairs", category: Atom },
     summary: "Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start.",

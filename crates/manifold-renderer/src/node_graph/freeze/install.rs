@@ -2089,7 +2089,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "ctrl", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.texture_dimensions", "nodeId": "dims" },
+                { "id": 1, "typeId": "node.texture_size", "nodeId": "dims" },
                 { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
@@ -2106,7 +2106,7 @@ mod tests {
         let fused_doc =
             fused.def.nodes.iter().find(|n| n.type_id == "node.wgsl_compute").unwrap().id;
         let dims_doc =
-            fused.def.nodes.iter().find(|n| n.type_id == "node.texture_dimensions").unwrap().id;
+            fused.def.nodes.iter().find(|n| n.type_id == "node.texture_size").unwrap().id;
         let cw = fused
             .def
             .wires

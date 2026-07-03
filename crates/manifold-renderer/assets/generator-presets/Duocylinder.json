@@ -672,7 +672,7 @@
           {
             "id": 13,
             "nodeId": "pack",
-            "typeId": "node.pack_vec4",
+            "typeId": "node.combine_xyzw",
             "handle": "pack",
             "title": "Pack Vertices"
           },

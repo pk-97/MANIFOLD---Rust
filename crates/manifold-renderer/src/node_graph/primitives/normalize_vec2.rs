@@ -1,4 +1,4 @@
-//! `node.normalize_vec2` — per-pixel safe-normalize of the RG
+//! `node.normalize` — per-pixel safe-normalize of the RG
 //! channels of an input texture as a 2D vector.
 //!
 //! Reads `in.rg` per pixel, writes `(v / length(v), 0, 1)` when
@@ -16,7 +16,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: NormalizeVec2,
-    type_id: "node.normalize_vec2",
+    type_id: "node.normalize",
     purpose: "Per-pixel safe-normalize of the input's RG channels treated as a vec2. Writes (v/length(v), 0, 1) when length ≥ 1e-6, else (0, 0, 0, 1). Direction-only — restores magnitude downstream with `node.exposure`. The building block for curl-force extraction (normalize gradients before summing in fluid-sim velocity steps) and any flow-field that wants directional uniformity regardless of source magnitude.",
     inputs: {
         in: Texture2D required,
@@ -25,13 +25,13 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
-    composition_notes: "BA of the input are ignored; output BA is forced to (0, 1). Chain order for the oily-fluid curl-force pattern: `node.gradient_central_diff → node.normalize_vec2 → (sum two of these) → node.exposure → node.rotate_vec2_by_angle`.",
+    composition_notes: "BA of the input are ignored; output BA is forced to (0, 1). Chain order for the oily-fluid curl-force pattern: `node.gradient_central_diff → node.normalize → (sum two of these) → node.exposure → node.rotate_vec2_by_angle`.",
     examples: [],
     picker: { label: "Normalize", category: Atom },
     summary: "Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["normalize", "unit vector", "direction"],
+    aliases: ["normalize", "normalize vec2", "unit vector", "direction"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/normalize_vec2_body.wgsl"),
 }
@@ -55,9 +55,9 @@ impl Primitive for NormalizeVec2 {
             // normalize_vec2.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.normalize_vec2 standalone codegen"),
+                    .expect("node.normalize standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.normalize_vec2",
+                "node.normalize",
             )
         });
         let sampler = self
@@ -81,7 +81,7 @@ impl Primitive for NormalizeVec2 {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.normalize_vec2",
+            "node.normalize",
         );
     }
 }

@@ -76,7 +76,7 @@ crate::primitive! {
             enum_values: &["TangentZ", "WorldYUp"],
         },
     ],
-    composition_notes: "Height is read from the R channel only. If your height is a derived quantity (e.g. `length(color.rg)` in the oily-fluid family) wire `node.length_vec2` upstream first. TangentZ (default) pairs with `node.lambert_directional`, `node.matcap_two_tone`, `node.fresnel_rim`, `node.blinn_specular` for the flat-surface screen-space shading family. WorldYUp feeds `node.render_3d_mesh`'s `normal_map` input for full PBR on a 3D mesh laid out in the XZ plane (the renderer's `node.pbr_material` owns the Cook-Torrance + IBL shading) — the MetallicGlass pattern. The `aspect` input is normally wired from `system.generator_input.aspect` so reflections stay correct across canvas aspect ratios.",
+    composition_notes: "Height is read from the R channel only. If your height is a derived quantity (e.g. `length(color.rg)` in the oily-fluid family) wire `node.vector_length` upstream first. TangentZ (default) pairs with `node.lambert_directional`, `node.matcap_two_tone`, `node.fresnel_rim`, `node.blinn_specular` for the flat-surface screen-space shading family. WorldYUp feeds `node.render_3d_mesh`'s `normal_map` input for full PBR on a 3D mesh laid out in the XZ plane (the renderer's `node.pbr_material` owns the Cook-Torrance + IBL shading) — the MetallicGlass pattern. The `aspect` input is normally wired from `system.generator_input.aspect` so reflections stay correct across canvas aspect ratios.",
     examples: [],
     picker: { label: "Surface Bumps", category: Atom },
     summary: "Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture.",

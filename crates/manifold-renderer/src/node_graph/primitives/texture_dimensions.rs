@@ -1,4 +1,4 @@
-//! `node.texture_dimensions` — Texture→Scalar bridge that emits the
+//! `node.texture_size` — Texture→Scalar bridge that emits the
 //! input texture's `width`, `height`, and `aspect` (width / height) on
 //! three scalar output ports.
 //!
@@ -19,7 +19,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: TextureDimensions,
-    type_id: "node.texture_dimensions",
+    type_id: "node.texture_size",
     purpose: "Read the input texture's pixel dimensions. Outputs `width`, `height`, and `aspect` (= width / height) as scalars. No GPU dispatch — values are CPU-accessible from the bound texture, so the read is zero-latency. Use to feed aspect-correction into a downstream effect-graph chain (e.g. wire `aspect` into `distance_to_point.scale_x` to make a radial mask circular on a non-square canvas).",
     inputs: {
         in: Texture2D required,
@@ -36,7 +36,7 @@ crate::primitive! {
     summary: "Reads the width, height, and aspect ratio of an image and hands them back as numbers. Wire the aspect into a mask to keep circles round on a wide canvas.",
     category: MathAndConvert,
     role: Control,
-    aliases: ["texture size", "dimensions", "resolution", "aspect"],
+    aliases: ["texture size", "texture dimensions", "dimensions", "resolution", "aspect"],
 }
 
 impl Primitive for TextureDimensions {
@@ -61,7 +61,7 @@ mod tests {
     #[test]
     fn texture_dimensions_declares_one_texture_input_and_three_scalar_outputs() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(TextureDimensions::TYPE_ID, "node.texture_dimensions");
+        assert_eq!(TextureDimensions::TYPE_ID, "node.texture_size");
         let ins = TextureDimensions::INPUTS;
         assert_eq!(ins.len(), 1);
         assert_eq!(ins[0].name, "in");
@@ -81,6 +81,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = TextureDimensions::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.texture_dimensions");
+        assert_eq!(node.type_id().as_str(), "node.texture_size");
     }
 }

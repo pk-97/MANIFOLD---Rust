@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "DigitalPlants",
-  "description": "DigitalPlants — 400×400 grid of cubes lifted onto a morphing cylinder ↔ torus surface, with simplex-noise stem displacement, FBM petal fracturing, per-instance hash rotation, neighbour smoothing, and cel-shaded cube rendering with PCF shadows. First decomposition of the topology-wrap generator family: the graph wires node.grid_uv_field → per-instance noise/math → cyl + tor wrap fields → lerp_instance_fields → rotation jitter → neighbor_smooth → digital_plants_render. Every legacy compute-shader step is reproduced as a curated primitive — node.simplex_per_instance, node.fbm_per_instance, node.array_math (with ShapePowClip / MirrorRamp / ScaleOffset ops), node.cylinder_wrap_field, node.torus_wrap_field, node.instance_position_jitter, node.instance_rotation_jitter, node.lerp_instance_fields — so the same vocabulary can be reused by future generators (stem fields, ring fields, plant variants).\n\nThe `morph` slider continuously interpolates between cylinder-stem and torus-flower topologies via node.lerp_instance_fields (NOT node.mux_array — selection vs interpolation matters here). `base_radius` is multiplied by (1 - morph) for the cylinder branch so it shrinks toward zero in flower mode, matching legacy. `instance_scale` follows `box_scale * (1 + morph * 3)` so cube size grows with petal density.\n\nCamera params are exposed in DEGREES on the outer card (cam_orbit / cam_tilt / cam_fov) and converted to RADIANS by three node.affine_scalar nodes before reaching node.digital_plants_render. The cam_orbit_rad node adds π/2 to compensate for the orbit convention difference between the legacy compute and the new render primitive (legacy looks down +Z at orbit=0; render primitive looks down +X — adding π/2 rotates back to legacy's view).",
+  "description": "DigitalPlants — 400×400 grid of cubes lifted onto a morphing cylinder ↔ torus surface, with simplex-noise stem displacement, FBM petal fracturing, per-instance hash rotation, neighbour smoothing, and cel-shaded cube rendering with PCF shadows. First decomposition of the topology-wrap generator family: the graph wires node.grid_uv_field → per-instance noise/math → cyl + tor wrap fields → lerp_instance_fields → rotation jitter → neighbor_smooth → digital_plants_render. Every legacy compute-shader step is reproduced as a curated primitive — node.simplex_per_instance, node.fbm_per_instance, node.array_math (with ShapePowClip / MirrorRamp / ScaleOffset ops), node.cylinder_wrap_field, node.torus_wrap_field, node.instance_position_jitter, node.instance_rotation_jitter, node.lerp_instance_fields — so the same vocabulary can be reused by future generators (stem fields, ring fields, plant variants).\n\nThe `morph` slider continuously interpolates between cylinder-stem and torus-flower topologies via node.lerp_instance_fields (NOT node.mux_array — selection vs interpolation matters here). `base_radius` is multiplied by (1 - morph) for the cylinder branch so it shrinks toward zero in flower mode, matching legacy. `instance_scale` follows `box_scale * (1 + morph * 3)` so cube size grows with petal density.\n\nCamera params are exposed in DEGREES on the outer card (cam_orbit / cam_tilt / cam_fov) and converted to RADIANS by three node.scale_offset_value nodes before reaching node.digital_plants_render. The cam_orbit_rad node adds π/2 to compensate for the orbit convention difference between the legacy compute and the new render primitive (legacy looks down +Z at orbit=0; render primitive looks down +X — adding π/2 rotates back to legacy's view).",
   "presetMetadata": {
     "id": "DigitalPlants",
     "displayName": "Digital Plants",
@@ -101,7 +101,7 @@
         "grid_size": { "type": "Float", "value": 400.0 }
       } },
 
-    { "id": 3, "typeId": "node.array_unpack_vec2", "handle": "uv_unpack", "nodeId": "uv_unpack" },
+    { "id": 3, "typeId": "node.split_xy", "handle": "uv_unpack", "nodeId": "uv_unpack" },
 
     { "id": 4, "typeId": "node.math", "handle": "stem_freq_calc", "nodeId": "stem_freq_calc",
       "params": {
@@ -212,7 +212,7 @@
         "bias":   { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 17, "typeId": "node.affine_scalar", "handle": "one_minus_morph", "nodeId": "one_minus_morph",
+    { "id": 17, "typeId": "node.scale_offset_value", "handle": "one_minus_morph", "nodeId": "one_minus_morph",
       "params": {
         "a":      { "type": "Float", "value": 0.0 },
         "scale":  { "type": "Float", "value": -1.0 },
@@ -226,7 +226,7 @@
         "op": { "type": "Enum",  "value": 2 }
       } },
 
-    { "id": 19, "typeId": "node.affine_scalar", "handle": "scale_factor_morph", "nodeId": "scale_factor_morph",
+    { "id": 19, "typeId": "node.scale_offset_value", "handle": "scale_factor_morph", "nodeId": "scale_factor_morph",
       "params": {
         "a":      { "type": "Float", "value": 0.0 },
         "scale":  { "type": "Float", "value": 3.0 },
@@ -292,14 +292,14 @@
         "instance_scale": { "type": "Float", "value": 0.025 }
       } },
 
-    { "id": 27, "typeId": "node.affine_scalar", "handle": "tor_time_uvx", "nodeId": "tor_time_uvx",
+    { "id": 27, "typeId": "node.scale_offset_value", "handle": "tor_time_uvx", "nodeId": "tor_time_uvx",
       "params": {
         "a":      { "type": "Float", "value": 0.0 },
         "scale":  { "type": "Float", "value": 0.2 },
         "offset": { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 28, "typeId": "node.affine_scalar", "handle": "tor_time_z", "nodeId": "tor_time_z",
+    { "id": 28, "typeId": "node.scale_offset_value", "handle": "tor_time_z", "nodeId": "tor_time_z",
       "params": {
         "a":      { "type": "Float", "value": 0.0 },
         "scale":  { "type": "Float", "value": 0.15 },
@@ -331,21 +331,21 @@
         "center_weight": { "type": "Float", "value": 0.6 }
       } },
 
-    { "id": 33, "typeId": "node.affine_scalar", "handle": "cam_orbit_rad", "nodeId": "cam_orbit_rad",
+    { "id": 33, "typeId": "node.scale_offset_value", "handle": "cam_orbit_rad", "nodeId": "cam_orbit_rad",
       "params": {
         "a":      { "type": "Float", "value": 0.0 },
         "scale":  { "type": "Float", "value": 0.01745329252 },
         "offset": { "type": "Float", "value": 1.57079632679 }
       } },
 
-    { "id": 34, "typeId": "node.affine_scalar", "handle": "cam_tilt_rad", "nodeId": "cam_tilt_rad",
+    { "id": 34, "typeId": "node.scale_offset_value", "handle": "cam_tilt_rad", "nodeId": "cam_tilt_rad",
       "params": {
         "a":      { "type": "Float", "value": 15.0 },
         "scale":  { "type": "Float", "value": 0.01745329252 },
         "offset": { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 35, "typeId": "node.affine_scalar", "handle": "cam_fov_rad", "nodeId": "cam_fov_rad",
+    { "id": 35, "typeId": "node.scale_offset_value", "handle": "cam_fov_rad", "nodeId": "cam_fov_rad",
       "params": {
         "a":      { "type": "Float", "value": 50.0 },
         "scale":  { "type": "Float", "value": 0.01745329252 },

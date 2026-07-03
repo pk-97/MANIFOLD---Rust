@@ -3120,10 +3120,10 @@ mod gpu_tests {
             // the square test input, so the per-pixel hash matches bit-for-bit.
             ("node.film_grain", "film_grain.wgsl", &[0.3]),
             // Math/convert pointwise atoms (overnight vocabulary sweep).
-            ("node.fract_texture", "fract_texture.wgsl", &[3.0]),
-            ("node.power_texture", "power_texture.wgsl", &[2.5]),
-            ("node.scale_offset_texture", "scale_offset_texture.wgsl", &[1.5, -0.25]),
-            ("node.smoothstep_texture", "smoothstep_texture.wgsl", &[0.2, 0.8]),
+            ("node.wrap", "fract_texture.wgsl", &[3.0]),
+            ("node.power", "power_texture.wgsl", &[2.5]),
+            ("node.scale_offset_image", "scale_offset_texture.wgsl", &[1.5, -0.25]),
+            ("node.smoothstep", "smoothstep_texture.wgsl", &[0.2, 0.8]),
             ("node.field_combine", "field_combine.wgsl", &[1.5, -0.5, 0.25]),
         ];
         let differ = TextureDiff::new(&device);
@@ -3718,7 +3718,7 @@ mod gpu_tests {
         let (w, h) = (128u32, 128u32);
         let input = gradient(&device, w, h);
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
-        let node = registry.construct("node.abs_texture").unwrap();
+        let node = registry.construct("node.absolute_value").unwrap();
         let generated = generate_standalone(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),
@@ -4784,8 +4784,8 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
 
         // Paramless vector ops.
         for (type_id, shader) in [
-            ("node.length_vec2", "length_vec2.wgsl"),
-            ("node.normalize_vec2", "normalize_vec2.wgsl"),
+            ("node.vector_length", "length_vec2.wgsl"),
+            ("node.normalize", "normalize_vec2.wgsl"),
         ] {
             let node = registry.construct(type_id).unwrap();
             let generated = generate_standalone(
@@ -4918,7 +4918,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         );
     }
 
-    /// OPTIONAL-INPUT use-flag parity: node.pack_channels combines 4 optional
+    /// OPTIONAL-INPUT use-flag parity: node.pack_rgba combines 4 optional
     /// coincident inputs (r/g/b/a) into RGBA, falling back to default_* when an
     /// input is unwired (use_*==0). The codegen injects a use_<name> flag per
     /// optional input. Dual-packed: the hand uniform is {use_r..use_a, defaults[4]}
@@ -4934,7 +4934,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
         let differ = TextureDiff::new(&device);
 
-        let node = registry.construct("node.pack_channels").unwrap();
+        let node = registry.construct("node.pack_rgba").unwrap();
         let generated = generate_standalone(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),
@@ -5003,7 +5003,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
         let differ = TextureDiff::new(&device);
 
-        let node = registry.construct("node.trig_texture").unwrap();
+        let node = registry.construct("node.sine_cosine").unwrap();
         let generated = generate_standalone(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),

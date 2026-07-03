@@ -1,7 +1,7 @@
-//! `node.pack_curve_xy` — zip two `Array<f32>` (x channel, y channel)
+//! `node.combine_xy` — zip two `Array<f32>` (x channel, y channel)
 //! into a single `Array<CurvePoint>` that any line renderer can draw.
 //!
-//! The inverse of `node.array_unpack_vec2` for the curve-rendering
+//! The inverse of `node.split_xy` for the curve-rendering
 //! pipeline. Takes axis-separated channels (built independently by
 //! array_math / generate_range chains) and assembles them into the
 //! typed `Array<CurvePoint>` wire that `node.draw_lines` consumes.
@@ -28,8 +28,8 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: PackCurveXy,
-    type_id: "node.pack_curve_xy",
-    purpose: "Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. The curve-pipeline counterpart to node.array_unpack_vec2; the standard way to assemble a curve from independently-built axis chains (generate_range → array_math sweep → pack_curve_xy → render_lines). `scale` is port-shadows-param so an outer slider can rescale the whole curve at performance time. An internal PROJ_SCALE = 0.25 screen-fit constant is folded into the output: at scale = 1.0 the curve fills the inner 50% of the screen — matches the legacy generator_math::PROJ_SCALE convention so existing line-renderer presets stay visually identical. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
+    type_id: "node.combine_xy",
+    purpose: "Combine two Array<f32> (x channel, y channel) into one Array<CurvePoint>. The curve-pipeline counterpart to node.split_xy; the standard way to assemble a curve from independently-built axis chains (generate_range → array_math sweep → pack_curve_xy → render_lines). `scale` is port-shadows-param so an outer slider can rescale the whole curve at performance time. An internal PROJ_SCALE = 0.25 screen-fit constant is folded into the output: at scale = 1.0 the curve fills the inner 50% of the screen — matches the legacy generator_math::PROJ_SCALE convention so existing line-renderer presets stay visually identical. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
     inputs: {
         x: Array(f32) required,
         y: Array(f32) required,
@@ -48,13 +48,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Output capacity follows the `x` input (mirrors how node.array_math sizes its `out` to its `a` input) so the pack auto-sizes to whatever the upstream curve length is — no separate `max_capacity` knob to keep in sync. Processing truncates to min(x_capacity, y_capacity, out_capacity) so a shorter axis channel naturally clips the curve length. The internal PROJ_SCALE = 0.25 is intentionally not a user param — it's the screen-fit factor baked into the curve-space contract render_lines expects. Pair with node.generate_range + node.array_math (ScaleOffset + Sin) per axis to build any parametric curve (Lissajous, Rose, hypocycloid, audio waveform). To cancel the PROJ_SCALE factor (e.g. when the upstream axis chain already encodes the desired screen-fractional radius), set `scale = 4.0` — this is the documented pattern for polygon outlines whose `size` param is already in screen-fractional units.",
+    composition_notes: "Output capacity follows the `x` input (mirrors how node.array_math sizes its `out` to its `a` input) so the pack auto-sizes to whatever the upstream curve length is — no separate `max_capacity` knob to keep in sync. Processing truncates to min(x_capacity, y_capacity, out_capacity) so a shorter axis channel naturally clips the curve length. The internal PROJ_SCALE = 0.25 is intentionally not a user param — it's the screen-fit factor baked into the curve-space contract render_lines expects. Pair with node.range + node.array_math (ScaleOffset + Sin) per axis to build any parametric curve (Lissajous, Rose, hypocycloid, audio waveform). To cancel the PROJ_SCALE factor (e.g. when the upstream axis chain already encodes the desired screen-fractional radius), set `scale = 4.0` — this is the documented pattern for polygon outlines whose `size` param is already in screen-fractional units.",
     examples: [],
     picker: { label: "Combine XY (curve)", category: Atom },
     summary: "Zips two number lists, X and Y, into one list of points ready to draw as a line or curve.",
     category: Geometry3D,
     role: Filter,
-    aliases: ["combine xy", "pack curve", "zip points"],
+    aliases: ["combine xy", "pack curve xy", "pack curve", "zip points"],
 }
 
 impl PackCurveXy {
@@ -97,7 +97,7 @@ impl Primitive for PackCurveXy {
         };
         let Some(out_buf) = ctx.outputs.array("out") else {
             log::warn!(
-                "node.pack_curve_xy: no GpuBuffer bound to output port `out` — \
+                "node.combine_xy: no GpuBuffer bound to output port `out` — \
                  the chain build did not pre-allocate this Array<CurvePoint>. \
                  Confirm `max_capacity` is set on this node.",
             );
@@ -156,7 +156,7 @@ mod tests {
     fn declares_x_y_required_scale_optional_and_curvepoint_output() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
 
-        assert_eq!(PackCurveXy::TYPE_ID, "node.pack_curve_xy");
+        assert_eq!(PackCurveXy::TYPE_ID, "node.combine_xy");
 
         let f32_layout = ArrayType::of_known::<f32>();
         let curve_layout = ArrayType::of_known::<CurvePoint>();
@@ -212,6 +212,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = PackCurveXy::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.pack_curve_xy");
+        assert_eq!(node.type_id().as_str(), "node.combine_xy");
     }
 }

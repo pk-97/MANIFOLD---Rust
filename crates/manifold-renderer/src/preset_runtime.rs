@@ -4818,7 +4818,7 @@ mod generator_runtime_tests {
             "nodes": [
                 { "id": 0, "typeId": "system.generator_input", "handle": "input" },
                 { "id": 1, "typeId": "node.uv_field", "handle": "uv" },
-                { "id": 2, "typeId": "node.scale_offset_texture", "handle": "so" },
+                { "id": 2, "typeId": "node.scale_offset_image", "handle": "so" },
                 { "id": 3, "typeId": "system.final_output", "handle": "final_output" }
             ],
             "wires": [

@@ -78,7 +78,7 @@ pub struct EdgeInstance {
 crate::primitive! {
     name: RenderLines,
     type_id: "node.draw_lines",
-    purpose: "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.pack_curve_xy (for parametric curve graphs built from generate_range + array_math chains) or other curve-source primitives upstream.",
+    purpose: "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.combine_xy (for parametric curve graphs built from generate_range + array_math chains) or other curve-source primitives upstream.",
     inputs: {
         points: Array(CurvePoint) required,
         // Optional explicit edge topology. When wired, each non-sentinel

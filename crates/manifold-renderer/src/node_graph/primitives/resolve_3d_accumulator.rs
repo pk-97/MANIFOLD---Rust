@@ -1,4 +1,4 @@
-//! `node.resolve_3d_accumulator` — convert a u32 fixed-point 3D
+//! `node.resolve_scatter_3d` — convert a u32 fixed-point 3D
 //! accumulator buffer into a float density Texture3D, with
 //! self-clearing back to zero for the next frame.
 //!
@@ -32,7 +32,7 @@ struct Resolve3DUniforms {
 
 crate::primitive! {
     name: Resolve3DAccumulator,
-    type_id: "node.resolve_3d_accumulator",
+    type_id: "node.resolve_scatter_3d",
     purpose: "Read a u32 fixed-point 3D accumulator buffer (produced by node.scatter_particles_3d), divide by 4096 (FluidSim3D's FIXED_POINT_MULTIPLIER), and write the result as a density Texture3D. Self-clears the accumulator to zero atomically as part of the same dispatch so the next frame starts fresh.",
     inputs: {
         accum: Array(u32) required,
@@ -64,7 +64,7 @@ crate::primitive! {
     summary: "Reads back the 3D buffer that a 3D particle scatter wrote into and turns it into a volume you can sample.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["resolve scatter 3d", "accumulator", "volume read back"],
+    aliases: ["resolve scatter 3d", "resolve 3d accumulator", "accumulator", "volume read back"],
     fusion_kind: Boundary,
     wgsl_body: include_str!("shaders/resolve_3d_accumulator_body.wgsl"),
 }
@@ -95,9 +95,9 @@ impl Primitive for Resolve3DAccumulator {
             // shared fluid_scatter_3d.wgsl resolve_3d is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.resolve_3d_accumulator standalone codegen"),
+                    .expect("node.resolve_scatter_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.resolve_3d_accumulator",
+                "node.resolve_scatter_3d",
             )
         });
 
@@ -131,7 +131,7 @@ impl Primitive for Resolve3DAccumulator {
                 },
             ],
             [vol_res.div_ceil(4), vol_res.div_ceil(4), vol_depth.div_ceil(4)],
-            "node.resolve_3d_accumulator",
+            "node.resolve_scatter_3d",
         );
     }
 }
@@ -146,7 +146,7 @@ mod tests {
     fn resolve_3d_declares_array_in_and_texture_3d_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let u32_layout = ArrayType::of_known::<u32>();
-        assert_eq!(Resolve3DAccumulator::TYPE_ID, "node.resolve_3d_accumulator");
+        assert_eq!(Resolve3DAccumulator::TYPE_ID, "node.resolve_scatter_3d");
         assert_eq!(Resolve3DAccumulator::INPUTS.len(), 1);
         assert_eq!(Resolve3DAccumulator::INPUTS[0].name, "accum");
         assert_eq!(
@@ -172,7 +172,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = Resolve3DAccumulator::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.resolve_3d_accumulator");
+        assert_eq!(node.type_id().as_str(), "node.resolve_scatter_3d");
     }
 }
 

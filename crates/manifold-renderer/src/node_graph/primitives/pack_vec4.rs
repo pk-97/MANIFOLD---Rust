@@ -1,8 +1,8 @@
-//! `node.pack_vec4` — zip four `Array<f32>` (x, y, z, w channels)
+//! `node.combine_xyzw` — zip four `Array<f32>` (x, y, z, w channels)
 //! into a single `Array<Vec4Vertex>` that downstream 4D rotation /
 //! projection / line rendering consumes.
 //!
-//! The 4D analogue of `node.pack_curve_xy`. Used to assemble any
+//! The 4D analogue of `node.combine_xy`. Used to assemble any
 //! parametric 4D point cloud from independently-built axis chains
 //! (`generate_grid_uv` → `array_math` per axis → `pack_vec4` →
 //! `rotate_4d` → `project_4d` → `render_lines`). Pure structural
@@ -25,8 +25,8 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: PackVec4,
-    type_id: "node.pack_vec4",
-    purpose: "Combine four Array<f32> (x, y, z, w channels) into one Array<Vec4Vertex>. The 4D analogue of node.pack_curve_xy: zips axis-separated channels (built by generate_grid_uv → array_math chains) into the typed wire that node.rotate_4d / project_4d / render_lines consume. Pure structural transformation — no scale bake; per-shape magnitude normalisation is applied upstream via array_math(ScaleOffset) since the constant is shape-specific (0.125 for tesseract, 0.176776695 for duocylinder, …). Pair with generate_grid_uv + array_math(Cos|Sin) + edges_from_grid_uv to author any (u, v)-parametric 4D surface in pure JSON. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
+    type_id: "node.combine_xyzw",
+    purpose: "Combine four Array<f32> (x, y, z, w channels) into one Array<Vec4Vertex>. The 4D analogue of node.combine_xy: zips axis-separated channels (built by generate_grid_uv → array_math chains) into the typed wire that node.rotate_4d / project_4d / render_lines consume. Pure structural transformation — no scale bake; per-shape magnitude normalisation is applied upstream via array_math(ScaleOffset) since the constant is shape-specific (0.125 for tesseract, 0.176776695 for duocylinder, …). Pair with generate_grid_uv + array_math(Cos|Sin) + edges_from_grid_uv to author any (u, v)-parametric 4D surface in pure JSON. CPU-only — runs on the content thread so downstream CPU consumers see same-frame writes.",
     inputs: {
         x: Array(f32) required,
         y: Array(f32) required,
@@ -37,7 +37,7 @@ crate::primitive! {
         out: Array(Vec4Vertex),
     },
     params: [],
-    composition_notes: "Output capacity follows the `x` input (mirrors node.pack_curve_xy / node.array_math) so the pack auto-sizes to whatever the upstream channel length is. Processing truncates to min(x, y, z, w, out) so a shorter channel naturally clips the vertex count. No scale or projection constant is baked — the caller is responsible for any magnitude normalisation. For 4D wireframe surfaces using the existing rotate_4d / project_4d pipeline, multiply each channel by the legacy PROJ_SCALE-equivalent (0.176776695 for duocylinder, 0.125 for tesseract) via an array_math(ScaleOffset) node placed between the trig output and this pack — keeps the magnitude convention with the rest of the 4D family.",
+    composition_notes: "Output capacity follows the `x` input (mirrors node.combine_xy / node.array_math) so the pack auto-sizes to whatever the upstream channel length is. Processing truncates to min(x, y, z, w, out) so a shorter channel naturally clips the vertex count. No scale or projection constant is baked — the caller is responsible for any magnitude normalisation. For 4D wireframe surfaces using the existing rotate_4d / project_4d pipeline, multiply each channel by the legacy PROJ_SCALE-equivalent (0.176776695 for duocylinder, 0.125 for tesseract) via an array_math(ScaleOffset) node placed between the trig output and this pack — keeps the magnitude convention with the rest of the 4D family.",
     examples: [],
     picker: { label: "Combine XYZW", category: Atom },
     summary: "Zips four separate number lists into one list of 4D points. The 4D counterpart to combining X and Y into a curve.",
@@ -77,7 +77,7 @@ impl Primitive for PackVec4 {
         };
         let Some(out_buf) = ctx.outputs.array("out") else {
             log::warn!(
-                "node.pack_vec4: no GpuBuffer bound to output port `out` — \
+                "node.combine_xyzw: no GpuBuffer bound to output port `out` — \
                  the chain build did not pre-allocate this Array<Vec4Vertex>.",
             );
             return;
@@ -146,7 +146,7 @@ mod tests {
     fn declares_four_required_f32_inputs_and_vec4_vertex_output() {
         use crate::node_graph::ports::{ArrayType, PortType};
 
-        assert_eq!(PackVec4::TYPE_ID, "node.pack_vec4");
+        assert_eq!(PackVec4::TYPE_ID, "node.combine_xyzw");
 
         let f32_layout = ArrayType::of_known::<f32>();
         let vtx_layout = ArrayType::of_known::<Vec4Vertex>();
@@ -180,6 +180,6 @@ mod tests {
     fn registers_as_palette_atom() {
         let prim = PackVec4::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.pack_vec4");
+        assert_eq!(node.type_id().as_str(), "node.combine_xyzw");
     }
 }

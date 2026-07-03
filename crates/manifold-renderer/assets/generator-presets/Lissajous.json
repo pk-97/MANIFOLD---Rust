@@ -311,7 +311,7 @@
     {
       "id": 7,
       "nodeId": "t",
-      "typeId": "node.generate_range",
+      "typeId": "node.range",
       "handle": "t",
       "params": {
         "end": {
@@ -332,7 +332,7 @@
     {
       "id": 24,
       "nodeId": "pack",
-      "typeId": "node.pack_curve_xy",
+      "typeId": "node.combine_xy",
       "handle": "pack",
       "params": {
         "scale": {

@@ -1,4 +1,4 @@
-//! `node.power_texture` — per-pixel `pow(max(input.rgb, 0), exponent)`.
+//! `node.power` — per-pixel `pow(max(input.rgb, 0), exponent)`.
 //! Alpha pass-through.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
@@ -18,7 +18,7 @@ struct PowerUniforms {
 
 crate::primitive! {
     name: PowerTexture,
-    type_id: "node.power_texture",
+    type_id: "node.power",
     purpose: "Per-pixel pow(max(input.rgb, 0), exponent). Alpha passes through. Sharpens or softens a [0, 1] field: exponent > 1 pushes mid-grays toward 0 (great for spiking voronoi F1 into star-points), exponent < 1 lifts darks (gamma-like brightening).",
     inputs: {
         in: Texture2D required,
@@ -46,7 +46,7 @@ crate::primitive! {
     summary: "Raises each value to a power, which sharpens or softens a 0-to-1 field. Above 1 pushes toward black, below 1 lifts the midtones.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["power", "pow", "exponent", "gamma"],
+    aliases: ["power", "power texture", "pow", "exponent", "gamma"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/power_texture_body.wgsl"),
 }
@@ -66,11 +66,11 @@ impl Primitive for PowerTexture {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.power_texture standalone codegen");
+                .expect("node.power standalone codegen");
             gpu.device.create_compute_pipeline(
                 &wgsl,
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.power_texture",
+                "node.power",
             )
         });
         let sampler = self
@@ -105,7 +105,7 @@ impl Primitive for PowerTexture {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.power_texture",
+            "node.power",
         );
     }
 }
@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn power_texture_declares_required_input_optional_exponent_and_one_output() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(PowerTexture::TYPE_ID, "node.power_texture");
+        assert_eq!(PowerTexture::TYPE_ID, "node.power");
         assert_eq!(PowerTexture::INPUTS.len(), 2);
         assert_eq!(PowerTexture::INPUTS[0].name, "in");
         assert!(PowerTexture::INPUTS[0].required);
@@ -141,6 +141,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = PowerTexture::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.power_texture");
+        assert_eq!(node.type_id().as_str(), "node.power");
     }
 }

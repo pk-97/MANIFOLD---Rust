@@ -8,7 +8,7 @@
 //!     `node.remap` in **Relative** mode (or sum it with other offset
 //!     fields via `node.mix(Add)` first) to warp a source.
 //!   - `hash` (R): the raw per-block hash in [0, 1). Threshold it
-//!     (`node.exposure` → `node.smoothstep_texture`) for any per-block
+//!     (`node.exposure` → `node.smoothstep`) for any per-block
 //!     accent that must align with the displaced blocks — e.g. the
 //!     Glitch invert mask.
 //!
@@ -90,7 +90,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "offset is a signed displacement in UV units (~±0.15 in x, ±0.03 in y at amount=1), gated by step(1 - amount*0.6, block_hash) so it grows from sparse to dense as amount rises. Sum it with node.scanline_jitter_field's offset via node.mix(Add), then node.remap(mode=Relative, wrap=Clamp) to warp the source. hash carries the same block_hash the gate uses, so a `hash → node.exposure(amount) → node.smoothstep_texture(0.91, 0.92)` chain reproduces the legacy per-block invert accent and stays aligned with the moved blocks. block_size is clamped to >= 4 in-shader.",
+    composition_notes: "offset is a signed displacement in UV units (~±0.15 in x, ±0.03 in y at amount=1), gated by step(1 - amount*0.6, block_hash) so it grows from sparse to dense as amount rises. Sum it with node.scanline_jitter_field's offset via node.mix(Add), then node.remap(mode=Relative, wrap=Clamp) to warp the source. hash carries the same block_hash the gate uses, so a `hash → node.exposure(amount) → node.smoothstep(0.91, 0.92)` chain reproduces the legacy per-block invert accent and stays aligned with the moved blocks. block_size is clamped to >= 4 in-shader.",
     examples: ["preset.effect.glitch"],
     picker: { label: "Block Displace Field", category: Atom },
     summary: "Outputs a grid of random block offsets, the displacement map behind datamosh and block-glitch looks. Feed it into Remap.",

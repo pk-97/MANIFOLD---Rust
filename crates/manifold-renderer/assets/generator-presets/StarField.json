@@ -351,7 +351,7 @@
           {
             "id": 3,
             "nodeId": "offset_x",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "offset_x",
             "params": {
               "a": {
@@ -372,7 +372,7 @@
           {
             "id": 4,
             "nodeId": "offset_y",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "offset_y",
             "params": {
               "a": {
@@ -498,7 +498,7 @@
           {
             "id": 18,
             "nodeId": "center_offset",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "center_offset",
             "params": {
               "a": {
@@ -581,7 +581,7 @@
           {
             "id": 6,
             "nodeId": "invert_distance",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "invert_distance",
             "params": {
               "offset": {
@@ -598,7 +598,7 @@
           {
             "id": 7,
             "nodeId": "spike",
-            "typeId": "node.power_texture",
+            "typeId": "node.power",
             "handle": "spike",
             "params": {
               "exponent": {
@@ -611,7 +611,7 @@
           {
             "id": 9,
             "nodeId": "density_mask",
-            "typeId": "node.smoothstep_texture",
+            "typeId": "node.smoothstep",
             "handle": "density_mask",
             "params": {
               "high": {
@@ -645,7 +645,7 @@
           {
             "id": 19,
             "nodeId": "exponent_from_size",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "exponent_from_size",
             "params": {
               "a": {
@@ -754,7 +754,7 @@
           {
             "id": 11,
             "nodeId": "freq_per_cell",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "freq_per_cell",
             "params": {
               "offset": {
@@ -771,7 +771,7 @@
           {
             "id": 12,
             "nodeId": "phase_per_cell",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "phase_per_cell",
             "params": {
               "offset": {
@@ -788,7 +788,7 @@
           {
             "id": 13,
             "nodeId": "twinkle_sin",
-            "typeId": "node.trig_texture",
+            "typeId": "node.sine_cosine",
             "handle": "twinkle_sin",
             "params": {
               "freq": {
@@ -809,7 +809,7 @@
           {
             "id": 14,
             "nodeId": "twinkle_to_unit",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "twinkle_to_unit",
             "params": {
               "offset": {
@@ -931,7 +931,7 @@
           {
             "id": 16,
             "nodeId": "final_brightness",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "final_brightness",
             "params": {
               "offset": {

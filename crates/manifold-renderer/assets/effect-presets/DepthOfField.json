@@ -646,7 +646,7 @@
           {
             "id": 23,
             "nodeId": "depth_centered",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "depth_centered",
             "params": {
               "offset": {
@@ -663,14 +663,14 @@
           {
             "id": 24,
             "nodeId": "depth_abs",
-            "typeId": "node.abs_texture",
+            "typeId": "node.absolute_value",
             "handle": "depth_abs",
             "title": "Absolute Depth"
           },
           {
             "id": 25,
             "nodeId": "depth_normalize",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "depth_normalize",
             "params": {
               "offset": {
@@ -687,7 +687,7 @@
           {
             "id": 26,
             "nodeId": "depth_to_mask",
-            "typeId": "node.smoothstep_texture",
+            "typeId": "node.smoothstep",
             "handle": "depth_to_mask",
             "params": {
               "high": {
@@ -890,7 +890,7 @@
           {
             "id": 32,
             "nodeId": "coc_strength",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "coc_strength",
             "params": {
               "offset": {

@@ -1,8 +1,8 @@
-//! `node.length_vec2` — per-pixel `length(in.rg)` as a scalar field
+//! `node.vector_length` — per-pixel `length(in.rg)` as a scalar field
 //! in the R channel. Turns a signed flow / displacement / gradient
 //! texture into a positive scalar magnitude field. Pair with
 //! `node.heightmap_to_normal` (height = vec2 magnitude) for the
-//! oily-fluid color → normal pipeline, with `node.smoothstep_texture`
+//! oily-fluid color → normal pipeline, with `node.smoothstep`
 //! for thresholding, or with a tonemap for visualisation.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
@@ -12,7 +12,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: LengthVec2,
-    type_id: "node.length_vec2",
+    type_id: "node.vector_length",
     purpose: "Per-pixel `length(in.rg)` as a scalar field in the R channel (GBA = 0, 0, 1). The vec2 magnitude atom — converts signed flow / displacement / gradient textures into positive scalar fields. Standard upstream step for heightmap-style ops that need a derived height from a vec2 source.",
     inputs: {
         in: Texture2D required,
@@ -21,9 +21,9 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
-    composition_notes: "BA of `in` ignored. Output is unbounded above (length can exceed 1 for large vec2 inputs); pair with `node.exposure` or `node.smoothstep_texture` to remap the range as needed. Chain: `color → length_vec2 → heightmap_to_normal` is the oily-fluid normal pipeline.",
+    composition_notes: "BA of `in` ignored. Output is unbounded above (length can exceed 1 for large vec2 inputs); pair with `node.exposure` or `node.smoothstep` to remap the range as needed. Chain: `color → length_vec2 → heightmap_to_normal` is the oily-fluid normal pipeline.",
     examples: [],
-    picker: { label: "Length", category: Atom },
+    picker: { label: "Vector Length", category: Atom },
     summary: "Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field.",
     category: MathAndConvert,
     role: Filter,
@@ -51,9 +51,9 @@ impl Primitive for LengthVec2 {
             // length_vec2.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.length_vec2 standalone codegen"),
+                    .expect("node.vector_length standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.length_vec2",
+                "node.vector_length",
             )
         });
         let sampler = self
@@ -77,7 +77,7 @@ impl Primitive for LengthVec2 {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.length_vec2",
+            "node.vector_length",
         );
     }
 }

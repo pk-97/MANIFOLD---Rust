@@ -78,14 +78,14 @@
     {
       "id": 2,
       "nodeId": "fold",
-      "typeId": "node.abs_texture",
+      "typeId": "node.absolute_value",
       "handle": "fold",
       "title": "Fold (Absolute)"
     },
     {
       "id": 3,
       "nodeId": "mirror_uv",
-      "typeId": "node.scale_offset_texture",
+      "typeId": "node.scale_offset_image",
       "handle": "mirror_uv",
       "params": {
         "offset": {

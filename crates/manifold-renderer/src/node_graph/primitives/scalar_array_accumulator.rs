@@ -1,4 +1,4 @@
-//! `node.scalar_array_accumulator` — add `increment` to every element
+//! `node.sum_into_bins` — add `increment` to every element
 //! of an internal accumulator on each clip trigger, emit the
 //! accumulator as `Array<f32>`.
 //!
@@ -21,7 +21,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: ScalarArrayAccumulator,
-    type_id: "node.scalar_array_accumulator",
+    type_id: "node.sum_into_bins",
     purpose: "Add `increment` to every element of an internal Array<f32> accumulator on each clip trigger; emit the accumulator. Generic envelope-mode driver — pair with a trigger_count source to advance N parallel scalars synchronously. NestedCubes envelope mode is the first user.",
     inputs: {
         trigger_count: ScalarF32 optional,
@@ -65,7 +65,7 @@ crate::primitive! {
     summary: "Adds an amount into each slot of a running list on every trigger, so you can build up a histogram or per-slot counter over time.",
     category: MathAndConvert,
     role: Control,
-    aliases: ["sum into bins", "accumulator", "histogram"],
+    aliases: ["sum into bins", "scalar array accumulator", "accumulator", "histogram"],
     extra_fields: {
         accumulator: Vec<f32> = Vec::new(),
         last_trigger_count: Option<u32> = None,
@@ -92,7 +92,7 @@ impl Primitive for ScalarArrayAccumulator {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let Some(dst) = ctx.outputs.array("accumulated") else {
             log::warn!(
-                "node.scalar_array_accumulator: no GpuBuffer bound to output \
+                "node.sum_into_bins: no GpuBuffer bound to output \
                  port `accumulated` — the chain build did not pre-allocate \
                  the Array<f32> output.",
             );

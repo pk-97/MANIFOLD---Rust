@@ -167,7 +167,7 @@
     {
       "id": 3,
       "nodeId": "smoothing_remap",
-      "typeId": "node.affine_scalar",
+      "typeId": "node.scale_offset_value",
       "handle": "smoothing_remap",
       "params": {
         "a": {
@@ -209,7 +209,7 @@
     {
       "id": 5,
       "nodeId": "connect_nearest",
-      "typeId": "node.array_connect_nearest",
+      "typeId": "node.connect_nearest",
       "handle": "connect_nearest",
       "params": {
         "max_distance": {
@@ -226,7 +226,7 @@
     {
       "id": 6,
       "nodeId": "amount_value",
-      "typeId": "node.affine_scalar",
+      "typeId": "node.scale_offset_value",
       "handle": "amount_value",
       "params": {
         "a": {

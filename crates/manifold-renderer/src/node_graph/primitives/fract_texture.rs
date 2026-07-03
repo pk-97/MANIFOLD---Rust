@@ -1,4 +1,4 @@
-//! `node.fract_texture` — per-pixel `fract(input.rgb * scale)`,
+//! `node.wrap` — per-pixel `fract(input.rgb * scale)`,
 //! alpha pass-through.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
@@ -18,7 +18,7 @@ struct FractUniforms {
 
 crate::primitive! {
     name: FractTexture,
-    type_id: "node.fract_texture",
+    type_id: "node.wrap",
     purpose: "Per-pixel fract(input.rgb * scale). Returns x - floor(x). Multiplying before fract is the classic 'tile a smooth field into N repeating stripes' trick — e.g. fract(uv.x * 10) → 10 vertical stripes from 0 to 1.",
     inputs: {
         in: Texture2D required,
@@ -42,7 +42,7 @@ crate::primitive! {
     summary: "Keeps only the part after the decimal point, which wraps every value back into 0 to 1. Multiply the input first to tile or repeat a gradient.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["wrap", "fract", "repeat", "tile"],
+    aliases: ["wrap", "fract texture", "fract", "repeat", "tile"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/fract_texture_body.wgsl"),
 }
@@ -65,11 +65,11 @@ impl Primitive for FractTexture {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.fract_texture standalone codegen");
+                .expect("node.wrap standalone codegen");
             gpu.device.create_compute_pipeline(
                 &wgsl,
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.fract_texture",
+                "node.wrap",
             )
         });
         let sampler = self
@@ -104,7 +104,7 @@ impl Primitive for FractTexture {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.fract_texture",
+            "node.wrap",
         );
     }
 }
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn fract_texture_declares_one_input_and_one_output() {
         use crate::node_graph::ports::PortType;
-        assert_eq!(FractTexture::TYPE_ID, "node.fract_texture");
+        assert_eq!(FractTexture::TYPE_ID, "node.wrap");
         assert_eq!(FractTexture::INPUTS.len(), 1);
         assert_eq!(FractTexture::OUTPUTS.len(), 1);
         assert_eq!(FractTexture::OUTPUTS[0].ty, PortType::Texture2D);
@@ -134,6 +134,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = FractTexture::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.fract_texture");
+        assert_eq!(node.type_id().as_str(), "node.wrap");
     }
 }

@@ -557,7 +557,7 @@
           {
             "id": 1,
             "nodeId": "noise_scale_inv",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "noise_scale_inv",
             "params": {
               "a": {
@@ -595,7 +595,7 @@
           {
             "id": 41,
             "nodeId": "noise_offset_calc",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "noise_offset_calc",
             "params": {
               "a": {
@@ -670,7 +670,7 @@
           {
             "id": 5,
             "nodeId": "noise_scaled",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "noise_scaled",
             "params": {
               "offset": {
@@ -1195,7 +1195,7 @@
           {
             "id": 17,
             "nodeId": "mirror_deg_to_rad",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "mirror_deg_to_rad",
             "params": {
               "a": {
@@ -1342,7 +1342,7 @@
           {
             "id": 22,
             "nodeId": "gradient_xy",
-            "typeId": "node.pack_channels",
+            "typeId": "node.pack_rgba",
             "handle": "gradient_xy",
             "params": {
               "default_a": {
@@ -1367,7 +1367,7 @@
           {
             "id": 23,
             "nodeId": "gradient_mag",
-            "typeId": "node.length_vec2",
+            "typeId": "node.vector_length",
             "handle": "gradient_mag",
             "title": "Gradient Magnitude"
           },
@@ -1611,7 +1611,7 @@
           {
             "id": 52,
             "nodeId": "roughness_from_edge",
-            "typeId": "node.scale_offset_texture",
+            "typeId": "node.scale_offset_image",
             "handle": "roughness_from_edge",
             "params": {
               "offset": {
@@ -1977,7 +1977,7 @@
           {
             "id": 36,
             "nodeId": "cam_orbit_deg_to_rad",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "cam_orbit_deg_to_rad",
             "params": {
               "a": {
@@ -1998,7 +1998,7 @@
           {
             "id": 37,
             "nodeId": "cam_tilt_deg_to_rad",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "cam_tilt_deg_to_rad",
             "params": {
               "a": {
@@ -2019,7 +2019,7 @@
           {
             "id": 38,
             "nodeId": "cam_fov_deg_to_rad",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "cam_fov_deg_to_rad",
             "params": {
               "a": {

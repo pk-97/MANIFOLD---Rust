@@ -1,4 +1,4 @@
-//! `node.generate_range` — emit an `Array<f32>` of `N` samples
+//! `node.range` — emit an `Array<f32>` of `N` samples
 //! linearly spaced over `[start, end]`. The Pattern-CHOP atom: the
 //! source of an evenly-sampled parameter sweep that downstream
 //! `array_math` / curve-pack primitives consume.
@@ -31,7 +31,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: GenerateRange,
-    type_id: "node.generate_range",
+    type_id: "node.range",
     purpose: "Emit an Array<f32> of `count` samples linearly spaced over `[start, end]`. The TouchDesigner Pattern-CHOP analogue. Output is the t-parameter array that drives parametric curve graphs — pair with array_math (ScaleOffset / Sin / Cos) + pack_curve_xy for Lissajous-style curves, or with cycle_table_row + mux for stepped sequences. `start` and `end` are port-shadows-param so an LFO or driver wire can sweep the range dynamically. `active_count` (input-only) overrides the sample count for variable-N curves (regular polygons, variable-resolution sweeps) — when unwired the count is `max_capacity` for backward-compatible fixed-resolution sampling. Output capacity is `max_capacity`. CPU-only — the curve-math atom family runs on the content thread so downstream CPU readers (replicators, polyline stackers) see same-frame writes without a GPU→CPU fence.",
     inputs: {
         start: ScalarF32 optional,
@@ -81,7 +81,7 @@ crate::primitive! {
     summary: "Builds a list of evenly spaced numbers between a start and an end. The starting point for laying out copies, rings, or steps.",
     category: MathAndConvert,
     role: Source,
-    aliases: ["range", "linspace", "series", "Pattern CHOP"],
+    aliases: ["range", "generate range", "linspace", "series", "Pattern CHOP"],
 }
 
 impl Primitive for GenerateRange {
@@ -107,7 +107,7 @@ impl Primitive for GenerateRange {
 
         let Some(out_buf) = ctx.outputs.array("out") else {
             log::warn!(
-                "node.generate_range: no GpuBuffer bound to output port `out` — \
+                "node.range: no GpuBuffer bound to output port `out` — \
                  the chain build did not pre-allocate this Array<f32>, so the \
                  range generator is a no-op this frame. Confirm `max_capacity` \
                  is set on this node.",
@@ -157,7 +157,7 @@ mod tests {
     fn declares_three_optional_scalar_inputs_and_one_f32_output() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
 
-        assert_eq!(GenerateRange::TYPE_ID, "node.generate_range");
+        assert_eq!(GenerateRange::TYPE_ID, "node.range");
         assert_eq!(GenerateRange::INPUTS.len(), 3);
         for port in GenerateRange::INPUTS {
             assert!(!port.required, "{} must be optional (port-shadow)", port.name);
@@ -182,6 +182,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = GenerateRange::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.generate_range");
+        assert_eq!(node.type_id().as_str(), "node.range");
     }
 }

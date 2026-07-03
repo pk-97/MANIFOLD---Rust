@@ -75,6 +75,28 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.render_value_overlay", "node.value_overlay"),
     ("node.box_mask", "node.rectangle_mask"),
     ("node.ellipse_mask", "node.circle_mask"),
+    // --- VOCAB P2 4/8: Math & Convert (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    // Note: node.array_math and node.array_feedback keep their ids (label-only
+    // changes: Array Math / Array Feedback) - no migration entry needed.
+    ("node.abs_texture", "node.absolute_value"),
+    ("node.fract_texture", "node.wrap"),
+    ("node.power_texture", "node.power"),
+    ("node.trig_texture", "node.sine_cosine"),
+    ("node.smoothstep_texture", "node.smoothstep"),
+    ("node.scale_offset_texture", "node.scale_offset_image"),
+    ("node.affine_scalar", "node.scale_offset_value"),
+    ("node.array_unpack_vec2", "node.split_xy"),
+    ("node.array_connect_nearest", "node.connect_nearest"),
+    ("node.pack_curve_xy", "node.combine_xy"),
+    ("node.pack_vec4", "node.combine_xyzw"),
+    ("node.pack_channels", "node.pack_rgba"),
+    ("node.length_vec2", "node.vector_length"),
+    ("node.normalize_vec2", "node.normalize"),
+    ("node.generate_range", "node.range"),
+    ("node.scalar_array_accumulator", "node.sum_into_bins"),
+    ("node.resolve_accumulator", "node.resolve_scatter"),
+    ("node.resolve_3d_accumulator", "node.resolve_scatter_3d"),
+    ("node.texture_dimensions", "node.texture_size"),
 ];
 
 /// One legacy-fold entry: `(old_id, new_id, seed_params)` — the params to

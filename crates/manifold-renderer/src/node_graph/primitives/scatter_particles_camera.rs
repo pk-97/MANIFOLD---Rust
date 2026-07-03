@@ -7,7 +7,7 @@
 //! reads its basis vectors + position to project each 3D particle through
 //! orthographic (with toroidal wrap) or perspective camera math, then atomic-
 //! adds `scaled_energy` into a 2D u32 accumulator buffer sized
-//! `disp_w × disp_h`. Pair with `node.resolve_accumulator` downstream to lift
+//! `disp_w × disp_h`. Pair with `node.resolve_scatter` downstream to lift
 //! the u32 grid into a float Texture2D for display.
 //!
 //! Sibling to `node.scatter_particles` (2D in → 2D grid out) and
@@ -67,7 +67,7 @@ struct ProjectedUniforms {
 crate::primitive! {
     name: ScatterParticlesCamera,
     type_id: "node.scatter_particles_camera",
-    purpose: "Fused 3D→2D camera projection + atomic-add scatter. Takes 3D particles and a Camera; projects each particle through orthographic (with toroidal wrap) or perspective camera math; atomic-adds scaled_energy into a 2D u32 accumulator. Pair downstream with node.resolve_accumulator → texture for display. Sibling to node.scatter_particles (2D in/2D out) and node.scatter_particles_3d (3D in/3D out) — this one bridges 3D in to 2D-grid out via a camera. Used by FluidSim3D's display path.",
+    purpose: "Fused 3D→2D camera projection + atomic-add scatter. Takes 3D particles and a Camera; projects each particle through orthographic (with toroidal wrap) or perspective camera math; atomic-adds scaled_energy into a 2D u32 accumulator. Pair downstream with node.resolve_scatter → texture for display. Sibling to node.scatter_particles (2D in/2D out) and node.scatter_particles_3d (3D in/3D out) — this one bridges 3D in to 2D-grid out via a camera. Used by FluidSim3D's display path.",
     inputs: {
         particles: Array(Particle) required,
         camera: Camera required,
@@ -122,7 +122,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Reads cam.pos, cam.fwd, cam.right, cam.up from the input camera; ignores cam.fov_y (the splat math is implicit-FOV — basis vectors set the projection scale). `mode` dispatches between Perspective (geometrically correct + culls behind-camera) and Orthographic (toroidal wrap on screen edges). Aspect is derived from disp_w / disp_h. Downstream node.resolve_accumulator self-clears the accumulator after reading it — no scatter-side pre-clear needed.",
+    composition_notes: "Reads cam.pos, cam.fwd, cam.right, cam.up from the input camera; ignores cam.fov_y (the splat math is implicit-FOV — basis vectors set the projection scale). `mode` dispatches between Perspective (geometrically correct + culls behind-camera) and Orthographic (toroidal wrap on screen edges). Aspect is derived from disp_w / disp_h. Downstream node.resolve_scatter self-clears the accumulator after reading it — no scatter-side pre-clear needed.",
     examples: [],
     picker: { label: "Draw Particles (camera)", category: Atom },
     summary: "Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim.",

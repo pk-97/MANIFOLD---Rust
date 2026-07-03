@@ -497,7 +497,7 @@
           {
             "id": 6,
             "nodeId": "resolve",
-            "typeId": "node.resolve_accumulator",
+            "typeId": "node.resolve_scatter",
             "handle": "resolve",
             "params": {
               "fixed_point_scale": {
@@ -701,7 +701,7 @@
           {
             "id": 10,
             "nodeId": "cam_angle_a",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "cam_angle_a",
             "params": {
               "a": {
@@ -721,7 +721,7 @@
           {
             "id": 11,
             "nodeId": "cam_angle_b",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "cam_angle_b",
             "params": {
               "a": {
@@ -889,7 +889,7 @@
           {
             "id": 12,
             "nodeId": "particle_count_calc",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "particle_count_calc",
             "params": {
               "a": {
@@ -929,7 +929,7 @@
           {
             "id": 14,
             "nodeId": "scaled_energy_calc",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "scaled_energy_calc",
             "params": {
               "a": {
@@ -969,7 +969,7 @@
           {
             "id": 16,
             "nodeId": "intensity_calc",
-            "typeId": "node.affine_scalar",
+            "typeId": "node.scale_offset_value",
             "handle": "intensity_calc",
             "params": {
               "a": {

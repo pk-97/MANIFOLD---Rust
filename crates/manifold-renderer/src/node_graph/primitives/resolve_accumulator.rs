@@ -1,4 +1,4 @@
-//! `node.resolve_accumulator` — convert a u32 fixed-point
+//! `node.resolve_scatter` — convert a u32 fixed-point
 //! accumulator buffer (produced by `node.scatter_particles`) into
 //! a float density texture.
 //!
@@ -33,7 +33,7 @@ struct ResolveUniforms {
 
 crate::primitive! {
     name: ResolveAccumulator,
-    type_id: "node.resolve_accumulator",
+    type_id: "node.resolve_scatter",
     purpose: "Read a u32 fixed-point accumulator buffer (produced by node.scatter_particles), divide by `fixed_point_scale`, and write the result as a grayscale density texture. The bridge from Array(u32) back to Texture2D for downstream texture-domain primitives. Dimensions are taken from the output Texture2D — which the backend allocates at canvas size — so resolve always covers every pixel of the density texture, matching whatever scatter wrote (also canvas-sized via `canvas_sized_array_outputs()`).",
     inputs: {
         accum: Array(u32) required,
@@ -57,7 +57,7 @@ crate::primitive! {
     summary: "Reads back the buffer that Draw Particles wrote into and turns it into a normal image. The pickup step after a particle splat.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["resolve scatter", "accumulator", "read back"],
+    aliases: ["resolve scatter", "resolve accumulator", "accumulator", "read back"],
     fusion_kind: Boundary,
     wgsl_body: include_str!("shaders/resolve_accumulator_body.wgsl"),
 }
@@ -89,9 +89,9 @@ impl Primitive for ResolveAccumulator {
             // resolve_accumulator.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.resolve_accumulator standalone codegen"),
+                    .expect("node.resolve_scatter standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.resolve_accumulator",
+                "node.resolve_scatter",
             )
         });
 
@@ -122,7 +122,7 @@ impl Primitive for ResolveAccumulator {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.resolve_accumulator",
+            "node.resolve_scatter",
         );
     }
 }
@@ -138,7 +138,7 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType};
         let u32_layout = ArrayType::of_known::<u32>();
 
-        assert_eq!(ResolveAccumulator::TYPE_ID, "node.resolve_accumulator");
+        assert_eq!(ResolveAccumulator::TYPE_ID, "node.resolve_scatter");
         assert_eq!(ResolveAccumulator::INPUTS.len(), 1);
         assert_eq!(ResolveAccumulator::INPUTS[0].name, "accum");
         assert_eq!(
@@ -155,7 +155,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = ResolveAccumulator::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.resolve_accumulator");
+        assert_eq!(node.type_id().as_str(), "node.resolve_scatter");
     }
 }
 

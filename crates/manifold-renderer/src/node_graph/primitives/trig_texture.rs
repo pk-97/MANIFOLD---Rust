@@ -1,4 +1,4 @@
-//! `node.trig_texture` — per-pixel sin/cos/tan of `(input.rgb * freq + phase)`.
+//! `node.sine_cosine` — per-pixel sin/cos/tan of `(input.rgb * freq + phase)`.
 //!
 //! Replaces the old standalone `node.sin_texture` and `node.cos_texture`
 //! with a single primitive that switches on a `mode` enum (Sin / Cos / Tan).
@@ -28,7 +28,7 @@ pub const TRIG_MODES: &[&str] = &["Sin", "Cos", "Tan"];
 
 crate::primitive! {
     name: TrigTexture,
-    type_id: "node.trig_texture",
+    type_id: "node.sine_cosine",
     purpose: "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free. `freq` and `phase` can ALSO be driven per-pixel from optional texture inputs (`freq_tex` / `phase_tex` — R channel) — unlocks per-cell unique trig patterns (per-star twinkle, cellular flicker, etc.) when fed from a per-cell hash source like `node.voronoi_2d` (A channel) routed through `node.channel_mixer`.",
     inputs: {
         in: Texture2D required,
@@ -75,7 +75,7 @@ crate::primitive! {
     summary: "Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["sine", "cosine", "sin", "cos", "wave"],
+    aliases: ["sine", "cosine", "trig texture", "sin", "cos", "wave"],
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/trig_texture_body.wgsl"),
 }
@@ -122,9 +122,9 @@ impl Primitive for TrigTexture {
             // parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.trig_texture standalone codegen"),
+                    .expect("node.sine_cosine standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.trig_texture",
+                "node.sine_cosine",
             )
         });
         let sampler = self
@@ -162,7 +162,7 @@ impl Primitive for TrigTexture {
                 GpuBinding::Texture { binding: 5, texture: out_tex },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.trig_texture",
+            "node.sine_cosine",
         );
     }
 }
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn trig_texture_declares_required_in_optional_scalars_and_optional_texture_shadows() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(TrigTexture::TYPE_ID, "node.trig_texture");
+        assert_eq!(TrigTexture::TYPE_ID, "node.sine_cosine");
         let ins = TrigTexture::INPUTS;
         assert_eq!(ins.len(), 5);
         assert_eq!(ins[0].name, "in");
@@ -207,7 +207,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = TrigTexture::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.trig_texture");
+        assert_eq!(node.type_id().as_str(), "node.sine_cosine");
     }
 }
 
