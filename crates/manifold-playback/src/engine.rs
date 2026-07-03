@@ -6,11 +6,12 @@ use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
 use manifold_core::tempo::TempoMapConverter;
 use manifold_core::types::{LayerType, PlaybackState, TempoPointSource};
-use manifold_core::{Beats, Bpm, Seconds};
+use manifold_core::{Beats, Bpm, LayerId, SceneId, Seconds};
 
 use crate::live_clip_manager::LiveClipManager;
 use crate::renderer::ClipRenderer;
 use crate::scheduler::{ActiveClipRef, ClipScheduler};
+use crate::session_state::SessionRuntime;
 
 use ahash::{AHashMap, AHashSet};
 use std::collections::HashMap;
@@ -117,6 +118,11 @@ pub struct PlaybackEngine {
     // Live clip manager (MIDI phantom clips)
     live_clip_manager: Option<LiveClipManager>,
 
+    // Session mode runtime (P2). Never serialized, never undo-wrapped — see
+    // docs/SESSION_MODE_DESIGN.md §4. Sibling of `live_clip_manager`; always
+    // present (unlike the live-clip manager, it holds no platform resources).
+    session_runtime: SessionRuntime,
+
     // Live audio trigger edge-detection state (per-route armed flags). Drives
     // one-shot fires from incoming audio transients each tick.
     live_trigger_state: crate::live_trigger::LiveTriggerState,
@@ -153,6 +159,15 @@ pub struct PlaybackEngine {
     active_indices_scratch: Vec<(usize, usize)>,
     /// Pre-allocated scratch for live slot refs (avoids per-frame Vec allocation).
     live_slot_refs_scratch: Vec<ActiveClipRef>,
+    /// Pre-allocated scratch for session-slot refs — the third `sync_clips_to_time`
+    /// input, alongside `timeline_active_scratch` / `live_slot_refs_scratch`.
+    session_refs_scratch: Vec<ActiveClipRef>,
+    /// Pre-allocated scratch: clip ids to force-evict this tick because a
+    /// session loop wrap kept the same inner clip active across the boundary
+    /// (§4 wrap-restart rule) — `compute_sync` diffs by clip_id and wouldn't
+    /// otherwise restart it. Evicted via the engine's own `stop_clip` so the
+    /// very next `compute_sync` call sees it as a fresh `to_start`.
+    session_wrap_restart_scratch: Vec<ClipId>,
     /// Pre-allocated scratch for clips to start during sync (avoids per-sync Vec allocation).
     sync_start_scratch: Vec<ActiveClipRef>,
     /// Pre-allocated scratch for modulation active clip timing.
@@ -224,6 +239,7 @@ impl PlaybackEngine {
             scheduler: ClipScheduler::new(),
 
             live_clip_manager: None,
+            session_runtime: SessionRuntime::new(),
             live_trigger_state: crate::live_trigger::LiveTriggerState::default(),
             compositor_dirty_deadline: 0.0,
             sync_clips_dirty: false,
@@ -240,6 +256,8 @@ impl PlaybackEngine {
             timeline_active_scratch: Vec::with_capacity(32),
             active_indices_scratch: Vec::with_capacity(32),
             live_slot_refs_scratch: Vec::with_capacity(8),
+            session_refs_scratch: Vec::with_capacity(8),
+            session_wrap_restart_scratch: Vec::with_capacity(4),
             sync_start_scratch: Vec::with_capacity(4),
             modulation_timing_scratch: Vec::with_capacity(64),
             audio_snapshot: manifold_core::audio_features::AudioFeatureSnapshot::default(),
@@ -380,6 +398,9 @@ impl PlaybackEngine {
         // or programmatic construction may not. Redundant calls are safe (idempotent).
         project.on_after_deserialize();
         self.project = Some(project);
+        // Runtime session state never survives a project swap (it is never
+        // serialized) — a fresh/loaded project always starts arrangement-only.
+        self.session_runtime.reset();
 
         self.current_time_double = 0.0;
         self.current_time = Seconds::ZERO;
@@ -468,6 +489,10 @@ impl PlaybackEngine {
         if let Some(mgr) = &mut self.live_clip_manager {
             mgr.clear_all();
         }
+        // Transport stop stops all session playback and clears pending
+        // launches (Ableton behavior). session_override is NOT cleared —
+        // layers stay detached until an explicit Back to Arrangement (§4).
+        self.session_runtime.on_transport_stop();
         self.current_time_double = 0.0;
         self.current_time = Seconds::ZERO;
         self.current_beat = 0.0;
@@ -552,6 +577,13 @@ impl PlaybackEngine {
         let old_beat = self.current_beat;
         self.set_time(Seconds(time.0.max(0.0)));
         self.sync_project_bpm_from_current_beat();
+
+        // Session slots are beat-anchored and stateless, so a seek never
+        // stops them — but pending launches must retarget to the next
+        // quantize boundary after the new position (§4), or a jump could
+        // fire one off-grid (or, if the new position is already past the
+        // old target, instantly).
+        self.session_runtime.on_seek(self.current_beat);
 
         // Clear live clips on large seek
         let beat_delta = (self.current_beat - old_beat).abs();
@@ -852,12 +884,19 @@ impl PlaybackEngine {
         }
         if let Some(project) = &self.project {
             for (li, ci) in &self.active_indices_scratch {
-                if let Some(clip) = project
-                    .timeline
-                    .layers
-                    .get(*li)
-                    .and_then(|l| l.clips.get(*ci))
-                {
+                let Some(layer) = project.timeline.layers.get(*li) else {
+                    continue;
+                };
+                // Arrangement suppression (§6): a layer detached into session
+                // mode plays ONLY session content. Skipping it here is the
+                // entire integration — the scheduler diff then stops
+                // arrangement clips and starts session clips with no further
+                // changes downstream (compositor/effects/LED don't know or
+                // care where an active clip came from).
+                if self.session_runtime.is_overridden(&layer.layer_id) {
+                    continue;
+                }
+                if let Some(clip) = layer.clips.get(*ci) {
                     self.timeline_active_scratch.push(ActiveClipRef {
                         clip_id: clip.id.clone(),
                         layer_index: *li as i32,
@@ -1115,11 +1154,18 @@ impl PlaybackEngine {
             mgr.fill_live_slot_refs(&mut self.live_slot_refs_scratch);
         }
 
+        // Third reference source (§4/§9): an input to this sole authority,
+        // never a parallel path. May evict a clip via `stop_clip` (the same
+        // primitive this function's own to_stop loop uses) to force a
+        // same-clip loop-wrap restart before the diff below runs.
+        self.resolve_session_refs();
+
         let sync_result = self.scheduler.compute_sync(
             self.current_time,
             Beats(self.current_beat),
             &self.timeline_active_scratch,
             &self.live_slot_refs_scratch,
+            &self.session_refs_scratch,
             &self.active_clip_ids,
             &self.looping_clip_ids,
             Beats::from_f32(min_remaining_beats),
@@ -1141,6 +1187,8 @@ impl PlaybackEngine {
                     .as_ref()
                     .and_then(|mgr| mgr.find_live_slot_clip(&entry.clip_id))
                     .cloned()
+            } else if entry.is_session_slot() {
+                self.resolve_session_clip_for_start(entry)
             } else {
                 self.project
                     .as_ref()
@@ -1162,6 +1210,139 @@ impl PlaybackEngine {
 
         // Reclaim buffers for reuse on the next sync call (zero allocation).
         self.scheduler.reclaim(sync_result);
+    }
+
+    // ─── Session mode resolution (P2) ───
+
+    /// Fill `session_refs_scratch` (the third `sync_clips_to_time` input) from
+    /// `SessionRuntime`, and apply any wrap-restart evictions it reports.
+    ///
+    /// The eviction step mirrors `seek_to`'s existing "collect ids, stop after
+    /// the borrow" pattern (this file, `seek_to`): `SessionRuntime::resolve_refs`
+    /// only has `&Project`/`&Timeline` access and cannot call `self.stop_clip`
+    /// itself, so it reports the ids to evict and this method applies them
+    /// with the engine's own `stop_clip` — the same primitive the to_stop loop
+    /// in `sync_clips_to_time` already uses. This keeps `sync_clips_to_time`
+    /// the sole authority: the eviction only pre-empties the very next
+    /// `compute_sync` diff, it never bypasses it.
+    fn resolve_session_refs(&mut self) {
+        self.session_refs_scratch.clear();
+        self.session_wrap_restart_scratch.clear();
+        let current_beat = self.current_beat;
+        if let Some(project) = &self.project {
+            self.session_runtime.resolve_refs(
+                current_beat,
+                &project.session,
+                &project.timeline,
+                &mut self.session_refs_scratch,
+                &mut self.session_wrap_restart_scratch,
+            );
+        }
+        if !self.session_wrap_restart_scratch.is_empty() {
+            let ids = std::mem::take(&mut self.session_wrap_restart_scratch);
+            for clip_id in &ids {
+                self.stop_clip(clip_id);
+            }
+            self.session_wrap_restart_scratch = ids;
+        }
+    }
+
+    /// Resolve the full `TimelineClip` for a session-slot `ActiveClipRef` at
+    /// start time (rare, per-event — mirrors the live-slot/timeline arms just
+    /// above it). Delegates to `SessionRuntime::resolve_clip_for_start`, which
+    /// rebases the resolved clip's `start_beat` to the ref's already-global
+    /// value (the inner clip's stored `start_beat` is sequence-relative and
+    /// must never reach `start_clip`/video-time math directly).
+    fn resolve_session_clip_for_start(&self, entry: &ActiveClipRef) -> Option<TimelineClip> {
+        let project = self.project.as_ref()?;
+        let layer_id = &project.timeline.layers.get(entry.layer_index as usize)?.layer_id;
+        self.session_runtime
+            .resolve_clip_for_start(&project.session, layer_id, &entry.clip_id, entry.start_beat)
+    }
+
+    // ─── Session mode commands (P2, §5) ───
+
+    /// Launch a session slot, or — if the (layer, scene) cell is empty —
+    /// issue the sparse-grid stop for that layer (§5: "empty slot cells
+    /// don't exist"). Starts the transport first if it was stopped, and in
+    /// that case launches immediately rather than waiting for the next
+    /// quantize boundary (§4: "the grid is dead on first click for
+    /// timeline-free users" otherwise).
+    pub fn session_launch_slot(&mut self, layer_id: LayerId, scene_id: SceneId) {
+        let has_slot = self
+            .project
+            .as_ref()
+            .is_some_and(|p| p.session.get_slot(&layer_id, &scene_id).is_some());
+        let immediate = !self.is_playing();
+        if immediate {
+            self.play();
+        }
+        let current_beat = self.current_beat;
+        if has_slot {
+            self.session_runtime
+                .launch_slot(layer_id, scene_id, current_beat, immediate);
+        } else {
+            self.session_runtime.stop_slot(layer_id, current_beat, immediate);
+        }
+        // Direct re-sync (not just `mark_sync_dirty`), matching `play`/`seek_to`:
+        // this is a dedicated playback-affecting API call, not a generic
+        // project edit — a quantized launch's *pending* entry still waits for
+        // its beat, but an immediate one must resolve now, not one tick later.
+        self.sync_clips_to_time();
+    }
+
+    /// Quantized stop for one layer's session slot. `session_override`
+    /// persists (§5/§12) — the layer goes black, it does not fall back to
+    /// the arrangement.
+    pub fn session_stop_slot(&mut self, layer_id: LayerId) {
+        let current_beat = self.current_beat;
+        self.session_runtime.stop_slot(layer_id, current_beat, false);
+        self.sync_clips_to_time();
+    }
+
+    /// Launch every slot in `scene_id`; layers currently playing a session
+    /// slot with no slot in this scene get a quantized stop (Ableton "stop
+    /// other tracks" default, §5). Starts the transport first if stopped,
+    /// same as `session_launch_slot`.
+    pub fn session_launch_scene(&mut self, scene_id: SceneId) {
+        let immediate = !self.is_playing();
+        if immediate {
+            self.play();
+        }
+        let current_beat = self.current_beat;
+        if let Some(project) = &self.project {
+            self.session_runtime
+                .launch_scene(&scene_id, &project.session, current_beat, immediate);
+        }
+        self.sync_clips_to_time();
+    }
+
+    /// Quantized stop of every currently-playing (or about-to-play) session
+    /// slot. Distinct from a full transport stop: `session_override` is
+    /// untouched, exactly like a single `session_stop_slot`.
+    pub fn session_stop_all(&mut self) {
+        let current_beat = self.current_beat;
+        self.session_runtime.stop_all(current_beat);
+        self.sync_clips_to_time();
+    }
+
+    /// Immediate (not quantized): clears `session_override` for the layer
+    /// (or every layer if `None`) and stops its playing slot. Timeline clips
+    /// resume via the normal `sync_clips_to_time` call this method itself
+    /// makes — not deferred to the next tick.
+    pub fn session_back_to_arrangement(&mut self, layer_id: Option<LayerId>) {
+        self.session_runtime.back_to_arrangement(layer_id.as_ref());
+        self.sync_clips_to_time();
+    }
+
+    /// Set the global session launch quantize (0 = launch immediately).
+    pub fn session_set_quantize(&mut self, beats: Beats) {
+        self.session_runtime.set_quantize(beats);
+    }
+
+    /// Read-only access to session runtime state (UI snapshot / tests).
+    pub fn session_runtime(&self) -> &SessionRuntime {
+        &self.session_runtime
     }
 
     // ─── Time/Tempo math ───

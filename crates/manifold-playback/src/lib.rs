@@ -28,6 +28,7 @@ pub mod percussion_progress_parser;
 pub mod process_runner;
 pub mod renderer;
 pub mod scheduler;
+pub mod session_state;
 pub mod sync;
 pub mod sync_source;
 pub mod tempo_recorder;
