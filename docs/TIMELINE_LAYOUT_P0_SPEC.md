@@ -107,6 +107,17 @@ the mechanism of this bug class; the fix is that no second copy exists.
   summary rows and any other per-clip screen-rect path for the same pattern.
   Gate: headless PNG at far zoom over a dense short-clip lane — every clip
   present as a hairline; plus the P0.0 scenes unchanged.
+- **P0.5 — Generator label back on the card, both states.** (Peter,
+  2026-07-04: "add back info… so the layer controls show what generator is
+  used.") The data is already synced — `LayerInfo.generator_type`
+  (`panels/layer_header.rs:253`, populated at `ui_bridge/state_sync.rs:839`) —
+  but no control renders it. Add a label control: expanded cards show the
+  generator name on its own line under the layer name (video layers keep their
+  folder text there — same slot, source-type-appropriate text); collapsed
+  cards show it as dimmed text right of the name, ellipsized, never widening
+  the row. Display only — no picker behavior in this pass. Gates: unit test
+  that the control exists iff `generator_type.is_some()`; collapsed +
+  expanded PNGs showing the label in both.
 - **P0.4 — Sweep.** `rg` for inline track-height/Y math outside
   `coordinate_mapper.rs` (`140.0`, `TrackHeight::`, cumulative `y +=` loops
   over layers) — delete or route through the mapper (incl. `app.rs:895` dead
