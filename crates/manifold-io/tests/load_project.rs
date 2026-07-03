@@ -642,3 +642,35 @@ fn liveschool_roundtrip_preserves_addressing_sites() {
         "driver shape (effect + generator) must round-trip exactly"
     );
 }
+
+/// Session mode (P1, `docs/SESSION_MODE_DESIGN.md`) added `Project.session:
+/// SessionGrid`, skipped on serialize when empty. This fixture predates
+/// session mode entirely, so re-saving it must emit no `"session"` key at
+/// all — not an empty one — for byte-identical output. Also confirms a
+/// project lacking the field on disk defaults it cleanly on load (no error,
+/// no panic, grid empty).
+#[test]
+fn liveschool_reload_omits_empty_session_field() {
+    let path = fixture_path("Liveschool Live Show V6 LEDS.manifold");
+    if !path.exists() {
+        return;
+    }
+
+    let project = loader::load_project(&path).expect("load liveschool project");
+    assert!(
+        project.session.is_empty(),
+        "legacy fixture has no session data; session grid must default empty on load"
+    );
+
+    let json = serde_json::to_string(&project).expect("serialize liveschool project");
+    assert!(
+        !json.contains("\"session\""),
+        "empty SessionGrid must be skipped on serialize, not emitted as {{}}"
+    );
+
+    // Re-parsing the re-saved JSON must still round-trip to an empty grid —
+    // confirms the field defaults cleanly when entirely absent from disk.
+    let project2 =
+        loader::load_project_from_json(&json).expect("reload re-saved liveschool project");
+    assert!(project2.session.is_empty());
+}

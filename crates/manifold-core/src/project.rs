@@ -4,6 +4,7 @@ use crate::effect_graph_def::EffectGraphDef;
 use crate::midi::MidiMappingConfig;
 use crate::preset_def::PresetKind;
 use crate::recording::RecordingProvenance;
+use crate::session::SessionGrid;
 use crate::settings::ProjectSettings;
 use crate::tempo::TempoMap;
 use crate::timeline::Timeline;
@@ -74,6 +75,13 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub embedded_presets: Vec<EmbeddedPreset>,
 
+    /// Session-mode grid: scenes (rows) x layer slots, launched live like
+    /// Ableton session clips. Skipped on serialize when empty so projects
+    /// that never touch session mode round-trip byte-identically. See
+    /// `docs/SESSION_MODE_DESIGN.md`.
+    #[serde(default, skip_serializing_if = "SessionGrid::is_empty")]
+    pub session: SessionGrid,
+
     // ── Legacy top-level fields from V1.0.0 (before percussionImport nesting) ──
     #[serde(
         default,
@@ -137,6 +145,7 @@ impl Project {
         self.video_library.rebuild_lookup();
         self.midi_config.rebuild_dictionary();
         self.timeline.rebuild_clip_lookup();
+        self.session.rebuild_slot_lookup();
 
         // Fold a legacy pre-UID `deviceName` into a UID-less AudioDeviceRef so
         // older saves resolve their audio input by name. See
@@ -1262,7 +1271,7 @@ impl Default for Project {
     fn default() -> Self {
         Self {
             project_name: String::new(),
-            project_version: "1.10.0".to_string(),
+            project_version: "1.11.0".to_string(),
             timeline: Timeline::default(),
             video_library: VideoLibrary::default(),
             midi_config: MidiMappingConfig::default(),
@@ -1273,6 +1282,7 @@ impl Default for Project {
             last_saved_path: String::new(),
             saved_playhead_time: 0.0,
             embedded_presets: Vec::new(),
+            session: SessionGrid::default(),
             legacy_perc_audio_path: None,
             legacy_perc_audio_start_beat: None,
             legacy_perc_clip_placements: None,

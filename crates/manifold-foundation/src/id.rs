@@ -55,6 +55,14 @@ pub struct NodeId(Arc<str>);
 #[serde(transparent)]
 pub struct AudioSendId(Arc<str>);
 
+/// Session-grid scene (row) identifier — wraps a short UUID string. Minted
+/// when a scene is created and stable for its lifetime; scenes reorder
+/// (`SessionGrid::scenes` row order), so `SessionSlot`/`Scene` reference this
+/// identity, never a row index. See `docs/SESSION_MODE_DESIGN.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SceneId(Arc<str>);
+
 // ── Macro for shared impls ──
 
 macro_rules! impl_id_type {
@@ -161,6 +169,7 @@ impl_id_type!(EffectId);
 impl_id_type!(MarkerId);
 impl_id_type!(NodeId);
 impl_id_type!(AudioSendId);
+impl_id_type!(SceneId);
 
 #[cfg(test)]
 mod tests {
