@@ -22,3 +22,4 @@ __pycache__/
 .claude/substrate/telemetry.jsonl
 .claude/substrate/eval/run*.json
 .claude/substrate/eval/fires*.json
+.claude/substrate/eval/verdict_cache.jsonl
