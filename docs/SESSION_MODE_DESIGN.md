@@ -2,7 +2,7 @@
 
 Ableton-style scene/clip launching as a second performance surface. Users who never touch the timeline can drop content into a grid (layers × scenes) and launch slots/scenes quantized to the beat. Timeline users can slice arrangement sections into scenes and back.
 
-Status: IN PROGRESS — P1 (`4f072100`) + P2 (`f852d2bc`) built + merged into `feat/timeline-ui-redesign` (2026-07-03); P3–P5 not implemented. Written 2026-07-02 against `feat/timeline-ui-redesign`.
+Status: IN PROGRESS — P1 (`4f072100`) + P2 (`f852d2bc`) + P3 (`9a069aa4`) built + merged into `feat/timeline-ui-redesign` (2026-07-03); P4 (UI) + P5 (recording) not implemented. **P4 is a UI phase — hand it to Peter for feel review, not auto-gated.** Written 2026-07-02 against `feat/timeline-ui-redesign`.
 Prerequisites: none. Unblocks PERFORM_SURFACE_DESIGN P2 (`docs/DESIGN_BUILD_ORDER.md`).
 Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.
 
@@ -222,7 +222,7 @@ if phantom-commit reuse resists (cut recording from v1 and file it — §7).
 |---|---|---|
 | P1 ✅ DONE (`4f072100`) | `session.rs` model + `Project.session` + serde (`SceneId` in foundation; `slot_lookup` rebuilt in `on_after_deserialize`; version→1.11.0) | `manifold-core --lib` 279 green; real Liveschool byte-identical re-save + `liveschool_reload_omits_empty_session_field` |
 | P2 ✅ DONE (`f852d2bc`) | `SessionRuntime` (`session_state.rs`), third ref source into `compute_sync` (single authority kept), wrap-restart via pre-diff evict, suppression, 6 `ContentCommand` variants | `manifold-playback --lib` 126 green (20 new: quantize, resolution, wrap-restart, scene matrix, seek/stop) + 5 engine integration tests; workspace sweep + clippy clean. Solo/mute confirmed orthogonal to `session_override` |
-| P3 | `session_commands.rs` incl. capture/paste | `manifold-editing --lib`: undo round-trips; capture trim math vs split-command parity |
+| P3 ✅ DONE (`9a069aa4`) | `session_commands.rs` (scene/slot CRUD, capture/paste) reusing `EditingService::trim_clip_to_region`; `DeleteLayerCommand` extended to remove/restore slots | `manifold-editing` 66 roundtrips + 69 lib green (incl. real split-vs-capture `in_point` parity test); full workspace sweep 0 failed; Liveschool confirmed running |
 | P4 | Grid panel + `ContentState` plumbing | headless PNG verification (`reference_ui_headless_png_verification`) |
 | P5 | Session recording via phantom-commit reuse | record a launched sequence, verify arrangement clips match resolution math |
 
