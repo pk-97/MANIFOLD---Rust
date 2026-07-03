@@ -36,6 +36,7 @@ pub mod selection;
 pub mod settings;
 pub mod tempo;
 pub mod timeline;
+pub mod type_id_migration;
 pub mod types;
 pub mod units;
 pub mod video;

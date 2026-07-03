@@ -134,4 +134,21 @@ mod tests {
         assert!(back.is_generator());
         assert_eq!(back.get_base_param(0), 1.25);
     }
+
+    /// docs/NODE_VOCABULARY_AUDIT.md §3 test (b): a project fixture carrying
+    /// an old `generatorType` value loads through the real deserializer and
+    /// comes back on the current id. Exercises
+    /// `type_id_migration::TYPE_ID_MIGRATIONS`' fixture entry
+    /// (`__vocab_migration_test_old__` → `__vocab_migration_test_new__`),
+    /// chained after `remap_legacy_string` inside
+    /// `preset_type_id::deserialize_generator_type` — the same function
+    /// `Layer.gen_params` (a clip's generator) routes every project load
+    /// through.
+    #[test]
+    fn generator_type_migrates_legacy_id_on_load() {
+        let json = r#"{"generatorType":"__vocab_migration_test_old__"}"#;
+        let mut de = serde_json::Deserializer::from_str(json);
+        let back = deserialize_generator_instance(&mut de).unwrap();
+        assert_eq!(back.generator_type().as_str(), "__vocab_migration_test_new__");
+    }
 }

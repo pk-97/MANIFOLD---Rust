@@ -233,6 +233,12 @@ impl PresetTypeId {
 /// the legacy ids verbatim; renames after ship must be remapped here so saved
 /// layers continue to resolve. Folded in from the old generator decoder — the
 /// effect id space has no entries, so applying it globally is a no-op for them.
+///
+/// One-off historical rename. General renames (`docs/NODE_VOCABULARY_AUDIT.md`
+/// §6) go in [`crate::type_id_migration::TYPE_ID_MIGRATIONS`] instead — every
+/// call site here chains through [`crate::type_id_migration::migrate_type_id`]
+/// after this, so a `PresetTypeId` string sees both maps regardless of which
+/// one an old id lands in.
 pub(crate) fn remap_legacy_string(s: &str) -> &str {
     match s {
         "BasicShapesSnap" => "BasicShapes",
@@ -285,7 +291,9 @@ impl<'de> Deserialize<'de> for PresetTypeId {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = serde_json::Value::deserialize(deserializer)?;
         Ok(match &value {
-            serde_json::Value::String(s) => Self(Cow::Owned(remap_legacy_string(s).to_string())),
+            serde_json::Value::String(s) => Self(Cow::Owned(
+                crate::type_id_migration::migrate_type_id(remap_legacy_string(s)).to_string(),
+            )),
             _ => Self::UNKNOWN,
         })
     }
@@ -299,9 +307,9 @@ pub fn deserialize_effect_type<'de, D: Deserializer<'de>>(
 ) -> Result<PresetTypeId, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(match &value {
-        serde_json::Value::String(s) => {
-            PresetTypeId(Cow::Owned(remap_legacy_string(s).to_string()))
-        }
+        serde_json::Value::String(s) => PresetTypeId(Cow::Owned(
+            crate::type_id_migration::migrate_type_id(remap_legacy_string(s)).to_string(),
+        )),
         serde_json::Value::Number(n) => {
             PresetTypeId::from_legacy_effect_discriminant(n.as_i64().unwrap_or(0) as i32)
         }
@@ -317,9 +325,9 @@ pub fn deserialize_generator_type<'de, D: Deserializer<'de>>(
 ) -> Result<PresetTypeId, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(match &value {
-        serde_json::Value::String(s) => {
-            PresetTypeId(Cow::Owned(remap_legacy_string(s).to_string()))
-        }
+        serde_json::Value::String(s) => PresetTypeId(Cow::Owned(
+            crate::type_id_migration::migrate_type_id(remap_legacy_string(s)).to_string(),
+        )),
         serde_json::Value::Number(n) => {
             PresetTypeId::from_legacy_generator_discriminant(n.as_i64().unwrap_or(0) as i32)
         }
@@ -382,6 +390,32 @@ mod tests {
     fn string_remap_applies() {
         let back: PresetTypeId = serde_json::from_str("\"BasicShapesSnap\"").unwrap();
         assert_eq!(back, PresetTypeId::BASIC_SHAPES);
+    }
+
+    /// docs/NODE_VOCABULARY_AUDIT.md §3 test (b), supplementary: the general
+    /// `type_id_migration` table (not just the one-off `remap_legacy_string`
+    /// rename) is chained in at all three deserialize entry points — the
+    /// plain `Deserialize` impl (what `Clip::generator_type`'s legacy field
+    /// uses), and both kind-specific helpers.
+    #[test]
+    fn general_migration_table_applies_via_plain_deserialize() {
+        let back: PresetTypeId =
+            serde_json::from_str("\"__vocab_migration_test_old__\"").unwrap();
+        assert_eq!(back.as_str(), "__vocab_migration_test_new__");
+    }
+
+    #[test]
+    fn general_migration_table_applies_via_effect_and_generator_helpers() {
+        let mut de = serde_json::Deserializer::from_str("\"__vocab_migration_test_old__\"");
+        assert_eq!(
+            deserialize_effect_type(&mut de).unwrap().as_str(),
+            "__vocab_migration_test_new__"
+        );
+        let mut de = serde_json::Deserializer::from_str("\"__vocab_migration_test_old__\"");
+        assert_eq!(
+            deserialize_generator_type(&mut de).unwrap().as_str(),
+            "__vocab_migration_test_new__"
+        );
     }
 
     #[test]

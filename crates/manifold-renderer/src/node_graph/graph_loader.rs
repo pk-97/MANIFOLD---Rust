@@ -32,7 +32,9 @@ use std::borrow::Cow;
 
 use ahash::AHashMap;
 
-use manifold_core::effect_graph_def::{EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef};
+use manifold_core::effect_graph_def::{
+    EFFECT_GRAPH_VERSION_WITH_METADATA, EffectGraphDef, EffectGraphNode,
+};
 use manifold_gpu::{
     GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -223,6 +225,31 @@ pub struct NodeInstantiation {
 ///   the def's `system.final_output` identifies the splice's output
 ///   endpoint and is not connected. All other wires remap normally.
 ///
+/// Migrate every node's `type_id` (recursing into group bodies) via
+/// [`manifold_core::type_id_migration::migrate_type_id`]. Returns `Some`
+/// only when at least one id actually changed, so the overwhelmingly common
+/// already-current document — every bundled preset, every project saved
+/// since its last rename — passes through borrowed rather than cloned.
+fn migrate_def_type_ids(def: &EffectGraphDef) -> Option<EffectGraphDef> {
+    fn migrate_nodes(nodes: &mut [EffectGraphNode], changed: &mut bool) {
+        for n in nodes {
+            let new_id = manifold_core::type_id_migration::migrate_type_id(&n.type_id);
+            if new_id != n.type_id {
+                n.type_id = new_id.to_string();
+                *changed = true;
+            }
+            if let Some(group) = &mut n.group {
+                migrate_nodes(&mut group.nodes, changed);
+            }
+        }
+    }
+
+    let mut changed = false;
+    let mut owned = def.clone();
+    migrate_nodes(&mut owned.nodes, &mut changed);
+    changed.then_some(owned)
+}
+
 /// Returns the [`NodeInstantiation`] on success. On any error the
 /// graph's state is the union of every successful step before the
 /// failure — both callers handle this by either propagating
@@ -242,6 +269,26 @@ pub fn instantiate_def(
             max: EFFECT_GRAPH_VERSION_WITH_METADATA,
         });
     }
+
+    // Migrate legacy node type_ids before anything else runs, including
+    // inside group bodies — the group flatten below only rewires structure,
+    // so a rename must land first or a group-internal node keeps its stale
+    // id forever. Every loader (generator load, effect splice, freeze/proof
+    // harnesses) converges here, so this is the single choke point content
+    // written before a rename ever needs (see
+    // `manifold_core::type_id_migration`). Old ids are never reused, so this
+    // is a pure, idempotent string swap. A document needing no migration
+    // (the common case, always true once a project has been opened and
+    // resaved once) passes through as a borrow, matching the group-flatten
+    // pattern just below.
+    let migrated;
+    let def = match migrate_def_type_ids(def) {
+        Some(owned) => {
+            migrated = owned;
+            &migrated
+        }
+        None => def,
+    };
 
     // Fold any node groups before anything else runs. After this the def
     // contains no `group` nodes, so every path below — the boundary scan,
@@ -1553,5 +1600,126 @@ mod tests {
             pre_allocate_resources;
         let _: fn(&Graph, &ExecutionPlan, &GpuDevice, &mut MetalBackend) -> Result<(), PreAllocationError> =
             crate::node_graph::pre_allocate_resources;
+    }
+
+    // ── docs/NODE_VOCABULARY_AUDIT.md §3 test (a) ──
+    //
+    // `type_id_migration::TYPE_ID_MIGRATIONS` is empty in every shipped
+    // build except one fixture entry
+    // (`__vocab_migration_test_old__` → `__vocab_migration_test_new__`),
+    // kept unconditionally (not `#[cfg(test)]`) so it's visible from every
+    // crate's tests, not just this one — see the module doc on
+    // `manifold_core::type_id_migration` for why.
+
+    /// Builder mirroring `manifold_core::flatten`'s test helpers: a bare
+    /// node with no params/wires/position, for readable fixtures.
+    fn bare_node(id: u32, type_id: &str) -> EffectGraphNode {
+        EffectGraphNode {
+            id,
+            node_id: manifold_core::NodeId::default(),
+            type_id: type_id.to_string(),
+            handle: None,
+            params: Default::default(),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: Default::default(),
+            output_canvas_scales: Default::default(),
+            group: None,
+        }
+    }
+
+    /// A `group`-type node whose single body node carries `inner_type_id`.
+    fn grouped_node(id: u32, inner_type_id: &str) -> EffectGraphNode {
+        use manifold_core::effect_graph_def::{GROUP_TYPE_ID, GroupDef, GroupInterface};
+        let mut g = bare_node(id, GROUP_TYPE_ID);
+        g.group = Some(Box::new(GroupDef {
+            interface: GroupInterface {
+                inputs: vec![],
+                outputs: vec![],
+                params: vec![],
+            },
+            nodes: vec![bare_node(100, inner_type_id)],
+            wires: vec![],
+            tint: None,
+        }));
+        g
+    }
+
+    /// (a) A fixture graph written with old ids — one at top level, one
+    /// buried inside a group body — loads (via `migrate_def_type_ids`, the
+    /// function `instantiate_def` runs before the group flatten) structurally
+    /// identical to its hand-authored new-id twin. Proves both the ordering
+    /// (migrate before flatten) and the recursion into group bodies; a
+    /// migration applied only at top level, or only after flatten, would
+    /// leave the inner node's id stale and fail the `assert_eq!`.
+    #[test]
+    fn migrate_def_type_ids_matches_new_id_twin_including_group_bodies() {
+        let old_def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![
+                bare_node(0, "__vocab_migration_test_old__"),
+                grouped_node(1, "__vocab_migration_test_old__"),
+            ],
+            wires: vec![],
+        };
+        let new_twin = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            nodes: vec![
+                bare_node(0, "__vocab_migration_test_new__"),
+                grouped_node(1, "__vocab_migration_test_new__"),
+            ],
+            wires: vec![],
+        };
+
+        let migrated =
+            migrate_def_type_ids(&old_def).expect("old ids present, migration must produce Some");
+        assert_eq!(migrated, new_twin);
+
+        // A document already on current ids needs no migration at all —
+        // the cheap-clone-free common-case path `instantiate_def` relies on.
+        assert!(migrate_def_type_ids(&new_twin).is_none());
+    }
+
+    /// (a, continued) The same fixture through the real `instantiate_def`
+    /// entry point, boundary nodes only (the sentinel isn't a registered
+    /// primitive, so it can't sit mid-graph and still construct) — proves
+    /// the choke point is actually wired into the function tests above call
+    /// directly, not just defined alongside it.
+    #[test]
+    fn instantiate_def_migrates_boundary_free_standing_old_id_graph() {
+        // `system.*` ids are exempt from migration (§2 rule 7) and are the
+        // only ids `instantiate_def` can build without a real registry
+        // entry, so this proves migration runs inside `instantiate_def`
+        // without disturbing boundary handling — the fixture above proves
+        // the id-rewrite itself.
+        let json = r#"{
+            "version": 1,
+            "name": "test",
+            "nodes": [
+                { "id": 0, "typeId": "system.source", "handle": "source" },
+                { "id": 1, "typeId": "system.final_output", "handle": "final" }
+            ],
+            "wires": [
+                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" }
+            ]
+        }"#;
+        let def: EffectGraphDef = serde_json::from_str(json).expect("parse");
+        let mut graph = Graph::new();
+        instantiate_def(
+            &mut graph,
+            &def,
+            &registry(),
+            HandleScope::Global,
+            BoundaryHandling::Standalone,
+        )
+        .expect("system.* boundary ids are unaffected by migration and always construct");
     }
 }
