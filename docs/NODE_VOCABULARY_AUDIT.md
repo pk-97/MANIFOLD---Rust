@@ -261,11 +261,13 @@ reused (§2.5).
 - **P2 — Atom renames (§4).** Compiler-driven per category group: change the
   `primitive!` registration id first, then fix every red site (descriptors, bundled
   preset JSONs, parity/gpu tests), add the migration entry, commit per group. Gate
-  per group: `cargo run --bin check_presets` equivalent (lib `bundled_presets`
-  tests) + focused parity for touched presets. **Negative gate at end of P2:** for
-  every old id in §4, `rg -n '"<old_id>"' crates/ assets/` hits ONLY
-  `type_id_migration.rs` (loop the table; zero exceptions). Full workspace sweep
-  (registry change = infrastructure).
+  per group: compile + lib `bundled_presets` tests only (rescoped 2026-07-03,
+  Peter: an id rename can't change pixels — no parity runs, no per-phase workspace
+  sweeps; the single workspace sweep lives in P7). **Negative gate at end of P2:**
+  for every old id in §4, `rg -n '"<old_id>"' crates/ assets/` hits ONLY
+  `type_id_migration.rs` (loop the table; zero exceptions), plus the bare-word
+  prose sweep `rg -n '\bnode\.<old_tail>\b' crates/ assets/ -g '!*.wgsl'` (preset
+  JSON descriptions mention ids in prose — found in apply, groups 1–5).
 - **P3 — Preset renames + `NodeGraphTest` hide (§6).** Same technique, same
   negative gate for the 8 preset ids. OSC prefixes must be byte-identical before/
   after (`rg 'osc_prefix'` diff).
