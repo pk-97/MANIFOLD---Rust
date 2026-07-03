@@ -1,6 +1,6 @@
 # Node Vocabulary Audit — type_id Renames, Fills, Conventions
 
-**Status:** APPROVED in full (Peter, 2026-07-02) — including the six label changes in §10. Apply pass is Sonnet-executable; run §9 order.
+**Status:** SHIPPED — apply pass P1–P7 complete and merged into `feat/timeline-ui-redesign` (2026-07-03). All ~110 renames (102 §4 atoms + 2 §7 legacy folds + 8 §6 presets) live in `manifold-core/src/type_id_migration.rs`; examples auto-population, cross-tool aliases, and the §8c completeness gate are wired. This doc is now the historical record + the migration-table reference. Original approval: Peter, 2026-07-02, including the six §10 label changes.
 **Decided:** 2026-07-02. Companion: `NODE_CATALOG.md` (generated index), `MCP_INTERFACE_DESIGN.md` (the catalog's main future consumer).
 **Prerequisites:** none — this is the FIRST item in `docs/DESIGN_BUILD_ORDER.md` (renames get dearer with every preset/binding written on old ids).
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.

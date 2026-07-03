@@ -1,6 +1,6 @@
 # Gig Resilience — Red-Teaming the Live Show
 
-**Status: APPROVED design, not implemented. Sonnet-executable. Phases in §9.**
+**Status: IN PROGRESS — P1 built and merged into `feat/timeline-ui-redesign` (2026-07-03); P2–P4 not implemented. Sonnet-executable. Phases in §9.**
 **Prerequisites: none for P1–P2. P3 after PERFORM_SURFACE_DESIGN P1 (`docs/DESIGN_BUILD_ORDER.md` §2).**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
@@ -319,7 +319,13 @@ catching); in-process recovery of any kind (D1); new `Arc<Mutex>`/`Arc<RwLock>`
 (baseline the count with `rg -c 'Arc<Mutex|Arc<RwLock' crates/` first — it must
 not grow); any rung that needs human input mid-set (D3).
 
-- **P1 — Don't lose work.** Autosave wiring + background serialization +
+- **P1 — Don't lose work. ✅ BUILT + MERGED (2026-07-03, `feat/timeline-ui-redesign`).**
+  New `manifold-app/src/autosave.rs` + `alerts.rs`, history browser, save/load
+  error surfacing, crash.log rotation. Automated gate green in the merged workspace
+  sweep (`manifold-io/tests/history_snapshots.rs`). **Two manual checks still owed
+  by Peter:** (1) autosave end-to-end — edit → wait debounce → File → Revert to
+  Snapshot; (2) save to a full/read-only volume surfaces the UI event.
+  Autosave wiring + background serialization +
   history browser + save/load error surfacing + crash.log rotation & banner.
   Read-back: §6 whole, `archive.rs:45,143,341`, `app_lifecycle.rs:58`,
   `project_io.rs:323-404`. Forbidden: a new save path — everything routes

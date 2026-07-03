@@ -20,8 +20,7 @@ prerequisites aren't shipped, stop.
 
 | Design doc | Hard prerequisites | Hardening level (§DESIGN_DOC_STANDARD §9) |
 |---|---|---|
-| NODE_VOCABULARY_AUDIT (apply pass) | none | full |
-| GIG_RESILIENCE_DESIGN | none for P1–P2; P3 after PERFORM_SURFACE P1 (see §3) | full |
+| GIG_RESILIENCE_DESIGN (P1 SHIPPED 2026-07-03; P2–P4 remain) | none for P2; P3 after PERFORM_SURFACE P1 (see §3) | full |
 | MULTI_DISPLAY_DESIGN | none | full |
 | SESSION_MODE_DESIGN | none | full |
 | MEDIA_BACKEND_DESIGN | none for P1–P3; §6 pairs with VULKAN §8 | full |
@@ -93,10 +92,9 @@ along with a flashy headliner rather than headlining.
 
 Grouped in waves; within a wave, items are independent and order is free.
 
-**Wave 0 — lock the names, protect the work.**
-1. VOCAB apply pass (§9 order in its doc).
-2. GIG_RESILIENCE P1 (autosave + save-error surfacing + crash.log rotation) — cheap,
-   protects everything built after it, zero dependencies.
+**Wave 0 — lock the names, protect the work. ✅ COMPLETE (2026-07-03, merged into `feat/timeline-ui-redesign`).**
+1. ✅ VOCAB apply pass — P1–P7 shipped; every "VOCAB apply" prerequisite below (COMPONENT_LIBRARY, MCP_INTERFACE, MATERIAL_SYSTEM, REALTIME_3D, IMPORT P6) is now satisfied.
+2. ✅ GIG_RESILIENCE P1 (autosave + save-error surfacing + crash.log rotation). Two manual checks still owed by Peter (autosave end-to-end; read-only-volume dialog).
 
 **Wave 1 — the stage foundations.**
 4. MULTI_DISPLAY P1–P3 (core model → island rendering → multi-output present) — the
