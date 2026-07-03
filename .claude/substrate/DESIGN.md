@@ -100,6 +100,25 @@ classifier over historical transcripts offline and reports what would have fired
 A wrong whisper erodes trust in all whispers; when precision and recall trade off,
 buy precision.
 
+## 4b. Live outcome scoring + auto-mute
+
+The daemon scores each injection mechanically, in-session, and appends the score
+to its telemetry record: did the behavior the payload asks for appear within the
+next ~10 tool events (verify-claim → a test/run/render; thrash → the error streak
+ended; circling → a different tool class used)? Not every move has a mechanical
+outcome — score the ones that do, mark the rest `unscored`.
+
+Auto-tuning is split by risk:
+- **Auto-adjustable (bounded numeric dials):** per-move cooldowns and confidence
+  thresholds, within floors/ceilings set here — never below 0.7 confidence, never
+  under 10-event cooldown.
+- **Auto-mute:** a move that fires ≥ 5 times with a 0 scored-success rate is
+  disabled for the remainder of the week and queued for the sleep pass. Degrade
+  toward silence, consistent with fail-open.
+- **Never automatic:** payload or signature *wording*. Text edits happen only in
+  sleep passes (big model, committed, diffable). A loop that rewrites its own
+  words on its own measurements drifts unsupervised.
+
 ## 5. Sleep pass (consolidation)
 
 Weekly scheduled routine on the largest available model. Input: `telemetry.jsonl`
