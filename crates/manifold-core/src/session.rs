@@ -114,6 +114,18 @@ impl SessionGrid {
     pub fn mark_slot_lookup_dirty(&mut self) {
         self.slot_lookup_dirty = true;
     }
+
+    /// Look up the slot for a (layer, scene) cell. `None` means the cell is
+    /// empty — a sparse grid, not a slot with empty content (see
+    /// `SessionSlot` docs). A plain linear scan: grids are small (a handful
+    /// of layers x scenes) and P3's `slot_lookup` cache has no writer yet in
+    /// P2, so scanning `slots` directly is simpler than reasoning about
+    /// cache staleness. `docs/SESSION_MODE_DESIGN.md` §5/§6.
+    pub fn get_slot(&self, layer_id: &LayerId, scene_id: &SceneId) -> Option<&SessionSlot> {
+        self.slots
+            .iter()
+            .find(|s| &s.layer_id == layer_id && &s.scene_id == scene_id)
+    }
 }
 
 #[cfg(test)]

@@ -33,6 +33,12 @@ pub struct ActiveClipRef {
 impl ActiveClipRef {
     /// Sentinel clip_index for live slots (not in the project timeline).
     pub const LIVE_SLOT: u32 = u32::MAX;
+    /// Sentinel clip_index for session-grid slots (not in the project
+    /// timeline; resolved from `Project::session` instead). Distinct from
+    /// `LIVE_SLOT` — a parallel discriminant on the same field, following
+    /// the shape `is_live_slot` already uses rather than adding an enum.
+    /// See `docs/SESSION_MODE_DESIGN.md` §4.
+    pub const SESSION_SLOT: u32 = u32::MAX - 1;
 
     /// Computed end beat (start + duration).
     #[inline]
@@ -44,6 +50,13 @@ impl ActiveClipRef {
     #[inline]
     pub fn is_live_slot(&self) -> bool {
         self.clip_index == Self::LIVE_SLOT
+    }
+
+    /// Whether this is a session-grid slot clip (not in the project
+    /// timeline's per-layer clip lane).
+    #[inline]
+    pub fn is_session_slot(&self) -> bool {
+        self.clip_index == Self::SESSION_SLOT
     }
 }
 
@@ -97,15 +110,22 @@ impl ClipScheduler {
     /// - `current_beat`: Current playback position in beats
     /// - `timeline_active_clips`: Clips active at currentBeat from timeline query
     /// - `live_slots`: Phantom MIDI clips keyed by layer index (NoteOff lifetime)
+    /// - `session_refs`: Session-grid slot clips resolved by `SessionRuntime` for
+    ///   the current beat (third reference source — an input to this sole
+    ///   authority, never a parallel scheduler; see `docs/SESSION_MODE_DESIGN.md`
+    ///   §4/§9). Already gated to "should be active now" by the caller, so —
+    ///   unlike `live_slots` — no additional start-beat check is applied here.
     /// - `currently_active_ids`: IDs of clips that currently have a renderer assigned
     /// - `looping_clip_ids`: Clip IDs with IsLooping enabled (bypass min-remaining check)
     /// - `min_remaining_beats`: Don't start clips with less than this remaining
+    #[allow(clippy::too_many_arguments)]
     pub fn compute_sync(
         &mut self,
         _current_time: Seconds,
         current_beat: Beats,
         timeline_active_clips: &[ActiveClipRef],
         live_slots: &[ActiveClipRef],
+        session_refs: &[ActiveClipRef],
         currently_active_ids: &AHashSet<ClipId>,
         looping_clip_ids: &AHashSet<ClipId>,
         min_remaining_beats: Beats,
@@ -136,6 +156,11 @@ impl ClipScheduler {
                 merged.push(slot.clone());
             }
         }
+
+        // Merge session-grid refs. `SessionRuntime::resolve_refs` already only
+        // emits a ref when the sequence has a clip covering the current local
+        // beat, so no start-beat gate is needed here (unlike live slots).
+        merged.extend(session_refs.iter().cloned());
 
         // Build lookup of what should be active.
         for entry in &merged {
@@ -227,6 +252,7 @@ mod tests {
             Beats(0.0),
             &[],
             &[],
+            &[],
             &active,
             &looping,
             Beats(0.1),
@@ -246,6 +272,7 @@ mod tests {
             Seconds(3.0),
             Beats(3.0),
             &[clip],
+            &[],
             &[],
             &active,
             &looping,
@@ -268,6 +295,7 @@ mod tests {
             Beats(3.0),
             &[clip],
             &[],
+            &[],
             &active,
             &looping,
             Beats(0.1),
@@ -285,6 +313,7 @@ mod tests {
         let result = sched.compute_sync(
             Seconds(7.0),
             Beats(7.0),
+            &[],
             &[],
             &[],
             &active,
@@ -307,6 +336,7 @@ mod tests {
             Beats(5.95),
             &[clip],
             &[],
+            &[],
             &active,
             &looping,
             Beats(0.1),
@@ -325,6 +355,7 @@ mod tests {
             Seconds(5.95),
             Beats(5.95),
             &[clip],
+            &[],
             &[],
             &active,
             &looping,
@@ -347,6 +378,7 @@ mod tests {
             Beats(3.0),
             &[],
             &[live_clip],
+            &[],
             &active,
             &looping,
             Beats(0.1),
@@ -369,6 +401,7 @@ mod tests {
             Beats(3.0),
             &[],
             &[live_clip],
+            &[],
             &active,
             &looping,
             Beats(0.1),
@@ -389,6 +422,7 @@ mod tests {
             Beats(5.0),
             &[],
             &[live_clip],
+            &[],
             &active,
             &looping,
             Beats(0.1),
@@ -439,6 +473,7 @@ mod tests {
             Beats(1.0),
             &clips,
             &[],
+            &[],
             &active,
             &looping,
             Beats(0.1),
@@ -454,6 +489,7 @@ mod tests {
             Seconds(1.0),
             Beats(1.0),
             &clips[..5],
+            &[],
             &[],
             &active,
             &looping,

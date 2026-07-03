@@ -182,6 +182,26 @@ impl ContentThread {
                 self.engine.set_recording(rec);
             }
 
+            // ── Session mode (P2) ───────────────────────────────────
+            ContentCommand::SessionLaunchSlot { layer_id, scene_id } => {
+                self.engine.session_launch_slot(layer_id, scene_id);
+            }
+            ContentCommand::SessionStopSlot { layer_id } => {
+                self.engine.session_stop_slot(layer_id);
+            }
+            ContentCommand::SessionLaunchScene { scene_id } => {
+                self.engine.session_launch_scene(scene_id);
+            }
+            ContentCommand::SessionStopAll => {
+                self.engine.session_stop_all();
+            }
+            ContentCommand::SessionBackToArrangement { layer_id } => {
+                self.engine.session_back_to_arrangement(layer_id);
+            }
+            ContentCommand::SessionSetQuantize { beats } => {
+                self.engine.session_set_quantize(beats);
+            }
+
             // ── Editing ────────────────────────────────────────────
             ContentCommand::Execute(cmd) => {
                 if let Some(p) = self.engine.project_mut() {

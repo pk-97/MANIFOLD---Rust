@@ -4,7 +4,7 @@
 //! crossbeam channel. Each variant represents an action that must
 //! execute on the content thread where PlaybackEngine and EditingService live.
 use manifold_core::project::Project;
-use manifold_core::{Beats, ClipId, EffectId, LayerId, Seconds};
+use manifold_core::{Beats, ClipId, EffectId, LayerId, SceneId, Seconds};
 use manifold_editing::command::Command;
 use manifold_media::export_config::ExportConfig;
 
@@ -46,6 +46,41 @@ pub enum ContentCommand {
     ToggleMidiClock,
     SetMidiClockDevice(i32),
     ResetBpm,
+
+    // ── Session mode (P2, docs/SESSION_MODE_DESIGN.md §5) ───────────
+    // No producer yet — the grid panel is P4. The variants + content-thread
+    // plumbing (PlaybackEngine::session_* methods) are ready to wire up, same
+    // as `ReplanClip`/`CancelExport` above.
+    /// Launch a session slot, or — if the (layer, scene) cell is empty —
+    /// issue the sparse-grid stop for that layer ("empty slot cells don't
+    /// exist"). Starts the transport first if it was stopped, and in that
+    /// case launches immediately rather than waiting for a quantize
+    /// boundary. Not undoable — a performance gesture, like a MIDI trigger.
+    #[allow(dead_code)]
+    SessionLaunchSlot { layer_id: LayerId, scene_id: SceneId },
+    /// Quantized stop for one layer's session slot. `session_override`
+    /// persists — the layer goes black, it does not fall back to the
+    /// arrangement.
+    #[allow(dead_code)]
+    SessionStopSlot { layer_id: LayerId },
+    /// Launch every slot in a scene; layers currently playing a session slot
+    /// with no slot in this scene get a quantized stop (Ableton "stop other
+    /// tracks" default).
+    #[allow(dead_code)]
+    SessionLaunchScene { scene_id: SceneId },
+    /// Quantized stop of every currently-playing (or about-to-play) session
+    /// slot. Distinct from a full transport stop: `session_override` is
+    /// untouched.
+    #[allow(dead_code)]
+    SessionStopAll,
+    /// Immediate (not quantized): clears `session_override` for the layer
+    /// (or every layer if `None`) and stops its playing slot. Timeline
+    /// clips resume immediately.
+    #[allow(dead_code)]
+    SessionBackToArrangement { layer_id: Option<LayerId> },
+    /// Set the global session launch quantize (0 = launch immediately).
+    #[allow(dead_code)]
+    SessionSetQuantize { beats: Beats },
 
     // ── Audio ──────────────────────────────────────────────────────
     /// Set which send the Audio Setup spectrogram scope is showing (`None` =
