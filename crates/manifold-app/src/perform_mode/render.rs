@@ -45,6 +45,11 @@ impl Application {
             }
         }
 
+        // 1a. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN §5.1) — this is the
+        // path that matters most: perform mode IS the live show. Unlike
+        // autosave (D5 parks it here), the breadcrumb keeps refreshing.
+        self.tick_breadcrumb();
+
         // 2. Backup auto-exit: if the output window vanished (display unplug,
         //    crash, etc.) and the explicit close hooks didn't catch it, exit.
         if !self.window_registry.has_output_window() {

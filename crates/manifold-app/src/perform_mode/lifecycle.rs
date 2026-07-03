@@ -17,7 +17,18 @@ impl Application {
             self.perform.pending_enter = false;
             if !self.perform.active {
                 if !self.window_registry.has_output_window() {
-                    self.open_output_window(event_loop, "Output", None, false);
+                    // `--resume` (GIG_RESILIENCE_DESIGN §5.2 step 2) targets
+                    // the display captured in the breadcrumb; every other
+                    // caller of perform-mode entry leaves this `None` and
+                    // keeps the existing "first non-primary" default inside
+                    // `open_output_window` unchanged.
+                    let display_index = self.pending_resume.take().and_then(|pending| {
+                        crate::breadcrumb::resolve_display_index(
+                            event_loop,
+                            pending.display_uuid.as_deref(),
+                        )
+                    });
+                    self.open_output_window(event_loop, "Output", display_index, false);
                 }
                 if self.window_registry.has_output_window() {
                     // Quiesce in-flight UI state so nothing is left dangling

@@ -2212,6 +2212,7 @@ dependencies = [
  "png",
  "raw-window-handle",
  "rfd",
+ "serde",
  "serde_json",
  "winit",
 ]

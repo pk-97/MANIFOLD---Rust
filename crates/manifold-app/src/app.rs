@@ -161,6 +161,22 @@ pub struct Application {
     /// on an early editor frame.
     pub(crate) show_crash_notice: bool,
 
+    /// Gig-resilience breadcrumb sidecar (GIG_RESILIENCE_DESIGN §5.1), phase
+    /// P2. Cadence gate — pure logic, ticked from the content-state drain in
+    /// both editor and perform mode (unlike autosave, NOT parked in perform
+    /// mode: the breadcrumb is exactly what a live show needs).
+    pub(crate) breadcrumb_cadence: crate::breadcrumb::BreadcrumbCadence,
+    /// Background breadcrumb writer thread handle. `None` only if the thread
+    /// failed to spawn (degrades to "no breadcrumb this session," never a
+    /// crash).
+    pub(crate) breadcrumb_writer: Option<crate::breadcrumb::BreadcrumbWriter>,
+    /// Set once by `--resume` CLI parsing in `main.rs`, consumed by
+    /// `Application::resumed()` after the content thread + GPU are up.
+    pub(crate) resume_breadcrumb_path: Option<std::path::PathBuf>,
+    /// Set by `Application::boot_resume`, consumed by perform-mode entry
+    /// (`perform_mode/lifecycle.rs`) to pick the output window's display.
+    pub(crate) pending_resume: Option<crate::breadcrumb::PendingResume>,
+
     // Selection
     pub(crate) selection: SelectionState,
     pub(crate) active_layer_id: Option<LayerId>,
@@ -539,6 +555,10 @@ impl Application {
             suppress_snapshot_set_at: 0,
             autosave: crate::autosave::AutosaveState::new(),
             show_crash_notice: false,
+            breadcrumb_cadence: crate::breadcrumb::BreadcrumbCadence::new(),
+            breadcrumb_writer: Some(crate::breadcrumb::BreadcrumbWriter::spawn()),
+            resume_breadcrumb_path: None,
+            pending_resume: None,
             selection: UIState::new(),
             active_layer_id: None,
             slider_snapshot: None,
@@ -2243,6 +2263,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             active_idx,
             &self.selection,
         );
+
+        // `--resume` boot fast path (GIG_RESILIENCE_DESIGN §5.2): content
+        // thread + GPU are up, so this is the earliest point that can load a
+        // project and seek/play it. Output-window creation + perform-mode
+        // entry happen on the next `about_to_wait` via the flag this sets
+        // (`handle_perform_mode_pending` already runs unconditionally there).
+        if let Some(path) = self.resume_breadcrumb_path.take() {
+            self.boot_resume(&path);
+        }
 
         self.initialized = true;
 
