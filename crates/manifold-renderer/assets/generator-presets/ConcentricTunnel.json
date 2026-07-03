@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "ConcentricTunnel",
     "displayName": "Concentric Tunnel",
-    "category": "Procedural",
+    "category": "Pattern",
     "oscPrefix": "concentricTunnel",
     "legacyDiscriminant": 5,
     "available": true,

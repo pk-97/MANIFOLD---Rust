@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "Wireframe",
     "displayName": "Wireframe",
-    "category": "Procedural",
+    "category": "Geometry",
     "oscPrefix": "wireframeZoo",
     "available": true,
     "isLineBased": false,

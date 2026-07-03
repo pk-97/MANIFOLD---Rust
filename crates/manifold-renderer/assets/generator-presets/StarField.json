@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "StarField",
     "displayName": "Star Field",
-    "category": "Procedural",
+    "category": "Pattern",
     "oscPrefix": "starField",
     "available": true,
     "isLineBased": false,

@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "StrangeAttractor",
     "displayName": "Strange Attractor",
-    "category": "Procedural",
+    "category": "Sim",
     "oscPrefix": "strangeAttractor",
     "available": true,
     "isLineBased": false,

@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "DigitalPlants",
     "displayName": "Digital Plants",
-    "category": "Procedural",
+    "category": "Geometry",
     "oscPrefix": "digitalPlants",
     "available": true,
     "params": [

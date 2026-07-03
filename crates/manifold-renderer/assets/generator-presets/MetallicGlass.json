@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "MetallicGlass",
     "displayName": "Metallic Glass",
-    "category": "Generator",
+    "category": "Sim",
     "oscPrefix": "metallicGlass",
     "legacyDiscriminant": 23,
     "available": true,

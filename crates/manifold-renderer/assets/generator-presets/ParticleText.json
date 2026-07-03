@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "ParticleText",
     "displayName": "Particle Text",
-    "category": "Generator",
+    "category": "Text & Media",
     "oscPrefix": "particleText",
     "available": true,
     "isLineBased": false,

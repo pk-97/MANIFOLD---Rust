@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "Tesseract",
     "displayName": "Tesseract",
-    "category": "Procedural",
+    "category": "Geometry",
     "oscPrefix": "tesseract",
     "legacyDiscriminant": 4,
     "available": true,

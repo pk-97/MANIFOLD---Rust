@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "OilyFluid",
     "displayName": "Oily Fluid",
-    "category": "Generator",
+    "category": "Sim",
     "oscPrefix": "oilyFluid",
     "legacyDiscriminant": 24,
     "available": true,

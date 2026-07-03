@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "NestedCubes",
     "displayName": "Nested Cubes",
-    "category": "Procedural",
+    "category": "Geometry",
     "oscPrefix": "nestedCubes",
     "available": true,
     "params": [

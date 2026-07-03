@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "Lissajous",
     "displayName": "Lissajous",
-    "category": "Procedural",
+    "category": "Geometry",
     "oscPrefix": "lissajous",
     "available": true,
     "isLineBased": false,

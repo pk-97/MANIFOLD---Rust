@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "Text",
     "displayName": "Text",
-    "category": "Source",
+    "category": "Text & Media",
     "oscPrefix": "text",
     "available": true,
     "isLineBased": false,

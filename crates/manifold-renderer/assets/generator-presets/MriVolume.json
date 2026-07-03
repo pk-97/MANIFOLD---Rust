@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "MriVolume",
     "displayName": "MRI Volume",
-    "category": "Source",
+    "category": "Text & Media",
     "oscPrefix": "mriVolume",
     "available": true,
     "isLineBased": false,

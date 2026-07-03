@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "FluidSim2D",
     "displayName": "Fluid Sim 2D",
-    "category": "Generator",
+    "category": "Sim",
     "oscPrefix": "fluidSim2d",
     "legacyDiscriminant": 15,
     "available": true,

@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "BlackHole",
     "displayName": "Black Hole",
-    "category": "Procedural",
+    "category": "Sim",
     "oscPrefix": "blackHole",
     "available": true,
     "isLineBased": false,

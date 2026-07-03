@@ -5,7 +5,7 @@
   "presetMetadata": {
     "id": "Duocylinder",
     "displayName": "Duocylinder",
-    "category": "Procedural",
+    "category": "Geometry",
     "oscPrefix": "duocylinder",
     "legacyDiscriminant": 3,
     "available": true,
