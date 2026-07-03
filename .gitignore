@@ -11,4 +11,12 @@ assets/mri-data/
 profiling_sessions/
 __pycache__/
 .venv/
-.claude/
+# .claude is versioned selectively: hooks + substrate + settings are the model-steering
+# layer and must have history; local state stays ignored.
+.claude/*
+!.claude/hooks/
+!.claude/substrate/
+!.claude/settings.json
+.claude/settings.local.json
+.claude/substrate/verdicts/
+.claude/substrate/telemetry.jsonl
