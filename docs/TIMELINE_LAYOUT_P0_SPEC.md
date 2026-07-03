@@ -91,7 +91,16 @@ the mechanism of this bug class; the fix is that no second copy exists.
 - **P0.2 — D4 audio fit.** Gates: audio-expanded and audio-collapsed PNGs show
   the card fully inside its row; `collapsed_layer_has_no_expanded_controls`-
   style test extended to audio.
-- **P0.3 — Sweep.** `rg` for inline track-height/Y math outside
+- **P0.3 — Sub-pixel clips never vanish.** `layer_clip_rects` culls any clip
+  narrower than 1px (`crates/manifold-ui/src/panels/viewport.rs:567`,
+  `if w < 1.0 { continue; }`) — at far zoom, short trigger clips (the MIDI-
+  mockup workflow's bread and butter) disappear entirely. Change the cull to
+  offscreen-only and clamp width to a 1px hairline (`w.max(1.0)`), matching
+  the overview strip's existing rule (`viewport/render.rs:125`). Check group
+  summary rows and any other per-clip screen-rect path for the same pattern.
+  Gate: headless PNG at far zoom over a dense short-clip lane — every clip
+  present as a hairline; plus the P0.0 scenes unchanged.
+- **P0.4 — Sweep.** `rg` for inline track-height/Y math outside
   `coordinate_mapper.rs` (`140.0`, `TrackHeight::`, cumulative `y +=` loops
   over layers) — delete or route through the mapper (incl. `app.rs:895` dead
   code). Gate: the search comes back clean and is pasted into the report.
