@@ -1575,8 +1575,8 @@ mod tests {
                 ..
             } => {
                 assert!(
-                    producer_node_type.contains("seed_particles")
-                        || producer_node_type.contains("euler_step_particles")
+                    producer_node_type.contains("spawn_particles")
+                        || producer_node_type.contains("move_particles")
                         || producer_node_type.contains("grid_uv_field"),
                     "error must name an Array<T> producer from the graph; got {producer_node_type}"
                 );
