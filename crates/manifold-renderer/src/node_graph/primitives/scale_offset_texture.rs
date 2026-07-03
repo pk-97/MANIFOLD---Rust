@@ -60,7 +60,7 @@ crate::primitive! {
     summary: "Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["scale offset", "scale offset texture", "remap", "multiply add", "re-range"],
+    aliases: ["scale offset", "scale offset texture", "remap", "multiply add", "re-range", "Map Range"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/scale_offset_texture_body.wgsl"),
     extra_fields: {

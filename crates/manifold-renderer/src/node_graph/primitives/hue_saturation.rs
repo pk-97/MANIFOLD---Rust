@@ -68,7 +68,7 @@ crate::primitive! {
     summary: "Spins the hue around the colour wheel and adjusts how vivid and bright the image is. The HSV way to recolour.",
     category: ColorAndTone,
     role: Filter,
-    aliases: ["hue", "saturation", "hsv", "recolour", "HSV Adjust TOP"],
+    aliases: ["hue", "saturation", "hsv", "recolour", "HSV Adjust TOP", "Hue Saturation Value"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/hue_saturation_body.wgsl"),
 }

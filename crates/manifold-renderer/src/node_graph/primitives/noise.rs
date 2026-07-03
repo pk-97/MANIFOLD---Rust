@@ -118,7 +118,7 @@ crate::primitive! {
     summary: "Procedural noise in one node. Pick the Type, set the Scale, and raise Detail to stack octaves into rich fractal noise. Perlin, Simplex, and Value are smooth and organic for clouds, terrain, and slow fields; Random is per-pixel grain for film and dither.",
     category: Noise,
     role: Source,
-    aliases: ["noise", "perlin", "simplex", "value", "value noise", "fbm", "fractal", "fractal noise", "white noise", "random", "hash", "clouds", "turbulence", "Noise TOP"],
+    aliases: ["noise", "perlin", "simplex", "value", "value noise", "fbm", "fractal", "fractal noise", "white noise", "random", "hash", "clouds", "turbulence", "Noise TOP", "Noise Texture"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/noise_body.wgsl"),
     extra_fields: {

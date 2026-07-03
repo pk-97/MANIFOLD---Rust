@@ -138,7 +138,7 @@ crate::primitive! {
     summary: "A physically based material with roughness, metalness, and environment reflections. The realistic workhorse for 3D surfaces.",
     category: MaterialsAndLighting,
     role: Source,
-    aliases: ["pbr", "realistic", "metallic roughness", "material"],
+    aliases: ["pbr", "realistic", "metallic roughness", "material", "Principled BSDF"],
 }
 
 impl Primitive for PbrMaterial {

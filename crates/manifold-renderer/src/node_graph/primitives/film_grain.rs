@@ -48,7 +48,7 @@ crate::primitive! {
     summary: "Lays fine film-style grain over the image, heavier in the bright areas like real photographic stock. Dial the amount for a subtle texture or heavy noise.",
     category: Stylize,
     role: Filter,
-    aliases: ["film grain", "grain", "noise", "16mm"],
+    aliases: ["film grain", "grain", "noise", "16mm", "Add Grain"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/film_grain_body.wgsl"),
 }

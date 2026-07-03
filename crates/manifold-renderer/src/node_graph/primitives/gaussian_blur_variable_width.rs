@@ -89,7 +89,7 @@ crate::primitive! {
     summary: "A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for selective focus.",
     category: BlurAndSharpen,
     role: Filter,
-    aliases: ["variable blur", "gaussian blur", "depth blur", "selective blur", "depth of field"],
+    aliases: ["variable blur", "gaussian blur", "depth blur", "selective blur", "depth of field", "Compound Blur"],
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/gaussian_blur_variable_width_body.wgsl"),
     input_access: [Gather, Gather],

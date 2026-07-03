@@ -67,7 +67,7 @@ crate::primitive! {
     summary: "Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to apply them.",
     category: DistortAndWarp,
     role: Map,
-    aliases: ["kaleidoscope", "radial fold", "mandala", "radial mirror", "wedges"],
+    aliases: ["kaleidoscope", "radial fold", "mandala", "radial mirror", "wedges", "CC Kaleida"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/radial_fold_uv_body.wgsl"),
 }

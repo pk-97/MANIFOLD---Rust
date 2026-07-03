@@ -70,7 +70,7 @@ crate::primitive! {
     summary: "Blends two images together with a choice of modes like Add, Screen, Multiply, and Overlay, plus a crossfade amount. The core layer-blend node.",
     category: Composite,
     role: Filter,
-    aliases: ["mix", "blend", "composite", "Composite TOP"],
+    aliases: ["mix", "blend", "composite", "Composite TOP", "Mix Color"],
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/mix_body.wgsl"),
 }

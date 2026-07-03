@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 212 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 210 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -47,14 +47,14 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Brightness | `node.brightness` | Filter | Multiplies the image brightness up or down. A plain brightness control. |
 | Channel Mixer | `node.channel_mixer` | Filter | Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix. |
 | Clamp | `node.clamp` | Filter | Holds every colour between a low and high limit so nothing goes darker or brighter than you set. The tidy-up step after a math node. |
-| — | `node.color_lut` | Filter | Remaps the image through a lookup-table strip indexed by brightness, the engine behind heat-map and infrared palettes. |
+| Color LUT | `node.color_lut` | Filter | Remaps the image through a lookup-table strip indexed by brightness, the engine behind heat-map and infrared palettes. |
 | Colorize | `node.colorize` | Filter | Tints the image toward a single colour, strongest on the bright neutral areas. Good for duotones and washes. |
 | Contrast | `node.contrast` | Filter | Pushes the lights and darks apart for a punchier image, or pulls them together for a flatter one. It pivots around mid grey. |
 | Dither | `node.dither` | Filter | Reduces the image to a few brightness levels and hides the banding with a fine noise pattern. The classic low-bit look. |
 | Exposure | `node.exposure` | Filter | Brightens or darkens the whole image by multiplying every colour. Above 1 brightens, below 1 darkens, and 0 is black. |
 | Gradient Map | `node.gradient_map` | Filter | Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second. |
 | Hue / Saturation | `node.hue_saturation` | Filter | Spins the hue around the colour wheel and adjusts how vivid and bright the image is. The HSV way to recolour. |
-| — | `node.invert` | Filter | Flips every colour to its opposite, turning a negative of the image. Blend it part-way for a partial invert. |
+| Invert | `node.invert` | Filter | Flips every colour to its opposite, turning a negative of the image. Blend it part-way for a partial invert. |
 | Levels | `node.levels` | Filter | Reshapes brightness in one step with scale, offset, a clamp, and gamma. A compact way to lift shadows, crush highlights, or set black and white points. |
 | Posterize | `node.posterize` | Filter | Crushes each colour into a small number of steps for a banded, blocky look. Fewer levels give a chunkier result. |
 | Reinhard Tone Map | `node.reinhard_tone_map` | Filter | A simpler HDR-to-display tone map using the Reinhard curve. Lighter weight than the full Tone Map node. |
@@ -91,7 +91,7 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 |---|---|---|---|
 | Dither Pattern | `node.dither_pattern` | Source | Generates the threshold grid that the Dither node uses to decide where pixels flip, with a choice of Bayer, halftone, and other patterns. Feed its output into … |
 | Draw Scanlines | `node.draw_scanlines` | Filter | Adds faint monitor-style scanlines across the whole image. |
-| — | `node.edge_detect` | Filter | Finds the edges in the image and draws them as bright lines on dark, a Sobel outline. Crossfade it back over the source for a sketch look. |
+| Edge Detect | `node.edge_detect` | Filter | Finds the edges in the image and draws them as bright lines on dark, a Sobel outline. Crossfade it back over the source for a sketch look. |
 | Film Grain | `node.film_grain` | Filter | Lays fine film-style grain over the image, heavier in the bright areas like real photographic stock. Dial the amount for a subtle texture or heavy noise. |
 | Flash | `node.flash` | Filter | Pulses the whole image brighter, toward white, or toward black from a single amount. Wire a beat gate or envelope into the amount for strobes and hits. |
 | Vignette | `node.vignette` | Filter | Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade. |
@@ -111,32 +111,37 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Render Text | `node.render_text` | Filter | Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live. |
 | Value Overlay | `node.value_overlay` | Filter | Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph. |
 
-### Noise (4)
+### Noise (8)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
+| — | `node.fbm_2d` | Source | Octave-summed Perlin noise for rich fractal texture. The 4-octave Perlin branch of the unified Noise node. |
 | Flow Field Noise | `node.flow_field_noise` | Source | Generates a swirling 2D flow field from layered noise, the velocity field you feed into advect or displace for fluid-like motion. |
+| — | `node.hash_noise_field_2d` | Source | Uncorrelated per-pixel white noise, grain and dust and LIC ink. The Random branch of the unified Noise node. |
 | Noise | `node.noise` | Source | Procedural noise in one node. Pick the Type, set the Scale, and raise Detail to stack octaves into rich fractal noise. Perlin, Simplex, and Value are smooth an… |
+| — | `node.perlin_noise_2d` | Source | Classic Perlin gradient noise. The single-octave Perlin branch of the unified Noise node. |
 | Simplex Field 2D | `node.simplex_field_2d` | Source | Signed simplex noise output as a field, used to drive flows and displacements rather than shown directly. |
+| — | `node.simplex_noise_2d` | Source | Cleaner gradient noise with fewer directional artifacts than Perlin. The single-octave Simplex branch of the unified Noise node. |
 | Voronoi 2D | `node.voronoi_2d` | Source | Cellular noise that gives each cell a distance and a stable random value. Good for tiles, foam, cracked glass and starfields. |
 
 ### Mask (4)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
-| — | `node.chroma_key` | Filter | Outputs a mask showing how close each pixel is to a chosen colour, the green-screen key. Feed it into a mask mix to knock out a background. |
+| Chroma Key | `node.chroma_key` | Filter | Outputs a mask showing how close each pixel is to a chosen colour, the green-screen key. Feed it into a mask mix to knock out a background. |
 | Circle Mask | `node.circle_mask` | Source | Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate. |
 | Rectangle Mask | `node.rectangle_mask` | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
 | Threshold | `node.threshold` | Filter | Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask. |
 
-### Composite (6)
+### Composite (7)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Feedback | `node.feedback` | Filter | Holds the previous frame and hands it back this frame, which lets you build feedback loops like trails and echoes. Wire its output back into the chain through … |
 | HDR Mix | `node.hdr_mix` | Filter | Blends two images while keeping the bright above-white highlights from a reference, so a gain or grade doesn't crush the HDR detail. Reach for it when a proces… |
-| — | `node.masked_mix` | Filter | Blends two images using a third as a mask, applying one only where the mask is bright. The apply-only-where node. |
+| Masked Mix | `node.masked_mix` | Filter | Blends two images using a third as a mask, applying one only where the mask is bright. The apply-only-where node. |
 | Mix | `node.mix` | Filter | Blends two images together with a choice of modes like Add, Screen, Multiply, and Overlay, plus a crossfade amount. The core layer-blend node. |
+| Multi Blend | `node.multi_blend` | Filter | Adds together any number of images and divides by a shared amount, collapsing a long chain of Mix(Add) nodes into one. Divisor 1 sums, divisor N averages. |
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
@@ -207,7 +212,7 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (12)
+### Particles 3D (11)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -215,7 +220,6 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
 | Draw Particles (camera) | `node.draw_particles_camera` | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
-| — | `node.fluid_project_scatter_2d` | Filter | Projects 3D particles through a camera and splats them to 2D. The older name for Draw Particles (camera). |
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
 | Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
@@ -306,7 +310,7 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | — | `system.generator_input` | Source | The per-frame context a generator starts from, with time, beat, aspect, and trigger count. Wired in automatically. |
 | — | `system.source` | Source | The incoming image at the start of an effect chain. Wired in automatically. |
 
-### Fields & Coordinates (21)
+### Fields & Coordinates (20)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -322,7 +326,6 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Smooth (neighbors) | `node.neighbor_smooth` | Filter | Averages each point with its neighbours on a grid, smoothing out a bumpy field of values or positions. |
 | Polar Field | `node.polar_field` | Source | Outputs each pixel's angle and distance from a centre instead of its X and Y. The base for spirals, tunnels, and kaleidoscopes. |
 | Rotate Coordinates | `node.rotate_coordinates` | Map | Rotates a coordinate field around the centre. This spins the coordinates used to build a warp, not the image itself. For the picture, use Flip or a transform. |
-| — | `node.rotate_vec2_90` | Map | Rotates a 2D vector field by 90 degrees. The fixed-angle older version of Rotate Vector. |
 | Rotate Vector | `node.rotate_vector` | Map | Rotates a 2D vector field by an angle, turning every arrow in a flow or gradient field by the same amount. |
 | Scanline Jitter Field | `node.scanline_jitter_field` | Source | Per-row horizontal offset for sideways glitch. Tear = gated VHS jolt; Slide = smooth organic per-band drift. Set Bands for chunky strips, feed it into Remap. |
 | Sine Wave (projected) | `node.sine_wave` | Map | Mixes a coordinate field into a moving sine wave in one step, the core ingredient of plasma and interference patterns. |
@@ -332,65 +335,55 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |
 | UV Field | `node.uv_field` | Source | Outputs the position of each pixel as a coordinate, red for left-to-right and green for top-to-bottom. The starting grid for most warps and patterns. |
 
-### Uncategorized (5)
-
-| Node | type_id | role | summary |
-|---|---|---|---|
-| — | `node.fbm_2d` | — | — |
-| — | `node.hash_noise_field_2d` | — | — |
-| Multi Blend | `node.multi_blend` | — | — |
-| — | `node.perlin_noise_2d` | — | — |
-| — | `node.simplex_noise_2d` | — | — |
-
 ### Effect & generator presets (45)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
 | `AutoGain` | Auto Gain | effect | Stylize | 4 |
-| `BasicShapes` | Basic Shapes | generator | Procedural | 4 |
-| `BlackHole` | Black Hole | generator | Procedural | 15 |
+| `BasicShapes` | Basic Shapes | generator | Pattern | 4 |
+| `BlackHole` | Black Hole | generator | Sim | 15 |
 | `BlobTracking` | Blob Track | effect | Diagnostic | 5 |
 | `Bloom` | Bloom | effect | Filmic | 1 |
 | `ChromaticAberration` | Chromatic Aberration | effect | Filmic | 5 |
 | `ColorCompass` | Color Compass | effect | Spatial | 2 |
 | `ColorGrade` | Color Grade | effect | Color | 9 |
-| `ComputeStrangeAttractor` | Strange Attractor | generator | Procedural | 11 |
-| `ConcentricTunnel` | Concentric Tunnel | generator | Procedural | 6 |
+| `ConcentricTunnel` | Concentric Tunnel | generator | Pattern | 6 |
 | `DepthOfField` | Depth of Field | effect | Filmic | 8 |
 | `DigitalDrift` | Digital Drift | effect | Filmic | 4 |
-| `DigitalPlants` | Digital Plants | generator | Procedural | 14 |
+| `DigitalPlants` | Digital Plants | generator | Geometry | 14 |
 | `Dither` | Dither | effect | Color | 2 |
-| `Duocylinder` | Duocylinder | generator | Procedural | 11 |
-| `EdgeGlow` | Edge Detect | effect | Diagnostic | 3 |
+| `Duocylinder` | Duocylinder | generator | Geometry | 11 |
+| `EdgeDetect` | Edge Detect | effect | Diagnostic | 3 |
 | `EdgeStretch` | Edge Stretch | effect | Spatial | 3 |
-| `FluidSimulation` | Fluid Sim 2D | generator | Generator | 13 |
-| `FluidSimulation3D` | Fluid Sim 3D | generator | Generator | 20 |
+| `FluidSim2D` | Fluid Sim 2D | generator | Sim | 13 |
+| `FluidSim3D` | Fluid Sim 3D | generator | Sim | 20 |
 | `Glitch` | Glitch | effect | Filmic | 5 |
-| `HdrBoost` | Highlight Boost | effect | Filmic | 4 |
+| `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
 | `Infrared` | Infrared | effect | Color | 3 |
-| `InvertColors` | Invert | effect | Color | 1 |
+| `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
-| `Lissajous` | Lissajous | generator | Procedural | 11 |
-| `MetallicGlass` | Metallic Glass | generator | Generator | 13 |
+| `Lissajous` | Lissajous | generator | Geometry | 11 |
+| `MetallicGlass` | Metallic Glass | generator | Sim | 13 |
 | `Mirror` | Mirror | effect | Spatial | 2 |
-| `MriVolume` | MRI Volume | generator | Source | 8 |
-| `NestedCubes` | Nested Cubes | generator | Procedural | 6 |
+| `MriVolume` | MRI Volume | generator | Text & Media | 8 |
+| `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
 | `NodeGraphTest` | Node Graph Test | effect | Diagnostic | 1 |
-| `OilyFluid` | Oily Fluid | generator | Generator | 14 |
-| `ParticleText` | Particle Text | generator | Generator | 15 |
-| `Plasma` | Plasma | generator | Procedural | 6 |
+| `OilyFluid` | Oily Fluid | generator | Sim | 14 |
+| `ParticleText` | Particle Text | generator | Text & Media | 15 |
+| `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
-| `SoftFocusGraph` | Soft Focus | effect | Stylize | 2 |
-| `StarField` | Star Field | generator | Procedural | 8 |
+| `SoftFocus` | Soft Focus | effect | Stylize | 2 |
+| `StarField` | Star Field | generator | Pattern | 8 |
+| `StrangeAttractor` | Strange Attractor | generator | Sim | 11 |
 | `Strobe` | Strobe | effect | Stylize | 3 |
 | `StylizedFeedback` | Stylized Feedback | effect | Stylize | 3 |
-| `Tesseract` | Tesseract | generator | Procedural | 12 |
-| `Text` | Text | generator | Source | 9 |
+| `Tesseract` | Tesseract | generator | Geometry | 12 |
+| `Text` | Text | generator | Text & Media | 9 |
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Stylize | 3 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
+| `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Diagnostic | 8 |
-| `WireframeZoo` | Wireframe | generator | Procedural | 9 |
 
 <!-- END GENERATED: registered-node-index -->
 

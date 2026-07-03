@@ -59,7 +59,7 @@ crate::primitive! {
     summary: "Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field.",
     category: FieldsAndCoordinates,
     role: Filter,
-    aliases: ["flow displace", "advect", "warp by flow"],
+    aliases: ["flow displace", "advect", "warp by flow", "Displace"],
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/uv_displace_by_flow_body.wgsl"),
     input_access: [Gather, Coincident],

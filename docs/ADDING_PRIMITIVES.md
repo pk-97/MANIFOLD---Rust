@@ -228,6 +228,7 @@ fn invert_decomposes_pixel_exactly_across_all_fixtures() {
 - **Don't skip the parity test when replacing an existing effect.** Strict bit-equality is the gate.
 - **Don't add a primitive for speculative future use.** The `≥2-use` filter is enforced at review time.
 - **Don't ship a fused single-effect / single-generator bundle.** If your primitive internally orchestrates multiple distinct dispatches that each do a different operation, that's a graph, not a primitive. Build the atoms separately and wire them in JSON. The recurring failure mode in past decomposition passes was reaching for a fused kernel to pass parity quickly; the no-fused-monolith rule prohibits this regardless of parity-test pressure. If parity drift is the concern, spec intermediate texture formats up to `Rgba32Float` to eliminate the rounding gap — the bandwidth cost is negligible on M-series and the bundle-as-primitive cost is structural.
+- **Don't touch the kernel without re-reading the purpose.** `purpose` states the math (`docs/NODE_VOCABULARY_AUDIT.md` §2.6) and lives right next to the shader in the same file, on screen during the edit — there's no excuse for it drifting. Touch the kernel, re-read the purpose.
 
 ## Parity-without-fusion
 

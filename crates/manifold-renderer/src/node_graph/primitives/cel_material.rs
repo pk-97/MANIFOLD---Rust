@@ -133,7 +133,7 @@ crate::primitive! {
     summary: "A toon material that snaps the lighting into a few flat bands for a cartoon or cel-shaded look.",
     category: MaterialsAndLighting,
     role: Source,
-    aliases: ["cel", "toon", "cartoon", "material"],
+    aliases: ["cel", "toon", "cartoon", "material", "Toon BSDF"],
 }
 
 impl Primitive for CelMaterial {

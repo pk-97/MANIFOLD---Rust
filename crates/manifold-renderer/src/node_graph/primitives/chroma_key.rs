@@ -81,7 +81,7 @@ crate::primitive! {
     summary: "Outputs a mask showing how close each pixel is to a chosen colour, the green-screen key. Feed it into a mask mix to knock out a background.",
     category: Mask,
     role: Filter,
-    aliases: ["chroma key", "green screen", "keying", "Chroma Key TOP"],
+    aliases: ["chroma key", "green screen", "keying", "Chroma Key TOP", "Color Key"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/chroma_key_body.wgsl"),
 }

@@ -106,7 +106,7 @@ crate::primitive! {
     summary: "A flat-colour material with no lighting, so the surface shows its base colour straight. The simplest material, good for solid or glowing looks.",
     category: MaterialsAndLighting,
     role: Source,
-    aliases: ["unlit", "flat", "constant", "material"],
+    aliases: ["unlit", "flat", "constant", "material", "Emission"],
 }
 
 impl Primitive for UnlitMaterial {

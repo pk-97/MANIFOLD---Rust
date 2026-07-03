@@ -69,7 +69,7 @@ crate::primitive! {
     summary: "Eases each value through a smooth S-curve between a low and high edge. Softens a hard threshold into a gentle ramp.",
     category: MathAndConvert,
     role: Filter,
-    aliases: ["smoothstep", "smoothstep texture", "ease", "s-curve", "soft threshold"],
+    aliases: ["smoothstep", "smoothstep texture", "ease", "s-curve", "soft threshold", "Map Range"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/smoothstep_texture_body.wgsl"),
 }

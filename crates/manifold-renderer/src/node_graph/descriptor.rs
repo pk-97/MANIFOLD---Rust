@@ -353,7 +353,7 @@ hand_descriptor!(
 );
 hand_descriptor!(
     "node.envelope_follower_ar",
-    "Asymmetric attack/release envelope follower on a scalar. Switches time constant on rising (`attack`) vs falling (`release`) input. The audio-style counterpart to the symmetric node.smoothing.",
+    "Asymmetric attack/release envelope follower on a scalar: tau = attack if in > previous else release; alpha = 1 - exp(-dt / tau) (dt = frame delta seconds; alpha = 1 when tau < 1e-6); out = previous + (in - previous) * alpha. Same EMA shape as node.smoothing but tau switches by direction each frame. attack ranges [0, 5] s (default 0.005), release [0, 10] s (default 0.5). Optional reset_trigger drops the stored `previous` to 0 on an integer-edge change.",
     summary: "Follows the level of a signal, rising fast on the attack and falling slow on the release, or however you set the two times. The asymmetric version of a smooth.",
     category: Control,
     role: Control,
@@ -377,7 +377,7 @@ hand_descriptor!(
 );
 hand_descriptor!(
     "node.smoothing",
-    "Exponential one-pole smoothing on a scalar wire. Response time is about `time_constant` seconds, frame-rate-independent. Symmetric (single time constant).",
+    "Exponential one-pole low-pass on a scalar wire: alpha = 1 - exp(-dt / time_constant), out = previous + (in - previous) * alpha, where dt is the frame delta in seconds. At dt = time_constant the output has moved ~63% of the way to the input (1 - e^-1). Symmetric (single time constant, range (0.001, 2.0] s) — frame-rate-independent since alpha derives from dt, not frame count. Optional reset_trigger drops the stored `previous` to 0 on an integer-edge change.",
     summary: "Smooths a jumpy control signal into a gentle glide, with the response time set in seconds. The same feel holds whatever the frame rate.",
     category: Control,
     role: Control,

@@ -28,7 +28,7 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: ArrayFilterDetections,
     type_id: "node.array_filter_detections",
-    purpose: "Reject degenerate items from a Channels[X, Y, WIDTH, HEIGHT] detection array by size, aspect ratio, and frame coverage. Drops frame-wide horizon strips (huge aspect), vertical slivers (tiny aspect), specks (below min size), and bbox-covers-everything regions (above max_area_frac). Sits between a detector and a tracker so identity tracking never locks onto garbage. Defaults pass everything through; set bounds to taste. Output preserves the Channels type and the order of surviving items.",
+    purpose: "Reject degenerate items from a Channels[X, Y, WIDTH, HEIGHT] detection array by size, aspect ratio, and frame coverage — all bounds in the detector's normalised 0..1 coordinate space. Keeps an item only when min_width <= width <= max_width, min_height <= height <= max_height, min_aspect <= (width / height) <= max_aspect, and (width * height) <= max_area_frac. Drops frame-wide horizon strips (huge aspect), vertical slivers (tiny aspect), specks (below min size), and bbox-covers-everything regions (above max_area_frac). Sits between a detector and a tracker so identity tracking never locks onto garbage. Defaults (width/height bounded to [0,1], min_aspect=0, max_aspect=1000, max_area_frac=1) pass everything through; set bounds to taste. Output preserves the Channels type and the order of surviving items; rejected slots compact out and the tail zero-fills.",
     inputs: {
         in: Channels[X: F32, Y: F32, WIDTH: F32, HEIGHT: F32] required,
         min_height: ScalarF32 optional,

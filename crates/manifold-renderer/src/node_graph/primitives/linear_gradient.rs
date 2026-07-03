@@ -83,7 +83,7 @@ crate::primitive! {
     summary: "A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects.",
     category: Generate,
     role: Source,
-    aliases: ["linear gradient", "ramp", "fade", "Ramp TOP"],
+    aliases: ["linear gradient", "ramp", "fade", "Ramp TOP", "Gradient Texture"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/linear_gradient_body.wgsl"),
 }

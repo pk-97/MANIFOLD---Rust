@@ -43,7 +43,7 @@ struct InstanceUniforms {
 crate::primitive! {
     name: GenerateInstanceTransforms,
     type_id: "node.arrange_copies",
-    purpose: "Emit an Array<InstanceTransform> filled with a procedural layout (grid / ring / spiral / random). Pair with node.render_copies to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
+    purpose: "Emit an Array<InstanceTransform> filled with one of four procedural layouts (slots beyond active_count zero out): Grid — side = ceil(active_count^(1/3)), 3D index (cx,cy,cz) = (i mod side, (i/side) mod side, i/side^2), position = ((cx/(side-1) - 0.5)*extent_x, (cy/(side-1) - 0.5)*extent_y, (cz/(side-1) - 0.5)*extent_z). Ring — t = i/active_count, theta = t*2π, position = (cos(theta)*extent_x/2, 0, sin(theta)*extent_z/2). Spiral — t = i/active_count, theta = t*2π*4 (4 turns), r = t, position = (cos(theta)*r*extent_x/2, (t-0.5)*extent_y, sin(theta)*r*extent_z/2). Random — wang-hash of (index, seed) per axis, position = (hash-0.5)*extent per axis, uniform within the extent box. Scale is uniform `base_scale`; rotation is uniform (rot_x, rot_y, rot_z) applied identically to every instance. Pair with node.render_copies to draw N copies of a base mesh. The unlock for NestedCubes / DigitalPlants-shaped graphs.",
     inputs: {},
     outputs: {
         instances: Array(InstanceTransform),

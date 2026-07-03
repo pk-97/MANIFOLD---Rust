@@ -68,7 +68,7 @@ crate::primitive! {
     summary: "Runs a custom 3x3 kernel over the image, so you can build your own blur, sharpen, edge-detect, or emboss from nine weights. For when the preset filters don't do quite what you want.",
     category: BlurAndSharpen,
     role: Filter,
-    aliases: ["custom convolution", "9tap", "kernel", "convolve", "filter matrix"],
+    aliases: ["custom convolution", "9tap", "kernel", "convolve", "filter matrix", "Convolution Kernel"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/convolution_2d_9tap_body.wgsl"),
     input_access: [Gather],

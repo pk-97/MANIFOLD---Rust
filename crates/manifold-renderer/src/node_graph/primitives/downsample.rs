@@ -65,7 +65,7 @@ crate::primitive! {
     summary: "Shrinks the image by a whole-number factor with a box filter, trading detail for speed. Good before a heavy effect or for a blocky look.",
     category: Routing,
     role: Filter,
-    aliases: ["downsample", "downscale", "shrink", "Resolution TOP"],
+    aliases: ["downsample", "downscale", "shrink", "Resolution TOP", "Pixelate"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/downsample_body.wgsl"),
     input_access: [Gather],

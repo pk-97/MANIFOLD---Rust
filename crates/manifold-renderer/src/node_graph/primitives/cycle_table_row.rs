@@ -21,7 +21,7 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: CycleTableRow,
     type_id: "node.cycle_table_row",
-    purpose: "Cycle through a curated `Table` of f32 rows on each clip trigger, emitting the selected row as `Array<f32>`. The generic preset-cycler primitive — pair with any consumer that takes a variable-length float buffer (per-instance angles, channel triplets, rhythm steps) plus a trigger source from generator_input. Output capacity = table.col_count(); rows are dimensionally consistent (enforced at JSON load).",
+    purpose: "Cycle through a curated `Table` of f32 rows on each clip trigger, emitting the selected row as `Array<f32>`. row_idx = ClipTriggerCycle::step(trigger_count, table.row_count()): a repeated trigger_count returns the cached row (idempotent — same-frame callers don't re-roll); a new trigger_count emits trigger_count % row_count, unless that would repeat the previous emission (and row_count > 1), in which case it advances by +1 mod row_count instead — never fires the same row twice in a row. The generic preset-cycler primitive — pair with any consumer that takes a variable-length float buffer (per-instance angles, channel triplets, rhythm steps) plus a trigger source from generator_input. Output capacity = table.col_count(); rows are dimensionally consistent (enforced at JSON load). Unwired trigger_count stays on row 0.",
     inputs: {
         trigger_count: ScalarF32 optional,
     },

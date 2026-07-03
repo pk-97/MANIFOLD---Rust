@@ -50,7 +50,7 @@ crate::primitive! {
     summary: "Pushes the lights and darks apart for a punchier image, or pulls them together for a flatter one. It pivots around mid grey.",
     category: ColorAndTone,
     role: Filter,
-    aliases: ["contrast", "Level TOP"],
+    aliases: ["contrast", "Level TOP", "Bright/Contrast"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/contrast_body.wgsl"),
 }

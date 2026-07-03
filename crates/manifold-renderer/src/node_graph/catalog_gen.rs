@@ -22,8 +22,10 @@
 
 use std::fmt::Write as _;
 
+use ahash::AHashMap;
 use manifold_core::PresetTypeId;
-use manifold_core::effect_graph_def::PresetMetadata;
+use manifold_core::effect_graph_def::{EffectGraphNode, PresetMetadata};
+use manifold_core::preset_def::PresetKind;
 
 use crate::generators::bundled_generator_presets::loaded_generator_presets_from_bundled;
 use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
@@ -70,7 +72,10 @@ struct NodeRow {
     category: Category,
     role: Role,
     aliases: &'static [&'static str],
-    examples: &'static [&'static str],
+    /// Bundled preset ids that use this node — auto-populated from a scan
+    /// of every shipping preset's graph (docs/NODE_VOCABULARY_AUDIT.md §8b),
+    /// never hand-written, so it cannot go stale.
+    examples: Vec<String>,
     inputs: Vec<PortRow>,
     outputs: Vec<PortRow>,
     params: Vec<ParamRow>,
@@ -99,8 +104,44 @@ fn is_test_fixture(type_id: &str) -> bool {
     type_id.starts_with("node.__")
 }
 
+/// Which bundled presets use each node `type_id` — the discoverable
+/// "which presets use this node" examples the catalog ships per descriptor
+/// entry. Scans every bundled preset's parsed graph (both effect and
+/// generator catalogs), recursing into group bodies so a node buried
+/// inside a group still counts, and inverts node-usage into
+/// `type_id -> sorted, deduped preset ids`. Computed fresh at catalog-build
+/// time from the live registry, so — unlike a hand-maintained list — it
+/// cannot go stale (docs/NODE_VOCABULARY_AUDIT.md §8b).
+fn preset_examples() -> AHashMap<String, Vec<String>> {
+    fn walk(nodes: &[EffectGraphNode], preset_id: &str, out: &mut AHashMap<String, Vec<String>>) {
+        for n in nodes {
+            out.entry(n.type_id.clone())
+                .or_default()
+                .push(preset_id.to_string());
+            if let Some(group) = &n.group {
+                walk(&group.nodes, preset_id, out);
+            }
+        }
+    }
+
+    let mut out: AHashMap<String, Vec<String>> = AHashMap::default();
+    for kind in [PresetKind::Effect, PresetKind::Generator] {
+        for id in bundled_preset_type_ids(kind) {
+            if let Some(def) = bundled_preset_def(&id) {
+                walk(&def.nodes, id.as_str(), &mut out);
+            }
+        }
+    }
+    for uses in out.values_mut() {
+        uses.sort();
+        uses.dedup();
+    }
+    out
+}
+
 /// Collect one [`NodeRow`] per registered primitive, sorted by `type_id`.
 fn collect_rows() -> Vec<NodeRow> {
+    let examples_by_type_id = preset_examples();
     let mut rows: Vec<NodeRow> = inventory::iter::<PrimitiveFactory>
         .into_iter()
         .filter(|f| !is_test_fixture(f.type_id))
@@ -116,7 +157,7 @@ fn collect_rows() -> Vec<NodeRow> {
                 category: desc.map(|d| d.category).unwrap_or(Category::Uncategorized),
                 role: desc.map(|d| d.role).unwrap_or(Role::Unknown),
                 aliases: desc.map(|d| d.aliases).unwrap_or(&[]),
-                examples: desc.map(|d| d.examples).unwrap_or(&[]),
+                examples: examples_by_type_id.get(f.type_id).cloned().unwrap_or_default(),
                 inputs: node.inputs().iter().map(port_row).collect(),
                 outputs: node.outputs().iter().map(port_row).collect(),
                 params: node.parameters().iter().map(param_row).collect(),
@@ -545,6 +586,42 @@ mod tests {
                 block.contains(f.type_id),
                 "registered node `{}` missing from generated index",
                 f.type_id
+            );
+        }
+    }
+
+    /// docs/NODE_VOCABULARY_AUDIT.md §8c completeness gate: every
+    /// palette-visible node (Atom or Driver stratum — hidden/legacy/
+    /// `system.*` nodes are `Unlisted`, from having no `picker:`, and are
+    /// exempt) must ship a non-empty label, summary, category, and alias
+    /// list. Vocabulary becomes a merge requirement paid by the node's
+    /// author, when context is richest, instead of surfacing later as one
+    /// of the "uncategorized" stragglers this audit had to sweep up.
+    #[test]
+    fn palette_visible_nodes_have_complete_descriptors() {
+        for row in collect_rows() {
+            if row.stratum == Stratum::Unlisted {
+                continue;
+            }
+            assert!(
+                row.label.is_some_and(|l| !l.is_empty()),
+                "palette node `{}` has an empty picker label",
+                row.type_id
+            );
+            assert!(
+                !row.summary.is_empty(),
+                "palette node `{}` has an empty summary",
+                row.type_id
+            );
+            assert!(
+                row.category != Category::Uncategorized,
+                "palette node `{}` has no category",
+                row.type_id
+            );
+            assert!(
+                !row.aliases.is_empty(),
+                "palette node `{}` has no aliases",
+                row.type_id
             );
         }
     }
