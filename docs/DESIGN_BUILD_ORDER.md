@@ -38,6 +38,7 @@ prerequisites aren't shipped, stop.
 | REALTIME_3D_DESIGN | MATERIAL_SYSTEM M1–M5 (its P0); VOCAB apply | full (written to standard 2026-07-03) |
 | SIMULATIONS_DESIGN | MATERIAL M1–M5; REALTIME_3D P1 for scene composition | full (written to standard 2026-07-03) |
 | IMPORT_DESIGN | per phase: P1–P3 need REALTIME_3D P1 + MATERIAL; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 needs VOCAB (agent half: MCP) | full (written to standard 2026-07-03) |
+| COMMERCIALIZATION_DESIGN (commerce infra: license, watermark, updater, telemetry) | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 | conformance |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is IN PROGRESS (phases 0–6 done) — finish
 in flight, don't re-queue. **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -75,6 +76,18 @@ rewritten as widgets one phase later. Order them; don't build twice.
 
 ## 3. Recommended order (re-rankable)
 
+**Version map (Peter, 2026-07-03 — see BUSINESS_PLAN.md §2):**
+**v1.0 = waves 0–3 complete + the launch gate below** — core feature-complete,
+"just works out of the box." **v1.x** = small flexes (staged ML Vision tasks,
+preset/component packs) + the **import funnels as campaigns** — IMPORT P5
+(Resolume) and P6 (TD) have all hard prerequisites inside v1.0, so they fill the
+otherwise-quiet Vulkan stretch. **v1.5 = Vulkan/Windows** (+ ML ONNX parity, its
+hard edge). **v2.0 = the 3D track (§4) as the paid upgrade.**
+
+Within a wave, re-rank freely by judgment — including **demo-ability** (does the
+feature make a release trailer?): deeply-useful-but-boring-to-film items ride
+along with a flashy headliner rather than headlining.
+
 Grouped in waves; within a wave, items are independent and order is free.
 
 **Wave 0 — lock the names, protect the work.**
@@ -107,9 +120,16 @@ Grouped in waves; within a wave, items are independent and order is free.
 18. GIG_RESILIENCE P4 (peripheral hardening — MIDI hotplug, audio rebuild, GPU CB
     status, thermal).
 
+**Launch gate (inside v1.0, after wave 3):**
+19. COMMERCIALIZATION_DESIGN P1–P4 (license file, trial watermark, updater,
+    telemetry upload).
+20. First-hour pass: bundled demo project + starter presets; `.als` import is the
+    first hour (BUSINESS_PLAN §7) — re-weighting, not new design.
+
 **Background track (long-running, parallel to everything):**
-- VULKAN phases 1–4. Start when Peter says; nothing in waves 0–3 waits on it, and
-  its two dependents (ML ONNX, MEDIA_BACKEND §6) are explicitly later-tier.
+- VULKAN phases 1–4 = **the v1.5 release**. Start gates on v1.0 stability in the
+  field; nothing in waves 0–3 waits on it, and its two dependents (ML ONNX,
+  MEDIA_BACKEND §6) land with it.
 
 ## 4. The 3D track (added 2026-07-03)
 
@@ -119,9 +139,11 @@ Sequence within the track: MATERIAL M1–M5 → REALTIME_3D P1–P7 →
 SIMULATIONS P1–P4 (`docs/SIMULATIONS_DESIGN.md` — XPBD cloth/liquids) →
 IMPORT P1–P4 (`docs/IMPORT_DESIGN.md` — glTF scenes, beat-retimed animation,
 MDD/PC2 caches = SIMULATIONS lane 1, texture sets). IMPORT P5 (Resolume funnel)
-and P6 (TD funnel) hang off the main waves instead (session mode / MCP). The
-track is independent of waves 0–3 (renderer-internal) and can run parallel to
-them once VOCAB apply has landed; Peter ranks when it starts.
+and P6 (TD funnel) hang off the main waves instead (session mode / MCP) — they
+ship as v1.x campaigns, before this track. The track is independent of waves 0–3
+(renderer-internal) and can run parallel to them once VOCAB apply has landed;
+per the version map it is **the paid v2.0 upgrade**, so it starts after v1.0
+ships unless Peter re-ranks.
 
 ## 5. Maintenance
 
