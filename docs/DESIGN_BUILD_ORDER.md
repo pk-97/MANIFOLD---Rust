@@ -105,7 +105,7 @@ Grouped in waves; within a wave, items are independent and order is free.
    **P1 ⏸ PARKED 2026-07-03: committed §3 trait can't wrap the shipped thread-split +
    zero-alloc reuse-pool decode — needs a §3 addendum before code
    (`docs/DESIGN_HARDENING_QUEUE.md` item 1). No near-wave dependent, so parking is free.**
-7. GIG_RESILIENCE P2 (breadcrumb + `--resume`) — needs nothing from other designs.
+7. GIG_RESILIENCE P2 (breadcrumb + `--resume`) — needs nothing from other designs. **✅ merged (`3dffe29a`). D8 Ableton-position rejoin deferred to ABLETON_SHOW_SYNC (bridge has no inbound song-position); breadcrumb-beat fallback shipped. P3 (understudy) needs PERFORM_SURFACE P1.**
 
 **Wave 2 — the show becomes playable end-to-end.**
 8. PERFORM_SURFACE P1 (chrome-hosted perform substrate, timeline perform migrated).

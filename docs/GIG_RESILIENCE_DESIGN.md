@@ -1,6 +1,7 @@
 # Gig Resilience — Red-Teaming the Live Show
 
-**Status: IN PROGRESS — P1 built and merged into `feat/timeline-ui-redesign` (2026-07-03); P2–P4 not implemented. Sonnet-executable. Phases in §9.**
+**Status: IN PROGRESS — P1 (`3dffe29a` P2 merge) and P2 built + merged into `feat/timeline-ui-redesign` (2026-07-03); P3–P4 not implemented. Sonnet-executable. Phases in §9.**
+**D8 caveat (shipped in P2):** the "rejoin to live Ableton position" branch is NOT built — the bridge (`ableton_bridge.rs:250`) has no inbound song-position field (position is outbound-only). P2 shipped D8's breadcrumb-beat fallback (autonomous, plays immediately). Building Ableton-position rejoin needs a new inbound OSC listener; deferred to ABLETON_SHOW_SYNC (where inbound transport belongs) — decision pending Peter.
 **Prerequisites: none for P1–P2. P3 after PERFORM_SURFACE_DESIGN P1 (`docs/DESIGN_BUILD_ORDER.md` §2).**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
 
@@ -334,7 +335,17 @@ not grow); any rung that needs human input mid-set (D3).
   edit, wait debounce, assert history entry appears + prune caps hold; save to
   a full/readonly volume surfaces a UI event (manual check); touches
   `manifold-io` save path = infrastructure → full workspace sweep.
-- **P2 — Come back fast.** Breadcrumb sidecar + `--resume` boot path + output
+- **P2 — Come back fast. ✅ BUILT + MERGED (2026-07-03, `3dffe29a`).** New
+  `manifold-app/src/breadcrumb.rs`: sidecar (atomic write, integer-beat cadence,
+  background writer), `--resume` boot path (opens via existing ProjectIOService,
+  seeks breadcrumb beat, display-UUID topology restore), panic-hook beat stamp
+  (single atomic). Reads beat via the existing `ContentState` channel — `sync_clips_to_time`
+  untouched, `Arc<Mutex>` count unchanged. 10/10 breadcrumb unit + resume/crash tests +
+  workspace sweep green. **D8 Ableton-position rejoin deferred (see status caveat above);
+  breadcrumb-beat fallback shipped.** Live kill→relaunch crash-to-picture profiling is a
+  PETER manual drill (documented in the P2 report; instrumentation at `app_lifecycle.rs:575`
+  + a `[Resume]` log line) — not yet run.
+  Breadcrumb sidecar + `--resume` boot path + output
   window topology restore + transport rejoin (Ableton-first, breadcrumb
   fallback) + panic-hook beat stamp. Read-back: §5 whole. Forbidden:
   per-frame breadcrumb writes (cadence = integer-beat + transport changes,
