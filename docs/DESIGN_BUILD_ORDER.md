@@ -42,8 +42,8 @@ prerequisites aren't shipped, stop.
 | DJ_PERFORMANCE_DESIGN | ABLETON_SHOW_SYNC; PERFORM_SURFACE P1; MEDIA_BACKEND P1 | conformance |
 | PRO_DJ_LINK_DESIGN | PERFORM_SURFACE P1; sync-source seam (timecode/Link infra) | conformance |
 
-Not in the queue: **LIVE_AUDIO_TRIGGERS** is IN PROGRESS (phases 0–6 done) — finish
-in flight, don't re-queue. **COMPETITIVE_STEAL_PASS** is a closed record.
+Not in the queue: **LIVE_AUDIO_TRIGGERS** is SHIPPED (phases 0–7, proven live,
+branch merged). **COMPETITIVE_STEAL_PASS** is a closed record.
 
 ## 2. Hard dependency edges
 
@@ -96,7 +96,6 @@ Grouped in waves; within a wave, items are independent and order is free.
 1. VOCAB apply pass (§9 order in its doc).
 2. GIG_RESILIENCE P1 (autosave + save-error surfacing + crash.log rotation) — cheap,
    protects everything built after it, zero dependencies.
-3. Finish LIVE_AUDIO_TRIGGERS (in flight).
 
 **Wave 1 — the stage foundations.**
 4. MULTI_DISPLAY P1–P3 (core model → island rendering → multi-output present) — the
