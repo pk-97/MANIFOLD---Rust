@@ -99,12 +99,12 @@ Grouped in waves; within a wave, items are independent and order is free.
 **Wave 1 — the stage foundations.** (2026-07-03: P1s landing in parallel worktrees off `feat/timeline-ui-redesign`.)
 4. MULTI_DISPLAY P1–P3 (core model → island rendering → multi-output present) — the
    widest unblock in the corpus: projection mapping, LED P2, and the rig work all
-   ride it. **P1 ✅ merged (`0cb5114f`); P2 next.**
-5. SESSION_MODE — second performance surface; unblocks session perform. **P1 ✅ merged (`4f072100`); P2 (SessionRuntime, the risk-concentration phase) next.**
+   ride it. **P1 ✅ merged (`0cb5114f`); P2 ⏸ BLOCKED pending §6.1 seam-hardening — `docs/DESIGN_HARDENING_QUEUE.md` item 2.**
+5. SESSION_MODE — second performance surface; unblocks session perform. **P1 ✅ merged (`4f072100`); P2 (SessionRuntime, the risk-concentration phase) IN FLIGHT.**
 6. MEDIA_BACKEND P1–P3 (Metal era) — decode/encode traits; independent of everything.
-   **P1 ⏸ PARKED 2026-07-03: the committed §3 `MediaDecoder` trait can't wrap the shipped
-   thread-split + zero-alloc reuse-pool decode without changing behavior — needs a §3
-   design addendum before code. No near-wave dependent, so parking is free.**
+   **P1 ⏸ PARKED 2026-07-03: committed §3 trait can't wrap the shipped thread-split +
+   zero-alloc reuse-pool decode — needs a §3 addendum before code
+   (`docs/DESIGN_HARDENING_QUEUE.md` item 1). No near-wave dependent, so parking is free.**
 7. GIG_RESILIENCE P2 (breadcrumb + `--resume`) — needs nothing from other designs.
 
 **Wave 2 — the show becomes playable end-to-end.**

@@ -1,6 +1,6 @@
 # Multi-Display / Totem Canvas Model
 
-**Status: IN PROGRESS — P1 built + merged into `feat/timeline-ui-redesign` (2026-07-03, commit `0cb5114f`); P2–P5 not implemented.** Written 2026-07-02 (Fable). **v2, same
+**Status: IN PROGRESS — P1 built + merged into `feat/timeline-ui-redesign` (2026-07-03, commit `0cb5114f`). P2 BLOCKED 2026-07-03 pending a §6.1 seam-hardening pass — see `docs/DESIGN_HARDENING_QUEUE.md` item 2 (Peter: "harden the doc first"; the per-island state seam has no old→new brief). P3–P5 not implemented.** Written 2026-07-02 (Fable). **v2, same
 day:** the v1 "render the gaps" pixel canvas was rejected by Peter — a super-wide stage
 must not spend its frame budget on invisible air. v2 replaces it with the island atlas
 model. Execution is a Sonnet apply pass — every decision needed is in here; don't

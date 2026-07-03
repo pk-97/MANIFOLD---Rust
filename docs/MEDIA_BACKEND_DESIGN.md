@@ -1,6 +1,6 @@
 # Media Backend — Neutral Decode/Encode Traits
 
-**Status: APPROVED design, not built · 2026-07-02 · Fable queue (media backend)**
+**Status: APPROVED design · P1 BLOCKED 2026-07-03 pending a §3 hardening pass — see `docs/DESIGN_HARDENING_QUEUE.md` item 1 (the committed §3 trait can't wrap the shipped thread-split + reuse-pool decode; needs a Fable options pass before code). · 2026-07-02 · Fable queue (media backend)**
 **Prerequisites: none for Metal-era P1–P3. The Vulkan-era handoff (§6) pairs with
 `docs/VULKAN_BACKEND_DESIGN.md` §8 — this is the biggest single port item after the GPU.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.**
