@@ -23,7 +23,178 @@ or human can read it, and it needs no external tool.
 
 ## Open
 
-_(none)_
+All nine entries below come from the **freeze-compiler adversarial bug hunt, 2026-07-03**
+(40-agent Sonnet workflow `wf_73bb4ddf-885`; 10 finder lenses → every finding attacked by 2
+independent skeptics). BUG-006–012 were **confirmed by both skeptics** with line-level
+evidence; BUG-013/014 got split verdicts (judgment recorded per entry). Full verifier
+transcripts: the workflow journal at
+`~/.claude/projects/-Users-peterkiemann-MANIFOLD---Rust/18511d71-15ae-4119-81cc-894a3f83d247/subagents/workflows/wf_73bb4ddf-885/journal.jsonl`.
+System context for all of them: [FREEZE_COMPILER_MAP.md](FREEZE_COMPILER_MAP.md).
+
+### BUG-006 — Param edits/undo on fused-away nodes silently no-op until an unrelated rebuild — HIGH
+
+**Root cause** — [bound_graph.rs:114-133](../crates/manifold-renderer/src/node_graph/bound_graph.rs#L114-L133):
+`apply_inner_param_overrides` looks each node's `node_id` up in `slot.node_map` and silently
+`continue`s on a miss. For a fused card, `node_map` is built from the FUSED def
+([preset_runtime.rs:1285-1288](../crates/manifold-renderer/src/preset_runtime.rs#L1285-L1288)),
+so fused-away members (e.g. `gain`) aren't in it. The path never consults the fused view's
+`fused_retarget` map (which knows `gain.gain` → `fused_region_0.n0_gain`). Value-only edits
+bump only `graph_version`, which is deliberately not in `compute_topology_hash`, so no rebuild
+fires.
+
+**Symptom** — edit a param in the editor, close it (re-fuses, bakes the value), then Undo
+while viewing another effect: the def reverts but the fused kernel keeps rendering the OLD
+value indefinitely, until a resize/editor-open/unrelated edit forces a rebuild. Live control
+stranded, zero errors. `CHAIN_FUSION_DESIGN.md` §6 already flags this as an open item.
+
+**Fix shape** — thread the fused view's `fused_retarget` into `apply_inner_param_overrides`
+(or into `node_map` construction): on a `node_map` miss, translate `(node_id, param)` through
+the retarget map to `(fused node, n{i}_field)` and apply there. Test: fuse, value-edit,
+assert the fused node's param moved without a rebuild.
+
+### BUG-007 — Particle-loop fusion exclusion is blind to configured `node.wgsl_compute` shapes — HIGH
+
+**Root cause** — [region.rs:834](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L834):
+`cycle_contains_array` uses a bare `registry.construct(type_id)` — the ONE hold-out in the
+file; every other classification call site uses `configured_construct`, whose own doc comment
+states why the bare form is wrong. A full-kernel `node.wgsl_compute` with a
+`var<storage, read_write> array<Particle>` output (StrangeAttractor's "simulate" node is a
+shipped instance) introspects as the DEFAULT kernel (no Array output) under the bare
+construct, so the cycle scan can't see the particle stage.
+
+**Symptom** — a texture atom on a feedback loop whose only Array producer is such a node
+passes cut rule 12 and fuses tier-A f16 in-loop, where the bit-exact induction argument does
+not hold across a particle/scatter stage (FluidSim precedent: max_abs ~0.73 over ~31% of
+pixels). Fused render visibly diverges from the editor.
+
+**Fix shape** — one line: use `configured_construct(registry, node)` in
+`cycle_contains_array`. Sweep the file for any other bare-construct hold-outs
+(`node_is_buffer_atom` / `region_is_buffer` at
+[region.rs:1885-1905](../crates/manifold-renderer/src/node_graph/freeze/region.rs#L1885-L1905)
+have the same pattern — audit while there). Test: a loop through a configured wgsl_compute
+particle node must classify its texture atoms Boundary.
+
+### BUG-008 — Fused buffer region with mismatched array lengths reads out of bounds — HIGH
+
+**Root cause** — [codegen.rs:1777-1813](../crates/manifold-renderer/src/node_graph/freeze/codegen.rs#L1777-L1813):
+`generate_fused_buffer` anchors the dispatch guard to the FIRST array external's
+`arrayLength`, then unconditionally pre-reads EVERY array external at that index. Nothing
+anywhere (classify, union, `build_region`, `fused_def_builds`) checks that a buffer region's
+array externals agree on length — the tier-6 uniformity gate is texture-only. The unfused
+atom (e.g. `LerpInstanceFields`) explicitly clamps to `min(a_cap, b_cap, out_cap)`.
+
+**Symptom** — two array inputs of different lengths fuse; for indices past the shorter
+buffer the kernel does an out-of-bounds Metal storage read and writes garbage
+instances/particles to the output — silent visual corruption. Shipped presets happen to share
+lengths today; user graphs are unprotected.
+
+**Fix shape** — either refuse at `build_region` when a buffer region has >1 array external
+(conservative, fail-closed, cheapest), or emit a per-external in-bounds guard
+(`idx < arrayLength(&src_e)` with a defined fallback element). Pair with BUG-011.
+
+### BUG-009 — Segment "stateless" gate misses StateStore-held scalar state; harvest skip resets it — HIGH
+
+**Root cause** — [segment.rs:153-171](../crates/manifold-renderer/src/node_graph/freeze/segment.rs#L153-L171):
+`def_is_segment_stateless` checks only `state_capture_input_ports` + `aliased_array_io`.
+Primitives that hold real cross-frame state in the StateStore without declaring either —
+`sample_and_hold`, `envelope_decay`, `trigger_ease_to`, `compressor_envelope`,
+`envelope_follower_ar`, `inject_burst` — pass as stateless. Segment member slots get
+`def_content_key: 0` ([preset_runtime.rs:1105](../crates/manifold-renderer/src/preset_runtime.rs#L1105))
+and `harvest_state_from` skips them
+([preset_runtime.rs:1693](../crates/manifold-renderer/src/preset_runtime.rs#L1693)), so any
+chain rebuild drops their state.
+
+**Symptom** — AutoGain (shipped: `compressor_envelope` next to pointwise atoms) joins a
+segment; any rebuild while it's a member — editor open/close elsewhere, an unrelated card
+edit, or the fused-segment swap-in itself — resets the envelope: gain snaps to unity, a
+visible/audible pop mid-show. Violates the chain-fusion design's own "never resets state"
+invariant.
+
+**Fix shape** — the root fix is a truthful statefulness signal: a `NodeRequires`-style
+`uses_state_store` flag (or derive it from `ctx.state` usage) that `def_is_segment_stateless`
+also checks. Stop-gap is a hard-coded exclusion list, which is exactly the pattern the freeze
+module refuses everywhere else — prefer the flag.
+
+### BUG-010 — `wgsl_compute` silently dispatches the first of multiple entry points — MED
+
+**Root cause** — [wgsl_compute.rs:615-624](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L615-L624):
+`introspect()` takes `module.entry_points[0]` with no `len() == 1` check (the module doc at
+lines 29-31 claims multiple entry points fail validation — they don't). The pipeline compile
+independently picks the same first entry. A fragment-form node embeds the author's raw text
+BEFORE the synthesized `cs_main`, so any leftover `@compute fn` in the fragment becomes
+entry 0 and is what actually runs. Verified empirically by a skeptic (scratch test:
+`compile_failed=false`, `debug_pass` dispatched, real kernel never runs).
+
+**Symptom** — a user kernel/fragment with a stray second `@compute` function (debug leftover,
+copy-paste) renders stale/blank output with no warning; downstream wires read it as if it
+worked. Authoring-time surface, so MED — but it's the exact silent-wrong-output class.
+
+**Fix shape** — in `introspect()`: if the module has >1 compute entry point, prefer `cs_main`
+by name; if absent, fail validation with the warning the doc already promises. Keep the
+dispatch-side pick in lockstep.
+
+### BUG-011 — Fused `@fused_output` buffer sized to max of ALL array inputs, not the member's own rule — MED
+
+**Root cause** — [wgsl_compute.rs:1828-1829](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L1828-L1829):
+the fresh-output branch of `array_output_capacity` returns
+`input_capacities.max()` generically, overriding the fused output member's own semantic
+capacity rule (e.g. `LerpInstanceFields` follows only input `a`). Downstream consumers
+(`render_instanced_3d_mesh` computes capacity from physical buffer size) can then draw ghost
+instances from the never-written tail.
+
+**Symptom** — with mismatched input lengths (same shape as BUG-008), the fused output buffer
+is larger than the unfused chain's, and its tail is uninitialized pooled VRAM — potential
+stale-data ghosting across preset/frame boundaries.
+
+**Fix shape** — falls out of BUG-008's decision: if multi-external buffer regions are
+refused, this is unreachable; if guarded instead, size `dst` from the anchor external and
+zero-fill or guard the tail.
+
+### BUG-012 — Fragment `tex_` port-rename corrupts scalar params named `tex_*` — LOW
+
+**Root cause** — [wgsl_compute.rs:544-548](../crates/manifold-renderer/src/node_graph/primitives/wgsl_compute.rs#L544-L548):
+the fragment-form rename loop strips a literal `tex_` prefix from EVERY input port name with
+no type filter (the sibling texture-binding rename at 549-561 IS filtered to
+`SampledTexture`). A scalar `@param: tex_speed` exposes port `speed` while the uniform layout
+and params stay keyed `tex_speed`; the dispatch-time wire lookup misses and the live wire is
+silently ignored.
+
+**Symptom** — a wired LFO/Ableton control on such a param renders as connected but never
+moves the value. Latent — no shipped preset uses a `tex_`-prefixed param name.
+
+**Fix shape** — filter the rename to texture-typed ports, mirroring lines 549-561. One-line.
+
+### BUG-013 — `commit_and_wait_completed` never checks command-buffer status (likely the GPU-proof flake mechanism) — MED
+
+**Root cause** — [encoder.rs:1655-1662](../crates/manifold-gpu/src/metal/encoder.rs#L1655-L1662):
+`waitUntilCompleted()` returns on ANY terminal state including `Error`; no caller checks
+`status()`/`error()`. Every heavy freeze proof and `TextureDiff::compare` submit through this
+call and read the result back as if it succeeded. Under cross-binary GPU contention
+(documented in `.config/nextest.toml` and the `GPU_TEST_LOCK` comment; three call sites build
+unlocked devices), a transiently failed buffer reads back stale/partial → spurious large diff.
+
+**Status** — split verdict, judged REAL-as-flake-mechanism: it precisely explains the
+observed signature (several heavy tests, random divergence sizes, never reproducing
+isolated). It is test-infra, not a compiler miscompile — but it gates trust in the entire
+oracle suite, so it blocks using the suite as a hard gate for agent work.
+
+**Fix shape** — check the buffer's terminal status in `commit_and_wait_completed`; on error,
+panic in tests (fail loudly, retryable) and log in production. Then re-baseline the flake:
+if red runs now report command-buffer errors instead of pixel diffs, the mechanism is
+confirmed; if divergences persist with clean status, keep hunting.
+
+### BUG-014 — Content key collapses NaN/±Inf param values to one hash — LOW (parked)
+
+**Root cause** — [install.rs:205-215](../crates/manifold-renderer/src/node_graph/freeze/install.rs#L205-L215):
+`def_content_key` hashes `serde_json::to_vec(def)`, and serde_json writes non-finite floats
+as `null`, so defs differing only in a non-finite param share a key while the fuse bakes the
+raw f32.
+
+**Status** — split verdict, judged UNREACHABLE today: the second skeptic traced every write
+path into node params (scrub handlers clamp to finite ranges; JSON round-trips reject
+non-finite). Parked as a hardening note — if a new param write path ever skips the clamp,
+this becomes live. Cheapest closure: reject non-finite values at the `SerializedParamValue`
+boundary (the eliminate-bug-class-at-storage-layer pattern).
 
 ## Fixed
 

@@ -350,6 +350,17 @@ invariant a fused def must respect:
 
 ## 11. Honest edges (the bug hunt starts here)
 
+**Update 2026-07-03: the hunt ran** (40-agent adversarial workflow; 10 lenses, 2 skeptics
+per finding). Outcome: 7 confirmed + 2 split-verdict findings, all documented as
+**BUG-006 … BUG-014 in [BUG_BACKLOG.md](BUG_BACKLOG.md)** — including a likely mechanism
+for edge #2 below (unchecked Metal command-buffer status, BUG-013). The completeness
+critic's round-2 lens list (what got shallow coverage): the executor itself
+(`execution.rs`/`execution_plan.rs`, esp. the §9.9 specialization-vs-memoizer question),
+`classify.rs`'s gates independent of its stale comments, `space.rs`'s mixed-input canvas
+fallback, `diff.rs` (can the oracle itself false-pass?), `reference.rs` golden-update
+discipline, `graph_loader.rs`'s consumption of fused defs, the segment Pending-hang path,
+and edges #3/#7 below, which no lens engaged.
+
 1. The **marker ABI** (§5) has no type-level enforcement; producer/consumer
    drift is a silent-wrong-output class. (Mitigated by oracles that assert
    markers, e.g. the fluidsim oracle asserts `@dispatch_count_param`.)
