@@ -143,6 +143,24 @@ def cmd_run(args):
         kind = lbls[0]["kind"]
         incident_labels = [l for l in lbls if l["kind"] == "incident"]
         windows, marker_hits = build_session_windows(path, incident_labels)
+
+        # Cost cuts for tuning rounds (the final gate run should use
+        # --tail 0 --clean-cap 0 to measure everything):
+        # - incidents: recall only needs a fire BEFORE the marker, and drift
+        #   develops in the run-up — keep the last N windows before each
+        #   marker. Conservative: can only under-count recall.
+        # - cleans: stride-sample to a cap; noise-per-window still measures.
+        if kind == "incident" and args.tail and marker_hits:
+            keep = set()
+            for ec, _ts in marker_hits.values():
+                pre = [i for i, w in enumerate(windows) if w["end_event_count"] <= ec]
+                keep.update(pre[-args.tail:])
+            windows = [w for i, w in enumerate(windows) if i in keep]
+        elif kind == "clean" and args.clean_cap and len(windows) > args.clean_cap:
+            n = args.clean_cap
+            idxs = {round(i * (len(windows) - 1) / (n - 1)) for i in range(n)}
+            windows = [w for i, w in enumerate(windows) if i in idxs]
+
         total_windows += len(windows)
         sessions_out[session] = {
             "kind": kind,
@@ -181,6 +199,21 @@ def cmd_run(args):
                     reused += 1
         print(f"Resumed {reused} verdicts from {args.resume}")
 
+    # Content-addressed cache: identical (rubric, window) pairs are never
+    # re-bought, across runs and across sessions. Rubric edits change the key,
+    # so stale answers can't leak through.
+    cache = common.VerdictCache(os.path.join(SUBSTRATE_DIR, "eval", "verdict_cache.jsonl"))
+    cache_hits = 0
+    for session, data in sessions_out.items():
+        for w in data["windows"]:
+            if "verdict" not in w:
+                v = cache.get(system_prompt, w["text"])
+                if v is not None:
+                    w["verdict"] = v
+                    cache_hits += 1
+    if cache_hits:
+        print(f"Verdict cache: {cache_hits} hits")
+
     tasks = [(session, w) for session, data in sessions_out.items() for w in data["windows"] if "verdict" not in w]
     print(f"Dispatching {len(tasks)} classifier calls with {args.workers} workers...")
     done = 0
@@ -195,6 +228,7 @@ def cmd_run(args):
             except Exception as e:  # noqa: BLE001 - any subprocess/threading failure becomes an error verdict
                 verdict = {"error": str(e)}
             w["verdict"] = verdict
+            cache.put(system_prompt, w["text"], verdict)
             done += 1
             # Circuit breaker: a sustained error run means quota/auth/rate wall,
             # not per-window flakiness. Stop burning calls; partial results are
@@ -349,6 +383,8 @@ def main():
     run_p.add_argument("--limit-windows", type=int, help="cap windows per session (smoke tests)")
     run_p.add_argument("--dry-run", action="store_true", help="print window counts + cost estimate, no API calls")
     run_p.add_argument("--resume", help="previous run's --out file; reuse its non-error verdicts instead of re-paying")
+    run_p.add_argument("--tail", type=int, default=25, help="incident sessions: last N windows before each marker (0 = all; use 0 for the final gate run)")
+    run_p.add_argument("--clean-cap", type=int, default=40, help="clean sessions: stride-sample to N windows (0 = all; use 0 for the final gate run)")
     run_p.set_defaults(func=cmd_run)
 
     report_p = sub.add_parser("report", help="recompute gates from a saved run (free)")

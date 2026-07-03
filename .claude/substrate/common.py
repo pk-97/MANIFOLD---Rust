@@ -7,7 +7,9 @@ specific to historical replay; session-specific concerns (marker matching,
 truncation, gate math) live in replay.py.
 """
 
+import hashlib
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -251,6 +253,43 @@ def call_classifier(system_prompt, window_text, model=MODEL, timeout=60, cwd=Non
     if verdict is None:
         return {"error": "unparseable verdict", "raw": outer.get("result", "")[:200]}
     return verdict
+
+
+class VerdictCache:
+    """Content-addressed verdict cache: key = hash(system_prompt + window text),
+    so identical questions are never paid for twice, and any rubric/signature
+    edit automatically invalidates (the prompt is part of the key). Error
+    verdicts are never cached — they represent a failed call, not an answer.
+    Storage is a JSONL file, append-on-put, loaded once."""
+
+    def __init__(self, path):
+        self.path = path
+        self.mem = {}
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        d = json.loads(line)
+                        self.mem[d["k"]] = d["v"]
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+
+    @staticmethod
+    def key(system_prompt, window_text):
+        return hashlib.sha256((system_prompt + "\x00" + window_text).encode("utf-8")).hexdigest()
+
+    def get(self, system_prompt, window_text):
+        return self.mem.get(self.key(system_prompt, window_text))
+
+    def put(self, system_prompt, window_text, verdict):
+        if "error" in (verdict or {"error": True}):
+            return
+        k = self.key(system_prompt, window_text)
+        if k in self.mem:
+            return
+        self.mem[k] = verdict
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"k": k, "v": verdict}) + "\n")
 
 
 COOLDOWN_EVENTS = {"standard": 20, "slow": 40}  # "once" handled separately (fire-at-most-once)
