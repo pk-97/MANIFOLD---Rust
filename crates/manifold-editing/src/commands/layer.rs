@@ -3,6 +3,7 @@ use manifold_core::PresetTypeId;
 use manifold_core::LayerId;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
+use manifold_core::session::SessionSlot;
 use manifold_core::types::LayerType;
 use std::collections::HashMap;
 
@@ -81,6 +82,11 @@ impl Command for AddLayerCommand {
 /// Delete a layer from the timeline.
 /// If the deleted layer is a group, its children's parent_layer_id is cleared
 /// (matching Unity's behavior where children become root layers).
+///
+/// Grid integrity (`docs/SESSION_MODE_DESIGN.md` §7): a `LayerId` with no
+/// resolving layer must never be left behind in `Project.session.slots` —
+/// deleting a layer removes that layer's session slots in the same command,
+/// restored on undo.
 #[derive(Debug)]
 pub struct DeleteLayerCommand {
     layer: Option<Layer>,
@@ -89,6 +95,8 @@ pub struct DeleteLayerCommand {
     deleted_at_index: usize,
     /// Children whose parent_layer_id was cleared when a group was deleted.
     orphaned_children: Vec<(LayerId, Option<LayerId>)>,
+    /// This layer's session slots, removed alongside the layer itself.
+    removed_slots: Vec<SessionSlot>,
 }
 
 impl DeleteLayerCommand {
@@ -99,6 +107,7 @@ impl DeleteLayerCommand {
             layer_id,
             deleted_at_index: 0,
             orphaned_children: Vec::new(),
+            removed_slots: Vec::new(),
         }
     }
 }
@@ -119,6 +128,21 @@ impl Command for DeleteLayerCommand {
             }
 
             self.layer = project.timeline.remove_layer(idx);
+
+            // Grid integrity: remove this layer's session slots too.
+            self.removed_slots.clear();
+            let layer_id = self.layer_id.clone();
+            let mut i = 0;
+            while i < project.session.slots.len() {
+                if project.session.slots[i].layer_id == layer_id {
+                    self.removed_slots.push(project.session.slots.remove(i));
+                } else {
+                    i += 1;
+                }
+            }
+            if !self.removed_slots.is_empty() {
+                project.session.mark_slot_lookup_dirty();
+            }
         }
     }
 
@@ -135,7 +159,21 @@ impl Command for DeleteLayerCommand {
                 }
             }
             project.timeline.enforce_tree_order();
+
+            for slot in self.removed_slots.drain(..) {
+                project.session.slots.push(slot);
+            }
+            project.session.mark_slot_lookup_dirty();
         }
+
+        debug_assert!(
+            project
+                .session
+                .slots
+                .iter()
+                .all(|s| project.timeline.find_layer_index_by_id(&s.layer_id).is_some()),
+            "session slot references a LayerId that no longer resolves"
+        );
     }
 
     fn description(&self) -> &str {
