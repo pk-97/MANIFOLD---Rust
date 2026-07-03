@@ -59,8 +59,23 @@ impl Application {
                 Ok(()) => {
                     self.send_content_cmd(ContentCommand::MarkClean);
                     log::info!("[ProjectIO] Saved to {}", path.display());
+                    // The save pushed the previous state into history/ —
+                    // keep the Revert to Snapshot menu current.
+                    self.refresh_history_menu();
                 }
-                Err(e) => log::error!("[ProjectIO] Save failed: {e}"),
+                Err(e) => {
+                    // G4: a silent save failure means believing work is on
+                    // disk when it isn't. Log AND surface it.
+                    log::error!("[ProjectIO] Save failed: {e}");
+                    crate::alerts::error(
+                        "Save Failed",
+                        &format!(
+                            "MANIFOLD couldn't save to\n{}\n\n{e}\n\n\
+                             Your work is NOT on disk — check free space and try again.",
+                            path.display()
+                        ),
+                    );
+                }
             }
         } else {
             self.save_project_as();
@@ -605,6 +620,8 @@ impl Application {
         // A load/save may have changed the recent-projects list — refresh the
         // File → Open Recent submenu so it reflects the latest order.
         self.refresh_recent_menu();
+        // Same for the archive's history entries (File → Revert to Snapshot).
+        self.refresh_history_menu();
     }
 
     /// Rebuild the File → Open Recent submenu from the current recent-projects
@@ -614,6 +631,107 @@ impl Application {
         let paths = self.project_io.recent_projects();
         if let Some(menu) = self.app_menu.as_mut() {
             menu.set_recent_projects(&paths);
+        }
+    }
+
+    /// How many history snapshots the Revert to Snapshot menu shows. The
+    /// archive may hold more (all manual saves + the autosave cap); the menu
+    /// shows the newest slice — a native menu is a browser, not an archive.
+    const HISTORY_MENU_CAP: usize = 30;
+
+    /// Rebuild the File → Revert to Snapshot submenu from the current
+    /// archive's manifest. Manifest-only read (fast — no project deserialize);
+    /// runs on project operations and autosave completion, never per frame.
+    /// No-op until the native menu exists; empty for unsaved projects.
+    pub(crate) fn refresh_history_menu(&mut self) {
+        let entries: Vec<crate::menu::HistoryMenuEntry> = self
+            .current_project_path
+            .as_ref()
+            .and_then(|p| manifold_io::archive::read_manifest(&p.to_string_lossy()))
+            .map(|manifest| {
+                manifest
+                    .history
+                    .iter()
+                    // The newest entry IS the current project.json — nothing
+                    // to revert to, and its history blob doesn't exist yet.
+                    .filter(|e| e.hash != manifest.current_hash)
+                    .take(Self::HISTORY_MENU_CAP)
+                    .map(|e| crate::menu::HistoryMenuEntry {
+                        hash: e.hash.clone(),
+                        display: format!(
+                            "{} — {}",
+                            friendly_timestamp(&e.timestamp),
+                            e.label.as_deref().unwrap_or(if e.is_auto {
+                                "autosave"
+                            } else {
+                                "manual save"
+                            })
+                        ),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(menu) = self.app_menu.as_mut() {
+            menu.set_history_snapshots(&entries);
+        }
+    }
+
+    /// Restore a history snapshot in place: the archive path stays current,
+    /// the in-memory project becomes the snapshot. The state on disk is
+    /// untouched until the next save (which journals whatever it replaces —
+    /// a restore can itself be reverted).
+    pub(crate) fn restore_history_snapshot(&mut self, hash: &str) {
+        let Some(path) = self.current_project_path.clone() else {
+            return;
+        };
+        match manifold_io::loader::load_project_snapshot(&path, hash) {
+            Ok(project) => {
+                log::info!("[ProjectIO] Restored history snapshot {hash}");
+                self.apply_project_io_action(ProjectIOAction {
+                    apply_project: Some(project),
+                    needs_structural_sync: true,
+                    ..Default::default()
+                });
+            }
+            Err(e) => {
+                log::error!("[ProjectIO] Snapshot restore failed: {e}");
+                crate::alerts::error(
+                    "Restore Failed",
+                    &format!("Couldn't restore the snapshot:\n{e}"),
+                );
+            }
+        }
+    }
+
+    /// Open a history snapshot as a detached copy: untitled (no project
+    /// path), so saving it asks for a location instead of overwriting the
+    /// original archive.
+    pub(crate) fn open_history_snapshot_copy(&mut self, hash: &str) {
+        let Some(path) = self.current_project_path.clone() else {
+            return;
+        };
+        match manifold_io::loader::load_project_snapshot(&path, hash) {
+            Ok(mut project) => {
+                project.project_name = format!("{} (snapshot)", project.project_name);
+                // Detach from the source archive so a save can't clobber it.
+                project.last_saved_path = String::new();
+                log::info!("[ProjectIO] Opened history snapshot {hash} as a copy");
+                self.apply_project_io_action(ProjectIOAction {
+                    apply_project: Some(project),
+                    needs_structural_sync: true,
+                    // Empty path → apply_project_io_action clears
+                    // current_project_path (untitled).
+                    set_project_path: Some(std::path::PathBuf::new()),
+                    ..Default::default()
+                });
+            }
+            Err(e) => {
+                log::error!("[ProjectIO] Snapshot copy failed: {e}");
+                crate::alerts::error(
+                    "Open Copy Failed",
+                    &format!("Couldn't open the snapshot:\n{e}"),
+                );
+            }
         }
     }
 
@@ -996,5 +1114,17 @@ impl Application {
         self.send_content_cmd(ContentCommand::WatchEffectGraph(None));
         self.send_content_cmd(ContentCommand::WatchGeneratorGraph(None));
         log::info!("[GraphEditor] Closed");
+    }
+}
+
+/// Menu-friendly form of the archive's ISO-8601 UTC timestamps:
+/// "2026-07-03T04:12:33.123Z" → "2026-07-03 04:12 UTC". Anything that
+/// doesn't look like ISO-8601 is shown as-is — never hide an entry over
+/// a timestamp format.
+fn friendly_timestamp(iso: &str) -> String {
+    if iso.len() >= 16 && iso.as_bytes().get(10) == Some(&b'T') {
+        format!("{} {} UTC", &iso[..10], &iso[11..16])
+    } else {
+        iso.to_string()
     }
 }

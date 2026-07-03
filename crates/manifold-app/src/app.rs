@@ -152,6 +152,15 @@ pub struct Application {
     /// Frame count when suppress_snapshot_until was set (for timeout).
     pub(crate) suppress_snapshot_set_at: u64,
 
+    /// Debounced background autosave (GIG_RESILIENCE_DESIGN §6). Ticked from
+    /// `tick_and_render` after the state drain, editor mode only — perform
+    /// mode returns before the tick, which parks the timer (D5).
+    pub(crate) autosave: crate::autosave::AutosaveState,
+    /// Set at startup when the previous session exited uncleanly (sentinel
+    /// left behind — see `main.rs`). Consumed once to show the crash notice
+    /// on an early editor frame.
+    pub(crate) show_crash_notice: bool,
+
     // Selection
     pub(crate) selection: SelectionState,
     pub(crate) active_layer_id: Option<LayerId>,
@@ -528,6 +537,8 @@ impl Application {
             last_snapshot_arc: None,
             suppress_snapshot_until: 0,
             suppress_snapshot_set_at: 0,
+            autosave: crate::autosave::AutosaveState::new(),
+            show_crash_notice: false,
             selection: UIState::new(),
             active_layer_id: None,
             slider_snapshot: None,

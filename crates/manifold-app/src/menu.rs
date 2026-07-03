@@ -36,6 +36,12 @@ pub enum MenuAction {
     ClearRecentProjects,
     Save,
     SaveAs,
+    /// Restore a history snapshot (by manifest hash) into the current
+    /// project, in place. From the dynamic "Revert to Snapshot" submenu.
+    RestoreSnapshot(String),
+    /// Open a history snapshot (by manifest hash) as a detached copy —
+    /// untitled, so the first save asks where to put it.
+    OpenSnapshotCopy(String),
     ImportVideo,
     ExportVideo,
     ExportFrame,
@@ -55,6 +61,13 @@ pub enum MenuAction {
 /// covers every rebuild of the submenu.
 const RECENT_CLEAR_ID: &str = "file.recent.clear";
 
+/// One row of the dynamic "Revert to Snapshot" submenu: manifest hash plus
+/// the human-readable line shown in the menu (timestamp — label/kind).
+pub struct HistoryMenuEntry {
+    pub hash: String,
+    pub display: String,
+}
+
 /// Owns the native menu and the id→action map. Must be kept alive for the
 /// process lifetime — dropping it tears the menu down.
 pub struct AppMenu {
@@ -66,18 +79,26 @@ pub struct AppMenu {
     /// Maps each currently-shown recent item's id to the project it opens.
     /// Rebuilt in lockstep with `recent_submenu`.
     recent_actions: HashMap<MenuId, PathBuf>,
+    /// The dynamic "Revert to Snapshot" submenu (the archive's `history/`
+    /// browser), rebuilt by [`set_history_snapshots`].
+    history_submenu: Submenu,
+    /// Maps each currently-shown snapshot item's id to its action.
+    /// Rebuilt in lockstep with `history_submenu`.
+    history_actions: HashMap<MenuId, MenuAction>,
 }
 
 impl AppMenu {
     /// Build the menu tree. Call once, on the main thread.
     pub fn new() -> Self {
         let mut actions = HashMap::new();
-        let (menu, recent_submenu) = build(&mut actions);
+        let (menu, recent_submenu, history_submenu) = build(&mut actions);
         Self {
             _menu: menu,
             actions,
             recent_submenu,
             recent_actions: HashMap::new(),
+            history_submenu,
+            history_actions: HashMap::new(),
         }
     }
 
@@ -115,6 +136,44 @@ impl AppMenu {
         let _ = self.recent_submenu.append(&clear);
     }
 
+    /// Rebuild the "Revert to Snapshot" submenu from the project archive's
+    /// history entries (newest first). Each snapshot gets a nested submenu
+    /// with Restore / Open a Copy. Call on the main thread after any project
+    /// open or save (manual or auto) — same cadence as `set_recent_projects`.
+    /// An empty list shows a single disabled placeholder.
+    pub fn set_history_snapshots(&mut self, entries: &[HistoryMenuEntry]) {
+        while self.history_submenu.remove_at(0).is_some() {}
+        self.history_actions.clear();
+
+        if entries.is_empty() {
+            let placeholder = MenuItem::new("No Snapshots", false, None);
+            let _ = self.history_submenu.append(&placeholder);
+            return;
+        }
+
+        for (i, entry) in entries.iter().enumerate() {
+            let snap_m = Submenu::new(&entry.display, true);
+
+            let restore =
+                MenuItem::with_id(format!("file.history.{i}.restore"), "Restore", true, None);
+            self.history_actions.insert(
+                restore.id().clone(),
+                MenuAction::RestoreSnapshot(entry.hash.clone()),
+            );
+            let _ = snap_m.append(&restore);
+
+            let copy =
+                MenuItem::with_id(format!("file.history.{i}.copy"), "Open a Copy", true, None);
+            self.history_actions.insert(
+                copy.id().clone(),
+                MenuAction::OpenSnapshotCopy(entry.hash.clone()),
+            );
+            let _ = snap_m.append(&copy);
+
+            let _ = self.history_submenu.append(&snap_m);
+        }
+    }
+
     /// Attach the menu to the platform application.
     ///
     /// macOS: installs it as the app's main menu (system menu bar). Must run on
@@ -141,6 +200,8 @@ impl AppMenu {
                 out.push(action.clone());
             } else if let Some(path) = self.recent_actions.get(&ev.id) {
                 out.push(MenuAction::OpenRecentPath(path.clone()));
+            } else if let Some(action) = self.history_actions.get(&ev.id) {
+                out.push(action.clone());
             }
         }
         out
@@ -163,9 +224,11 @@ fn item(
     mi
 }
 
-/// Build the menu tree. Returns the root menu plus the (initially empty) "Open
-/// Recent" submenu, which the caller populates via [`AppMenu::set_recent_projects`].
-fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu) {
+/// Build the menu tree. Returns the root menu plus the two (initially empty)
+/// dynamic submenus: "Open Recent" (populated via
+/// [`AppMenu::set_recent_projects`]) and "Revert to Snapshot" (populated via
+/// [`AppMenu::set_history_snapshots`]).
+fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu, Submenu) {
     let menu = Menu::new();
 
     // ── MANIFOLD (application menu) ────────────────────────────────────────
@@ -208,6 +271,11 @@ fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu) {
         "Save As…",
         Some("CmdOrCtrl+Shift+S"),
     ));
+    // "Revert to Snapshot" browses the archive's history/ entries (versioned
+    // autosave + manual saves — GIG_RESILIENCE_DESIGN §6). Populated at
+    // runtime via `AppMenu::set_history_snapshots`.
+    let history_m = Submenu::with_id("file.history", "Revert to Snapshot", true);
+    let _ = file_m.append(&history_m);
     let _ = file_m.append(&PredefinedMenuItem::separator());
     let _ = file_m.append(&item(
         actions,
@@ -245,5 +313,5 @@ fn build(actions: &mut HashMap<MenuId, MenuAction>) -> (Menu, Submenu) {
     let _ = menu.append(&edit_m);
     let _ = menu.append(&view_m);
 
-    (menu, recent_m)
+    (menu, recent_m, history_m)
 }
