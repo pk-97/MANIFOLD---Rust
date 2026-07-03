@@ -196,7 +196,7 @@ mod tests {
     const CARD_A: &str = r#"{
         "version": 1, "name": "cardA", "nodes": [
             { "id": 0, "typeId": "system.source", "nodeId": "source" },
-            { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+            { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
             { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
             { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
         ], "wires": [
@@ -284,7 +284,7 @@ mod tests {
             r#"{
             "version": 1, "name": "broken", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" }
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" }
             ]

@@ -47,10 +47,18 @@ use crate::effect_graph_def::SerializedParamValue;
 /// `#[cfg(test)]` item from a dependency, which wouldn't compile in when this
 /// crate is built as a normal (non-test) library dependency of another
 /// crate's test binary.
-pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[(
-    "__vocab_migration_test_old__",
-    "__vocab_migration_test_new__",
-)];
+pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "__vocab_migration_test_old__",
+        "__vocab_migration_test_new__",
+    ),
+    // --- VOCAB P2 1/8: Color & Tone / Composite (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    ("node.gain", "node.exposure"),
+    ("node.color_ramp", "node.gradient_map"),
+    ("node.channel_mix", "node.channel_mixer"),
+    ("node.clamp_texture", "node.clamp"),
+    ("node.hdr_retention_mix", "node.hdr_mix"),
+];
 
 /// One legacy-fold entry: `(old_id, new_id, seed_params)` — the params to
 /// write onto the successor node so it reproduces the retired node's fixed
@@ -82,7 +90,10 @@ mod tests {
 
     #[test]
     fn unknown_id_is_identity() {
-        assert_eq!(migrate_type_id("node.gain"), "node.gain");
+        // `node.mix` and `Bloom` are never renamed by the vocabulary audit
+        // (docs/NODE_VOCABULARY_AUDIT.md §4/§6) — safe stand-ins for "any
+        // current id with no migration entry".
+        assert_eq!(migrate_type_id("node.mix"), "node.mix");
         assert_eq!(migrate_type_id("Bloom"), "Bloom");
     }
 

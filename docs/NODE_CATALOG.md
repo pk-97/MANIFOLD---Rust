@@ -45,14 +45,14 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Brightness | `node.brightness` | Filter | Multiplies the image brightness up or down. A plain brightness control. |
-| Channel Mixer | `node.channel_mix` | Filter | Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix. |
-| Clamp | `node.clamp_texture` | Filter | Holds every colour between a low and high limit so nothing goes darker or brighter than you set. The tidy-up step after a math node. |
+| Channel Mixer | `node.channel_mixer` | Filter | Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix. |
+| Clamp | `node.clamp` | Filter | Holds every colour between a low and high limit so nothing goes darker or brighter than you set. The tidy-up step after a math node. |
 | — | `node.color_lut` | Filter | Remaps the image through a lookup-table strip indexed by brightness, the engine behind heat-map and infrared palettes. |
-| Gradient Map | `node.color_ramp` | Filter | Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second. |
 | Colorize | `node.colorize` | Filter | Tints the image toward a single colour, strongest on the bright neutral areas. Good for duotones and washes. |
 | Contrast | `node.contrast` | Filter | Pushes the lights and darks apart for a punchier image, or pulls them together for a flatter one. It pivots around mid grey. |
 | Dither | `node.dither` | Filter | Reduces the image to a few brightness levels and hides the banding with a fine noise pattern. The classic low-bit look. |
-| Exposure | `node.gain` | Filter | Brightens or darkens the whole image by multiplying every colour. Above 1 brightens, below 1 darkens, and 0 is black. |
+| Exposure | `node.exposure` | Filter | Brightens or darkens the whole image by multiplying every colour. Above 1 brightens, below 1 darkens, and 0 is black. |
+| Gradient Map | `node.gradient_map` | Filter | Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second. |
 | Hue / Saturation | `node.hue_saturation` | Filter | Spins the hue around the colour wheel and adjusts how vivid and bright the image is. The HSV way to recolour. |
 | — | `node.invert` | Filter | Flips every colour to its opposite, turning a negative of the image. Blend it part-way for a partial invert. |
 | Levels | `node.levels` | Filter | Reshapes brightness in one step with scale, offset, a clamp, and gamma. A compact way to lift shadows, crush highlights, or set black and white points. |
@@ -134,7 +134,7 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Feedback | `node.feedback` | Filter | Holds the previous frame and hands it back this frame, which lets you build feedback loops like trails and echoes. Wire its output back into the chain through … |
-| HDR Mix | `node.hdr_retention_mix` | Filter | Blends two images while keeping the bright above-white highlights from a reference, so a gain or grade doesn't crush the HDR detail. Reach for it when a proces… |
+| HDR Mix | `node.hdr_mix` | Filter | Blends two images while keeping the bright above-white highlights from a reference, so a gain or grade doesn't crush the HDR detail. Reach for it when a proces… |
 | — | `node.masked_mix` | Filter | Blends two images using a third as a mask, applying one only where the mask is bright. The apply-only-where node. |
 | Mix | `node.mix` | Filter | Blends two images together with a choice of modes like Add, Screen, Multiply, and Overlay, plus a crossfade amount. The core layer-blend node. |
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |

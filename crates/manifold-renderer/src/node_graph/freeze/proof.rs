@@ -312,7 +312,7 @@ fn fused_colorgrade_matches_unfused_within_tolerance() {
     .expect("read ColorGrade.json");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("parse ColorGrade.json");
     let mut graph = def.into_graph(&registry).expect("build ColorGrade graph");
-    set_f(&mut graph, "node.gain", "gain", params.gain);
+    set_f(&mut graph, "node.exposure", "gain", params.gain);
     set_f(&mut graph, "node.saturation", "saturation", params.sat_s);
     set_f(&mut graph, "node.hue_saturation", "hue", params.hue_deg);
     set_f(&mut graph, "node.hue_saturation", "saturation", params.sat_h);
@@ -326,7 +326,7 @@ fn fused_colorgrade_matches_unfused_within_tolerance() {
 
     let plan = compile(&graph).expect("compile ColorGrade");
     let src_res = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
-    let out_res = resource_for_output(&plan, find_node(&graph, "node.clamp_texture"), "out");
+    let out_res = resource_for_output(&plan, find_node(&graph, "node.clamp"), "out");
     let unfused = render_graph(&device, &mut graph, &plan, src_res, &input, out_res);
 
     // Fused: one kernel.
@@ -377,7 +377,7 @@ fn chain_segment_fused_matches_sequential_per_card() {
         r#"{
         "version": 1, "name": "segA", "nodes": [
             { "id": 0, "typeId": "system.source", "nodeId": "source" },
-            { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+            { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
             { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
             { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
         ], "wires": [
@@ -407,7 +407,7 @@ fn chain_segment_fused_matches_sequential_per_card() {
 
     // ── Sequential per-card: today's chain semantics, seam round-trip included. ──
     let mut graph_a = card_a.clone().into_graph(&registry).expect("card A graph");
-    set_f(&mut graph_a, "node.gain", "gain", gain);
+    set_f(&mut graph_a, "node.exposure", "gain", gain);
     set_f(&mut graph_a, "node.contrast", "contrast", contrast);
     let plan_a = compile(&graph_a).expect("compile card A");
     let a_src = resource_for_output(&plan_a, find_node(&graph_a, "system.source"), "out");
@@ -560,7 +560,7 @@ fn colorgrade_fuzz_fused_agrees_with_unfused() {
     let u_src =
         resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
     let u_out =
-        resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.clamp_texture"), "out");
+        resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.clamp"), "out");
     let fused_plan = compile(&fused_graph).expect("compile fused");
     let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
     let f_out = resource_for_output(&fused_plan, fused_node, "dst");
@@ -691,7 +691,7 @@ fn auto_fused_colorgrade_via_executor_matches_unfused() {
     let unfused_plan = compile(&unfused_graph).expect("compile unfused");
     let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
     let u_out =
-        resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.clamp_texture"), "out");
+        resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.clamp"), "out");
     let unfused = render_graph(&device, &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
 
     // ── Auto-fused: region-grow + def-rewrite, then run through the executor. ──
@@ -1276,7 +1276,7 @@ fn stencil_checkpoint_diff(
         r#"{{
         "version": 1, "name": "stencil-cp", "nodes": [
             {{ "id": 0, "typeId": "system.source", "nodeId": "source" }},
-            {{ "id": 1, "typeId": "node.gain", "nodeId": "gain",
+            {{ "id": 1, "typeId": "node.exposure", "nodeId": "gain",
                "params": {{ "gain": {{ "type": "Float", "value": 1.3 }} }} }},
             {{ "id": 2, "typeId": "node.gaussian_blur", "nodeId": "blur",
                "params": {{
@@ -1305,7 +1305,7 @@ fn stencil_checkpoint_diff(
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the stencil region fuses");
     assert!(
-        !fdef.nodes.iter().any(|n| n.type_id == "node.gain"),
+        !fdef.nodes.iter().any(|n| n.type_id == "node.exposure"),
         "the gain must be absorbed into the blur's fetch"
     );
     assert!(
@@ -1383,7 +1383,7 @@ fn fused_variable_width_blur_matches_unfused() {
     let json = r#"{
         "version": 1, "name": "vbw", "nodes": [
             { "id": 0, "typeId": "system.source", "nodeId": "source" },
-            { "id": 1, "typeId": "node.gain", "nodeId": "gain",
+            { "id": 1, "typeId": "node.exposure", "nodeId": "gain",
               "params": { "gain": { "type": "Float", "value": 1.2 } } },
             { "id": 2, "typeId": "node.gaussian_blur_variable_width", "nodeId": "blur",
               "params": {
@@ -1412,7 +1412,7 @@ fn fused_variable_width_blur_matches_unfused() {
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the specialized blur fuses");
     assert!(
-        !fdef.nodes.iter().any(|n| n.type_id == "node.gain"),
+        !fdef.nodes.iter().any(|n| n.type_id == "node.exposure"),
         "the gain is absorbed into the blur's in-fetch"
     );
     let wgsl = fdef
@@ -1907,7 +1907,7 @@ fn fused_generator_renders_like_unfused() {
         "nodes": [
             { "id": 0, "typeId": "system.generator_input", "nodeId": "gen_in" },
             { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
-            { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+            { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
             { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
             { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
         ], "wires": [
@@ -3624,7 +3624,7 @@ fn fused_quarter_res_chain_matches_unfused() {
         "version": 1, "name": "multires", "nodes": [
             { "id": 0, "typeId": "system.source", "nodeId": "source" },
             { "id": 1, "typeId": "node.downsample", "nodeId": "down" },
-            { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+            { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
             { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
             { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
         ], "wires": [
@@ -3685,7 +3685,7 @@ fn fused_control_wired_param_matches_unfused() {
         "version": 1, "name": "ctrl", "nodes": [
             { "id": 0, "typeId": "system.source", "nodeId": "source" },
             { "id": 1, "typeId": "node.texture_dimensions", "nodeId": "dims" },
-            { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+            { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
             { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
             { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
         ], "wires": [
@@ -3746,7 +3746,7 @@ fn fused_fanout_region_matches_unfused() {
     let json = r#"{
         "version": 1, "name": "fanout", "nodes": [
             { "id": 0, "typeId": "system.source", "nodeId": "source" },
-            { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+            { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
             { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
             { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
             { "id": 4, "typeId": "node.multi_blend", "nodeId": "thr_a" },
@@ -3814,7 +3814,7 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
     let json = r#"{
         "version": 1, "name": "frag-parity", "nodes": [
             { "id": 0, "typeId": "system.source", "nodeId": "source" },
-            { "id": 1, "typeId": "node.gain", "nodeId": "gain",
+            { "id": 1, "typeId": "node.exposure", "nodeId": "gain",
               "params": { "gain": { "type": "Float", "value": 1.2 } } },
             { "id": 2, "typeId": "node.wgsl_compute", "nodeId": "frag",
               "wgslSource": "// @fusion: pointwise\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {\n    return vec4<f32>(c.rgb * scale, c.a);\n}\n",
@@ -3841,7 +3841,7 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
     let FusedDef { def: fdef, .. } =
         fuse_canonical_def(&def, &registry).expect("the fragment region fuses");
     assert!(
-        !fdef.nodes.iter().any(|n| n.type_id == "node.gain"),
+        !fdef.nodes.iter().any(|n| n.type_id == "node.exposure"),
         "gain must be absorbed into the fused kernel"
     );
     let mut fused = fdef.into_graph(&registry).expect("fused graph builds");

@@ -1,4 +1,4 @@
-//! `node.hdr_retention_mix` — preserve a reference texture's
+//! `node.hdr_mix` — preserve a reference texture's
 //! above-1.0 highlight energy through a compressed texture's gain
 //! adjustment.
 //!
@@ -37,7 +37,7 @@ struct HdrRetentionMixUniforms {
 
 crate::primitive! {
     name: HdrRetentionMix,
-    type_id: "node.hdr_retention_mix",
+    type_id: "node.hdr_mix",
     purpose: "Preserve a reference texture's above-1.0 highlight energy through a compressed texture's gain adjustment. Per-pixel: SDR body from `compressed`, HDR portion lerps between compressed's HDR and reference's HDR by `retention`. retention=1 keeps the HDR ceiling anchored to reference; retention=0 passes compressed through unchanged.",
     inputs: {
         compressed: Texture2D required,
@@ -57,13 +57,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Pair with `node.gain` for level-rider effects (AutoGain) where uniform RGB scaling would push highlights into / out of clip. Wire the gained branch into `compressed` and the un-gained source into `reference`. retention defaults to 1.0 (HDR ceiling pinned). The retention input is port-shadowable so the value can ride a control wire when needed.",
+    composition_notes: "Pair with `node.exposure` for level-rider effects (AutoGain) where uniform RGB scaling would push highlights into / out of clip. Wire the gained branch into `compressed` and the un-gained source into `reference`. retention defaults to 1.0 (HDR ceiling pinned). The retention input is port-shadowable so the value can ride a control wire when needed.",
     examples: ["preset.effect.auto_gain"],
     picker: { label: "HDR Mix", category: Atom },
     summary: "Blends two images while keeping the bright above-white highlights from a reference, so a gain or grade doesn't crush the HDR detail. Reach for it when a process is flattening your highlights.",
     category: Composite,
     role: Filter,
-    aliases: ["hdr mix", "highlight retention", "hdr blend"],
+    aliases: ["hdr mix", "hdr retention mix", "highlight retention", "hdr blend"],
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/hdr_retention_mix_body.wgsl"),
 }
@@ -95,11 +95,11 @@ impl Primitive for HdrRetentionMix {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.hdr_retention_mix standalone codegen");
+                .expect("node.hdr_mix standalone codegen");
             gpu.device.create_compute_pipeline(
                 &wgsl,
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.hdr_retention_mix",
+                "node.hdr_mix",
             )
         });
         let sampler = self
@@ -138,7 +138,7 @@ impl Primitive for HdrRetentionMix {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.hdr_retention_mix",
+            "node.hdr_mix",
         );
     }
 }

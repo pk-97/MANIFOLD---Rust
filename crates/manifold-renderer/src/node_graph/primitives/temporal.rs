@@ -23,7 +23,7 @@ use crate::node_graph::state_store::NodeState;
 // Closes per-frame feedback loops without introducing graph cycles:
 // downstream nodes consume `out` (last frame's input) and the loop
 // runs through the StateStore rather than through wires. Compose with
-// `node.affine_transform` / `node.gain` / `node.mix` / `node.vignette`
+// `node.affine_transform` / `node.exposure` / `node.mix` / `node.vignette`
 // to build classic stylized-feedback chains, or with custom WGSL
 // compute steps to build reaction-diffusion / fluid / paint sims.
 // =====================================================================

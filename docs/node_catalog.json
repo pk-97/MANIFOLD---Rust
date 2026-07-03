@@ -2542,6 +2542,7 @@
     {
       "aliases": [
         "channel mixer",
+        "channel mix",
         "matrix",
         "swizzle",
         "Channel Mix TOP"
@@ -2596,7 +2597,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix.",
-      "type_id": "node.channel_mix"
+      "type_id": "node.channel_mixer"
     },
     {
       "aliases": [
@@ -2786,6 +2787,7 @@
     {
       "aliases": [
         "clamp",
+        "clamp texture",
         "saturate",
         "limit"
       ],
@@ -2843,7 +2845,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Holds every colour between a low and high limit so nothing goes darker or brighter than you set. The tidy-up step after a math node.",
-      "type_id": "node.clamp_texture"
+      "type_id": "node.clamp"
     },
     {
       "aliases": [
@@ -2996,51 +2998,6 @@
       "stratum": "unlisted",
       "summary": "Remaps the image through a lookup-table strip indexed by brightness, the engine behind heat-map and infrared palettes.",
       "type_id": "node.color_lut"
-    },
-    {
-      "aliases": [
-        "gradient map",
-        "color ramp",
-        "duotone",
-        "Lookup TOP"
-      ],
-      "category": "Color & Tone",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "source",
-          "required": true,
-          "type": "Texture2D"
-        }
-      ],
-      "label": "Gradient Map",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "[0, 0, 0, 1]",
-          "label": "Color A",
-          "name": "color_a",
-          "tooltip": "The colour mapped to the dark end of the image. Black areas pick up this colour.",
-          "type": "color"
-        },
-        {
-          "default": "[1, 1, 1, 1]",
-          "label": "Color B",
-          "name": "color_b",
-          "tooltip": "The colour mapped to the bright end of the image. White areas pick up this colour.",
-          "type": "color"
-        }
-      ],
-      "purpose": "Map a scalar / luma input through a two-stop colour gradient (Color A to Color B). The palette-lookup atom behind tints and heat-map looks.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second.",
-      "type_id": "node.color_ramp"
     },
     {
       "aliases": [
@@ -5604,6 +5561,55 @@
       "type_id": "node.euler_step_particles_3d"
     },
     {
+      "aliases": [
+        "gain",
+        "brightness",
+        "exposure",
+        "Level TOP"
+      ],
+      "category": "Color & Tone",
+      "examples": [
+        "preset.strobe"
+      ],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "gain",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Exposure",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "1",
+          "label": "Gain",
+          "name": "gain",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "Multiplies the brightness. Above 1 brightens, below 1 darkens, and 0 is black.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Multiply the input texture's RGB by a scalar gain. Alpha passes through unchanged. The `gain` input port is the standard control-wire shadow of the `gain` param — wire any scalar source (LFO, BeatGate, Luminance, …) to make the gain react in real time.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Brightens or darkens the whole image by multiplying every colour. Above 1 brightens, below 1 darkens, and 0 is black.",
+      "type_id": "node.exposure"
+    },
+    {
       "aliases": [],
       "category": "Uncategorized",
       "examples": [],
@@ -6520,55 +6526,6 @@
     },
     {
       "aliases": [
-        "gain",
-        "brightness",
-        "exposure",
-        "Level TOP"
-      ],
-      "category": "Color & Tone",
-      "examples": [
-        "preset.strobe"
-      ],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "gain",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Exposure",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "1",
-          "label": "Gain",
-          "name": "gain",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "Multiplies the brightness. Above 1 brightens, below 1 darkens, and 0 is black.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Multiply the input texture's RGB by a scalar gain. Alpha passes through unchanged. The `gain` input port is the standard control-wire shadow of the `gain` param — wire any scalar source (LFO, BeatGate, Luminance, …) to make the gain react in real time.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Brightens or darkens the whole image by multiplying every colour. Above 1 brightens, below 1 darkens, and 0 is black.",
-      "type_id": "node.gain"
-    },
-    {
-      "aliases": [
         "gaussian blur",
         "blur",
         "soft",
@@ -7337,6 +7294,51 @@
     },
     {
       "aliases": [
+        "gradient map",
+        "color ramp",
+        "duotone",
+        "Lookup TOP"
+      ],
+      "category": "Color & Tone",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "source",
+          "required": true,
+          "type": "Texture2D"
+        }
+      ],
+      "label": "Gradient Map",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "[0, 0, 0, 1]",
+          "label": "Color A",
+          "name": "color_a",
+          "tooltip": "The colour mapped to the dark end of the image. Black areas pick up this colour.",
+          "type": "color"
+        },
+        {
+          "default": "[1, 1, 1, 1]",
+          "label": "Color B",
+          "name": "color_b",
+          "tooltip": "The colour mapped to the bright end of the image. White areas pick up this colour.",
+          "type": "color"
+        }
+      ],
+      "purpose": "Map a scalar / luma input through a two-stop colour gradient (Color A to Color B). The palette-lookup atom behind tints and heat-map looks.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second.",
+      "type_id": "node.gradient_map"
+    },
+    {
+      "aliases": [
         "gradient",
         "color ramp",
         "lut",
@@ -7622,6 +7624,7 @@
     {
       "aliases": [
         "hdr mix",
+        "hdr retention mix",
         "highlight retention",
         "hdr blend"
       ],
@@ -7670,7 +7673,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Blends two images while keeping the bright above-white highlights from a reference, so a gain or grade doesn't crush the HDR detail. Reach for it when a process is flattening your highlights.",
-      "type_id": "node.hdr_retention_mix"
+      "type_id": "node.hdr_mix"
     },
     {
       "aliases": [
@@ -8320,7 +8323,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multiplied by the light's colour. The basic directional-lighting atom — pair with `node.color_ramp` to tint further, or sum with `node.fresnel_rim` / `node.blinn_specular` for stylized PBR. Two ways to drive the light: scattered `light_x/y/z` scalars (output grayscale, white tint), or wire a `node.light` into `light` (output picks up the light's premultiplied colour). The scalar fallback keeps every existing OilyFluid-shaped consumer working unchanged.",
+      "purpose": "Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multiplied by the light's colour. The basic directional-lighting atom — pair with `node.gradient_map` to tint further, or sum with `node.fresnel_rim` / `node.blinn_specular` for stylized PBR. Two ways to drive the light: scattered `light_x/y/z` scalars (output grayscale, white tint), or wire a `node.light` into `light` (output picks up the light's premultiplied colour). The scalar fallback keeps every existing OilyFluid-shaped consumer working unchanged.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Shades a surface from its normal map and a single direction, brightest where it faces the light. The plain matte lighting term.",
@@ -10136,7 +10139,7 @@
         }
       ],
       "params": [],
-      "purpose": "Per-pixel safe-normalize of the input's RG channels treated as a vec2. Writes (v/length(v), 0, 1) when length ≥ 1e-6, else (0, 0, 0, 1). Direction-only — restores magnitude downstream with `node.gain`. The building block for curl-force extraction (normalize gradients before summing in fluid-sim velocity steps) and any flow-field that wants directional uniformity regardless of source magnitude.",
+      "purpose": "Per-pixel safe-normalize of the input's RG channels treated as a vec2. Writes (v/length(v), 0, 1) when length ≥ 1e-6, else (0, 0, 0, 1). Direction-only — restores magnitude downstream with `node.exposure`. The building block for curl-force extraction (normalize gradients before summing in fluid-sim velocity steps) and any flow-field that wants directional uniformity regardless of source magnitude.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude.",
@@ -13331,7 +13334,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Per-pixel affine remap `a * x + b` on RGB. Alpha pass-through. The general re-range primitive: use scale=2, offset=-1 to recover signed [-1, 1] noise from a [0, 1] generator; scale=0.5, offset=0.5 to compress signed sin/cos to [0, 1]; scale<0 to invert. Two-scalar version of node.gain + node.brightness fused.",
+      "purpose": "Per-pixel affine remap `a * x + b` on RGB. Alpha pass-through. The general re-range primitive: use scale=2, offset=-1 to recover signed [-1, 1] noise from a [0, 1] generator; scale=0.5, offset=0.5 to compress signed sin/cos to [0, 1]; scale<0 to invert. Two-scalar version of node.exposure + node.brightness fused.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Multiplies each colour by a scale and adds an offset, the image version of a basic value remap. Re-range a field before a clamp or a math step.",
@@ -15407,7 +15410,7 @@
           "type": "enum"
         }
       ],
-      "purpose": "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free. `freq` and `phase` can ALSO be driven per-pixel from optional texture inputs (`freq_tex` / `phase_tex` — R channel) — unlocks per-cell unique trig patterns (per-star twinkle, cellular flicker, etc.) when fed from a per-cell hash source like `node.voronoi_2d` (A channel) routed through `node.channel_mix`.",
+      "purpose": "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free. `freq` and `phase` can ALSO be driven per-pixel from optional texture inputs (`freq_tex` / `phase_tex` — R channel) — unlocks per-cell unique trig patterns (per-star twinkle, cellular flicker, etc.) when fed from a per-cell hash source like `node.voronoi_2d` (A channel) routed through `node.channel_mixer`.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient.",

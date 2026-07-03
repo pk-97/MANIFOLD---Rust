@@ -907,7 +907,7 @@
           {
             "id": 33,
             "nodeId": "coc_clamp",
-            "typeId": "node.clamp_texture",
+            "typeId": "node.clamp",
             "handle": "coc_clamp",
             "params": {
               "max": {

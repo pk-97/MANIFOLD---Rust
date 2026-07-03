@@ -29,7 +29,7 @@ pub const TRIG_MODES: &[&str] = &["Sin", "Cos", "Tan"];
 crate::primitive! {
     name: TrigTexture,
     type_id: "node.trig_texture",
-    purpose: "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free. `freq` and `phase` can ALSO be driven per-pixel from optional texture inputs (`freq_tex` / `phase_tex` — R channel) — unlocks per-cell unique trig patterns (per-star twinkle, cellular flicker, etc.) when fed from a per-cell hash source like `node.voronoi_2d` (A channel) routed through `node.channel_mix`.",
+    purpose: "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free. `freq` and `phase` can ALSO be driven per-pixel from optional texture inputs (`freq_tex` / `phase_tex` — R channel) — unlocks per-cell unique trig patterns (per-star twinkle, cellular flicker, etc.) when fed from a per-cell hash source like `node.voronoi_2d` (A channel) routed through `node.channel_mixer`.",
     inputs: {
         in: Texture2D required,
         // Port-shadows-param: wired scalars override the inline freq/phase.

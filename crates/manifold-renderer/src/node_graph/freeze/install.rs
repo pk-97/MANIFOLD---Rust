@@ -1652,11 +1652,11 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "split", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
                 { "id": 3, "typeId": "node.threshold", "nodeId": "thresh" },
                 { "id": 4, "typeId": "node.saturation", "nodeId": "sat" },
-                { "id": 5, "typeId": "node.clamp_texture", "nodeId": "clamp" },
+                { "id": 5, "typeId": "node.clamp", "nodeId": "clamp" },
                 { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
@@ -1684,14 +1684,14 @@ mod tests {
             1,
             "only the enabled region becomes a fused node"
         );
-        for survivor in ["node.saturation", "node.clamp_texture"] {
+        for survivor in ["node.saturation", "node.clamp"] {
             assert!(
                 half.def.nodes.iter().any(|n| n.type_id == survivor),
                 "{survivor} must survive the masked fuse"
             );
         }
         assert!(
-            !half.def.nodes.iter().any(|n| n.type_id == "node.gain"),
+            !half.def.nodes.iter().any(|n| n.type_id == "node.exposure"),
             "the enabled region's members are fused away"
         );
 
@@ -1861,11 +1861,11 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "split", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
                 { "id": 3, "typeId": "node.threshold", "nodeId": "thresh" },
                 { "id": 4, "typeId": "node.saturation", "nodeId": "sat" },
-                { "id": 5, "typeId": "node.clamp_texture", "nodeId": "clamp" },
+                { "id": 5, "typeId": "node.clamp", "nodeId": "clamp" },
                 { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
@@ -2021,7 +2021,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "fanout", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
                 { "id": 4, "typeId": "node.multi_blend", "nodeId": "thr_a" },
@@ -2090,7 +2090,7 @@ mod tests {
             "version": 1, "name": "ctrl", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
                 { "id": 1, "typeId": "node.texture_dimensions", "nodeId": "dims" },
-                { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
@@ -2152,7 +2152,7 @@ mod tests {
             "nodes": [
                 { "id": 0, "typeId": "system.generator_input", "nodeId": "gen_in" },
                 { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
-                { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
@@ -2195,8 +2195,8 @@ mod tests {
             "nodes": [
                 { "id": 0, "typeId": "system.generator_input", "nodeId": "gen_in" },
                 { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
-                { "id": 2, "typeId": "node.gain", "nodeId": "gain_a" },
-                { "id": 3, "typeId": "node.gain", "nodeId": "gain_b" },
+                { "id": 2, "typeId": "node.exposure", "nodeId": "gain_a" },
+                { "id": 3, "typeId": "node.exposure", "nodeId": "gain_b" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
@@ -2249,7 +2249,7 @@ mod tests {
             "nodes": [
                 { "id": 0, "typeId": "system.generator_input", "nodeId": "gen_in" },
                 { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
-                { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 3, "typeId": "node.mix", "nodeId": "mix" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [

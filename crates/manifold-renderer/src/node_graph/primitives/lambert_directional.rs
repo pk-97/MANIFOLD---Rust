@@ -4,7 +4,7 @@
 //! Output is RGB [0, 1] — grayscale when no `light` wire is bound (or
 //! when the wired light's colour is white), tinted by the light's
 //! colour when one is wired. Caller tints further downstream with
-//! `node.color_grade` / `node.color_ramp` if needed.
+//! `node.color_grade` / `node.gradient_map` if needed.
 //!
 //! Two ways to drive the light:
 //!
@@ -46,7 +46,7 @@ struct LambertUniforms {
 crate::primitive! {
     name: LambertDirectional,
     type_id: "node.lambert_directional",
-    purpose: "Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multiplied by the light's colour. The basic directional-lighting atom — pair with `node.color_ramp` to tint further, or sum with `node.fresnel_rim` / `node.blinn_specular` for stylized PBR. Two ways to drive the light: scattered `light_x/y/z` scalars (output grayscale, white tint), or wire a `node.light` into `light` (output picks up the light's premultiplied colour). The scalar fallback keeps every existing OilyFluid-shaped consumer working unchanged.",
+    purpose: "Lambert (diffuse) shading from a tangent-space normal map and a directional light: `out = max(dot(n, normalize(light_dir)), 0) * (1-ambient) + ambient`, multiplied by the light's colour. The basic directional-lighting atom — pair with `node.gradient_map` to tint further, or sum with `node.fresnel_rim` / `node.blinn_specular` for stylized PBR. Two ways to drive the light: scattered `light_x/y/z` scalars (output grayscale, white tint), or wire a `node.light` into `light` (output picks up the light's premultiplied colour). The scalar fallback keeps every existing OilyFluid-shaped consumer working unchanged.",
     inputs: {
         normal: Texture2D required,
         light: Light optional,

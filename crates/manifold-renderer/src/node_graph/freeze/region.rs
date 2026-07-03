@@ -1973,7 +1973,7 @@ mod tests {
         let out_node = colorgrade_def()
             .nodes
             .iter()
-            .find(|n| n.type_id == "node.clamp_texture")
+            .find(|n| n.type_id == "node.clamp")
             .map(|n| n.id)
             .unwrap();
         assert_eq!(r.outputs, vec![out_node], "clamp is the region output");
@@ -2006,11 +2006,11 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "split", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
                 { "id": 3, "typeId": "node.multi_blend", "nodeId": "thresh" },
                 { "id": 4, "typeId": "node.saturation", "nodeId": "sat" },
-                { "id": 5, "typeId": "node.clamp_texture", "nodeId": "clamp" },
+                { "id": 5, "typeId": "node.clamp", "nodeId": "clamp" },
                 { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
@@ -2089,7 +2089,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "cut", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.sharpen", "nodeId": "sharp" },
                 { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
@@ -2112,7 +2112,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "solo", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
@@ -2214,7 +2214,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "fanout", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
                 { "id": 4, "typeId": "node.multi_blend", "nodeId": "thr_a" },
@@ -2264,7 +2264,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "deadfork", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
                 { "id": 4, "typeId": "node.multi_blend", "nodeId": "dead" },
@@ -2298,7 +2298,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "convex", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 3, "typeId": "node.multi_blend", "nodeId": "thr" },
                 { "id": 4, "typeId": "node.contrast", "nodeId": "contrast" },
@@ -2413,7 +2413,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "stencil", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.gaussian_blur", "nodeId": "blur" },
                 { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
@@ -2449,7 +2449,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "shared", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.gaussian_blur", "nodeId": "blur" },
                 { "id": 3, "typeId": "node.mix", "nodeId": "mix" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
@@ -2477,7 +2477,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "pair", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
                 { "id": 3, "typeId": "node.gaussian_blur", "nodeId": "blur" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
@@ -2509,7 +2509,7 @@ mod tests {
             "version": 1, "name": "ctrl", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
                 { "id": 1, "typeId": "node.texture_dimensions", "nodeId": "dims" },
-                { "id": 2, "typeId": "node.gain", "nodeId": "gain" },
+                { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
                 { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
@@ -2543,7 +2543,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "frag", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.gain", "nodeId": "gain",
+                { "id": 1, "typeId": "node.exposure", "nodeId": "gain",
                   "params": { "gain": { "type": "Float", "value": 1.2 } } },
                 { "id": 2, "typeId": "node.wgsl_compute", "nodeId": "frag",
                   "wgslSource": "// @fusion: pointwise\n// @in: src\n// @param: scale = 0.75 [0, 2]\nfn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, scale: f32) -> vec4<f32> {\n    return vec4<f32>(c.rgb * scale, c.a);\n}\n",

@@ -1061,7 +1061,7 @@
           {
             "id": 49,
             "nodeId": "height_for_normal_gain",
-            "typeId": "node.gain",
+            "typeId": "node.exposure",
             "handle": "height_for_normal_gain",
             "params": {
               "gain": {
@@ -1374,7 +1374,7 @@
           {
             "id": 24,
             "nodeId": "edge_gain",
-            "typeId": "node.gain",
+            "typeId": "node.exposure",
             "handle": "edge_gain",
             "params": {
               "gain": {
@@ -1387,7 +1387,7 @@
           {
             "id": 25,
             "nodeId": "edge_clamp",
-            "typeId": "node.clamp_texture",
+            "typeId": "node.clamp",
             "handle": "edge_clamp",
             "params": {
               "max": {

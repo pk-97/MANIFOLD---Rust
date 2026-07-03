@@ -373,7 +373,7 @@ fn snapshot_with_param_node(
     handle: &str,
     params: Vec<crate::graph_view::ParamSnapshot>,
 ) -> GraphSnapshot {
-    let mut n = node(1, "node.gain", Some(handle));
+    let mut n = node(1, "node.exposure", Some(handle));
     n.parameters = params;
     GraphSnapshot {
         nodes: vec![n],
@@ -487,7 +487,7 @@ fn topology_rebuild_prunes_stale_sparkline_history() {
     // A real topology change (different runtime id, so `hash_level` differs
     // and `set_snapshot` takes the full-rebuild path) evicts the old node's
     // trace so the history map can't accrete across a session.
-    let mut n = node(2, "node.gain", Some("other"));
+    let mut n = node(2, "node.exposure", Some("other"));
     n.parameters = vec![float_param("amount", 0.2)];
     let snap2 = GraphSnapshot {
         nodes: vec![n],
@@ -1460,7 +1460,7 @@ fn wire_driven_snapshot(with_outer: bool) -> GraphSnapshot {
 }
 
 fn outer_driven_snapshot() -> GraphSnapshot {
-    let mut n1 = node(1, "node.gain", Some("gain"));
+    let mut n1 = node(1, "node.exposure", Some("gain"));
     n1.parameters = vec![float_param("amount", 0.5)];
     GraphSnapshot {
         nodes: vec![n1],

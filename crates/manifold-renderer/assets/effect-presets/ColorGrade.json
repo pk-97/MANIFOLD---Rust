@@ -267,7 +267,7 @@
     {
       "id": 1,
       "nodeId": "gain",
-      "typeId": "node.gain",
+      "typeId": "node.exposure",
       "handle": "gain",
       "params": {
         "gain": {
@@ -365,7 +365,7 @@
     {
       "id": 7,
       "nodeId": "clamp",
-      "typeId": "node.clamp_texture",
+      "typeId": "node.clamp",
       "handle": "clamp",
       "params": {
         "max": {

@@ -132,7 +132,7 @@
     {
       "id": 2,
       "nodeId": "decay",
-      "typeId": "node.gain",
+      "typeId": "node.exposure",
       "handle": "decay",
       "params": {
         "gain": {
@@ -346,7 +346,7 @@
     {
       "id": 11,
       "nodeId": "guard",
-      "typeId": "node.clamp_texture",
+      "typeId": "node.clamp",
       "handle": "guard",
       "params": {
         "max": {

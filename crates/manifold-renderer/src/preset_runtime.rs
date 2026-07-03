@@ -4436,7 +4436,7 @@ mod generator_input_tests {
     /// toggle on (default), [`PresetRuntime::try_build`] renders a canonical
     /// ColorGrade card through the FUSED node, not the 7 atoms: the built chain
     /// graph contains one `node.wgsl_compute` and none of the original
-    /// `node.gain` / `node.mix` workers, and it runs one frame producing an
+    /// `node.exposure` / `node.mix` workers, and it runs one frame producing an
     /// output texture. This is what puts the optimised fused kernel on screen.
     #[test]
     fn colorgrade_chain_renders_via_fused_node() {
@@ -4474,7 +4474,7 @@ mod generator_input_tests {
             "fused chain must contain the fused WGSL node; got {type_ids:?}"
         );
         assert!(
-            !type_ids.contains(&"node.gain") && !type_ids.contains(&"node.mix"),
+            !type_ids.contains(&"node.exposure") && !type_ids.contains(&"node.mix"),
             "fused chain must NOT still contain unfused ColorGrade atoms; got {type_ids:?}"
         );
 

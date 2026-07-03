@@ -173,7 +173,7 @@
     {
       "id": 30,
       "nodeId": "gain",
-      "typeId": "node.gain",
+      "typeId": "node.exposure",
       "handle": "gain",
       "params": {
         "gain": {
@@ -186,7 +186,7 @@
     {
       "id": 35,
       "nodeId": "hdr_retain",
-      "typeId": "node.hdr_retention_mix",
+      "typeId": "node.hdr_mix",
       "handle": "hdr_retain",
       "params": {
         "retention": {

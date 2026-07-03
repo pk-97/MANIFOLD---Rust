@@ -381,7 +381,7 @@
           {
             "id": 12,
             "nodeId": "visibility",
-            "typeId": "node.gain",
+            "typeId": "node.exposure",
             "handle": "visibility",
             "params": {
               "gain": {

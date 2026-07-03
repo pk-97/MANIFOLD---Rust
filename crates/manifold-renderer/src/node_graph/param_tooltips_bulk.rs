@@ -13,7 +13,7 @@ crate::param_tooltips!("node.brightness", {
     "weights" => "How much each of red, green, and blue counts toward the grey value. The defaults are the Rec.709 luma weights, which match how the eye sees brightness.",
 });
 
-crate::param_tooltips!("node.channel_mix", {
+crate::param_tooltips!("node.channel_mixer", {
     "row0" => "How much red, green, blue, and alpha each feed into the new red channel. The default takes red straight through.",
     "row1" => "How much red, green, blue, and alpha each feed into the new green channel. The default takes green straight through.",
     "row2" => "How much red, green, blue, and alpha each feed into the new blue channel. The default takes blue straight through.",
@@ -25,7 +25,7 @@ crate::param_tooltips!("node.color_lut", {
     "contrast" => "Pushes brightness around the midpoint before the lookup, which spreads the image across more of the palette. 1 leaves it unchanged, higher is punchier.",
 });
 
-crate::param_tooltips!("node.color_ramp", {
+crate::param_tooltips!("node.gradient_map", {
     "color_a" => "The colour mapped to the dark end of the image. Black areas pick up this colour.",
     "color_b" => "The colour mapped to the bright end of the image. White areas pick up this colour.",
 });
@@ -242,7 +242,7 @@ crate::param_tooltips!("node.threshold", {
 
 // ─── Composite ───
 
-crate::param_tooltips!("node.hdr_retention_mix", {
+crate::param_tooltips!("node.hdr_mix", {
     "retention" => "How much of the reference image's above-white highlights to keep. At 1 the bright detail stays anchored to the reference, and at 0 the compressed image passes through untouched.",
 });
 

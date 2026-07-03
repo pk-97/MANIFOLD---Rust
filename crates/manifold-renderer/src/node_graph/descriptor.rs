@@ -270,15 +270,15 @@ hand_descriptor!(
     aliases: ["brightness", "Level TOP"],
 );
 hand_descriptor!(
-    "node.channel_mix",
+    "node.channel_mixer",
     "4x4 RGBA matrix transform: each output channel is a weighted sum of the input RGBA plus a constant. Swizzle, desaturate, broadcast one channel to RGB, or apply any linear colour matrix.",
     summary: "Rebuilds each output channel as a mix of the input red, green, blue and alpha. Swizzle channels, build a custom black and white, or apply any colour matrix.",
     category: ColorAndTone,
     role: Filter,
-    aliases: ["channel mixer", "matrix", "swizzle", "Channel Mix TOP"],
+    aliases: ["channel mixer", "channel mix", "matrix", "swizzle", "Channel Mix TOP"],
 );
 hand_descriptor!(
-    "node.color_ramp",
+    "node.gradient_map",
     "Map a scalar / luma input through a two-stop colour gradient (Color A to Color B). The palette-lookup atom behind tints and heat-map looks.",
     summary: "Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second.",
     category: ColorAndTone,

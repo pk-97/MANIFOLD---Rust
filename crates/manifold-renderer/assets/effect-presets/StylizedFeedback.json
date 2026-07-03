@@ -127,7 +127,7 @@
     {
       "id": 3,
       "nodeId": "gain",
-      "typeId": "node.gain",
+      "typeId": "node.exposure",
       "handle": "gain",
       "params": {
         "gain": {

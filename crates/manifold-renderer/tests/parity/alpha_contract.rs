@@ -18,7 +18,7 @@
 //! ## Coverage and known gaps (2026-06-22)
 //!
 //! Covered: every texture→texture effect. The only display violator found
-//! was `node.color_ramp` (now fixed).
+//! was `node.gradient_map` (now fixed).
 //!
 //! The "could not probe" nodes need non-texture inputs (Channels arrays /
 //! mesh / camera / material) the transparent probe can't synthesise. They

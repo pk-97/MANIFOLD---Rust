@@ -481,7 +481,7 @@
           },
           {
             "id": 7,
-            "typeId": "node.gain",
+            "typeId": "node.exposure",
             "handle": "curl_gain",
             "nodeId": "curl_gain",
             "params": {
@@ -753,7 +753,7 @@
           },
           {
             "id": 3,
-            "typeId": "node.gain",
+            "typeId": "node.exposure",
             "handle": "vel_damp_gain",
             "nodeId": "vel_damp_gain",
             "params": {
@@ -977,7 +977,7 @@
           },
           {
             "id": 6,
-            "typeId": "node.gain",
+            "typeId": "node.exposure",
             "handle": "noise_inject_gain",
             "nodeId": "noise_inject_gain",
             "params": {
@@ -1115,7 +1115,7 @@
           },
           {
             "id": 3,
-            "typeId": "node.gain",
+            "typeId": "node.exposure",
             "handle": "color_retention",
             "nodeId": "color_retention",
             "params": {
@@ -1907,7 +1907,7 @@
           },
           {
             "id": 1,
-            "typeId": "node.gain",
+            "typeId": "node.exposure",
             "handle": "grade_gain",
             "nodeId": "grade_gain",
             "params": {
@@ -1963,7 +1963,7 @@
           },
           {
             "id": 5,
-            "typeId": "node.clamp_texture",
+            "typeId": "node.clamp",
             "handle": "grade_clamp",
             "nodeId": "grade_clamp",
             "params": {

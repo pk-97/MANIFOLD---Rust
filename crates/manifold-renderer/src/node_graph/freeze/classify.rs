@@ -164,13 +164,13 @@ mod tests {
         use crate::node_graph::PrimitiveRegistry;
         let registry = PrimitiveRegistry::with_builtin();
         let expected = [
-            ("node.gain", FusionKind::Pointwise),
+            ("node.exposure", FusionKind::Pointwise),
             ("node.saturation", FusionKind::Pointwise),
             ("node.hue_saturation", FusionKind::Pointwise),
             ("node.contrast", FusionKind::Pointwise),
             ("node.colorize", FusionKind::Pointwise),
             ("node.mix", FusionKind::MultiInputCoincident),
-            ("node.clamp_texture", FusionKind::Pointwise),
+            ("node.clamp", FusionKind::Pointwise),
         ];
         for (type_id, kind) in expected {
             let node = registry
@@ -200,7 +200,7 @@ mod tests {
             "dither's in + pattern are both exact-texel"
         );
 
-        let gain = registry.construct("node.gain").expect("registry missing node.gain");
+        let gain = registry.construct("node.exposure").expect("registry missing node.exposure");
         assert!(
             gain.input_access().is_empty(),
             "a color atom leaves INPUT_ACCESS empty (= all Coincident by default)"

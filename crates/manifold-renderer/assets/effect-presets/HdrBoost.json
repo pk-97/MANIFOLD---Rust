@@ -185,7 +185,7 @@
     {
       "id": 4,
       "nodeId": "boost",
-      "typeId": "node.gain",
+      "typeId": "node.exposure",
       "handle": "boost",
       "params": {
         "gain": {

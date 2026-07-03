@@ -5,7 +5,7 @@
 //! HDR-safe: no clamp, and — unlike `node.levels`, whose gamma `pow`
 //! NaNs on negative inputs — the contrast pivot is pure affine, so it
 //! handles the negatives a contrast push can produce on dark pixels.
-//! Clamp downstream (`node.clamp_texture`) if a consumer needs bounded
+//! Clamp downstream (`node.clamp`) if a consumer needs bounded
 //! input. This is the contrast stage of a decomposed Color Grade.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
@@ -44,7 +44,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Pure affine around the 0.5 pivot — no clamp, so dark pixels can go negative at contrast > 1. Follow with node.clamp_texture (min 0) before consumers that need bounded input; Color Grade does exactly this at the end of its chain. Wire wins over param.",
+    composition_notes: "Pure affine around the 0.5 pivot — no clamp, so dark pixels can go negative at contrast > 1. Follow with node.clamp (min 0) before consumers that need bounded input; Color Grade does exactly this at the end of its chain. Wire wins over param.",
     examples: ["preset.effect.color_grade"],
     picker: { label: "Contrast", category: Atom },
     summary: "Pushes the lights and darks apart for a punchier image, or pulls them together for a flatter one. It pivots around mid grey.",

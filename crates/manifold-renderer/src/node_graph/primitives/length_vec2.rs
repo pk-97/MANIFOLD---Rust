@@ -21,7 +21,7 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
-    composition_notes: "BA of `in` ignored. Output is unbounded above (length can exceed 1 for large vec2 inputs); pair with `node.gain` or `node.smoothstep_texture` to remap the range as needed. Chain: `color → length_vec2 → heightmap_to_normal` is the oily-fluid normal pipeline.",
+    composition_notes: "BA of `in` ignored. Output is unbounded above (length can exceed 1 for large vec2 inputs); pair with `node.exposure` or `node.smoothstep_texture` to remap the range as needed. Chain: `color → length_vec2 → heightmap_to_normal` is the oily-fluid normal pipeline.",
     examples: [],
     picker: { label: "Length", category: Atom },
     summary: "Measures the length of the red and green channels read as a 2D vector, giving the strength of a flow or gradient field.",

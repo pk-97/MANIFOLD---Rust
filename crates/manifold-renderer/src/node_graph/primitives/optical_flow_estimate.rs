@@ -115,7 +115,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Wire `out` → node.uv_displace_by_flow.flow to advect a source by per-pixel motion (background → particles-along-flow effects, motion-blur-style trails). Wire G channel through node.channel_mix to use confidence as a mask. Wire `cut_score` → node.filter (threshold ~0.28) → reset_trigger on any downstream stateful primitive to clear frame-to-frame state on hard scene cuts. Until two frames have been inferenced, both outputs are zero. If the native plugin is unavailable, primitive logs a warning once and outputs zero/black.",
+    composition_notes: "Wire `out` → node.uv_displace_by_flow.flow to advect a source by per-pixel motion (background → particles-along-flow effects, motion-blur-style trails). Wire G channel through node.channel_mixer to use confidence as a mask. Wire `cut_score` → node.filter (threshold ~0.28) → reset_trigger on any downstream stateful primitive to clear frame-to-frame state on hard scene cuts. Until two frames have been inferenced, both outputs are zero. If the native plugin is unavailable, primitive logs a warning once and outputs zero/black.",
     examples: [],
     picker: { label: "Optical Flow", category: Atom },
     summary: "Measures how the image is moving between frames and outputs that motion as a flow field. Drive a displace or advect with it to push pixels along the motion.",

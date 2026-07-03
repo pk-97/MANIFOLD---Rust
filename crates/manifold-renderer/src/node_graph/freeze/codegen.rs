@@ -3109,7 +3109,7 @@ mod gpu_tests {
             ("node.hue_saturation", "hue_saturation.wgsl", &[30.0, 1.3, 0.9]),
             ("node.contrast", "contrast.wgsl", &[1.5]),
             ("node.colorize", "colorize.wgsl", &[0.5, 200.0, 0.7, 0.6]),
-            ("node.clamp_texture", "clamp_texture.wgsl", &[0.1, 0.8]),
+            ("node.clamp", "clamp_texture.wgsl", &[0.1, 0.8]),
             // Vocabulary widening (design §12.3): pure-pointwise color/tone atoms
             // converted to single-source bodies. Partial invert exercises the
             // mix; levels uses the MetallicGlass height shape; posterize at 6.
@@ -3567,7 +3567,7 @@ mod gpu_tests {
         // (type_id, hand shader, #texture inputs, f32 params in PARAMS order).
         let cases: &[(&str, &str, usize, &[f32])] = &[
             ("node.wet_dry", "wet_dry_mix.wgsl", 2, &[0.6]),
-            ("node.hdr_retention_mix", "hdr_retention_mix.wgsl", 2, &[0.7]),
+            ("node.hdr_mix", "hdr_retention_mix.wgsl", 2, &[0.7]),
             ("node.masked_mix", "masked_mix.wgsl", 3, &[0.8]),
             ("node.texture_sum_5", "texture_sum_5.wgsl", 5, &[5.0]),
         ];

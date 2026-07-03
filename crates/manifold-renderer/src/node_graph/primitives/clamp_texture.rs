@@ -1,4 +1,4 @@
-//! `node.clamp_texture` — saturate a texture's RGB channels to a
+//! `node.clamp` — saturate a texture's RGB channels to a
 //! configurable range. Alpha passes through.
 //!
 //! The texture-side counterpart of `node.array_math` op `Clamp01`: any
@@ -24,7 +24,7 @@ struct ClampUniforms {
 
 crate::primitive! {
     name: ClampTexture,
-    type_id: "node.clamp_texture",
+    type_id: "node.clamp",
     purpose: "Per-pixel clamp on RGB: out.rgb = clamp(in.rgb, min, max). Alpha passes through unchanged. The saturate() atom: pair after scale_offset_texture / power_texture / trig_texture / any chain that produces unbounded output, before LUT lookups / pow with fractional exponent / displacement scales that need a defined input range. Defaults to [0, 1].",
     inputs: {
         in: Texture2D required,
@@ -58,7 +58,7 @@ crate::primitive! {
     summary: "Holds every colour between a low and high limit so nothing goes darker or brighter than you set. The tidy-up step after a math node.",
     category: ColorAndTone,
     role: Filter,
-    aliases: ["clamp", "saturate", "limit"],
+    aliases: ["clamp", "clamp texture", "saturate", "limit"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/clamp_texture_body.wgsl"),
 }
@@ -91,11 +91,11 @@ impl Primitive for ClampTexture {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.clamp_texture standalone codegen");
+                .expect("node.clamp standalone codegen");
             gpu.device.create_compute_pipeline(
                 &wgsl,
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.clamp_texture",
+                "node.clamp",
             )
         });
         let sampler = self
@@ -130,7 +130,7 @@ impl Primitive for ClampTexture {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.clamp_texture",
+            "node.clamp",
         );
     }
 }

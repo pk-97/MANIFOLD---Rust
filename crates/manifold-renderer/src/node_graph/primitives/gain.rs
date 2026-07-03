@@ -1,4 +1,4 @@
-//! `node.gain` — multiply the input texture's RGB channels by a
+//! `node.exposure` — multiply the input texture's RGB channels by a
 //! scalar `gain` value. Alpha passes through unchanged.
 //!
 //! Smallest possible scalar-driven texture primitive: drop one on
@@ -29,7 +29,7 @@ struct GainUniforms {
 
 crate::primitive! {
     name: Gain,
-    type_id: "node.gain",
+    type_id: "node.exposure",
     purpose: "Multiply the input texture's RGB by a scalar gain. Alpha passes through unchanged. The `gain` input port is the standard control-wire shadow of the `gain` param — wire any scalar source (LFO, BeatGate, Luminance, …) to make the gain react in real time.",
     inputs: {
         in: Texture2D required,
@@ -82,11 +82,11 @@ impl Primitive for Gain {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.gain standalone codegen");
+                .expect("node.exposure standalone codegen");
             gpu.device.create_compute_pipeline(
                 &wgsl,
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.gain",
+                "node.exposure",
             )
         });
         let sampler = self
@@ -121,7 +121,7 @@ impl Primitive for Gain {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.gain",
+            "node.exposure",
         );
     }
 }

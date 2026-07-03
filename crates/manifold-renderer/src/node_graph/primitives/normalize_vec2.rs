@@ -3,7 +3,7 @@
 //!
 //! Reads `in.rg` per pixel, writes `(v / length(v), 0, 1)` when
 //! `length > 1e-6`, else `(0, 0, 0, 1)`. Direction-only output —
-//! caller restores magnitude with downstream `node.gain` if needed.
+//! caller restores magnitude with downstream `node.exposure` if needed.
 //! The classic safe-normalize is the building block for curl-forcing
 //! extraction in reaction-diffusion / fluid sims and for any
 //! flow-field op that wants directional uniformity regardless of
@@ -17,7 +17,7 @@ use crate::node_graph::primitive::Primitive;
 crate::primitive! {
     name: NormalizeVec2,
     type_id: "node.normalize_vec2",
-    purpose: "Per-pixel safe-normalize of the input's RG channels treated as a vec2. Writes (v/length(v), 0, 1) when length ≥ 1e-6, else (0, 0, 0, 1). Direction-only — restores magnitude downstream with `node.gain`. The building block for curl-force extraction (normalize gradients before summing in fluid-sim velocity steps) and any flow-field that wants directional uniformity regardless of source magnitude.",
+    purpose: "Per-pixel safe-normalize of the input's RG channels treated as a vec2. Writes (v/length(v), 0, 1) when length ≥ 1e-6, else (0, 0, 0, 1). Direction-only — restores magnitude downstream with `node.exposure`. The building block for curl-force extraction (normalize gradients before summing in fluid-sim velocity steps) and any flow-field that wants directional uniformity regardless of source magnitude.",
     inputs: {
         in: Texture2D required,
     },
@@ -25,7 +25,7 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
-    composition_notes: "BA of the input are ignored; output BA is forced to (0, 1). Chain order for the oily-fluid curl-force pattern: `node.gradient_central_diff → node.normalize_vec2 → (sum two of these) → node.gain → node.rotate_vec2_by_angle`.",
+    composition_notes: "BA of the input are ignored; output BA is forced to (0, 1). Chain order for the oily-fluid curl-force pattern: `node.gradient_central_diff → node.normalize_vec2 → (sum two of these) → node.exposure → node.rotate_vec2_by_angle`.",
     examples: [],
     picker: { label: "Normalize", category: Atom },
     summary: "Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude.",

@@ -15,7 +15,7 @@
 
 // ─── Color & Tone ────────────────────────────────────────────────────
 
-crate::param_tooltips!("node.gain", {
+crate::param_tooltips!("node.exposure", {
     "gain" => "Multiplies the brightness. Above 1 brightens, below 1 darkens, and 0 is black.",
 });
 
@@ -44,7 +44,7 @@ crate::param_tooltips!("node.colorize", {
     "focus" => "How tightly the tint sticks to the bright neutral areas rather than spreading everywhere.",
 });
 
-crate::param_tooltips!("node.clamp_texture", {
+crate::param_tooltips!("node.clamp", {
     "min" => "The lowest value any colour is allowed to reach. Nothing goes darker than this.",
     "max" => "The highest value any colour is allowed to reach. Nothing goes brighter than this.",
 });

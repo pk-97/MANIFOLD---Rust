@@ -264,7 +264,7 @@
           { "id": 0, "typeId": "system.group_input" },
           {
             "id": 1,
-            "typeId": "node.gain",
+            "typeId": "node.exposure",
             "handle": "invert_gain", "nodeId": "invert_gain",
             "params": {
               "gain": { "type": "Float", "value": 1.0 }

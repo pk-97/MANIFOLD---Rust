@@ -252,7 +252,7 @@
     {
       "id": 8,
       "nodeId": "cell_hash_to_r",
-      "typeId": "node.channel_mix",
+      "typeId": "node.channel_mixer",
       "handle": "cell_hash_to_r",
       "params": {
         "row0": {
@@ -948,7 +948,7 @@
           {
             "id": 17,
             "nodeId": "white_stars",
-            "typeId": "node.channel_mix",
+            "typeId": "node.channel_mixer",
             "handle": "white_stars",
             "params": {
               "row0": {

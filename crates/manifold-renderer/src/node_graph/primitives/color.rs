@@ -151,7 +151,7 @@ inventory::submit! {
 // ChannelMix — 4x4 RGBA transformation.
 // =====================================================================
 
-pub const CHANNEL_MIX_TYPE_ID: &str = "node.channel_mix";
+pub const CHANNEL_MIX_TYPE_ID: &str = "node.channel_mixer";
 
 const CHANNEL_MIX_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
 const CHANNEL_MIX_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
@@ -262,7 +262,7 @@ impl EffectNode for ChannelMix {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/channel_mix.wgsl"),
                 "cs_main",
-                "node.channel_mix",
+                "node.channel_mixer",
             )
         });
         let sampler = self
@@ -290,7 +290,7 @@ impl EffectNode for ChannelMix {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.channel_mix",
+            "node.channel_mixer",
         );
     }
 }
@@ -307,7 +307,7 @@ inventory::submit! {
 // ColorRamp — luma → two-stop gradient lookup.
 // =====================================================================
 
-pub const COLOR_RAMP_TYPE_ID: &str = "node.color_ramp";
+pub const COLOR_RAMP_TYPE_ID: &str = "node.gradient_map";
 
 const COLOR_RAMP_INPUTS: [NodeInput; 1] = [SOURCE_INPUT];
 const COLOR_RAMP_OUTPUTS: [NodeOutput; 1] = [OUT_OUTPUT];
@@ -399,7 +399,7 @@ impl EffectNode for ColorRamp {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/color_ramp.wgsl"),
                 "cs_main",
-                "node.color_ramp",
+                "node.gradient_map",
             )
         });
         let sampler = self
@@ -427,7 +427,7 @@ impl EffectNode for ColorRamp {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.color_ramp",
+            "node.gradient_map",
         );
     }
 }

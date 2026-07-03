@@ -23,7 +23,7 @@ struct ScaleOffsetUniforms {
 crate::primitive! {
     name: ScaleOffsetTexture,
     type_id: "node.scale_offset_texture",
-    purpose: "Per-pixel affine remap `a * x + b` on RGB. Alpha pass-through. The general re-range primitive: use scale=2, offset=-1 to recover signed [-1, 1] noise from a [0, 1] generator; scale=0.5, offset=0.5 to compress signed sin/cos to [0, 1]; scale<0 to invert. Two-scalar version of node.gain + node.brightness fused.",
+    purpose: "Per-pixel affine remap `a * x + b` on RGB. Alpha pass-through. The general re-range primitive: use scale=2, offset=-1 to recover signed [-1, 1] noise from a [0, 1] generator; scale=0.5, offset=0.5 to compress signed sin/cos to [0, 1]; scale<0 to invert. Two-scalar version of node.exposure + node.brightness fused.",
     inputs: {
         in: Texture2D required,
         // Port-shadows-param for scale and offset: wired scalars

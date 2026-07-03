@@ -477,7 +477,7 @@
     {
       "id": 219,
       "nodeId": "display_key",
-      "typeId": "node.channel_mix",
+      "typeId": "node.channel_mixer",
       "handle": "display_key",
       "params": {
         "row0": { "type": "Vec4", "value": [1.0, 0.0, 0.0, 0.0] },
@@ -1225,7 +1225,7 @@
           {
             "id": 205,
             "nodeId": "text_force_gain",
-            "typeId": "node.gain",
+            "typeId": "node.exposure",
             "handle": "text_force_gain",
             "params": {
               "gain": {
