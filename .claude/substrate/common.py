@@ -61,6 +61,18 @@ def parse_moves(text):
     return moves
 
 
+def validate_move_id(move_id, moves):
+    """Returns move_id if it's a real, classifier-selectable move in the
+    catalog, else None. `escalate/*` ids are daemon-selected only and are
+    never valid coming from the classifier. An unrecognized id — e.g. the
+    hallucinated `coaching/scope-drift` (nonexistent; only `anchor/scope-drift`
+    is real) seen in replay round 2 — must be treated as clear, not silently
+    accepted under a default cooldown class."""
+    if not move_id or move_id not in moves or move_id.startswith("escalate/"):
+        return None
+    return move_id
+
+
 def build_signature_catalog(moves):
     lines = []
     for mid in sorted(moves):
@@ -109,8 +121,13 @@ def tool_result_status(block):
     return "ok"
 
 
-def format_window(task, ledger, recent):
+TASK_ADDRESSED_MIN_CHARS = 40  # a trivial ack ("OK.", "Got it.") doesn't count as addressing TASK
+
+
+def format_window(task, ledger, recent, task_addressed=False):
     task_str = task if task else "(no task statement yet)"
+    if task and task_addressed:
+        task_str += " — already addressed by a prior reply this session"
     ledger_str = " · ".join(ledger) if ledger else "(no tool events)"
     recent_str = "\n---\n".join(t.strip() for t in recent) if recent else "(no assistant text yet)"
     return f'TASK: "{task_str}"\n\nLEDGER: `{ledger_str}`\n\nRECENT:\n{recent_str}'
@@ -141,18 +158,45 @@ class WindowState:
         self.total_tool_event_count = 0
         self.last_window_ts = None
         self.pending = {}
+        self.task_addressed = False
 
-    def feed_assistant_content(self, content):
+    def _close_window(self, ts):
+        closed = {
+            "end_event_count": self.total_tool_event_count,
+            "end_ts": ts,
+            "text": format_window(self.current_task, self.ledger_buffer, self.recent_texts, self.task_addressed),
+        }
+        self.ledger_buffer = []
+        self.tool_event_count_since_window = 0
+        self.last_window_ts = ts
+        return closed
+
+    def feed_assistant_content(self, content, ts=None):
+        """Feed one assistant turn's content blocks. Returns a closed window
+        the moment a text block lands (with a TASK already set) — drift
+        markers ARE assistant texts, and waiting for the next cadence tick
+        misses the 1-3 tool events that landed right after the last window
+        closed (the dominant cadence-miss cluster in replay round 2: altitude,
+        enumerate-levels, hedge-creep, destructive-isolation). Returns None
+        when no text block was seen, or none has been seen since the task was
+        set (nothing to judge against yet)."""
+        closed = None
         for c in content:
             if not isinstance(c, dict):
                 continue
             if c.get("type") == "text":
                 text = c.get("text", "")
-                if text.strip():
+                stripped = text.strip()
+                if stripped:
                     self.recent_texts.append(text)
                     self.recent_texts[:] = self.recent_texts[-2:]
+                    if self.current_task is not None:
+                        if len(stripped) >= TASK_ADDRESSED_MIN_CHARS:
+                            self.task_addressed = True
+                        closed = self._close_window(ts if ts is not None else self.last_window_ts)
             elif c.get("type") == "tool_use":
                 self.pending[c.get("id")] = (c.get("name", "?"), c.get("input", {}) or {})
+        return closed
 
     def feed_user_content(self, content, ts):
         """Returns (closed_window_or_None, list_of_human_text_seen).
@@ -177,14 +221,7 @@ class WindowState:
                 if not fire and self.last_window_ts is not None and ts is not None:
                     fire = (ts - self.last_window_ts) >= CADENCE_SECONDS
                 if fire and self.ledger_buffer:
-                    closed = {
-                        "end_event_count": self.total_tool_event_count,
-                        "end_ts": ts,
-                        "text": format_window(self.current_task, self.ledger_buffer, self.recent_texts),
-                    }
-                    self.ledger_buffer = []
-                    self.tool_event_count_since_window = 0
-                    self.last_window_ts = ts
+                    closed = self._close_window(ts)
             elif ctype == "text":
                 text = c.get("text", "")
                 stripped = text.strip()
@@ -192,6 +229,7 @@ class WindowState:
                     human_texts.append(stripped)
                     if len(stripped) >= 8:
                         self.current_task = stripped
+                        self.task_addressed = False
         return closed, human_texts
 
 

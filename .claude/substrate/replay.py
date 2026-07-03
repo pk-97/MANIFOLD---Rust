@@ -89,7 +89,9 @@ def build_session_windows(path, incident_labels):
                 # Assistant content is always a block list in practice.
                 if not isinstance(content, list) or not content:
                     continue
-                state.feed_assistant_content(content)
+                closed = state.feed_assistant_content(content, ts)
+                if closed:
+                    windows.append(closed)
             else:
                 if content is None or (isinstance(content, list) and not content):
                     continue
@@ -256,16 +258,17 @@ def cmd_run(args):
         sys.exit(1)
 
 
-def compute_gates(raw, labels_by_session, move_cooldowns):
+def compute_gates(raw, labels_by_session, moves):
     incident_results = []
     clean_flag_counts = []
     all_effective_fires = []
+    move_cooldowns = {mid: m["cooldown"] for mid, m in moves.items()}
 
     for session, data in raw["sessions"].items():
         windows = sorted(data["windows"], key=lambda w: w["end_event_count"])
         fires = []
         for w in windows:
-            flag = (w.get("verdict") or {}).get("flag")
+            flag = common.validate_move_id((w.get("verdict") or {}).get("flag"), moves)
             if flag:
                 fires.append((w["end_event_count"], flag, w))
         effective = common.apply_cooldowns(fires, move_cooldowns)
@@ -320,8 +323,7 @@ def cmd_report(args):
         raw = json.load(f)
     by_session = group_by_session(load_labels())
     moves = common.parse_moves(common.read(MOVES_PATH))
-    move_cooldowns = {mid: m["cooldown"] for mid, m in moves.items()}
-    gates = compute_gates(raw, by_session, move_cooldowns)
+    gates = compute_gates(raw, by_session, moves)
 
     # Validity first: gate numbers from a run full of classifier errors are
     # not measurements. An error verdict has no flag, so unchecked it reads
