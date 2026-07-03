@@ -18,6 +18,7 @@ loop is wrapped and any escape is logged to <session>.log, not raised.
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 import traceback
@@ -67,8 +68,9 @@ class Daemon:
         self.last_fire_event = {}  # move_id -> event_count of its last delivered fire
         self.fire_count = {}  # move_id -> times delivered (post-cooldown) this session
         self.escalated = False  # escalate/checkpoint fires at most once per session
-        self.next_seq = 1
+        self.next_seq = 1  # re-seeded in _run from the persistent consumed marker
         self.phase = "orienting"
+        self.owns_pidfile = False
 
     # ---- lifecycle ----
 
@@ -84,8 +86,15 @@ class Daemon:
     def _claim_pidfile(self):
         with open(self.pid_path, "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
+        self.owns_pidfile = True
 
     def _cleanup(self):
+        # A duplicate spawn that lost the pidfile race must not delete the
+        # live daemon's pidfile on its way out — that orphans the live daemon
+        # (SessionEnd can't find it) and lets a later spawn create a second
+        # concurrent tailer with colliding seq numbers.
+        if not self.owns_pidfile:
+            return
         for p in (self.pid_path, self.stop_path):
             try:
                 os.remove(p)
@@ -94,6 +103,11 @@ class Daemon:
 
     def run(self):
         os.makedirs(VERDICTS_DIR, exist_ok=True)
+        # SessionEnd stops us with SIGTERM; Python's default handler skips
+        # `finally`, which would strand the pidfile and .stop sentinel — and a
+        # stale .stop ends the *next* daemon for this session on its first
+        # poll. Convert to SystemExit so cleanup below always runs.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         with open(self.log_path, "a", encoding="utf-8") as logf:
             try:
                 self._run(logf)
@@ -107,7 +121,19 @@ class Daemon:
             _log(logf, "another daemon already running for this session, exiting")
             return
         self._claim_pidfile()
-        _log(logf, f"observer started, pid={os.getpid()}, transcript={self.transcript_path}")
+        # Anything in the mailbox from before our spawn is a predecessor's:
+        # a leftover .stop (SIGKILLed daemon, pre-fix SIGTERM) would end us on
+        # the first poll, and the consumed marker persists across restarts —
+        # if we restarted seq at 1, every new flag would read as already
+        # consumed and silently never deliver.
+        try:
+            os.remove(self.stop_path)
+        except OSError:
+            pass
+        prior = self._read_verdict_file() or {}
+        prior_seq = (prior.get("flag") or {}).get("seq") or 0
+        self.next_seq = max(self._read_consumed(), prior_seq) + 1
+        _log(logf, f"observer started, pid={os.getpid()}, next_seq={self.next_seq}, transcript={self.transcript_path}")
 
         offset = self._catchup(logf)
         last_activity = time.time()
@@ -145,7 +171,11 @@ class Daemon:
         """Read whole lines from `offset` to EOF, feed each into WindowState,
         classify any window it closes (if `classify`), and return the new
         offset. A trailing partial line (mid-write) is left for next poll."""
-        with open(self.transcript_path, encoding="utf-8") as f:
+        # errors="replace": a torn multi-byte char at EOF (writer mid-write)
+        # would otherwise raise UnicodeDecodeError and kill the daemon for
+        # the rest of the session; the torn line has no trailing \n, so it is
+        # re-read intact on the next poll either way.
+        with open(self.transcript_path, encoding="utf-8", errors="replace") as f:
             f.seek(offset)
             while True:
                 # readline(), not `for line in f` — iteration protocol uses
@@ -154,7 +184,12 @@ class Daemon:
                 line = f.readline()
                 if not line or not line.endswith("\n"):
                     break
-                self._feed_line(line, classify, logf)
+                try:
+                    self._feed_line(line, classify, logf)
+                except Exception:
+                    # one malformed transcript line must cost one line, not
+                    # the whole week of observation
+                    _log(logf, "feed_line error:\n" + traceback.format_exc())
                 offset = f.tell()
         return offset
 

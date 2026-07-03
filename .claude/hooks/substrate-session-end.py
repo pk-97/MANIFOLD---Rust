@@ -16,6 +16,7 @@ raises — pure best-effort cleanup.
 import json
 import os
 import signal
+import subprocess
 import sys
 
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -41,8 +42,17 @@ def main():
     try:
         with open(os.path.join(VERDICTS_DIR, f"{session_id}.pid")) as f:
             pid = int(f.read().strip())
-        os.kill(pid, signal.SIGTERM)
-    except (OSError, ValueError):
+        # A stale pidfile (crashed daemon) can point at a recycled PID owned
+        # by anything — verify it's actually the observer before signaling.
+        # If in doubt, skip the kill: the .stop sentinel above stops a live
+        # daemon within one 3s poll anyway; SIGTERM is only fast cleanup.
+        cmdline = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        if "observer.py" in cmdline:
+            os.kill(pid, signal.SIGTERM)
+    except Exception:
         pass
 
 
