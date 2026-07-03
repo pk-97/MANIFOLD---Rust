@@ -30,7 +30,7 @@ pub const CONSECUTIVE_EDGES_MAX_CAPACITY: u32 = 64;
 crate::primitive! {
     name: ConsecutiveEdges,
     type_id: "node.consecutive_edges",
-    purpose: "Generate consecutive-pair edge topology [(0,1), (1,2), …, (N-2, N-1)] from a vertex count, optionally closed via (N-1, 0). The polyline-topology atom: pair with a points source (generate_range + array_math + pack_curve_xy, or any custom CurvePoint producer) and node.render_lines to draw a closed regular polygon, an open polyline, or any topology where edges connect consecutive vertex indices. `count` is port-shadow-param so an upstream variable-N source (e.g. a mux driving the active polygon side count) drives the active edge count. Output capacity is `max_capacity`; slots beyond the active count are EdgePair::SENTINEL so downstream render_lines filters them out — drawing exactly the active topology, never garbage from the inactive tail.",
+    purpose: "Generate consecutive-pair edge topology [(0,1), (1,2), …, (N-2, N-1)] from a vertex count, optionally closed via (N-1, 0). The polyline-topology atom: pair with a points source (generate_range + array_math + pack_curve_xy, or any custom CurvePoint producer) and node.draw_lines to draw a closed regular polygon, an open polyline, or any topology where edges connect consecutive vertex indices. `count` is port-shadow-param so an upstream variable-N source (e.g. a mux driving the active polygon side count) drives the active edge count. Output capacity is `max_capacity`; slots beyond the active count are EdgePair::SENTINEL so downstream draw_lines filters them out — drawing exactly the active topology, never garbage from the inactive tail.",
     inputs: {
         count: ScalarF32 optional,
     },
@@ -63,7 +63,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "`closed = true` emits N edges forming a closed loop ([0,1], [1,2], …, [N-1, 0]); `closed = false` emits N-1 edges as an open strip. Pair with `node.generate_range(end_inclusive=false, active_count=N)` so vertex 0 and vertex N-1 land on geometrically distinct points — the closed (N-1, 0) edge then bridges a real gap rather than collapsing to zero length. Output capacity = `max_capacity` (pre-allocated by chain build); the runtime active count comes from the `count` port-shadow, clamped into `[2, max_capacity]`. Inactive tail = `EdgePair::SENTINEL = (u32::MAX, u32::MAX)` so downstream node.render_lines's `build_instances_from_edges` filter skips them without drawing a line.",
+    composition_notes: "`closed = true` emits N edges forming a closed loop ([0,1], [1,2], …, [N-1, 0]); `closed = false` emits N-1 edges as an open strip. Pair with `node.generate_range(end_inclusive=false, active_count=N)` so vertex 0 and vertex N-1 land on geometrically distinct points — the closed (N-1, 0) edge then bridges a real gap rather than collapsing to zero length. Output capacity = `max_capacity` (pre-allocated by chain build); the runtime active count comes from the `count` port-shadow, clamped into `[2, max_capacity]`. Inactive tail = `EdgePair::SENTINEL = (u32::MAX, u32::MAX)` so downstream node.draw_lines's `build_instances_from_edges` filter skips them without drawing a line.",
     examples: [],
     picker: { label: "Edge Pairs", category: Atom },
     summary: "Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start.",

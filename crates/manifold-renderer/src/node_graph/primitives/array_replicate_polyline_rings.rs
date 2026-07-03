@@ -6,7 +6,7 @@
 //! `Array<CurvePoint>` outline + parallel `Array<EdgePair>` edge
 //! topology — typically a polygon ring from
 //! `generate_range → array_math → pack_curve_xy` + `consecutive_edges`)
-//! and produces K concatenated rings ready for `node.render_lines`.
+//! and produces K concatenated rings ready for `node.draw_lines`.
 //!
 //! Per ring i (for i in `[0, ring_count)`):
 //!   - `outline_out[i*M..(i+1)*M] = outline[..M] * scales[i]`

@@ -7,7 +7,7 @@
 //! The 4D-side counterpart of [`super::polytope_vertices`]; pair with
 //! [`super::edges_from_hypercube`] for the matching wireframe topology
 //! and feed both into `node.rotate_4d → node.project_4d →
-//! node.render_lines` (with the `edges` input wired).
+//! node.draw_lines` (with the `edges` input wired).
 //!
 //! Vertex `i` has coordinates `(sx, sy, sz, sw) * 0.125 * present(axis)`
 //! where the sign pattern is `(sign(i&1), sign(i&2), sign(i&4),
@@ -51,7 +51,7 @@ struct Uniforms {
 crate::primitive! {
     name: HypercubeVertices,
     type_id: "node.hypercube_vertices",
-    purpose: "Emit the 16 corner vertices of a 4D hypercube as Array<Vec4Vertex>, with a continuous `dimension` control (1..4) that collapses the higher axes toward zero so the shape morphs point → line → square → cube → tesseract. At dimension=4 it is the full tesseract. Pair with node.edges_from_hypercube and feed both into node.rotate_4d → node.project_4d → node.render_lines (with the `edges` input wired). The 4D counterpart of node.polytope_vertices.",
+    purpose: "Emit the 16 corner vertices of a 4D hypercube as Array<Vec4Vertex>, with a continuous `dimension` control (1..4) that collapses the higher axes toward zero so the shape morphs point → line → square → cube → tesseract. At dimension=4 it is the full tesseract. Pair with node.edges_from_hypercube and feed both into node.rotate_4d → node.project_4d → node.draw_lines (with the `edges` input wired). The 4D counterpart of node.polytope_vertices.",
     inputs: {
         // Port-shadows the `dimension` param. Wire an LFO / envelope /
         // macro here to animate the square→cube→tesseract morph live;

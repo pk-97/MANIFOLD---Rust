@@ -3,7 +3,7 @@
 //! orthographic or perspective projection.
 //!
 //! **Output is centred at the origin**, matching the convention of
-//! every other `Array<CurvePoint>` producer. `node.render_lines`
+//! every other `Array<CurvePoint>` producer. `node.draw_lines`
 //! applies the center offset + aspect correction itself; no
 //! producer should pre-shift to (0.5, 0.5).
 //!
@@ -41,7 +41,7 @@ struct Project3DUniforms {
 crate::primitive! {
     name: Project3D,
     type_id: "node.project_3d",
-    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.render_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For WireframeZoo-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
+    purpose: "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For WireframeZoo-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
     inputs: {
         in: Array(MeshVertex) required,
         // Port-shadows-param: control-rate wires take precedence over

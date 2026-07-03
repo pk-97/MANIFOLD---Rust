@@ -1,6 +1,6 @@
 #![allow(private_interfaces)]
 
-//! `node.render_value_overlay` — lightweight bitmap-font numeric
+//! `node.value_overlay` — lightweight bitmap-font numeric
 //! labels at multiple positions, composited onto a source texture.
 //!
 //! Renders one text label per item in the `positions` array using an
@@ -101,7 +101,7 @@ fn push_digits_3(
 
 crate::primitive! {
     name: RenderValueOverlay,
-    type_id: "node.render_value_overlay",
+    type_id: "node.value_overlay",
     purpose: "Lightweight bitmap-font numeric labels at multiple positions, composited onto a source texture. Embedded 5×7 glyph atlas (0-9, A-F, hex, coords). Format enum selects display: Index (decimal), Hex (0Xnn), Coord (xxx,yyy from X/Y channels), Float3 (value×1000). For diagnostic HUDs, data-viz annotation layers, debug overlays.",
     inputs: {
         in: Texture2D required,
@@ -184,7 +184,7 @@ crate::primitive! {
     summary: "Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph.",
     category: Generate,
     role: Filter,
-    aliases: ["value overlay", "debug text", "readout", "numbers"],
+    aliases: ["value overlay", "render value overlay", "debug text", "readout", "numbers"],
     extra_fields: {
         render_pipeline: Option<GpuRenderPipeline> = None,
         font_atlas: Option<GpuTexture> = None,
@@ -499,7 +499,7 @@ impl Primitive for RenderValueOverlay {
                 "fs_main",
                 GpuTextureFormat::Rgba16Float,
                 Some(blend),
-                "node.render_value_overlay",
+                "node.value_overlay",
             )
         });
 
@@ -519,7 +519,7 @@ impl Primitive for RenderValueOverlay {
             6,
             quad_count as u32,
             GpuLoadAction::Load,
-            "node.render_value_overlay",
+            "node.value_overlay",
         );
     }
 }
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn render_value_overlay_declares_io() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(RenderValueOverlay::TYPE_ID, "node.render_value_overlay");
+        assert_eq!(RenderValueOverlay::TYPE_ID, "node.value_overlay");
         assert_eq!(RenderValueOverlay::INPUTS.len(), 4);
         assert_eq!(RenderValueOverlay::INPUTS[0].name, "in");
         assert_eq!(RenderValueOverlay::INPUTS[0].ty, PortType::Texture2D);
@@ -551,7 +551,7 @@ mod tests {
     fn render_value_overlay_registers() {
         let prim = RenderValueOverlay::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.render_value_overlay");
+        assert_eq!(node.type_id().as_str(), "node.value_overlay");
     }
 
     #[test]

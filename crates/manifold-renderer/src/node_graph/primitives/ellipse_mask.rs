@@ -1,4 +1,4 @@
-//! `node.ellipse_mask` — rotated elliptical SDF mask in UV space.
+//! `node.circle_mask` — rotated elliptical SDF mask in UV space.
 //!
 //! Pure generator. Output is a single-channel mask in RGB (A = 1)
 //! with value 1.0 inside the ellipse, 0.0 outside, smoothstepped
@@ -38,7 +38,7 @@ struct EllipseMaskUniforms {
 
 crate::primitive! {
     name: EllipseMask,
-    type_id: "node.ellipse_mask",
+    type_id: "node.circle_mask",
     purpose: "Rotated elliptical SDF mask. Output: RGB = mask value (inside=1, outside=0, smoothstep falloff of width `softness`), A = 1. Pure UV-space; no canvas-aspect correction. Industry-standard masking convention — pairs with masked_mix downstream, and with node.invert when the polarity needs flipping (e.g. DoF wants outside=1).",
     inputs: {
         cx: ScalarF32 optional,
@@ -134,9 +134,9 @@ impl Primitive for EllipseMask {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.ellipse_mask standalone codegen"),
+                    .expect("node.circle_mask standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.ellipse_mask",
+                "node.circle_mask",
             )
         });
 
@@ -164,7 +164,7 @@ impl Primitive for EllipseMask {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.ellipse_mask",
+            "node.circle_mask",
         );
     }
 }
@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn ellipse_mask_declares_six_optional_scalar_inputs_and_one_texture_output() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(EllipseMask::TYPE_ID, "node.ellipse_mask");
+        assert_eq!(EllipseMask::TYPE_ID, "node.circle_mask");
         let ins = EllipseMask::INPUTS;
         assert_eq!(ins.len(), 6);
         let names: Vec<&str> = ins.iter().map(|p| p.name).collect();
@@ -208,6 +208,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = EllipseMask::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.ellipse_mask");
+        assert_eq!(node.type_id().as_str(), "node.circle_mask");
     }
 }

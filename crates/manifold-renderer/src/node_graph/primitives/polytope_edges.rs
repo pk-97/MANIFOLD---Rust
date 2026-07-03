@@ -6,7 +6,7 @@
 //! CPU-only — the edge tables are tiny (≤30 entries × 8 bytes per
 //! shape), pure adjacency lookups with no math. CPU-write also lands
 //! the data in the shared MTLBuffer in time for downstream CPU readers
-//! (`node.render_lines`'s `build_instances_from_edges`) to consume it
+//! (`node.draw_lines`'s `build_instances_from_edges`) to consume it
 //! same-frame without a GPU→CPU fence.
 
 use crate::generators::mesh_common::{
@@ -20,7 +20,7 @@ use crate::node_graph::primitives::polytope_vertices::read_shape;
 crate::primitive! {
     name: PolytopeEdges,
     type_id: "node.polytope_edges",
-    purpose: "Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. Curated-enum atom — one CPU write of a static per-shape adjacency table, sentinel-padded for the inactive tail. Pair with node.polytope_vertices (driving both from the same shape scalar) and feed both into node.render_lines (vertices → points, edges → edges) for a 3D wireframe.",
+    purpose: "Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. Curated-enum atom — one CPU write of a static per-shape adjacency table, sentinel-padded for the inactive tail. Pair with node.polytope_vertices (driving both from the same shape scalar) and feed both into node.draw_lines (vertices → points, edges → edges) for a 3D wireframe.",
     inputs: {
         // Port-shadows the `shape` enum param. Wire the same scalar
         // here that drives `node.polytope_vertices.shape` so the two
@@ -40,7 +40,7 @@ crate::primitive! {
             enum_values: PLATONIC_SHAPES,
         },
     ],
-    composition_notes: "Output capacity is fixed at PLATONIC_MAX_EDGES (30 — Icosa / Dodeca have the most edges); slots past the active shape's edge count are EdgePair::SENTINEL so node.render_lines's `build_instances_from_edges` filter skips them without drawing a line. Indices are stable per shape and reference the paired `node.polytope_vertices` slot ordering — drive both atoms' `shape` input from the same scalar so vertices and edges always agree.",
+    composition_notes: "Output capacity is fixed at PLATONIC_MAX_EDGES (30 — Icosa / Dodeca have the most edges); slots past the active shape's edge count are EdgePair::SENTINEL so node.draw_lines's `build_instances_from_edges` filter skips them without drawing a line. Indices are stable per shape and reference the paired `node.polytope_vertices` slot ordering — drive both atoms' `shape` input from the same scalar so vertices and edges always agree.",
     examples: [],
     picker: { label: "Platonic Solid Edges", category: Atom },
     summary: "Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe.",

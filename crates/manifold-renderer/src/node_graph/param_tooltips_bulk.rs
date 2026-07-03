@@ -129,7 +129,7 @@ crate::param_tooltips!("node.edge_detect", {
 
 // ─── Generate ───
 
-crate::param_tooltips!("node.gradient_ramp", {
+crate::param_tooltips!("node.gradient", {
     "stops" => "The list of colour stops that make up the gradient, each set at a position along the strip. Add as many as you need up to 16.",
     "domain" => "How far along the value range the strip covers. 1 is the normal range, and 2 reaches past the last stop to catch bright overshoots for a thermal look.",
 });
@@ -142,13 +142,13 @@ crate::param_tooltips!("node.image_folder", {
     "prev" => "Steps back one image each time it fires. Wire a MIDI button or clip retrigger to it.",
 });
 
-crate::param_tooltips!("node.render_filled_rects", {
+crate::param_tooltips!("node.draw_rectangles", {
     "color" => "The colour of every rectangle drawn on top of the image.",
     "alpha" => "How opaque the rectangles are. The blend is additive so even at full alpha the rectangles add their colour to whatever is underneath rather than fully covering it.",
     "rect_count" => "How many rectangles from the list to draw. It is safe to leave high since empty zero size entries are skipped automatically.",
 });
 
-crate::param_tooltips!("node.render_lines", {
+crate::param_tooltips!("node.draw_lines", {
     "edge_thickness" => "How thick each line is drawn, as a fraction of the frame height. Around 0.002 is roughly one pixel at 1080p.",
     "closed_loop" => "Joins the last point back to the first so the path closes into a loop. Turn it off to leave an open strip.",
     "show_verts" => "Draws a dot at each point as well as the connecting lines.",
@@ -179,7 +179,7 @@ crate::param_tooltips!("node.render_text", {
     "fontFamily" => "The font to use by name. Leave it blank to fall back to the built-in default.",
 });
 
-crate::param_tooltips!("node.render_value_overlay", {
+crate::param_tooltips!("node.value_overlay", {
     "format" => "What the labels show. Index is the array number, Hex is a hex ID, Coord prints the X and Y position, and Float3 shows a wired value.",
     "color" => "The colour of the printed text.",
     "alpha" => "Overall opacity of the labels. 1 is solid and lower values fade them into the image.",
@@ -226,7 +226,7 @@ crate::param_tooltips!("node.chroma_key", {
     "mode" => "Select outputs white where the colour matches, good for applying an effect to that colour. Reject flips it for a traditional green screen knockout.",
 });
 
-crate::param_tooltips!("node.ellipse_mask", {
+crate::param_tooltips!("node.circle_mask", {
     "cx" => "Horizontal centre of the circle across the frame, where 0 is the left edge and 1 is the right.",
     "cy" => "Vertical centre of the circle up the frame, where 0 is the bottom edge and 1 is the top.",
     "radius_x" => "Half the width of the shape. Make it different from Radius Y to stretch the circle into an oval. At 0 the shape collapses to a line along that axis.",

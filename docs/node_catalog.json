@@ -1755,128 +1755,6 @@
     },
     {
       "aliases": [
-        "rectangle mask",
-        "box mask",
-        "rect",
-        "Rectangle TOP"
-      ],
-      "category": "Mask",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "cx",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "cy",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "half_width",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "half_height",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "rotation",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "softness",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Rectangle Mask",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D (typed)"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.5",
-          "label": "Center X",
-          "name": "cx",
-          "range": [
-            "-1",
-            "2"
-          ],
-          "tooltip": "Horizontal center of the rectangle. 0 is the left edge, 1 is the right.",
-          "type": "float"
-        },
-        {
-          "default": "0.5",
-          "label": "Center Y",
-          "name": "cy",
-          "range": [
-            "-1",
-            "2"
-          ],
-          "tooltip": "Vertical center. 0 is the top, 1 is the bottom.",
-          "type": "float"
-        },
-        {
-          "default": "0.25",
-          "label": "Half Width",
-          "name": "half_width",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "How far the rectangle reaches from its center to the left and right. At 0.5 it fills the frame.",
-          "type": "float"
-        },
-        {
-          "default": "0.25",
-          "label": "Half Height",
-          "name": "half_height",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "How far it reaches up and down from the center.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Rotation",
-          "name": "rotation",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Spins the rectangle around its center. Wire a knob or LFO to turn it over time.",
-          "type": "angle"
-        },
-        {
-          "default": "0",
-          "label": "Softness",
-          "name": "softness",
-          "range": [
-            "0",
-            "2"
-          ],
-          "tooltip": "Fades the edge of the mask. 0 gives a clean hard edge, higher values blur it out.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Rotated rectangular SDF mask (Chebyshev distance). Output: RGB = mask value (inside=1, outside=0, smoothstep falloff of width `softness`), A = 1. half_width / half_height are extents from the center (same convention as ellipse_mask's radii). For canvas-spanning bands, set the unbounded axis' half-extent ≥ 1.0; combined with rotation that gives rotated band masks for tilt-shift, scanlines, and letterboxes.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge.",
-      "type_id": "node.box_mask"
-    },
-    {
-      "aliases": [
         "brightness",
         "Level TOP"
       ],
@@ -2638,6 +2516,128 @@
     },
     {
       "aliases": [
+        "circle mask",
+        "ellipse mask",
+        "oval",
+        "Circle TOP"
+      ],
+      "category": "Mask",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "cx",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "cy",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "radius_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "radius_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "rotation",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "softness",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Circle Mask",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D (typed)"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.5",
+          "label": "Center X",
+          "name": "cx",
+          "range": [
+            "-1",
+            "2"
+          ],
+          "tooltip": "Horizontal centre of the circle across the frame, where 0 is the left edge and 1 is the right.",
+          "type": "float"
+        },
+        {
+          "default": "0.5",
+          "label": "Center Y",
+          "name": "cy",
+          "range": [
+            "-1",
+            "2"
+          ],
+          "tooltip": "Vertical centre of the circle up the frame, where 0 is the bottom edge and 1 is the top.",
+          "type": "float"
+        },
+        {
+          "default": "0.25",
+          "label": "Radius X",
+          "name": "radius_x",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "Half the width of the shape. Make it different from Radius Y to stretch the circle into an oval. At 0 the shape collapses to a line along that axis.",
+          "type": "float"
+        },
+        {
+          "default": "0.25",
+          "label": "Radius Y",
+          "name": "radius_y",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "Half the height of the shape. Make it different from Radius X to stretch the circle into an oval. At 0 the shape collapses to a line along that axis.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Rotation",
+          "name": "rotation",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Turns the oval around its centre, measured in degrees. Has no visible effect on a perfect circle.",
+          "type": "angle"
+        },
+        {
+          "default": "0",
+          "label": "Softness",
+          "name": "softness",
+          "range": [
+            "0",
+            "2"
+          ],
+          "tooltip": "Feathers the edge of the mask. 0 gives a clean hard edge, and higher values fade it out, measured in radius units so 1 spreads the falloff a full radius past the edge.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Rotated elliptical SDF mask. Output: RGB = mask value (inside=1, outside=0, smoothstep falloff of width `softness`), A = 1. Pure UV-space; no canvas-aspect correction. Industry-standard masking convention — pairs with masked_mix downstream, and with node.invert when the polarity needs flipping (e.g. DoF wants outside=1).",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate.",
+      "type_id": "node.circle_mask"
+    },
+    {
+      "aliases": [
         "clamp",
         "clamp texture",
         "saturate",
@@ -3137,7 +3137,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Generate consecutive-pair edge topology [(0,1), (1,2), …, (N-2, N-1)] from a vertex count, optionally closed via (N-1, 0). The polyline-topology atom: pair with a points source (generate_range + array_math + pack_curve_xy, or any custom CurvePoint producer) and node.render_lines to draw a closed regular polygon, an open polyline, or any topology where edges connect consecutive vertex indices. `count` is port-shadow-param so an upstream variable-N source (e.g. a mux driving the active polygon side count) drives the active edge count. Output capacity is `max_capacity`; slots beyond the active count are EdgePair::SENTINEL so downstream render_lines filters them out — drawing exactly the active topology, never garbage from the inactive tail.",
+      "purpose": "Generate consecutive-pair edge topology [(0,1), (1,2), …, (N-2, N-1)] from a vertex count, optionally closed via (N-1, 0). The polyline-topology atom: pair with a points source (generate_range + array_math + pack_curve_xy, or any custom CurvePoint producer) and node.draw_lines to draw a closed regular polygon, an open polyline, or any topology where edges connect consecutive vertex indices. `count` is port-shadow-param so an upstream variable-N source (e.g. a mux driving the active polygon side count) drives the active edge count. Output capacity is `max_capacity`; slots beyond the active count are EdgePair::SENTINEL so downstream draw_lines filters them out — drawing exactly the active topology, never garbage from the inactive tail.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Connects a list of points in order into a single line, pairing each point with the next. Can close the loop back to the start.",
@@ -4639,6 +4639,162 @@
     },
     {
       "aliases": [
+        "draw lines",
+        "render lines",
+        "strokes",
+        "wireframe"
+      ],
+      "category": "Generate",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "points",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "edges",
+          "required": false,
+          "type": "Array"
+        }
+      ],
+      "label": "Draw Lines",
+      "outputs": [
+        {
+          "name": "color",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.002",
+          "label": "Edge Thickness",
+          "name": "edge_thickness",
+          "range": [
+            "0.0001",
+            "0.1"
+          ],
+          "tooltip": "How thick each line is drawn, as a fraction of the frame height. Around 0.002 is roughly one pixel at 1080p.",
+          "type": "float"
+        },
+        {
+          "default": "true",
+          "label": "Closed Loop",
+          "name": "closed_loop",
+          "tooltip": "Joins the last point back to the first so the path closes into a loop. Turn it off to leave an open strip.",
+          "type": "bool"
+        },
+        {
+          "default": "false",
+          "label": "Show Vertices",
+          "name": "show_verts",
+          "tooltip": "Draws a dot at each point as well as the connecting lines.",
+          "type": "bool"
+        },
+        {
+          "default": "1",
+          "label": "Vertex Size",
+          "name": "vert_size",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "How large the vertex dots are drawn, where 1 matches the classic generator size.",
+          "type": "float"
+        },
+        {
+          "default": "false",
+          "label": "Animate",
+          "name": "animate",
+          "tooltip": "Reveals the lines as a scrolling window that travels along the path rather than drawing them all at once.",
+          "type": "bool"
+        },
+        {
+          "default": "1",
+          "label": "Speed",
+          "name": "speed",
+          "range": [
+            "0",
+            "10"
+          ],
+          "tooltip": "How fast the reveal window scrolls when Animate is on.",
+          "type": "float"
+        },
+        {
+          "default": "0.1",
+          "label": "Window",
+          "name": "window",
+          "range": [
+            "0.001",
+            "1"
+          ],
+          "tooltip": "The fraction of the path shown at once when Animate is on. Small values draw a short travelling segment, larger values show more of the line.",
+          "type": "float"
+        },
+        {
+          "default": "0.4",
+          "label": "Beat Flash",
+          "name": "beat_flash_amount",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "How hard the lines pulse brighter on each beat. Set it to 0 to hold a steady brightness.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Color R",
+          "name": "color_r",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "The red amount of the line colour. Values above 1 push into HDR for a brighter additive glow.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Color G",
+          "name": "color_g",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "The green amount of the line colour. Values above 1 push into HDR for a brighter additive glow.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Color B",
+          "name": "color_b",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "The blue amount of the line colour. Values above 1 push into HDR for a brighter additive glow.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Color A",
+          "name": "color_a",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "The opacity of the lines, from invisible at 0 to fully solid at 1.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.pack_curve_xy (for parametric curve graphs built from generate_range + array_math chains) or other curve-source primitives upstream.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays.",
+      "type_id": "node.draw_lines"
+    },
+    {
+      "aliases": [
         "draw markers",
         "hud",
         "overlay",
@@ -4735,6 +4891,72 @@
       "stratum": "atom",
       "summary": "Draws a marker on every tracked object: corner brackets around it or a crosshair at its centre. The building block for tracking overlays.",
       "type_id": "node.draw_markers"
+    },
+    {
+      "aliases": [
+        "draw rectangles",
+        "render filled rects",
+        "filled rects",
+        "boxes",
+        "bars"
+      ],
+      "category": "Generate",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "rects",
+          "required": true,
+          "type": "Array"
+        }
+      ],
+      "label": "Draw Rectangles",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "[0.85, 0.92, 1, 1]",
+          "label": "Color",
+          "name": "color",
+          "tooltip": "The colour of every rectangle drawn on top of the image.",
+          "type": "color"
+        },
+        {
+          "default": "0.8",
+          "label": "Alpha",
+          "name": "alpha",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "How opaque the rectangles are. The blend is additive so even at full alpha the rectangles add their colour to whatever is underneath rather than fully covering it.",
+          "type": "float"
+        },
+        {
+          "default": "32",
+          "label": "Rect Count",
+          "name": "rect_count",
+          "range": [
+            "0",
+            "256"
+          ],
+          "tooltip": "How many rectangles from the list to draw. It is safe to leave high since empty zero size entries are skipped automatically.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Instanced filled-rectangle overlay composited onto a source texture. Each item in the input Channels[X, Y, WIDTH, HEIGHT] array draws one axis-aligned filled rectangle with the configured color and alpha. Additive blend. Zero-size items are skipped. For gauge fills, center dots, debug regions, VU meters, status bars, selection boxes.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays.",
+      "type_id": "node.draw_rectangles"
     },
     {
       "aliases": [
@@ -5089,133 +5311,11 @@
         }
       ],
       "params": [],
-      "purpose": "Emit the wireframe edge topology of a 4D hypercube as Array<EdgePair> — the constant 32-edge bit-flip table. The 4D counterpart of node.polytope_edges. Pair with node.hypercube_vertices and feed both into node.render_lines (vertices → points, edges → edges) for a 4D wireframe. No params: a hypercube has one topology; the dimension-morph lives in the vertex positions.",
+      "purpose": "Emit the wireframe edge topology of a 4D hypercube as Array<EdgePair> — the constant 32-edge bit-flip table. The 4D counterpart of node.polytope_edges. Pair with node.hypercube_vertices and feed both into node.draw_lines (vertices → points, edges → edges) for a 4D wireframe. No params: a hypercube has one topology; the dimension-morph lives in the vertex positions.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Builds the wireframe edges of a hypercube — which corners connect. Feed it with the matching hypercube points to draw the 4D cube.",
       "type_id": "node.edges_from_hypercube"
-    },
-    {
-      "aliases": [
-        "circle mask",
-        "ellipse mask",
-        "oval",
-        "Circle TOP"
-      ],
-      "category": "Mask",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "cx",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "cy",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "radius_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "radius_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "rotation",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "softness",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Circle Mask",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D (typed)"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.5",
-          "label": "Center X",
-          "name": "cx",
-          "range": [
-            "-1",
-            "2"
-          ],
-          "tooltip": "Horizontal centre of the circle across the frame, where 0 is the left edge and 1 is the right.",
-          "type": "float"
-        },
-        {
-          "default": "0.5",
-          "label": "Center Y",
-          "name": "cy",
-          "range": [
-            "-1",
-            "2"
-          ],
-          "tooltip": "Vertical centre of the circle up the frame, where 0 is the bottom edge and 1 is the top.",
-          "type": "float"
-        },
-        {
-          "default": "0.25",
-          "label": "Radius X",
-          "name": "radius_x",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "Half the width of the shape. Make it different from Radius Y to stretch the circle into an oval. At 0 the shape collapses to a line along that axis.",
-          "type": "float"
-        },
-        {
-          "default": "0.25",
-          "label": "Radius Y",
-          "name": "radius_y",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "Half the height of the shape. Make it different from Radius X to stretch the circle into an oval. At 0 the shape collapses to a line along that axis.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Rotation",
-          "name": "rotation",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Turns the oval around its centre, measured in degrees. Has no visible effect on a perfect circle.",
-          "type": "angle"
-        },
-        {
-          "default": "0",
-          "label": "Softness",
-          "name": "softness",
-          "range": [
-            "0",
-            "2"
-          ],
-          "tooltip": "Feathers the edge of the mask. 0 gives a clean hard edge, and higher values fade it out, measured in radius units so 1 spreads the falloff a full radius past the edge.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Rotated elliptical SDF mask. Output: RGB = mask value (inside=1, outside=0, smoothstep falloff of width `softness`), A = 1. Pure UV-space; no canvas-aspect correction. Industry-standard masking convention — pairs with masked_mix downstream, and with node.invert when the polarity needs flipping (e.g. DoF wants outside=1).",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate.",
-      "type_id": "node.ellipse_mask"
     },
     {
       "aliases": [
@@ -7052,6 +7152,58 @@
     {
       "aliases": [
         "gradient",
+        "gradient ramp",
+        "color ramp",
+        "lut",
+        "palette"
+      ],
+      "category": "Generate",
+      "examples": [
+        "preset.effect.infrared"
+      ],
+      "inputs": [
+        {
+          "name": "domain",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Gradient",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "label": "Stops",
+          "name": "stops",
+          "tooltip": "The list of colour stops that make up the gradient, each set at a position along the strip. Add as many as you need up to 16.",
+          "type": "table"
+        },
+        {
+          "default": "1",
+          "label": "Domain",
+          "name": "domain",
+          "range": [
+            "0",
+            "8"
+          ],
+          "tooltip": "How far along the value range the strip covers. 1 is the normal range, and 2 reaches past the last stop to catch bright overshoots for a thermal look.",
+          "type": "float"
+        }
+      ],
+      "purpose": "General N-stop gradient / LUT generator. Emits a 1D piecewise-linear gradient as a texture — texel x → t = x/(width-1) * domain (endpoint-inclusive: texel 0 is exactly the first stop, the last texel is exactly t=domain), evaluated over a Table of `[position, r, g, b]` stops (up to 16). Constant in y, so it's a luminance LUT for node.color_lut, and reusable as a gradient texture anywhere (false-colour, duotone, thermal palettes, gradient-map, UI ramps). Evaluation matches the classic gradient(): clamp below the first stop, lerp between stops, and EXTRAPOLATE the last segment past the last stop — the overshoot that paints HDR blowout highlights when domain > 1.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like.",
+      "type_id": "node.gradient"
+    },
+    {
+      "aliases": [
+        "gradient",
         "edge slope",
         "derivative",
         "sobel"
@@ -7213,57 +7365,6 @@
       "stratum": "atom",
       "summary": "Remaps the image through a two-colour gradient based on brightness. Dark areas take the first colour, bright areas the second.",
       "type_id": "node.gradient_map"
-    },
-    {
-      "aliases": [
-        "gradient",
-        "color ramp",
-        "lut",
-        "palette"
-      ],
-      "category": "Generate",
-      "examples": [
-        "preset.effect.infrared"
-      ],
-      "inputs": [
-        {
-          "name": "domain",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Gradient",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "label": "Stops",
-          "name": "stops",
-          "tooltip": "The list of colour stops that make up the gradient, each set at a position along the strip. Add as many as you need up to 16.",
-          "type": "table"
-        },
-        {
-          "default": "1",
-          "label": "Domain",
-          "name": "domain",
-          "range": [
-            "0",
-            "8"
-          ],
-          "tooltip": "How far along the value range the strip covers. 1 is the normal range, and 2 reaches past the last stop to catch bright overshoots for a thermal look.",
-          "type": "float"
-        }
-      ],
-      "purpose": "General N-stop gradient / LUT generator. Emits a 1D piecewise-linear gradient as a texture — texel x → t = x/(width-1) * domain (endpoint-inclusive: texel 0 is exactly the first stop, the last texel is exactly t=domain), evaluated over a Table of `[position, r, g, b]` stops (up to 16). Constant in y, so it's a luminance LUT for node.color_lut, and reusable as a gradient texture anywhere (false-colour, duotone, thermal palettes, gradient-map, UI ramps). Evaluation matches the classic gradient(): clamp below the first stop, lerp between stops, and EXTRAPOLATE the last segment past the last stop — the overshoot that paints HDR blowout highlights when domain > 1.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like.",
-      "type_id": "node.gradient_ramp"
     },
     {
       "aliases": [
@@ -7744,7 +7845,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Emit the 16 corner vertices of a 4D hypercube as Array<Vec4Vertex>, with a continuous `dimension` control (1..4) that collapses the higher axes toward zero so the shape morphs point → line → square → cube → tesseract. At dimension=4 it is the full tesseract. Pair with node.edges_from_hypercube and feed both into node.rotate_4d → node.project_4d → node.render_lines (with the `edges` input wired). The 4D counterpart of node.polytope_vertices.",
+      "purpose": "Emit the 16 corner vertices of a 4D hypercube as Array<Vec4Vertex>, with a continuous `dimension` control (1..4) that collapses the higher axes toward zero so the shape morphs point → line → square → cube → tesseract. At dimension=4 it is the full tesseract. Pair with node.edges_from_hypercube and feed both into node.rotate_4d → node.project_4d → node.draw_lines (with the `edges` input wired). The 4D counterpart of node.polytope_vertices.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Builds the corner points of a hypercube. The Dimension knob morphs it from a flat square up through a cube to a full 4D tesseract — wire it to an LFO to animate the reveal.",
@@ -11084,7 +11185,7 @@
           "type": "enum"
         }
       ],
-      "purpose": "Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. Curated-enum atom — one CPU write of a static per-shape adjacency table, sentinel-padded for the inactive tail. Pair with node.polytope_vertices (driving both from the same shape scalar) and feed both into node.render_lines (vertices → points, edges → edges) for a 3D wireframe.",
+      "purpose": "Emit the wireframe edge topology of one of the five Platonic solids as Array<EdgePair>. Curated-enum atom — one CPU write of a static per-shape adjacency table, sentinel-padded for the inactive tail. Pair with node.polytope_vertices (driving both from the same shape scalar) and feed both into node.draw_lines (vertices → points, edges → edges) for a 3D wireframe.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe.",
@@ -11129,7 +11230,7 @@
           "type": "enum"
         }
       ],
-      "purpose": "Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. Curated-enum atom — one GPU dispatch with closed-form per-shape coordinates baked into WGSL, normalised to magnitude 0.25 (the legacy screen-friendly default). Pair with node.polytope_edges (driving both from the same shape scalar) and feed both into node.rotate_3d → node.project_3d → node.render_lines for a 3D wireframe.",
+      "purpose": "Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. Curated-enum atom — one GPU dispatch with closed-form per-shape coordinates baked into WGSL, normalised to magnitude 0.25 (the legacy screen-friendly default). Pair with node.polytope_edges (driving both from the same shape scalar) and feed both into node.rotate_3d → node.project_3d → node.draw_lines for a 3D wireframe.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry.",
@@ -11298,7 +11399,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.render_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For WireframeZoo-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
+      "purpose": "Project an Array<MeshVertex> (3D positions) to an Array<CurvePoint> (2D pre-aspect curve space) with either orthographic or perspective projection. Output is centred at the origin — node.draw_lines applies the center offset itself, so the convention matches every other Array<CurvePoint> producer (generate_lissajous, etc.). For WireframeZoo-shaped decompositions: polytope_vertices → Rotate3D → Project3D → render_lines.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Flattens a 3D mesh down to 2D points using a camera, so you can draw it as lines. The projection step for wireframe rendering.",
@@ -11550,6 +11651,128 @@
     },
     {
       "aliases": [
+        "rectangle mask",
+        "box mask",
+        "rect",
+        "Rectangle TOP"
+      ],
+      "category": "Mask",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "cx",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "cy",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "half_width",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "half_height",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "rotation",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "softness",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Rectangle Mask",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D (typed)"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.5",
+          "label": "Center X",
+          "name": "cx",
+          "range": [
+            "-1",
+            "2"
+          ],
+          "tooltip": "Horizontal center of the rectangle. 0 is the left edge, 1 is the right.",
+          "type": "float"
+        },
+        {
+          "default": "0.5",
+          "label": "Center Y",
+          "name": "cy",
+          "range": [
+            "-1",
+            "2"
+          ],
+          "tooltip": "Vertical center. 0 is the top, 1 is the bottom.",
+          "type": "float"
+        },
+        {
+          "default": "0.25",
+          "label": "Half Width",
+          "name": "half_width",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "How far the rectangle reaches from its center to the left and right. At 0.5 it fills the frame.",
+          "type": "float"
+        },
+        {
+          "default": "0.25",
+          "label": "Half Height",
+          "name": "half_height",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "How far it reaches up and down from the center.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Rotation",
+          "name": "rotation",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Spins the rectangle around its center. Wire a knob or LFO to turn it over time.",
+          "type": "angle"
+        },
+        {
+          "default": "0",
+          "label": "Softness",
+          "name": "softness",
+          "range": [
+            "0",
+            "2"
+          ],
+          "tooltip": "Fades the edge of the mask. 0 gives a clean hard edge, higher values blur it out.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Rotated rectangular SDF mask (Chebyshev distance). Output: RGB = mask value (inside=1, outside=0, smoothstep falloff of width `softness`), A = 1. half_width / half_height are extents from the center (same convention as ellipse_mask's radii). For canvas-spanning bands, set the unbounded axis' half-extent ≥ 1.0; combined with rotation that gives rotated band masks for tilt-shift, scanlines, and letterboxes.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge.",
+      "type_id": "node.rectangle_mask"
+    },
+    {
+      "aliases": [
         "reinhard",
         "tonemap",
         "hdr"
@@ -11752,71 +11975,6 @@
     },
     {
       "aliases": [
-        "draw rectangles",
-        "filled rects",
-        "boxes",
-        "bars"
-      ],
-      "category": "Generate",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "rects",
-          "required": true,
-          "type": "Array"
-        }
-      ],
-      "label": "Draw Rectangles",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "[0.85, 0.92, 1, 1]",
-          "label": "Color",
-          "name": "color",
-          "tooltip": "The colour of every rectangle drawn on top of the image.",
-          "type": "color"
-        },
-        {
-          "default": "0.8",
-          "label": "Alpha",
-          "name": "alpha",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "How opaque the rectangles are. The blend is additive so even at full alpha the rectangles add their colour to whatever is underneath rather than fully covering it.",
-          "type": "float"
-        },
-        {
-          "default": "32",
-          "label": "Rect Count",
-          "name": "rect_count",
-          "range": [
-            "0",
-            "256"
-          ],
-          "tooltip": "How many rectangles from the list to draw. It is safe to leave high since empty zero size entries are skipped automatically.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Instanced filled-rectangle overlay composited onto a source texture. Each item in the input Channels[X, Y, WIDTH, HEIGHT] array draws one axis-aligned filled rectangle with the configured color and alpha. Additive blend. Zero-size items are skipped. For gauge fills, center dots, debug regions, VU meters, status bars, selection boxes.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays.",
-      "type_id": "node.render_filled_rects"
-    },
-    {
-      "aliases": [
         "render copies",
         "instancing",
         "instances",
@@ -11891,162 +12049,6 @@
       "stratum": "atom",
       "summary": "Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects.",
       "type_id": "node.render_instanced_3d_mesh"
-    },
-    {
-      "aliases": [
-        "draw lines",
-        "render lines",
-        "strokes",
-        "wireframe"
-      ],
-      "category": "Generate",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "points",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "edges",
-          "required": false,
-          "type": "Array"
-        }
-      ],
-      "label": "Draw Lines",
-      "outputs": [
-        {
-          "name": "color",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.002",
-          "label": "Edge Thickness",
-          "name": "edge_thickness",
-          "range": [
-            "0.0001",
-            "0.1"
-          ],
-          "tooltip": "How thick each line is drawn, as a fraction of the frame height. Around 0.002 is roughly one pixel at 1080p.",
-          "type": "float"
-        },
-        {
-          "default": "true",
-          "label": "Closed Loop",
-          "name": "closed_loop",
-          "tooltip": "Joins the last point back to the first so the path closes into a loop. Turn it off to leave an open strip.",
-          "type": "bool"
-        },
-        {
-          "default": "false",
-          "label": "Show Vertices",
-          "name": "show_verts",
-          "tooltip": "Draws a dot at each point as well as the connecting lines.",
-          "type": "bool"
-        },
-        {
-          "default": "1",
-          "label": "Vertex Size",
-          "name": "vert_size",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "How large the vertex dots are drawn, where 1 matches the classic generator size.",
-          "type": "float"
-        },
-        {
-          "default": "false",
-          "label": "Animate",
-          "name": "animate",
-          "tooltip": "Reveals the lines as a scrolling window that travels along the path rather than drawing them all at once.",
-          "type": "bool"
-        },
-        {
-          "default": "1",
-          "label": "Speed",
-          "name": "speed",
-          "range": [
-            "0",
-            "10"
-          ],
-          "tooltip": "How fast the reveal window scrolls when Animate is on.",
-          "type": "float"
-        },
-        {
-          "default": "0.1",
-          "label": "Window",
-          "name": "window",
-          "range": [
-            "0.001",
-            "1"
-          ],
-          "tooltip": "The fraction of the path shown at once when Animate is on. Small values draw a short travelling segment, larger values show more of the line.",
-          "type": "float"
-        },
-        {
-          "default": "0.4",
-          "label": "Beat Flash",
-          "name": "beat_flash_amount",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "How hard the lines pulse brighter on each beat. Set it to 0 to hold a steady brightness.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "Color R",
-          "name": "color_r",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "The red amount of the line colour. Values above 1 push into HDR for a brighter additive glow.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "Color G",
-          "name": "color_g",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "The green amount of the line colour. Values above 1 push into HDR for a brighter additive glow.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "Color B",
-          "name": "color_b",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "The blue amount of the line colour. Values above 1 push into HDR for a brighter additive glow.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "Color A",
-          "name": "color_a",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "The opacity of the lines, from invisible at 0 to fully solid at 1.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.pack_curve_xy (for parametric curve graphs built from generate_range + array_math chains) or other curve-source primitives upstream.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays.",
-      "type_id": "node.render_lines"
     },
     {
       "aliases": [
@@ -12257,149 +12259,6 @@
       "stratum": "atom",
       "summary": "Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live.",
       "type_id": "node.render_text"
-    },
-    {
-      "aliases": [
-        "value overlay",
-        "debug text",
-        "readout",
-        "numbers"
-      ],
-      "category": "Generate",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "positions",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "values",
-          "required": false,
-          "type": "Array"
-        },
-        {
-          "name": "alpha",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Value Overlay",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "enum_values": [
-            "Index",
-            "Hex",
-            "Coord",
-            "Float3"
-          ],
-          "label": "Format",
-          "name": "format",
-          "range": [
-            "0",
-            "3"
-          ],
-          "tooltip": "What the labels show. Index is the array number, Hex is a hex ID, Coord prints the X and Y position, and Float3 shows a wired value.",
-          "type": "enum"
-        },
-        {
-          "default": "[0.85, 0.92, 1, 1]",
-          "label": "Color",
-          "name": "color",
-          "tooltip": "The colour of the printed text.",
-          "type": "color"
-        },
-        {
-          "default": "1",
-          "label": "Alpha",
-          "name": "alpha",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "Overall opacity of the labels. 1 is solid and lower values fade them into the image.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "Font Scale",
-          "name": "font_scale",
-          "range": [
-            "0.25",
-            "4"
-          ],
-          "tooltip": "Size of the text. 1 is the base size, raise it for bigger labels.",
-          "type": "float"
-        },
-        {
-          "default": "32",
-          "label": "Label Count",
-          "name": "label_count",
-          "range": [
-            "0",
-            "256"
-          ],
-          "tooltip": "The most labels to draw. Lower it to thin out a crowded readout.",
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "label": "Offset X",
-          "name": "offset_x",
-          "range": [
-            "-0.5",
-            "0.5"
-          ],
-          "tooltip": "Nudges every label sideways from its anchor point, in fractions of the frame width.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Offset Y",
-          "name": "offset_y",
-          "range": [
-            "-0.5",
-            "0.5"
-          ],
-          "tooltip": "Nudges every label up or down from its anchor point, in fractions of the frame height.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "TopLeft",
-            "TopRight",
-            "BottomLeft",
-            "BottomRight",
-            "Center"
-          ],
-          "label": "Anchor",
-          "name": "anchor",
-          "range": [
-            "0",
-            "4"
-          ],
-          "tooltip": "Which corner or centre of each region the label sits on, from Top Left through to Center.",
-          "type": "enum"
-        }
-      ],
-      "purpose": "Lightweight bitmap-font numeric labels at multiple positions, composited onto a source texture. Embedded 5×7 glyph atlas (0-9, A-F, hex, coords). Format enum selects display: Index (decimal), Hex (0Xnn), Coord (xxx,yyy from X/Y channels), Float3 (value×1000). For diagnostic HUDs, data-viz annotation layers, debug overlays.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph.",
-      "type_id": "node.render_value_overlay"
     },
     {
       "aliases": [
@@ -15758,6 +15617,150 @@
       "stratum": "driver",
       "summary": "Outputs a single fixed number you set by hand. Wire it into any knob as a constant, or expose it to drive from outside.",
       "type_id": "node.value"
+    },
+    {
+      "aliases": [
+        "value overlay",
+        "render value overlay",
+        "debug text",
+        "readout",
+        "numbers"
+      ],
+      "category": "Generate",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "positions",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "values",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "alpha",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Value Overlay",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "enum_values": [
+            "Index",
+            "Hex",
+            "Coord",
+            "Float3"
+          ],
+          "label": "Format",
+          "name": "format",
+          "range": [
+            "0",
+            "3"
+          ],
+          "tooltip": "What the labels show. Index is the array number, Hex is a hex ID, Coord prints the X and Y position, and Float3 shows a wired value.",
+          "type": "enum"
+        },
+        {
+          "default": "[0.85, 0.92, 1, 1]",
+          "label": "Color",
+          "name": "color",
+          "tooltip": "The colour of the printed text.",
+          "type": "color"
+        },
+        {
+          "default": "1",
+          "label": "Alpha",
+          "name": "alpha",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "Overall opacity of the labels. 1 is solid and lower values fade them into the image.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Font Scale",
+          "name": "font_scale",
+          "range": [
+            "0.25",
+            "4"
+          ],
+          "tooltip": "Size of the text. 1 is the base size, raise it for bigger labels.",
+          "type": "float"
+        },
+        {
+          "default": "32",
+          "label": "Label Count",
+          "name": "label_count",
+          "range": [
+            "0",
+            "256"
+          ],
+          "tooltip": "The most labels to draw. Lower it to thin out a crowded readout.",
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Offset X",
+          "name": "offset_x",
+          "range": [
+            "-0.5",
+            "0.5"
+          ],
+          "tooltip": "Nudges every label sideways from its anchor point, in fractions of the frame width.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Offset Y",
+          "name": "offset_y",
+          "range": [
+            "-0.5",
+            "0.5"
+          ],
+          "tooltip": "Nudges every label up or down from its anchor point, in fractions of the frame height.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "TopLeft",
+            "TopRight",
+            "BottomLeft",
+            "BottomRight",
+            "Center"
+          ],
+          "label": "Anchor",
+          "name": "anchor",
+          "range": [
+            "0",
+            "4"
+          ],
+          "tooltip": "Which corner or centre of each region the label sits on, from Top Left through to Center.",
+          "type": "enum"
+        }
+      ],
+      "purpose": "Lightweight bitmap-font numeric labels at multiple positions, composited onto a source texture. Embedded 5×7 glyph atlas (0-9, A-F, hex, coords). Format enum selects display: Index (decimal), Hex (0Xnn), Coord (xxx,yyy from X/Y channels), Float3 (value×1000). For diagnostic HUDs, data-viz annotation layers, debug overlays.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph.",
+      "type_id": "node.value_overlay"
     },
     {
       "aliases": [

@@ -113,7 +113,7 @@ crate::param_tooltips!("node.wet_dry", {
 
 // ─── Mask ────────────────────────────────────────────────────────────
 
-crate::param_tooltips!("node.box_mask", {
+crate::param_tooltips!("node.rectangle_mask", {
     "cx" => "Horizontal center of the rectangle. 0 is the left edge, 1 is the right.",
     "cy" => "Vertical center. 0 is the top, 1 is the bottom.",
     "half_width" => "How far the rectangle reaches from its center to the left and right. At 0.5 it fills the frame.",

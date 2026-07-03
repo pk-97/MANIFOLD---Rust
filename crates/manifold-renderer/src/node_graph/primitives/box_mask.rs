@@ -1,4 +1,4 @@
-//! `node.box_mask` — rotated rectangular SDF mask (Chebyshev distance).
+//! `node.rectangle_mask` — rotated rectangular SDF mask (Chebyshev distance).
 //!
 //! Pure generator. Output: single-channel mask in RGB (A = 1) with
 //! value 1.0 inside the box, 0.0 outside, smoothstepped over a
@@ -38,7 +38,7 @@ struct BoxMaskUniforms {
 
 crate::primitive! {
     name: BoxMask,
-    type_id: "node.box_mask",
+    type_id: "node.rectangle_mask",
     purpose: "Rotated rectangular SDF mask (Chebyshev distance). Output: RGB = mask value (inside=1, outside=0, smoothstep falloff of width `softness`), A = 1. half_width / half_height are extents from the center (same convention as ellipse_mask's radii). For canvas-spanning bands, set the unbounded axis' half-extent ≥ 1.0; combined with rotation that gives rotated band masks for tilt-shift, scanlines, and letterboxes.",
     inputs: {
         cx: ScalarF32 optional,
@@ -134,9 +134,9 @@ impl Primitive for BoxMask {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.box_mask standalone codegen"),
+                    .expect("node.rectangle_mask standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.box_mask",
+                "node.rectangle_mask",
             )
         });
 
@@ -164,7 +164,7 @@ impl Primitive for BoxMask {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.box_mask",
+            "node.rectangle_mask",
         );
     }
 }
@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn box_mask_declares_six_optional_scalar_inputs_and_one_texture_output() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(BoxMask::TYPE_ID, "node.box_mask");
+        assert_eq!(BoxMask::TYPE_ID, "node.rectangle_mask");
         let ins = BoxMask::INPUTS;
         assert_eq!(ins.len(), 6);
         let names: Vec<&str> = ins.iter().map(|p| p.name).collect();
@@ -208,6 +208,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = BoxMask::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.box_mask");
+        assert_eq!(node.type_id().as_str(), "node.rectangle_mask");
     }
 }

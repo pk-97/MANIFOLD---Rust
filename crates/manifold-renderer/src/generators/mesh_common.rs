@@ -114,12 +114,12 @@ impl KnownItem for InstanceTransform {
 /// A 2D point in **origin-centered pre-aspect curve space** — the
 /// canonical wire type between every curve / wireframe producer
 /// (`pack_curve_xy`, `project_3d`, `project_4d`,
-/// `polygon_shape`, `concentric_outlines`) and `node.render_lines`.
+/// `polygon_shape`, `concentric_outlines`) and `node.draw_lines`.
 /// 8 bytes.
 ///
 /// Coordinates are centred at the origin: a value of `(0.0, 0.0)`
 /// renders at the visual centre of the output texture. The
-/// consumer (`node.render_lines`) applies aspect correction and
+/// consumer (`node.draw_lines`) applies aspect correction and
 /// the `+0.5` screen shift in its vertex shader. **Do not pre-shift
 /// in the producer** — that would double-apply the offset and the
 /// drawing would cluster near the top-right of the output.
@@ -155,13 +155,13 @@ impl KnownItem for CurvePoint {
 /// An explicit edge between two vertices in an `Array<CurvePoint>` or
 /// `Array<MeshVertex>` buffer, identified by their indices. Used by
 /// wireframe-shape producers (Platonic solids, Tesseract, Duocylinder,
-/// any future user-imported wireframe mesh) to tell `node.render_lines`
+/// any future user-imported wireframe mesh) to tell `node.draw_lines`
 /// which vertex pairs to connect, when the topology isn't the implicit
 /// "sequential" / "closed loop" pattern that curve generators use. 8
 /// bytes.
 ///
 /// Unused slots in a fixed-capacity edge buffer are marked with
-/// `a == u32::MAX` (sentinel); `node.render_lines` skips any slot
+/// `a == u32::MAX` (sentinel); `node.draw_lines` skips any slot
 /// matching this on its way through the buffer.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -172,7 +172,7 @@ pub struct EdgePair {
 
 impl EdgePair {
     /// Sentinel value for unused slots in a fixed-capacity edges
-    /// buffer. `node.render_lines` checks `a == u32::MAX` and skips.
+    /// buffer. `node.draw_lines` checks `a == u32::MAX` and skips.
     pub const SENTINEL: EdgePair = EdgePair {
         a: u32::MAX,
         b: u32::MAX,

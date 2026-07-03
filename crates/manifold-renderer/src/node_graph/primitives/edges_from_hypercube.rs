@@ -6,12 +6,12 @@
 //! one topology, unlike the five Platonic solids), so there is no
 //! `shape` selector and no param. The morph in `hypercube_vertices`
 //! lives entirely in the vertex positions — collapsed axes make some of
-//! these 32 edges zero-length, which `node.render_lines` draws as
+//! these 32 edges zero-length, which `node.draw_lines` draws as
 //! nothing / dots. The topology stays the full 32 edges at every
 //! `dimension`, which is exactly the "ramp the 4th coord from 0" reveal.
 //!
 //! CPU-write lands the data in the shared MTLBuffer in time for the
-//! downstream CPU reader (`node.render_lines`'s
+//! downstream CPU reader (`node.draw_lines`'s
 //! `build_instances_from_edges`) to consume it same-frame without a
 //! GPU→CPU fence — same pattern as `polytope_edges`.
 
@@ -49,13 +49,13 @@ pub const HYPERCUBE_EDGES: [EdgePair; HYPERCUBE_EDGE_COUNT as usize] = hypercube
 crate::primitive! {
     name: EdgesFromHypercube,
     type_id: "node.edges_from_hypercube",
-    purpose: "Emit the wireframe edge topology of a 4D hypercube as Array<EdgePair> — the constant 32-edge bit-flip table. The 4D counterpart of node.polytope_edges. Pair with node.hypercube_vertices and feed both into node.render_lines (vertices → points, edges → edges) for a 4D wireframe. No params: a hypercube has one topology; the dimension-morph lives in the vertex positions.",
+    purpose: "Emit the wireframe edge topology of a 4D hypercube as Array<EdgePair> — the constant 32-edge bit-flip table. The 4D counterpart of node.polytope_edges. Pair with node.hypercube_vertices and feed both into node.draw_lines (vertices → points, edges → edges) for a 4D wireframe. No params: a hypercube has one topology; the dimension-morph lives in the vertex positions.",
     inputs: {},
     outputs: {
         edges: Array(EdgePair),
     },
     params: [],
-    composition_notes: "Output capacity is fixed at 32 (the hypercube edge count). Edges connect (i, i^bit) for bit ∈ {1,2,4,8} where j > i. The table is constant across `dimension` — when node.hypercube_vertices collapses an axis, the affected edges become zero-length and node.render_lines skips/dots them. Drive the paired node.hypercube_vertices for the matching corners.",
+    composition_notes: "Output capacity is fixed at 32 (the hypercube edge count). Edges connect (i, i^bit) for bit ∈ {1,2,4,8} where j > i. The table is constant across `dimension` — when node.hypercube_vertices collapses an axis, the affected edges become zero-length and node.draw_lines skips/dots them. Drive the paired node.hypercube_vertices for the matching corners.",
     examples: [],
     picker: { label: "Hypercube Edges (4D)", category: Atom },
     summary: "Builds the wireframe edges of a hypercube — which corners connect. Feed it with the matching hypercube points to draw the 4D cube.",

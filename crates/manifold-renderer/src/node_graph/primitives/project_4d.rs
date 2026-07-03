@@ -192,7 +192,7 @@ mod gpu_tests {
     //! and Duocylinder spawn in the top right" bug at primitive-level
     //! the first time it ran — the pre-fix WGSL added a `+0.5` shift
     //! that the legacy CPU reference does not. Origin-centered output
-    //! is the contract `node.render_lines` consumes; deviating from
+    //! is the contract `node.draw_lines` consumes; deviating from
     //! it doubles the screen offset and the wireframe clusters in the
     //! top-right of the output.
     //!

@@ -103,13 +103,13 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 |---|---|---|---|
 | Basic Shape | `node.basic_shape` | Source | Draws one of three simple shapes, a square, diamond, or octagon, as a clean anti-aliased fill. Pick the shape, then size and rotate it. |
 | Checkerboard | `node.checkerboard` | Source | Lays down an alternating black and white checker grid at any scale. Handy as a test pattern, a mask, or a base for tiled looks. |
-| Gradient | `node.gradient_ramp` | Source | Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like. |
+| Draw Lines | `node.draw_lines` | Filter | Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays. |
+| Draw Rectangles | `node.draw_rectangles` | Filter | Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays. |
+| Gradient | `node.gradient` | Source | Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like. |
 | Image Folder | `node.image_folder` | Source | Plays through a folder of images with a single position knob, so you can scrub or sequence stills. Point it at a folder and drive the position. |
 | Linear Gradient | `node.linear_gradient` | Source | A straight light-to-dark ramp across the frame at any angle. The simplest gradient, good for fades, masks, and ramps to drive other effects. |
-| Draw Rectangles | `node.render_filled_rects` | Filter | Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays. |
-| Draw Lines | `node.render_lines` | Filter | Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays. |
 | Render Text | `node.render_text` | Filter | Draws a text string onto the image with a chosen font, size, and position. Wire the text and font through the card so you can change them live. |
-| Value Overlay | `node.render_value_overlay` | Filter | Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph. |
+| Value Overlay | `node.value_overlay` | Filter | Prints small numeric labels onto the image at given spots using a built-in font. A quick readout for values flowing through a graph. |
 
 ### Noise (4)
 
@@ -124,9 +124,9 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 
 | Node | type_id | role | summary |
 |---|---|---|---|
-| Rectangle Mask | `node.box_mask` | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
 | — | `node.chroma_key` | Filter | Outputs a mask showing how close each pixel is to a chosen colour, the green-screen key. Feed it into a mask mix to knock out a background. |
-| Circle Mask | `node.ellipse_mask` | Source | Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate. |
+| Circle Mask | `node.circle_mask` | Source | Draws a soft-edged circle to limit an effect to a round region. It can stretch into an oval and rotate. |
+| Rectangle Mask | `node.rectangle_mask` | Source | Draws a soft-edged rectangle you can use to limit an effect to one region of the frame. Position it, size it, rotate it, and soften the edge. |
 | Threshold | `node.threshold` | Filter | Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask. |
 
 ### Composite (6)

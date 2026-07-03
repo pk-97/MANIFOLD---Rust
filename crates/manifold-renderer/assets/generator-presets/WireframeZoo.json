@@ -426,7 +426,7 @@
     {
       "id": 11,
       "nodeId": "render",
-      "typeId": "node.render_lines",
+      "typeId": "node.draw_lines",
       "handle": "render",
       "params": {
         "animate": {

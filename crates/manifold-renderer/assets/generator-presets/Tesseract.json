@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Tesseract",
-  "description": "Tesseract — 4D hypercube wireframe rotating continuously through the XY, ZW, and XW planes. Decomposed from the legacy `TesseractGenerator` Rust struct into the curated primitive library.\n\n`node.hypercube_vertices` produces the 16 corners (pre-scaled to magnitude 0.25 to match `PROJ_SCALE`) and `node.edges_from_hypercube` the 32-edge bit-flip topology — the 4D counterparts of `node.polytope_vertices` / `node.polytope_edges`. Three `node.math` nodes turn `time × rate` into per-plane angles fed into `node.rotate_4d`; `node.project_4d` performs the two-stage 4D→3D→2D perspective collapse; `node.render_lines` (with its `edges` input wired) renders the wireframe with line + dot semantics.\n\nThe `Dimension` control on `hypercube_vertices` collapses the higher axes toward zero, morphing the shape point → line → square → cube → tesseract as it ramps 1 → 4. At 4.0 (the default) it is the full tesseract, matching the legacy generator's look. Wire `Dimension` to an LFO / macro for a live dimension-morph reveal.\n\nLegacy outer-card param names (`xy` / `zw` / `xw` / `verts` / `v_size` / `anim`) are aliased to the new general-user names for save-file backward compatibility.",
+  "description": "Tesseract — 4D hypercube wireframe rotating continuously through the XY, ZW, and XW planes. Decomposed from the legacy `TesseractGenerator` Rust struct into the curated primitive library.\n\n`node.hypercube_vertices` produces the 16 corners (pre-scaled to magnitude 0.25 to match `PROJ_SCALE`) and `node.edges_from_hypercube` the 32-edge bit-flip topology — the 4D counterparts of `node.polytope_vertices` / `node.polytope_edges`. Three `node.math` nodes turn `time × rate` into per-plane angles fed into `node.rotate_4d`; `node.project_4d` performs the two-stage 4D→3D→2D perspective collapse; `node.draw_lines` (with its `edges` input wired) renders the wireframe with line + dot semantics.\n\nThe `Dimension` control on `hypercube_vertices` collapses the higher axes toward zero, morphing the shape point → line → square → cube → tesseract as it ramps 1 → 4. At 4.0 (the default) it is the full tesseract, matching the legacy generator's look. Wire `Dimension` to an LFO / macro for a live dimension-morph reveal.\n\nLegacy outer-card param names (`xy` / `zw` / `xw` / `verts` / `v_size` / `anim`) are aliased to the new general-user names for save-file backward compatibility.",
   "presetMetadata": {
     "id": "Tesseract",
     "displayName": "Tesseract",
@@ -241,7 +241,7 @@
       }
     },
     {
-      "id": 7, "typeId": "node.render_lines", "handle": "render", "nodeId": "render",
+      "id": 7, "typeId": "node.draw_lines", "handle": "render", "nodeId": "render",
       "params": {
         "edge_thickness":    { "type": "Float", "value": 0.002 },
         "closed_loop":       { "type": "Bool",  "value": false },

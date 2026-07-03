@@ -706,7 +706,7 @@
           {
             "id": 14,
             "nodeId": "hex_label",
-            "typeId": "node.render_value_overlay",
+            "typeId": "node.value_overlay",
             "handle": "hex_label",
             "params": {
               "alpha": {
@@ -752,7 +752,7 @@
           {
             "id": 15,
             "nodeId": "coord_label",
-            "typeId": "node.render_value_overlay",
+            "typeId": "node.value_overlay",
             "handle": "coord_label",
             "params": {
               "alpha": {

@@ -3303,7 +3303,7 @@ mod tests {
     fn exposing_a_non_preset_param_on_generator_appends_user_binding_and_grows_param_values() {
         // Regression: clicking the expose checkbox on a generator's
         // inner-node param that has NO preset binding (e.g.
-        // `node.render_lines:animate` on the Wireframe preset) must
+        // `node.draw_lines:animate` on the Wireframe preset) must
         // synthesize a user-added BindingDef + ParamSpecDef in the
         // graph's preset_metadata AND extend gp.param_values by one
         // slot so the outer card has somewhere to render it.
@@ -3399,7 +3399,7 @@ mod tests {
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: manifold_core::NodeId::new("render"),
-                type_id: "node.render_lines".to_string(),
+                type_id: "node.draw_lines".to_string(),
                 handle: Some("render".to_string()),
                 params: BTreeMap::new(),
                 exposed_params: Default::default(),
@@ -3655,7 +3655,7 @@ mod tests {
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: manifold_core::NodeId::new("render"),
-                type_id: "node.render_lines".to_string(),
+                type_id: "node.draw_lines".to_string(),
                 handle: Some("render".to_string()),
                 params: BTreeMap::new(),
                 exposed_params: {

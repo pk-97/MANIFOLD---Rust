@@ -13,7 +13,7 @@
 //! atom is the topology counterpart of `node.polytope_edges`: closed
 //! mathematical structure, sentinel-padded inactive tail, CPU-write
 //! into shared MTLBuffer for downstream CPU consumption by
-//! `node.render_lines`.
+//! `node.draw_lines`.
 
 use crate::generators::mesh_common::EdgePair;
 use crate::node_graph::effect_node::EffectNodeContext;

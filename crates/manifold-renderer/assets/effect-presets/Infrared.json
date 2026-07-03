@@ -155,7 +155,7 @@
           {
             "id": 1,
             "nodeId": "pal_white_hot",
-            "typeId": "node.gradient_ramp",
+            "typeId": "node.gradient",
             "handle": "pal_white_hot",
             "params": {
               "domain": {
@@ -185,7 +185,7 @@
           {
             "id": 2,
             "nodeId": "pal_black_hot",
-            "typeId": "node.gradient_ramp",
+            "typeId": "node.gradient",
             "handle": "pal_black_hot",
             "params": {
               "domain": {
@@ -215,7 +215,7 @@
           {
             "id": 3,
             "nodeId": "pal_green_nv",
-            "typeId": "node.gradient_ramp",
+            "typeId": "node.gradient",
             "handle": "pal_green_nv",
             "params": {
               "domain": {
@@ -245,7 +245,7 @@
           {
             "id": 4,
             "nodeId": "pal_iron_bow",
-            "typeId": "node.gradient_ramp",
+            "typeId": "node.gradient",
             "handle": "pal_iron_bow",
             "params": {
               "domain": {
@@ -299,7 +299,7 @@
           {
             "id": 5,
             "nodeId": "pal_rainbow",
-            "typeId": "node.gradient_ramp",
+            "typeId": "node.gradient",
             "handle": "pal_rainbow",
             "params": {
               "domain": {
@@ -359,7 +359,7 @@
           {
             "id": 6,
             "nodeId": "pal_lava",
-            "typeId": "node.gradient_ramp",
+            "typeId": "node.gradient",
             "handle": "pal_lava",
             "params": {
               "domain": {
@@ -407,7 +407,7 @@
           {
             "id": 7,
             "nodeId": "pal_arctic",
-            "typeId": "node.gradient_ramp",
+            "typeId": "node.gradient",
             "handle": "pal_arctic",
             "params": {
               "domain": {
@@ -455,7 +455,7 @@
           {
             "id": 8,
             "nodeId": "pal_magenta",
-            "typeId": "node.gradient_ramp",
+            "typeId": "node.gradient",
             "handle": "pal_magenta",
             "params": {
               "domain": {
@@ -503,7 +503,7 @@
           {
             "id": 9,
             "nodeId": "pal_electric",
-            "typeId": "node.gradient_ramp",
+            "typeId": "node.gradient",
             "handle": "pal_electric",
             "params": {
               "domain": {
@@ -551,7 +551,7 @@
           {
             "id": 10,
             "nodeId": "pal_toxic",
-            "typeId": "node.gradient_ramp",
+            "typeId": "node.gradient",
             "handle": "pal_toxic",
             "params": {
               "domain": {

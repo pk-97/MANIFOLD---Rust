@@ -1,4 +1,4 @@
-//! `node.render_filled_rects` — instanced filled-rectangle overlay
+//! `node.draw_rectangles` — instanced filled-rectangle overlay
 //! composited onto a source texture.
 //!
 //! Each item in the input `Channels[X, Y, WIDTH, HEIGHT]` array
@@ -28,7 +28,7 @@ struct FilledRectsUniforms {
 
 crate::primitive! {
     name: RenderFilledRects,
-    type_id: "node.render_filled_rects",
+    type_id: "node.draw_rectangles",
     purpose: "Instanced filled-rectangle overlay composited onto a source texture. Each item in the input Channels[X, Y, WIDTH, HEIGHT] array draws one axis-aligned filled rectangle with the configured color and alpha. Additive blend. Zero-size items are skipped. For gauge fills, center dots, debug regions, VU meters, status bars, selection boxes.",
     inputs: {
         in: Texture2D required,
@@ -69,7 +69,7 @@ crate::primitive! {
     summary: "Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays.",
     category: Generate,
     role: Filter,
-    aliases: ["draw rectangles", "filled rects", "boxes", "bars"],
+    aliases: ["draw rectangles", "render filled rects", "filled rects", "boxes", "bars"],
     extra_fields: {
         render_pipeline: Option<GpuRenderPipeline> = None,
     },
@@ -184,7 +184,7 @@ impl Primitive for RenderFilledRects {
                 "fs_main",
                 GpuTextureFormat::Rgba16Float,
                 Some(blend),
-                "node.render_filled_rects",
+                "node.draw_rectangles",
             )
         });
 
@@ -212,7 +212,7 @@ impl Primitive for RenderFilledRects {
             6,
             rect_count,
             GpuLoadAction::Load,
-            "node.render_filled_rects",
+            "node.draw_rectangles",
         );
     }
 }
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn render_filled_rects_declares_tex_and_array_inputs() {
         use crate::node_graph::ports::PortType;
-        assert_eq!(RenderFilledRects::TYPE_ID, "node.render_filled_rects");
+        assert_eq!(RenderFilledRects::TYPE_ID, "node.draw_rectangles");
         assert_eq!(RenderFilledRects::INPUTS.len(), 2);
         assert_eq!(RenderFilledRects::INPUTS[0].name, "in");
         assert_eq!(RenderFilledRects::INPUTS[0].ty, PortType::Texture2D);
@@ -240,7 +240,7 @@ mod tests {
     fn render_filled_rects_registers() {
         let prim = RenderFilledRects::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.render_filled_rects");
+        assert_eq!(node.type_id().as_str(), "node.draw_rectangles");
     }
 
     #[test]

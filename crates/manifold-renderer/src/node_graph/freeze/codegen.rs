@@ -4176,7 +4176,7 @@ mod gpu_tests {
         }
     }
 
-    /// TABLE-param SOURCE parity: node.gradient_ramp's `stops` Table param expands
+    /// TABLE-param SOURCE parity: node.gradient's `stops` Table param expands
     /// in the generated uniform to a `stops_count` header word + a fixed
     /// `array<vec4<f32>, 16>` after the aligned header, and the body receives
     /// (stops_count, stops). The hand uniform is {count, domain, _pad, _pad, stops}
@@ -4191,7 +4191,7 @@ mod gpu_tests {
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
         let differ = TextureDiff::new(&device);
 
-        let node = registry.construct("node.gradient_ramp").unwrap();
+        let node = registry.construct("node.gradient").unwrap();
         let generated = generate_standalone(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),
@@ -5452,10 +5452,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             ("node.linear_gradient", "linear_gradient.wgsl", Some(lg_bytes.as_slice())),
             ("node.distance_to_point", "distance_to_point.wgsl", Some(dist_bytes.as_slice())),
             ("node.polar_field", "polar_field.wgsl", Some(polar_bytes.as_slice())),
-            ("node.box_mask", "box_mask.wgsl", Some(box_bytes.as_slice())),
+            ("node.rectangle_mask", "box_mask.wgsl", Some(box_bytes.as_slice())),
             ("node.mirror", "mirror_fold_uv.wgsl", Some(mirror_bytes.as_slice())),
             ("node.kaleidoscope", "radial_fold_uv.wgsl", Some(radial_bytes.as_slice())),
-            ("node.ellipse_mask", "ellipse_mask.wgsl", Some(ellipse_bytes.as_slice())),
+            ("node.circle_mask", "ellipse_mask.wgsl", Some(ellipse_bytes.as_slice())),
             ("node.dither_pattern", "dither_pattern.wgsl", Some(dither_pat_bytes.as_slice())),
             ("node.simplex_field_2d", "simplex_field_2d.wgsl", Some(simplex_bytes.as_slice())),
             ("node.noise", "noise.wgsl", Some(noise_perlin.as_slice())),

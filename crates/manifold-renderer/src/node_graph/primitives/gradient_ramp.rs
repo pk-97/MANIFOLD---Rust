@@ -1,4 +1,4 @@
-//! `node.gradient_ramp` — general N-stop gradient / LUT generator.
+//! `node.gradient` — general N-stop gradient / LUT generator.
 //!
 //! Emits a 1D piecewise-linear gradient as a texture: output texel x maps to
 //! `t = x / (width - 1) * domain` (endpoint-inclusive, so texel 0 is exactly the
@@ -63,7 +63,7 @@ struct GradientRampUniforms {
 
 crate::primitive! {
     name: GradientRamp,
-    type_id: "node.gradient_ramp",
+    type_id: "node.gradient",
     purpose: "General N-stop gradient / LUT generator. Emits a 1D piecewise-linear gradient as a texture — texel x → t = x/(width-1) * domain (endpoint-inclusive: texel 0 is exactly the first stop, the last texel is exactly t=domain), evaluated over a Table of `[position, r, g, b]` stops (up to 16). Constant in y, so it's a luminance LUT for node.color_lut, and reusable as a gradient texture anywhere (false-colour, duotone, thermal palettes, gradient-map, UI ramps). Evaluation matches the classic gradient(): clamp below the first stop, lerp between stops, and EXTRAPOLATE the last segment past the last stop — the overshoot that paints HDR blowout highlights when domain > 1.",
     inputs: {
         domain: ScalarF32 optional,
@@ -99,7 +99,7 @@ crate::primitive! {
     summary: "Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like.",
     category: Generate,
     role: Source,
-    aliases: ["gradient", "color ramp", "lut", "palette"],
+    aliases: ["gradient", "gradient ramp", "color ramp", "lut", "palette"],
     pure: true,
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/gradient_ramp_body.wgsl"),
@@ -167,9 +167,9 @@ impl Primitive for GradientRamp {
             // gradient_ramp.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.gradient_ramp standalone codegen"),
+                    .expect("node.gradient standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.gradient_ramp",
+                "node.gradient",
             )
         });
 
@@ -194,7 +194,7 @@ impl Primitive for GradientRamp {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.gradient_ramp",
+            "node.gradient",
         );
     }
 }

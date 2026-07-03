@@ -67,7 +67,7 @@ pub(crate) fn read_shape(ctx: &EffectNodeContext<'_, '_>) -> u32 {
 crate::primitive! {
     name: PolytopeVertices,
     type_id: "node.polytope_vertices",
-    purpose: "Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. Curated-enum atom — one GPU dispatch with closed-form per-shape coordinates baked into WGSL, normalised to magnitude 0.25 (the legacy screen-friendly default). Pair with node.polytope_edges (driving both from the same shape scalar) and feed both into node.rotate_3d → node.project_3d → node.render_lines for a 3D wireframe.",
+    purpose: "Emit the vertex set of one of the five Platonic solids (Tetrahedron / Cube / Octahedron / Icosahedron / Dodecahedron) as Array<MeshVertex>. Curated-enum atom — one GPU dispatch with closed-form per-shape coordinates baked into WGSL, normalised to magnitude 0.25 (the legacy screen-friendly default). Pair with node.polytope_edges (driving both from the same shape scalar) and feed both into node.rotate_3d → node.project_3d → node.draw_lines for a 3D wireframe.",
     inputs: {
         // Port-shadows the `shape` enum param. Wire a scalar here to
         // drive the shape from a mux / clip_trigger_cycle / external

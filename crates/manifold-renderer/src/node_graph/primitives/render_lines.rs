@@ -1,4 +1,4 @@
-//! `node.render_lines` — render-pass primitive that draws an
+//! `node.draw_lines` — render-pass primitive that draws an
 //! `Array<CurvePoint>` as anti-aliased capsule line segments with
 //! 4× MSAA and additive blending.
 //!
@@ -77,7 +77,7 @@ pub struct EdgeInstance {
 
 crate::primitive! {
     name: RenderLines,
-    type_id: "node.render_lines",
+    type_id: "node.draw_lines",
     purpose: "Draw an Array<CurvePoint> as anti-aliased capsule line segments with 4x MSAA and additive blending. Input points are in pre-aspect curve space centred at the origin; this node applies aspect correction + centre offset on its way to the framebuffer. `animate=true` enables a scrolling-window reveal that matches the legacy line-generator helper; `show_verts=true` draws a dot at each (visible) vertex. `beat_flash_amount` pulses luminance per beat to match the legacy generator_lines.wgsl flash. Pair with node.pack_curve_xy (for parametric curve graphs built from generate_range + array_math chains) or other curve-source primitives upstream.",
     inputs: {
         points: Array(CurvePoint) required,
@@ -232,7 +232,7 @@ impl RenderLines {
             height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             MSAA_SAMPLE_COUNT,
-            "node.render_lines MSAA",
+            "node.draw_lines MSAA",
         ));
         self.msaa_width = width;
         self.msaa_height = height;
@@ -539,7 +539,7 @@ impl Primitive for RenderLines {
         // line of diagnostic instead of a black render.
         let Some(points) = ctx.inputs.array("points") else {
             log::warn!(
-                "node.render_lines: no GpuBuffer bound to input port `points` — \
+                "node.draw_lines: no GpuBuffer bound to input port `points` — \
                  nothing to draw this frame. The producing Array<CurvePoint> node \
                  was either skipped or its output buffer wasn't pre-allocated.",
             );
@@ -547,7 +547,7 @@ impl Primitive for RenderLines {
         };
         let Some(target) = ctx.outputs.texture_2d("color") else {
             log::warn!(
-                "node.render_lines: no GpuTexture bound to output port `color` — \
+                "node.draw_lines: no GpuTexture bound to output port `color` — \
                  the host did not pre-bind a render target.",
             );
             return;
@@ -584,7 +584,7 @@ impl Primitive for RenderLines {
                 },
                 None => {
                     log::warn!(
-                        "node.render_lines: `edges` input buffer is not host-mapped — \
+                        "node.draw_lines: `edges` input buffer is not host-mapped — \
                          expected a shared-memory Array<EdgePair> from the upstream producer.",
                     );
                     &[]
@@ -652,7 +652,7 @@ impl Primitive for RenderLines {
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
                 Some(blend),
                 MSAA_SAMPLE_COUNT,
-                "node.render_lines",
+                "node.draw_lines",
             ));
         }
         self.ensure_msaa_texture(gpu.device, width, height);
@@ -694,7 +694,7 @@ impl Primitive for RenderLines {
             6,
             total_instances,
             GpuLoadAction::Clear,
-            "node.render_lines",
+            "node.draw_lines",
         );
     }
 }
@@ -711,7 +711,7 @@ mod tests {
         let points_layout = ArrayType::of_known::<CurvePoint>();
         let edges_layout = ArrayType::of_known::<EdgePair>();
 
-        assert_eq!(RenderLines::TYPE_ID, "node.render_lines");
+        assert_eq!(RenderLines::TYPE_ID, "node.draw_lines");
         assert_eq!(RenderLines::INPUTS.len(), 2);
         assert_eq!(RenderLines::INPUTS[0].name, "points");
         assert!(RenderLines::INPUTS[0].required);
@@ -750,7 +750,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = RenderLines::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.render_lines");
+        assert_eq!(node.type_id().as_str(), "node.draw_lines");
     }
 
     /// `build_instances` non-animated, closed-loop: N segments

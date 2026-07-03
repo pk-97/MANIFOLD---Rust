@@ -68,6 +68,13 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.radial_fold_uv", "node.kaleidoscope"),
     ("node.uv_strip_clamp", "node.edge_stretch"),
     ("node.affine_transform", "node.transform"),
+    // --- VOCAB P2 3/8: Generate / Mask / Noise (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    ("node.gradient_ramp", "node.gradient"),
+    ("node.render_filled_rects", "node.draw_rectangles"),
+    ("node.render_lines", "node.draw_lines"),
+    ("node.render_value_overlay", "node.value_overlay"),
+    ("node.box_mask", "node.rectangle_mask"),
+    ("node.ellipse_mask", "node.circle_mask"),
 ];
 
 /// One legacy-fold entry: `(old_id, new_id, seed_params)` — the params to

@@ -462,7 +462,7 @@
           {
             "id": 20,
             "nodeId": "tilt_mask",
-            "typeId": "node.box_mask",
+            "typeId": "node.rectangle_mask",
             "handle": "tilt_mask",
             "params": {
               "cx": {
@@ -542,7 +542,7 @@
           {
             "id": 21,
             "nodeId": "radial_mask",
-            "typeId": "node.ellipse_mask",
+            "typeId": "node.circle_mask",
             "handle": "radial_mask",
             "params": {
               "cx": {

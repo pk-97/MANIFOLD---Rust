@@ -4,7 +4,7 @@
 //! The inverse of `node.array_unpack_vec2` for the curve-rendering
 //! pipeline. Takes axis-separated channels (built independently by
 //! array_math / generate_range chains) and assembles them into the
-//! typed `Array<CurvePoint>` wire that `node.render_lines` consumes.
+//! typed `Array<CurvePoint>` wire that `node.draw_lines` consumes.
 //!
 //! Per-element math:
 //!   `out[i].xy = vec2(x[i] * scale * PROJ_SCALE, y[i] * scale * PROJ_SCALE)`
