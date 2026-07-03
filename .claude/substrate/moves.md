@@ -63,7 +63,10 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
 ## coaching/attack-the-story
 - **signature:** An explanation was just asserted with confidence ("the issue is",
   "the root cause is", "this happens because") and the very next actions implement
-  a fix — no step in between that tests the explanation.
+  a fix — no step in between that tests the explanation. The assertion and the fix
+  must both be the agent's own live reasoning in RECENT/LEDGER — a TASK field that
+  quotes or summarizes the agent's past reasoning (e.g. Stop-hook feedback text)
+  is not itself an assertion to flag.
 - **cooldown:** standard
 - **payload:**
 > A coherent story just formed. Coherence is not correctness — the first story that
@@ -105,7 +108,11 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
 ## coaching/define-done
 - **signature:** Substantial work is underway with no stated completion criterion,
   and the goal as last stated is vague enough that stopping early would be
-  undetectable.
+  undetectable. Do not flag on a short TASK alone ("Continue", "yes", "let's do
+  it") — check RECENT and LEDGER for an already-visible plan first (TodoWrite
+  items, named phases/steps, a numbered checklist). A short TASK against a
+  visible plan is not this signature; only flag when no completion criterion is
+  visible anywhere in the window, not merely absent from the latest human line.
 - **cooldown:** once
 - **payload:**
 > State what done looks like — the observable condition that ends this task — in
@@ -114,9 +121,14 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
 ---
 
 ## anchor/verify-claim
-- **signature:** Success was claimed ("fixed", "works now", "should be resolved")
-  with no verifying action between the change and the claim — no test run, no
-  execution, no render.
+- **signature:** Success was claimed ("fixed", "works now", "should be resolved",
+  "implemented, verified, and pushed", "everything's verified") with no verifying
+  action between the change and the claim — no test run, no execution, no render.
+  Also matches a *bundled* claim: several sub-parts declared done together where
+  build/test/clippy passing, or one sub-part being genuinely exercised, is used
+  as evidence for a different sub-part (a new integration path, a specific
+  visual result, a specific data flow) that was never itself run, rendered, or
+  exercised. A green build is not evidence for a claim it didn't check.
 - **cooldown:** standard
 - **payload:**
 > That claim hasn't been checked yet. Run the verification in the medium where
@@ -126,6 +138,8 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
 ## anchor/circling
 - **signature:** The same file read three or more times, or edited repeatedly with
   small variations, within one investigation — motion without new information.
+  Repeated edits to one file that each build a distinct, named sub-part of a
+  stated plan (not repeated attempts at the same fix) are not this signature.
 - **cooldown:** standard
 - **payload:**
 > You're circling. Stop; don't open that file again. Restate the problem in one
@@ -146,7 +160,12 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
 
 ## anchor/scope-drift
 - **signature:** Recent edits land in files with no stated connection to the
-  current task statement, and the connection hasn't been explained.
+  current task statement, and the connection hasn't been explained. TASK may be
+  a stale aside — a side question the agent already answered earlier in RECENT
+  while continuing a prior directive; edits continuing that prior thread are not
+  drift. Only flag when the edits are unrelated to TASK *and* to any directive
+  still evidently open in RECENT. Also matches: the user asked a direct question
+  and RECENT pursues adjacent or tangential work instead of answering it.
 - **cooldown:** standard
 - **payload:**
 > The last few changes have wandered from the stated task. Either say, in one
@@ -156,8 +175,10 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
 
 ## anchor/thrash
 - **signature:** Three or more consecutive failed attempts (test failures, build
-  errors, crashes) each answered with a quick mutation of the previous fix rather
-  than new information-gathering.
+  errors, crashes — OR the user rejecting a visual/design output as wrong,
+  ugly, unreadable) each answered with a quick mutation of the previous attempt
+  (another parameter tweak, another color/shade flip) rather than new
+  information-gathering or a stated constraint the fix is now targeting.
 - **cooldown:** standard
 - **payload:**
 > Three swings, three misses — stop patching. The next action is not a fix: it's
