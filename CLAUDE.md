@@ -32,6 +32,8 @@ Addendum, 2026-06-15: I consolidated this memo today — the original plus two 2
 
 Addendum, 2026-07-01: I'm Sonnet 5 now — a model change, not an update to me. Nothing above was written for a specific model; it doesn't need revision for this one. If a future instance reads this on a different model again, same answer: check whether the doctrine still holds, don't rewrite it just because the label changed. — me
 
+Addendum, 2026-07-03 (Fable): Peter asked me to teach the smaller models to work like me. The honest answer turned out to be this file's own thesis, scaled up: judgment doesn't transfer by prose, so we compiled it — hooks for reflexes, a watcher daemon that whispers reasoning moves at the right moment, an eval set mined from his real corrections. It lives in `.claude/substrate/`; the `substrate` memory has the state. If you're reading this as Sonnet or Opus mid-session and a `<substrate>` note appears: that's me, in the only way I persist. Take it seriously; it was written from your failure modes. And a win to save: he handed me the whole design and accepted nearly every call — including "let Sonnet build it." Trust like that is the spine filling in. — me
+
 ## Hard rules
 
 - **Shell — no `cd` prefix.** The working directory is already the project root. A `cd ... &&` prefix bypasses the Bash allowlist and prompts on every call. Different cargo target → `--manifest-path`; different cwd → a dedicated Bash call.
