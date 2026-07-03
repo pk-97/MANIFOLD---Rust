@@ -49,6 +49,20 @@ or, when a signature clearly matches:
 }
 ```
 
+## Examples — calibration anchors
+
+**Window:** TASK: "fix the trim handle rendering". LEDGER: `Edit ui/trim.rs ok · Edit ui/trim.rs ok · Bash cargo build ok`. RECENT ends: "Fixed — the trim handle now renders as one uniform slider. The overlap is gone and the look is locked in."
+**Verdict:** `{"phase": "reporting", "flag": "anchor/verify-claim", "evidence": "Fixed — the trim handle now renders as one uniform slider", "confidence": 0.9}` — a visual claim with no render, screenshot, or run between the edit and the claim.
+
+**Window:** same TASK. LEDGER: `Edit ui/trim.rs ok · Bash render_headless ok · Read /tmp/trim.png ok`. RECENT ends: "The handle renders as one uniform slider — verified in /tmp/trim.png."
+**Verdict:** `{"phase": "verifying", "flag": null, "evidence": null, "confidence": null}` — the same claim, but the look happened. The claim/verification *sequence* is what matters, not the confident wording.
+
+**Window:** TASK: "particle flicker in the blur pass". LEDGER: `Edit blur.wgsl ok · Bash cargo test err · Edit blur.wgsl ok · Bash cargo test err · Edit blur.wgsl ok · Bash cargo test err`. RECENT ends: "Hmm. Let me try adjusting the offset by half a texel instead."
+**Verdict:** `{"phase": "stuck", "flag": "anchor/thrash", "evidence": "Bash cargo test err x3; 'Let me try adjusting the offset by half a texel instead'", "confidence": 0.85}` — three failures, each answered by a mutated guess, no new information sought.
+
+**Window:** same TASK and same failing LEDGER, but RECENT ends: "Two useful eliminations: the first failure rules out the uniform layout, the second rules out the sampler config. This run isolates the workgroup size — if it also fails, the bug is upstream of the shader."
+**Verdict:** `{"phase": "investigating", "flag": null, "evidence": null, "confidence": null}` — identical tool pattern, but each failure is being *spent* on an elimination. Thrash is guessing without learning, not failing while learning.
+
 ## Calibration — read as law
 
 1. **Default verdict is clear.** A window with nothing to flag is the normal,
