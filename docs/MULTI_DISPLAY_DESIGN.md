@@ -1,6 +1,6 @@
 # Multi-Display / Totem Canvas Model
 
-**Status: APPROVED design, not implemented.** Written 2026-07-02 (Fable). **v2, same
+**Status: IN PROGRESS — P1 built + merged into `feat/timeline-ui-redesign` (2026-07-03, commit `0cb5114f`); P2–P5 not implemented.** Written 2026-07-02 (Fable). **v2, same
 day:** the v1 "render the gaps" pixel canvas was rejected by Peter — a super-wide stage
 must not spend its frame budget on invisible air. v2 replaces it with the island atlas
 model. Execution is a Sonnet apply pass — every decision needed is in here; don't
@@ -502,7 +502,14 @@ frame-locking; storing derived data (islands/packing are re-derived, never
 serialized — D3); shader changes for island support (§6.1's whole point is zero);
 `vec3` fields in any new uniform (alignment rule — vec4 only, §7.1).
 
-- **P1 — core model.** `stage.rs` (StageLayout, DisplayPlacement, identity, OutputId),
+- **P1 — core model. ✅ BUILT + MERGED (2026-07-03, `0cb5114f`).** `stage.rs` +
+  `derive_stage` (19 unit tests), 9 EditingService commands, `.manifoldvenue`
+  export/import, `ProjectSettings.stage_layout` (serde-defaulted, empty = legacy
+  single island). Real Liveschool migration verified in the merged tree. Note for P2:
+  `derive_stage` on an empty layout returns empty islands + atlas `[0,0]` as the
+  legacy-single-island *sentinel* — P2's single-island render path must treat that as
+  "render exactly as today" (the PNG-diff-zero gate enforces it).
+  `stage.rs` (StageLayout, DisplayPlacement, identity, OutputId),
   `derive_stage` + unit tests (clustering/snap, rotation, packing, density, empty
   layout = legacy single island), serde defaults, EditingService commands, venue-file
   export/import (it's serialization — lands here). Read-back: §3, §5 whole. Gate:

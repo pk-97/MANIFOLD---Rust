@@ -2,7 +2,7 @@
 
 Ableton-style scene/clip launching as a second performance surface. Users who never touch the timeline can drop content into a grid (layers × scenes) and launch slots/scenes quantized to the beat. Timeline users can slice arrangement sections into scenes and back.
 
-Status: design approved, not implemented. Written 2026-07-02 against `feat/timeline-ui-redesign`.
+Status: IN PROGRESS — P1 built + merged into `feat/timeline-ui-redesign` (2026-07-03, commit `4f072100`); P2–P5 not implemented. Written 2026-07-02 against `feat/timeline-ui-redesign`.
 Prerequisites: none. Unblocks PERFORM_SURFACE_DESIGN P2 (`docs/DESIGN_BUILD_ORDER.md`).
 Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase.
 
@@ -220,7 +220,7 @@ if phantom-commit reuse resists (cut recording from v1 and file it — §7).
 
 | Phase | Scope | Test gate |
 |---|---|---|
-| P1 | `session.rs` model + `Project.session` + serde | `manifold-core --lib` round-trip tests; Liveschool fixture byte-identical re-save |
+| P1 ✅ DONE (`4f072100`) | `session.rs` model + `Project.session` + serde (`SceneId` in foundation; `slot_lookup` rebuilt in `on_after_deserialize`; version→1.11.0) | `manifold-core --lib` 279 green; real Liveschool byte-identical re-save + `liveschool_reload_omits_empty_session_field` |
 | P2 | `SessionRuntime`, third ref source, suppression, `ContentCommand` variants | `manifold-playback --lib`: resolution math (local/iteration/wrap), quantize targeting, scene launch/stop matrix, seek/stop behavior — all headless, no GPU |
 | P3 | `session_commands.rs` incl. capture/paste | `manifold-editing --lib`: undo round-trips; capture trim math vs split-command parity |
 | P4 | Grid panel + `ContentState` plumbing | headless PNG verification (`reference_ui_headless_png_verification`) |
