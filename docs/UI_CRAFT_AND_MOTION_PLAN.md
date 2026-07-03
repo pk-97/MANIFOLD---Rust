@@ -111,8 +111,37 @@ escalation, not a guess.
 - **D14 — OPEN (Peter's eye, escalate before implementing):** graph node corner
   radius — 4px to harmonize vs 0px as deliberate technical-canvas statement. Ship a
   4px variant behind one constant and render both `graph` scene PNGs for his pick.
+- **D15 — Magnetic snap (Peter: "Love it").** Snap targets get spring settle: clip
+  drag/trim → beat grid, wire end → port (+ port scale pop + one dash pulse
+  traveling source→dest on connect), panel split → default on double-click, value →
+  default on double-click. **The data snaps instantly; only the visual settles** —
+  an edit is never delayed by animation. Second curve token `EASE_SNAP` (back-out,
+  ≈25% overshoot) + magnet radius 14px (both ⚠ tune with Peter's playground
+  numbers at P2 entry). Rejected: springs on everything — EASE_SNAP fires only on
+  snap events.
+- **D16 — Continuous timeline zoom, wider limits.** `ZOOM_LEVELS` (color.rs:975)
+  and its 10 steps DIE. Wheel sets an exponential zoom target
+  (`target *= exp(-dy·k)`), an `AnimF32` eases actual px/beat toward it,
+  cursor-anchored (`scroll_beat += mx/z_old − mx/z_new` each tick). Range
+  **0.25–1000 px/beat** (whole set ↔ inside one beat). Left-edge over-scroll
+  rubber-bands home. Grid subdivision LOD must cross-fade, not pop, across the
+  continuous range. Seam: keyboard zoom in/out steps ×1.5 toward target (shortcut
+  behavior preserved, levels gone).
+- **D17 — Interaction juice (all action-triggered, Peter approved the set).**
+  Grab lift (shadow + 1–2px rise on drag start, drop on release; rides existing
+  drag-ghost infra) · duplicate-drag translucent ghost solidifies on drop · card/
+  node spawn pop (scale 0.94→1, EASE_SNAP) · delete collapse (height→0 + fade,
+  ~160ms; undo restores) · clip split 1px separation flick · group fold (children
+  collapse into header) · error shake (3px horizontal, ~240ms) on invalid drop ·
+  modal/dropdown enter (scale 0.98→1 + fade, MOTION_FAST — one rule for every
+  popup) · marquee fade in/out · export-complete green sweep.
+- **D18 — REJECTED (Peter, verbatim: "no this sucks"): ambient / beat-aware UI
+  motion.** Nothing pulses with the music — no transport beat ticks, no oscillating
+  arm icons, no modulation shimmer. Motion fires on user action only. Playhead
+  NEVER eases — it is the clock. (Session-mode launch-quantize feedback =
+  scheduling information, decided in SESSION_MODE_DESIGN, outside this rejection.)
 
-## 3. Design body — the one new piece
+## 3. Design body — the motion layer
 
 ```rust
 // crates/manifold-ui/src/anim.rs (new, ~100 lines)
@@ -131,12 +160,39 @@ impl AnimF32 {
 }
 ```
 
-Single cubic ease baked in (D1). Widgets own their `AnimF32` fields inside existing
-per-row/per-panel UI state (the card-reuse mechanism from the design-system pass keeps
-that state stable across rebuilds — anchor: reuse-by-effect-id described in
-`UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md`). The panel tick calls `tick(dt)` and
-keeps its node dirty while any returns true. Hot-path rule: zero allocations; fields,
-not HashMaps.
+Curve per-anim: `Ease` (D1) or `Snap` (D15 back-out). Widgets own their `AnimF32`
+fields inside existing per-row/per-panel UI state (the card-reuse mechanism from the
+design-system pass keeps that state stable across rebuilds — anchor:
+reuse-by-effect-id described in `UI_DESIGN_SYSTEM_AND_INSPECTOR_REDESIGN.md`). The
+panel tick calls `tick(dt)` and keeps its node dirty while any returns true.
+Hot-path rule: zero allocations; fields, not HashMaps.
+
+The full motion layer is FOUR pieces in `anim.rs` (~300 lines total), and every
+D15/D17 effect reduces to them — an executor adding a fifth mechanism is
+off-design:
+
+```rust
+pub struct Transient { /* started_ms, dur_ms */ }      // one-shot: flash, shake,
+impl Transient {                                        // pop, pulse, sweep, toast
+    pub fn fire(&mut self, dur_ms: f32);
+    pub fn progress(&self) -> Option<f32>;              // None = finished/idle
+    pub fn tick(&mut self, dt_ms: f32) -> bool;
+}
+pub struct FlipList { /* pre-reorder rects */ }         // list displacement:
+impl FlipList {                                         // cards, group fold
+    pub fn capture(&mut self, rects: &[Rect]);
+    pub fn play(&mut self, rects_after: &[Rect]) -> /* per-item AnimF32 offsets */;
+}
+// Exit-state pattern (not a type — a rule): a panel deleting an item moves it to
+// a panel-owned `dying: Vec<(Id, Transient)>` and keeps DRAWING it until the
+// transient finishes. The data model never knows; EditingService commands are
+// unaffected. This is the one place motion touches tree lifetime — design it
+// once here, never per-panel ad hoc.
+```
+
+**The named wrong turn:** a global animation registry / `Arc<Mutex>` animation
+clock. No. Ownership is per-panel state, ticked by the UI frame loop that already
+runs; a `bool any_animating` bubbles up for dirty-tracking.
 
 Everything else in this plan modifies existing code; seams are listed per phase.
 
@@ -149,25 +205,34 @@ Peter eyeballs taste-tagged items.
 
 ### P1 — Motion foundation
 - **Entry:** anchors in §1 re-verified; `cargo test -p manifold-ui --lib` green.
-- **Deliverables:** `anim.rs` (D3) + `MOTION_*` tokens (D1) + reduced-motion check;
-  applied to: kit chip hover/press (background + 1px press drop) and drawer
-  open/close height.
-- **Gate (positive):** `anim.rs` unit tests (progress, retarget mid-flight, snap);
-  Peter feels hover/drawer in the running app. **(negative):**
+- **Deliverables:** `anim.rs` — all four pieces (§3: `AnimF32`, `Transient`,
+  `FlipList`, exit-state pattern doc-comment) + `MOTION_*`/`EASE_SNAP` tokens
+  (D1, D15) + reduced-motion check; applied to: kit chip hover/press (background +
+  1px press drop) and drawer open/close height.
+- **Gate (positive):** `anim.rs` unit tests (progress, retarget mid-flight, snap,
+  transient lifecycle, flip offsets); Peter feels hover/drawer in the running app.
+  **(negative):**
   `rg -n "AnimF32" crates/manifold-renderer crates/manifold-app/src/content*` → 0 hits ·
   `rg -n "Arc<Mutex|thread::spawn" crates/manifold-ui/src/anim.rs` → 0 hits.
-- **Forbidden:** timer threads; animating anything in manifold-renderer; easing
-  library dependency; touching content-thread code at all.
+- **Forbidden:** timer threads; a global animation registry; animating anything in
+  manifold-renderer; easing library dependency; touching content-thread code at all.
 
-### P2 — Motion patterns
-- **Entry:** P1 merged.
-- **Deliverables:** tab-ink slide, card collapse + caret rotate, value-change flash
-  (brightness pulse on slider fill when value changes from binding/MIDI — glanceable
-  "something moved this"), undo/redo toast (D11).
-- **Gate:** toast renders in a new `ui-snap` still (structure only); Peter eyeballs
-  motion; `cargo test -p manifold-ui --lib` green.
-- **Forbidden:** animating layout sizes other than listed; toast queueing systems
-  (latest wins, one slot).
+### P2 — Motion patterns + snap + juice
+- **Entry:** P1 merged; ⚠ confirm final overshoot %/magnet radius with Peter
+  (playground defaults: 25% / 14px).
+- **Deliverables:** tab-ink slide, card collapse + caret rotate, value-change flash,
+  undo/redo toast (D11) · D15 snap set: clip drag/trim grid settle + landing-line
+  flash, wire→port magnetize + pop + flow pulse, split/value snap-back ·
+  D17 juice set: grab lift, duplicate ghost, spawn pop, delete collapse (exit-state
+  pattern), clip split flick, group fold, error shake, modal/dropdown enter,
+  marquee fade, export sweep.
+- **Gate:** toast + modal-enter render in `ui-snap` stills (structure); Peter
+  drives drag/snap/reorder in the running app and signs off feel; `cargo test -p
+  manifold-ui --lib` green. **(negative):** `rg -n "dying" crates/manifold-ui/src`
+  shows the exit pattern ONLY in panel state structs (no model/core types).
+- **Forbidden:** animating layout sizes other than listed; toast queueing (latest
+  wins, one slot); easing the playhead or any timing readout (D18); delaying an
+  edit behind its animation (D15 — data first, visual follows).
 
 ### P3 — Color & token craft
 - **Deliverables:** D4 mute-dim (delete MUTED_COLOR/SOLO_COLOR) · D7 visible slider
@@ -223,15 +288,27 @@ Peter eyeballs taste-tagged items.
 - **Escalate:** D14 (node radius) — render both variants, stop for Peter's pick.
 
 ### P6 — Feel & chrome
-- **Deliverables:** D12 shortcut overlay + shortcuts in tooltips/menus · split/resize
-  affordances (hover grip + cursor on the 3 main splits) · window chrome (unsaved
-  dot, proxy icon, "<project> — MANIFOLD" title) · pointer cursor audit→fix (resize/
-  grab/scrub zones set system cursors) · text-input polish audit→fix (caret blink =
-  MOTION timing, selection highlight, double-click word, Cmd+A).
-- **Gate:** shortcut overlay generated from the real binding table
-  (negative: `rg -n "Cmd\+" <overlay source>` shows no hand-maintained string list);
-  Peter drives the app for feel items.
-- **Forbidden:** rebinding any existing shortcut; new keymap systems.
+- **Deliverables:** D16 continuous zoom — delete `ZOOM_LEVELS` (color.rs:975),
+  exponential wheel target + `AnimF32` follow, cursor anchoring, 0.25–1000 px/beat
+  clamp, edge rubber-band, grid-LOD cross-fade, keyboard zoom = ×1.5 steps ·
+  D12 shortcut overlay + shortcuts in tooltips/menus · split/resize affordances
+  (hover grip + cursor on the 3 main splits, double-click snap-back w/ EASE_SNAP) ·
+  window chrome (unsaved dot, proxy icon, "<project> — MANIFOLD" title) · pointer
+  cursor audit→fix · text-input polish audit→fix (caret blink = MOTION timing,
+  selection highlight, double-click word, Cmd+A).
+- **Gate (positive):** zoom at 0.25 shows a 60+-bar project full-width; at 1000 a
+  single beat spans the window; cursor-anchor invariant test (beat under cursor
+  fixed across a zoom step); Peter drives feel. **(negative):**
+  `rg -n "ZOOM_LEVELS" crates/` → 0 hits ·
+  shortcut overlay: `rg -n "Cmd\+" <overlay source>` shows no hand-maintained list.
+- **Seam brief (zoom):** compiler-driven — delete `ZOOM_LEVELS` + `DEFAULT_ZOOM_INDEX`
+  first; every red is a call site to move to the continuous value. Re-derive:
+  `rg -n "ZOOM_LEVELS|zoom_index" crates/` at entry; if sites exceed the doc's
+  expectation (viewport + input + persistence), stop and list.
+  ⚠ VERIFY-AT-IMPL: persisted project zoom (an index today?) needs a load-migration
+  to px/beat — check `rg -n "zoom" crates/manifold-io/src`.
+- **Forbidden:** rebinding any existing shortcut; new keymap systems; easing
+  scroll/zoom via velocity physics (target+ease only — momentum is the OS's job).
 
 ### P7 — Harness & audits (final phase, single sweep)
 - **Deliverables:** `ui-snap` scenes `popup` (dropdown open + modal + toast),
@@ -249,8 +326,12 @@ Peter eyeballs taste-tagged items.
 ## §5. Decided — do not reopen
 1. Headers stay full-saturation (Peter, verbatim in D8).
 2. Blue keeps selection+active roles; only the white header ring ships.
-3. Motion = 90/160/240 ms, one cubic ease, chrome-only.
-4. No animation clock thread; `AnimF32` ticked by the UI frame.
+3. Motion = 90/160/240 ms, two curves (ease + EASE_SNAP), chrome-only,
+   action-triggered ONLY — ambient/beat-aware motion rejected verbatim (D18).
+4. No animation clock thread, no global registry; per-panel ownership ticked by
+   the UI frame. Motion layer = exactly four pieces (§3).
+4b. Data snaps instantly; visuals settle after (D15). Playhead never eases.
+4c. Stepped zoom is dead; continuous 0.25–1000 px/beat (D16).
 5. Radius system = 2/4/6 (+3 for list cells under a cell-named token).
 6. Mute dims toward BG_1; MUTED_COLOR/SOLO_COLOR deleted.
 7. Preset layout fix = re-bake via existing `auto_layout`, not layout-on-load.
