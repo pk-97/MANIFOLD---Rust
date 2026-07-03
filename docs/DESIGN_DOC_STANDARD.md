@@ -156,7 +156,12 @@ brief is not executable — that's the definition.
   call site · synthesizing code from memory instead of reading it · inventing infra
   that exists (inventory first) · widening scope to "improve" adjacent code.
 - **Test scope** — which tier per the CLAUDE.md scope rule (focused vs full workspace
-  sweep), stated per phase so the executor doesn't decide.
+  sweep), stated per phase so the executor doesn't decide. Calibrate it to the failure
+  class the phase can actually produce (an id rename can't change pixels → no parity
+  runs), and verify ONCE per phase, at the end — batch the work, don't run test cycles
+  per sub-step. A multi-phase pass runs its single workspace sweep in its final phase,
+  not per phase. (Peter, 2026-07-03: granular per-step testing is "massive overkill" —
+  executor static analysis is trusted; the end-of-phase gate catches what matters.)
 
 ## 6. Seam briefs — refactors and API changes
 
