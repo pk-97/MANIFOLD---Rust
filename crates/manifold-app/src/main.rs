@@ -8,6 +8,7 @@ mod app_render;
 mod audio_mod_runtime;
 mod autosave;
 mod audio_waveform_cache;
+mod breadcrumb;
 mod clip_atlas;
 mod clip_filmstrip;
 mod clip_thumb_cache;
@@ -63,6 +64,15 @@ fn main() {
         }
     }
 
+    // --- `--resume <breadcrumb-path>` (GIG_RESILIENCE_DESIGN §5.2) ---
+    // The crash-recovery relaunch path: `manifold --resume <path>` skips
+    // everything that isn't pixels. Parsed here (no other CLI arg parsing
+    // exists in this binary — see `crash_log_tests` module for the closest
+    // existing pattern) and handed to `Application` before the event loop
+    // starts; the actual project load + rejoin happens once the content
+    // thread + GPU are up, inside `Application::resumed()`.
+    let resume_breadcrumb_path = parse_resume_arg(std::env::args());
+
     // --- Panic hook (10.1, 10.12) ---
     // Install before anything else so even early panics get logged to disk.
     // Critical with `panic=abort` + stripped symbols in release builds.
@@ -74,8 +84,18 @@ fn main() {
                 .unwrap_or_default();
             d.as_secs()
         };
-        let msg =
-            format!("MANIFOLD PANIC at unix_ts={timestamp}\n{info}\n\nBacktrace:\n{backtrace}",);
+        // Score-address the crash report (GIG_RESILIENCE_DESIGN §5.1): the
+        // content-state drain publishes the latest known beat to a single
+        // atomic every UI frame (`breadcrumb::publish_beat_for_crash_log`);
+        // read it here since a panic hook has no `&Application` to call
+        // through.
+        let beat_line = match crate::breadcrumb::last_known_beat_for_crash_log() {
+            Some(beat) => format!("current_beat={beat:.3}\n"),
+            None => "current_beat=unknown\n".to_string(),
+        };
+        let msg = format!(
+            "MANIFOLD PANIC at unix_ts={timestamp}\n{beat_line}{info}\n\nBacktrace:\n{backtrace}",
+        );
         eprintln!("{msg}");
 
         // Write a timestamped crash log and rotate old ones (G10: one
@@ -124,11 +144,25 @@ fn main() {
 
     let mut application = app::Application::new();
     application.show_crash_notice = previous_session_uncleanly_exited;
+    application.resume_breadcrumb_path = resume_breadcrumb_path;
     event_loop.run_app(&mut application).unwrap();
 
     // Reached only on a clean event-loop exit (panics abort above): the next
     // launch should not report a crash.
     clear_session_sentinel();
+}
+
+// ---------------------------------------------------------------------------
+// `--resume` CLI parsing (GIG_RESILIENCE_DESIGN §5.2)
+// ---------------------------------------------------------------------------
+
+/// Parse `--resume <breadcrumb-path>` out of the process arguments. Returns
+/// `None` for a normal launch. Takes an iterator (rather than reading
+/// `std::env::args()` internally) so it's testable without a real process.
+fn parse_resume_arg(args: impl Iterator<Item = String>) -> Option<std::path::PathBuf> {
+    let args: Vec<String> = args.collect();
+    let idx = args.iter().position(|a| a == "--resume")?;
+    args.get(idx + 1).map(std::path::PathBuf::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -369,5 +403,46 @@ mod crash_log_tests {
         assert!(dir.join("crash-0000000042.log").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod resume_arg_tests {
+    use super::parse_resume_arg;
+
+    fn args(v: &[&str]) -> impl Iterator<Item = String> {
+        v.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+    }
+
+    #[test]
+    fn no_resume_flag_is_none() {
+        assert_eq!(parse_resume_arg(args(&["manifold"])), None);
+    }
+
+    #[test]
+    fn resume_flag_with_path_parses() {
+        assert_eq!(
+            parse_resume_arg(args(&["manifold", "--resume", "/tmp/show.manifold.breadcrumb"])),
+            Some(std::path::PathBuf::from("/tmp/show.manifold.breadcrumb"))
+        );
+    }
+
+    #[test]
+    fn resume_flag_without_a_following_path_is_none() {
+        assert_eq!(parse_resume_arg(args(&["manifold", "--resume"])), None);
+    }
+
+    #[test]
+    fn resume_flag_not_confused_with_other_args() {
+        assert_eq!(
+            parse_resume_arg(args(&[
+                "manifold",
+                "--some-other-flag",
+                "value",
+                "--resume",
+                "/path/a.manifold.breadcrumb"
+            ])),
+            Some(std::path::PathBuf::from("/path/a.manifold.breadcrumb"))
+        );
     }
 }

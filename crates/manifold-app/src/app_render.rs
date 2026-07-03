@@ -645,6 +645,11 @@ impl Application {
         // D5 "autosave timer parks" behavior.
         self.tick_autosave();
 
+        // 1a1. Breadcrumb sidecar (GIG_RESILIENCE_DESIGN §5.1). Unlike
+        // autosave this is NOT parked in perform mode — see the matching
+        // call in `tick_perform_mode` (perform_mode/render.rs) for that path.
+        self.tick_breadcrumb();
+
         // 1a2. One-shot crash notice (G10): the previous session exited
         // uncleanly. Shown after the first frames have painted so the dialog
         // sits over a real window, never on a perform surface.
