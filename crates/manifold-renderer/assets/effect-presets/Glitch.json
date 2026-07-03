@@ -230,7 +230,7 @@
           },
           {
             "id": 2,
-            "typeId": "node.chromatic_displace",
+            "typeId": "node.rgb_split",
             "handle": "split", "nodeId": "split",
             "params": {
               "amount": { "type": "Float", "value": -10.0 }

@@ -12,7 +12,7 @@
 //! half-extent past 0.5 (e.g. 1.0 ≥ any UV pixel's center-distance).
 //! Combined with `rotation`, this produces arbitrary rotated bands.
 //!
-//! Pairs with `node.masked_mix`, `node.gaussian_blur_variable_width.width`,
+//! Pairs with `node.masked_mix`, `node.variable_blur.width`,
 //! or any other mask consumer. For DoF tilt-shift flip polarity with
 //! `node.invert` downstream (CoC wants outside=1, mask atom convention
 //! is inside=1).

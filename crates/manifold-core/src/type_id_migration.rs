@@ -58,6 +58,16 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.channel_mix", "node.channel_mixer"),
     ("node.clamp_texture", "node.clamp"),
     ("node.hdr_retention_mix", "node.hdr_mix"),
+    // --- VOCAB P2 2/8: Blur / Distort / Stylize (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    ("node.blur_3d_separable", "node.blur_3d"),
+    ("node.convolution_2d_9tap", "node.custom_convolution"),
+    ("node.gaussian_blur_variable_width", "node.variable_blur"),
+    ("node.chromatic_displace", "node.rgb_split"),
+    ("node.mirror_axis", "node.flip"),
+    ("node.mirror_fold_uv", "node.mirror"),
+    ("node.radial_fold_uv", "node.kaleidoscope"),
+    ("node.uv_strip_clamp", "node.edge_stretch"),
+    ("node.affine_transform", "node.transform"),
 ];
 
 /// One legacy-fold entry: `(old_id, new_id, seed_params)` — the params to

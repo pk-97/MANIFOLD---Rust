@@ -130,7 +130,7 @@
     {
       "id": 1,
       "nodeId": "transform",
-      "typeId": "node.affine_transform",
+      "typeId": "node.transform",
       "handle": "transform",
       "params": {
         "rotation": {

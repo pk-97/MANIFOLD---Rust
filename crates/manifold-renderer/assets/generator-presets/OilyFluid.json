@@ -1286,7 +1286,7 @@
                 },
                 {
                   "id": 1,
-                  "typeId": "node.chromatic_displace",
+                  "typeId": "node.rgb_split",
                   "handle": "oilslick_chroma",
                   "nodeId": "oilslick_chroma",
                   "params": {

@@ -1,15 +1,15 @@
-//! `node.mirror_fold_uv` — mirror / fold coordinate generator. Emits the
-//! per-pixel sample UV produced by the legacy `node.transform` mirror/fold
+//! `node.mirror` — mirror / fold coordinate generator. Emits the
+//! per-pixel sample UV produced by the legacy `TransformFX` mirror/fold
 //! mode table (axis flips + kaleidoscope-style folds). Pair with
 //! `node.remap` to resample any source at the rewritten coordinates and
 //! `node.mix` to crossfade — the TD-style `coordinate → remap → blend`
-//! shape that replaces the fused `node.transform` mirror modes.
+//! shape that replaces the fused `TransformFX` mirror modes.
 //!
 //! Output: R = folded_u, G = folded_v, B = 0, A = 1. The fold math is a
 //! verbatim port of `uv_transform.wgsl`'s mirror pass, so
 //! `remap(Clamp) + mix(Lerp)` reproduces the legacy Mirror effect
-//! bit-for-bit. The affine half of `node.transform` (translate / scale /
-//! rotate) is intentionally left to `node.affine_transform`.
+//! bit-for-bit. The affine half of `TransformFX` (translate / scale /
+//! rotate) is intentionally left to `node.transform`.
 
 use manifold_gpu::GpuBinding;
 
@@ -18,7 +18,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 /// Mirror/fold modes, indexed by the `mode` enum. Mirrors the legacy
-/// `node.transform` table (the affine-only `Identity` plus eight
+/// `TransformFX` table (the affine-only `Identity` plus eight
 /// mirror/fold variants).
 pub const MIRROR_FOLD_MODES: &[&str] = &[
     "Identity",
@@ -43,8 +43,8 @@ struct MirrorFoldUvUniforms {
 
 crate::primitive! {
     name: MirrorFoldUv,
-    type_id: "node.mirror_fold_uv",
-    purpose: "Mirror/fold coordinate generator: rewrites the per-pixel UV via an axis flip or kaleidoscope-style fold (Identity / Mirror / MirrorX / MirrorY / FlipY / QuadMirror / FoldX / FoldY / FoldBoth) and emits it (R = folded_u, G = folded_v). Resampling at these coordinates produces the mirrored / folded image. Pair with node.remap (Clamp) + node.mix (Lerp) — the TD coordinate → remap → blend shape replacing the fused node.transform mirror modes. The affine half (translate/scale/rotate) stays in node.affine_transform.",
+    type_id: "node.mirror",
+    purpose: "Mirror/fold coordinate generator: rewrites the per-pixel UV via an axis flip or kaleidoscope-style fold (Identity / Mirror / MirrorX / MirrorY / FlipY / QuadMirror / FoldX / FoldY / FoldBoth) and emits it (R = folded_u, G = folded_v). Resampling at these coordinates produces the mirrored / folded image. Pair with node.remap (Clamp) + node.mix (Lerp) — the TD coordinate → remap → blend shape replacing the fused TransformFX mirror modes. The affine half (translate/scale/rotate) stays in node.transform.",
     inputs: {},
     outputs: {
         out: Texture2D,
@@ -65,7 +65,7 @@ crate::primitive! {
     summary: "Folds the image back on itself for mirror reflections, from a simple flip to a four-way quad mirror. It produces the folded coordinates, so feed it into Remap to apply the fold to a picture.",
     category: DistortAndWarp,
     role: Map,
-    aliases: ["mirror", "fold", "quad mirror", "reflect"],
+    aliases: ["mirror", "mirror fold", "fold", "quad mirror", "reflect"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/mirror_fold_uv_body.wgsl"),
 }
@@ -89,9 +89,9 @@ impl Primitive for MirrorFoldUv {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.mirror_fold_uv standalone codegen"),
+                    .expect("node.mirror standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.mirror_fold_uv",
+                "node.mirror",
             )
         });
 
@@ -115,7 +115,7 @@ impl Primitive for MirrorFoldUv {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.mirror_fold_uv",
+            "node.mirror",
         );
     }
 }

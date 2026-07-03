@@ -84,7 +84,7 @@
     {
       "id": 1,
       "nodeId": "fold",
-      "typeId": "node.radial_fold_uv",
+      "typeId": "node.kaleidoscope",
       "handle": "fold",
       "params": {
         "cx": {

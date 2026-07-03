@@ -1,4 +1,4 @@
-//! Pixel-exact parity test for `node.affine_transform` vs the
+//! Pixel-exact parity test for `node.transform` vs the
 //! legacy `TransformFX` effect. Fifth §6.1 migration.
 //!
 //! Both the legacy effect and the primitive surface `rotation` in
@@ -120,7 +120,7 @@ fn affine_transform_is_pixel_exact_across_fixtures_and_xforms() {
 
             assert_bytewise_equal(
                 &format!(
-                    "affine_transform/{:?}/xform={}: legacy vs node.affine_transform",
+                    "affine_transform/{:?}/xform={}: legacy vs node.transform",
                     fixture, xf.label
                 ),
                 &legacy,

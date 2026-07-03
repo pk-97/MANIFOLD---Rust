@@ -1,4 +1,4 @@
-//! `node.convolution_2d_9tap` — general 3×3 non-separable
+//! `node.custom_convolution` — general 3×3 non-separable
 //! convolution with a uniform-supplied kernel.
 //!
 //! Nine kernel weights, optional bias, optional normalisation by
@@ -27,7 +27,7 @@ struct ConvUniforms {
 
 crate::primitive! {
     name: Convolution2D9Tap,
-    type_id: "node.convolution_2d_9tap",
+    type_id: "node.custom_convolution",
     purpose: "General 3×3 non-separable convolution with a user-supplied kernel (9 float weights k0..k8 in row-major order, k4 = center). Optional bias and sum-normalisation. Useful for Sobel, Laplacian, emboss, sharpen, diffusion, custom edge detectors. The kernel is data — composable, modulatable, and discoverable for AI agents (vs hardcoded-weight specific primitives).",
     inputs: {
         in: Texture2D required,
@@ -68,7 +68,7 @@ crate::primitive! {
     summary: "Runs a custom 3x3 kernel over the image, so you can build your own blur, sharpen, edge-detect, or emboss from nine weights. For when the preset filters don't do quite what you want.",
     category: BlurAndSharpen,
     role: Filter,
-    aliases: ["custom convolution", "kernel", "convolve", "filter matrix"],
+    aliases: ["custom convolution", "9tap", "kernel", "convolve", "filter matrix"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/convolution_2d_9tap_body.wgsl"),
     input_access: [Gather],
@@ -118,9 +118,9 @@ impl Primitive for Convolution2D9Tap {
             // convolution_2d_9tap.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.convolution_2d_9tap standalone codegen"),
+                    .expect("node.custom_convolution standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.convolution_2d_9tap",
+                "node.custom_convolution",
             )
         });
         let sampler = self
@@ -155,7 +155,7 @@ impl Primitive for Convolution2D9Tap {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.convolution_2d_9tap",
+            "node.custom_convolution",
         );
     }
 }
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn convolution_2d_9tap_declares_texture_in_and_out() {
         use crate::node_graph::ports::PortType;
-        assert_eq!(Convolution2D9Tap::TYPE_ID, "node.convolution_2d_9tap");
+        assert_eq!(Convolution2D9Tap::TYPE_ID, "node.custom_convolution");
         assert_eq!(Convolution2D9Tap::INPUTS.len(), 1);
         assert_eq!(Convolution2D9Tap::INPUTS[0].ty, PortType::Texture2D);
         assert_eq!(Convolution2D9Tap::OUTPUTS.len(), 1);
@@ -198,6 +198,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = Convolution2D9Tap::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.convolution_2d_9tap");
+        assert_eq!(node.type_id().as_str(), "node.custom_convolution");
     }
 }

@@ -2898,7 +2898,7 @@
           {
             "id": 13,
             "nodeId": "display_zoom",
-            "typeId": "node.affine_transform",
+            "typeId": "node.transform",
             "handle": "display_zoom",
             "params": {
               "rotation": {

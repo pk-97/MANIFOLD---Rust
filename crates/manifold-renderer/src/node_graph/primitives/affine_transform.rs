@@ -1,4 +1,4 @@
-//! `node.affine_transform` — pixel-exact replacement for legacy
+//! `node.transform` — pixel-exact replacement for legacy
 //! Originally `TransformFX`. Fifth
 //! §6.1 migration.
 //!
@@ -11,10 +11,11 @@
 //! Math-style consumers that want radians can wrap the primitive in
 //! their own preset graph and convert at *their* boundary.
 //!
-//! Distinct from the existing fold-mode `Transform` primitive (used
-//! by Mirror, QuadMirror, etc.). Both operate on UV coordinates but
-//! their parameter surfaces and math don't overlap; the AI surface
-//! lists both with composition_notes calling out the difference.
+//! Distinct from the fold-mode `node.mirror` primitive (mirror/flip/
+//! kaleidoscope-style folds, used by Mirror, QuadMirror, etc.). Both
+//! operate on UV coordinates but their parameter surfaces and math
+//! don't overlap; the AI surface lists both with composition_notes
+//! calling out the difference.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -24,7 +25,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: AffineTransform,
-    type_id: "node.affine_transform",
+    type_id: "node.transform",
     purpose: "2D UV affine: translate, scale, rotate around the center. Aspect-correct rotation; out-of-bounds samples return transparent black. Every affine param has a same-named scalar input port (port-shadows-param) — wire `translate_x`, `translate_y`, or `rotation` to drive the transform from a control producer (LFO, Color Compass, Math, …).",
     inputs: {
         in: Texture2D required,
@@ -70,12 +71,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "1:1 building block for the legacy Transform effect. Rotation is in DEGREES, screen-CW (e.g. +90 rotates clockwise on screen) — the math conversion to radians + Y-down sign flip happens inside the primitive. Distinct from Transform (fold modes for Mirror); use this for affine, that for fold.",
+    composition_notes: "1:1 building block for the legacy TransformFX effect. Rotation is in DEGREES, screen-CW (e.g. +90 rotates clockwise on screen) — the math conversion to radians + Y-down sign flip happens inside the primitive. Distinct from node.mirror (fold modes for Mirror); use this for affine, that for fold.",
     examples: ["preset.effect.transform"],
+    picker: { label: "Transform", category: Atom },
     summary: "Moves, scales, and rotates the whole image around its centre. The basic transform for repositioning a layer.",
     category: DistortAndWarp,
     role: Filter,
-    aliases: ["transform", "move scale rotate", "Transform TOP"],
+    aliases: ["transform", "affine transform", "move scale rotate", "Transform TOP"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/affine_transform_body.wgsl"),
     input_access: [Gather],
@@ -152,7 +154,7 @@ impl Primitive for AffineTransform {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/affine_transform.wgsl"),
                 "cs_main",
-                "node.affine_transform",
+                "node.transform",
             )
         });
         let sampler = self
@@ -191,7 +193,7 @@ impl Primitive for AffineTransform {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.affine_transform",
+            "node.transform",
         );
     }
 }

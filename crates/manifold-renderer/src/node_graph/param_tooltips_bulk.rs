@@ -59,14 +59,14 @@ crate::param_tooltips!("node.blur", {
     "mode" => "The blur shape. Gaussian gives a smooth falloff, Box is a flat even spread, and Radial smears outward from the centre.",
 });
 
-crate::param_tooltips!("node.blur_3d_separable", {
+crate::param_tooltips!("node.blur_3d", {
     "mode" => "What kind of volume to blur. Scalar handles a density field that lives in one channel, Vector handles a force field across all four.",
     "axis" => "Which direction this pass blurs along, X, Y, or Z. Chain three instances, one per axis, for an even blur in all directions.",
     "vol_res" => "The grid size of the volume, default 128. It has to match the actual dimensions of the input and output volume or the blur reads the wrong cells.",
     "radius" => "How wide the blur reaches, in voxels. Higher values soften more and cost more. Wire it from a scalar to drive the width live.",
 });
 
-crate::param_tooltips!("node.convolution_2d_9tap", {
+crate::param_tooltips!("node.custom_convolution", {
     "k0" => "The top-left weight of the 3x3 kernel. The nine weights read in reading order, top row first.",
     "k1" => "The top-centre weight of the 3x3 kernel.",
     "k2" => "The top-right weight of the 3x3 kernel.",
@@ -80,7 +80,7 @@ crate::param_tooltips!("node.convolution_2d_9tap", {
     "normalise" => "Divides the result by the sum of the weights so brightness is preserved. Turn it on for blurs and off for sharpen or edge-detect kernels.",
 });
 
-crate::param_tooltips!("node.gaussian_blur_variable_width", {
+crate::param_tooltips!("node.variable_blur", {
     "axis" => "Which direction this pass blurs, Horizontal or Vertical. Run one of each in sequence for a full blur in both directions.",
     "max_radius" => "The widest the blur can reach at full strength, in pixels. The control image scales each pixel between sharp and this maximum.",
     "quality" => "How many samples the blur takes, Low, Medium, or High. Higher is smoother but slower, and Medium matches the original.",
@@ -89,14 +89,14 @@ crate::param_tooltips!("node.gaussian_blur_variable_width", {
 
 // ─── Distort & Warp ───
 
-crate::param_tooltips!("node.affine_transform", {
+crate::param_tooltips!("node.transform", {
     "translate_x" => "Slides the image sideways. Negative moves it left, positive moves it right, and the range runs from -1 to 1 across the frame.",
     "translate_y" => "Slides the image up and down. The range runs from -1 to 1 across the frame and 0 leaves it centred.",
     "scale" => "Zooms the image around its centre. 1 is original size, below 1 shrinks it, above 1 enlarges it.",
     "rotation" => "Spins the image around its centre in degrees. Positive turns it clockwise on screen and 0 leaves it level.",
 });
 
-crate::param_tooltips!("node.mirror_fold_uv", {
+crate::param_tooltips!("node.mirror", {
     "mode" => "Which fold to apply, from a simple Mirror or FlipY to a four-way QuadMirror or a FoldBoth kaleidoscope. This node outputs the folded coordinates, so send it into Remap to fold a picture.",
 });
 
@@ -111,7 +111,7 @@ crate::param_tooltips!("node.remap", {
     "mode" => "How to read the coordinate map. Absolute treats it as the exact spot to sample, while Relative treats it as an offset added to each pixel's own position so displacement fields stack cleanly.",
 });
 
-crate::param_tooltips!("node.uv_strip_clamp", {
+crate::param_tooltips!("node.edge_stretch", {
     "width" => "How wide the centre strip is before it gets smeared to the edges. Smaller values pin a thinner strip and stretch it further.",
     "direction" => "Which way to smear, with Horiz stretching the middle row outward, Vert the middle column, and Both at once.",
 });

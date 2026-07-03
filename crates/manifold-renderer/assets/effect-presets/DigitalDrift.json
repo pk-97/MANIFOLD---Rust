@@ -276,7 +276,7 @@
           },
           {
             "id": 3,
-            "typeId": "node.chromatic_displace",
+            "typeId": "node.rgb_split",
             "handle": "split", "nodeId": "split",
             "title": "RGB channel split",
             "params": {

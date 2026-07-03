@@ -1385,7 +1385,7 @@ fn fused_variable_width_blur_matches_unfused() {
             { "id": 0, "typeId": "system.source", "nodeId": "source" },
             { "id": 1, "typeId": "node.exposure", "nodeId": "gain",
               "params": { "gain": { "type": "Float", "value": 1.2 } } },
-            { "id": 2, "typeId": "node.gaussian_blur_variable_width", "nodeId": "blur",
+            { "id": 2, "typeId": "node.variable_blur", "nodeId": "blur",
               "params": {
                 "quality": { "type": "Enum", "value": 2 },
                 "weighting_mode": { "type": "Enum", "value": 1 },

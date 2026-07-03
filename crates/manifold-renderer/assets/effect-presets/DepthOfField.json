@@ -996,7 +996,7 @@
           {
             "id": 40,
             "nodeId": "blur_h",
-            "typeId": "node.gaussian_blur_variable_width",
+            "typeId": "node.variable_blur",
             "handle": "blur_h",
             "params": {
               "axis": {
@@ -1021,7 +1021,7 @@
           {
             "id": 41,
             "nodeId": "blur_v",
-            "typeId": "node.gaussian_blur_variable_width",
+            "typeId": "node.variable_blur",
             "handle": "blur_v",
             "params": {
               "axis": {

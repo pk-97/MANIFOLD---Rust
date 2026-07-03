@@ -3877,7 +3877,7 @@ mod gpu_tests {
         // (b, sampled at the luminance-indexed coord). amount=0.5 exercises the
         // crossfade; the LUT texture is just gradient_b sampled at y=0.5.
         let cases: &[(&str, &str, &[f32])] = &[
-            ("node.chromatic_displace", "chromatic_displace.wgsl", &[2.0]),
+            ("node.rgb_split", "chromatic_displace.wgsl", &[2.0]),
             ("node.uv_displace_by_flow", "uv_displace_by_flow.wgsl", &[0.05, 0.5]),
             ("node.color_lut", "lut1d.wgsl", &[0.5, 1.5]),
             // slope_displace: base (a) + image (b) both gathered; strength/step/weight.
@@ -3969,8 +3969,8 @@ mod gpu_tests {
             ("node.sharpen", "sharpen.wgsl", sharpen_bytes.as_slice()),
             ("node.edge_detect", "edge_detect.wgsl", edge_bytes.as_slice()),
             ("node.gradient_central_diff", "gradient_central_diff.wgsl", grad_bytes.as_slice()),
-            ("node.convolution_2d_9tap", "convolution_2d_9tap.wgsl", conv_bytes.as_slice()),
-            ("node.mirror_axis", "mirror_axis.wgsl", mirror_bytes.as_slice()),
+            ("node.custom_convolution", "convolution_2d_9tap.wgsl", conv_bytes.as_slice()),
+            ("node.flip", "mirror_axis.wgsl", mirror_bytes.as_slice()),
             ("node.heightmap_to_normal", "heightmap_to_normal.wgsl", heightmap_bytes.as_slice()),
         ];
         for (type_id, shader_file, bytes) in cases {
@@ -4324,7 +4324,7 @@ mod gpu_tests {
         );
     }
 
-    /// SPECIALIZATION + 2-input GATHER parity: node.gaussian_blur_variable_width
+    /// SPECIALIZATION + 2-input GATHER parity: node.variable_blur
     /// gathers `in` + `width` along one axis and selects its tap count / weighting
     /// via the QUALITY_LEVEL / WEIGHTING_MODE specialization tokens (run() compiles
     /// the GENERATED WGSL through create_specialized_compute_pipeline, same as the
@@ -4341,7 +4341,7 @@ mod gpu_tests {
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
         let differ = TextureDiff::new(&device);
 
-        let node = registry.construct("node.gaussian_blur_variable_width").unwrap();
+        let node = registry.construct("node.variable_blur").unwrap();
         let generated = generate_standalone_ext(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),
@@ -4416,7 +4416,7 @@ mod gpu_tests {
         })
     }
 
-    /// 3D-VOLUME GATHER parity: node.blur_3d_separable blurs a Texture3D along one
+    /// 3D-VOLUME GATHER parity: node.blur_3d blurs a Texture3D along one
     /// axis. The hand fluid_blur_3d.wgsl has two entry points (blur_scalar /
     /// blur_vector); the generated kernel merges them behind a runtime `mode`
     /// branch and runs through the dim-aware (texture_storage_3d, @workgroup_size
@@ -4431,7 +4431,7 @@ mod gpu_tests {
         let n = 32u32;
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
 
-        let node = registry.construct("node.blur_3d_separable").unwrap();
+        let node = registry.construct("node.blur_3d").unwrap();
         let generated = generate_standalone(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),
@@ -5453,8 +5453,8 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             ("node.distance_to_point", "distance_to_point.wgsl", Some(dist_bytes.as_slice())),
             ("node.polar_field", "polar_field.wgsl", Some(polar_bytes.as_slice())),
             ("node.box_mask", "box_mask.wgsl", Some(box_bytes.as_slice())),
-            ("node.mirror_fold_uv", "mirror_fold_uv.wgsl", Some(mirror_bytes.as_slice())),
-            ("node.radial_fold_uv", "radial_fold_uv.wgsl", Some(radial_bytes.as_slice())),
+            ("node.mirror", "mirror_fold_uv.wgsl", Some(mirror_bytes.as_slice())),
+            ("node.kaleidoscope", "radial_fold_uv.wgsl", Some(radial_bytes.as_slice())),
             ("node.ellipse_mask", "ellipse_mask.wgsl", Some(ellipse_bytes.as_slice())),
             ("node.dither_pattern", "dither_pattern.wgsl", Some(dither_pat_bytes.as_slice())),
             ("node.simplex_field_2d", "simplex_field_2d.wgsl", Some(simplex_bytes.as_slice())),
@@ -5462,7 +5462,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
             ("node.noise", "noise.wgsl", Some(noise_simplex.as_slice())),
             ("node.noise", "noise.wgsl", Some(noise_random.as_slice())),
             ("node.radial_offset_field", "radial_offset_field.wgsl", Some(radial_offset_bytes.as_slice())),
-            ("node.uv_strip_clamp", "uv_strip_clamp.wgsl", Some(strip_bytes.as_slice())),
+            ("node.edge_stretch", "uv_strip_clamp.wgsl", Some(strip_bytes.as_slice())),
             ("node.scanline_jitter_field", "scanline_jitter_field.wgsl", Some(scanline_bytes.as_slice())),
             ("node.flow_field_noise", "flow_field_noise.wgsl", Some(flow_bytes.as_slice())),
         ];

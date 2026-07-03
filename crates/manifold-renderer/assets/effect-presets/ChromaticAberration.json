@@ -198,7 +198,7 @@
     {
       "id": 3,
       "nodeId": "split",
-      "typeId": "node.chromatic_displace",
+      "typeId": "node.rgb_split",
       "handle": "split",
       "params": {
         "amount": {

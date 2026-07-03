@@ -1,4 +1,4 @@
-//! `node.radial_fold_uv` — kaleidoscope coordinate generator. Emits the
+//! `node.kaleidoscope` — kaleidoscope coordinate generator. Emits the
 //! per-pixel sample UV produced by folding the plane into N mirrored
 //! wedges around a center. Pair with `node.remap` to sample any source at
 //! the folded coordinates and `node.mix` to crossfade — the TD-style
@@ -27,7 +27,7 @@ struct RadialFoldUvUniforms {
 
 crate::primitive! {
     name: RadialFoldUv,
-    type_id: "node.radial_fold_uv",
+    type_id: "node.kaleidoscope",
     purpose: "Kaleidoscope coordinate generator: folds the plane into `segments` mirrored wedges around (cx, cy) and emits the per-pixel sample UV (R = folded_u, G = folded_v). Pair with node.remap (Clamp) to resample a source at the folded coordinates, then node.mix (Lerp) to crossfade — the TD coordinate → remap → blend shape that replaces the fused node.kaleidoscope kernel. Reusable for any radial-symmetry warp.",
     inputs: {
         segments: ScalarF32 optional,
@@ -67,7 +67,7 @@ crate::primitive! {
     summary: "Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to apply them.",
     category: DistortAndWarp,
     role: Map,
-    aliases: ["kaleidoscope", "mandala", "radial mirror", "wedges"],
+    aliases: ["kaleidoscope", "radial fold", "mandala", "radial mirror", "wedges"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/radial_fold_uv_body.wgsl"),
 }
@@ -90,9 +90,9 @@ impl Primitive for RadialFoldUv {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.radial_fold_uv standalone codegen"),
+                    .expect("node.kaleidoscope standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.radial_fold_uv",
+                "node.kaleidoscope",
             )
         });
 
@@ -116,7 +116,7 @@ impl Primitive for RadialFoldUv {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.radial_fold_uv",
+            "node.kaleidoscope",
         );
     }
 }

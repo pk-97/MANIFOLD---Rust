@@ -29,7 +29,7 @@ struct SharpenUniforms {
 crate::primitive! {
     name: Sharpen,
     type_id: "node.sharpen",
-    purpose: "Single-knob 4-neighbour Laplacian unsharp mask. `amount = 0` passes the source through unchanged; positive values add increasingly aggressive edge enhancement. Curated wrapper over the same math node.convolution_2d_9tap can express, factored out so one outer-card slider drives sharpening directly without needing five affine_scalar nodes to compute kernel weights.",
+    purpose: "Single-knob 4-neighbour Laplacian unsharp mask. `amount = 0` passes the source through unchanged; positive values add increasingly aggressive edge enhancement. Curated wrapper over the same math node.custom_convolution can express, factored out so one outer-card slider drives sharpening directly without needing five affine_scalar nodes to compute kernel weights.",
     inputs: {
         in: Texture2D required,
         amount: ScalarF32 optional,
@@ -47,7 +47,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Port-shadowable amount input — wire a single outer-card Sharpen slider straight to this node's amount port via presetMetadata.bindings (convert: Float). amount = 0 fast-paths to a passthrough (no Laplacian taps). The tap spacing reads `textureDimensions` of the source, so the kernel scales with source resolution. For wider blurs prefer node.gaussian_blur_variable_width — this primitive is for crisp edge enhancement, not arbitrary radius work.",
+    composition_notes: "Port-shadowable amount input — wire a single outer-card Sharpen slider straight to this node's amount port via presetMetadata.bindings (convert: Float). amount = 0 fast-paths to a passthrough (no Laplacian taps). The tap spacing reads `textureDimensions` of the source, so the kernel scales with source resolution. For wider blurs prefer node.variable_blur — this primitive is for crisp edge enhancement, not arbitrary radius work.",
     examples: [],
     picker: { label: "Sharpen", category: Atom },
     summary: "Sharpens the image by boosting the difference between each pixel and its neighbours. At 0 it passes through, higher values make edges crisper.",

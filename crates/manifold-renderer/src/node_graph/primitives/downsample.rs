@@ -59,7 +59,7 @@ crate::primitive! {
             enum_values: DOWNSAMPLE_FACTORS,
         },
     ],
-    composition_notes: "Output is sized to input_dims / factor (rounded down, min 1). Pair with `node.gaussian_blur` or `node.gaussian_blur_variable_width` to do cheap multi-pass blur at reduced resolution. The downsample uses a uniform-weight box filter (each output pixel = mean of factor×factor inputs); for a higher-quality kernel apply a Gaussian blur AFTER downsampling, not before.",
+    composition_notes: "Output is sized to input_dims / factor (rounded down, min 1). Pair with `node.gaussian_blur` or `node.variable_blur` to do cheap multi-pass blur at reduced resolution. The downsample uses a uniform-weight box filter (each output pixel = mean of factor×factor inputs); for a higher-quality kernel apply a Gaussian blur AFTER downsampling, not before.",
     examples: ["preset.generator.oily_fluid"],
     picker: { label: "Downsample", category: Atom },
     summary: "Shrinks the image by a whole-number factor with a box filter, trading detail for speed. Good before a heavy effect or for a blocky look.",

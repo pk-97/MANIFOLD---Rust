@@ -1,4 +1,4 @@
-//! `node.uv_strip_clamp` — edge-stretch coordinate generator. Clamps the
+//! `node.edge_stretch` — edge-stretch coordinate generator. Clamps the
 //! per-pixel UV to a center strip of width `width` on the selected axis
 //! (Horiz / Vert / Both). Resampling at the clamped coordinates stretches
 //! the edge row/column outward. Pair with `node.remap` + `node.mix` — the
@@ -28,7 +28,7 @@ struct UvStripClampUniforms {
 
 crate::primitive! {
     name: UvStripClamp,
-    type_id: "node.uv_strip_clamp",
+    type_id: "node.edge_stretch",
     purpose: "Edge-stretch coordinate generator: clamps the per-pixel UV to a center strip of width `width` on the selected axis (Horiz / Vert / Both) and emits it (R = clamped_u, G = clamped_v). Resampling at these coordinates stretches the edge row/column outward. Pair with node.remap (Clamp) + node.mix (Lerp) — the TD coordinate → remap → blend shape replacing the fused node.edge_stretch kernel.",
     inputs: {
         width: ScalarF32 optional,
@@ -60,7 +60,7 @@ crate::primitive! {
     summary: "Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap.",
     category: DistortAndWarp,
     role: Map,
-    aliases: ["edge stretch", "slit scan", "smear", "stretch"],
+    aliases: ["edge stretch", "strip clamp", "slit scan", "smear", "stretch"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/uv_strip_clamp_body.wgsl"),
 }
@@ -87,9 +87,9 @@ impl Primitive for UvStripClamp {
             // kernel binds uniform(0)/dst(1). uv_strip_clamp.wgsl is the oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.uv_strip_clamp standalone codegen"),
+                    .expect("node.edge_stretch standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.uv_strip_clamp",
+                "node.edge_stretch",
             )
         });
 
@@ -113,7 +113,7 @@ impl Primitive for UvStripClamp {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.uv_strip_clamp",
+            "node.edge_stretch",
         );
     }
 }

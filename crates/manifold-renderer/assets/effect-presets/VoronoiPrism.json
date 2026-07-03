@@ -279,7 +279,7 @@
           {
             "id": 6,
             "nodeId": "content_window",
-            "typeId": "node.uv_strip_clamp",
+            "typeId": "node.edge_stretch",
             "handle": "content_window",
             "params": {
               "direction": {

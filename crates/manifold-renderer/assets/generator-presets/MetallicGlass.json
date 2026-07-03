@@ -1216,7 +1216,7 @@
           {
             "id": 18,
             "nodeId": "mirrored",
-            "typeId": "node.mirror_axis",
+            "typeId": "node.flip",
             "handle": "mirrored",
             "params": {
               "angle": {
@@ -1236,7 +1236,7 @@
           {
             "id": 20,
             "nodeId": "sobel_x",
-            "typeId": "node.convolution_2d_9tap",
+            "typeId": "node.custom_convolution",
             "handle": "sobel_x",
             "params": {
               "bias": {
@@ -1289,7 +1289,7 @@
           {
             "id": 21,
             "nodeId": "sobel_y",
-            "typeId": "node.convolution_2d_9tap",
+            "typeId": "node.custom_convolution",
             "handle": "sobel_y",
             "params": {
               "bias": {

@@ -7,7 +7,7 @@
 //!
 //! Industry-standard "elliptical mask with feather" — same shape as
 //! Photoshop / After Effects / DaVinci marquee tools. Pairs with
-//! `node.masked_mix`, `node.gaussian_blur_variable_width.width`, or
+//! `node.masked_mix`, `node.variable_blur.width`, or
 //! any other mask consumer. For radial focus effects flip polarity
 //! with `node.invert` downstream (DoF wants outside=1, mask atom
 //! convention is inside=1).

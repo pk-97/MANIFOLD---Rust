@@ -1,4 +1,4 @@
-//! `node.chromatic_displace` — 3-tap RGB sample of an input texture
+//! `node.rgb_split` — 3-tap RGB sample of an input texture
 //! displaced by a 2D vector field.
 //!
 //! R samples at `uv - velocity*amount/dims`, G at `uv`, B at
@@ -27,7 +27,7 @@ struct ChromaticDisplaceUniforms {
 
 crate::primitive! {
     name: ChromaticDisplace,
-    type_id: "node.chromatic_displace",
+    type_id: "node.rgb_split",
     purpose: "3-tap RGB sample of `in` displaced by `velocity` (RG). R samples at `uv - velocity*amount/dims`, G at centre, B at `uv + …`. Alpha follows centre. Different from `node.chromatic_aberration` (radial split): this is FLOW-driven, the offset direction comes from a per-pixel velocity field. Used for normal-map chromatic splits in oily-fluid Oil Slick rendering, signed-field chromatic trails, anywhere displacement direction is data not symmetry.",
     inputs: {
         in: Texture2D required,
@@ -53,7 +53,7 @@ crate::primitive! {
     summary: "Pulls the red and blue channels apart along a direction you feed in, for a chromatic-aberration or glitchy colour-fringe look. The amount is in pixels and can go negative to swap which way they shift.",
     category: DistortAndWarp,
     role: Filter,
-    aliases: ["rgb split", "chromatic aberration", "chroma shift", "color fringe"],
+    aliases: ["rgb split", "chromatic displace", "chromatic aberration", "chroma shift", "color fringe"],
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/chromatic_displace_body.wgsl"),
     input_access: [Gather, Coincident],
@@ -89,11 +89,11 @@ impl Primitive for ChromaticDisplace {
             // generated kernel's bindings match the set below (textures then
             // sampler). chromatic_displace.wgsl is the parity oracle.
             let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                .expect("node.chromatic_displace standalone codegen");
+                .expect("node.rgb_split standalone codegen");
             gpu.device.create_compute_pipeline(
                 &wgsl,
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.chromatic_displace",
+                "node.rgb_split",
             )
         });
         let sampler = self
@@ -132,7 +132,7 @@ impl Primitive for ChromaticDisplace {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.chromatic_displace",
+            "node.rgb_split",
         );
     }
 }

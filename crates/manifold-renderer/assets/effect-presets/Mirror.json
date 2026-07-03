@@ -108,7 +108,7 @@
     {
       "id": 1,
       "nodeId": "uv_transform",
-      "typeId": "node.mirror_fold_uv",
+      "typeId": "node.mirror",
       "handle": "uv_transform",
       "params": {
         "mode": {

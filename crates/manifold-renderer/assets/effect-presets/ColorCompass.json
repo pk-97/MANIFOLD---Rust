@@ -249,7 +249,7 @@
     {
       "id": 13,
       "nodeId": "affine",
-      "typeId": "node.affine_transform",
+      "typeId": "node.transform",
       "handle": "affine",
       "title": "Translate by Direction"
     },

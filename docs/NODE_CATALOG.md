@@ -66,24 +66,24 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Blur | `node.blur` | Filter | Softens the image evenly in all directions, with a radius that sets how strong the blur is. The everyday blur. |
-| Blur (3D) | `node.blur_3d_separable` | Filter | Blurs a 3D volume one axis at a time, softening a density or flow field. Run it on each axis for an even blur in all directions. |
-| Custom Convolution | `node.convolution_2d_9tap` | Filter | Runs a custom 3x3 kernel over the image, so you can build your own blur, sharpen, edge-detect, or emboss from nine weights. For when the preset filters don't d… |
+| Blur (3D) | `node.blur_3d` | Filter | Blurs a 3D volume one axis at a time, softening a density or flow field. Run it on each axis for an even blur in all directions. |
+| Custom Convolution | `node.custom_convolution` | Filter | Runs a custom 3x3 kernel over the image, so you can build your own blur, sharpen, edge-detect, or emboss from nine weights. For when the preset filters don't d… |
 | Gaussian Blur | `node.gaussian_blur` | Filter | A single-axis Gaussian blur. Pair a horizontal pass with a vertical one for an even, soft blur in all directions. |
-| Gaussian Blur (Variable Width) | `node.gaussian_blur_variable_width` | Filter | A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for s… |
 | Sharpen | `node.sharpen` | Filter | Sharpens the image by boosting the difference between each pixel and its neighbours. At 0 it passes through, higher values make edges crisper. |
+| Variable Blur | `node.variable_blur` | Filter | A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for s… |
 
 ### Distort & Warp (8)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
-| — | `node.affine_transform` | Filter | Moves, scales, and rotates the whole image around its centre. The basic transform for repositioning a layer. |
-| RGB Split | `node.chromatic_displace` | Filter | Pulls the red and blue channels apart along a direction you feed in, for a chromatic-aberration or glitchy colour-fringe look. The amount is in pixels and can … |
-| Flip | `node.mirror_axis` | Filter | Mirrors the image across a line through the centre at any angle, so one half becomes a reflection of the other. Set the angle for a horizontal, vertical, or di… |
-| Mirror | `node.mirror_fold_uv` | Map | Folds the image back on itself for mirror reflections, from a simple flip to a four-way quad mirror. It produces the folded coordinates, so feed it into Remap … |
-| Kaleidoscope | `node.radial_fold_uv` | Map | Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to … |
+| Edge Stretch | `node.edge_stretch` | Map | Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap. |
+| Flip | `node.flip` | Filter | Mirrors the image across a line through the centre at any angle, so one half becomes a reflection of the other. Set the angle for a horizontal, vertical, or di… |
+| Kaleidoscope | `node.kaleidoscope` | Map | Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to … |
+| Mirror | `node.mirror` | Map | Folds the image back on itself for mirror reflections, from a simple flip to a four-way quad mirror. It produces the folded coordinates, so feed it into Remap … |
 | Radial Offset Field | `node.radial_offset_field` | Map | Makes a push outward from a centre point that other nodes use to shift pixels. It has no look of its own, so wire it into a displace or remap node. |
 | Remap | `node.remap` | Filter | Resamples the image through a coordinate map, reading each pixel from wherever the map points. This is the node that turns a Mirror, Kaleidoscope, or any coord… |
-| Edge Stretch | `node.uv_strip_clamp` | Map | Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap. |
+| RGB Split | `node.rgb_split` | Filter | Pulls the red and blue channels apart along a direction you feed in, for a chromatic-aberration or glitchy colour-fringe look. The amount is in pixels and can … |
+| Transform | `node.transform` | Filter | Moves, scales, and rotates the whole image around its centre. The basic transform for repositioning a layer. |
 
 ### Stylize (7)
 

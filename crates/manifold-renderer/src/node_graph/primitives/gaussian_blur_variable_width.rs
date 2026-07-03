@@ -1,4 +1,4 @@
-//! `node.gaussian_blur_variable_width` — per-pixel-width separable
+//! `node.variable_blur` — per-pixel-width separable
 //! Gaussian blur. One dispatch = one axis; pair two with ping-pong
 //! for a full 2D blur.
 //!
@@ -40,7 +40,7 @@ struct BlurUniforms {
 
 crate::primitive! {
     name: GaussianBlurVariableWidth,
-    type_id: "node.gaussian_blur_variable_width",
+    type_id: "node.variable_blur",
     purpose: "Separable Gaussian blur where the per-pixel kernel width is sampled from a `width` Texture2D's R channel. One dispatch handles one axis (horizontal or vertical); pair two with ping-pong textures for a 2D blur. Three quality levels (9-/17-/25-tap kernels at σ≈2/4/6) and an optional CoC-driven scatter-as-gather weighting that prevents sharp pixels bleeding into blurry regions — load-bearing for DoF-class effects.",
     inputs: {
         in: Texture2D required,
@@ -85,11 +85,11 @@ crate::primitive! {
     ],
     composition_notes: "step_size = width_sample × max_radius + 1.0 along the chosen axis. width_sample < 0.005 produces a pass-through (in-focus). For a full 2D blur: dispatch this primitive twice with axis=Horizontal then axis=Vertical, ping-ponging between two Rgba16Float textures. ScatterAsGatherByCoC: each neighbor only contributes if its CoC (sampled from the `width` texture's R channel) ≥ the center pixel's CoC, OR the center is itself very blurry (CoC > 0.5). For DoF parity set max_radius = 6.0 and weighting_mode = ScatterAsGatherByCoC; the kernel matches the legacy DoF blur byte-for-byte.",
     examples: [],
-    picker: { label: "Gaussian Blur (Variable Width)", category: Atom },
+    picker: { label: "Variable Blur", category: Atom },
     summary: "A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for selective focus.",
     category: BlurAndSharpen,
     role: Filter,
-    aliases: ["variable blur", "depth blur", "selective blur", "depth of field"],
+    aliases: ["variable blur", "gaussian blur", "depth blur", "selective blur", "depth of field"],
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/gaussian_blur_variable_width_body.wgsl"),
     input_access: [Gather, Gather],
@@ -151,7 +151,7 @@ impl Primitive for GaussianBlurVariableWidth {
                 // weighting) — dead tap branches flatten away, perf preserved.
                 // gaussian_blur_variable_width.wgsl is the parity oracle.
                 let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.gaussian_blur_variable_width standalone codegen");
+                    .expect("node.variable_blur standalone codegen");
                 let quality_str = match quality {
                     0 => "0u",
                     2 => "2u",
@@ -159,7 +159,7 @@ impl Primitive for GaussianBlurVariableWidth {
                 };
                 let weighting_str = if weighting == 1 { "1u" } else { "0u" };
                 let label = format!(
-                    "node.gaussian_blur_variable_width.q{quality}.w{weighting}"
+                    "node.variable_blur.q{quality}.w{weighting}"
                 );
                 gpu.device.create_specialized_compute_pipeline(
                     &wgsl,
@@ -207,7 +207,7 @@ impl Primitive for GaussianBlurVariableWidth {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.gaussian_blur_variable_width",
+            "node.variable_blur",
         );
     }
 }
@@ -223,7 +223,7 @@ mod tests {
         use crate::node_graph::ports::PortType;
         assert_eq!(
             GaussianBlurVariableWidth::TYPE_ID,
-            "node.gaussian_blur_variable_width"
+            "node.variable_blur"
         );
         assert_eq!(GaussianBlurVariableWidth::INPUTS.len(), 2);
         assert_eq!(GaussianBlurVariableWidth::INPUTS[0].name, "in");
@@ -247,6 +247,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = GaussianBlurVariableWidth::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.gaussian_blur_variable_width");
+        assert_eq!(node.type_id().as_str(), "node.variable_blur");
     }
 }

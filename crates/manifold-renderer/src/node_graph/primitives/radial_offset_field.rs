@@ -9,7 +9,7 @@
 //!
 //! The radial branch is a verbatim port of the legacy chromatic-aberration
 //! direction math, so chromatic aberration decomposes to
-//! `radial_offset_field → node.chromatic_displace → node.mix` without
+//! `radial_offset_field → node.rgb_split → node.mix` without
 //! changing the look. The offset magnitude and ± sign live on the consumer
 //! (scale its `amount`/`weight`); this node emits the unit-ish direction
 //! (|dir| ≤ 1) only.
@@ -32,7 +32,7 @@ struct RadialOffsetFieldUniforms {
 crate::primitive! {
     name: RadialOffsetField,
     type_id: "node.radial_offset_field",
-    purpose: "Directional displacement field generator. Radial mode: per-pixel direction points outward from the center, scaled by a center→edge falloff mask. Linear mode: a uniform direction at `angle` degrees. Output R = dir.x, G = dir.y (signed), B = 0, A = 1; |dir| ≤ 1. The reusable direction field behind the radial-warp family — feed it as the velocity field to node.chromatic_displace (chromatic aberration), node.uv_displace_by_flow (lens / zoom warp), node.texture_advect. The displacement magnitude and ± sign are applied by the consumer.",
+    purpose: "Directional displacement field generator. Radial mode: per-pixel direction points outward from the center, scaled by a center→edge falloff mask. Linear mode: a uniform direction at `angle` degrees. Output R = dir.x, G = dir.y (signed), B = 0, A = 1; |dir| ≤ 1. The reusable direction field behind the radial-warp family — feed it as the velocity field to node.rgb_split (chromatic aberration), node.uv_displace_by_flow (lens / zoom warp), node.texture_advect. The displacement magnitude and ± sign are applied by the consumer.",
     inputs: {
         angle: ScalarF32 optional,
         falloff: ScalarF32 optional,

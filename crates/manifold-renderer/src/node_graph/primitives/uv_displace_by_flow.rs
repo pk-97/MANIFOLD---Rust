@@ -27,7 +27,7 @@ struct DisplaceUniforms {
 crate::primitive! {
     name: UvDisplaceByFlow,
     type_id: "node.uv_displace_by_flow",
-    purpose: "Sample a source texture at UVs displaced by a 2D flow vector field. offset = (flow.rb - bias) * weight. Pair with node.flow_field_noise upstream for procedural distortion (Watercolor-style), or with any other primitive that emits 2-channel offsets packed in R/B (e.g. an upstream node.convolution_2d_9tap configured as a gradient).",
+    purpose: "Sample a source texture at UVs displaced by a 2D flow vector field. offset = (flow.rb - bias) * weight. Pair with node.flow_field_noise upstream for procedural distortion (Watercolor-style), or with any other primitive that emits 2-channel offsets packed in R/B (e.g. an upstream node.custom_convolution configured as a gradient).",
     inputs: {
         in: Texture2D required,
         flow: Texture2D required,

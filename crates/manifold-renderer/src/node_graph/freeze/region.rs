@@ -2343,7 +2343,7 @@ mod tests {
             "version": 1, "name": "spec", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
                 { "id": 1, "typeId": "node.invert", "nodeId": "inv_a" },
-                { "id": 2, "typeId": "node.gaussian_blur_variable_width", "nodeId": "blur" },
+                { "id": 2, "typeId": "node.variable_blur", "nodeId": "blur" },
                 { "id": 3, "typeId": "node.invert", "nodeId": "inv_b" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
@@ -2376,7 +2376,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "specbind", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 2, "typeId": "node.gaussian_blur_variable_width", "nodeId": "blur" },
+                { "id": 2, "typeId": "node.variable_blur", "nodeId": "blur" },
                 { "id": 3, "typeId": "node.invert", "nodeId": "inv_b" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [

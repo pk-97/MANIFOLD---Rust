@@ -1,4 +1,4 @@
-//! `node.blur_3d_separable` — separable 3D Gaussian blur along one
+//! `node.blur_3d` — separable 3D Gaussian blur along one
 //! axis. Bit-exact wrap of `generators/shaders/fluid_blur_3d.wgsl`
 //! via include_str (two entry points: `blur_scalar` for density-like
 //! fields, `blur_vector` for force-field volumes).
@@ -34,7 +34,7 @@ struct Blur3DUniforms {
 
 crate::primitive! {
     name: Blur3DSeparable,
-    type_id: "node.blur_3d_separable",
+    type_id: "node.blur_3d",
     purpose: "Single-axis separable Gaussian blur on a Texture3D. Mode selects scalar (samples .r, writes single channel) or vector (samples .rgba, writes all channels). For a full 3-axis separable blur, wire three instances with ping-pong textures (axis=X(a→b), axis=Y(b→a), axis=Z(a→b)). Bilinear tap-pairing halves the sample count vs a naive Gaussian.",
     inputs: {
         in: Texture3D required,
@@ -120,9 +120,9 @@ impl Primitive for Blur3DSeparable {
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.blur_3d_separable standalone codegen"),
+                    .expect("node.blur_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.blur_3d_separable",
+                "node.blur_3d",
             )
         });
         let sampler = self
@@ -157,7 +157,7 @@ impl Primitive for Blur3DSeparable {
                 },
             ],
             [vol_res.div_ceil(4), vol_res.div_ceil(4), vol_res.div_ceil(4)],
-            "node.blur_3d_separable",
+            "node.blur_3d",
         );
     }
 }
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn blur_3d_declares_texture_3d_in_and_out() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(Blur3DSeparable::TYPE_ID, "node.blur_3d_separable");
+        assert_eq!(Blur3DSeparable::TYPE_ID, "node.blur_3d");
         assert_eq!(Blur3DSeparable::INPUTS[0].name, "in");
         assert_eq!(Blur3DSeparable::INPUTS[0].ty, PortType::Texture3D);
         assert!(Blur3DSeparable::INPUTS[0].required);
@@ -199,6 +199,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = Blur3DSeparable::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.blur_3d_separable");
+        assert_eq!(node.type_id().as_str(), "node.blur_3d");
     }
 }

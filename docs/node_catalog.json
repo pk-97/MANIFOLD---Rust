@@ -107,102 +107,6 @@
     },
     {
       "aliases": [
-        "transform",
-        "move scale rotate",
-        "Transform TOP"
-      ],
-      "category": "Distort & Warp",
-      "examples": [
-        "preset.effect.transform"
-      ],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "translate_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "translate_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "scale",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "rotation",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": null,
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "label": "Translate X",
-          "name": "translate_x",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "Slides the image sideways. Negative moves it left, positive moves it right, and the range runs from -1 to 1 across the frame.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Translate Y",
-          "name": "translate_y",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "Slides the image up and down. The range runs from -1 to 1 across the frame and 0 leaves it centred.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "Scale",
-          "name": "scale",
-          "range": [
-            "0.1",
-            "5"
-          ],
-          "tooltip": "Zooms the image around its centre. 1 is original size, below 1 shrinks it, above 1 enlarges it.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Rotation",
-          "name": "rotation",
-          "range": [
-            "-180",
-            "180"
-          ],
-          "tooltip": "Spins the image around its centre in degrees. Positive turns it clockwise on screen and 0 leaves it level.",
-          "type": "float"
-        }
-      ],
-      "purpose": "2D UV affine: translate, scale, rotate around the center. Aspect-correct rotation; out-of-bounds samples return transparent black. Every affine param has a same-named scalar input port (port-shadows-param) — wire `translate_x`, `translate_y`, or `rotation` to drive the transform from a control producer (LFO, Color Compass, Math, …).",
-      "role": "Filter",
-      "stratum": "unlisted",
-      "summary": "Moves, scales, and rotates the whole image around its centre. The basic transform for repositioning a layer.",
-      "type_id": "node.affine_transform"
-    },
-    {
-      "aliases": [
         "anti-clump",
         "separation",
         "spread",
@@ -1847,7 +1751,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Blurs a 3D volume one axis at a time, softening a density or flow field. Run it on each axis for an even blur in all directions.",
-      "type_id": "node.blur_3d_separable"
+      "type_id": "node.blur_3d"
     },
     {
       "aliases": [
@@ -2734,58 +2638,6 @@
     },
     {
       "aliases": [
-        "rgb split",
-        "chromatic aberration",
-        "chroma shift",
-        "color fringe"
-      ],
-      "category": "Distort & Warp",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "velocity",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "amount",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "RGB Split",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "2",
-          "label": "Amount (pixels)",
-          "name": "amount",
-          "range": [
-            "-32",
-            "32"
-          ],
-          "tooltip": "How far the red and blue channels pull apart, in pixels. Negative values swap which way they shift.",
-          "type": "float"
-        }
-      ],
-      "purpose": "3-tap RGB sample of `in` displaced by `velocity` (RG). R samples at `uv - velocity*amount/dims`, G at centre, B at `uv + …`. Alpha follows centre. Different from `node.chromatic_aberration` (radial split): this is FLOW-driven, the offset direction comes from a per-pixel velocity field. Used for normal-map chromatic splits in oily-fluid Oil Slick rendering, signed-field chromatic trails, anywhere displacement direction is data not symmetry.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Pulls the red and blue channels apart along a direction you feed in, for a chromatic-aberration or glitchy colour-fringe look. The amount is in pixels and can go negative to swap which way they shift.",
-      "type_id": "node.chromatic_displace"
-    },
-    {
-      "aliases": [
         "clamp",
         "clamp texture",
         "saturate",
@@ -3501,7 +3353,143 @@
     },
     {
       "aliases": [
+        "swirl force",
+        "curl",
+        "vortex",
+        "smoke"
+      ],
+      "category": "Particles 3D",
+      "examples": [
+        "FluidSimulation3D"
+      ],
+      "inputs": [
+        {
+          "name": "gradient",
+          "required": true,
+          "type": "Texture3D"
+        },
+        {
+          "name": "curl_strength",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "slope_strength",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "ref_axis_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "ref_axis_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "ref_axis_z",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Swirl Force (3D, curl)",
+      "outputs": [
+        {
+          "name": "force",
+          "type": "Texture3D"
+        }
+      ],
+      "params": [
+        {
+          "default": "128",
+          "label": "Volume Resolution",
+          "name": "vol_res",
+          "range": [
+            "16",
+            "512"
+          ],
+          "tooltip": "The width and height of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
+          "type": "int"
+        },
+        {
+          "default": "128",
+          "label": "Volume Depth",
+          "name": "vol_depth",
+          "range": [
+            "16",
+            "512"
+          ],
+          "tooltip": "The depth of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Curl Strength",
+          "name": "curl_strength",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "How hard the swirl pulls particles into orbiting eddies. 0 is no swirl, higher spins them up. This is the dial that makes the flow read as smoke.",
+          "type": "float"
+        },
+        {
+          "default": "-500",
+          "label": "Slope Strength",
+          "name": "slope_strength",
+          "range": [
+            "-5000",
+            "5000"
+          ],
+          "tooltip": "How hard particles push along the gradient. Negative pulls them toward dense spots, positive pushes them away, default -500.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Ref Axis X",
+          "name": "ref_axis_x",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The X part of the axis the swirl rotates around. The three axis values get normalised together, so feed raw sine and cosine without worrying about length.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Ref Axis Y",
+          "name": "ref_axis_y",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The Y part of the axis the swirl rotates around, default 1. The three axis values get normalised together before the swirl is built.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Ref Axis Z",
+          "name": "ref_axis_z",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The Z part of the axis the swirl rotates around. The three axis values get normalised together, so a length of zero falls back to straight up.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a curl-noise reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). axis = normalize(ref_axis + smooth spatial wobble of the voxel position); force = cross(gradient, axis) * curl_strength + gradient * slope_strength. Writes a vec3 force Texture3D. The per-voxel axis wobble keeps the swirl even across the volume instead of pooling in one octant. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.gradient_central_diff_3d.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies.",
+      "type_id": "node.curl_slope_force_3d"
+    },
+    {
+      "aliases": [
         "custom convolution",
+        "9tap",
         "kernel",
         "convolve",
         "filter matrix"
@@ -3645,142 +3633,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Runs a custom 3x3 kernel over the image, so you can build your own blur, sharpen, edge-detect, or emboss from nine weights. For when the preset filters don't do quite what you want.",
-      "type_id": "node.convolution_2d_9tap"
-    },
-    {
-      "aliases": [
-        "swirl force",
-        "curl",
-        "vortex",
-        "smoke"
-      ],
-      "category": "Particles 3D",
-      "examples": [
-        "FluidSimulation3D"
-      ],
-      "inputs": [
-        {
-          "name": "gradient",
-          "required": true,
-          "type": "Texture3D"
-        },
-        {
-          "name": "curl_strength",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "slope_strength",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "ref_axis_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "ref_axis_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "ref_axis_z",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Swirl Force (3D, curl)",
-      "outputs": [
-        {
-          "name": "force",
-          "type": "Texture3D"
-        }
-      ],
-      "params": [
-        {
-          "default": "128",
-          "label": "Volume Resolution",
-          "name": "vol_res",
-          "range": [
-            "16",
-            "512"
-          ],
-          "tooltip": "The width and height of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
-          "type": "int"
-        },
-        {
-          "default": "128",
-          "label": "Volume Depth",
-          "name": "vol_depth",
-          "range": [
-            "16",
-            "512"
-          ],
-          "tooltip": "The depth of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "label": "Curl Strength",
-          "name": "curl_strength",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "How hard the swirl pulls particles into orbiting eddies. 0 is no swirl, higher spins them up. This is the dial that makes the flow read as smoke.",
-          "type": "float"
-        },
-        {
-          "default": "-500",
-          "label": "Slope Strength",
-          "name": "slope_strength",
-          "range": [
-            "-5000",
-            "5000"
-          ],
-          "tooltip": "How hard particles push along the gradient. Negative pulls them toward dense spots, positive pushes them away, default -500.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Ref Axis X",
-          "name": "ref_axis_x",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The X part of the axis the swirl rotates around. The three axis values get normalised together, so feed raw sine and cosine without worrying about length.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "Ref Axis Y",
-          "name": "ref_axis_y",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The Y part of the axis the swirl rotates around, default 1. The three axis values get normalised together before the swirl is built.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Ref Axis Z",
-          "name": "ref_axis_z",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The Z part of the axis the swirl rotates around. The three axis values get normalised together, so a length of zero falls back to straight up.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a curl-noise reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). axis = normalize(ref_axis + smooth spatial wobble of the voxel position); force = cross(gradient, axis) * curl_strength + gradient * slope_strength. Writes a vec3 force Texture3D. The per-voxel axis wobble keeps the swirl even across the volume instead of pooling in one octant. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.gradient_central_diff_3d.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies.",
-      "type_id": "node.curl_slope_force_3d"
+      "type_id": "node.custom_convolution"
     },
     {
       "aliases": [
@@ -5121,6 +4974,63 @@
     },
     {
       "aliases": [
+        "edge stretch",
+        "strip clamp",
+        "slit scan",
+        "smear",
+        "stretch"
+      ],
+      "category": "Distort & Warp",
+      "examples": [
+        "preset.effect.edge_stretch"
+      ],
+      "inputs": [
+        {
+          "name": "width",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Edge Stretch",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.5",
+          "label": "Width",
+          "name": "width",
+          "range": [
+            "0.1",
+            "0.9"
+          ],
+          "tooltip": "How wide the centre strip is before it gets smeared to the edges. Smaller values pin a thinner strip and stretch it further.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Horiz",
+            "Vert",
+            "Both"
+          ],
+          "label": "Direction",
+          "name": "direction",
+          "tooltip": "Which way to smear, with Horiz stretching the middle row outward, Vert the middle column, and Both at once.",
+          "type": "enum"
+        }
+      ],
+      "purpose": "Edge-stretch coordinate generator: clamps the per-pixel UV to a center strip of width `width` on the selected axis (Horiz / Vert / Both) and emits it (R = clamped_u, G = clamped_v). Resampling at these coordinates stretches the edge row/column outward. Pair with node.remap (Clamp) + node.mix (Lerp) — the TD coordinate → remap → blend shape replacing the fused node.edge_stretch kernel.",
+      "role": "Map",
+      "stratum": "atom",
+      "summary": "Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap.",
+      "type_id": "node.edge_stretch"
+    },
+    {
+      "aliases": [
         "grid edges",
         "wireframe",
         "topology"
@@ -6155,6 +6065,54 @@
     },
     {
       "aliases": [
+        "flip",
+        "mirror axis",
+        "mirror",
+        "reflect",
+        "Flip TOP"
+      ],
+      "category": "Distort & Warp",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "angle",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Flip",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.7853982",
+          "label": "Angle",
+          "name": "angle",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Rotates the mirror line. Set it for a horizontal, vertical, or diagonal flip.",
+          "type": "angle"
+        }
+      ],
+      "purpose": "Sample input at UVs mirrored across a line through center at `angle` radians. Single-axis 2-fold symmetry (one half visible, other half is mirror). Distinct from `node.transform` fold modes (axis-aligned, both halves visible mirrored) and `node.kaleidoscope` (N-segment radial). Use for tilted symmetry overlays, asymmetric kaleidoscope variants, height-map symmetry in shading chains.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Mirrors the image across a line through the centre at any angle, so one half becomes a reflection of the other. Set the angle for a horizontal, vertical, or diagonal flip.",
+      "type_id": "node.flip"
+    },
+    {
+      "aliases": [
         "flow field",
         "noise flow",
         "velocity",
@@ -6651,87 +6609,6 @@
       "stratum": "atom",
       "summary": "A single-axis Gaussian blur. Pair a horizontal pass with a vertical one for an even, soft blur in all directions.",
       "type_id": "node.gaussian_blur"
-    },
-    {
-      "aliases": [
-        "variable blur",
-        "depth blur",
-        "selective blur",
-        "depth of field"
-      ],
-      "category": "Blur & Sharpen",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "width",
-          "required": true,
-          "type": "Texture2D"
-        }
-      ],
-      "label": "Gaussian Blur (Variable Width)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "enum_values": [
-            "Horizontal",
-            "Vertical"
-          ],
-          "label": "Axis",
-          "name": "axis",
-          "tooltip": "Which direction this pass blurs, Horizontal or Vertical. Run one of each in sequence for a full blur in both directions.",
-          "type": "enum"
-        },
-        {
-          "default": "12",
-          "label": "Max Radius",
-          "name": "max_radius",
-          "range": [
-            "1",
-            "64"
-          ],
-          "tooltip": "The widest the blur can reach at full strength, in pixels. The control image scales each pixel between sharp and this maximum.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "enum_values": [
-            "Low",
-            "Medium",
-            "High"
-          ],
-          "label": "Quality",
-          "name": "quality",
-          "tooltip": "How many samples the blur takes, Low, Medium, or High. Higher is smoother but slower, and Medium matches the original.",
-          "type": "enum"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "None",
-            "ScatterAsGatherByCoC"
-          ],
-          "label": "Weighting Mode",
-          "name": "weighting_mode",
-          "tooltip": "None is a plain blur. ScatterAsGatherByCoC stops sharp areas from bleeding into blurry ones, which is what depth of field needs.",
-          "type": "enum"
-        }
-      ],
-      "purpose": "Separable Gaussian blur where the per-pixel kernel width is sampled from a `width` Texture2D's R channel. One dispatch handles one axis (horizontal or vertical); pair two with ping-pong textures for a 2D blur. Three quality levels (9-/17-/25-tap kernels at σ≈2/4/6) and an optional CoC-driven scatter-as-gather weighting that prevents sharp pixels bleeding into blurry regions — load-bearing for DoF-class effects.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for selective focus.",
-      "type_id": "node.gaussian_blur_variable_width"
     },
     {
       "aliases": [
@@ -8231,6 +8108,73 @@
     },
     {
       "aliases": [
+        "kaleidoscope",
+        "radial fold",
+        "mandala",
+        "radial mirror",
+        "wedges"
+      ],
+      "category": "Distort & Warp",
+      "examples": [
+        "preset.effect.kaleidoscope"
+      ],
+      "inputs": [
+        {
+          "name": "segments",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Kaleidoscope",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "6",
+          "label": "Segments",
+          "name": "segments",
+          "range": [
+            "2",
+            "16"
+          ],
+          "tooltip": "How many mirrored wedges to fold the image into. More wedges give a finer pattern.",
+          "type": "float"
+        },
+        {
+          "default": "0.5",
+          "label": "Center X",
+          "name": "cx",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "Horizontal center of the fold. 0 is the left edge, 1 is the right.",
+          "type": "float"
+        },
+        {
+          "default": "0.5",
+          "label": "Center Y",
+          "name": "cy",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "Vertical center of the fold. 0 is the top, 1 is the bottom.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Kaleidoscope coordinate generator: folds the plane into `segments` mirrored wedges around (cx, cy) and emits the per-pixel sample UV (R = folded_u, G = folded_v). Pair with node.remap (Clamp) to resample a source at the folded coordinates, then node.mix (Lerp) to crossfade — the TD coordinate → remap → blend shape that replaces the fused node.kaleidoscope kernel. Reusable for any radial-symmetry warp.",
+      "role": "Map",
+      "stratum": "atom",
+      "summary": "Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to apply them.",
+      "type_id": "node.kaleidoscope"
+    },
+    {
+      "aliases": [
         "lambert",
         "diffuse",
         "matte",
@@ -9308,54 +9252,8 @@
     },
     {
       "aliases": [
-        "flip",
         "mirror",
-        "reflect",
-        "Flip TOP"
-      ],
-      "category": "Distort & Warp",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "angle",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Flip",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.7853982",
-          "label": "Angle",
-          "name": "angle",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "Rotates the mirror line. Set it for a horizontal, vertical, or diagonal flip.",
-          "type": "angle"
-        }
-      ],
-      "purpose": "Sample input at UVs mirrored across a line through center at `angle` radians. Single-axis 2-fold symmetry (one half visible, other half is mirror). Distinct from `node.transform` fold modes (axis-aligned, both halves visible mirrored) and `node.kaleidoscope` (N-segment radial). Use for tilted symmetry overlays, asymmetric kaleidoscope variants, height-map symmetry in shading chains.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Mirrors the image across a line through the centre at any angle, so one half becomes a reflection of the other. Set the angle for a horizontal, vertical, or diagonal flip.",
-      "type_id": "node.mirror_axis"
-    },
-    {
-      "aliases": [
-        "mirror",
+        "mirror fold",
         "fold",
         "quad mirror",
         "reflect"
@@ -9392,11 +9290,11 @@
           "type": "enum"
         }
       ],
-      "purpose": "Mirror/fold coordinate generator: rewrites the per-pixel UV via an axis flip or kaleidoscope-style fold (Identity / Mirror / MirrorX / MirrorY / FlipY / QuadMirror / FoldX / FoldY / FoldBoth) and emits it (R = folded_u, G = folded_v). Resampling at these coordinates produces the mirrored / folded image. Pair with node.remap (Clamp) + node.mix (Lerp) — the TD coordinate → remap → blend shape replacing the fused node.transform mirror modes. The affine half (translate/scale/rotate) stays in node.affine_transform.",
+      "purpose": "Mirror/fold coordinate generator: rewrites the per-pixel UV via an axis flip or kaleidoscope-style fold (Identity / Mirror / MirrorX / MirrorY / FlipY / QuadMirror / FoldX / FoldY / FoldBoth) and emits it (R = folded_u, G = folded_v). Resampling at these coordinates produces the mirrored / folded image. Pair with node.remap (Clamp) + node.mix (Lerp) — the TD coordinate → remap → blend shape replacing the fused TransformFX mirror modes. The affine half (translate/scale/rotate) stays in node.transform.",
       "role": "Map",
       "stratum": "atom",
       "summary": "Folds the image back on itself for mirror reflections, from a simple flip to a four-way quad mirror. It produces the folded coordinates, so feed it into Remap to apply the fold to a picture.",
-      "type_id": "node.mirror_fold_uv"
+      "type_id": "node.mirror"
     },
     {
       "aliases": [
@@ -11581,72 +11479,6 @@
       "type_id": "node.radial_burst_force_field"
     },
     {
-      "aliases": [
-        "kaleidoscope",
-        "mandala",
-        "radial mirror",
-        "wedges"
-      ],
-      "category": "Distort & Warp",
-      "examples": [
-        "preset.effect.kaleidoscope"
-      ],
-      "inputs": [
-        {
-          "name": "segments",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Kaleidoscope",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "6",
-          "label": "Segments",
-          "name": "segments",
-          "range": [
-            "2",
-            "16"
-          ],
-          "tooltip": "How many mirrored wedges to fold the image into. More wedges give a finer pattern.",
-          "type": "float"
-        },
-        {
-          "default": "0.5",
-          "label": "Center X",
-          "name": "cx",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "Horizontal center of the fold. 0 is the left edge, 1 is the right.",
-          "type": "float"
-        },
-        {
-          "default": "0.5",
-          "label": "Center Y",
-          "name": "cy",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "Vertical center of the fold. 0 is the top, 1 is the bottom.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Kaleidoscope coordinate generator: folds the plane into `segments` mirrored wedges around (cx, cy) and emits the per-pixel sample UV (R = folded_u, G = folded_v). Pair with node.remap (Clamp) to resample a source at the folded coordinates, then node.mix (Lerp) to crossfade — the TD coordinate → remap → blend shape that replaces the fused node.kaleidoscope kernel. Reusable for any radial-symmetry warp.",
-      "role": "Map",
-      "stratum": "atom",
-      "summary": "Folds the image into a ring of mirrored wedges around a centre point. More segments give finer slices. It outputs warped coordinates, so pair it with Remap to apply them.",
-      "type_id": "node.radial_fold_uv"
-    },
-    {
       "aliases": [],
       "category": "Distort & Warp",
       "examples": [
@@ -11710,7 +11542,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Directional displacement field generator. Radial mode: per-pixel direction points outward from the center, scaled by a center→edge falloff mask. Linear mode: a uniform direction at `angle` degrees. Output R = dir.x, G = dir.y (signed), B = 0, A = 1; |dir| ≤ 1. The reusable direction field behind the radial-warp family — feed it as the velocity field to node.chromatic_displace (chromatic aberration), node.uv_displace_by_flow (lens / zoom warp), node.texture_advect. The displacement magnitude and ± sign are applied by the consumer.",
+      "purpose": "Directional displacement field generator. Radial mode: per-pixel direction points outward from the center, scaled by a center→edge falloff mask. Linear mode: a uniform direction at `angle` degrees. Output R = dir.x, G = dir.y (signed), B = 0, A = 1; |dir| ≤ 1. The reusable direction field behind the radial-warp family — feed it as the velocity field to node.rgb_split (chromatic aberration), node.uv_displace_by_flow (lens / zoom warp), node.texture_advect. The displacement magnitude and ± sign are applied by the consumer.",
       "role": "Map",
       "stratum": "atom",
       "summary": "Makes a push outward from a centre point that other nodes use to shift pixels. It has no look of its own, so wire it into a displace or remap node.",
@@ -12661,6 +12493,59 @@
       "stratum": "atom",
       "summary": "Reads back the buffer that Draw Particles wrote into and turns it into a normal image. The pickup step after a particle splat.",
       "type_id": "node.resolve_accumulator"
+    },
+    {
+      "aliases": [
+        "rgb split",
+        "chromatic displace",
+        "chromatic aberration",
+        "chroma shift",
+        "color fringe"
+      ],
+      "category": "Distort & Warp",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "velocity",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "amount",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "RGB Split",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "2",
+          "label": "Amount (pixels)",
+          "name": "amount",
+          "range": [
+            "-32",
+            "32"
+          ],
+          "tooltip": "How far the red and blue channels pull apart, in pixels. Negative values swap which way they shift.",
+          "type": "float"
+        }
+      ],
+      "purpose": "3-tap RGB sample of `in` displaced by `velocity` (RG). R samples at `uv - velocity*amount/dims`, G at centre, B at `uv + …`. Alpha follows centre. Different from `node.chromatic_aberration` (radial split): this is FLOW-driven, the offset direction comes from a per-pixel velocity field. Used for normal-map chromatic splits in oily-fluid Oil Slick rendering, signed-field chromatic trails, anywhere displacement direction is data not symmetry.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Pulls the red and blue channels apart along a direction you feed in, for a chromatic-aberration or glitchy colour-fringe look. The amount is in pixels and can go negative to swap which way they shift.",
+      "type_id": "node.rgb_split"
     },
     {
       "aliases": [
@@ -13964,7 +13849,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Single-knob 4-neighbour Laplacian unsharp mask. `amount = 0` passes the source through unchanged; positive values add increasingly aggressive edge enhancement. Curated wrapper over the same math node.convolution_2d_9tap can express, factored out so one outer-card slider drives sharpening directly without needing five affine_scalar nodes to compute kernel weights.",
+      "purpose": "Single-knob 4-neighbour Laplacian unsharp mask. `amount = 0` passes the source through unchanged; positive values add increasingly aggressive edge enhancement. Curated wrapper over the same math node.custom_convolution can express, factored out so one outer-card slider drives sharpening directly without needing five affine_scalar nodes to compute kernel weights.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Sharpens the image by boosting the difference between each pixel and its neighbours. At 0 it passes through, higher values make edges crisper.",
@@ -15277,6 +15162,103 @@
     },
     {
       "aliases": [
+        "transform",
+        "affine transform",
+        "move scale rotate",
+        "Transform TOP"
+      ],
+      "category": "Distort & Warp",
+      "examples": [
+        "preset.effect.transform"
+      ],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "translate_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "translate_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "scale",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "rotation",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Transform",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "label": "Translate X",
+          "name": "translate_x",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "Slides the image sideways. Negative moves it left, positive moves it right, and the range runs from -1 to 1 across the frame.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Translate Y",
+          "name": "translate_y",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "Slides the image up and down. The range runs from -1 to 1 across the frame and 0 leaves it centred.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Scale",
+          "name": "scale",
+          "range": [
+            "0.1",
+            "5"
+          ],
+          "tooltip": "Zooms the image around its centre. 1 is original size, below 1 shrinks it, above 1 enlarges it.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Rotation",
+          "name": "rotation",
+          "range": [
+            "-180",
+            "180"
+          ],
+          "tooltip": "Spins the image around its centre in degrees. Positive turns it clockwise on screen and 0 leaves it level.",
+          "type": "float"
+        }
+      ],
+      "purpose": "2D UV affine: translate, scale, rotate around the center. Aspect-correct rotation; out-of-bounds samples return transparent black. Every affine param has a same-named scalar input port (port-shadows-param) — wire `translate_x`, `translate_y`, or `rotation` to drive the transform from a control producer (LFO, Color Compass, Math, …).",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Moves, scales, and rotates the whole image around its centre. The basic transform for repositioning a layer.",
+      "type_id": "node.transform"
+    },
+    {
+      "aliases": [
         "triangulate",
         "make triangles",
         "mesh",
@@ -15716,7 +15698,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Sample a source texture at UVs displaced by a 2D flow vector field. offset = (flow.rb - bias) * weight. Pair with node.flow_field_noise upstream for procedural distortion (Watercolor-style), or with any other primitive that emits 2-channel offsets packed in R/B (e.g. an upstream node.convolution_2d_9tap configured as a gradient).",
+      "purpose": "Sample a source texture at UVs displaced by a 2D flow vector field. offset = (flow.rb - bias) * weight. Pair with node.flow_field_noise upstream for procedural distortion (Watercolor-style), or with any other primitive that emits 2-channel offsets packed in R/B (e.g. an upstream node.custom_convolution configured as a gradient).",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field.",
@@ -15748,62 +15730,6 @@
     },
     {
       "aliases": [
-        "edge stretch",
-        "slit scan",
-        "smear",
-        "stretch"
-      ],
-      "category": "Distort & Warp",
-      "examples": [
-        "preset.effect.edge_stretch"
-      ],
-      "inputs": [
-        {
-          "name": "width",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Edge Stretch",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.5",
-          "label": "Width",
-          "name": "width",
-          "range": [
-            "0.1",
-            "0.9"
-          ],
-          "tooltip": "How wide the centre strip is before it gets smeared to the edges. Smaller values pin a thinner strip and stretch it further.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "Horiz",
-            "Vert",
-            "Both"
-          ],
-          "label": "Direction",
-          "name": "direction",
-          "tooltip": "Which way to smear, with Horiz stretching the middle row outward, Vert the middle column, and Both at once.",
-          "type": "enum"
-        }
-      ],
-      "purpose": "Edge-stretch coordinate generator: clamps the per-pixel UV to a center strip of width `width` on the selected axis (Horiz / Vert / Both) and emits it (R = clamped_u, G = clamped_v). Resampling at these coordinates stretches the edge row/column outward. Pair with node.remap (Clamp) + node.mix (Lerp) — the TD coordinate → remap → blend shape replacing the fused node.edge_stretch kernel.",
-      "role": "Map",
-      "stratum": "atom",
-      "summary": "Grabs a thin strip across the middle of the frame and smears it out to the edges, the classic slit-scan stretch. It outputs coordinates, so pair it with Remap.",
-      "type_id": "node.uv_strip_clamp"
-    },
-    {
-      "aliases": [
         "value",
         "constant",
         "Constant CHOP"
@@ -15832,6 +15758,88 @@
       "stratum": "driver",
       "summary": "Outputs a single fixed number you set by hand. Wire it into any knob as a constant, or expose it to drive from outside.",
       "type_id": "node.value"
+    },
+    {
+      "aliases": [
+        "variable blur",
+        "gaussian blur",
+        "depth blur",
+        "selective blur",
+        "depth of field"
+      ],
+      "category": "Blur & Sharpen",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "width",
+          "required": true,
+          "type": "Texture2D"
+        }
+      ],
+      "label": "Variable Blur",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "enum_values": [
+            "Horizontal",
+            "Vertical"
+          ],
+          "label": "Axis",
+          "name": "axis",
+          "tooltip": "Which direction this pass blurs, Horizontal or Vertical. Run one of each in sequence for a full blur in both directions.",
+          "type": "enum"
+        },
+        {
+          "default": "12",
+          "label": "Max Radius",
+          "name": "max_radius",
+          "range": [
+            "1",
+            "64"
+          ],
+          "tooltip": "The widest the blur can reach at full strength, in pixels. The control image scales each pixel between sharp and this maximum.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "enum_values": [
+            "Low",
+            "Medium",
+            "High"
+          ],
+          "label": "Quality",
+          "name": "quality",
+          "tooltip": "How many samples the blur takes, Low, Medium, or High. Higher is smoother but slower, and Medium matches the original.",
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "None",
+            "ScatterAsGatherByCoC"
+          ],
+          "label": "Weighting Mode",
+          "name": "weighting_mode",
+          "tooltip": "None is a plain blur. ScatterAsGatherByCoC stops sharp areas from bleeding into blurry ones, which is what depth of field needs.",
+          "type": "enum"
+        }
+      ],
+      "purpose": "Separable Gaussian blur where the per-pixel kernel width is sampled from a `width` Texture2D's R channel. One dispatch handles one axis (horizontal or vertical); pair two with ping-pong textures for a 2D blur. Three quality levels (9-/17-/25-tap kernels at σ≈2/4/6) and an optional CoC-driven scatter-as-gather weighting that prevents sharp pixels bleeding into blurry regions — load-bearing for DoF-class effects.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "A Gaussian blur whose strength changes per pixel from a control image, so some areas blur more than others. Feed a mask or depth map into the width input for selective focus.",
+      "type_id": "node.variable_blur"
     },
     {
       "aliases": [

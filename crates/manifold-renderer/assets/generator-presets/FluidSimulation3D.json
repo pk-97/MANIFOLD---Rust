@@ -2186,7 +2186,7 @@
           {
             "id": 9,
             "nodeId": "density_blur_x",
-            "typeId": "node.blur_3d_separable",
+            "typeId": "node.blur_3d",
             "handle": "density_blur_x",
             "params": {
               "axis": {
@@ -2211,7 +2211,7 @@
           {
             "id": 10,
             "nodeId": "density_blur_y",
-            "typeId": "node.blur_3d_separable",
+            "typeId": "node.blur_3d",
             "handle": "density_blur_y",
             "params": {
               "axis": {
@@ -2236,7 +2236,7 @@
           {
             "id": 11,
             "nodeId": "density_blur_z",
-            "typeId": "node.blur_3d_separable",
+            "typeId": "node.blur_3d",
             "handle": "density_blur_z",
             "params": {
               "axis": {
@@ -2449,7 +2449,7 @@
           {
             "id": 13,
             "nodeId": "field_blur_x",
-            "typeId": "node.blur_3d_separable",
+            "typeId": "node.blur_3d",
             "handle": "field_blur_x",
             "params": {
               "axis": {
@@ -2474,7 +2474,7 @@
           {
             "id": 14,
             "nodeId": "field_blur_y",
-            "typeId": "node.blur_3d_separable",
+            "typeId": "node.blur_3d",
             "handle": "field_blur_y",
             "params": {
               "axis": {
@@ -2499,7 +2499,7 @@
           {
             "id": 15,
             "nodeId": "field_blur_z",
-            "typeId": "node.blur_3d_separable",
+            "typeId": "node.blur_3d",
             "handle": "field_blur_z",
             "params": {
               "axis": {
@@ -3504,7 +3504,7 @@
           {
             "id": 20,
             "nodeId": "display_zoom",
-            "typeId": "node.affine_transform",
+            "typeId": "node.transform",
             "handle": "display_zoom",
             "params": {
               "rotation": {

@@ -51,15 +51,15 @@ crate::param_tooltips!("node.clamp", {
 
 // ─── Distort & Warp ──────────────────────────────────────────────────
 
-crate::param_tooltips!("node.chromatic_displace", {
+crate::param_tooltips!("node.rgb_split", {
     "amount" => "How far the red and blue channels pull apart, in pixels. Negative values swap which way they shift.",
 });
 
-crate::param_tooltips!("node.mirror_axis", {
+crate::param_tooltips!("node.flip", {
     "angle" => "Rotates the mirror line. Set it for a horizontal, vertical, or diagonal flip.",
 });
 
-crate::param_tooltips!("node.radial_fold_uv", {
+crate::param_tooltips!("node.kaleidoscope", {
     "segments" => "How many mirrored wedges to fold the image into. More wedges give a finer pattern.",
     "cx" => "Horizontal center of the fold. 0 is the left edge, 1 is the right.",
     "cy" => "Vertical center of the fold. 0 is the top, 1 is the bottom.",

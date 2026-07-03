@@ -1,4 +1,4 @@
-//! `node.mirror_axis` — sample a texture at UVs mirrored across a line
+//! `node.flip` — sample a texture at UVs mirrored across a line
 //! through the center at a given angle.
 //!
 //! Single-axis 2-fold symmetry: one half of the input is visible, the
@@ -34,7 +34,7 @@ struct MirrorAxisUniforms {
 
 crate::primitive! {
     name: MirrorAxis,
-    type_id: "node.mirror_axis",
+    type_id: "node.flip",
     purpose: "Sample input at UVs mirrored across a line through center at `angle` radians. Single-axis 2-fold symmetry (one half visible, other half is mirror). Distinct from `node.transform` fold modes (axis-aligned, both halves visible mirrored) and `node.kaleidoscope` (N-segment radial). Use for tilted symmetry overlays, asymmetric kaleidoscope variants, height-map symmetry in shading chains.",
     inputs: {
         in: Texture2D required,
@@ -59,7 +59,7 @@ crate::primitive! {
     summary: "Mirrors the image across a line through the centre at any angle, so one half becomes a reflection of the other. Set the angle for a horizontal, vertical, or diagonal flip.",
     category: DistortAndWarp,
     role: Filter,
-    aliases: ["flip", "mirror", "reflect", "Flip TOP"],
+    aliases: ["flip", "mirror axis", "mirror", "reflect", "Flip TOP"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/mirror_axis_body.wgsl"),
     input_access: [Gather],
@@ -94,9 +94,9 @@ impl Primitive for MirrorAxis {
             // mirror_axis.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.mirror_axis standalone codegen"),
+                    .expect("node.flip standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.mirror_axis",
+                "node.flip",
             )
         });
         let sampler = self
@@ -131,7 +131,7 @@ impl Primitive for MirrorAxis {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.mirror_axis",
+            "node.flip",
         );
     }
 }
