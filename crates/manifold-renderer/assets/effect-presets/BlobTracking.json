@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "BlobTracking",
-  "description": "Blob detection and identity tracking with a parametric HUD overlay. The preset decomposes into two separable stages.\n\nDetection and Tracking: source video enters blob_detect_ffi (FFI-based detection), gets filtered by dimension/aspect/coverage thresholds, then feeds into a persistence tracker for stable identity assignment across frames. The tracker's output goes to a 1-Euro temporal smoother, with smoothing curve remapped by the Smoothing parameter. Connection proximity is computed from the smoothed detections.\n\nHUD Overlay: The smoothed detection array fans out to nine chained draw primitives (Corner Brackets, Crosshair, Center Dot, Size Gauge, Tick Marks, Connection Lines, two value labels, and Scanline). Each primitive reads the detections and a global Amount multiplier for alpha blending. The final render stacks them by piping each output to the next input.\n\nThe two groups flatten to the same byte-identical behavior: they are pure presentation, grouping the graph for readability without touching wires, nodeIds, or params. Every layer is an ordinary node — tune its appearance with params or swap it out. The whole HUD stack skips to passthrough while no blobs are detected.",
+  "description": "Blob detection and identity tracking with a parametric HUD overlay. The preset decomposes into two separable stages.\n\nDetection and Tracking: source video enters blob_tracker (FFI-based detection), gets filtered by dimension/aspect/coverage thresholds, then feeds into a persistence tracker for stable identity assignment across frames. The tracker's output goes to a 1-Euro temporal smoother, with smoothing curve remapped by the Smoothing parameter. Connection proximity is computed from the smoothed detections.\n\nHUD Overlay: The smoothed detection array fans out to nine chained draw primitives (Corner Brackets, Crosshair, Center Dot, Size Gauge, Tick Marks, Connection Lines, two value labels, and Scanline). Each primitive reads the detections and a global Amount multiplier for alpha blending. The final render stacks them by piping each output to the next input.\n\nThe two groups flatten to the same byte-identical behavior: they are pure presentation, grouping the graph for readability without touching wires, nodeIds, or params. Every layer is an ordinary node — tune its appearance with params or swap it out. The whole HUD stack skips to passthrough while no blobs are detected.",
   "presetMetadata": {
     "id": "BlobTracking",
     "displayName": "Blob Track",
@@ -275,7 +275,7 @@
           {
             "id": 1,
             "nodeId": "detect",
-            "typeId": "node.blob_detect_ffi",
+            "typeId": "node.blob_tracker",
             "handle": "detect",
             "params": {
               "analysis_max_dim": {

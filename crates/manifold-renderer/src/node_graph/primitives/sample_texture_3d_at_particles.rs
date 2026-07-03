@@ -1,15 +1,15 @@
-//! `node.sample_texture_3d_at_particles` — trilinear sample of a vec3
+//! `node.sample_volume_at_particles` — trilinear sample of a vec3
 //! `Texture3D` at each particle's `position.xyz`, emit `Array<[f32; 3]>`.
 //!
-//! The 3D sibling of `node.sample_texture_at_particles`. Each live
+//! The 3D sibling of `node.sample_image_at_particles`. Each live
 //! particle reads the volume field's RGB at its current position and
 //! writes it into the per-particle force buffer (overwrite, not add —
 //! this is the first contribution to the FluidSim3D force accumulation,
 //! matching the legacy `force = textureSampleLevel(t_field, ...).xyz`).
 //!
 //! Decomposed out of the fused `node.fluid_simulate_3d`. Compose with
-//! `node.simplex_noise_force_3d_at_particles`,
-//! `node.euler_step_particles_3d`, and `node.container_bounds_3d` for
+//! `node.turbulence_3d`,
+//! `node.move_particles_3d`, and `node.keep_in_box_3d` for
 //! the full 3D advection chain.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
@@ -32,8 +32,8 @@ struct SampleUniforms {
 
 crate::primitive! {
     name: SampleTexture3DAtParticles,
-    type_id: "node.sample_texture_3d_at_particles",
-    purpose: "Per-particle trilinear sample of a vec3 Texture3D at each particle's position.xyz. Output: Array<[f32; 3]> of the volume's RGB per particle (overwrite, not add — seeds the per-particle force buffer). The 3D sibling of node.sample_texture_at_particles; the generic volumetric field-read atom for any 3D particle pipeline. Decomposed out of the fused node.fluid_simulate_3d.",
+    type_id: "node.sample_volume_at_particles",
+    purpose: "Per-particle trilinear sample of a vec3 Texture3D at each particle's position.xyz. Output: Array<[f32; 3]> of the volume's RGB per particle (overwrite, not add — seeds the per-particle force buffer). The 3D sibling of node.sample_image_at_particles; the generic volumetric field-read atom for any 3D particle pipeline. Decomposed out of the fused node.fluid_simulate_3d.",
     inputs: {
         particles: Array(Particle) required,
         field: Texture3D required,
@@ -52,13 +52,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Output capacity follows the input `particles` array. Samples are trilinear via the default clamp-edge sampler (matches the legacy fluid_simulate_3d field read). Writes the RGB at position.xyz directly — the force buffer is seeded here and accumulated by downstream force atoms (simplex_noise_force_3d, diffuse_force_3d, container_repel_force_3d) before node.euler_step_particles_3d integrates it. Output entries for indices >= active_count are uninitialised.",
+    composition_notes: "Output capacity follows the input `particles` array. Samples are trilinear via the default clamp-edge sampler (matches the legacy fluid_simulate_3d field read). Writes the RGB at position.xyz directly — the force buffer is seeded here and accumulated by downstream force atoms (simplex_noise_force_3d, diffuse_force_3d, container_repel_force_3d) before node.move_particles_3d integrates it. Output entries for indices >= active_count are uninitialised.",
     examples: ["FluidSimulation3D"],
     picker: { label: "Sample Volume for Particles (3D)", category: Atom },
     summary: "Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through.",
     category: Particles3D,
     role: Filter,
-    aliases: ["sample volume", "read 3d texture", "trilinear"],
+    aliases: ["sample volume", "sample texture 3d at particles", "read 3d texture", "trilinear"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/sample_texture_3d_at_particles_body.wgsl"),
 }
@@ -113,9 +113,9 @@ impl Primitive for SampleTexture3DAtParticles {
             // the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.sample_texture_3d_at_particles standalone codegen"),
+                    .expect("node.sample_volume_at_particles standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.sample_texture_3d_at_particles",
+                "node.sample_volume_at_particles",
             )
         });
         let sampler = self
@@ -156,7 +156,7 @@ impl Primitive for SampleTexture3DAtParticles {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.sample_texture_3d_at_particles",
+            "node.sample_volume_at_particles",
         );
     }
 }
@@ -175,7 +175,7 @@ mod tests {
 
         assert_eq!(
             SampleTexture3DAtParticles::TYPE_ID,
-            "node.sample_texture_3d_at_particles"
+            "node.sample_volume_at_particles"
         );
         let names: Vec<&str> = SampleTexture3DAtParticles::INPUTS
             .iter()
@@ -205,7 +205,7 @@ mod tests {
         let node: &dyn EffectNode = &prim;
         assert_eq!(
             node.type_id().as_str(),
-            "node.sample_texture_3d_at_particles"
+            "node.sample_volume_at_particles"
         );
     }
 }

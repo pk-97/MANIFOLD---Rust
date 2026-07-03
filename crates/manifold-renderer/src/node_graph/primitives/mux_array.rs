@@ -1,6 +1,6 @@
-//! `node.mux_array` — N-way `Array<f32>` selector.
+//! `node.switch_array` — N-way `Array<f32>` selector.
 //!
-//! Sibling of `node.mux_scalar` and `node.mux_texture` for `Array<f32>`
+//! Sibling of `node.switch_value` and `node.switch_texture` for `Array<f32>`
 //! ports. Picks one of `in_0..in_7` based on the `selector` input and
 //! routes its contents into `out`. Completes the mux family planned in
 //! `docs/GENERATOR_DECOMPOSITION_PLAN.md` D2; first user is NestedCubes
@@ -22,8 +22,8 @@ const PORT_NAMES: [&str; 8] = [
 
 crate::primitive! {
     name: MuxArray,
-    type_id: "node.mux_array",
-    purpose: "N-way Array<f32> selector. Routes one of in_0..in_7 (Array f32) to the output buffer based on the selector input (rounded, clamped). Output capacity = max of all wired input capacities at chain-build time. Completes the mux family alongside node.mux_scalar / node.mux_texture; primary use is mode-switching at the value-array level (e.g., NestedCubes Envelope vs Pose target_angles).",
+    type_id: "node.switch_array",
+    purpose: "N-way Array<f32> selector. Routes one of in_0..in_7 (Array f32) to the output buffer based on the selector input (rounded, clamped). Output capacity = max of all wired input capacities at chain-build time. Completes the mux family alongside node.switch_value / node.switch_texture; primary use is mode-switching at the value-array level (e.g., NestedCubes Envelope vs Pose target_angles).",
     inputs: {
         selector: ScalarF32 required,
         in_0: Array(f32) optional,
@@ -54,7 +54,7 @@ crate::primitive! {
     summary: "Picks one of several incoming lists and passes it through, chosen by a selector number.",
     category: Routing,
     role: Filter,
-    aliases: ["switch", "mux", "selector"],
+    aliases: ["switch", "mux", "mux array", "selector"],
 }
 
 impl Primitive for MuxArray {
@@ -112,7 +112,7 @@ impl Primitive for MuxArray {
 
         let Some(dst) = ctx.outputs.array("out") else {
             log::warn!(
-                "node.mux_array: no GpuBuffer bound to output port `out` — \
+                "node.switch_array: no GpuBuffer bound to output port `out` — \
                  the chain build did not pre-allocate the Array<f32> output.",
             );
             return;
@@ -140,7 +140,7 @@ impl Primitive for MuxArray {
         // depends on upstream being CPU-write (true for the cycler and
         // the accumulator); see composition_notes.
         let Some(src_ptr) = src.mapped_ptr() else {
-            log::warn!("node.mux_array: source buffer has no mapped_ptr");
+            log::warn!("node.switch_array: source buffer has no mapped_ptr");
             return;
         };
         // Safety: src_ptr is valid for src_size bytes (allocation policy),

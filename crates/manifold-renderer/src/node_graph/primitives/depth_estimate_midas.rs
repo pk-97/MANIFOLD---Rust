@@ -1,4 +1,4 @@
-//! `node.depth_estimate_midas` — monocular depth estimation via the
+//! `node.depth_map` — monocular depth estimation via the
 //! MiDaS DNN, exposed as a standalone primitive.
 //!
 //! Note on `#![allow(private_interfaces)]`: the `primitive!` macro
@@ -72,7 +72,7 @@ struct DepthState {
 
 crate::primitive! {
     name: DepthEstimateMidas,
-    type_id: "node.depth_estimate_midas",
+    type_id: "node.depth_map",
     purpose: "MiDaS monocular depth estimation via FFI native plugin, wrapped as a primitive. Input: any Texture2D frame. Output: depth map (R = G = B = depth ∈ [0, 1], near = 1, far = 0; A = 1). Inference runs on a background worker thread with ~2-3 frame latency; output is bilinear-upsampled from an analysis-resolution staging texture into the runtime-allocated output. Until first inference completes, the output is black.",
     inputs: {
         in: Texture2D required,
@@ -104,7 +104,7 @@ crate::primitive! {
     summary: "Estimates a depth map from any flat image with an AI model, so nearer things read bright and far things dark. Feed it into a blur or displace to fake 3D from 2D footage.",
     category: DetectionAndSampling,
     role: Filter,
-    aliases: ["depth map", "midas", "depth", "ai depth"],
+    aliases: ["depth map", "depth estimate midas", "midas", "depth", "ai depth"],
     extra_fields: {
         upsample_pipeline: Option<GpuComputePipeline> = None,
         depth_worker: Option<BackgroundWorker<DepthRequest, DepthResponse>> = None,
@@ -122,7 +122,7 @@ impl DepthEstimateMidas {
         self.depth_worker = BackgroundWorker::try_new(|| {
             let mut estimator =
                 manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_depth_only()?;
-            log::info!("[node.depth_estimate_midas] MiDaS worker spawned (depth-only)");
+            log::info!("[node.depth_map] MiDaS worker spawned (depth-only)");
             Some(move |req: DepthRequest| -> DepthResponse {
                 let pc = (req.width * req.height) as usize;
                 let mut depth = vec![0f32; pc];
@@ -143,7 +143,7 @@ impl DepthEstimateMidas {
         });
         if self.depth_worker.is_none() {
             log::warn!(
-                "[node.depth_estimate_midas] MiDaS native plugin unavailable — output will be black"
+                "[node.depth_map] MiDaS native plugin unavailable — output will be black"
             );
         }
     }
@@ -186,7 +186,7 @@ impl DepthEstimateMidas {
             format: GpuTextureFormat::Rgba8Unorm,
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
-            label: "node.depth_estimate_midas.depth",
+            label: "node.depth_map.depth",
             mip_levels: 1,
         });
         // Fresh Metal textures have undefined contents, and the upsample
@@ -199,7 +199,7 @@ impl DepthEstimateMidas {
             format: GpuTextureFormat::Rgba16Float,
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL,
-            label: "node.depth_estimate_midas.staging",
+            label: "node.depth_map.staging",
             mip_levels: 1,
         });
         self.depth_state = Some(DepthState {
@@ -284,7 +284,7 @@ impl Primitive for DepthEstimateMidas {
                     }
                     let mean = sum / ds.depth_buffer.len().max(1) as f32;
                     log::info!(
-                        "[node.depth_estimate_midas] depth stats (frame {}): min={mn:.3} max={mx:.3} mean={mean:.3} \
+                        "[node.depth_map] depth stats (frame {}): min={mn:.3} max={mx:.3} mean={mean:.3} \
                          — near=1/far=0; min==max==0 means MiDaS returned no depth",
                         ds.frame_counter,
                     );
@@ -341,7 +341,7 @@ impl Primitive for DepthEstimateMidas {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/depth_estimate_midas_upsample.wgsl"),
                 "cs_main",
-                "node.depth_estimate_midas.upsample",
+                "node.depth_map.upsample",
             )
         });
         let sampler = self
@@ -368,7 +368,7 @@ impl Primitive for DepthEstimateMidas {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.depth_estimate_midas",
+            "node.depth_map",
         );
     }
 }
@@ -382,7 +382,7 @@ mod tests {
     #[test]
     fn depth_estimate_midas_declares_one_input_and_one_output() {
         use crate::node_graph::ports::PortType;
-        assert_eq!(DepthEstimateMidas::TYPE_ID, "node.depth_estimate_midas");
+        assert_eq!(DepthEstimateMidas::TYPE_ID, "node.depth_map");
         assert_eq!(DepthEstimateMidas::INPUTS.len(), 1);
         assert_eq!(DepthEstimateMidas::INPUTS[0].name, "in");
         assert_eq!(DepthEstimateMidas::INPUTS[0].ty, PortType::Texture2D);
@@ -404,6 +404,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = DepthEstimateMidas::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.depth_estimate_midas");
+        assert_eq!(node.type_id().as_str(), "node.depth_map");
     }
 }

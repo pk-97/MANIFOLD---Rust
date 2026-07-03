@@ -247,7 +247,7 @@
     {
       "id": 1,
       "nodeId": "mux_n_sides",
-      "typeId": "node.mux_scalar",
+      "typeId": "node.switch_value",
       "handle": "mux_n_sides",
       "params": {
         "in_0": {
@@ -280,7 +280,7 @@
     {
       "id": 2,
       "nodeId": "mux_ring_freq",
-      "typeId": "node.mux_scalar",
+      "typeId": "node.switch_value",
       "handle": "mux_ring_freq",
       "params": {
         "in_0": {
@@ -383,7 +383,7 @@
     {
       "id": 14,
       "nodeId": "mux_final_n_sides",
-      "typeId": "node.mux_scalar",
+      "typeId": "node.switch_value",
       "handle": "mux_final_n_sides",
       "params": {
         "selector": {
@@ -438,7 +438,7 @@
           {
             "id": 9,
             "nodeId": "mux_cycle_sides",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "mux_cycle_sides",
             "params": {
               "in_0": {
@@ -475,7 +475,7 @@
           {
             "id": 10,
             "nodeId": "mode_shape_enable",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "mode_shape_enable",
             "params": {
               "in_0": {
@@ -500,7 +500,7 @@
           {
             "id": 11,
             "nodeId": "mode_spawn_enable",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "mode_spawn_enable",
             "params": {
               "in_0": {

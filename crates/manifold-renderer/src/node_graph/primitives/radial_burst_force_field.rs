@@ -1,4 +1,4 @@
-//! `node.radial_burst_force_field` — per-pixel vec2 force texture for
+//! `node.explosion_force` — per-pixel vec2 force texture for
 //! an impulse burst around a point.
 //!
 //! Produces a force field with:
@@ -44,7 +44,7 @@ const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.w
 
 crate::primitive! {
     name: RadialBurstForceField,
-    type_id: "node.radial_burst_force_field",
+    type_id: "node.explosion_force",
     purpose: "Produces a per-pixel vec2 force texture for a radial impulse burst around (point_x, point_y) within `radius`. Combines radial outward push, tangent curl, noise-perturbed radial direction, and a `(1-t²)²` falloff envelope, multiplied by `amplitude * envelope`. Sum into a velocity field via node.mix(Add) and let the downstream particle integrator pick up the impulse. Reusable for any 'impulse around a point' — snaps, beat shoves, audio splashes, fluid clip-trigger inject.",
     inputs: {
         point_x: ScalarF32 optional,
@@ -107,13 +107,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "All six inputs are port-shadow-param. Typical wiring: `node.inject_burst` produces (active, phase, point_x, point_y); wire point_x/point_y straight in, derive envelope from `active * envelope_decay(phase)` (or compose attack/decay externally), wire amplitude from an outer-card slider. When amplitude * envelope ≈ 0 the kernel early-outs to a zero texture — cheap when idle. Bit-exact noise perturbation via `noise_common.wgsl`'s simplex3d (same as `node.simplex_per_instance` / `node.simplex_field_2d`).",
+    composition_notes: "All six inputs are port-shadow-param. Typical wiring: `node.inject_burst` produces (active, phase, point_x, point_y); wire point_x/point_y straight in, derive envelope from `active * envelope_decay(phase)` (or compose attack/decay externally), wire amplitude from an outer-card slider. When amplitude * envelope ≈ 0 the kernel early-outs to a zero texture — cheap when idle. Bit-exact noise perturbation via `noise_common.wgsl`'s simplex3d (same as `node.simplex_noise_per_copy` / `node.simplex_field_2d`).",
     examples: [],
     picker: { label: "Explosion Force", category: Atom },
     summary: "Makes a force field that pushes outward from a point, the field you feed into a particle move to drive an explosion.",
     category: Particles2D,
     role: Source,
-    aliases: ["explosion force", "radial burst", "blast", "force field"],
+    aliases: ["explosion force", "radial burst force field", "radial burst", "blast", "force field"],
 }
 
 impl Primitive for RadialBurstForceField {
@@ -141,7 +141,7 @@ impl Primitive for RadialBurstForceField {
             );
             src.push_str(NOISE_COMMON);
             src.push_str(include_str!("shaders/radial_burst_force_field.wgsl"));
-            gpu.device.create_compute_pipeline(&src, "cs_main", "node.radial_burst_force_field")
+            gpu.device.create_compute_pipeline(&src, "cs_main", "node.explosion_force")
         });
 
         let uniforms = BurstUniforms {
@@ -168,7 +168,7 @@ impl Primitive for RadialBurstForceField {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.radial_burst_force_field",
+            "node.explosion_force",
         );
     }
 }
@@ -183,7 +183,7 @@ mod tests {
     fn declares_six_port_shadow_inputs_and_texture_out() {
         use crate::node_graph::ports::PortType;
 
-        assert_eq!(RadialBurstForceField::TYPE_ID, "node.radial_burst_force_field");
+        assert_eq!(RadialBurstForceField::TYPE_ID, "node.explosion_force");
         let names: Vec<&str> = RadialBurstForceField::INPUTS.iter().map(|p| p.name).collect();
         assert_eq!(
             names,
@@ -215,6 +215,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = RadialBurstForceField::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.radial_burst_force_field");
+        assert_eq!(node.type_id().as_str(), "node.explosion_force");
     }
 }

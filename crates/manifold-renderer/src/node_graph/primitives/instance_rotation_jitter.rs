@@ -1,4 +1,4 @@
-//! `node.instance_rotation_jitter` — add hash-driven per-instance
+//! `node.rotation_jitter` — add hash-driven per-instance
 //! rotation jitter to each InstanceTransform's `rot_pad.xyz`.
 //! Positions and per-instance scale pass through unchanged.
 //!
@@ -41,7 +41,7 @@ const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.w
 
 crate::primitive! {
     name: InstanceRotationJitter,
-    type_id: "node.instance_rotation_jitter",
+    type_id: "node.rotation_jitter",
     purpose: "Add hash-driven per-instance Euler-rotation jitter to each InstanceTransform's rot_pad.xyz; positions and scale pass through. For each idx: rx/ry/rz = (hash_u32(idx*3+{0,1,2}) - 0.5) · amplitude. ADD semantics — pre-existing rotation from upstream is preserved and perturbed. Generic across any instanced field that wants visual density via non-uniform per-cube orientation. Reproduces the legacy DigitalPlants per-instance rotation hash bit-exactly when amplitude = 0.2.",
     inputs: {
         instances: Array(InstanceTransform) required,
@@ -66,7 +66,7 @@ crate::primitive! {
     summary: "Adds a random twist to each copy's rotation, so a field of copies face slightly different ways instead of lining up.",
     category: Particles2D,
     role: Filter,
-    aliases: ["rotation jitter", "random rotation", "twist"],
+    aliases: ["rotation jitter", "instance rotation jitter", "random rotation", "twist"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/instance_rotation_jitter_body.wgsl"),
     wgsl_includes: [NOISE_COMMON],
@@ -113,9 +113,9 @@ impl Primitive for InstanceRotationJitter {
             // hash_u32). instance_rotation_jitter.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.instance_rotation_jitter standalone codegen"),
+                    .expect("node.rotation_jitter standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.instance_rotation_jitter",
+                "node.rotation_jitter",
             )
         });
 
@@ -145,7 +145,7 @@ impl Primitive for InstanceRotationJitter {
                 },
             ],
             [count.div_ceil(256), 1, 1],
-            "node.instance_rotation_jitter",
+            "node.rotation_jitter",
         );
     }
 }
@@ -160,7 +160,7 @@ mod tests {
     fn instance_rotation_jitter_ports() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let inst_layout = ArrayType::of_known::<InstanceTransform>();
-        assert_eq!(InstanceRotationJitter::TYPE_ID, "node.instance_rotation_jitter");
+        assert_eq!(InstanceRotationJitter::TYPE_ID, "node.rotation_jitter");
 
         let inst_in = InstanceRotationJitter::INPUTS
             .iter()
@@ -215,7 +215,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = InstanceRotationJitter::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.instance_rotation_jitter");
+        assert_eq!(node.type_id().as_str(), "node.rotation_jitter");
     }
 }
 

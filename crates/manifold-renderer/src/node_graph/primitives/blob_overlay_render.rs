@@ -1,7 +1,7 @@
-//! `node.blob_overlay_render` — draw hollow rectangles around each
+//! `node.blob_overlay` — draw hollow rectangles around each
 //! blob in an `Array<Blob>` on top of a source Texture2D.
 //!
-//! Companion to `node.blob_detect_ffi`. Minimal box-drawing
+//! Companion to `node.blob_tracker`. Minimal box-drawing
 //! variant — not the full HUD pipeline (brackets / crosshairs /
 //! labels) that the legacy `node.blob_tracking` ships. Agents
 //! compose richer overlays themselves by chaining multiple
@@ -27,12 +27,12 @@ struct OverlayUniforms {
 
 crate::primitive! {
     name: BlobOverlayRender,
-    type_id: "node.blob_overlay_render",
-    purpose: "Draw hollow rectangles around each blob in an Array<Blob> on top of a source Texture2D. Companion to node.blob_detect_ffi for sparse blob visualisation. Minimal box-drawing — for the full HUD treatment (brackets, crosshairs, ticks, labels) use the legacy node.blob_tracking wrapper.",
+    type_id: "node.blob_overlay",
+    purpose: "Draw hollow rectangles around each blob in an Array<Blob> on top of a source Texture2D. Companion to node.blob_tracker for sparse blob visualisation. Minimal box-drawing — for the full HUD treatment (brackets, crosshairs, ticks, labels) use the legacy node.blob_tracking wrapper.",
     inputs: {
         in: Texture2D required,
         // Phase 4b: typed Channels signature matching what
-        // node.blob_detect_ffi emits. The wire's byte layout (16 bytes:
+        // node.blob_tracker emits. The wire's byte layout (16 bytes:
         // x, y, width, height as f32, 4-byte aligned) is the public
         // contract; the consumer reads it directly from the bound
         // buffer in the WGSL shader.
@@ -75,13 +75,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Wire node.blob_detect_ffi.blobs → this primitive's blobs port. `blob_count` is an upper bound (the shader iterates this many entries from the array but skips any with zero width/height, so it's safe to leave at 32 even if the actual detection count is lower). `border_width` is in UV units (0.003 ≈ 2px at 720p). For thicker boxes raise this; for solid filled boxes set border_width > max(blob.width, blob.height).",
+    composition_notes: "Wire node.blob_tracker.blobs → this primitive's blobs port. `blob_count` is an upper bound (the shader iterates this many entries from the array but skips any with zero width/height, so it's safe to leave at 32 even if the actual detection count is lower). `border_width` is in UV units (0.003 ≈ 2px at 720p). For thicker boxes raise this; for solid filled boxes set border_width > max(blob.width, blob.height).",
     examples: [],
     picker: { label: "Blob Overlay", category: Atom },
     summary: "Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking.",
     category: DetectionAndSampling,
     role: Filter,
-    aliases: ["blob overlay", "tracking boxes", "debug view"],
+    aliases: ["blob overlay", "blob overlay render", "tracking boxes", "debug view"],
 }
 
 impl Primitive for BlobOverlayRender {
@@ -119,7 +119,7 @@ impl Primitive for BlobOverlayRender {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/blob_overlay_render.wgsl"),
                 "cs_main",
-                "node.blob_overlay_render",
+                "node.blob_overlay",
             )
         });
         let sampler = self
@@ -161,7 +161,7 @@ impl Primitive for BlobOverlayRender {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.blob_overlay_render",
+            "node.blob_overlay",
         );
     }
 }
@@ -187,7 +187,7 @@ mod tests {
         ];
         let expected = ArrayType::of_channels(EXPECTED, MatchMode::Exact);
 
-        assert_eq!(BlobOverlayRender::TYPE_ID, "node.blob_overlay_render");
+        assert_eq!(BlobOverlayRender::TYPE_ID, "node.blob_overlay");
         assert_eq!(BlobOverlayRender::INPUTS.len(), 2);
         assert_eq!(BlobOverlayRender::INPUTS[0].name, "in");
         assert_eq!(BlobOverlayRender::INPUTS[0].ty, PortType::Texture2D);
@@ -210,6 +210,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = BlobOverlayRender::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.blob_overlay_render");
+        assert_eq!(node.type_id().as_str(), "node.blob_overlay");
     }
 }

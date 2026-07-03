@@ -306,12 +306,12 @@ hand_descriptor!(
 
 // Routing (mux_texture.rs)
 hand_descriptor!(
-    "node.mux_texture",
+    "node.switch_texture",
     "Dynamic N-way Texture2D selector. `num_inputs` sets how many in_0..in_N ports exist and a rounded, clamped `selector` forwards the matching input. Reconfigures its port list when `num_inputs` changes.",
     summary: "Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in.",
     category: Routing,
     role: Filter,
-    aliases: ["switch", "mux", "selector", "Switch TOP"],
+    aliases: ["switch", "mux", "mux texture", "selector", "Switch TOP"],
 );
 
 // WGSL escape hatch (wgsl_compute.rs)
@@ -395,7 +395,7 @@ hand_descriptor!(
 // Particle simulation (scatter_particles_camera.rs — legacy alias)
 hand_descriptor!(
     "node.fluid_project_scatter_2d",
-    "Legacy type-ID alias of node.scatter_particles_camera (FluidSim3D's camera-projection + 2D scatter display path), retained so older projects load.",
+    "Legacy type-ID alias of node.draw_particles_camera (FluidSim3D's camera-projection + 2D scatter display path), retained so older projects load.",
     summary: "Projects 3D particles through a camera and splats them to 2D. The older name for Draw Particles (camera).",
     category: Particles3D,
     role: Filter,

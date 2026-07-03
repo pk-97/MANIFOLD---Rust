@@ -34,171 +34,8 @@
     },
     {
       "aliases": [
-        "anti-clump",
-        "separation",
-        "spread",
-        "repel"
-      ],
-      "category": "Particles 2D",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "strength_modulator",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "strength",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Anti-Clump Particles",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "label": "Strength",
-          "name": "strength",
-          "range": [
-            "0",
-            "0.1"
-          ],
-          "tooltip": "How hard each particle gets nudged off its spot every frame. 0 leaves the cloud alone, and higher values spread it out faster. The useful range is small, so keep it low for a gentle drift.",
-          "type": "float"
-        },
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles in the buffer get the kick. It is clamped to whatever the buffer can actually hold.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Modulator-weighted Brownian kick on each live particle's position.xy. With a `strength_modulator` texture wired, samples it at the particle's UV and applies `kick = (hash3(i, frame) − 0.5) * strength * capped(m)` where `capped = m / (1 + m)`. Without a modulator, applies plain `kick = (hash3) * strength` uniformly. Canonical FluidSim use wires density (kick concentrates where particles cluster); equally useful with audio amplitude maps, masks, depth slices, or any scalar texture. Sibling to node.array_diffuse_particles (which kicks velocity, un-weighted) — separate atoms because the math, the state field, and the modulator weighting differ.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Nudges particles apart where they bunch up, keeping the cloud evenly spread instead of collapsing into blobs.",
-      "type_id": "node.anti_clump_particles"
-    },
-    {
-      "aliases": [
-        "add burst 3d",
-        "explosion 3d",
-        "inject"
-      ],
-      "category": "Particles 3D",
-      "examples": [
-        "FluidSimulation3D"
-      ],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "inject_index",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "inject_force",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "inject_phase",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Add Burst (3D, radial)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "-1",
-          "label": "Inject Zone",
-          "name": "inject_index",
-          "range": [
-            "-1",
-            "3"
-          ],
-          "tooltip": "Picks which of the four fixed burst zones to fire into, numbered 0 to 3. Set it to -1 to switch the burst off entirely.",
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "label": "Inject Force",
-          "name": "inject_force",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "How hard the burst pushes new material in, from 0 for nothing up to 1 for a full puff. Wire a trigger envelope here to fire it on a hit.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Inject Phase",
-          "name": "inject_phase",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "Where the burst sits in its attack and decay envelope, from 0 to 1. Drive it from the same trigger that fires the burst so the push fades in and out.",
-          "type": "float"
-        },
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles the burst is allowed to touch. Keep it matched to the particle count feeding the sim so the whole field reacts.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Per-particle 3D injection burst around one of four hardcoded tetrahedron-vertex zones. inject_index < 0 disables it; 0..3 selects a zone. Applies a noise-perturbed radial push + vortex-ring tangent (within radius 0.25, quartic falloff, attack/decay envelope from inject_phase) directly to position.xyz. The 3D sibling of node.apply_radial_burst_to_particles; decomposed from the injection step of the fused node.fluid_simulate_3d.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit.",
-      "type_id": "node.apply_radial_burst_3d_to_particles"
-    },
-    {
-      "aliases": [
         "add burst",
+        "apply radial burst to particles",
         "explosion",
         "shockwave",
         "impulse"
@@ -317,11 +154,176 @@
           "type": "int"
         }
       ],
-      "purpose": "Per-particle radial impulse around `(point_x, point_y)` — evaluates the radial + tangent + noise-perturbed-radial + falloff math at each particle's exact UV and applies the resulting push to `position.xy` directly. The per-particle counterpart to `node.radial_burst_force_field` (which paints the same math as a texture for downstream sampling). Use this atom when bilinear smoothing near the impulse centre would muddy the visible kick — fluid sims, sparks reacting to beat hits, particle-text inject events.",
+      "purpose": "Per-particle radial impulse around `(point_x, point_y)` — evaluates the radial + tangent + noise-perturbed-radial + falloff math at each particle's exact UV and applies the resulting push to `position.xy` directly. The per-particle counterpart to `node.explosion_force` (which paints the same math as a texture for downstream sampling). Use this atom when bilinear smoothing near the impulse centre would muddy the visible kick — fluid sims, sparks reacting to beat hits, particle-text inject events.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Pushes particles outward from a point in a burst, like an explosion or shockwave on a hit.",
-      "type_id": "node.apply_radial_burst_to_particles"
+      "type_id": "node.add_burst"
+    },
+    {
+      "aliases": [
+        "add burst 3d",
+        "apply radial burst 3d to particles",
+        "explosion 3d",
+        "inject"
+      ],
+      "category": "Particles 3D",
+      "examples": [
+        "FluidSimulation3D"
+      ],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "inject_index",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "inject_force",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "inject_phase",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Add Burst (3D, radial)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "-1",
+          "label": "Inject Zone",
+          "name": "inject_index",
+          "range": [
+            "-1",
+            "3"
+          ],
+          "tooltip": "Picks which of the four fixed burst zones to fire into, numbered 0 to 3. Set it to -1 to switch the burst off entirely.",
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Inject Force",
+          "name": "inject_force",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "How hard the burst pushes new material in, from 0 for nothing up to 1 for a full puff. Wire a trigger envelope here to fire it on a hit.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Inject Phase",
+          "name": "inject_phase",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "Where the burst sits in its attack and decay envelope, from 0 to 1. Drive it from the same trigger that fires the burst so the push fades in and out.",
+          "type": "float"
+        },
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles the burst is allowed to touch. Keep it matched to the particle count feeding the sim so the whole field reacts.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Per-particle 3D injection burst around one of four hardcoded tetrahedron-vertex zones. inject_index < 0 disables it; 0..3 selects a zone. Applies a noise-perturbed radial push + vortex-ring tangent (within radius 0.25, quartic falloff, attack/decay envelope from inject_phase) directly to position.xyz. The 3D sibling of node.add_burst; decomposed from the injection step of the fused node.fluid_simulate_3d.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit.",
+      "type_id": "node.add_burst_3d"
+    },
+    {
+      "aliases": [
+        "anti-clump",
+        "separation",
+        "spread",
+        "repel"
+      ],
+      "category": "Particles 2D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "strength_modulator",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "strength",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Anti-Clump Particles",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "label": "Strength",
+          "name": "strength",
+          "range": [
+            "0",
+            "0.1"
+          ],
+          "tooltip": "How hard each particle gets nudged off its spot every frame. 0 leaves the cloud alone, and higher values spread it out faster. The useful range is small, so keep it low for a gentle drift.",
+          "type": "float"
+        },
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles in the buffer get the kick. It is clamped to whatever the buffer can actually hold.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Modulator-weighted Brownian kick on each live particle's position.xy. With a `strength_modulator` texture wired, samples it at the particle's UV and applies `kick = (hash3(i, frame) − 0.5) * strength * capped(m)` where `capped = m / (1 + m)`. Without a modulator, applies plain `kick = (hash3) * strength` uniformly. Canonical FluidSim use wires density (kick concentrates where particles cluster); equally useful with audio amplitude maps, masks, depth slices, or any scalar texture. Sibling to node.spread_out (which kicks velocity, un-weighted) — separate atoms because the math, the state field, and the modulator weighting differ.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Nudges particles apart where they bunch up, keeping the cloud evenly spread instead of collapsing into blobs.",
+      "type_id": "node.anti_clump_particles"
     },
     {
       "aliases": [
@@ -471,69 +473,6 @@
       "stratum": "atom",
       "summary": "Lays out a field of copies in a grid, ring, spiral, or random spread, giving each one a position to render at. Pair it with Render Copies.",
       "type_id": "node.arrange_copies"
-    },
-    {
-      "aliases": [
-        "spread out",
-        "diffuse",
-        "jitter",
-        "random kick"
-      ],
-      "category": "Particles 2D",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "diffusion",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Spread Out (diffuse)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "label": "Diffusion",
-          "name": "diffusion",
-          "range": [
-            "0",
-            "0.05"
-          ],
-          "tooltip": "How hard the random kick hits each particle every frame. 0 leaves the cloud exactly as it is, and the useful range tops out around 0.05 before things scatter wildly.",
-          "type": "float"
-        },
-        {
-          "default": "500000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles in the buffer actually get kicked, counted from the front. It is capped to the real buffer size so a value above the particle count just affects all of them.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Apply a per-particle hash-based random kick to `Particle.velocity`. One GPU dispatch over Array<Particle> with aliased read+write. `diffusion` scales the kick magnitude (typical range 0..0.05); zero means no-op. `frame_count` reseeds the hash each frame so the kick is genuinely uncorrelated across frames. Generic Brownian-noise atom — pairs with any particle integrator (attractor ODE, fluid sim, advection) that wants additive jitter on its 3D state.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Gives each particle a small random kick so a tight clump slowly spreads apart. Adds a bit of life and scatter.",
-      "type_id": "node.array_diffuse_particles"
     },
     {
       "aliases": [
@@ -1248,7 +1187,137 @@
     },
     {
       "aliases": [
+        "blend copies",
+        "lerp instance fields",
+        "morph",
+        "lerp",
+        "interpolate"
+      ],
+      "category": "Particles 2D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "a",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "b",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "t",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Blend Copies",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.5",
+          "label": "Mix",
+          "name": "t",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "How far to blend from the first arrangement toward the second. 0 is all the first, 1 is all the second, and 0.5 is the midway morph. Values outside that range overshoot.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Elementwise linear interpolation between two Array<InstanceTransform>s. out[idx] = (1 - t) * a[idx] + t * b[idx] applied to both pos_scale and rot_pad. The continuous counterpart to node.switch_array — pick this when the morph parameter is a real 0..1 slider and intermediate values must visually morph (the DigitalPlants cyl ↔ tor case). At t=0 the output equals a; at t=1 it equals b; at t=0.5 the elementwise midpoint. `t` is port-shadow-param so the morph factor can be modulated.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Blends two arrangements of copies together by an amount, so you can morph a field of copies from one layout to another.",
+      "type_id": "node.blend_copies"
+    },
+    {
+      "aliases": [
+        "blob overlay",
+        "blob overlay render",
+        "tracking boxes",
+        "debug view"
+      ],
+      "category": "Detection & Sampling",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "blobs",
+          "required": true,
+          "type": "Array"
+        }
+      ],
+      "label": "Blob Overlay",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "[0, 1, 0.5, 1]",
+          "label": "Color",
+          "name": "color",
+          "tooltip": "The colour of the boxes drawn around each blob.",
+          "type": "color"
+        },
+        {
+          "default": "0.8",
+          "label": "Alpha",
+          "name": "alpha",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "How opaque the boxes are over the image. 0 is invisible and 1 is solid.",
+          "type": "float"
+        },
+        {
+          "default": "0.003",
+          "label": "Border Width",
+          "name": "border_width",
+          "range": [
+            "0.0005",
+            "0.05"
+          ],
+          "tooltip": "Thickness of the box outline, in UV units where 0.003 is roughly 2 pixels at 720p. Push it past the blob size to get solid filled boxes instead of outlines.",
+          "type": "float"
+        },
+        {
+          "default": "32",
+          "label": "Blob Count",
+          "name": "blob_count",
+          "range": [
+            "0",
+            "32"
+          ],
+          "tooltip": "The most blobs to draw boxes for, up to 32. It is safe to leave at 32 since entries with no size are skipped.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Draw hollow rectangles around each blob in an Array<Blob> on top of a source Texture2D. Companion to node.blob_tracker for sparse blob visualisation. Minimal box-drawing — for the full HUD treatment (brackets, crosshairs, ticks, labels) use the legacy node.blob_tracking wrapper.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking.",
+      "type_id": "node.blob_overlay"
+    },
+    {
+      "aliases": [
         "blob tracker",
+        "blob detect ffi",
         "blob detect",
         "tracking",
         "bright spots"
@@ -1330,82 +1399,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals.",
-      "type_id": "node.blob_detect_ffi"
-    },
-    {
-      "aliases": [
-        "blob overlay",
-        "tracking boxes",
-        "debug view"
-      ],
-      "category": "Detection & Sampling",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "blobs",
-          "required": true,
-          "type": "Array"
-        }
-      ],
-      "label": "Blob Overlay",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "[0, 1, 0.5, 1]",
-          "label": "Color",
-          "name": "color",
-          "tooltip": "The colour of the boxes drawn around each blob.",
-          "type": "color"
-        },
-        {
-          "default": "0.8",
-          "label": "Alpha",
-          "name": "alpha",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "How opaque the boxes are over the image. 0 is invisible and 1 is solid.",
-          "type": "float"
-        },
-        {
-          "default": "0.003",
-          "label": "Border Width",
-          "name": "border_width",
-          "range": [
-            "0.0005",
-            "0.05"
-          ],
-          "tooltip": "Thickness of the box outline, in UV units where 0.003 is roughly 2 pixels at 720p. Push it past the blob size to get solid filled boxes instead of outlines.",
-          "type": "float"
-        },
-        {
-          "default": "32",
-          "label": "Blob Count",
-          "name": "blob_count",
-          "range": [
-            "0",
-            "32"
-          ],
-          "tooltip": "The most blobs to draw boxes for, up to 32. It is safe to leave at 32 since entries with no size are skipped.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Draw hollow rectangles around each blob in an Array<Blob> on top of a source Texture2D. Companion to node.blob_detect_ffi for sparse blob visualisation. Minimal box-drawing — for the full HUD treatment (brackets, crosshairs, ticks, labels) use the legacy node.blob_tracking wrapper.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking.",
-      "type_id": "node.blob_overlay_render"
+      "type_id": "node.blob_tracker"
     },
     {
       "aliases": [
@@ -2961,167 +2955,6 @@
     },
     {
       "aliases": [
-        "keep in box",
-        "bounds",
-        "contain",
-        "clamp"
-      ],
-      "category": "Particles 3D",
-      "examples": [
-        "FluidSimulation3D"
-      ],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "ctr_scale",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Keep In Box (3D)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "enum_values": [
-            "None",
-            "Cube",
-            "Sphere",
-            "Torus"
-          ],
-          "label": "Container",
-          "name": "container",
-          "tooltip": "The shape that holds the particles in. None wraps them around the edges, while Cube, Sphere, and Torus bounce them back inside the surface.",
-          "type": "enum"
-        },
-        {
-          "default": "0.8",
-          "label": "Container Scale",
-          "name": "ctr_scale",
-          "range": [
-            "0.2",
-            "1"
-          ],
-          "tooltip": "How big the container is inside the unit cube, from 0.2 to 1. Smaller values pull the walls in tighter. This has no effect when the container is set to None.",
-          "type": "float"
-        },
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles from the front of the buffer to contain. Set this to match the live particle count so idle slots are left alone.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Post-integration hard containment for 3D particles: toroidal wrap (container = None) or SDF reflect + clamp (Cube/Sphere/Torus). For None: position = fract(position + 1). For an SDF container: when a particle escapes (d > 0) it's pushed back inside along the surface normal, then clamped to [0.001, 0.999]. The 3D sibling of node.wrap_particles_torus (torus-only); decomposed from the containment step of the fused node.fluid_simulate_3d. Particle velocity is not touched (the legacy velocity-bounce write was dead state).",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move.",
-      "type_id": "node.container_bounds_3d"
-    },
-    {
-      "aliases": [
-        "push from walls",
-        "repel",
-        "boundary",
-        "container"
-      ],
-      "category": "Particles 3D",
-      "examples": [
-        "FluidSimulation3D"
-      ],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "particles",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "ctr_scale",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Push From Walls (3D)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "enum_values": [
-            "None",
-            "Cube",
-            "Sphere",
-            "Torus"
-          ],
-          "label": "Container",
-          "name": "container",
-          "tooltip": "The shape of the wall particles get pushed away from. None turns the push off entirely, the rest pick a Cube, Sphere, or Torus boundary.",
-          "type": "enum"
-        },
-        {
-          "default": "0.8",
-          "label": "Container Scale",
-          "name": "ctr_scale",
-          "range": [
-            "0.2",
-            "1"
-          ],
-          "tooltip": "How big the container is. Smaller packs the particles into a tighter volume, larger gives them more room before the walls start pushing back.",
-          "type": "float"
-        },
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles in the buffer feel the wall push, counted from the front. It is capped to the real particle count.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Soft container-boundary repulsion added in-place to an Array<[f32; 3]> force buffer. When a particle is within a 0.1 margin of the container SDF (Cube/Sphere/Torus), a gentle inward force `n * (t*t*0.15)` cushions it back along the outward normal, preventing wall pile-up. container = None disables it. The pre-integration cushion half of the FluidSim3D container behaviour (the post-integration hard wall is node.container_bounds_3d). Decomposed from the fused node.fluid_simulate_3d.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce.",
-      "type_id": "node.container_repel_force_3d"
-    },
-    {
-      "aliases": [
         "contrast",
         "Level TOP"
       ],
@@ -3214,141 +3047,6 @@
       "stratum": "atom",
       "summary": "Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry.",
       "type_id": "node.cube_mesh"
-    },
-    {
-      "aliases": [
-        "swirl force",
-        "curl",
-        "vortex",
-        "smoke"
-      ],
-      "category": "Particles 3D",
-      "examples": [
-        "FluidSimulation3D"
-      ],
-      "inputs": [
-        {
-          "name": "gradient",
-          "required": true,
-          "type": "Texture3D"
-        },
-        {
-          "name": "curl_strength",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "slope_strength",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "ref_axis_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "ref_axis_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "ref_axis_z",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Swirl Force (3D, curl)",
-      "outputs": [
-        {
-          "name": "force",
-          "type": "Texture3D"
-        }
-      ],
-      "params": [
-        {
-          "default": "128",
-          "label": "Volume Resolution",
-          "name": "vol_res",
-          "range": [
-            "16",
-            "512"
-          ],
-          "tooltip": "The width and height of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
-          "type": "int"
-        },
-        {
-          "default": "128",
-          "label": "Volume Depth",
-          "name": "vol_depth",
-          "range": [
-            "16",
-            "512"
-          ],
-          "tooltip": "The depth of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "label": "Curl Strength",
-          "name": "curl_strength",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "How hard the swirl pulls particles into orbiting eddies. 0 is no swirl, higher spins them up. This is the dial that makes the flow read as smoke.",
-          "type": "float"
-        },
-        {
-          "default": "-500",
-          "label": "Slope Strength",
-          "name": "slope_strength",
-          "range": [
-            "-5000",
-            "5000"
-          ],
-          "tooltip": "How hard particles push along the gradient. Negative pulls them toward dense spots, positive pushes them away, default -500.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Ref Axis X",
-          "name": "ref_axis_x",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The X part of the axis the swirl rotates around. The three axis values get normalised together, so feed raw sine and cosine without worrying about length.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "Ref Axis Y",
-          "name": "ref_axis_y",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The Y part of the axis the swirl rotates around, default 1. The three axis values get normalised together before the swirl is built.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Ref Axis Z",
-          "name": "ref_axis_z",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "The Z part of the axis the swirl rotates around. The three axis values get normalised together, so a length of zero falls back to straight up.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a curl-noise reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). axis = normalize(ref_axis + smooth spatial wobble of the voxel position); force = cross(gradient, axis) * curl_strength + gradient * slope_strength. Writes a vec3 force Texture3D. The per-voxel axis wobble keeps the swirl even across the volume instead of pooling in one octant. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.edge_slope_3d.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies.",
-      "type_id": "node.curl_slope_force_3d"
     },
     {
       "aliases": [
@@ -3629,7 +3327,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Lift an Array<vec2<f32>> of UVs onto a cylindrical surface and emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, r = base_radius * pow(max(1 - uv.y, 0), taper) + radius_disp, y = (uv.y - 0.5) * height_scale, pos = (r·cos θ, y, r·sin θ). The taper curve narrows the radius toward uv.y=1 — produces stem / vase / cone / conifer shapes. Optional radius_disp Array<f32> adds per-instance radial noise (typically driven by node.simplex_per_instance + shaping). All scalar params are port-shadow so the cylinder can be animated by control wires.",
+      "purpose": "Lift an Array<vec2<f32>> of UVs onto a cylindrical surface and emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, r = base_radius * pow(max(1 - uv.y, 0), taper) + radius_disp, y = (uv.y - 0.5) * height_scale, pos = (r·cos θ, y, r·sin θ). The taper curve narrows the radius toward uv.y=1 — produces stem / vase / cone / conifer shapes. Optional radius_disp Array<f32> adds per-instance radial noise (typically driven by node.simplex_noise_per_copy + shaping). All scalar params are port-shadow so the cylinder can be animated by control wires.",
       "role": "Map",
       "stratum": "atom",
       "summary": "Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry.",
@@ -3638,6 +3336,7 @@
     {
       "aliases": [
         "depth map",
+        "depth estimate midas",
         "midas",
         "depth",
         "ai depth"
@@ -3686,81 +3385,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Estimates a depth map from any flat image with an AI model, so nearer things read bright and far things dark. Feed it into a blur or displace to fake 3D from 2D footage.",
-      "type_id": "node.depth_estimate_midas"
-    },
-    {
-      "aliases": [
-        "spread out 3d",
-        "diffuse 3d",
-        "jitter"
-      ],
-      "category": "Particles 3D",
-      "examples": [
-        "FluidSimulation3D"
-      ],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "particles",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "density",
-          "required": true,
-          "type": "Texture3D"
-        },
-        {
-          "name": "diffusion",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Spread Out (3D diffuse)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.0166",
-          "label": "Diffusion",
-          "name": "diffusion",
-          "range": [
-            "0",
-            "0.5"
-          ],
-          "tooltip": "How strong a random kick each particle gets, from 0 for none up to 0.5. Higher spreads tight clumps apart faster, and the push is stronger where particles are densest.",
-          "type": "float"
-        },
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles get the random kick. Keep it matched to the particle count feeding the sim.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Per-particle incoherent 3D random kick added in-place to an Array<[f32; 3]> force buffer, weighted by local density. forces[i] += (hash_float3(i, frame) - 0.5) * diffusion * capped(density). Reseeds the hash each frame (Brownian, not drift); the density weighting concentrates the kick where particles clump (anti-clumping diffusion). Decomposed from the diffusion step of the fused node.fluid_simulate_3d.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space.",
-      "type_id": "node.diffuse_force_3d_at_particles"
+      "type_id": "node.depth_map"
     },
     {
       "aliases": [
@@ -4678,6 +4303,293 @@
     },
     {
       "aliases": [
+        "draw particles",
+        "scatter particles",
+        "scatter",
+        "splat",
+        "points"
+      ],
+      "category": "Particles 2D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "particles",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "width",
+          "required": true,
+          "type": "f32"
+        },
+        {
+          "name": "height",
+          "required": true,
+          "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "scaled_energy",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Draw Particles (scatter)",
+      "outputs": [
+        {
+          "name": "accum",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles to splat, counted from the start of the buffer. Match it to your live particle count so empty slots add nothing.",
+          "type": "int"
+        },
+        {
+          "default": "4096",
+          "label": "Energy per Particle",
+          "name": "scaled_energy",
+          "range": [
+            "1",
+            "65536"
+          ],
+          "tooltip": "How much brightness each particle deposits where it lands. Higher values build the image up faster, so dense clouds bloom sooner.",
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Wrap",
+            "Discard"
+          ],
+          "label": "Boundary",
+          "name": "boundary",
+          "tooltip": "What happens to particles that land outside the canvas. Wrap tiles them back around so fluids flow without a seam, Discard drops them to avoid a hard edge when projecting from 3D.",
+          "type": "enum"
+        }
+      ],
+      "purpose": "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). `width` and `height` are required wired inputs — the convention is to drive them from `system.generator_input.output_width / output_height` so the dispatch tracks the host's canvas (the buffer itself is also auto-sized to the canvas via `canvas_sized_array_outputs()`, so allocation and dispatch never disagree). Pair with `node.resolve_scatter` to read the result as a float texture.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Splats a cloud of particles onto a buffer, building up an image from where they land. Pair it with Resolve Scatter to read the result back.",
+      "type_id": "node.draw_particles"
+    },
+    {
+      "aliases": [
+        "draw particles 3d",
+        "scatter particles 3d",
+        "scatter 3d",
+        "splat",
+        "volume"
+      ],
+      "category": "Particles 3D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "particles",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "scaled_energy",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Draw Particles (3D scatter)",
+      "outputs": [
+        {
+          "name": "accum",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles from the front of the buffer to splat into the volume. Set this to match the live particle count.",
+          "type": "int"
+        },
+        {
+          "default": "128",
+          "label": "Volume Resolution",
+          "name": "vol_res",
+          "range": [
+            "16",
+            "512"
+          ],
+          "tooltip": "The width and height of the volume grid in cells. Higher gives a finer density field at the cost of memory and speed.",
+          "type": "int"
+        },
+        {
+          "default": "128",
+          "label": "Volume Depth",
+          "name": "vol_depth",
+          "range": [
+            "16",
+            "512"
+          ],
+          "tooltip": "How many cells deep the volume grid is. Together with the resolution this sets how much detail the density field holds.",
+          "type": "int"
+        },
+        {
+          "default": "4096",
+          "label": "Energy per Particle",
+          "name": "scaled_energy",
+          "range": [
+            "1",
+            "65536"
+          ],
+          "tooltip": "How much density each particle adds to its cell. The default 4096 reads back as roughly 1.0 in float density downstream.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Atomic-add splat of an Array<Particle> into a u32 3D accumulator buffer sized vol_res × vol_res × vol_depth. Each live particle's nearest-voxel cell receives `scaled_energy` via atomicAdd. Pair with node.resolve_scatter_3d to lift the u32 grid into a float Texture3D for downstream volumetric primitives like blur_3d, gradient_curl_3d, project_particles_3d.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles.",
+      "type_id": "node.draw_particles_3d"
+    },
+    {
+      "aliases": [
+        "draw particles camera",
+        "scatter particles camera",
+        "project scatter",
+        "3d to 2d"
+      ],
+      "category": "Particles 3D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "particles",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "camera",
+          "required": true,
+          "type": "Camera"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "disp_w",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "disp_h",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "scaled_energy",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "mode",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Draw Particles (camera)",
+      "outputs": [
+        {
+          "name": "accum",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles get drawn, counted from the front of the buffer. It is capped to the real particle count.",
+          "type": "int"
+        },
+        {
+          "default": "1920",
+          "label": "Display Width",
+          "name": "disp_w",
+          "range": [
+            "16",
+            "8192"
+          ],
+          "tooltip": "Width of the image the particles splat onto, in pixels. Wire this from the canvas size so the splat matches your output resolution.",
+          "type": "int"
+        },
+        {
+          "default": "1080",
+          "label": "Display Height",
+          "name": "disp_h",
+          "range": [
+            "16",
+            "8192"
+          ],
+          "tooltip": "Height of the image the particles splat onto, in pixels. Wire this from the canvas size so the splat matches your output resolution.",
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Perspective",
+            "Orthographic"
+          ],
+          "label": "Projection",
+          "name": "mode",
+          "tooltip": "Perspective gives true depth and hides particles behind the camera. Orthographic keeps everything flat and wraps the edges so the field tiles without a visible seam.",
+          "type": "enum"
+        },
+        {
+          "default": "4096",
+          "label": "Energy per Particle",
+          "name": "scaled_energy",
+          "range": [
+            "1",
+            "65536"
+          ],
+          "tooltip": "How much brightness each particle deposits where it lands. Higher makes a denser, more glowing splat.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Fused 3D→2D camera projection + atomic-add scatter. Takes 3D particles and a Camera; projects each particle through orthographic (with toroidal wrap) or perspective camera math; atomic-adds scaled_energy into a 2D u32 accumulator. Pair downstream with node.resolve_scatter → texture for display. Sibling to node.draw_particles (2D in/2D out) and node.draw_particles_3d (3D in/3D out) — this one bridges 3D in to 2D-grid out via a camera. Used by FluidSim3D's display path.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim.",
+      "type_id": "node.draw_particles_camera"
+    },
+    {
+      "aliases": [
         "draw rectangles",
         "render filled rects",
         "filled rects",
@@ -5154,7 +5066,7 @@
           "type": "int"
         }
       ],
-      "purpose": "6-tap central-difference gradient of a scalar density Texture3D, written as a vec3 Texture3D. Toroidal wrap (XY use vol_res, Z uses vol_depth); gradient = float3(dx, dy, dz) * 0.5 in integer voxel space. 3D sibling of node.edge_slope. Decomposed from the gradient half of the legacy fused node.fluid_gradient_curl_3d; pair with node.curl_slope_force_3d for the FluidSim3D force field.",
+      "purpose": "6-tap central-difference gradient of a scalar density Texture3D, written as a vec3 Texture3D. Toroidal wrap (XY use vol_res, Z uses vol_depth); gradient = float3(dx, dy, dz) * 0.5 in integer voxel space. 3D sibling of node.edge_slope. Decomposed from the gradient half of the legacy fused node.fluid_gradient_curl_3d; pair with node.swirl_force_3d for the FluidSim3D force field.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Measures how fast a value changes through a 3D volume, giving a direction at every point. Used to find flow and forces inside a fluid sim.",
@@ -5334,141 +5246,126 @@
     },
     {
       "aliases": [
-        "move particles",
-        "integrate",
-        "step",
-        "euler"
+        "explosion force",
+        "radial burst force field",
+        "radial burst",
+        "blast",
+        "force field"
       ],
       "category": "Particles 2D",
       "examples": [],
       "inputs": [
         {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "forces",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "speed",
+          "name": "point_x",
           "required": false,
           "type": "f32"
         },
         {
-          "name": "active_count",
+          "name": "point_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "amplitude",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "envelope",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "radius",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "time",
           "required": false,
           "type": "f32"
         }
       ],
-      "label": "Move Particles (Euler step)",
+      "label": "Explosion Force",
       "outputs": [
         {
           "name": "out",
-          "type": "Array"
+          "type": "Texture2D"
         }
       ],
       "params": [
         {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
+          "default": "0.5",
+          "label": "Point X",
+          "name": "point_x",
           "range": [
             "0",
-            "16000000"
+            "1"
           ],
-          "tooltip": "How many particles are alive and being moved.",
-          "type": "int"
+          "tooltip": "Horizontal centre of the blast, from 0 at the left edge to 1 at the right.",
+          "type": "float"
         },
         {
-          "default": "1",
-          "label": "Speed",
-          "name": "speed",
+          "default": "0.5",
+          "label": "Point Y",
+          "name": "point_y",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "Vertical centre of the blast, from 0 at the top to 1 at the bottom.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Amplitude",
+          "name": "amplitude",
           "range": [
             "0",
             "10"
           ],
-          "tooltip": "How fast the particles move each step.",
+          "tooltip": "How hard the burst pushes. At 0 the field is empty and the node costs nothing, raise it to throw particles harder.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Envelope",
+          "name": "envelope",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "The current strength of the burst from 0 to 1, usually driven by a decay so the impulse fades after it fires. At 0 the field is empty.",
+          "type": "float"
+        },
+        {
+          "default": "0.25",
+          "label": "Radius",
+          "name": "radius",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "How far the push reaches from the centre point, in fractions of the frame. The force falls off smoothly to nothing at the edge of this radius.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Time",
+          "name": "time",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "Feeds the noise that breaks up the push so it looks organic rather than perfectly radial. Wire your time source in to keep it animating.",
           "type": "float"
         }
       ],
-      "purpose": "Apply one Euler integration step to each live particle's position.xy by a per-particle 2D force. `position.xy += forces[i] * speed * (delta * 60)`. Frame-rate-normalised via the `* 60` scale so the same `speed` value gives consistent motion across frame rates (matches the legacy fluid_simulate's `dt_scale = dt * 60`). Dead particles (life <= 0) pass through unchanged. No boundary handling — pair with `node.wrap_particles_torus` for the toroidal policy.",
-      "role": "Filter",
+      "purpose": "Produces a per-pixel vec2 force texture for a radial impulse burst around (point_x, point_y) within `radius`. Combines radial outward push, tangent curl, noise-perturbed radial direction, and a `(1-t²)²` falloff envelope, multiplied by `amplitude * envelope`. Sum into a velocity field via node.mix(Add) and let the downstream particle integrator pick up the impulse. Reusable for any 'impulse around a point' — snaps, beat shoves, audio splashes, fluid clip-trigger inject.",
+      "role": "Source",
       "stratum": "atom",
-      "summary": "Moves every particle one step along its velocity each frame. The basic integrator that makes a particle system actually move.",
-      "type_id": "node.euler_step_particles"
-    },
-    {
-      "aliases": [
-        "move particles 3d",
-        "integrate 3d",
-        "step",
-        "euler"
-      ],
-      "category": "Particles 3D",
-      "examples": [
-        "FluidSimulation3D"
-      ],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "forces",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "speed",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Move Particles (3D, Euler step)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles to move each frame, counted from the start of the buffer. Match it to your live particle count so dead slots stay put.",
-          "type": "int"
-        },
-        {
-          "default": "1",
-          "label": "Speed",
-          "name": "speed",
-          "range": [
-            "0",
-            "10"
-          ],
-          "tooltip": "Scales how far every particle travels per step. 1 moves them at the force's natural pace, higher is faster. Wire an LFO or audio band in to drive the energy live.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Apply one Euler integration step to each live particle's position.xyz by a per-particle 3D force. `position.xyz += forces[i] * speed * (delta * 60)`. Frame-rate-normalised via the `* 60` scale (matches the legacy fluid_simulate_3d's dt_scale = dt * 60). Dead particles (life <= 0) pass through unchanged. No boundary handling — pair with node.container_bounds_3d. The 3D sibling of node.euler_step_particles; decomposed from the integration step of the fused node.fluid_simulate_3d.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system.",
-      "type_id": "node.euler_step_particles_3d"
+      "summary": "Makes a force field that pushes outward from a point, the field you feed into a particle move to drive an explosion.",
+      "type_id": "node.explosion_force"
     },
     {
       "aliases": [
@@ -5630,134 +5527,6 @@
       "stratum": "unlisted",
       "summary": "",
       "type_id": "node.fbm_2d"
-    },
-    {
-      "aliases": [
-        "fractal noise",
-        "fbm",
-        "per copy",
-        "variation"
-      ],
-      "category": "Particles 2D",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "uv",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "scale",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "z",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "offset_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "offset_y",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Fractal Noise (per copy)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "1",
-          "label": "Scale",
-          "name": "scale",
-          "range": [
-            "0",
-            "64"
-          ],
-          "tooltip": "How zoomed in the noise is. Higher values pack more detail into the same space so neighbouring copies vary more.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Z",
-          "name": "z",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "Slides through the noise along a third axis. Animate this from time to make the value on each copy drift smoothly.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Offset X",
-          "name": "offset_x",
-          "range": [
-            "-100",
-            "100"
-          ],
-          "tooltip": "Shifts the noise sideways. Move it to pan the whole field or to reach a fresh patch of randomness.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Offset Y",
-          "name": "offset_y",
-          "range": [
-            "-100",
-            "100"
-          ],
-          "tooltip": "Shifts the noise vertically. Move it to pan the field or sample a different part of the pattern.",
-          "type": "float"
-        },
-        {
-          "default": "5",
-          "label": "Octaves",
-          "name": "octaves",
-          "range": [
-            "1",
-            "12"
-          ],
-          "tooltip": "How many layers of detail to stack. More octaves add finer grain at the cost of more work, and 5 matches the classic fractal noise.",
-          "type": "int"
-        },
-        {
-          "default": "1.5",
-          "label": "Lacunarity",
-          "name": "lacunarity",
-          "range": [
-            "1",
-            "4"
-          ],
-          "tooltip": "How much finer each stacked layer gets. Larger values open the cells up and spread the detail apart.",
-          "type": "float"
-        },
-        {
-          "default": "0.8",
-          "label": "Gain",
-          "name": "gain",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "How much each finer layer adds, from 0 to 1. Lower values keep the result smooth while higher values make it rougher and busier.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Sample fractal Brownian motion (multi-octave 3D simplex) at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.noise. For each idx: out[idx] = fbm(vec3(uv * scale + offset, z), octaves, lacunarity, gain). The internal loop matches noise_common.wgsl::fbm byte-for-byte; with the defaults (octaves=5, lacunarity=1.5, gain=0.8) the output is bit-identical to the legacy fbm — DigitalPlants's petal-noise pass relies on this. Port-shadow on scale / z / offset_* so the noise field can be animated from time and LFO wires.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Gives every copy its own fractal-noise value, a smooth random number per copy you can drive size, colour, or motion with.",
-      "type_id": "node.fbm_per_instance"
     },
     {
       "aliases": [
@@ -6482,11 +6251,140 @@
           "type": "int"
         }
       ],
-      "purpose": "Legacy type-ID alias of node.scatter_particles_camera (FluidSim3D's camera-projection + 2D scatter display path), retained so older projects load.",
+      "purpose": "Legacy type-ID alias of node.draw_particles_camera (FluidSim3D's camera-projection + 2D scatter display path), retained so older projects load.",
       "role": "Filter",
       "stratum": "unlisted",
       "summary": "Projects 3D particles through a camera and splats them to 2D. The older name for Draw Particles (camera).",
       "type_id": "node.fluid_project_scatter_2d"
+    },
+    {
+      "aliases": [
+        "fractal noise",
+        "fbm per instance",
+        "fbm",
+        "per copy",
+        "variation"
+      ],
+      "category": "Particles 2D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "uv",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "scale",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "z",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "offset_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "offset_y",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Fractal Noise (per copy)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "1",
+          "label": "Scale",
+          "name": "scale",
+          "range": [
+            "0",
+            "64"
+          ],
+          "tooltip": "How zoomed in the noise is. Higher values pack more detail into the same space so neighbouring copies vary more.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Z",
+          "name": "z",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "Slides through the noise along a third axis. Animate this from time to make the value on each copy drift smoothly.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Offset X",
+          "name": "offset_x",
+          "range": [
+            "-100",
+            "100"
+          ],
+          "tooltip": "Shifts the noise sideways. Move it to pan the whole field or to reach a fresh patch of randomness.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Offset Y",
+          "name": "offset_y",
+          "range": [
+            "-100",
+            "100"
+          ],
+          "tooltip": "Shifts the noise vertically. Move it to pan the field or sample a different part of the pattern.",
+          "type": "float"
+        },
+        {
+          "default": "5",
+          "label": "Octaves",
+          "name": "octaves",
+          "range": [
+            "1",
+            "12"
+          ],
+          "tooltip": "How many layers of detail to stack. More octaves add finer grain at the cost of more work, and 5 matches the classic fractal noise.",
+          "type": "int"
+        },
+        {
+          "default": "1.5",
+          "label": "Lacunarity",
+          "name": "lacunarity",
+          "range": [
+            "1",
+            "4"
+          ],
+          "tooltip": "How much finer each stacked layer gets. Larger values open the cells up and spread the detail apart.",
+          "type": "float"
+        },
+        {
+          "default": "0.8",
+          "label": "Gain",
+          "name": "gain",
+          "range": [
+            "0",
+            "1"
+          ],
+          "tooltip": "How much each finer layer adds, from 0 to 1. Lower values keep the result smooth while higher values make it rougher and busier.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Sample fractal Brownian motion (multi-octave 3D simplex) at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.noise. For each idx: out[idx] = fbm(vec3(uv * scale + offset, z), octaves, lacunarity, gain). The internal loop matches noise_common.wgsl::fbm byte-for-byte; with the defaults (octaves=5, lacunarity=1.5, gain=0.8) the output is bit-identical to the legacy fbm — DigitalPlants's petal-noise pass relies on this. Port-shadow on scale / z / offset_* so the noise field can be animated from time and LFO wires.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Gives every copy its own fractal-noise value, a smooth random number per copy you can drive size, colour, or motion with.",
+      "type_id": "node.fractal_noise_per_copy"
     },
     {
       "aliases": [
@@ -7556,168 +7454,6 @@
     },
     {
       "aliases": [
-        "position jitter",
-        "offset",
-        "scatter",
-        "noise"
-      ],
-      "category": "Particles 2D",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "instances",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "uv",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "frequency",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "amplitude",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "time_uvx_drift",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "z_coord",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "axis_seed",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Position Jitter",
-      "outputs": [
-        {
-          "name": "instances",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "10",
-          "label": "Frequency",
-          "name": "frequency",
-          "range": [
-            "0",
-            "256"
-          ],
-          "tooltip": "How tightly the noise varies across the copies. Higher values make neighbouring copies wander in different directions, lower values move whole regions together.",
-          "type": "float"
-        },
-        {
-          "default": "0.01",
-          "label": "Amplitude",
-          "name": "amplitude",
-          "range": [
-            "0",
-            "10"
-          ],
-          "tooltip": "How far each copy is pushed off its spot. 0 leaves the grid perfect, higher values scatter the copies further.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Time UV.x Drift",
-          "name": "time_uvx_drift",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "Slides the noise pattern along over time so the scatter animates. Drive it from a time wire for slow drift.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Z Coord",
-          "name": "z_coord",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "Picks which slice of the noise field to sample. Animate it from time to make the whole pattern evolve in place rather than slide.",
-          "type": "float"
-        },
-        {
-          "default": "100",
-          "label": "Axis Seed",
-          "name": "axis_seed",
-          "range": [
-            "0",
-            "10000"
-          ],
-          "tooltip": "Separates the noise used for each axis so the three directions wobble independently. Move it to land in a different part of the noise.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Add 3-axis 3D-simplex position noise to each InstanceTransform's pos.xyz, leaving scale and rotation unchanged. base = (uv.x*freq + time_uvx_drift, uv.y*freq, z_coord); pos += amp · (simplex(base), simplex(base + (seed,0,0)), simplex(base + (0,seed,0))). Generic — any instanced field that wants organic per-instance position wobble. Reproduces both legacy DigitalPlants detail- and micro-noise patterns when parameterised.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Adds a random offset to each copy's position with noise, so a perfect grid of copies looks more natural and scattered.",
-      "type_id": "node.instance_position_jitter"
-    },
-    {
-      "aliases": [
-        "rotation jitter",
-        "random rotation",
-        "twist"
-      ],
-      "category": "Particles 2D",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "instances",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "amplitude",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Rotation Jitter",
-      "outputs": [
-        {
-          "name": "instances",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.2",
-          "label": "Amplitude",
-          "name": "amplitude",
-          "range": [
-            "0",
-            "10"
-          ],
-          "tooltip": "How much random twist to add to each copy. 0 leaves every copy aligned, and higher values scatter their angles more. The twist is added on top of any rotation the copies already had.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Add hash-driven per-instance Euler-rotation jitter to each InstanceTransform's rot_pad.xyz; positions and scale pass through. For each idx: rx/ry/rz = (hash_u32(idx*3+{0,1,2}) - 0.5) · amplitude. ADD semantics — pre-existing rotation from upstream is preserved and perturbed. Generic across any instanced field that wants visual density via non-uniform per-cube orientation. Reproduces the legacy DigitalPlants per-instance rotation hash bit-exactly when amplitude = 0.2.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Adds a random twist to each copy's rotation, so a field of copies face slightly different ways instead of lining up.",
-      "type_id": "node.instance_rotation_jitter"
-    },
-    {
-      "aliases": [
         "invert",
         "negative",
         "Invert TOP"
@@ -7828,31 +7564,34 @@
     },
     {
       "aliases": [
-        "blend copies",
-        "morph",
-        "lerp",
-        "interpolate"
+        "keep in box",
+        "container bounds 3d",
+        "bounds",
+        "contain",
+        "clamp"
       ],
-      "category": "Particles 2D",
-      "examples": [],
+      "category": "Particles 3D",
+      "examples": [
+        "FluidSimulation3D"
+      ],
       "inputs": [
         {
-          "name": "a",
+          "name": "in",
           "required": true,
           "type": "Array"
         },
         {
-          "name": "b",
-          "required": true,
-          "type": "Array"
+          "name": "ctr_scale",
+          "required": false,
+          "type": "f32"
         },
         {
-          "name": "t",
+          "name": "active_count",
           "required": false,
           "type": "f32"
         }
       ],
-      "label": "Blend Copies",
+      "label": "Keep In Box (3D)",
       "outputs": [
         {
           "name": "out",
@@ -7861,22 +7600,46 @@
       ],
       "params": [
         {
-          "default": "0.5",
-          "label": "Mix",
-          "name": "t",
+          "default": "0",
+          "enum_values": [
+            "None",
+            "Cube",
+            "Sphere",
+            "Torus"
+          ],
+          "label": "Container",
+          "name": "container",
+          "tooltip": "The shape that holds the particles in. None wraps them around the edges, while Cube, Sphere, and Torus bounce them back inside the surface.",
+          "type": "enum"
+        },
+        {
+          "default": "0.8",
+          "label": "Container Scale",
+          "name": "ctr_scale",
           "range": [
-            "0",
+            "0.2",
             "1"
           ],
-          "tooltip": "How far to blend from the first arrangement toward the second. 0 is all the first, 1 is all the second, and 0.5 is the midway morph. Values outside that range overshoot.",
+          "tooltip": "How big the container is inside the unit cube, from 0.2 to 1. Smaller values pull the walls in tighter. This has no effect when the container is set to None.",
           "type": "float"
+        },
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles from the front of the buffer to contain. Set this to match the live particle count so idle slots are left alone.",
+          "type": "int"
         }
       ],
-      "purpose": "Elementwise linear interpolation between two Array<InstanceTransform>s. out[idx] = (1 - t) * a[idx] + t * b[idx] applied to both pos_scale and rot_pad. The continuous counterpart to node.mux_array — pick this when the morph parameter is a real 0..1 slider and intermediate values must visually morph (the DigitalPlants cyl ↔ tor case). At t=0 the output equals a; at t=1 it equals b; at t=0.5 the elementwise midpoint. `t` is port-shadow-param so the morph factor can be modulated.",
+      "purpose": "Post-integration hard containment for 3D particles: toroidal wrap (container = None) or SDF reflect + clamp (Cube/Sphere/Torus). For None: position = fract(position + 1). For an SDF container: when a particle escapes (d > 0) it's pushed back inside along the surface normal, then clamped to [0.001, 0.999]. The 3D sibling of node.wrap_around (torus-only); decomposed from the containment step of the fused node.fluid_simulate_3d. Particle velocity is not touched (the legacy velocity-bounce write was dead state).",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Blends two arrangements of copies together by an amount, so you can morph a field of copies from one layout to another.",
-      "type_id": "node.lerp_instance_fields"
+      "summary": "Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move.",
+      "type_id": "node.keep_in_box_3d"
     },
     {
       "aliases": [
@@ -8881,6 +8644,146 @@
       "type_id": "node.mix"
     },
     {
+      "aliases": [
+        "move particles",
+        "euler step particles",
+        "integrate",
+        "step",
+        "euler"
+      ],
+      "category": "Particles 2D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "forces",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "speed",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Move Particles (Euler step)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles are alive and being moved.",
+          "type": "int"
+        },
+        {
+          "default": "1",
+          "label": "Speed",
+          "name": "speed",
+          "range": [
+            "0",
+            "10"
+          ],
+          "tooltip": "How fast the particles move each step.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Apply one Euler integration step to each live particle's position.xy by a per-particle 2D force. `position.xy += forces[i] * speed * (delta * 60)`. Frame-rate-normalised via the `* 60` scale so the same `speed` value gives consistent motion across frame rates (matches the legacy fluid_simulate's `dt_scale = dt * 60`). Dead particles (life <= 0) pass through unchanged. No boundary handling — pair with `node.wrap_around` for the toroidal policy.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Moves every particle one step along its velocity each frame. The basic integrator that makes a particle system actually move.",
+      "type_id": "node.move_particles"
+    },
+    {
+      "aliases": [
+        "move particles 3d",
+        "euler step particles 3d",
+        "integrate 3d",
+        "step",
+        "euler"
+      ],
+      "category": "Particles 3D",
+      "examples": [
+        "FluidSimulation3D"
+      ],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "forces",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "speed",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Move Particles (3D, Euler step)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles to move each frame, counted from the start of the buffer. Match it to your live particle count so dead slots stay put.",
+          "type": "int"
+        },
+        {
+          "default": "1",
+          "label": "Speed",
+          "name": "speed",
+          "range": [
+            "0",
+            "10"
+          ],
+          "tooltip": "Scales how far every particle travels per step. 1 moves them at the force's natural pace, higher is faster. Wire an LFO or audio band in to drive the energy live.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Apply one Euler integration step to each live particle's position.xyz by a per-particle 3D force. `position.xyz += forces[i] * speed * (delta * 60)`. Frame-rate-normalised via the `* 60` scale (matches the legacy fluid_simulate_3d's dt_scale = dt * 60). Dead particles (life <= 0) pass through unchanged. No boundary handling — pair with node.keep_in_box_3d. The 3D sibling of node.move_particles; decomposed from the integration step of the fused node.fluid_simulate_3d.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system.",
+      "type_id": "node.move_particles_3d"
+    },
+    {
       "aliases": [],
       "category": "Uncategorized",
       "examples": [],
@@ -8945,310 +8848,6 @@
       "stratum": "atom",
       "summary": "",
       "type_id": "node.multi_blend"
-    },
-    {
-      "aliases": [
-        "switch",
-        "mux",
-        "selector"
-      ],
-      "category": "Routing",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "selector",
-          "required": true,
-          "type": "f32"
-        },
-        {
-          "name": "in_0",
-          "required": false,
-          "type": "Array"
-        },
-        {
-          "name": "in_1",
-          "required": false,
-          "type": "Array"
-        },
-        {
-          "name": "in_2",
-          "required": false,
-          "type": "Array"
-        },
-        {
-          "name": "in_3",
-          "required": false,
-          "type": "Array"
-        },
-        {
-          "name": "in_4",
-          "required": false,
-          "type": "Array"
-        },
-        {
-          "name": "in_5",
-          "required": false,
-          "type": "Array"
-        },
-        {
-          "name": "in_6",
-          "required": false,
-          "type": "Array"
-        },
-        {
-          "name": "in_7",
-          "required": false,
-          "type": "Array"
-        }
-      ],
-      "label": "Switch (array)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "label": "Selector",
-          "name": "selector",
-          "range": [
-            "0",
-            "7"
-          ],
-          "tooltip": "Picks which input list to pass through, by number.",
-          "type": "float"
-        }
-      ],
-      "purpose": "N-way Array<f32> selector. Routes one of in_0..in_7 (Array f32) to the output buffer based on the selector input (rounded, clamped). Output capacity = max of all wired input capacities at chain-build time. Completes the mux family alongside node.mux_scalar / node.mux_texture; primary use is mode-switching at the value-array level (e.g., NestedCubes Envelope vs Pose target_angles).",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Picks one of several incoming lists and passes it through, chosen by a selector number.",
-      "type_id": "node.mux_array"
-    },
-    {
-      "aliases": [
-        "switch",
-        "mux",
-        "selector",
-        "Switch CHOP"
-      ],
-      "category": "Routing",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "selector",
-          "required": true,
-          "type": "f32"
-        },
-        {
-          "name": "in_0",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "in_1",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "in_2",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "in_3",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "in_4",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "in_5",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "in_6",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "in_7",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Switch (value)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "f32"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "label": "Selector",
-          "name": "selector",
-          "range": [
-            "0",
-            "7"
-          ],
-          "tooltip": "Picks which input to pass through, by number.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "In 0",
-          "name": "in_0",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "In 1",
-          "name": "in_1",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "In 2",
-          "name": "in_2",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "In 3",
-          "name": "in_3",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "In 4",
-          "name": "in_4",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "In 5",
-          "name": "in_5",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "In 6",
-          "name": "in_6",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "In 7",
-          "name": "in_7",
-          "type": "float"
-        }
-      ],
-      "purpose": "N-way scalar selector. Routes one of in_0..in_7 (Scalar F32) to the output based on the selector input (rounded, clamped). Every input is port-shadows-param — wire dynamic sources into the ports, or set the inline `in_N` params for static option tables (curated frequency rates, side counts, gate constants). Useful for trigger-driven parameter switching.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Picks one of several incoming values and passes it through, chosen by a selector number. Use it to flip between sources live.",
-      "type_id": "node.mux_scalar"
-    },
-    {
-      "aliases": [
-        "switch",
-        "mux",
-        "selector",
-        "Switch TOP"
-      ],
-      "category": "Routing",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "selector",
-          "required": true,
-          "type": "f32"
-        },
-        {
-          "name": "in_0",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "in_1",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "in_2",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "in_3",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "in_4",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "in_5",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "in_6",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "in_7",
-          "required": false,
-          "type": "Texture2D"
-        }
-      ],
-      "label": "Switch (texture)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "label": "Selector",
-          "name": "selector",
-          "range": [
-            "0",
-            "31"
-          ],
-          "tooltip": "Picks which input image to pass through, by number.",
-          "type": "float"
-        },
-        {
-          "default": "8",
-          "label": "Input Count",
-          "name": "num_inputs",
-          "range": [
-            "2",
-            "32"
-          ],
-          "tooltip": "How many inputs to expose. The node grows or shrinks to match.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Dynamic N-way Texture2D selector. `num_inputs` sets how many in_0..in_N ports exist and a rounded, clamped `selector` forwards the matching input. Reconfigures its port list when `num_inputs` changes.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in.",
-      "type_id": "node.mux_texture"
     },
     {
       "aliases": [
@@ -9629,6 +9228,7 @@
     {
       "aliases": [
         "optical flow",
+        "optical flow estimate",
         "motion",
         "flow",
         "velocity"
@@ -9681,7 +9281,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Measures how the image is moving between frames and outputs that motion as a flow field. Drive a displace or advect with it to push pixels along the motion.",
-      "type_id": "node.optical_flow_estimate"
+      "type_id": "node.optical_flow"
     },
     {
       "aliases": [
@@ -10276,6 +9876,7 @@
     {
       "aliases": [
         "person mask",
+        "person segment",
         "segmentation",
         "people",
         "matte"
@@ -10335,7 +9936,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them.",
-      "type_id": "node.person_segment"
+      "type_id": "node.person_mask"
     },
     {
       "aliases": [
@@ -10711,6 +10312,123 @@
     },
     {
       "aliases": [
+        "position jitter",
+        "instance position jitter",
+        "offset",
+        "scatter",
+        "noise"
+      ],
+      "category": "Particles 2D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "instances",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "uv",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "frequency",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "amplitude",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "time_uvx_drift",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "z_coord",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "axis_seed",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Position Jitter",
+      "outputs": [
+        {
+          "name": "instances",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "10",
+          "label": "Frequency",
+          "name": "frequency",
+          "range": [
+            "0",
+            "256"
+          ],
+          "tooltip": "How tightly the noise varies across the copies. Higher values make neighbouring copies wander in different directions, lower values move whole regions together.",
+          "type": "float"
+        },
+        {
+          "default": "0.01",
+          "label": "Amplitude",
+          "name": "amplitude",
+          "range": [
+            "0",
+            "10"
+          ],
+          "tooltip": "How far each copy is pushed off its spot. 0 leaves the grid perfect, higher values scatter the copies further.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Time UV.x Drift",
+          "name": "time_uvx_drift",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "Slides the noise pattern along over time so the scatter animates. Drive it from a time wire for slow drift.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Z Coord",
+          "name": "z_coord",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "Picks which slice of the noise field to sample. Animate it from time to make the whole pattern evolve in place rather than slide.",
+          "type": "float"
+        },
+        {
+          "default": "100",
+          "label": "Axis Seed",
+          "name": "axis_seed",
+          "range": [
+            "0",
+            "10000"
+          ],
+          "tooltip": "Separates the noise used for each axis so the three directions wobble independently. Move it to land in a different part of the noise.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Add 3-axis 3D-simplex position noise to each InstanceTransform's pos.xyz, leaving scale and rotation unchanged. base = (uv.x*freq + time_uvx_drift, uv.y*freq, z_coord); pos += amp · (simplex(base), simplex(base + (seed,0,0)), simplex(base + (0,seed,0))). Generic — any instanced field that wants organic per-instance position wobble. Reproduces both legacy DigitalPlants detail- and micro-noise patterns when parameterised.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Adds a random offset to each copy's position with noise, so a perfect grid of copies looks more natural and scattered.",
+      "type_id": "node.position_jitter"
+    },
+    {
+      "aliases": [
         "posterize",
         "quantize",
         "banding"
@@ -10807,6 +10525,90 @@
     },
     {
       "aliases": [
+        "push from walls",
+        "container repel force 3d",
+        "repel",
+        "boundary",
+        "container"
+      ],
+      "category": "Particles 3D",
+      "examples": [
+        "FluidSimulation3D"
+      ],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "particles",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "ctr_scale",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Push From Walls (3D)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "enum_values": [
+            "None",
+            "Cube",
+            "Sphere",
+            "Torus"
+          ],
+          "label": "Container",
+          "name": "container",
+          "tooltip": "The shape of the wall particles get pushed away from. None turns the push off entirely, the rest pick a Cube, Sphere, or Torus boundary.",
+          "type": "enum"
+        },
+        {
+          "default": "0.8",
+          "label": "Container Scale",
+          "name": "ctr_scale",
+          "range": [
+            "0.2",
+            "1"
+          ],
+          "tooltip": "How big the container is. Smaller packs the particles into a tighter volume, larger gives them more room before the walls start pushing back.",
+          "type": "float"
+        },
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles in the buffer feel the wall push, counted from the front. It is capped to the real particle count.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Soft container-boundary repulsion added in-place to an Array<[f32; 3]> force buffer. When a particle is within a 0.1 margin of the container SDF (Cube/Sphere/Torus), a gentle inward force `n * (t*t*0.15)` cushions it back along the outward normal, preventing wall pile-up. container = None disables it. The pre-integration cushion half of the FluidSim3D container behaviour (the post-integration hard wall is node.keep_in_box_3d). Decomposed from the fused node.fluid_simulate_3d.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce.",
+      "type_id": "node.push_from_walls_3d"
+    },
+    {
+      "aliases": [
         "displace mesh",
         "push mesh",
         "height",
@@ -10884,128 +10686,6 @@
       "stratum": "atom",
       "summary": "Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement.",
       "type_id": "node.push_mesh"
-    },
-    {
-      "aliases": [
-        "explosion force",
-        "radial burst",
-        "blast",
-        "force field"
-      ],
-      "category": "Particles 2D",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "point_x",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "point_y",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "amplitude",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "envelope",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "radius",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "time",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Explosion Force",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.5",
-          "label": "Point X",
-          "name": "point_x",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "Horizontal centre of the blast, from 0 at the left edge to 1 at the right.",
-          "type": "float"
-        },
-        {
-          "default": "0.5",
-          "label": "Point Y",
-          "name": "point_y",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "Vertical centre of the blast, from 0 at the top to 1 at the bottom.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Amplitude",
-          "name": "amplitude",
-          "range": [
-            "0",
-            "10"
-          ],
-          "tooltip": "How hard the burst pushes. At 0 the field is empty and the node costs nothing, raise it to throw particles harder.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Envelope",
-          "name": "envelope",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "The current strength of the burst from 0 to 1, usually driven by a decay so the impulse fades after it fires. At 0 the field is empty.",
-          "type": "float"
-        },
-        {
-          "default": "0.25",
-          "label": "Radius",
-          "name": "radius",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "How far the push reaches from the centre point, in fractions of the frame. The force falls off smoothly to nothing at the edge of this radius.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Time",
-          "name": "time",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "Feeds the noise that breaks up the push so it looks organic rather than perfectly radial. Wire your time source in to keep it animating.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Produces a per-pixel vec2 force texture for a radial impulse burst around (point_x, point_y) within `radius`. Combines radial outward push, tangent curl, noise-perturbed radial direction, and a `(1-t²)²` falloff envelope, multiplied by `amplitude * envelope`. Sum into a velocity field via node.mix(Add) and let the downstream particle integrator pick up the impulse. Reusable for any 'impulse around a point' — snaps, beat shoves, audio splashes, fluid clip-trigger inject.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Makes a force field that pushes outward from a point, the field you feed into a particle move to drive an explosion.",
-      "type_id": "node.radial_burst_force_field"
     },
     {
       "aliases": [],
@@ -11865,7 +11545,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Read a u32 fixed-point accumulator buffer (produced by node.scatter_particles), divide by `fixed_point_scale`, and write the result as a grayscale density texture. The bridge from Array(u32) back to Texture2D for downstream texture-domain primitives. Dimensions are taken from the output Texture2D — which the backend allocates at canvas size — so resolve always covers every pixel of the density texture, matching whatever scatter wrote (also canvas-sized via `canvas_sized_array_outputs()`).",
+      "purpose": "Read a u32 fixed-point accumulator buffer (produced by node.draw_particles), divide by `fixed_point_scale`, and write the result as a grayscale density texture. The bridge from Array(u32) back to Texture2D for downstream texture-domain primitives. Dimensions are taken from the output Texture2D — which the backend allocates at canvas size — so resolve always covers every pixel of the density texture, matching whatever scatter wrote (also canvas-sized via `canvas_sized_array_outputs()`).",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Reads back the buffer that Draw Particles wrote into and turns it into a normal image. The pickup step after a particle splat.",
@@ -11918,7 +11598,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Read a u32 fixed-point 3D accumulator buffer (produced by node.scatter_particles_3d), divide by 4096 (FluidSim3D's FIXED_POINT_MULTIPLIER), and write the result as a density Texture3D. Self-clears the accumulator to zero atomically as part of the same dispatch so the next frame starts fresh.",
+      "purpose": "Read a u32 fixed-point 3D accumulator buffer (produced by node.draw_particles_3d), divide by 4096 (FluidSim3D's FIXED_POINT_MULTIPLIER), and write the result as a density Texture3D. Self-clears the accumulator to zero atomically as part of the same dispatch so the next frame starts fresh.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Reads back the 3D buffer that a 3D particle scatter wrote into and turns it into a volume you can sample.",
@@ -12378,6 +12058,53 @@
     },
     {
       "aliases": [
+        "rotation jitter",
+        "instance rotation jitter",
+        "random rotation",
+        "twist"
+      ],
+      "category": "Particles 2D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "instances",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "amplitude",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Rotation Jitter",
+      "outputs": [
+        {
+          "name": "instances",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.2",
+          "label": "Amplitude",
+          "name": "amplitude",
+          "range": [
+            "0",
+            "10"
+          ],
+          "tooltip": "How much random twist to add to each copy. 0 leaves every copy aligned, and higher values scatter their angles more. The twist is added on top of any rotation the copies already had.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Add hash-driven per-instance Euler-rotation jitter to each InstanceTransform's rot_pad.xyz; positions and scale pass through. For each idx: rx/ry/rz = (hash_u32(idx*3+{0,1,2}) - 0.5) · amplitude. ADD semantics — pre-existing rotation from upstream is preserved and perturbed. Generic across any instanced field that wants visual density via non-uniform per-cube orientation. Reproduces the legacy DigitalPlants per-instance rotation hash bit-exactly when amplitude = 0.2.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Adds a random twist to each copy's rotation, so a field of copies face slightly different ways instead of lining up.",
+      "type_id": "node.rotation_jitter"
+    },
+    {
+      "aliases": [
         "sample and hold",
         "latch",
         "hold",
@@ -12413,60 +12140,8 @@
     },
     {
       "aliases": [
-        "sample volume",
-        "read 3d texture",
-        "trilinear"
-      ],
-      "category": "Particles 3D",
-      "examples": [
-        "FluidSimulation3D"
-      ],
-      "inputs": [
-        {
-          "name": "particles",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "field",
-          "required": true,
-          "type": "Texture3D"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Sample Volume for Particles (3D)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles read the volume this frame, capped to the size of the particle list. Entries beyond this count are left untouched.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Per-particle trilinear sample of a vec3 Texture3D at each particle's position.xyz. Output: Array<[f32; 3]> of the volume's RGB per particle (overwrite, not add — seeds the per-particle force buffer). The 3D sibling of node.sample_texture_at_particles; the generic volumetric field-read atom for any 3D particle pipeline. Decomposed out of the fused node.fluid_simulate_3d.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through.",
-      "type_id": "node.sample_texture_3d_at_particles"
-    },
-    {
-      "aliases": [
         "sample image",
+        "sample texture at particles",
         "read texture",
         "pick color"
       ],
@@ -12513,7 +12188,61 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Reads the image colour underneath each particle, so the particles can pick up the look of whatever they fly over.",
-      "type_id": "node.sample_texture_at_particles"
+      "type_id": "node.sample_image_at_particles"
+    },
+    {
+      "aliases": [
+        "sample volume",
+        "sample texture 3d at particles",
+        "read 3d texture",
+        "trilinear"
+      ],
+      "category": "Particles 3D",
+      "examples": [
+        "FluidSimulation3D"
+      ],
+      "inputs": [
+        {
+          "name": "particles",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "field",
+          "required": true,
+          "type": "Texture3D"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Sample Volume for Particles (3D)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles read the volume this frame, capped to the size of the particle list. Entries beyond this count are left untouched.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Per-particle trilinear sample of a vec3 Texture3D at each particle's position.xyz. Output: Array<[f32; 3]> of the volume's RGB per particle (overwrite, not add — seeds the per-particle force buffer). The 3D sibling of node.sample_image_at_particles; the generic volumetric field-read atom for any 3D particle pipeline. Decomposed out of the fused node.fluid_simulate_3d.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through.",
+      "type_id": "node.sample_volume_at_particles"
     },
     {
       "aliases": [],
@@ -12812,475 +12541,6 @@
       "stratum": "atom",
       "summary": "Per-row horizontal offset for sideways glitch. Tear = gated VHS jolt; Slide = smooth organic per-band drift. Set Bands for chunky strips, feed it into Remap.",
       "type_id": "node.scanline_jitter_field"
-    },
-    {
-      "aliases": [
-        "draw particles",
-        "scatter",
-        "splat",
-        "points"
-      ],
-      "category": "Particles 2D",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "particles",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "width",
-          "required": true,
-          "type": "f32"
-        },
-        {
-          "name": "height",
-          "required": true,
-          "type": "f32"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "scaled_energy",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Draw Particles (scatter)",
-      "outputs": [
-        {
-          "name": "accum",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles to splat, counted from the start of the buffer. Match it to your live particle count so empty slots add nothing.",
-          "type": "int"
-        },
-        {
-          "default": "4096",
-          "label": "Energy per Particle",
-          "name": "scaled_energy",
-          "range": [
-            "1",
-            "65536"
-          ],
-          "tooltip": "How much brightness each particle deposits where it lands. Higher values build the image up faster, so dense clouds bloom sooner.",
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "Wrap",
-            "Discard"
-          ],
-          "label": "Boundary",
-          "name": "boundary",
-          "tooltip": "What happens to particles that land outside the canvas. Wrap tiles them back around so fluids flow without a seam, Discard drops them to avoid a hard edge when projecting from 3D.",
-          "type": "enum"
-        }
-      ],
-      "purpose": "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). `width` and `height` are required wired inputs — the convention is to drive them from `system.generator_input.output_width / output_height` so the dispatch tracks the host's canvas (the buffer itself is also auto-sized to the canvas via `canvas_sized_array_outputs()`, so allocation and dispatch never disagree). Pair with `node.resolve_scatter` to read the result as a float texture.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Splats a cloud of particles onto a buffer, building up an image from where they land. Pair it with Resolve Scatter to read the result back.",
-      "type_id": "node.scatter_particles"
-    },
-    {
-      "aliases": [
-        "draw particles 3d",
-        "scatter 3d",
-        "splat",
-        "volume"
-      ],
-      "category": "Particles 3D",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "particles",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "scaled_energy",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Draw Particles (3D scatter)",
-      "outputs": [
-        {
-          "name": "accum",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles from the front of the buffer to splat into the volume. Set this to match the live particle count.",
-          "type": "int"
-        },
-        {
-          "default": "128",
-          "label": "Volume Resolution",
-          "name": "vol_res",
-          "range": [
-            "16",
-            "512"
-          ],
-          "tooltip": "The width and height of the volume grid in cells. Higher gives a finer density field at the cost of memory and speed.",
-          "type": "int"
-        },
-        {
-          "default": "128",
-          "label": "Volume Depth",
-          "name": "vol_depth",
-          "range": [
-            "16",
-            "512"
-          ],
-          "tooltip": "How many cells deep the volume grid is. Together with the resolution this sets how much detail the density field holds.",
-          "type": "int"
-        },
-        {
-          "default": "4096",
-          "label": "Energy per Particle",
-          "name": "scaled_energy",
-          "range": [
-            "1",
-            "65536"
-          ],
-          "tooltip": "How much density each particle adds to its cell. The default 4096 reads back as roughly 1.0 in float density downstream.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Atomic-add splat of an Array<Particle> into a u32 3D accumulator buffer sized vol_res × vol_res × vol_depth. Each live particle's nearest-voxel cell receives `scaled_energy` via atomicAdd. Pair with node.resolve_scatter_3d to lift the u32 grid into a float Texture3D for downstream volumetric primitives like blur_3d, gradient_curl_3d, project_particles_3d.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles.",
-      "type_id": "node.scatter_particles_3d"
-    },
-    {
-      "aliases": [
-        "draw particles camera",
-        "project scatter",
-        "3d to 2d"
-      ],
-      "category": "Particles 3D",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "particles",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "camera",
-          "required": true,
-          "type": "Camera"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "disp_w",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "disp_h",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "scaled_energy",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "mode",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Draw Particles (camera)",
-      "outputs": [
-        {
-          "name": "accum",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles get drawn, counted from the front of the buffer. It is capped to the real particle count.",
-          "type": "int"
-        },
-        {
-          "default": "1920",
-          "label": "Display Width",
-          "name": "disp_w",
-          "range": [
-            "16",
-            "8192"
-          ],
-          "tooltip": "Width of the image the particles splat onto, in pixels. Wire this from the canvas size so the splat matches your output resolution.",
-          "type": "int"
-        },
-        {
-          "default": "1080",
-          "label": "Display Height",
-          "name": "disp_h",
-          "range": [
-            "16",
-            "8192"
-          ],
-          "tooltip": "Height of the image the particles splat onto, in pixels. Wire this from the canvas size so the splat matches your output resolution.",
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "Perspective",
-            "Orthographic"
-          ],
-          "label": "Projection",
-          "name": "mode",
-          "tooltip": "Perspective gives true depth and hides particles behind the camera. Orthographic keeps everything flat and wraps the edges so the field tiles without a visible seam.",
-          "type": "enum"
-        },
-        {
-          "default": "4096",
-          "label": "Energy per Particle",
-          "name": "scaled_energy",
-          "range": [
-            "1",
-            "65536"
-          ],
-          "tooltip": "How much brightness each particle deposits where it lands. Higher makes a denser, more glowing splat.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Fused 3D→2D camera projection + atomic-add scatter. Takes 3D particles and a Camera; projects each particle through orthographic (with toroidal wrap) or perspective camera math; atomic-adds scaled_energy into a 2D u32 accumulator. Pair downstream with node.resolve_scatter → texture for display. Sibling to node.scatter_particles (2D in/2D out) and node.scatter_particles_3d (3D in/3D out) — this one bridges 3D in to 2D-grid out via a camera. Used by FluidSim3D's display path.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim.",
-      "type_id": "node.scatter_particles_camera"
-    },
-    {
-      "aliases": [
-        "spawn particles",
-        "seed",
-        "emit",
-        "birth"
-      ],
-      "category": "Particles 2D",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Spawn Particles",
-      "outputs": [
-        {
-          "name": "particles",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "1048576",
-          "label": "Max Capacity",
-          "name": "max_capacity",
-          "range": [
-            "1024",
-            "16000000"
-          ],
-          "tooltip": "The most particles this can ever hold, set when the chain is built.",
-          "type": "int"
-        },
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles to spawn and keep alive.",
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "label": "Seed",
-          "name": "seed_offset",
-          "range": [
-            "0",
-            "1000000"
-          ],
-          "tooltip": "Changes the random layout. Move it to get a different spread.",
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "EveryFrame",
-            "OnceOnReset"
-          ],
-          "label": "Seed Mode",
-          "name": "seed_mode",
-          "tooltip": "How the starting positions are chosen.",
-          "type": "enum"
-        }
-      ],
-      "purpose": "Emit a fresh Array<Particle> sized by `max_capacity` (chain-build-time ceiling). `active_count` particles initialise alive at Wang-hash uniform positions in [0,1]²; the remaining capacity sits dead at center. `seed_mode` picks when the seed kernel fires: EveryFrame (legacy — overwrite each tick; suited to advection 'rain' effects where the integrator never accumulates state) or OnceOnReset (seed once after a state-store reset; the buffer persists whatever the downstream sim writes into it — required for any sim where particle state must evolve across frames, e.g. StrangeAttractor + FluidSim2D).",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Creates a fresh batch of particles to start a simulation, with a count you set. The first node in a particle chain.",
-      "type_id": "node.seed_particles"
-    },
-    {
-      "aliases": [
-        "spawn from image",
-        "seed from texture",
-        "image particles"
-      ],
-      "category": "Particles 2D",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "mask",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "output_width",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "output_height",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "frame_seed",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "reset_trigger",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Spawn From Image",
-      "outputs": [
-        {
-          "name": "particles",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "1048576",
-          "label": "Max Capacity",
-          "name": "max_capacity",
-          "range": [
-            "1024",
-            "16000000"
-          ],
-          "tooltip": "The most particles this node will ever hold, which sets the buffer size. Raise it only if you need more than the active count.",
-          "type": "int"
-        },
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles to spawn this frame. Every one lands on a bright part of the image, wrapping round if there are more particles than bright pixels.",
-          "type": "int"
-        },
-        {
-          "default": "1920",
-          "label": "Output Width",
-          "name": "output_width",
-          "range": [
-            "64",
-            "8192"
-          ],
-          "tooltip": "The width of the space the image maps into, in pixels. Match it to your render size so the mask lands where you expect.",
-          "type": "float"
-        },
-        {
-          "default": "1080",
-          "label": "Output Height",
-          "name": "output_height",
-          "range": [
-            "64",
-            "8192"
-          ],
-          "tooltip": "The height of the space the image maps into, in pixels. Match it to your render size so the mask lands where you expect.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Frame Seed",
-          "name": "frame_seed",
-          "range": [
-            "0",
-            "1000000"
-          ],
-          "tooltip": "Changes the random sub-pixel jitter on placement. Move it to reshuffle how particles sit within each bright pixel.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Exact-placement particle seeding from a Texture2D density mask. Two-pass dispatch: (1) compact — scan the mask, atomically append every bright texel's UV (R > 0.1) into a flat list; (2) place — assign each active particle a UV via round-robin (i mod bright_count) with sub-texel jitter. Guarantees every particle lands alive on the mask: zero dead particles regardless of mask sparsity. When active_count > bright_count, particles wrap-around the list (jittered so they don't stack). When the mask is empty every particle is parked dead at center.",
-      "role": "Source",
-      "stratum": "atom",
-      "summary": "Creates particles placed by the bright areas of an image, so a picture or mask becomes a cloud of points. Spawn density follows the image.",
-      "type_id": "node.seed_particles_from_texture"
     },
     {
       "aliases": [
@@ -13716,221 +12976,8 @@
     },
     {
       "aliases": [
-        "turbulence 3d",
-        "noise force 3d",
-        "flow",
-        "simplex"
-      ],
-      "category": "Particles 3D",
-      "examples": [
-        "FluidSimulation3D"
-      ],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "particles",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "density",
-          "required": true,
-          "type": "Texture3D"
-        },
-        {
-          "name": "turbulence",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "anti_clump",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Turbulence (3D, simplex)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.001",
-          "label": "Turbulence",
-          "name": "turbulence",
-          "range": [
-            "0",
-            "0.05"
-          ],
-          "tooltip": "How strongly the 3D noise pushes the particles around. 0 leaves them on their existing path, and higher values stir up more swirl. The useful range is small, so keep it low.",
-          "type": "float"
-        },
-        {
-          "default": "20",
-          "label": "Anti-Clump",
-          "name": "anti_clump",
-          "range": [
-            "0",
-            "60"
-          ],
-          "tooltip": "How much extra push the noise adds where particles are already crowded, which spreads dense clumps apart. 0 turns the boost off, and higher values separate clusters more aggressively.",
-          "type": "float"
-        },
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles the noise force is applied to. It is clamped to whatever the particle and force buffers can hold.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Per-particle 3D simplex noise advection added in-place to an Array<[f32; 3]> force buffer. 3D noise from SimplexNoise2D on three orthogonal planes (yz/xz/xy), density-adaptive amplitude (turbulence * (1 + capped(density) * anti_clump), capped = d/(1+d)). Samples a density Texture3D at the particle's position. Aliased force in/out — one physical buffer, in-place add. The 3D sibling of node.simplex_noise_force_at_particles, decomposed from the fused node.fluid_simulate_3d.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space.",
-      "type_id": "node.simplex_noise_force_3d_at_particles"
-    },
-    {
-      "aliases": [
-        "turbulence",
-        "noise force",
-        "flow",
-        "simplex"
-      ],
-      "category": "Particles 2D",
-      "examples": [
-        "FluidSimulation"
-      ],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "particles",
-          "required": true,
-          "type": "Array"
-        },
-        {
-          "name": "amplitude_modulator",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "amplitude",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "modulator_gain",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "z",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "noise_scale",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "active_count",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Turbulence (simplex)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Array"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.001",
-          "label": "Amplitude",
-          "name": "amplitude",
-          "range": [
-            "0",
-            "0.05"
-          ],
-          "tooltip": "How hard the noise field pushes each particle, from 0 for still up to 0.05. Small values already give plenty of swirl, so keep it low.",
-          "type": "float"
-        },
-        {
-          "default": "2",
-          "label": "Modulator Gain",
-          "name": "modulator_gain",
-          "range": [
-            "0",
-            "20"
-          ],
-          "tooltip": "How much a wired modulator texture boosts the noise where it is bright, from 0 to 20. Only does anything when something is wired into the modulator input.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Z (Time)",
-          "name": "z",
-          "range": [
-            "-1000",
-            "1000"
-          ],
-          "tooltip": "Slides the noise field through its third dimension, which animates the flow. Wire time times a rate here to keep the turbulence moving.",
-          "type": "float"
-        },
-        {
-          "default": "2",
-          "label": "Noise Scale",
-          "name": "noise_scale",
-          "range": [
-            "0",
-            "16"
-          ],
-          "tooltip": "How zoomed in the noise pattern is, from 0 for huge soft swells up to 16 for fine busy detail.",
-          "type": "float"
-        },
-        {
-          "default": "100000",
-          "label": "Active Count",
-          "name": "active_count",
-          "range": [
-            "0",
-            "16000000"
-          ],
-          "tooltip": "How many particles the noise force is applied to. Keep it matched to the particle count feeding the sim.",
-          "type": "int"
-        }
-      ],
-      "purpose": "Per-particle 2D simplex noise force added in-place to an Array<vec2<f32>> force buffer. Evaluates simplex_noise_2d at each particle's position (X/Y noise channels offset by 100 for decorrelation), scales by `amplitude`, optionally boosts by a scalar Texture2D sampled at the same UV (`amplitude * (1 + capped(m) * gain)`, capped = m/(1+m)), and adds to `forces[i]`. Aliased Array<vec2> in/out — one physical buffer, in-place mutation. Resolution-independent: work scales with particle count, not canvas area. Replaces a per-pixel texture noise chain (simplex_field × 2 + math + mix) for any per-particle noise consumer.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force.",
-      "type_id": "node.simplex_noise_force_at_particles"
-    },
-    {
-      "aliases": [
         "simplex noise",
+        "simplex per instance",
         "per copy",
         "variation"
       ],
@@ -14020,7 +13067,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Gives every copy its own simplex-noise value, a smooth random number per copy for varying the look across a field.",
-      "type_id": "node.simplex_per_instance"
+      "type_id": "node.simplex_noise_per_copy"
     },
     {
       "aliases": [
@@ -14494,6 +13541,193 @@
     },
     {
       "aliases": [
+        "spawn from image",
+        "seed particles from texture",
+        "seed from texture",
+        "image particles"
+      ],
+      "category": "Particles 2D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "mask",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "output_width",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "output_height",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "frame_seed",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "reset_trigger",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Spawn From Image",
+      "outputs": [
+        {
+          "name": "particles",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "1048576",
+          "label": "Max Capacity",
+          "name": "max_capacity",
+          "range": [
+            "1024",
+            "16000000"
+          ],
+          "tooltip": "The most particles this node will ever hold, which sets the buffer size. Raise it only if you need more than the active count.",
+          "type": "int"
+        },
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles to spawn this frame. Every one lands on a bright part of the image, wrapping round if there are more particles than bright pixels.",
+          "type": "int"
+        },
+        {
+          "default": "1920",
+          "label": "Output Width",
+          "name": "output_width",
+          "range": [
+            "64",
+            "8192"
+          ],
+          "tooltip": "The width of the space the image maps into, in pixels. Match it to your render size so the mask lands where you expect.",
+          "type": "float"
+        },
+        {
+          "default": "1080",
+          "label": "Output Height",
+          "name": "output_height",
+          "range": [
+            "64",
+            "8192"
+          ],
+          "tooltip": "The height of the space the image maps into, in pixels. Match it to your render size so the mask lands where you expect.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Frame Seed",
+          "name": "frame_seed",
+          "range": [
+            "0",
+            "1000000"
+          ],
+          "tooltip": "Changes the random sub-pixel jitter on placement. Move it to reshuffle how particles sit within each bright pixel.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Exact-placement particle seeding from a Texture2D density mask. Two-pass dispatch: (1) compact — scan the mask, atomically append every bright texel's UV (R > 0.1) into a flat list; (2) place — assign each active particle a UV via round-robin (i mod bright_count) with sub-texel jitter. Guarantees every particle lands alive on the mask: zero dead particles regardless of mask sparsity. When active_count > bright_count, particles wrap-around the list (jittered so they don't stack). When the mask is empty every particle is parked dead at center.",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Creates particles placed by the bright areas of an image, so a picture or mask becomes a cloud of points. Spawn density follows the image.",
+      "type_id": "node.spawn_from_image"
+    },
+    {
+      "aliases": [
+        "spawn particles",
+        "seed particles",
+        "seed",
+        "emit",
+        "birth"
+      ],
+      "category": "Particles 2D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Spawn Particles",
+      "outputs": [
+        {
+          "name": "particles",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "1048576",
+          "label": "Max Capacity",
+          "name": "max_capacity",
+          "range": [
+            "1024",
+            "16000000"
+          ],
+          "tooltip": "The most particles this can ever hold, set when the chain is built.",
+          "type": "int"
+        },
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles to spawn and keep alive.",
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Seed",
+          "name": "seed_offset",
+          "range": [
+            "0",
+            "1000000"
+          ],
+          "tooltip": "Changes the random layout. Move it to get a different spread.",
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "EveryFrame",
+            "OnceOnReset"
+          ],
+          "label": "Seed Mode",
+          "name": "seed_mode",
+          "tooltip": "How the starting positions are chosen.",
+          "type": "enum"
+        }
+      ],
+      "purpose": "Emit a fresh Array<Particle> sized by `max_capacity` (chain-build-time ceiling). `active_count` particles initialise alive at Wang-hash uniform positions in [0,1]²; the remaining capacity sits dead at center. `seed_mode` picks when the seed kernel fires: EveryFrame (legacy — overwrite each tick; suited to advection 'rain' effects where the integrator never accumulates state) or OnceOnReset (seed once after a state-store reset; the buffer persists whatever the downstream sim writes into it — required for any sim where particle state must evolve across frames, e.g. StrangeAttractor + FluidSim2D).",
+      "role": "Source",
+      "stratum": "atom",
+      "summary": "Creates a fresh batch of particles to start a simulation, with a count you set. The first node in a particle chain.",
+      "type_id": "node.spawn_particles"
+    },
+    {
+      "aliases": [
         "split xy",
         "array unpack vec2",
         "unpack",
@@ -14525,6 +13759,145 @@
       "stratum": "atom",
       "summary": "Splits a list of 2D points into two separate number lists, one for X and one for Y. The inverse of combining them.",
       "type_id": "node.split_xy"
+    },
+    {
+      "aliases": [
+        "spread out",
+        "array diffuse particles",
+        "diffuse",
+        "jitter",
+        "random kick"
+      ],
+      "category": "Particles 2D",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "diffusion",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Spread Out (diffuse)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "label": "Diffusion",
+          "name": "diffusion",
+          "range": [
+            "0",
+            "0.05"
+          ],
+          "tooltip": "How hard the random kick hits each particle every frame. 0 leaves the cloud exactly as it is, and the useful range tops out around 0.05 before things scatter wildly.",
+          "type": "float"
+        },
+        {
+          "default": "500000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles in the buffer actually get kicked, counted from the front. It is capped to the real buffer size so a value above the particle count just affects all of them.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Apply a per-particle hash-based random kick to `Particle.velocity`. One GPU dispatch over Array<Particle> with aliased read+write. `diffusion` scales the kick magnitude (typical range 0..0.05); zero means no-op. `frame_count` reseeds the hash each frame so the kick is genuinely uncorrelated across frames. Generic Brownian-noise atom — pairs with any particle integrator (attractor ODE, fluid sim, advection) that wants additive jitter on its 3D state.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Gives each particle a small random kick so a tight clump slowly spreads apart. Adds a bit of life and scatter.",
+      "type_id": "node.spread_out"
+    },
+    {
+      "aliases": [
+        "spread out 3d",
+        "diffuse force 3d at particles",
+        "diffuse 3d",
+        "jitter"
+      ],
+      "category": "Particles 3D",
+      "examples": [
+        "FluidSimulation3D"
+      ],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "particles",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "density",
+          "required": true,
+          "type": "Texture3D"
+        },
+        {
+          "name": "diffusion",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Spread Out (3D diffuse)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.0166",
+          "label": "Diffusion",
+          "name": "diffusion",
+          "range": [
+            "0",
+            "0.5"
+          ],
+          "tooltip": "How strong a random kick each particle gets, from 0 for none up to 0.5. Higher spreads tight clumps apart faster, and the push is stronger where particles are densest.",
+          "type": "float"
+        },
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles get the random kick. Keep it matched to the particle count feeding the sim.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Per-particle incoherent 3D random kick added in-place to an Array<[f32; 3]> force buffer, weighted by local density. forces[i] += (hash_float3(i, frame) - 0.5) * diffusion * capped(density). Reseeds the hash each frame (Brownian, not drift); the density weighting concentrates the kick where particles clump (anti-clumping diffusion). Decomposed from the diffusion step of the fused node.fluid_simulate_3d.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space.",
+      "type_id": "node.spread_out_3d"
     },
     {
       "aliases": [
@@ -14665,6 +14038,449 @@
       "stratum": "atom",
       "summary": "Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture.",
       "type_id": "node.surface_bumps"
+    },
+    {
+      "aliases": [
+        "swirl force",
+        "curl slope force 3d",
+        "curl",
+        "vortex",
+        "smoke"
+      ],
+      "category": "Particles 3D",
+      "examples": [
+        "FluidSimulation3D"
+      ],
+      "inputs": [
+        {
+          "name": "gradient",
+          "required": true,
+          "type": "Texture3D"
+        },
+        {
+          "name": "curl_strength",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "slope_strength",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "ref_axis_x",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "ref_axis_y",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "ref_axis_z",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Swirl Force (3D, curl)",
+      "outputs": [
+        {
+          "name": "force",
+          "type": "Texture3D"
+        }
+      ],
+      "params": [
+        {
+          "default": "128",
+          "label": "Volume Resolution",
+          "name": "vol_res",
+          "range": [
+            "16",
+            "512"
+          ],
+          "tooltip": "The width and height of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
+          "type": "int"
+        },
+        {
+          "default": "128",
+          "label": "Volume Depth",
+          "name": "vol_depth",
+          "range": [
+            "16",
+            "512"
+          ],
+          "tooltip": "The depth of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Curl Strength",
+          "name": "curl_strength",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "How hard the swirl pulls particles into orbiting eddies. 0 is no swirl, higher spins them up. This is the dial that makes the flow read as smoke.",
+          "type": "float"
+        },
+        {
+          "default": "-500",
+          "label": "Slope Strength",
+          "name": "slope_strength",
+          "range": [
+            "-5000",
+            "5000"
+          ],
+          "tooltip": "How hard particles push along the gradient. Negative pulls them toward dense spots, positive pushes them away, default -500.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Ref Axis X",
+          "name": "ref_axis_x",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The X part of the axis the swirl rotates around. The three axis values get normalised together, so feed raw sine and cosine without worrying about length.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Ref Axis Y",
+          "name": "ref_axis_y",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The Y part of the axis the swirl rotates around, default 1. The three axis values get normalised together before the swirl is built.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Ref Axis Z",
+          "name": "ref_axis_z",
+          "range": [
+            "-1",
+            "1"
+          ],
+          "tooltip": "The Z part of the axis the swirl rotates around. The three axis values get normalised together, so a length of zero falls back to straight up.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a curl-noise reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). axis = normalize(ref_axis + smooth spatial wobble of the voxel position); force = cross(gradient, axis) * curl_strength + gradient * slope_strength. Writes a vec3 force Texture3D. The per-voxel axis wobble keeps the swirl even across the volume instead of pooling in one octant. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.edge_slope_3d.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies.",
+      "type_id": "node.swirl_force_3d"
+    },
+    {
+      "aliases": [
+        "switch",
+        "mux",
+        "mux array",
+        "selector"
+      ],
+      "category": "Routing",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "selector",
+          "required": true,
+          "type": "f32"
+        },
+        {
+          "name": "in_0",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "in_1",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "in_2",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "in_3",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "in_4",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "in_5",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "in_6",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "in_7",
+          "required": false,
+          "type": "Array"
+        }
+      ],
+      "label": "Switch (array)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "label": "Selector",
+          "name": "selector",
+          "range": [
+            "0",
+            "7"
+          ],
+          "tooltip": "Picks which input list to pass through, by number.",
+          "type": "float"
+        }
+      ],
+      "purpose": "N-way Array<f32> selector. Routes one of in_0..in_7 (Array f32) to the output buffer based on the selector input (rounded, clamped). Output capacity = max of all wired input capacities at chain-build time. Completes the mux family alongside node.switch_value / node.switch_texture; primary use is mode-switching at the value-array level (e.g., NestedCubes Envelope vs Pose target_angles).",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Picks one of several incoming lists and passes it through, chosen by a selector number.",
+      "type_id": "node.switch_array"
+    },
+    {
+      "aliases": [
+        "switch",
+        "mux",
+        "mux texture",
+        "selector",
+        "Switch TOP"
+      ],
+      "category": "Routing",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "selector",
+          "required": true,
+          "type": "f32"
+        },
+        {
+          "name": "in_0",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "in_1",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "in_2",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "in_3",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "in_4",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "in_5",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "in_6",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "in_7",
+          "required": false,
+          "type": "Texture2D"
+        }
+      ],
+      "label": "Switch (texture)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "label": "Selector",
+          "name": "selector",
+          "range": [
+            "0",
+            "31"
+          ],
+          "tooltip": "Picks which input image to pass through, by number.",
+          "type": "float"
+        },
+        {
+          "default": "8",
+          "label": "Input Count",
+          "name": "num_inputs",
+          "range": [
+            "2",
+            "32"
+          ],
+          "tooltip": "How many inputs to expose. The node grows or shrinks to match.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Dynamic N-way Texture2D selector. `num_inputs` sets how many in_0..in_N ports exist and a rounded, clamped `selector` forwards the matching input. Reconfigures its port list when `num_inputs` changes.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in.",
+      "type_id": "node.switch_texture"
+    },
+    {
+      "aliases": [
+        "switch",
+        "mux",
+        "mux scalar",
+        "selector",
+        "Switch CHOP"
+      ],
+      "category": "Routing",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "selector",
+          "required": true,
+          "type": "f32"
+        },
+        {
+          "name": "in_0",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "in_1",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "in_2",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "in_3",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "in_4",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "in_5",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "in_6",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "in_7",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Switch (value)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "f32"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "label": "Selector",
+          "name": "selector",
+          "range": [
+            "0",
+            "7"
+          ],
+          "tooltip": "Picks which input to pass through, by number.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "In 0",
+          "name": "in_0",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "In 1",
+          "name": "in_1",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "In 2",
+          "name": "in_2",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "In 3",
+          "name": "in_3",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "In 4",
+          "name": "in_4",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "In 5",
+          "name": "in_5",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "In 6",
+          "name": "in_6",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "In 7",
+          "name": "in_7",
+          "type": "float"
+        }
+      ],
+      "purpose": "N-way scalar selector. Routes one of in_0..in_7 (Scalar F32) to the output based on the selector input (rounded, clamped). Every input is port-shadows-param — wire dynamic sources into the ports, or set the inline `in_N` params for static option tables (curated frequency rates, side counts, gate constants). Useful for trigger-driven parameter switching.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Picks one of several incoming values and passes it through, chosen by a selector number. Use it to flip between sources live.",
+      "type_id": "node.switch_value"
     },
     {
       "aliases": [
@@ -15067,7 +14883,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Lift an Array<vec2<f32>> of UVs onto a torus surface, emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, phi = uv.y * TAU, pos = ((R + r·cos φ)·cos θ, r·sin φ, (R + r·cos φ)·sin θ). Optional Array<f32> normal_disp pushes each instance along the outward surface normal — drive from node.fbm_per_instance × petal-amplitude for flower-style petal displacement. `fold_angle` rotates the whole field around the X axis (port-shadow, drive from time for continuous animation). Generic across rings, halos, donuts, flower discs, gateways.",
+      "purpose": "Lift an Array<vec2<f32>> of UVs onto a torus surface, emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, phi = uv.y * TAU, pos = ((R + r·cos φ)·cos θ, r·sin φ, (R + r·cos φ)·sin θ). Optional Array<f32> normal_disp pushes each instance along the outward surface normal — drive from node.fractal_noise_per_copy × petal-amplitude for flower-style petal displacement. `fold_angle` rotates the whole field around the X axis (port-shadow, drive from time for continuous animation). Generic across rings, halos, donuts, flower discs, gateways.",
       "role": "Map",
       "stratum": "atom",
       "summary": "Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface.",
@@ -15322,6 +15138,222 @@
       "stratum": "driver",
       "summary": "Passes a trigger stream through only while it is enabled, so you can switch a clip-trigger source on and off.",
       "type_id": "node.trigger_gate"
+    },
+    {
+      "aliases": [
+        "turbulence",
+        "simplex noise force at particles",
+        "noise force",
+        "flow",
+        "simplex"
+      ],
+      "category": "Particles 2D",
+      "examples": [
+        "FluidSimulation"
+      ],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "particles",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "amplitude_modulator",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "amplitude",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "modulator_gain",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "z",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "noise_scale",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Turbulence (simplex)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.001",
+          "label": "Amplitude",
+          "name": "amplitude",
+          "range": [
+            "0",
+            "0.05"
+          ],
+          "tooltip": "How hard the noise field pushes each particle, from 0 for still up to 0.05. Small values already give plenty of swirl, so keep it low.",
+          "type": "float"
+        },
+        {
+          "default": "2",
+          "label": "Modulator Gain",
+          "name": "modulator_gain",
+          "range": [
+            "0",
+            "20"
+          ],
+          "tooltip": "How much a wired modulator texture boosts the noise where it is bright, from 0 to 20. Only does anything when something is wired into the modulator input.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Z (Time)",
+          "name": "z",
+          "range": [
+            "-1000",
+            "1000"
+          ],
+          "tooltip": "Slides the noise field through its third dimension, which animates the flow. Wire time times a rate here to keep the turbulence moving.",
+          "type": "float"
+        },
+        {
+          "default": "2",
+          "label": "Noise Scale",
+          "name": "noise_scale",
+          "range": [
+            "0",
+            "16"
+          ],
+          "tooltip": "How zoomed in the noise pattern is, from 0 for huge soft swells up to 16 for fine busy detail.",
+          "type": "float"
+        },
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles the noise force is applied to. Keep it matched to the particle count feeding the sim.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Per-particle 2D simplex noise force added in-place to an Array<vec2<f32>> force buffer. Evaluates simplex_noise_2d at each particle's position (X/Y noise channels offset by 100 for decorrelation), scales by `amplitude`, optionally boosts by a scalar Texture2D sampled at the same UV (`amplitude * (1 + capped(m) * gain)`, capped = m/(1+m)), and adds to `forces[i]`. Aliased Array<vec2> in/out — one physical buffer, in-place mutation. Resolution-independent: work scales with particle count, not canvas area. Replaces a per-pixel texture noise chain (simplex_field × 2 + math + mix) for any per-particle noise consumer.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force.",
+      "type_id": "node.turbulence"
+    },
+    {
+      "aliases": [
+        "turbulence 3d",
+        "simplex noise force 3d at particles",
+        "noise force 3d",
+        "flow",
+        "simplex"
+      ],
+      "category": "Particles 3D",
+      "examples": [
+        "FluidSimulation3D"
+      ],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "particles",
+          "required": true,
+          "type": "Array"
+        },
+        {
+          "name": "density",
+          "required": true,
+          "type": "Texture3D"
+        },
+        {
+          "name": "turbulence",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "anti_clump",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "active_count",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Turbulence (3D, simplex)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Array"
+        }
+      ],
+      "params": [
+        {
+          "default": "0.001",
+          "label": "Turbulence",
+          "name": "turbulence",
+          "range": [
+            "0",
+            "0.05"
+          ],
+          "tooltip": "How strongly the 3D noise pushes the particles around. 0 leaves them on their existing path, and higher values stir up more swirl. The useful range is small, so keep it low.",
+          "type": "float"
+        },
+        {
+          "default": "20",
+          "label": "Anti-Clump",
+          "name": "anti_clump",
+          "range": [
+            "0",
+            "60"
+          ],
+          "tooltip": "How much extra push the noise adds where particles are already crowded, which spreads dense clumps apart. 0 turns the boost off, and higher values separate clusters more aggressively.",
+          "type": "float"
+        },
+        {
+          "default": "100000",
+          "label": "Active Count",
+          "name": "active_count",
+          "range": [
+            "0",
+            "16000000"
+          ],
+          "tooltip": "How many particles the noise force is applied to. It is clamped to whatever the particle and force buffers can hold.",
+          "type": "int"
+        }
+      ],
+      "purpose": "Per-particle 3D simplex noise advection added in-place to an Array<[f32; 3]> force buffer. 3D noise from SimplexNoise2D on three orthogonal planes (yz/xz/xy), density-adaptive amplitude (turbulence * (1 + capped(density) * anti_clump), capped = d/(1+d)). Samples a density Texture3D at the particle's position. Aliased force in/out — one physical buffer, in-place add. The 3D sibling of node.turbulence, decomposed from the fused node.fluid_simulate_3d.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space.",
+      "type_id": "node.turbulence_3d"
     },
     {
       "aliases": [
@@ -16267,6 +16299,7 @@
     {
       "aliases": [
         "wrap around",
+        "wrap particles torus",
         "torus",
         "loop",
         "tile"
@@ -16309,7 +16342,7 @@
       "role": "Filter",
       "stratum": "atom",
       "summary": "Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping.",
-      "type_id": "node.wrap_particles_torus"
+      "type_id": "node.wrap_around"
     },
     {
       "aliases": [

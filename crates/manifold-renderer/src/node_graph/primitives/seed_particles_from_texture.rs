@@ -1,4 +1,4 @@
-//! `node.seed_particles_from_texture` — exact-placement particle seeding
+//! `node.spawn_from_image` — exact-placement particle seeding
 //! from a Texture2D density mask.
 //!
 //! Two-pass GPU dispatch:
@@ -52,7 +52,7 @@ struct SeedFromTextureUniforms {
 
 crate::primitive! {
     name: SeedParticlesFromTexture,
-    type_id: "node.seed_particles_from_texture",
+    type_id: "node.spawn_from_image",
     purpose: "Exact-placement particle seeding from a Texture2D density mask. Two-pass dispatch: (1) compact — scan the mask, atomically append every bright texel's UV (R > 0.1) into a flat list; (2) place — assign each active particle a UV via round-robin (i mod bright_count) with sub-texel jitter. Guarantees every particle lands alive on the mask: zero dead particles regardless of mask sparsity. When active_count > bright_count, particles wrap-around the list (jittered so they don't stack). When the mask is empty every particle is parked dead at center.",
     inputs: {
         mask: Texture2D required,
@@ -119,7 +119,7 @@ crate::primitive! {
     summary: "Creates particles placed by the bright areas of an image, so a picture or mask becomes a cloud of points. Spawn density follows the image.",
     category: Particles2D,
     role: Source,
-    aliases: ["spawn from image", "seed from texture", "image particles"],
+    aliases: ["spawn from image", "seed particles from texture", "seed from texture", "image particles"],
     extra_fields: {
         // The macro-allocated `pipeline` field holds count_main; these hold
         // the other three entry points of the deterministic four-pass compaction.
@@ -217,28 +217,28 @@ impl Primitive for SeedParticlesFromTexture {
             self.pipeline = Some(gpu.device.create_compute_pipeline(
                 SHADER_SRC,
                 "count_main",
-                "node.seed_particles_from_texture.count",
+                "node.spawn_from_image.count",
             ));
         }
         if self.scan_pipeline.is_none() {
             self.scan_pipeline = Some(gpu.device.create_compute_pipeline(
                 SHADER_SRC,
                 "scan_main",
-                "node.seed_particles_from_texture.scan",
+                "node.spawn_from_image.scan",
             ));
         }
         if self.compact_pipeline.is_none() {
             self.compact_pipeline = Some(gpu.device.create_compute_pipeline(
                 SHADER_SRC,
                 "compact_main",
-                "node.seed_particles_from_texture.compact",
+                "node.spawn_from_image.compact",
             ));
         }
         if self.place_pipeline.is_none() {
             self.place_pipeline = Some(gpu.device.create_compute_pipeline(
                 SHADER_SRC,
                 "place_main",
-                "node.seed_particles_from_texture.place",
+                "node.spawn_from_image.place",
             ));
         }
         if self.sampler.is_none() {
@@ -300,7 +300,7 @@ impl Primitive for SeedParticlesFromTexture {
             count_pipeline,
             &bindings,
             [num_blocks.div_ceil(64), 1, 1],
-            "node.seed_particles_from_texture.count",
+            "node.spawn_from_image.count",
         );
         // Each pass reads what the previous wrote — barrier between every stage.
         gpu.native_enc.compute_memory_barrier_buffers();
@@ -310,7 +310,7 @@ impl Primitive for SeedParticlesFromTexture {
             scan_pipeline,
             &bindings,
             [1, 1, 1],
-            "node.seed_particles_from_texture.scan",
+            "node.spawn_from_image.scan",
         );
         gpu.native_enc.compute_memory_barrier_buffers();
 
@@ -320,7 +320,7 @@ impl Primitive for SeedParticlesFromTexture {
             compact_pipeline,
             &bindings,
             [num_blocks.div_ceil(64), 1, 1],
-            "node.seed_particles_from_texture.compact",
+            "node.spawn_from_image.compact",
         );
         gpu.native_enc.compute_memory_barrier_buffers();
 
@@ -329,7 +329,7 @@ impl Primitive for SeedParticlesFromTexture {
             place_pipeline,
             &bindings,
             [active_count.div_ceil(256), 1, 1],
-            "node.seed_particles_from_texture.place",
+            "node.spawn_from_image.place",
         );
     }
 }
@@ -347,7 +347,7 @@ mod tests {
 
         assert_eq!(
             SeedParticlesFromTexture::TYPE_ID,
-            "node.seed_particles_from_texture"
+            "node.spawn_from_image"
         );
         // mask is required Texture2D; active_count / output_width /
         // output_height / frame_seed are optional port-shadows.
@@ -395,7 +395,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = SeedParticlesFromTexture::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.seed_particles_from_texture");
+        assert_eq!(node.type_id().as_str(), "node.spawn_from_image");
     }
 
     #[test]
@@ -425,7 +425,7 @@ mod tests {
         let seed = flat
             .nodes
             .iter()
-            .find(|n| n.type_id == "node.seed_particles_from_texture")
+            .find(|n| n.type_id == "node.spawn_from_image")
             .expect("FluidSim has a seed node");
         let wired = flat
             .wires

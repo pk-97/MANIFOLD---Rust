@@ -1,5 +1,5 @@
 //! `node.resolve_scatter` — convert a u32 fixed-point
-//! accumulator buffer (produced by `node.scatter_particles`) into
+//! accumulator buffer (produced by `node.draw_particles`) into
 //! a float density texture.
 //!
 //! Phase A.7 of `BUFFER_PORT_PLAN`. Reads each accumulator cell,
@@ -34,7 +34,7 @@ struct ResolveUniforms {
 crate::primitive! {
     name: ResolveAccumulator,
     type_id: "node.resolve_scatter",
-    purpose: "Read a u32 fixed-point accumulator buffer (produced by node.scatter_particles), divide by `fixed_point_scale`, and write the result as a grayscale density texture. The bridge from Array(u32) back to Texture2D for downstream texture-domain primitives. Dimensions are taken from the output Texture2D — which the backend allocates at canvas size — so resolve always covers every pixel of the density texture, matching whatever scatter wrote (also canvas-sized via `canvas_sized_array_outputs()`).",
+    purpose: "Read a u32 fixed-point accumulator buffer (produced by node.draw_particles), divide by `fixed_point_scale`, and write the result as a grayscale density texture. The bridge from Array(u32) back to Texture2D for downstream texture-domain primitives. Dimensions are taken from the output Texture2D — which the backend allocates at canvas size — so resolve always covers every pixel of the density texture, matching whatever scatter wrote (also canvas-sized via `canvas_sized_array_outputs()`).",
     inputs: {
         accum: Array(u32) required,
     },

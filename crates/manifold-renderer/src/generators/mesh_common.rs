@@ -345,8 +345,8 @@ pub fn platonic_edges(shape: u32) -> &'static [EdgePair] {
 
 // `pub struct Blob` and BLOB_SPECS deleted in Phase 4b. The blob
 // rectangle wire is now described purely by the Channels signature
-// declared inline on `node.blob_detect_ffi.blobs` and
-// `node.blob_overlay_render.blobs`:
+// declared inline on `node.blob_tracker.blobs` and
+// `node.blob_overlay.blobs`:
 //   `Channels[x: F32, y: F32, width: F32, height: F32]`
 // (4×f32, 16 bytes, 4-byte aligned). The FFI producer + overlay
 // consumer each carry their own module-private `BlobRect` Pod struct
@@ -405,7 +405,7 @@ mod mesh_common_specs_drift {
 
     // `blob_specs_stride_matches_struct` deleted in Phase 4b alongside
     // `pub struct Blob` and `BLOB_SPECS`. The Channels signature on
-    // node.blob_detect_ffi.blobs now describes the byte layout
+    // node.blob_tracker.blobs now describes the byte layout
     // directly; the size invariant survives as
     // `blob_rect_struct_is_16_bytes_for_channels_wire` in
     // primitives/blob_detect_ffi.rs.

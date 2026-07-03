@@ -1,4 +1,4 @@
-//! `node.person_segment` — person/human segmentation via the native
+//! `node.person_mask` — person/human segmentation via the native
 //! plugin's `process_subject_mask` API, wrapped as a standalone
 //! primitive.
 //!
@@ -75,7 +75,7 @@ struct MaskState {
 
 crate::primitive! {
     name: PersonSegment,
-    type_id: "node.person_segment",
+    type_id: "node.person_mask",
     purpose: "Person / human segmentation via the native plugin's process_subject_mask API. Detects PEOPLE specifically (selfie / human / person model variants), not generic salient objects. Input: any Texture2D frame. Output: Rgba16Float mask where R = G = B = person probability ∈ [0, 1] (0 = background, 1 = person); A = 0 until the first inference completes, 1 afterwards (availability gate). Inference runs on a background worker with ~2-3 frame latency. Temporal blending (α = 0.55 default) reduces noise worker-side before upload — matches the legacy WireframeDepth contract. Same channel pack as depth_estimate_midas so they compose interchangeably as mask inputs.",
     inputs: {
         in: Texture2D required,
@@ -120,7 +120,7 @@ crate::primitive! {
     summary: "Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them.",
     category: DetectionAndSampling,
     role: Filter,
-    aliases: ["person mask", "segmentation", "people", "matte"],
+    aliases: ["person mask", "person segment", "segmentation", "people", "matte"],
     extra_fields: {
         upsample_pipeline: Option<GpuComputePipeline> = None,
         mask_worker: Option<BackgroundWorker<MaskRequest, MaskResponse>> = None,
@@ -142,7 +142,7 @@ impl PersonSegment {
             // First inference: pass-through (no prev → blended = clamped
             // mask). Subsequent: hist += (curr - hist) * smoothing.
             let mut prev_blended: Option<Vec<f32>> = None;
-            log::info!("[node.person_segment] Person-segmentation worker spawned");
+            log::info!("[node.person_mask] Person-segmentation worker spawned");
             Some(move |req: MaskRequest| -> MaskResponse {
                 let pc = (req.width * req.height) as usize;
                 let mut mask = vec![0f32; pc];
@@ -177,7 +177,7 @@ impl PersonSegment {
         });
         if self.mask_worker.is_none() {
             log::warn!(
-                "[node.person_segment] Native subject-segmentation API unavailable — output will be black"
+                "[node.person_mask] Native subject-segmentation API unavailable — output will be black"
             );
         }
     }
@@ -217,7 +217,7 @@ impl PersonSegment {
             format: GpuTextureFormat::Rgba8Unorm,
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
-            label: "node.person_segment.mask",
+            label: "node.person_mask.mask",
             mip_levels: 1,
         });
         // Clear so alpha reads 0 until the first real mask upload — the
@@ -231,7 +231,7 @@ impl PersonSegment {
             format: GpuTextureFormat::Rgba16Float,
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL,
-            label: "node.person_segment.staging",
+            label: "node.person_mask.staging",
             mip_levels: 1,
         });
         self.mask_state = Some(MaskState {
@@ -314,7 +314,7 @@ impl Primitive for PersonSegment {
                     }
                     let mean = sum / ms.mask_buffer.len().max(1) as f32;
                     log::info!(
-                        "[node.person_segment] mask stats (frame {}): max={mx:.3} mean={mean:.3} \
+                        "[node.person_mask] mask stats (frame {}): max={mx:.3} mean={mean:.3} \
                          — max==0 means no subject mask",
                         ms.frame_counter,
                     );
@@ -370,7 +370,7 @@ impl Primitive for PersonSegment {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/person_segment_upsample.wgsl"),
                 "cs_main",
-                "node.person_segment.upsample",
+                "node.person_mask.upsample",
             )
         });
         let sampler = self
@@ -397,7 +397,7 @@ impl Primitive for PersonSegment {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.person_segment",
+            "node.person_mask",
         );
     }
 }
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn person_segment_declares_one_input_and_one_output() {
         use crate::node_graph::ports::PortType;
-        assert_eq!(PersonSegment::TYPE_ID, "node.person_segment");
+        assert_eq!(PersonSegment::TYPE_ID, "node.person_mask");
         assert_eq!(PersonSegment::INPUTS.len(), 1);
         assert_eq!(PersonSegment::INPUTS[0].name, "in");
         assert_eq!(PersonSegment::INPUTS[0].ty, PortType::Texture2D);
@@ -450,6 +450,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = PersonSegment::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.person_segment");
+        assert_eq!(node.type_id().as_str(), "node.person_mask");
     }
 }

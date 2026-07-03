@@ -1,4 +1,4 @@
-//! `node.lerp_instance_fields` — elementwise linear interpolation
+//! `node.blend_copies` — elementwise linear interpolation
 //! between two `Array<InstanceTransform>`s.
 //!
 //! ```text
@@ -8,7 +8,7 @@
 //!
 //! Pair with `node.cylinder_wrap_field` / `node.torus_wrap_field` (or
 //! any two topology-derived `Array<InstanceTransform>`s) to morph
-//! continuously between them — what `node.mux_array` can't do (it
+//! continuously between them — what `node.switch_array` can't do (it
 //! selects one of N discretely, at the lowest integer index of the
 //! selector). For the canonical DigitalPlants morph (cyl ↔ tor), `t
 //! = morph` is wired from the outer card.
@@ -33,8 +33,8 @@ struct Uniforms {
 
 crate::primitive! {
     name: LerpInstanceFields,
-    type_id: "node.lerp_instance_fields",
-    purpose: "Elementwise linear interpolation between two Array<InstanceTransform>s. out[idx] = (1 - t) * a[idx] + t * b[idx] applied to both pos_scale and rot_pad. The continuous counterpart to node.mux_array — pick this when the morph parameter is a real 0..1 slider and intermediate values must visually morph (the DigitalPlants cyl ↔ tor case). At t=0 the output equals a; at t=1 it equals b; at t=0.5 the elementwise midpoint. `t` is port-shadow-param so the morph factor can be modulated.",
+    type_id: "node.blend_copies",
+    purpose: "Elementwise linear interpolation between two Array<InstanceTransform>s. out[idx] = (1 - t) * a[idx] + t * b[idx] applied to both pos_scale and rot_pad. The continuous counterpart to node.switch_array — pick this when the morph parameter is a real 0..1 slider and intermediate values must visually morph (the DigitalPlants cyl ↔ tor case). At t=0 the output equals a; at t=1 it equals b; at t=0.5 the elementwise midpoint. `t` is port-shadow-param so the morph factor can be modulated.",
     inputs: {
         a: Array(InstanceTransform) required,
         b: Array(InstanceTransform) required,
@@ -59,7 +59,7 @@ crate::primitive! {
     summary: "Blends two arrangements of copies together by an amount, so you can morph a field of copies from one layout to another.",
     category: Particles2D,
     role: Filter,
-    aliases: ["blend copies", "morph", "lerp", "interpolate"],
+    aliases: ["blend copies", "lerp instance fields", "morph", "lerp", "interpolate"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/lerp_instance_fields_body.wgsl"),
 }
@@ -108,9 +108,9 @@ impl Primitive for LerpInstanceFields {
             // coincident path). lerp_instance_fields.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.lerp_instance_fields standalone codegen"),
+                    .expect("node.blend_copies standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.lerp_instance_fields",
+                "node.blend_copies",
             )
         });
 
@@ -145,7 +145,7 @@ impl Primitive for LerpInstanceFields {
                 },
             ],
             [count.div_ceil(256), 1, 1],
-            "node.lerp_instance_fields",
+            "node.blend_copies",
         );
     }
 }
@@ -160,7 +160,7 @@ mod tests {
     fn lerp_instance_fields_ports() {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let inst_layout = ArrayType::of_known::<InstanceTransform>();
-        assert_eq!(LerpInstanceFields::TYPE_ID, "node.lerp_instance_fields");
+        assert_eq!(LerpInstanceFields::TYPE_ID, "node.blend_copies");
 
         for name in ["a", "b"] {
             let port = LerpInstanceFields::INPUTS
@@ -202,7 +202,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = LerpInstanceFields::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.lerp_instance_fields");
+        assert_eq!(node.type_id().as_str(), "node.blend_copies");
     }
 }
 

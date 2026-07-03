@@ -1,4 +1,4 @@
-//! `node.simplex_noise_force_at_particles` — per-particle 2D simplex
+//! `node.turbulence` — per-particle 2D simplex
 //! noise force added in-place to an Array<vec2<f32>> force buffer.
 //!
 //! For each live particle i: evaluate 2D simplex noise at the
@@ -58,7 +58,7 @@ struct NoiseUniforms {
 
 crate::primitive! {
     name: SimplexNoiseForceAtParticles,
-    type_id: "node.simplex_noise_force_at_particles",
+    type_id: "node.turbulence",
     purpose: "Per-particle 2D simplex noise force added in-place to an Array<vec2<f32>> force buffer. Evaluates simplex_noise_2d at each particle's position (X/Y noise channels offset by 100 for decorrelation), scales by `amplitude`, optionally boosts by a scalar Texture2D sampled at the same UV (`amplitude * (1 + capped(m) * gain)`, capped = m/(1+m)), and adds to `forces[i]`. Aliased Array<vec2> in/out — one physical buffer, in-place mutation. Resolution-independent: work scales with particle count, not canvas area. Replaces a per-pixel texture noise chain (simplex_field × 2 + math + mix) for any per-particle noise consumer.",
     inputs: {
         in: Array([f32; 2]) required,
@@ -121,7 +121,7 @@ crate::primitive! {
     summary: "Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force.",
     category: Particles2D,
     role: Filter,
-    aliases: ["turbulence", "noise force", "flow", "simplex"],
+    aliases: ["turbulence", "simplex noise force at particles", "noise force", "flow", "simplex"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/simplex_noise_force_at_particles_body.wgsl"),
     extra_fields: {
@@ -194,9 +194,9 @@ impl Primitive for SimplexNoiseForceAtParticles {
             // simplex_noise_force_at_particles.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.simplex_noise_force_at_particles standalone codegen"),
+                    .expect("node.turbulence standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.simplex_noise_force_at_particles",
+                "node.turbulence",
             )
         });
         let sampler = self
@@ -214,7 +214,7 @@ impl Primitive for SimplexNoiseForceAtParticles {
                 format: GpuTextureFormat::Rgba8Unorm,
                 dimension: GpuTextureDimension::D2,
                 usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::CPU_UPLOAD,
-                label: "node.simplex_noise_force_at_particles dummy modulator",
+                label: "node.turbulence dummy modulator",
                 mip_levels: 1,
             });
             gpu.device.upload_texture(&tex, &[255u8, 255, 255, 255]);
@@ -269,7 +269,7 @@ impl Primitive for SimplexNoiseForceAtParticles {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.simplex_noise_force_at_particles",
+            "node.turbulence",
         );
     }
 }
@@ -288,7 +288,7 @@ mod tests {
 
         assert_eq!(
             SimplexNoiseForceAtParticles::TYPE_ID,
-            "node.simplex_noise_force_at_particles"
+            "node.turbulence"
         );
         let names: Vec<&str> = SimplexNoiseForceAtParticles::INPUTS
             .iter()
@@ -354,7 +354,7 @@ mod tests {
         let node: &dyn EffectNode = &prim;
         assert_eq!(
             node.type_id().as_str(),
-            "node.simplex_noise_force_at_particles"
+            "node.turbulence"
         );
     }
 }

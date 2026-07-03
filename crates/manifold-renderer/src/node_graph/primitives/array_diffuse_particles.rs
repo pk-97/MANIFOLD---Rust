@@ -1,4 +1,4 @@
-//! `node.array_diffuse_particles` — hash-based random kick on the 3D
+//! `node.spread_out` — hash-based random kick on the 3D
 //! state of each particle.
 //!
 //! Generic Brownian-noise atom for any Array<Particle> pipeline whose
@@ -37,7 +37,7 @@ struct DiffuseUniforms {
 
 crate::primitive! {
     name: ArrayDiffuseParticles,
-    type_id: "node.array_diffuse_particles",
+    type_id: "node.spread_out",
     purpose: "Apply a per-particle hash-based random kick to `Particle.velocity`. One GPU dispatch over Array<Particle> with aliased read+write. `diffusion` scales the kick magnitude (typical range 0..0.05); zero means no-op. `frame_count` reseeds the hash each frame so the kick is genuinely uncorrelated across frames. Generic Brownian-noise atom — pairs with any particle integrator (attractor ODE, fluid sim, advection) that wants additive jitter on its 3D state.",
     inputs: {
         in: Array(Particle) required,
@@ -71,7 +71,7 @@ crate::primitive! {
     summary: "Gives each particle a small random kick so a tight clump slowly spreads apart. Adds a bit of life and scatter.",
     category: Particles2D,
     role: Filter,
-    aliases: ["spread out", "diffuse", "jitter", "random kick"],
+    aliases: ["spread out", "array diffuse particles", "diffuse", "jitter", "random kick"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/array_diffuse_particles_body.wgsl"),
     derived_uniforms: ["frame_count:u32"],
@@ -139,9 +139,9 @@ impl Primitive for ArrayDiffuseParticles {
             // is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.array_diffuse_particles standalone codegen"),
+                    .expect("node.spread_out standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.array_diffuse_particles",
+                "node.spread_out",
             )
         });
 
@@ -166,7 +166,7 @@ impl Primitive for ArrayDiffuseParticles {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.array_diffuse_particles",
+            "node.spread_out",
         );
     }
 }
@@ -181,7 +181,7 @@ mod tests {
     fn diffuse_declares_aliased_particle_in_and_out() {
         use crate::node_graph::ports::{ArrayType, PortType};
         let particle_layout = ArrayType::of_known::<Particle>();
-        assert_eq!(ArrayDiffuseParticles::TYPE_ID, "node.array_diffuse_particles");
+        assert_eq!(ArrayDiffuseParticles::TYPE_ID, "node.spread_out");
 
         let in_port = ArrayDiffuseParticles::INPUTS
             .iter()
@@ -220,7 +220,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = ArrayDiffuseParticles::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.array_diffuse_particles");
+        assert_eq!(node.type_id().as_str(), "node.spread_out");
     }
 }
 

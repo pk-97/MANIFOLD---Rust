@@ -219,7 +219,7 @@ crate::param_tooltips!("node.linear_gradient", {
 
 // ─── Detection & Sampling ────────────────────────────────────────────
 
-crate::param_tooltips!("node.person_segment", {
+crate::param_tooltips!("node.person_mask", {
     "analysis_max_dim" => "The resolution the AI runs at. Lower is faster but rougher.",
     "update_interval" => "How often to re-run the detection, in frames. Higher saves performance.",
     "smoothing" => "How much to smooth the mask over time to reduce flicker.",
@@ -227,15 +227,15 @@ crate::param_tooltips!("node.person_segment", {
 
 // ─── Routing ─────────────────────────────────────────────────────────
 
-crate::param_tooltips!("node.mux_scalar", {
+crate::param_tooltips!("node.switch_value", {
     "selector" => "Picks which input to pass through, by number.",
 });
 
-crate::param_tooltips!("node.mux_array", {
+crate::param_tooltips!("node.switch_array", {
     "selector" => "Picks which input list to pass through, by number.",
 });
 
-crate::param_tooltips!("node.mux_texture", {
+crate::param_tooltips!("node.switch_texture", {
     "selector" => "Picks which input image to pass through, by number.",
     "num_inputs" => "How many inputs to expose. The node grows or shrinks to match.",
 });
@@ -263,14 +263,14 @@ crate::param_tooltips!("node.distance_to_point", {
 
 // ─── Particles ───────────────────────────────────────────────────────
 
-crate::param_tooltips!("node.seed_particles", {
+crate::param_tooltips!("node.spawn_particles", {
     "max_capacity" => "The most particles this can ever hold, set when the chain is built.",
     "active_count" => "How many particles to spawn and keep alive.",
     "seed_offset" => "Changes the random layout. Move it to get a different spread.",
     "seed_mode" => "How the starting positions are chosen.",
 });
 
-crate::param_tooltips!("node.euler_step_particles", {
+crate::param_tooltips!("node.move_particles", {
     "active_count" => "How many particles are alive and being moved.",
     "speed" => "How fast the particles move each step.",
 });

@@ -599,7 +599,7 @@
           {
             "id": 11,
             "nodeId": "palette_mux",
-            "typeId": "node.mux_texture",
+            "typeId": "node.switch_texture",
             "handle": "palette_mux",
             "params": {
               "num_inputs": {

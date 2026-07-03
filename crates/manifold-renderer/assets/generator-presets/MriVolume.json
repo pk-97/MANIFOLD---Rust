@@ -367,7 +367,7 @@
     {
       "id": 7,
       "nodeId": "tex_mux",
-      "typeId": "node.mux_texture",
+      "typeId": "node.switch_texture",
       "handle": "tex_mux",
       "params": {
         "selector": {
@@ -476,7 +476,7 @@
           {
             "id": 6,
             "nodeId": "axis_mux",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "axis_mux",
             "params": {
               "selector": {

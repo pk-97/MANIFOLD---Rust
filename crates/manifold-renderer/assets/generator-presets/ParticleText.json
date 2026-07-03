@@ -534,7 +534,7 @@
           {
             "id": 81,
             "nodeId": "seed_alloc",
-            "typeId": "node.seed_particles",
+            "typeId": "node.spawn_particles",
             "handle": "seed_alloc",
             "params": {
               "active_count": {
@@ -685,7 +685,7 @@
           {
             "id": 4,
             "nodeId": "splat",
-            "typeId": "node.scatter_particles",
+            "typeId": "node.draw_particles",
             "handle": "splat",
             "params": {
               "active_count": {
@@ -1449,7 +1449,7 @@
           {
             "id": 83,
             "nodeId": "sample_forces",
-            "typeId": "node.sample_texture_at_particles",
+            "typeId": "node.sample_image_at_particles",
             "handle": "sample_forces",
             "params": {
               "active_count": {
@@ -1479,7 +1479,7 @@
           {
             "id": 85,
             "nodeId": "euler",
-            "typeId": "node.euler_step_particles",
+            "typeId": "node.move_particles",
             "handle": "euler",
             "params": {
               "active_count": {
@@ -1496,7 +1496,7 @@
           {
             "id": 86,
             "nodeId": "wrap",
-            "typeId": "node.wrap_particles_torus",
+            "typeId": "node.wrap_around",
             "handle": "wrap",
             "params": {
               "active_count": {
@@ -1509,7 +1509,7 @@
           {
             "id": 91,
             "nodeId": "apply_inject",
-            "typeId": "node.apply_radial_burst_to_particles",
+            "typeId": "node.add_burst",
             "handle": "apply_inject",
             "params": {
               "active_count": {
@@ -1542,7 +1542,7 @@
           {
             "id": 130,
             "nodeId": "noise_force",
-            "typeId": "node.simplex_noise_force_at_particles",
+            "typeId": "node.turbulence",
             "handle": "noise_force",
             "params": {
               "active_count": {
@@ -2218,7 +2218,7 @@
           {
             "id": 31,
             "nodeId": "mux_mode3",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "mux_mode3",
             "params": {
               "selector": {
@@ -2265,7 +2265,7 @@
           {
             "id": 34,
             "nodeId": "mux_mode4",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "mux_mode4",
             "params": {
               "selector": {
@@ -2346,7 +2346,7 @@
           {
             "id": 42,
             "nodeId": "mux_turbulence",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "mux_turbulence",
             "params": {
               "selector": {
@@ -2422,7 +2422,7 @@
           {
             "id": 46,
             "nodeId": "mux_rotation",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "mux_rotation",
             "params": {
               "selector": {
@@ -2477,7 +2477,7 @@
           {
             "id": 49,
             "nodeId": "mux_slope",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "mux_slope",
             "params": {
               "selector": {

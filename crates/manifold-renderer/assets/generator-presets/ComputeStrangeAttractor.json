@@ -355,7 +355,7 @@
     {
       "id": 2,
       "nodeId": "seed",
-      "typeId": "node.seed_particles",
+      "typeId": "node.spawn_particles",
       "handle": "seed",
       "params": {
         "active_count": {
@@ -420,7 +420,7 @@
     {
       "id": 4,
       "nodeId": "diffuse",
-      "typeId": "node.array_diffuse_particles",
+      "typeId": "node.spread_out",
       "handle": "diffuse",
       "params": {
         "active_count": {
@@ -477,7 +477,7 @@
           {
             "id": 5,
             "nodeId": "scatter",
-            "typeId": "node.scatter_particles",
+            "typeId": "node.draw_particles",
             "handle": "scatter",
             "params": {
               "active_count": {
@@ -805,7 +805,7 @@
           {
             "id": 18,
             "nodeId": "type_mux",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "type_mux",
             "params": {
               "in_0": {

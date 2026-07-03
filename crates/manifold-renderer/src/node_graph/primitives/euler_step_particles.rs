@@ -1,4 +1,4 @@
-//! `node.euler_step_particles` — apply a per-particle 2D force to
+//! `node.move_particles` — apply a per-particle 2D force to
 //! each live particle's position via one Euler step.
 //!
 //! `position.xy += forces[i] * speed * dt_frame_normalized`
@@ -9,7 +9,7 @@
 //! convention).
 //!
 //! Dead particles (`life <= 0`) pass through unchanged. No boundary
-//! handling — pair with `node.wrap_particles_torus` (or a future
+//! handling — pair with `node.wrap_around` (or a future
 //! `boundary_death` atom) for the position-bounds policy.
 
 use manifold_gpu::GpuBinding;
@@ -34,8 +34,8 @@ struct EulerUniforms {
 
 crate::primitive! {
     name: EulerStepParticles,
-    type_id: "node.euler_step_particles",
-    purpose: "Apply one Euler integration step to each live particle's position.xy by a per-particle 2D force. `position.xy += forces[i] * speed * (delta * 60)`. Frame-rate-normalised via the `* 60` scale so the same `speed` value gives consistent motion across frame rates (matches the legacy fluid_simulate's `dt_scale = dt * 60`). Dead particles (life <= 0) pass through unchanged. No boundary handling — pair with `node.wrap_particles_torus` for the toroidal policy.",
+    type_id: "node.move_particles",
+    purpose: "Apply one Euler integration step to each live particle's position.xy by a per-particle 2D force. `position.xy += forces[i] * speed * (delta * 60)`. Frame-rate-normalised via the `* 60` scale so the same `speed` value gives consistent motion across frame rates (matches the legacy fluid_simulate's `dt_scale = dt * 60`). Dead particles (life <= 0) pass through unchanged. No boundary handling — pair with `node.wrap_around` for the toroidal policy.",
     inputs: {
         in: Array(Particle) required,
         forces: Array([f32; 2]) required,
@@ -69,7 +69,7 @@ crate::primitive! {
     summary: "Moves every particle one step along its velocity each frame. The basic integrator that makes a particle system actually move.",
     category: Particles2D,
     role: Filter,
-    aliases: ["move particles", "integrate", "step", "euler"],
+    aliases: ["move particles", "euler step particles", "integrate", "step", "euler"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/euler_step_particles_body.wgsl"),
     derived_uniforms: ["dt_scaled"],
@@ -132,9 +132,9 @@ impl Primitive for EulerStepParticles {
             // the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.euler_step_particles standalone codegen"),
+                    .expect("node.move_particles standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.euler_step_particles",
+                "node.move_particles",
             )
         });
 
@@ -173,7 +173,7 @@ impl Primitive for EulerStepParticles {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.euler_step_particles",
+            "node.move_particles",
         );
     }
 }
@@ -190,7 +190,7 @@ mod tests {
         let particle_layout = ArrayType::of_known::<Particle>();
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
 
-        assert_eq!(EulerStepParticles::TYPE_ID, "node.euler_step_particles");
+        assert_eq!(EulerStepParticles::TYPE_ID, "node.move_particles");
         let names: Vec<&str> = EulerStepParticles::INPUTS.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["in", "forces", "speed", "active_count"]);
         assert_eq!(
@@ -227,7 +227,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = EulerStepParticles::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.euler_step_particles");
+        assert_eq!(node.type_id().as_str(), "node.move_particles");
     }
 }
 

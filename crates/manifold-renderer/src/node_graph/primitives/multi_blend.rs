@@ -3,7 +3,7 @@
 //! The dynamic-input generalisation of the old fixed-five `node.texture_sum_5`:
 //! `out = (in_0 + in_1 + … + in_{N-1}) / divisor`, all channels. `num_inputs`
 //! sets how many `Texture2D` ports (`in_0` … `in_{N-1}`) the node exposes,
-//! rebuilt via [`EffectNode::reconfigure`] exactly like `node.mux_texture`.
+//! rebuilt via [`EffectNode::reconfigure`] exactly like `node.switch_texture`.
 //! `divisor = 1` (default) is a plain compose-add; `divisor = N` averages.
 //!
 //! Unwired inputs simply drop out of the sum (contribute nothing), so the

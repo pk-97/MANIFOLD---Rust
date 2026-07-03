@@ -3,7 +3,7 @@
 //!
 //! Two of the shipping effects (`DepthOfField`, `WireframeDepth`)
 //! drive native FFI plugins on background threads. (BlobTracking
-//! was decomposed — its worker lives in `node.blob_detect_ffi`.)
+//! was decomposed — its worker lives in `node.blob_tracker`.)
 //! Those workers must be running before the first frame renders so
 //! the first chain dispatch doesn't block on plugin initialisation.
 //!
@@ -75,7 +75,7 @@ mod tests {
     ///
     /// All historically plugin-using effects have since decomposed into
     /// self-warming DNN/FFI atoms, so `expected` is currently empty:
-    /// BlobTracking → node.blob_detect_ffi; WireframeDepth → the DNN
+    /// BlobTracking → node.blob_tracker; WireframeDepth → the DNN
     /// atoms; DepthOfField → node.depth_estimate (DepthOfField.json).
     /// None needs a prewarm. The empty list is a forward guard — if a
     /// new non-decomposed plugin effect lands, add it here.

@@ -1771,7 +1771,7 @@
           },
           {
             "id": 8,
-            "typeId": "node.mux_texture",
+            "typeId": "node.switch_texture",
             "handle": "mode_mux",
             "nodeId": "mode_mux",
             "params": {

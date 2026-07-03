@@ -1,4 +1,4 @@
-//! `node.curl_slope_force_3d` — combine a vec3 gradient `Texture3D`
+//! `node.swirl_force_3d` — combine a vec3 gradient `Texture3D`
 //! into a force field via curl (cross with a rotating reference axis)
 //! plus slope (gradient scaled).
 //!
@@ -49,7 +49,7 @@ struct CurlSlope3DUniforms {
 
 crate::primitive! {
     name: CurlSlopeForce3D,
-    type_id: "node.curl_slope_force_3d",
+    type_id: "node.swirl_force_3d",
     purpose: "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a curl-noise reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). axis = normalize(ref_axis + smooth spatial wobble of the voxel position); force = cross(gradient, axis) * curl_strength + gradient * slope_strength. Writes a vec3 force Texture3D. The per-voxel axis wobble keeps the swirl even across the volume instead of pooling in one octant. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.edge_slope_3d.",
     inputs: {
         gradient: Texture3D required,
@@ -126,7 +126,7 @@ crate::primitive! {
     summary: "Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies.",
     category: Particles3D,
     role: Filter,
-    aliases: ["swirl force", "curl", "vortex", "smoke"],
+    aliases: ["swirl force", "curl slope force 3d", "curl", "vortex", "smoke"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/curl_slope_force_3d_body.wgsl"),
     input_access: [CoincidentTexel],
@@ -173,9 +173,9 @@ impl Primitive for CurlSlopeForce3D {
             // dst(2). curl_slope_force_3d.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.curl_slope_force_3d standalone codegen"),
+                    .expect("node.swirl_force_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.curl_slope_force_3d",
+                "node.swirl_force_3d",
             )
         });
 
@@ -207,7 +207,7 @@ impl Primitive for CurlSlopeForce3D {
                 },
             ],
             [vol_res.div_ceil(8), vol_res.div_ceil(8), vol_depth.div_ceil(8)],
-            "node.curl_slope_force_3d",
+            "node.swirl_force_3d",
         );
     }
 }
@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn declares_gradient_in_force_out_and_port_shadow_scalars() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(CurlSlopeForce3D::TYPE_ID, "node.curl_slope_force_3d");
+        assert_eq!(CurlSlopeForce3D::TYPE_ID, "node.swirl_force_3d");
         assert_eq!(CurlSlopeForce3D::INPUTS[0].name, "gradient");
         assert_eq!(CurlSlopeForce3D::INPUTS[0].ty, PortType::Texture3D);
         assert!(CurlSlopeForce3D::INPUTS[0].required);
@@ -246,6 +246,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = CurlSlopeForce3D::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.curl_slope_force_3d");
+        assert_eq!(node.type_id().as_str(), "node.swirl_force_3d");
     }
 }

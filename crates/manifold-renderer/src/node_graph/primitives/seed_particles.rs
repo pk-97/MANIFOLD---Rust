@@ -1,4 +1,4 @@
-//! `node.seed_particles` — emit a freshly-initialised
+//! `node.spawn_particles` — emit a freshly-initialised
 //! `Array<Particle>` each frame.
 //!
 //! Phase A.7 of `BUFFER_PORT_PLAN`. The first primitive in the
@@ -53,7 +53,7 @@ struct SeedUniforms {
 
 crate::primitive! {
     name: SeedParticles,
-    type_id: "node.seed_particles",
+    type_id: "node.spawn_particles",
     purpose: "Emit a fresh Array<Particle> sized by `max_capacity` (chain-build-time ceiling). `active_count` particles initialise alive at Wang-hash uniform positions in [0,1]²; the remaining capacity sits dead at center. `seed_mode` picks when the seed kernel fires: EveryFrame (legacy — overwrite each tick; suited to advection 'rain' effects where the integrator never accumulates state) or OnceOnReset (seed once after a state-store reset; the buffer persists whatever the downstream sim writes into it — required for any sim where particle state must evolve across frames, e.g. StrangeAttractor + FluidSim2D).",
     inputs: {
         active_count: ScalarF32 optional,
@@ -101,7 +101,7 @@ crate::primitive! {
     summary: "Creates a fresh batch of particles to start a simulation, with a count you set. The first node in a particle chain.",
     category: Particles2D,
     role: Source,
-    aliases: ["spawn particles", "seed", "emit", "birth"],
+    aliases: ["spawn particles", "seed particles", "seed", "emit", "birth"],
 }
 
 /// Persistent state for `seed_mode = OnceOnReset` — tracks whether
@@ -167,7 +167,7 @@ impl Primitive for SeedParticles {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/seed_particles.wgsl"),
                 "cs_main",
-                "node.seed_particles",
+                "node.spawn_particles",
             )
         });
 
@@ -192,7 +192,7 @@ impl Primitive for SeedParticles {
                 },
             ],
             [capacity.div_ceil(256), 1, 1],
-            "node.seed_particles",
+            "node.spawn_particles",
         );
 
         // Record that we seeded so OnceOnReset skips subsequent frames.
@@ -225,7 +225,7 @@ mod tests {
 
         let particle_layout = ArrayType::of_known::<Particle>();
 
-        assert_eq!(SeedParticles::TYPE_ID, "node.seed_particles");
+        assert_eq!(SeedParticles::TYPE_ID, "node.spawn_particles");
         // Port-shadow on active_count so a math chain (e.g.
         // count_m × 1_000_000) can drive the count at runtime.
         let active_in = SeedParticles::INPUTS
@@ -278,6 +278,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = SeedParticles::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.seed_particles");
+        assert_eq!(node.type_id().as_str(), "node.spawn_particles");
     }
 }

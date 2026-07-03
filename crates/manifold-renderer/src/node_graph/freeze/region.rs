@@ -859,7 +859,7 @@ fn cycle_contains_array(start: u32, def: &EffectGraphDef, registry: &PrimitiveRe
 /// Construct a primitive for a def node and apply the node's CONFIGURED state —
 /// its `wgsl_source` (so a fragment-form `node.wgsl_compute` reparses its declared
 /// ports/params and reports its `fusion_kind()` / `wgsl_body()`) and its param
-/// values (so dynamic-port primitives like `node.mux_texture` reconfigure to the
+/// values (so dynamic-port primitives like `node.switch_texture` reconfigure to the
 /// right port count). A bare `registry.construct` returns the DEFAULT shape; the
 /// freeze classifier, finder, and codegen must see the SAME shape the live loader
 /// ([`instantiate_def`](crate::node_graph::graph_loader::instantiate_def)) builds —

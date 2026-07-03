@@ -1,4 +1,4 @@
-//! `node.optical_flow_estimate` — dense optical flow (Farneback)
+//! `node.optical_flow` — dense optical flow (Farneback)
 //! via the MiDaS native plugin's compute_flow path, wrapped as a
 //! standalone primitive.
 //!
@@ -75,7 +75,7 @@ struct FlowState {
 
 crate::primitive! {
     name: OpticalFlowEstimate,
-    type_id: "node.optical_flow_estimate",
+    type_id: "node.optical_flow",
     purpose: "Dense optical flow (Farneback + global motion compensation) via the MiDaS native plugin. Wraps FfiDepthEstimator::compute_flow on a background worker that holds the previous frame internally and pairs it with the current. Input: any Texture2D. Outputs: (a) Rgba16Float flow map with R=flow_x, G=confidence, B=flow_y, A=valid_mask (R/B layout matches node.flow_field_noise and node.uv_displace_by_flow); (b) scalar cut_score — global-motion-compensated frame-difference, crosses ~0.28 on hard scene cuts, near zero on continuous motion.",
     inputs: {
         in: Texture2D required,
@@ -121,7 +121,7 @@ crate::primitive! {
     summary: "Measures how the image is moving between frames and outputs that motion as a flow field. Drive a displace or advect with it to push pixels along the motion.",
     category: DetectionAndSampling,
     role: Filter,
-    aliases: ["optical flow", "motion", "flow", "velocity"],
+    aliases: ["optical flow", "optical flow estimate", "motion", "flow", "velocity"],
     extra_fields: {
         upsample_pipeline: Option<GpuComputePipeline> = None,
         flow_worker: Option<BackgroundWorker<FlowRequest, FlowResponse>> = None,
@@ -140,7 +140,7 @@ impl OpticalFlowEstimate {
             let mut estimator =
                 manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_flow_only()?;
             let mut prev_frame: Option<Vec<u8>> = None;
-            log::info!("[node.optical_flow_estimate] Flow worker spawned (Farneback)");
+            log::info!("[node.optical_flow] Flow worker spawned (Farneback)");
             Some(move |req: FlowRequest| -> FlowResponse {
                 let pc = (req.width * req.height) as usize;
                 let expected_bytes = pc * 4;
@@ -185,7 +185,7 @@ impl OpticalFlowEstimate {
         });
         if self.flow_worker.is_none() {
             log::warn!(
-                "[node.optical_flow_estimate] Native flow plugin unavailable — output will be black"
+                "[node.optical_flow] Native flow plugin unavailable — output will be black"
             );
         }
     }
@@ -222,7 +222,7 @@ impl OpticalFlowEstimate {
             format: GpuTextureFormat::Rgba16Float,
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL | GpuTextureUsage::CPU_UPLOAD,
-            label: "node.optical_flow_estimate.flow",
+            label: "node.optical_flow.flow",
             mip_levels: 1,
         });
         // Fresh Metal textures have undefined contents and the upsample
@@ -236,7 +236,7 @@ impl OpticalFlowEstimate {
             format: GpuTextureFormat::Rgba16Float,
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::RENDER_TARGET_FULL,
-            label: "node.optical_flow_estimate.staging",
+            label: "node.optical_flow.staging",
             mip_levels: 1,
         });
         self.flow_state = Some(FlowState {
@@ -354,7 +354,7 @@ impl Primitive for OpticalFlowEstimate {
                         }
                         let mean_valid = sum_valid / px.max(1) as f32;
                         log::info!(
-                            "[node.optical_flow_estimate] flow stats (frame {}): max|flow|={max_mag:.4} \
+                            "[node.optical_flow] flow stats (frame {}): max|flow|={max_mag:.4} \
                              max_valid={max_valid:.3} mean_valid={mean_valid:.3} cut={:.3} \
                              — max|flow|==0 means no motion vectors",
                             fs.frame_counter, fs.cut_score,
@@ -417,7 +417,7 @@ impl Primitive for OpticalFlowEstimate {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/optical_flow_estimate_upsample.wgsl"),
                 "cs_main",
-                "node.optical_flow_estimate.upsample",
+                "node.optical_flow.upsample",
             )
         });
         let sampler = self
@@ -444,7 +444,7 @@ impl Primitive for OpticalFlowEstimate {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.optical_flow_estimate",
+            "node.optical_flow",
         );
     }
 }
@@ -459,7 +459,7 @@ mod tests {
     fn optical_flow_estimate_declares_one_input_and_two_outputs() {
         use crate::node_graph::channel_names::well_known;
         use crate::node_graph::ports::{PortType, ScalarType, TextureChannels};
-        assert_eq!(OpticalFlowEstimate::TYPE_ID, "node.optical_flow_estimate");
+        assert_eq!(OpticalFlowEstimate::TYPE_ID, "node.optical_flow");
         assert_eq!(OpticalFlowEstimate::INPUTS.len(), 1);
         assert_eq!(OpticalFlowEstimate::INPUTS[0].name, "in");
         assert_eq!(OpticalFlowEstimate::INPUTS[0].ty, PortType::Texture2D);
@@ -497,7 +497,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = OpticalFlowEstimate::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.optical_flow_estimate");
+        assert_eq!(node.type_id().as_str(), "node.optical_flow");
     }
 
     #[test]

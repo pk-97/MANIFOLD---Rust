@@ -1,15 +1,15 @@
-//! `node.container_bounds_3d` — post-integration hard containment for 3D
+//! `node.keep_in_box_3d` — post-integration hard containment for 3D
 //! particles. The position-bounds policy atom: toroidal wrap (None) or
 //! SDF reflect + clamp (Cube / Sphere / Torus).
 //!
-//! The 3D sibling of `node.wrap_particles_torus` (which only does the
+//! The 3D sibling of `node.wrap_around` (which only does the
 //! torus case). Bit-exact (position-wise) with the containment step of
 //! the legacy fused `node.fluid_simulate_3d`. The legacy kernel also
 //! wrote a reflected `velocity` on bounce, but nothing in the fluid sim
 //! reads particle velocity — that write was dead state and is dropped.
 //!
-//! Pair downstream of `node.euler_step_particles_3d`; the soft
-//! pre-integration cushion is the separate `node.container_repel_force_3d`.
+//! Pair downstream of `node.move_particles_3d`; the soft
+//! pre-integration cushion is the separate `node.push_from_walls_3d`.
 
 use manifold_gpu::GpuBinding;
 
@@ -34,8 +34,8 @@ struct BoundsUniforms {
 
 crate::primitive! {
     name: ContainerBounds3D,
-    type_id: "node.container_bounds_3d",
-    purpose: "Post-integration hard containment for 3D particles: toroidal wrap (container = None) or SDF reflect + clamp (Cube/Sphere/Torus). For None: position = fract(position + 1). For an SDF container: when a particle escapes (d > 0) it's pushed back inside along the surface normal, then clamped to [0.001, 0.999]. The 3D sibling of node.wrap_particles_torus (torus-only); decomposed from the containment step of the fused node.fluid_simulate_3d. Particle velocity is not touched (the legacy velocity-bounce write was dead state).",
+    type_id: "node.keep_in_box_3d",
+    purpose: "Post-integration hard containment for 3D particles: toroidal wrap (container = None) or SDF reflect + clamp (Cube/Sphere/Torus). For None: position = fract(position + 1). For an SDF container: when a particle escapes (d > 0) it's pushed back inside along the surface normal, then clamped to [0.001, 0.999]. The 3D sibling of node.wrap_around (torus-only); decomposed from the containment step of the fused node.fluid_simulate_3d. Particle velocity is not touched (the legacy velocity-bounce write was dead state).",
     inputs: {
         in: Array(Particle) required,
         ctr_scale: ScalarF32 optional,
@@ -70,13 +70,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Aliased in/out — mutates the particle buffer in place. `container` is a mode enum (0 None / 1 Cube / 2 Sphere / 3 Torus); None is the default toroidal-wrap [0,1]^3 policy (the 3D wrap_particles_torus). `ctr_scale` is port-shadow. Wire downstream of node.euler_step_particles_3d; the soft pre-integration boundary cushion is node.container_repel_force_3d. For alternative policies, swap for a future boundary_death / wall_bounce sibling.",
+    composition_notes: "Aliased in/out — mutates the particle buffer in place. `container` is a mode enum (0 None / 1 Cube / 2 Sphere / 3 Torus); None is the default toroidal-wrap [0,1]^3 policy (the 3D wrap_particles_torus). `ctr_scale` is port-shadow. Wire downstream of node.move_particles_3d; the soft pre-integration boundary cushion is node.push_from_walls_3d. For alternative policies, swap for a future boundary_death / wall_bounce sibling.",
     examples: ["FluidSimulation3D"],
     picker: { label: "Keep In Box (3D)", category: Atom },
     summary: "Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move.",
     category: Particles3D,
     role: Filter,
-    aliases: ["keep in box", "bounds", "contain", "clamp"],
+    aliases: ["keep in box", "container bounds 3d", "bounds", "contain", "clamp"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/container_bounds_3d_body.wgsl"),
 }
@@ -139,9 +139,9 @@ impl Primitive for ContainerBounds3D {
             // the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.container_bounds_3d standalone codegen"),
+                    .expect("node.keep_in_box_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.container_bounds_3d",
+                "node.keep_in_box_3d",
             )
         });
 
@@ -173,7 +173,7 @@ impl Primitive for ContainerBounds3D {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.container_bounds_3d",
+            "node.keep_in_box_3d",
         );
     }
 }
@@ -189,7 +189,7 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType};
         let particle_layout = ArrayType::of_known::<Particle>();
 
-        assert_eq!(ContainerBounds3D::TYPE_ID, "node.container_bounds_3d");
+        assert_eq!(ContainerBounds3D::TYPE_ID, "node.keep_in_box_3d");
         let names: Vec<&str> = ContainerBounds3D::INPUTS.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["in", "ctr_scale", "active_count"]);
         assert_eq!(
@@ -213,7 +213,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = ContainerBounds3D::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.container_bounds_3d");
+        assert_eq!(node.type_id().as_str(), "node.keep_in_box_3d");
     }
 }
 

@@ -355,7 +355,7 @@
     {
       "id": 6,
       "nodeId": "shape_mux",
-      "typeId": "node.mux_scalar",
+      "typeId": "node.switch_value",
       "handle": "shape_mux",
       "params": {
         "in_0": {

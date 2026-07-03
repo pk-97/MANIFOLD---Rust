@@ -54,7 +54,7 @@ struct AntiClumpUniforms {
 crate::primitive! {
     name: AntiClumpParticles,
     type_id: "node.anti_clump_particles",
-    purpose: "Modulator-weighted Brownian kick on each live particle's position.xy. With a `strength_modulator` texture wired, samples it at the particle's UV and applies `kick = (hash3(i, frame) − 0.5) * strength * capped(m)` where `capped = m / (1 + m)`. Without a modulator, applies plain `kick = (hash3) * strength` uniformly. Canonical FluidSim use wires density (kick concentrates where particles cluster); equally useful with audio amplitude maps, masks, depth slices, or any scalar texture. Sibling to node.array_diffuse_particles (which kicks velocity, un-weighted) — separate atoms because the math, the state field, and the modulator weighting differ.",
+    purpose: "Modulator-weighted Brownian kick on each live particle's position.xy. With a `strength_modulator` texture wired, samples it at the particle's UV and applies `kick = (hash3(i, frame) − 0.5) * strength * capped(m)` where `capped = m / (1 + m)`. Without a modulator, applies plain `kick = (hash3) * strength` uniformly. Canonical FluidSim use wires density (kick concentrates where particles cluster); equally useful with audio amplitude maps, masks, depth slices, or any scalar texture. Sibling to node.spread_out (which kicks velocity, un-weighted) — separate atoms because the math, the state field, and the modulator weighting differ.",
     inputs: {
         in: Array(Particle) required,
         strength_modulator: Texture2D optional,

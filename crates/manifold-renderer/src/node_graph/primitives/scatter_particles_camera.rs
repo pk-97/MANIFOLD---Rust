@@ -1,4 +1,4 @@
-//! `node.scatter_particles_camera` — fused 3D-particle camera projection +
+//! `node.draw_particles_camera` — fused 3D-particle camera projection +
 //! 2D scatter for FluidSim3D's display path. Bit-exact wrap of
 //! `generators/shaders/fluid_scatter_3d.wgsl`'s `splat_projected` entry via
 //! include_str.
@@ -10,8 +10,8 @@
 //! `disp_w × disp_h`. Pair with `node.resolve_scatter` downstream to lift
 //! the u32 grid into a float Texture2D for display.
 //!
-//! Sibling to `node.scatter_particles` (2D in → 2D grid out) and
-//! `node.scatter_particles_3d` (3D in → 3D grid out): this one is 3D in → 2D
+//! Sibling to `node.draw_particles` (2D in → 2D grid out) and
+//! `node.draw_particles_3d` (3D in → 3D grid out): this one is 3D in → 2D
 //! grid out via a camera.
 //!
 //! The `mode` enum param dispatches between Perspective and Orthographic
@@ -66,8 +66,8 @@ struct ProjectedUniforms {
 
 crate::primitive! {
     name: ScatterParticlesCamera,
-    type_id: "node.scatter_particles_camera",
-    purpose: "Fused 3D→2D camera projection + atomic-add scatter. Takes 3D particles and a Camera; projects each particle through orthographic (with toroidal wrap) or perspective camera math; atomic-adds scaled_energy into a 2D u32 accumulator. Pair downstream with node.resolve_scatter → texture for display. Sibling to node.scatter_particles (2D in/2D out) and node.scatter_particles_3d (3D in/3D out) — this one bridges 3D in to 2D-grid out via a camera. Used by FluidSim3D's display path.",
+    type_id: "node.draw_particles_camera",
+    purpose: "Fused 3D→2D camera projection + atomic-add scatter. Takes 3D particles and a Camera; projects each particle through orthographic (with toroidal wrap) or perspective camera math; atomic-adds scaled_energy into a 2D u32 accumulator. Pair downstream with node.resolve_scatter → texture for display. Sibling to node.draw_particles (2D in/2D out) and node.draw_particles_3d (3D in/3D out) — this one bridges 3D in to 2D-grid out via a camera. Used by FluidSim3D's display path.",
     inputs: {
         particles: Array(Particle) required,
         camera: Camera required,
@@ -128,7 +128,7 @@ crate::primitive! {
     summary: "Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim.",
     category: Particles3D,
     role: Filter,
-    aliases: ["draw particles camera", "project scatter", "3d to 2d"],
+    aliases: ["draw particles camera", "scatter particles camera", "project scatter", "3d to 2d"],
     fusion_kind: Boundary,
     wgsl_body: include_str!("shaders/scatter_particles_camera_body.wgsl"),
     derived_uniforms: ["cam_pos:vec3", "cam_fwd:vec3", "cam_right:vec3", "cam_up:vec3"],
@@ -136,7 +136,7 @@ crate::primitive! {
 }
 
 // Legacy type-ID alias — projects authored before the rename from
-// `node.fluid_project_scatter_2d` → `node.scatter_particles_camera` still
+// `node.fluid_project_scatter_2d` → `node.draw_particles_camera` still
 // load. Hidden from the palette (`picker: None`) so the new name is the
 // only visible choice.
 inventory::submit! {
@@ -233,9 +233,9 @@ impl Primitive for ScatterParticlesCamera {
             // splat_projected is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.scatter_particles_camera standalone codegen"),
+                    .expect("node.draw_particles_camera standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.scatter_particles_camera",
+                "node.draw_particles_camera",
             )
         });
 
@@ -262,7 +262,7 @@ impl Primitive for ScatterParticlesCamera {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.scatter_particles_camera",
+            "node.draw_particles_camera",
         );
     }
 }
@@ -279,7 +279,7 @@ mod tests {
         let particle_layout = ArrayType::of_known::<Particle>();
         let u32_layout = ArrayType::of_known::<u32>();
 
-        assert_eq!(ScatterParticlesCamera::TYPE_ID, "node.scatter_particles_camera");
+        assert_eq!(ScatterParticlesCamera::TYPE_ID, "node.draw_particles_camera");
         assert!(ScatterParticlesCamera::INPUTS.len() >= 2);
         assert_eq!(ScatterParticlesCamera::INPUTS[0].name, "particles");
         assert!(ScatterParticlesCamera::INPUTS[0].required);
@@ -310,7 +310,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = ScatterParticlesCamera::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.scatter_particles_camera");
+        assert_eq!(node.type_id().as_str(), "node.draw_particles_camera");
     }
 
     #[test]
@@ -321,7 +321,7 @@ mod tests {
             .expect("legacy alias must be registered");
         assert_eq!(
             node.type_id().as_str(),
-            "node.scatter_particles_camera",
+            "node.draw_particles_camera",
             "legacy alias should construct the new primitive",
         );
     }

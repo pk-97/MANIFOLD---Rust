@@ -38,7 +38,7 @@ const MAX_STOPS: usize = 16;
 /// resolution, while a canvas-wide ramp regenerates a multi-MB texture per
 /// palette (Infrared bakes 10 of them, ~330 MB of pool at 4K). Every shipped
 /// consumer reads the ramp resolution-independently — Infrared wires it through
-/// `node.mux_texture` (samples at uv) into `node.color_lut`'s `lut` Gather input
+/// `node.switch_texture` (samples at uv) into `node.color_lut`'s `lut` Gather input
 /// (sampled at a normalized luminance coord) — so the strip is correct, never
 /// texel-exact-read. See the `output_dims` override below.
 const LUT_WIDTH: u32 = 256;

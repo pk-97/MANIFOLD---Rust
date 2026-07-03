@@ -1,7 +1,7 @@
-//! `node.simplex_noise_force_3d_at_particles` — per-particle 3D simplex
+//! `node.turbulence_3d` — per-particle 3D simplex
 //! noise advection added in place to an `Array<[f32; 3]>` force buffer.
 //!
-//! The 3D sibling of `node.simplex_noise_force_at_particles`. 3D noise
+//! The 3D sibling of `node.turbulence`. 3D noise
 //! is built from `SimplexNoise2D` evaluated on three orthogonal planes
 //! (yz / xz / xy), with density-adaptive amplitude
 //! (`turbulence * (1 + capped(density) * anti_clump)`). Bit-exact with
@@ -10,7 +10,7 @@
 //! Aliased `in`/`out` `Array<[f32; 3]>`: a single physical force buffer,
 //! mutated in place (the noise is *added* to whatever upstream force
 //! atoms already deposited). Pair downstream of
-//! `node.sample_texture_3d_at_particles`.
+//! `node.sample_volume_at_particles`.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -38,8 +38,8 @@ struct NoiseUniforms {
 
 crate::primitive! {
     name: SimplexNoiseForce3DAtParticles,
-    type_id: "node.simplex_noise_force_3d_at_particles",
-    purpose: "Per-particle 3D simplex noise advection added in-place to an Array<[f32; 3]> force buffer. 3D noise from SimplexNoise2D on three orthogonal planes (yz/xz/xy), density-adaptive amplitude (turbulence * (1 + capped(density) * anti_clump), capped = d/(1+d)). Samples a density Texture3D at the particle's position. Aliased force in/out — one physical buffer, in-place add. The 3D sibling of node.simplex_noise_force_at_particles, decomposed from the fused node.fluid_simulate_3d.",
+    type_id: "node.turbulence_3d",
+    purpose: "Per-particle 3D simplex noise advection added in-place to an Array<[f32; 3]> force buffer. 3D noise from SimplexNoise2D on three orthogonal planes (yz/xz/xy), density-adaptive amplitude (turbulence * (1 + capped(density) * anti_clump), capped = d/(1+d)). Samples a density Texture3D at the particle's position. Aliased force in/out — one physical buffer, in-place add. The 3D sibling of node.turbulence, decomposed from the fused node.fluid_simulate_3d.",
     inputs: {
         in: Array([f32; 3]) required,
         particles: Array(Particle) required,
@@ -77,13 +77,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Aliased Array<[f32; 3]> in/out (one force buffer, in-place add). `turbulence` and `anti_clump` are port-shadow so an LFO / clip-trigger envelope / outer-card slider drives the noise energy and the density-adaptive boost live. The density Texture3D modulates amplitude: where particles have accumulated (high density), the noise amplitude rises by `1 + capped(d) * anti_clump`, which spreads clumps apart. Time animates the noise field through `time2 * 0.1`. Wire downstream of node.sample_texture_3d_at_particles, upstream of node.euler_step_particles_3d.",
+    composition_notes: "Aliased Array<[f32; 3]> in/out (one force buffer, in-place add). `turbulence` and `anti_clump` are port-shadow so an LFO / clip-trigger envelope / outer-card slider drives the noise energy and the density-adaptive boost live. The density Texture3D modulates amplitude: where particles have accumulated (high density), the noise amplitude rises by `1 + capped(d) * anti_clump`, which spreads clumps apart. Time animates the noise field through `time2 * 0.1`. Wire downstream of node.sample_volume_at_particles, upstream of node.move_particles_3d.",
     examples: ["FluidSimulation3D"],
     picker: { label: "Turbulence (3D, simplex)", category: Atom },
     summary: "Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space.",
     category: Particles3D,
     role: Filter,
-    aliases: ["turbulence 3d", "noise force 3d", "flow", "simplex"],
+    aliases: ["turbulence 3d", "simplex noise force 3d at particles", "noise force 3d", "flow", "simplex"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/simplex_noise_force_3d_at_particles_body.wgsl"),
     derived_uniforms: ["time2"],
@@ -155,9 +155,9 @@ impl Primitive for SimplexNoiseForce3DAtParticles {
             // inlined). simplex_noise_force_3d_at_particles.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.simplex_noise_force_3d_at_particles standalone codegen"),
+                    .expect("node.turbulence_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.simplex_noise_force_3d_at_particles",
+                "node.turbulence_3d",
             )
         });
         let sampler = self
@@ -210,7 +210,7 @@ impl Primitive for SimplexNoiseForce3DAtParticles {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.simplex_noise_force_3d_at_particles",
+            "node.turbulence_3d",
         );
     }
 }
@@ -229,7 +229,7 @@ mod tests {
 
         assert_eq!(
             SimplexNoiseForce3DAtParticles::TYPE_ID,
-            "node.simplex_noise_force_3d_at_particles"
+            "node.turbulence_3d"
         );
         let names: Vec<&str> = SimplexNoiseForce3DAtParticles::INPUTS
             .iter()
@@ -282,7 +282,7 @@ mod tests {
         let node: &dyn EffectNode = &prim;
         assert_eq!(
             node.type_id().as_str(),
-            "node.simplex_noise_force_3d_at_particles"
+            "node.turbulence_3d"
         );
     }
 }

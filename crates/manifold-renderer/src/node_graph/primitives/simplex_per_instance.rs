@@ -1,4 +1,4 @@
-//! `node.simplex_per_instance` — sample 3D simplex noise at each
+//! `node.simplex_noise_per_copy` — sample 3D simplex noise at each
 //! UV position in an `Array<vec2<f32>>`, emit `Array<f32>`.
 //!
 //! Per-instance counterpart to `node.noise` — which
@@ -42,7 +42,7 @@ const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.w
 
 crate::primitive! {
     name: SimplexPerInstance,
-    type_id: "node.simplex_per_instance",
+    type_id: "node.simplex_noise_per_copy",
     purpose: "Sample 3D Ashima simplex noise at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.noise (which samples per-pixel into a Texture2D). For each idx: out[idx] = simplex3d(vec3(uv[idx] * scale + offset, z)). All four shaping inputs (scale / z / offset_x / offset_y) are port-shadow-param so a time wire can drive `z` (animated noise field) or an LFO can pan `offset_*` (scrolling noise) without dragging extra Value nodes in.",
     inputs: {
         uv: Array([f32; 2]) required,
@@ -94,7 +94,7 @@ crate::primitive! {
     summary: "Gives every copy its own simplex-noise value, a smooth random number per copy for varying the look across a field.",
     category: Particles2D,
     role: Filter,
-    aliases: ["simplex noise", "per copy", "variation"],
+    aliases: ["simplex noise", "simplex per instance", "per copy", "variation"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/simplex_per_instance_body.wgsl"),
     wgsl_includes: [NOISE_COMMON],
@@ -145,9 +145,9 @@ impl Primitive for SimplexPerInstance {
             // simplex3d). simplex_per_instance.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.simplex_per_instance standalone codegen"),
+                    .expect("node.simplex_noise_per_copy standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.simplex_per_instance",
+                "node.simplex_noise_per_copy",
             )
         });
 
@@ -181,7 +181,7 @@ impl Primitive for SimplexPerInstance {
                 },
             ],
             [count.div_ceil(256), 1, 1],
-            "node.simplex_per_instance",
+            "node.simplex_noise_per_copy",
         );
     }
 }
@@ -197,7 +197,7 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType};
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
         let f32_layout = ArrayType::of_known::<f32>();
-        assert_eq!(SimplexPerInstance::TYPE_ID, "node.simplex_per_instance");
+        assert_eq!(SimplexPerInstance::TYPE_ID, "node.simplex_noise_per_copy");
         let uv_in = SimplexPerInstance::INPUTS
             .iter()
             .find(|p| p.name == "uv")
@@ -244,7 +244,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = SimplexPerInstance::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.simplex_per_instance");
+        assert_eq!(node.type_id().as_str(), "node.simplex_noise_per_copy");
     }
 }
 

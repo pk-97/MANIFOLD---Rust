@@ -1,4 +1,4 @@
-//! `node.diffuse_force_3d_at_particles` — per-particle incoherent 3D
+//! `node.spread_out_3d` — per-particle incoherent 3D
 //! random kick added in place to an `Array<[f32; 3]>` force buffer,
 //! weighted by local density.
 //!
@@ -12,12 +12,12 @@
 //! ```
 //!
 //! Incoherent (per-particle hash, reseeded each frame) where
-//! `node.simplex_noise_force_3d_at_particles` is spatially coherent. The
+//! `node.turbulence_3d` is spatially coherent. The
 //! density weighting concentrates the kick where particles have clumped,
 //! so it doubles as an anti-clumping diffusion. Sibling on the velocity
-//! field would be `node.array_diffuse_particles` (attractor sims); this
+//! field would be `node.spread_out` (attractor sims); this
 //! one adds to the force buffer so the kick is integrated through
-//! `speed * dt` by `node.euler_step_particles_3d`.
+//! `speed * dt` by `node.move_particles_3d`.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -40,7 +40,7 @@ struct DiffuseUniforms {
 
 crate::primitive! {
     name: DiffuseForce3DAtParticles,
-    type_id: "node.diffuse_force_3d_at_particles",
+    type_id: "node.spread_out_3d",
     purpose: "Per-particle incoherent 3D random kick added in-place to an Array<[f32; 3]> force buffer, weighted by local density. forces[i] += (hash_float3(i, frame) - 0.5) * diffusion * capped(density). Reseeds the hash each frame (Brownian, not drift); the density weighting concentrates the kick where particles clump (anti-clumping diffusion). Decomposed from the diffusion step of the fused node.fluid_simulate_3d.",
     inputs: {
         in: Array([f32; 3]) required,
@@ -70,13 +70,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Aliased Array<[f32; 3]> in/out (one force buffer, in-place add). `diffusion` is port-shadow so a control wire drives the kick energy live. The density Texture3D weights the kick by `capped(d) = d/(1+d)` — particles in dense regions get a stronger random push, which spreads clumps. Early-outs when diffusion <= 0. Wire between node.simplex_noise_force_3d_at_particles and node.euler_step_particles_3d so the kick is integrated through speed*dt.",
+    composition_notes: "Aliased Array<[f32; 3]> in/out (one force buffer, in-place add). `diffusion` is port-shadow so a control wire drives the kick energy live. The density Texture3D weights the kick by `capped(d) = d/(1+d)` — particles in dense regions get a stronger random push, which spreads clumps. Early-outs when diffusion <= 0. Wire between node.turbulence_3d and node.move_particles_3d so the kick is integrated through speed*dt.",
     examples: ["FluidSimulation3D"],
     picker: { label: "Spread Out (3D diffuse)", category: Atom },
     summary: "Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space.",
     category: Particles3D,
     role: Filter,
-    aliases: ["spread out 3d", "diffuse 3d", "jitter"],
+    aliases: ["spread out 3d", "diffuse force 3d at particles", "diffuse 3d", "jitter"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/diffuse_force_3d_at_particles_body.wgsl"),
     derived_uniforms: ["frame_count:u32"],
@@ -147,9 +147,9 @@ impl Primitive for DiffuseForce3DAtParticles {
             // diffuse_force_3d_at_particles.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.diffuse_force_3d_at_particles standalone codegen"),
+                    .expect("node.spread_out_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.diffuse_force_3d_at_particles",
+                "node.spread_out_3d",
             )
         });
         let sampler = self
@@ -199,7 +199,7 @@ impl Primitive for DiffuseForce3DAtParticles {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.diffuse_force_3d_at_particles",
+            "node.spread_out_3d",
         );
     }
 }
@@ -217,7 +217,7 @@ mod tests {
 
         assert_eq!(
             DiffuseForce3DAtParticles::TYPE_ID,
-            "node.diffuse_force_3d_at_particles"
+            "node.spread_out_3d"
         );
         let names: Vec<&str> = DiffuseForce3DAtParticles::INPUTS
             .iter()
@@ -264,7 +264,7 @@ mod tests {
         let node: &dyn EffectNode = &prim;
         assert_eq!(
             node.type_id().as_str(),
-            "node.diffuse_force_3d_at_particles"
+            "node.spread_out_3d"
         );
     }
 }

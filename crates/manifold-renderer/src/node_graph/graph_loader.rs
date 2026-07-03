@@ -1011,7 +1011,7 @@ fn pre_allocate_array_buffers(
                 continue;
             };
 
-            // Atomic-accumulator outputs (e.g. node.scatter_particles' u32 grid)
+            // Atomic-accumulator outputs (e.g. node.draw_particles' u32 grid)
             // are read-modify-written: the downstream node.resolve_scatter
             // reads then zeros the buffer, so the buffer's contract is that it
             // STARTS at zero. Metal's create_buffer* does not zero-init, so a

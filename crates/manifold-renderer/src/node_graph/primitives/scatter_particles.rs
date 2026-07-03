@@ -1,4 +1,4 @@
-//! `node.scatter_particles` — atomic-add splat of particles into a
+//! `node.draw_particles` — atomic-add splat of particles into a
 //! `u32` fixed-point accumulator.
 //!
 //! Phase A.7 of `BUFFER_PORT_PLAN`. Reads particle positions from
@@ -46,7 +46,7 @@ struct ScatterUniforms {
 
 crate::primitive! {
     name: ScatterParticles,
-    type_id: "node.scatter_particles",
+    type_id: "node.draw_particles",
     purpose: "Atomic-add splat of particles into a u32 fixed-point accumulator buffer sized to the host's canvas. Each live particle contributes `scaled_energy` to its nearest texel; the buffer is cleared at the start of each dispatch. `boundary` selects the out-of-bounds policy: Wrap (toroidal — seamless tiling, FluidSim style) or Discard (drop the particle — avoids the edge seam when projecting from 3D where particles legitimately fall outside [0,1]², StrangeAttractor style). `active_count` and `scaled_energy` are port-shadows-param so they can be driven by runtime wires (e.g. a `node.math` chain for brightness normalisation by particle count). `width` and `height` are required wired inputs — the convention is to drive them from `system.generator_input.output_width / output_height` so the dispatch tracks the host's canvas (the buffer itself is also auto-sized to the canvas via `canvas_sized_array_outputs()`, so allocation and dispatch never disagree). Pair with `node.resolve_scatter` to read the result as a float texture.",
     inputs: {
         particles: Array(Particle) required,
@@ -90,7 +90,7 @@ crate::primitive! {
     summary: "Splats a cloud of particles onto a buffer, building up an image from where they land. Pair it with Resolve Scatter to read the result back.",
     category: Particles2D,
     role: Filter,
-    aliases: ["draw particles", "scatter", "splat", "points"],
+    aliases: ["draw particles", "scatter particles", "scatter", "splat", "points"],
     fusion_kind: Boundary,
     wgsl_body: include_str!("shaders/scatter_particles_body.wgsl"),
     derived_uniforms: ["width:u32", "height:u32"],
@@ -153,9 +153,9 @@ impl Primitive for ScatterParticles {
             // derived uniforms). scatter_particles.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.scatter_particles standalone codegen"),
+                    .expect("node.draw_particles standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.scatter_particles.splat",
+                "node.draw_particles.splat",
             )
         });
 
@@ -193,7 +193,7 @@ impl Primitive for ScatterParticles {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.scatter_particles.splat",
+            "node.draw_particles.splat",
         );
     }
 }
@@ -210,7 +210,7 @@ mod tests {
         let particle_layout = ArrayType::of_known::<Particle>();
         let u32_layout = ArrayType::of_known::<u32>();
 
-        assert_eq!(ScatterParticles::TYPE_ID, "node.scatter_particles");
+        assert_eq!(ScatterParticles::TYPE_ID, "node.draw_particles");
 
         let particles_in = ScatterParticles::INPUTS
             .iter()
@@ -255,7 +255,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = ScatterParticles::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.scatter_particles");
+        assert_eq!(node.type_id().as_str(), "node.draw_particles");
     }
 
     #[test]

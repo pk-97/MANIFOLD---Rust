@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "Nested Cubes",
-  "description": "Nested Cubes — 5-instance gap-face cube field with EMA-smoothed Y-axis rotation, per-face scatter drift, and a per-face envelope-driven kick on every clip trigger. Isometric orthographic camera, two-pass render (solid black fill + white wire edges with depth bias).\n\nDecomposed from the legacy `NestedCubesGenerator` Rust struct into five primitives: `node.trigger_gate` gates the upstream `trigger_count` stream by the `clip_trigger` toggle (advances absorbed when disabled, no backlog on re-enable); `node.sum_into_bins` advances all 5 target rotations by `speed × 90°` on each surviving trigger, initialised to the legacy `(0, 90, 180, 270, 360)` spread via its `initial` Table param (envelope mode); `node.cycle_table_row` snaps the 5-tuple to one of 6 preset arrangements on each trigger (pose mode); `node.mux_array` gates which path drives `target_angles` via the `mode` outer-card param; `node.nested_cubes_geometry` does the EMA smoothing, scatter, kick, and dual-pass GPU render.",
+  "description": "Nested Cubes — 5-instance gap-face cube field with EMA-smoothed Y-axis rotation, per-face scatter drift, and a per-face envelope-driven kick on every clip trigger. Isometric orthographic camera, two-pass render (solid black fill + white wire edges with depth bias).\n\nDecomposed from the legacy `NestedCubesGenerator` Rust struct into five primitives: `node.trigger_gate` gates the upstream `trigger_count` stream by the `clip_trigger` toggle (advances absorbed when disabled, no backlog on re-enable); `node.sum_into_bins` advances all 5 target rotations by `speed × 90°` on each surviving trigger, initialised to the legacy `(0, 90, 180, 270, 360)` spread via its `initial` Table param (envelope mode); `node.cycle_table_row` snaps the 5-tuple to one of 6 preset arrangements on each trigger (pose mode); `node.switch_array` gates which path drives `target_angles` via the `mode` outer-card param; `node.nested_cubes_geometry` does the EMA smoothing, scatter, kick, and dual-pass GPU render.",
   "presetMetadata": {
     "id": "NestedCubes",
     "displayName": "Nested Cubes",
@@ -141,7 +141,7 @@
       }
     },
     {
-      "id": 5, "typeId": "node.mux_array", "handle": "target_mux", "nodeId": "target_mux",
+      "id": 5, "typeId": "node.switch_array", "handle": "target_mux", "nodeId": "target_mux",
       "params": {
         "selector": { "type": "Float", "value": 0.0 }
       }

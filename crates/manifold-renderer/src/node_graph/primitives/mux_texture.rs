@@ -1,4 +1,4 @@
-//! `node.mux_texture` — dynamic N-way texture selector.
+//! `node.switch_texture` — dynamic N-way texture selector.
 //!
 //! A variadic-input primitive: the `num_inputs` param sets how many
 //! `Texture2D` inputs (`in_0` … `in_{num_inputs-1}`) the node exposes, and a
@@ -36,7 +36,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use crate::node_graph::primitive::PrimitiveDescription;
 
-pub const MUX_TEXTURE_TYPE_ID: &str = "node.mux_texture";
+pub const MUX_TEXTURE_TYPE_ID: &str = "node.switch_texture";
 
 /// Hard cap on input count — bounds the static port-name table below. The
 /// node only ever exposes `num_inputs` of these; 32 is far beyond any real
@@ -332,7 +332,7 @@ impl EffectNode for MuxTexture {
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device
-                .create_compute_pipeline(MUX_TEXTURE_WGSL, "cs_main", "node.mux_texture")
+                .create_compute_pipeline(MUX_TEXTURE_WGSL, "cs_main", "node.switch_texture")
         });
         let sampler = self
             .sampler
@@ -355,7 +355,7 @@ impl EffectNode for MuxTexture {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.mux_texture",
+            "node.switch_texture",
         );
     }
 }
@@ -443,6 +443,6 @@ mod tests {
     fn registers_with_palette_type_id() {
         let m = MuxTexture::new();
         let node: &dyn EffectNode = &m;
-        assert_eq!(node.type_id().as_str(), "node.mux_texture");
+        assert_eq!(node.type_id().as_str(), "node.switch_texture");
     }
 }

@@ -1,4 +1,4 @@
-//! `node.container_repel_force_3d` — soft container-boundary repulsion
+//! `node.push_from_walls_3d` — soft container-boundary repulsion
 //! added in place to an `Array<[f32; 3]>` force buffer.
 //!
 //! The pre-integration "cushion" half of the FluidSim3D container
@@ -7,10 +7,10 @@
 //! normal, preventing pile-up at the boundary. Bit-exact with the soft
 //! boundary repulsion in the legacy fused `node.fluid_simulate_3d`.
 //!
-//! Distinct from `node.container_bounds_3d`, which applies the
+//! Distinct from `node.keep_in_box_3d`, which applies the
 //! *post-integration* hard containment (toroidal wrap or SDF reflect +
 //! clamp). Both read the same `container` enum (None / Cube / Sphere /
-//! Torus); compose this one before `node.euler_step_particles_3d` and
+//! Torus); compose this one before `node.move_particles_3d` and
 //! the bounds atom after it.
 
 use manifold_gpu::GpuBinding;
@@ -20,7 +20,7 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-/// Container SDF modes — shared label set with `node.container_bounds_3d`
+/// Container SDF modes — shared label set with `node.keep_in_box_3d`
 /// and the legacy fluid_simulate_3d / fluid_seed_3d.
 pub const CONTAINER_3D_MODES: &[&str] = &["None", "Cube", "Sphere", "Torus"];
 
@@ -38,8 +38,8 @@ struct RepelUniforms {
 
 crate::primitive! {
     name: ContainerRepelForce3D,
-    type_id: "node.container_repel_force_3d",
-    purpose: "Soft container-boundary repulsion added in-place to an Array<[f32; 3]> force buffer. When a particle is within a 0.1 margin of the container SDF (Cube/Sphere/Torus), a gentle inward force `n * (t*t*0.15)` cushions it back along the outward normal, preventing wall pile-up. container = None disables it. The pre-integration cushion half of the FluidSim3D container behaviour (the post-integration hard wall is node.container_bounds_3d). Decomposed from the fused node.fluid_simulate_3d.",
+    type_id: "node.push_from_walls_3d",
+    purpose: "Soft container-boundary repulsion added in-place to an Array<[f32; 3]> force buffer. When a particle is within a 0.1 margin of the container SDF (Cube/Sphere/Torus), a gentle inward force `n * (t*t*0.15)` cushions it back along the outward normal, preventing wall pile-up. container = None disables it. The pre-integration cushion half of the FluidSim3D container behaviour (the post-integration hard wall is node.keep_in_box_3d). Decomposed from the fused node.fluid_simulate_3d.",
     inputs: {
         in: Array([f32; 3]) required,
         particles: Array(Particle) required,
@@ -75,13 +75,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Aliased Array<[f32; 3]> in/out (one force buffer, in-place subtract). `container` is a mode enum (0 None / 1 Cube / 2 Sphere / 3 Torus) — None makes the dispatch a no-op so the atom is inert at the default. `ctr_scale` is port-shadow (sizes the SDF). Wire upstream of node.euler_step_particles_3d so the cushion is integrated through speed*dt, and pair with node.container_bounds_3d (post-integration hard wall) downstream.",
+    composition_notes: "Aliased Array<[f32; 3]> in/out (one force buffer, in-place subtract). `container` is a mode enum (0 None / 1 Cube / 2 Sphere / 3 Torus) — None makes the dispatch a no-op so the atom is inert at the default. `ctr_scale` is port-shadow (sizes the SDF). Wire upstream of node.move_particles_3d so the cushion is integrated through speed*dt, and pair with node.keep_in_box_3d (post-integration hard wall) downstream.",
     examples: ["FluidSimulation3D"],
     picker: { label: "Push From Walls (3D)", category: Atom },
     summary: "Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce.",
     category: Particles3D,
     role: Filter,
-    aliases: ["push from walls", "repel", "boundary", "container"],
+    aliases: ["push from walls", "container repel force 3d", "repel", "boundary", "container"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/container_repel_force_3d_body.wgsl"),
 }
@@ -151,9 +151,9 @@ impl Primitive for ContainerRepelForce3D {
             // container_repel_force_3d.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.container_repel_force_3d standalone codegen"),
+                    .expect("node.push_from_walls_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.container_repel_force_3d",
+                "node.push_from_walls_3d",
             )
         });
 
@@ -191,7 +191,7 @@ impl Primitive for ContainerRepelForce3D {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.container_repel_force_3d",
+            "node.push_from_walls_3d",
         );
     }
 }
@@ -209,7 +209,7 @@ mod tests {
 
         assert_eq!(
             ContainerRepelForce3D::TYPE_ID,
-            "node.container_repel_force_3d"
+            "node.push_from_walls_3d"
         );
         let names: Vec<&str> = ContainerRepelForce3D::INPUTS
             .iter()
@@ -242,7 +242,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = ContainerRepelForce3D::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.container_repel_force_3d");
+        assert_eq!(node.type_id().as_str(), "node.push_from_walls_3d");
     }
 }
 

@@ -1,4 +1,4 @@
-//! `node.scatter_particles_3d` — atomic-add splat of particles into
+//! `node.draw_particles_3d` — atomic-add splat of particles into
 //! a 3D `u32` fixed-point accumulator buffer.
 //!
 //! Bit-exact wrap of `generators/shaders/fluid_scatter_3d.wgsl`'s
@@ -38,7 +38,7 @@ struct Splat3DUniforms {
 
 crate::primitive! {
     name: ScatterParticles3D,
-    type_id: "node.scatter_particles_3d",
+    type_id: "node.draw_particles_3d",
     purpose: "Atomic-add splat of an Array<Particle> into a u32 3D accumulator buffer sized vol_res × vol_res × vol_depth. Each live particle's nearest-voxel cell receives `scaled_energy` via atomicAdd. Pair with node.resolve_scatter_3d to lift the u32 grid into a float Texture3D for downstream volumetric primitives like blur_3d, gradient_curl_3d, project_particles_3d.",
     inputs: {
         particles: Array(Particle) required,
@@ -88,7 +88,7 @@ crate::primitive! {
     summary: "Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles.",
     category: Particles3D,
     role: Filter,
-    aliases: ["draw particles 3d", "scatter 3d", "splat", "volume"],
+    aliases: ["draw particles 3d", "scatter particles 3d", "scatter 3d", "splat", "volume"],
     fusion_kind: Boundary,
     wgsl_body: include_str!("shaders/scatter_particles_3d_body.wgsl"),
     atomic_outputs: ["accum"],
@@ -147,9 +147,9 @@ impl Primitive for ScatterParticles3D {
             // fluid_scatter_3d.wgsl splat_3d is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.scatter_particles_3d standalone codegen"),
+                    .expect("node.draw_particles_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.scatter_particles_3d",
+                "node.draw_particles_3d",
             )
         });
 
@@ -186,7 +186,7 @@ impl Primitive for ScatterParticles3D {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.scatter_particles_3d",
+            "node.draw_particles_3d",
         );
     }
 }
@@ -203,7 +203,7 @@ mod tests {
         let particle_layout = ArrayType::of_known::<Particle>();
         let u32_layout = ArrayType::of_known::<u32>();
 
-        assert_eq!(ScatterParticles3D::TYPE_ID, "node.scatter_particles_3d");
+        assert_eq!(ScatterParticles3D::TYPE_ID, "node.draw_particles_3d");
         assert_eq!(ScatterParticles3D::INPUTS[0].name, "particles");
         assert_eq!(
             ScatterParticles3D::INPUTS[0].ty,
@@ -241,7 +241,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = ScatterParticles3D::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.scatter_particles_3d");
+        assert_eq!(node.type_id().as_str(), "node.draw_particles_3d");
     }
 }
 

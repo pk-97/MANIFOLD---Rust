@@ -540,7 +540,7 @@
           {
             "id": 5,
             "nodeId": "mux_x",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "mux_x",
             "params": {
               "selector": {
@@ -553,7 +553,7 @@
           {
             "id": 6,
             "nodeId": "mux_y",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "mux_y",
             "params": {
               "selector": {

@@ -1,4 +1,4 @@
-//! `node.sample_texture_at_particles` — bilinear texture sample at
+//! `node.sample_image_at_particles` — bilinear texture sample at
 //! each particle's UV position, emit `Array<vec2<f32>>`.
 //!
 //! The per-particle texture-read atom. Pair with any pre-computed
@@ -7,8 +7,8 @@
 //! live particle wants the field's value at its current UV.
 //!
 //! Splits the legacy fused `integrate_particles` kernel into its
-//! field-sample step. Compose with `node.euler_step_particles` and
-//! `node.wrap_particles_torus` for the full advection chain.
+//! field-sample step. Compose with `node.move_particles` and
+//! `node.wrap_around` for the full advection chain.
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
@@ -30,7 +30,7 @@ struct SampleUniforms {
 
 crate::primitive! {
     name: SampleTextureAtParticles,
-    type_id: "node.sample_texture_at_particles",
+    type_id: "node.sample_image_at_particles",
     purpose: "Per-particle bilinear sample of a Texture2D at each particle's position.xy. Output: Array<vec2<f32>> of the texture's RG channels per particle. The generic field-read atom for any particle pipeline — velocity fields, density samples, per-particle colour LUTs. Decomposed out of the legacy fused `integrate_particles` kernel.",
     inputs: {
         particles: Array(Particle) required,
@@ -56,7 +56,7 @@ crate::primitive! {
     summary: "Reads the image colour underneath each particle, so the particles can pick up the look of whatever they fly over.",
     category: Particles2D,
     role: Filter,
-    aliases: ["sample image", "read texture", "pick color"],
+    aliases: ["sample image", "sample texture at particles", "read texture", "pick color"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/sample_texture_at_particles_body.wgsl"),
 }
@@ -111,9 +111,9 @@ impl Primitive for SampleTextureAtParticles {
             // position). sample_texture_at_particles.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.sample_texture_at_particles standalone codegen"),
+                    .expect("node.sample_image_at_particles standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.sample_texture_at_particles",
+                "node.sample_image_at_particles",
             )
         });
         let sampler = self
@@ -154,7 +154,7 @@ impl Primitive for SampleTextureAtParticles {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.sample_texture_at_particles",
+            "node.sample_image_at_particles",
         );
     }
 }
@@ -171,7 +171,7 @@ mod tests {
         let particle_layout = ArrayType::of_known::<Particle>();
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
 
-        assert_eq!(SampleTextureAtParticles::TYPE_ID, "node.sample_texture_at_particles");
+        assert_eq!(SampleTextureAtParticles::TYPE_ID, "node.sample_image_at_particles");
         let names: Vec<&str> = SampleTextureAtParticles::INPUTS.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["particles", "in", "active_count"]);
         assert_eq!(
@@ -207,7 +207,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = SampleTextureAtParticles::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.sample_texture_at_particles");
+        assert_eq!(node.type_id().as_str(), "node.sample_image_at_particles");
     }
 }
 

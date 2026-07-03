@@ -1,8 +1,8 @@
-//! `node.wrap_particles_torus` — per-particle toroidal wrap of
+//! `node.wrap_around` — per-particle toroidal wrap of
 //! `position.xy` to `[0, 1]²` via `fract(position.xy + 1)`.
 //!
 //! The cyclic-boundary policy atom. Pair downstream of
-//! `node.euler_step_particles` for the legacy
+//! `node.move_particles` for the legacy
 //! `integrate_particles` boundary behaviour. Dead particles
 //! (`life <= 0`) pass through unchanged.
 
@@ -29,7 +29,7 @@ struct WrapUniforms {
 
 crate::primitive! {
     name: WrapParticlesTorus,
-    type_id: "node.wrap_particles_torus",
+    type_id: "node.wrap_around",
     purpose: "Per-particle toroidal wrap: position.xy = fract(position.xy + 1). The cyclic-boundary policy atom for fluid sims and any flow-driven particle pipeline whose domain is `[0, 1]²`. Dead particles (life <= 0) pass through unchanged. Decomposed out of the legacy fused `integrate_particles` kernel — kept separate so different boundary policies (boundary_death, wall_bounce) can ship as sibling atoms without forking the integrator.",
     inputs: {
         in: Array(Particle) required,
@@ -54,7 +54,7 @@ crate::primitive! {
     summary: "Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping.",
     category: Particles2D,
     role: Filter,
-    aliases: ["wrap around", "torus", "loop", "tile"],
+    aliases: ["wrap around", "wrap particles torus", "torus", "loop", "tile"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/wrap_particles_torus_body.wgsl"),
 }
@@ -110,9 +110,9 @@ impl Primitive for WrapParticlesTorus {
             // coincident path). wrap_particles_torus.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.wrap_particles_torus standalone codegen"),
+                    .expect("node.wrap_around standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.wrap_particles_torus",
+                "node.wrap_around",
             )
         });
 
@@ -146,7 +146,7 @@ impl Primitive for WrapParticlesTorus {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.wrap_particles_torus",
+            "node.wrap_around",
         );
     }
 }
@@ -162,7 +162,7 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType};
         let particle_layout = ArrayType::of_known::<Particle>();
 
-        assert_eq!(WrapParticlesTorus::TYPE_ID, "node.wrap_particles_torus");
+        assert_eq!(WrapParticlesTorus::TYPE_ID, "node.wrap_around");
         let names: Vec<&str> = WrapParticlesTorus::INPUTS.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["in", "active_count"]);
         assert_eq!(
@@ -186,7 +186,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = WrapParticlesTorus::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.wrap_particles_torus");
+        assert_eq!(node.type_id().as_str(), "node.wrap_around");
     }
 }
 

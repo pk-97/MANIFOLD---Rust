@@ -518,7 +518,7 @@ crate::param_tooltips!("node.anti_clump_particles", {
     "active_count" => "How many particles in the buffer get the kick. It is clamped to whatever the buffer can actually hold.",
 });
 
-crate::param_tooltips!("node.apply_radial_burst_to_particles", {
+crate::param_tooltips!("node.add_burst", {
     "point_x" => "Horizontal centre of the burst across the canvas, from 0 at the left to 1 at the right. Wire it from a hit position to fire the shockwave wherever the action is.",
     "point_y" => "Vertical centre of the burst, from 0 at the bottom to 1 at the top.",
     "amplitude" => "How hard the push is. 0 means no burst at all, and higher values throw particles further out from the centre.",
@@ -527,12 +527,12 @@ crate::param_tooltips!("node.apply_radial_burst_to_particles", {
     "active_count" => "How many particles to push, counted from the start of the buffer. Keep it matched to your live particle count so dead slots stay still.",
 });
 
-crate::param_tooltips!("node.array_diffuse_particles", {
+crate::param_tooltips!("node.spread_out", {
     "diffusion" => "How hard the random kick hits each particle every frame. 0 leaves the cloud exactly as it is, and the useful range tops out around 0.05 before things scatter wildly.",
     "active_count" => "How many particles in the buffer actually get kicked, counted from the front. It is capped to the real buffer size so a value above the particle count just affects all of them.",
 });
 
-crate::param_tooltips!("node.fbm_per_instance", {
+crate::param_tooltips!("node.fractal_noise_per_copy", {
     "scale" => "How zoomed in the noise is. Higher values pack more detail into the same space so neighbouring copies vary more.",
     "z" => "Slides through the noise along a third axis. Animate this from time to make the value on each copy drift smoothly.",
     "offset_x" => "Shifts the noise sideways. Move it to pan the whole field or to reach a fresh patch of randomness.",
@@ -542,7 +542,7 @@ crate::param_tooltips!("node.fbm_per_instance", {
     "gain" => "How much each finer layer adds, from 0 to 1. Lower values keep the result smooth while higher values make it rougher and busier.",
 });
 
-crate::param_tooltips!("node.instance_position_jitter", {
+crate::param_tooltips!("node.position_jitter", {
     "frequency" => "How tightly the noise varies across the copies. Higher values make neighbouring copies wander in different directions, lower values move whole regions together.",
     "amplitude" => "How far each copy is pushed off its spot. 0 leaves the grid perfect, higher values scatter the copies further.",
     "time_uvx_drift" => "Slides the noise pattern along over time so the scatter animates. Drive it from a time wire for slow drift.",
@@ -550,15 +550,15 @@ crate::param_tooltips!("node.instance_position_jitter", {
     "axis_seed" => "Separates the noise used for each axis so the three directions wobble independently. Move it to land in a different part of the noise.",
 });
 
-crate::param_tooltips!("node.instance_rotation_jitter", {
+crate::param_tooltips!("node.rotation_jitter", {
     "amplitude" => "How much random twist to add to each copy. 0 leaves every copy aligned, and higher values scatter their angles more. The twist is added on top of any rotation the copies already had.",
 });
 
-crate::param_tooltips!("node.lerp_instance_fields", {
+crate::param_tooltips!("node.blend_copies", {
     "t" => "How far to blend from the first arrangement toward the second. 0 is all the first, 1 is all the second, and 0.5 is the midway morph. Values outside that range overshoot.",
 });
 
-crate::param_tooltips!("node.radial_burst_force_field", {
+crate::param_tooltips!("node.explosion_force", {
     "point_x" => "Horizontal centre of the blast, from 0 at the left edge to 1 at the right.",
     "point_y" => "Vertical centre of the blast, from 0 at the top to 1 at the bottom.",
     "amplitude" => "How hard the burst pushes. At 0 the field is empty and the node costs nothing, raise it to throw particles harder.",
@@ -567,17 +567,17 @@ crate::param_tooltips!("node.radial_burst_force_field", {
     "time" => "Feeds the noise that breaks up the push so it looks organic rather than perfectly radial. Wire your time source in to keep it animating.",
 });
 
-crate::param_tooltips!("node.sample_texture_at_particles", {
+crate::param_tooltips!("node.sample_image_at_particles", {
     "active_count" => "How many particles to sample for, counted from the start of the list. Keep it matched to the particle count feeding the rest of the chain.",
 });
 
-crate::param_tooltips!("node.scatter_particles", {
+crate::param_tooltips!("node.draw_particles", {
     "active_count" => "How many particles to splat, counted from the start of the buffer. Match it to your live particle count so empty slots add nothing.",
     "scaled_energy" => "How much brightness each particle deposits where it lands. Higher values build the image up faster, so dense clouds bloom sooner.",
     "boundary" => "What happens to particles that land outside the canvas. Wrap tiles them back around so fluids flow without a seam, Discard drops them to avoid a hard edge when projecting from 3D.",
 });
 
-crate::param_tooltips!("node.seed_particles_from_texture", {
+crate::param_tooltips!("node.spawn_from_image", {
     "max_capacity" => "The most particles this node will ever hold, which sets the buffer size. Raise it only if you need more than the active count.",
     "active_count" => "How many particles to spawn this frame. Every one lands on a bright part of the image, wrapping round if there are more particles than bright pixels.",
     "output_width" => "The width of the space the image maps into, in pixels. Match it to your render size so the mask lands where you expect.",
@@ -585,7 +585,7 @@ crate::param_tooltips!("node.seed_particles_from_texture", {
     "frame_seed" => "Changes the random sub-pixel jitter on placement. Move it to reshuffle how particles sit within each bright pixel.",
 });
 
-crate::param_tooltips!("node.simplex_noise_force_at_particles", {
+crate::param_tooltips!("node.turbulence", {
     "amplitude" => "How hard the noise field pushes each particle, from 0 for still up to 0.05. Small values already give plenty of swirl, so keep it low.",
     "modulator_gain" => "How much a wired modulator texture boosts the noise where it is bright, from 0 to 20. Only does anything when something is wired into the modulator input.",
     "z" => "Slides the noise field through its third dimension, which animates the flow. Wire time times a rate here to keep the turbulence moving.",
@@ -593,39 +593,39 @@ crate::param_tooltips!("node.simplex_noise_force_at_particles", {
     "active_count" => "How many particles the noise force is applied to. Keep it matched to the particle count feeding the sim.",
 });
 
-crate::param_tooltips!("node.simplex_per_instance", {
+crate::param_tooltips!("node.simplex_noise_per_copy", {
     "scale" => "Frequency of the noise. Around 1 gives one broad swell across the field, higher values pack in fine grain.",
     "z" => "Slices through the noise at a different depth. Wire a time value in to make the field drift and animate.",
     "offset_x" => "Slides the noise field sideways. Wire an LFO in to scroll it across the copies.",
     "offset_y" => "Slides the noise field up and down.",
 });
 
-crate::param_tooltips!("node.wrap_particles_torus", {
+crate::param_tooltips!("node.wrap_around", {
     "active_count" => "How many particles get wrapped, counted from the front of the buffer. It is capped to the real particle count.",
 });
 
 // ─── Particles 3D ───
 
-crate::param_tooltips!("node.apply_radial_burst_3d_to_particles", {
+crate::param_tooltips!("node.add_burst_3d", {
     "inject_index" => "Picks which of the four fixed burst zones to fire into, numbered 0 to 3. Set it to -1 to switch the burst off entirely.",
     "inject_force" => "How hard the burst pushes new material in, from 0 for nothing up to 1 for a full puff. Wire a trigger envelope here to fire it on a hit.",
     "inject_phase" => "Where the burst sits in its attack and decay envelope, from 0 to 1. Drive it from the same trigger that fires the burst so the push fades in and out.",
     "active_count" => "How many particles the burst is allowed to touch. Keep it matched to the particle count feeding the sim so the whole field reacts.",
 });
 
-crate::param_tooltips!("node.container_bounds_3d", {
+crate::param_tooltips!("node.keep_in_box_3d", {
     "container" => "The shape that holds the particles in. None wraps them around the edges, while Cube, Sphere, and Torus bounce them back inside the surface.",
     "ctr_scale" => "How big the container is inside the unit cube, from 0.2 to 1. Smaller values pull the walls in tighter. This has no effect when the container is set to None.",
     "active_count" => "How many particles from the front of the buffer to contain. Set this to match the live particle count so idle slots are left alone.",
 });
 
-crate::param_tooltips!("node.container_repel_force_3d", {
+crate::param_tooltips!("node.push_from_walls_3d", {
     "container" => "The shape of the wall particles get pushed away from. None turns the push off entirely, the rest pick a Cube, Sphere, or Torus boundary.",
     "ctr_scale" => "How big the container is. Smaller packs the particles into a tighter volume, larger gives them more room before the walls start pushing back.",
     "active_count" => "How many particles in the buffer feel the wall push, counted from the front. It is capped to the real particle count.",
 });
 
-crate::param_tooltips!("node.curl_slope_force_3d", {
+crate::param_tooltips!("node.swirl_force_3d", {
     "vol_res" => "The width and height of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
     "vol_depth" => "The depth of the force volume in cells, default 128. Keep it matched to the gradient volume feeding in.",
     "curl_strength" => "How hard the swirl pulls particles into orbiting eddies. 0 is no swirl, higher spins them up. This is the dial that makes the flow read as smoke.",
@@ -635,12 +635,12 @@ crate::param_tooltips!("node.curl_slope_force_3d", {
     "ref_axis_z" => "The Z part of the axis the swirl rotates around. The three axis values get normalised together, so a length of zero falls back to straight up.",
 });
 
-crate::param_tooltips!("node.diffuse_force_3d_at_particles", {
+crate::param_tooltips!("node.spread_out_3d", {
     "diffusion" => "How strong a random kick each particle gets, from 0 for none up to 0.5. Higher spreads tight clumps apart faster, and the push is stronger where particles are densest.",
     "active_count" => "How many particles get the random kick. Keep it matched to the particle count feeding the sim.",
 });
 
-crate::param_tooltips!("node.euler_step_particles_3d", {
+crate::param_tooltips!("node.move_particles_3d", {
     "active_count" => "How many particles to move each frame, counted from the start of the buffer. Match it to your live particle count so dead slots stay put.",
     "speed" => "Scales how far every particle travels per step. 1 moves them at the force's natural pace, higher is faster. Wire an LFO or audio band in to drive the energy live.",
 });
@@ -650,18 +650,18 @@ crate::param_tooltips!("node.flatten_to_camera_plane", {
     "active_count" => "How many particles to process, capped at the buffer size. Match it to the live particle count from the rest of the chain.",
 });
 
-crate::param_tooltips!("node.sample_texture_3d_at_particles", {
+crate::param_tooltips!("node.sample_volume_at_particles", {
     "active_count" => "How many particles read the volume this frame, capped to the size of the particle list. Entries beyond this count are left untouched.",
 });
 
-crate::param_tooltips!("node.scatter_particles_3d", {
+crate::param_tooltips!("node.draw_particles_3d", {
     "active_count" => "How many particles from the front of the buffer to splat into the volume. Set this to match the live particle count.",
     "vol_res" => "The width and height of the volume grid in cells. Higher gives a finer density field at the cost of memory and speed.",
     "vol_depth" => "How many cells deep the volume grid is. Together with the resolution this sets how much detail the density field holds.",
     "scaled_energy" => "How much density each particle adds to its cell. The default 4096 reads back as roughly 1.0 in float density downstream.",
 });
 
-crate::param_tooltips!("node.scatter_particles_camera", {
+crate::param_tooltips!("node.draw_particles_camera", {
     "active_count" => "How many particles get drawn, counted from the front of the buffer. It is capped to the real particle count.",
     "disp_w" => "Width of the image the particles splat onto, in pixels. Wire this from the canvas size so the splat matches your output resolution.",
     "disp_h" => "Height of the image the particles splat onto, in pixels. Wire this from the canvas size so the splat matches your output resolution.",
@@ -669,7 +669,7 @@ crate::param_tooltips!("node.scatter_particles_camera", {
     "scaled_energy" => "How much brightness each particle deposits where it lands. Higher makes a denser, more glowing splat.",
 });
 
-crate::param_tooltips!("node.simplex_noise_force_3d_at_particles", {
+crate::param_tooltips!("node.turbulence_3d", {
     "turbulence" => "How strongly the 3D noise pushes the particles around. 0 leaves them on their existing path, and higher values stir up more swirl. The useful range is small, so keep it low.",
     "anti_clump" => "How much extra push the noise adds where particles are already crowded, which spreads dense clumps apart. 0 turns the boost off, and higher values separate clusters more aggressively.",
     "active_count" => "How many particles the noise force is applied to. It is clamped to whatever the particle and force buffers can hold.",
@@ -703,7 +703,7 @@ crate::param_tooltips!("node.trigger_gate", {
 
 // ─── Detection & Sampling ───
 
-crate::param_tooltips!("node.blob_detect_ffi", {
+crate::param_tooltips!("node.blob_tracker", {
     "max_capacity" => "The most blobs this can track at once, up to 8. It is read once when the effect is built, so changing it live has no effect.",
     "threshold" => "The brightness cutoff for what counts as a blob. Lower picks up dimmer regions, higher only catches the brightest spots.",
     "sensitivity" => "How eagerly nearby bright regions get merged into one blob. Higher pulls neighbours together into bigger blobs, lower keeps them as separate smaller ones.",
@@ -711,7 +711,7 @@ crate::param_tooltips!("node.blob_detect_ffi", {
     "update_interval" => "How many frames to wait between detection passes. 1 runs every frame for the snappiest tracking, higher values save work but lag behind motion.",
 });
 
-crate::param_tooltips!("node.blob_overlay_render", {
+crate::param_tooltips!("node.blob_overlay", {
     "color" => "The colour of the boxes drawn around each blob.",
     "alpha" => "How opaque the boxes are over the image. 0 is invisible and 1 is solid.",
     "border_width" => "Thickness of the box outline, in UV units where 0.003 is roughly 2 pixels at 720p. Push it past the blob size to get solid filled boxes instead of outlines.",
@@ -723,12 +723,12 @@ crate::param_tooltips!("node.color_sample", {
     "radius_px" => "Averages a square window of this many pixels around the sample point. 0 reads a single pixel, higher values smooth out noise so the reading reflects the region.",
 });
 
-crate::param_tooltips!("node.depth_estimate_midas", {
+crate::param_tooltips!("node.depth_map", {
     "analysis_max_dim" => "The longest side, in pixels, the frame is shrunk to before the AI looks at it. Lower runs faster but reads depth coarsely, higher is sharper but slower.",
     "update_interval" => "How many frames to wait between depth estimates. 1 runs every frame for the freshest result, higher values ease the CPU load but the depth lags the picture a little.",
 });
 
-crate::param_tooltips!("node.optical_flow_estimate", {
+crate::param_tooltips!("node.optical_flow", {
     "analysis_max_dim" => "The longest side the image is shrunk to before flow is measured, in pixels. Smaller is faster and softer while larger catches finer motion at more cost.",
     "update_interval" => "How many frames between each flow measurement. Higher values save work but the motion lags further behind the picture.",
 });

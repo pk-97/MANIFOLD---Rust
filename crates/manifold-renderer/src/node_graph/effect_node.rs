@@ -647,7 +647,7 @@ pub trait EffectNode: Send {
     /// If `Some(port_name)`, this node is a branch-selector: only the
     /// upstream subgraph feeding the named input port needs to run
     /// this frame. The executor uses this to prune unselected branches
-    /// — `node.mux_texture` returning `Some("in_2")` causes the
+    /// — `node.switch_texture` returning `Some("in_2")` causes the
     /// in_0 / in_1 / in_3..7 producer chains to be skipped entirely
     /// for this frame's dispatch. Default: `None` (no pruning).
     ///

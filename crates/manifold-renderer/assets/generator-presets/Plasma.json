@@ -236,7 +236,7 @@
     {
       "id": 4,
       "nodeId": "pattern_mux",
-      "typeId": "node.mux_scalar",
+      "typeId": "node.switch_value",
       "handle": "pattern_mux",
       "params": {
         "in_0": {

@@ -1,4 +1,4 @@
-//! `node.blob_detect_ffi` — sparse blob detection via the
+//! `node.blob_tracker` — sparse blob detection via the
 //! `manifold_native::BlobDetector` FFI plugin, wrapped as a
 //! primitive that emits an `Array<Blob>`.
 //!
@@ -7,7 +7,7 @@
 //! hold valid blobs in normalized 0..1 image space; remaining
 //! entries are zeroed.
 //!
-//! Pair with a future `node.blob_overlay_render` (or any custom
+//! Pair with a future `node.blob_overlay` (or any custom
 //! consumer that iterates `Array<Blob>`) to draw the boxes.
 //!
 //! Same readback / background-worker pattern as the depth and
@@ -90,7 +90,7 @@ struct BlobState {
 
 crate::primitive! {
     name: BlobDetectFfi,
-    type_id: "node.blob_detect_ffi",
+    type_id: "node.blob_tracker",
     purpose: "Sparse blob detection (bright-region tracking) via the manifold_native BlobDetector FFI plugin. Input: any Texture2D. Output: Array<Blob> (16-byte items: x, y, width, height in normalized 0..1 image space). First N entries are valid blobs (N = detected count, capped at 32); remaining entries are zeroed. Pair with downstream blob-overlay render primitives to draw the boxes, or wire to any consumer that iterates Array<Blob>.",
     inputs: {
         in: Texture2D required,
@@ -151,7 +151,7 @@ crate::primitive! {
     summary: "Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals.",
     category: DetectionAndSampling,
     role: Filter,
-    aliases: ["blob tracker", "blob detect", "tracking", "bright spots"],
+    aliases: ["blob tracker", "blob detect ffi", "blob detect", "tracking", "bright spots"],
     extra_fields: {
         upload_pipeline: Option<GpuComputePipeline> = None,
         downsample_pipeline: Option<GpuComputePipeline> = None,
@@ -176,7 +176,7 @@ impl BlobDetectFfi {
             let detector =
                 manifold_native::ffi::blob_ffi::FfiBlobDetector::new(MAX_BLOB_CAP as i32)?;
             log::info!(
-                "[node.blob_detect_ffi] Blob detector worker spawned (max {} blobs)",
+                "[node.blob_tracker] Blob detector worker spawned (max {} blobs)",
                 MAX_BLOB_CAP
             );
             Some(move |req: BlobRequest| -> BlobResponse {
@@ -215,7 +215,7 @@ impl BlobDetectFfi {
         });
         if self.blob_worker.is_none() {
             log::warn!(
-                "[node.blob_detect_ffi] Native blob detector unavailable — output will be all zeros"
+                "[node.blob_tracker] Native blob detector unavailable — output will be all zeros"
             );
         }
     }
@@ -250,7 +250,7 @@ impl BlobDetectFfi {
             format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
             dimension: manifold_gpu::GpuTextureDimension::D2,
             usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-            label: "node.blob_detect_ffi.staging",
+            label: "node.blob_tracker.staging",
             mip_levels: 1,
         });
         self.blob_state = Some(BlobState {
@@ -349,7 +349,7 @@ impl Primitive for BlobDetectFfi {
                     gpu.device.create_compute_pipeline(
                         include_str!("shaders/blob_detect_ffi_downsample.wgsl"),
                         "cs_main",
-                        "node.blob_detect_ffi.downsample",
+                        "node.blob_tracker.downsample",
                     )
                 });
                 let sampler = self.downsample_sampler.get_or_insert_with(|| {
@@ -363,7 +363,7 @@ impl Primitive for BlobDetectFfi {
                         GpuBinding::Texture { binding: 2, texture: &bs.staging_texture },
                     ],
                     [aw.div_ceil(8), ah.div_ceil(8), 1],
-                    "node.blob_detect_ffi.downsample",
+                    "node.blob_tracker.downsample",
                 );
                 bs.readback.submit(gpu, &bs.staging_texture, aw, ah);
                 bs.readback_pending = true;
@@ -397,7 +397,7 @@ impl Primitive for BlobDetectFfi {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/blob_detect_ffi_upload.wgsl"),
                 "cs_main",
-                "node.blob_detect_ffi.upload",
+                "node.blob_tracker.upload",
             )
         });
 
@@ -419,7 +419,7 @@ impl Primitive for BlobDetectFfi {
                 },
             ],
             [capacity.div_ceil(64), 1, 1],
-            "node.blob_detect_ffi",
+            "node.blob_tracker",
         );
         self.last_output_count = Some(count);
     }
@@ -446,7 +446,7 @@ mod tests {
         ];
         let expected = ArrayType::of_channels(EXPECTED, MatchMode::Exact);
 
-        assert_eq!(BlobDetectFfi::TYPE_ID, "node.blob_detect_ffi");
+        assert_eq!(BlobDetectFfi::TYPE_ID, "node.blob_tracker");
         assert_eq!(BlobDetectFfi::INPUTS.len(), 1);
         assert_eq!(BlobDetectFfi::INPUTS[0].ty, PortType::Texture2D);
         assert_eq!(BlobDetectFfi::OUTPUTS.len(), 1);
@@ -473,7 +473,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = BlobDetectFfi::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.blob_detect_ffi");
+        assert_eq!(node.type_id().as_str(), "node.blob_tracker");
     }
 
     #[test]

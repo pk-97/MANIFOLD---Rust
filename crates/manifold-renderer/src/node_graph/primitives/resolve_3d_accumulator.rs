@@ -4,7 +4,7 @@
 //!
 //! Bit-exact wrap of `generators/shaders/fluid_scatter_3d.wgsl`'s
 //! `resolve_3d` entry point via include_str. Pairs with
-//! `node.scatter_particles_3d` upstream. First Texture3D-output
+//! `node.draw_particles_3d` upstream. First Texture3D-output
 //! primitive in node_graph — exercises the new
 //! `MetalBackend::pre_bind_texture_3d` path.
 
@@ -33,7 +33,7 @@ struct Resolve3DUniforms {
 crate::primitive! {
     name: Resolve3DAccumulator,
     type_id: "node.resolve_scatter_3d",
-    purpose: "Read a u32 fixed-point 3D accumulator buffer (produced by node.scatter_particles_3d), divide by 4096 (FluidSim3D's FIXED_POINT_MULTIPLIER), and write the result as a density Texture3D. Self-clears the accumulator to zero atomically as part of the same dispatch so the next frame starts fresh.",
+    purpose: "Read a u32 fixed-point 3D accumulator buffer (produced by node.draw_particles_3d), divide by 4096 (FluidSim3D's FIXED_POINT_MULTIPLIER), and write the result as a density Texture3D. Self-clears the accumulator to zero atomically as part of the same dispatch so the next frame starts fresh.",
     inputs: {
         accum: Array(u32) required,
     },

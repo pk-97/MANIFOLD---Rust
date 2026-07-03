@@ -4667,7 +4667,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         );
     }
 
-    /// 3D CoincidentTexel parity (dual-packed): node.curl_slope_force_3d reads its
+    /// 3D CoincidentTexel parity (dual-packed): node.swirl_force_3d reads its
     /// gradient volume at the OWN voxel (integer textureLoad, no sampler) and
     /// combines curl + slope. ref_axis is CPU-normalized in run() and the body
     /// tilts it per-voxel by a smooth spatial wobble (curl-noise) derived from the
@@ -4681,7 +4681,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         let n = 32u32;
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
 
-        let node = registry.construct("node.curl_slope_force_3d").unwrap();
+        let node = registry.construct("node.swirl_force_3d").unwrap();
         let generated = generate_standalone(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),

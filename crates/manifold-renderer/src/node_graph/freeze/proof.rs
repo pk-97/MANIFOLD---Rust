@@ -2264,7 +2264,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
         .expect("FluidSimulation3D fuses + builds (3D-sampler buffer region)");
 
     assert!(
-        !fused_def.nodes.iter().any(|n| n.type_id == "node.sample_texture_3d_at_particles"),
+        !fused_def.nodes.iter().any(|n| n.type_id == "node.sample_volume_at_particles"),
         "the 3D force sampler must be absorbed into a fused region — a surviving \
          standalone node means the Texture3D gate regressed and the integrator \
          is fragmented again"

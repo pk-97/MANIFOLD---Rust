@@ -15,7 +15,7 @@
 //! makes the top sharper.
 //!
 //! Optional `radius_disp` is a per-instance `Array<f32>` added to the
-//! tapered radius — drive from `node.simplex_per_instance` (organic
+//! tapered radius — drive from `node.simplex_noise_per_copy` (organic
 //! stem noise) or any other Array<f32> source.
 
 use manifold_gpu::GpuBinding;
@@ -41,7 +41,7 @@ struct Uniforms {
 crate::primitive! {
     name: CylinderWrapField,
     type_id: "node.cylinder_wrap_field",
-    purpose: "Lift an Array<vec2<f32>> of UVs onto a cylindrical surface and emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, r = base_radius * pow(max(1 - uv.y, 0), taper) + radius_disp, y = (uv.y - 0.5) * height_scale, pos = (r·cos θ, y, r·sin θ). The taper curve narrows the radius toward uv.y=1 — produces stem / vase / cone / conifer shapes. Optional radius_disp Array<f32> adds per-instance radial noise (typically driven by node.simplex_per_instance + shaping). All scalar params are port-shadow so the cylinder can be animated by control wires.",
+    purpose: "Lift an Array<vec2<f32>> of UVs onto a cylindrical surface and emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, r = base_radius * pow(max(1 - uv.y, 0), taper) + radius_disp, y = (uv.y - 0.5) * height_scale, pos = (r·cos θ, y, r·sin θ). The taper curve narrows the radius toward uv.y=1 — produces stem / vase / cone / conifer shapes. Optional radius_disp Array<f32> adds per-instance radial noise (typically driven by node.simplex_noise_per_copy + shaping). All scalar params are port-shadow so the cylinder can be animated by control wires.",
     inputs: {
         uv: Array([f32; 2]) required,
         radius_disp: Array(f32) optional,
@@ -87,7 +87,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Output capacity follows the `uv` input. `instance_scale` is written into the .w of pos_scale on every emitted InstanceTransform — pair with node.torus_wrap_field downstream of node.mux_array<InstanceTransform> and feed the SAME scale wire into both so the .w stays continuous across a cyl↔tor morph. Rotation is left at zero on every output; pair with node.instance_rotation_jitter downstream for hash-driven per-instance rotation. Taper = 0 disables tapering (straight cylinder); larger values sharpen the top.",
+    composition_notes: "Output capacity follows the `uv` input. `instance_scale` is written into the .w of pos_scale on every emitted InstanceTransform — pair with node.torus_wrap_field downstream of node.switch_array<InstanceTransform> and feed the SAME scale wire into both so the .w stays continuous across a cyl↔tor morph. Rotation is left at zero on every output; pair with node.rotation_jitter downstream for hash-driven per-instance rotation. Taper = 0 disables tapering (straight cylinder); larger values sharpen the top.",
     examples: [],
     picker: { label: "Cylinder Wrap Field", category: Atom },
     summary: "Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry.",

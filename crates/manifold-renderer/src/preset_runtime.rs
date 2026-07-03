@@ -4926,7 +4926,7 @@ mod generator_runtime_tests {
                 { "id": 0, "typeId": "system.generator_input", "handle": "input" },
                 { "id": 1, "typeId": "node.wgsl_compute", "handle": "branch_a" },
                 { "id": 2, "typeId": "node.wgsl_compute", "handle": "branch_b" },
-                { "id": 3, "typeId": "node.mux_texture", "handle": "mux" },
+                { "id": 3, "typeId": "node.switch_texture", "handle": "mux" },
                 { "id": 4, "typeId": "system.final_output", "handle": "final_output" }
             ],
             "wires": [
@@ -5060,7 +5060,7 @@ mod generator_runtime_tests {
             panic!("node `{type_id}` not in compiled plan");
         };
         let integrate_node = find_node("node.wgsl_compute");
-        let scatter_node = find_node("node.scatter_particles");
+        let scatter_node = find_node("node.draw_particles");
 
         let resource_for = |node: NodeInstanceId, port: &str, is_input: bool| -> ResourceId {
             for step in g.plan.steps() {
@@ -5126,7 +5126,7 @@ mod generator_runtime_tests {
             let scatter = (|| {
                 for step in g.plan.steps() {
                     let inst = g.graph.get_node(step.node).expect("step's node");
-                    if inst.node.type_id().as_str() == "node.scatter_particles" {
+                    if inst.node.type_id().as_str() == "node.draw_particles" {
                         return step.node;
                     }
                 }

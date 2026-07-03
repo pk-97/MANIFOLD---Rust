@@ -1,13 +1,13 @@
-//! `node.euler_step_particles_3d` — apply a per-particle 3D force to
+//! `node.move_particles_3d` — apply a per-particle 3D force to
 //! each live particle's position via one Euler step.
 //!
 //! `position.xyz += forces[i] * speed * (delta * 60)`
 //!
-//! The 3D sibling of `node.euler_step_particles`. Frame-rate-normalised
+//! The 3D sibling of `node.move_particles`. Frame-rate-normalised
 //! via the `* 60` scale (matches the legacy `fluid_simulate_3d`'s
 //! `dt_scale = dt * 60`). Dead particles (`life <= 0`) pass through
 //! unchanged. No boundary handling — pair with
-//! `node.container_bounds_3d` for the position-bounds policy.
+//! `node.keep_in_box_3d` for the position-bounds policy.
 
 use manifold_gpu::GpuBinding;
 
@@ -31,8 +31,8 @@ struct EulerUniforms {
 
 crate::primitive! {
     name: EulerStepParticles3D,
-    type_id: "node.euler_step_particles_3d",
-    purpose: "Apply one Euler integration step to each live particle's position.xyz by a per-particle 3D force. `position.xyz += forces[i] * speed * (delta * 60)`. Frame-rate-normalised via the `* 60` scale (matches the legacy fluid_simulate_3d's dt_scale = dt * 60). Dead particles (life <= 0) pass through unchanged. No boundary handling — pair with node.container_bounds_3d. The 3D sibling of node.euler_step_particles; decomposed from the integration step of the fused node.fluid_simulate_3d.",
+    type_id: "node.move_particles_3d",
+    purpose: "Apply one Euler integration step to each live particle's position.xyz by a per-particle 3D force. `position.xyz += forces[i] * speed * (delta * 60)`. Frame-rate-normalised via the `* 60` scale (matches the legacy fluid_simulate_3d's dt_scale = dt * 60). Dead particles (life <= 0) pass through unchanged. No boundary handling — pair with node.keep_in_box_3d. The 3D sibling of node.move_particles; decomposed from the integration step of the fused node.fluid_simulate_3d.",
     inputs: {
         in: Array(Particle) required,
         forces: Array([f32; 3]) required,
@@ -66,7 +66,7 @@ crate::primitive! {
     summary: "Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system.",
     category: Particles3D,
     role: Filter,
-    aliases: ["move particles 3d", "integrate 3d", "step", "euler"],
+    aliases: ["move particles 3d", "euler step particles 3d", "integrate 3d", "step", "euler"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/euler_step_particles_3d_body.wgsl"),
     derived_uniforms: ["dt_scaled"],
@@ -129,9 +129,9 @@ impl Primitive for EulerStepParticles3D {
             // the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.euler_step_particles_3d standalone codegen"),
+                    .expect("node.move_particles_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.euler_step_particles_3d",
+                "node.move_particles_3d",
             )
         });
 
@@ -170,7 +170,7 @@ impl Primitive for EulerStepParticles3D {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.euler_step_particles_3d",
+            "node.move_particles_3d",
         );
     }
 }
@@ -187,7 +187,7 @@ mod tests {
         let particle_layout = ArrayType::of_known::<Particle>();
         let vec3_layout = ArrayType::of_known::<[f32; 3]>();
 
-        assert_eq!(EulerStepParticles3D::TYPE_ID, "node.euler_step_particles_3d");
+        assert_eq!(EulerStepParticles3D::TYPE_ID, "node.move_particles_3d");
         let names: Vec<&str> = EulerStepParticles3D::INPUTS.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["in", "forces", "speed", "active_count"]);
         assert_eq!(
@@ -224,7 +224,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = EulerStepParticles3D::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.euler_step_particles_3d");
+        assert_eq!(node.type_id().as_str(), "node.move_particles_3d");
     }
 }
 

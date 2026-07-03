@@ -1,7 +1,7 @@
-//! `node.apply_radial_burst_to_particles` — per-particle radial
+//! `node.add_burst` — per-particle radial
 //! impulse around a point. Mutates `Particle.position.xy` directly.
 //!
-//! The per-particle counterpart to `node.radial_burst_force_field`.
+//! The per-particle counterpart to `node.explosion_force`.
 //! Where the texture-domain atom paints a vec2 force field that
 //! particles sample via bilinear interpolation, this atom evaluates
 //! the radial+tangent math at each particle's exact position and
@@ -47,8 +47,8 @@ struct BurstUniforms {
 
 crate::primitive! {
     name: ApplyRadialBurstToParticles,
-    type_id: "node.apply_radial_burst_to_particles",
-    purpose: "Per-particle radial impulse around `(point_x, point_y)` — evaluates the radial + tangent + noise-perturbed-radial + falloff math at each particle's exact UV and applies the resulting push to `position.xy` directly. The per-particle counterpart to `node.radial_burst_force_field` (which paints the same math as a texture for downstream sampling). Use this atom when bilinear smoothing near the impulse centre would muddy the visible kick — fluid sims, sparks reacting to beat hits, particle-text inject events.",
+    type_id: "node.add_burst",
+    purpose: "Per-particle radial impulse around `(point_x, point_y)` — evaluates the radial + tangent + noise-perturbed-radial + falloff math at each particle's exact UV and applies the resulting push to `position.xy` directly. The per-particle counterpart to `node.explosion_force` (which paints the same math as a texture for downstream sampling). Use this atom when bilinear smoothing near the impulse centre would muddy the visible kick — fluid sims, sparks reacting to beat hits, particle-text inject events.",
     inputs: {
         in: Array(Particle) required,
         point_x: ScalarF32 optional,
@@ -117,7 +117,7 @@ crate::primitive! {
     summary: "Pushes particles outward from a point in a burst, like an explosion or shockwave on a hit.",
     category: Particles2D,
     role: Filter,
-    aliases: ["add burst", "explosion", "shockwave", "impulse"],
+    aliases: ["add burst", "apply radial burst to particles", "explosion", "shockwave", "impulse"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/apply_radial_burst_to_particles_body.wgsl"),
     derived_uniforms: ["time_val", "dt_scaled"],
@@ -191,9 +191,9 @@ impl Primitive for ApplyRadialBurstToParticles {
             // in the body. apply_radial_burst_to_particles.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.apply_radial_burst_to_particles standalone codegen"),
+                    .expect("node.add_burst standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.apply_radial_burst_to_particles",
+                "node.add_burst",
             )
         });
 
@@ -233,7 +233,7 @@ impl Primitive for ApplyRadialBurstToParticles {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.apply_radial_burst_to_particles",
+            "node.add_burst",
         );
     }
 }
@@ -251,7 +251,7 @@ mod tests {
 
         assert_eq!(
             ApplyRadialBurstToParticles::TYPE_ID,
-            "node.apply_radial_burst_to_particles"
+            "node.add_burst"
         );
         let names: Vec<&str> = ApplyRadialBurstToParticles::INPUTS
             .iter()
@@ -287,7 +287,7 @@ mod tests {
         let node: &dyn EffectNode = &prim;
         assert_eq!(
             node.type_id().as_str(),
-            "node.apply_radial_burst_to_particles"
+            "node.add_burst"
         );
     }
 }

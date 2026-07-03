@@ -1,4 +1,4 @@
-//! `node.fbm_per_instance` — sample fractal Brownian motion
+//! `node.fractal_noise_per_copy` — sample fractal Brownian motion
 //! (multi-octave 3D simplex) at each UV in an `Array<vec2<f32>>`,
 //! emit `Array<f32>`.
 //!
@@ -41,7 +41,7 @@ const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.w
 
 crate::primitive! {
     name: FbmPerInstance,
-    type_id: "node.fbm_per_instance",
+    type_id: "node.fractal_noise_per_copy",
     purpose: "Sample fractal Brownian motion (multi-octave 3D simplex) at each UV in an Array<vec2<f32>>, emit Array<f32>. Per-instance counterpart to node.noise. For each idx: out[idx] = fbm(vec3(uv * scale + offset, z), octaves, lacunarity, gain). The internal loop matches noise_common.wgsl::fbm byte-for-byte; with the defaults (octaves=5, lacunarity=1.5, gain=0.8) the output is bit-identical to the legacy fbm — DigitalPlants's petal-noise pass relies on this. Port-shadow on scale / z / offset_* so the noise field can be animated from time and LFO wires.",
     inputs: {
         uv: Array([f32; 2]) required,
@@ -117,7 +117,7 @@ crate::primitive! {
     summary: "Gives every copy its own fractal-noise value, a smooth random number per copy you can drive size, colour, or motion with.",
     category: Particles2D,
     role: Filter,
-    aliases: ["fractal noise", "fbm", "per copy", "variation"],
+    aliases: ["fractal noise", "fbm per instance", "fbm", "per copy", "variation"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/fbm_per_instance_body.wgsl"),
     wgsl_includes: [NOISE_COMMON],
@@ -180,9 +180,9 @@ impl Primitive for FbmPerInstance {
             // simplex3d). fbm_per_instance.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.fbm_per_instance standalone codegen"),
+                    .expect("node.fractal_noise_per_copy standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.fbm_per_instance",
+                "node.fractal_noise_per_copy",
             )
         });
 
@@ -216,7 +216,7 @@ impl Primitive for FbmPerInstance {
                 },
             ],
             [count.div_ceil(256), 1, 1],
-            "node.fbm_per_instance",
+            "node.fractal_noise_per_copy",
         );
     }
 }
@@ -232,7 +232,7 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType};
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
         let f32_layout = ArrayType::of_known::<f32>();
-        assert_eq!(FbmPerInstance::TYPE_ID, "node.fbm_per_instance");
+        assert_eq!(FbmPerInstance::TYPE_ID, "node.fractal_noise_per_copy");
         let uv_in = FbmPerInstance::INPUTS
             .iter()
             .find(|p| p.name == "uv")
@@ -289,7 +289,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = FbmPerInstance::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.fbm_per_instance");
+        assert_eq!(node.type_id().as_str(), "node.fractal_noise_per_copy");
     }
 }
 

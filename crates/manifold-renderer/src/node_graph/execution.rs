@@ -2128,7 +2128,7 @@ mod tests {
     // only the chosen branch's producer chain evaluates each frame.
     // These tests use FinalOutput as the live-set seed (the real
     // production trigger) and a `selected_branch`-configured
-    // RecordingNode as a stand-in for `node.mux_texture`, so the
+    // RecordingNode as a stand-in for `node.switch_texture`, so the
     // tests stay isolated from the mux's WGSL dispatch path. The
     // mux's own selector → port-name resolution is covered in
     // primitives/mux_texture.rs.

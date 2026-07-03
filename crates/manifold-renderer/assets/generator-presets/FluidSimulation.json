@@ -860,7 +860,7 @@
                 },
                 {
                   "id": 2,
-                  "typeId": "node.mux_scalar",
+                  "typeId": "node.switch_value",
                   "handle": "mux_turbulence",
                   "nodeId": "mux_turbulence",
                   "params": {
@@ -1006,7 +1006,7 @@
                 },
                 {
                   "id": 2,
-                  "typeId": "node.mux_scalar",
+                  "typeId": "node.switch_value",
                   "handle": "mux_rotation",
                   "nodeId": "mux_rotation",
                   "params": {
@@ -1126,7 +1126,7 @@
                 },
                 {
                   "id": 2,
-                  "typeId": "node.mux_scalar",
+                  "typeId": "node.switch_value",
                   "handle": "mux_slope",
                   "nodeId": "mux_slope",
                   "params": {
@@ -1256,7 +1256,7 @@
                 },
                 {
                   "id": 1,
-                  "typeId": "node.mux_scalar",
+                  "typeId": "node.switch_value",
                   "handle": "mux_mode3",
                   "nodeId": "mux_mode3",
                   "params": {
@@ -1390,7 +1390,7 @@
                 },
                 {
                   "id": 1,
-                  "typeId": "node.mux_scalar",
+                  "typeId": "node.switch_value",
                   "handle": "mux_mode4",
                   "nodeId": "mux_mode4",
                   "params": {
@@ -1728,7 +1728,7 @@
             "typeId": "node.wgsl_compute",
             "handle": "seed_pattern",
             "nodeId": "seed_pattern",
-            "wgslSource": "// @reset_gated\n// FluidSim2D seed pattern \u2014 open family.\n// Writes a single-channel density texture; node.seed_particles_from_texture\n// performs exact placement (every bright texel \u2192 a particle, sub-texel\n// jitter for stacks). Crisp hard-edged patterns matching the legacy Unity\n// FluidSim 7-pattern set: tight cluster, 6 H-lines, 6 V-lines, 3 rings,\n// diagonal X, Archimedean spiral, edge ring.\n// Add an 8th pattern by appending a `case` to pattern_density's switch.\n\nstruct U {\n    pattern: u32,\n    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var density: texture_storage_2d<r32float, write>;\n\nconst TAU: f32 = 6.28318530718;\n// Half-width of every line/ring/arm in UV space. 0.0025 \u2248 5 px on a\n// 1080-tall canvas \u2014 crisp at viewing distance, wide enough that the\n// downstream compact pass finds enough texels for ~2M-particle round-robin.\nconst LINE_W: f32 = 0.0025;\n\nfn cluster(uv: vec2<f32>) -> f32 {\n    // Tight central disk. Legacy was a CLT Gaussian (spread 0.052);\n    // the disk gives the same visual stack with crisper boundary.\n    let d = distance(uv, vec2<f32>(0.5));\n    return select(0.0, 1.0, d < 0.06);\n}\n\nfn h_lines(uv: vec2<f32>) -> f32 {\n    // 6 horizontal lines at y = (k + 0.5) / 6 \u2014 legacy parity.\n    let bands = 6.0;\n    let nearest_y = (floor(uv.y * bands) + 0.5) / bands;\n    return select(0.0, 1.0, abs(uv.y - nearest_y) < LINE_W);\n}\n\nfn v_lines(uv: vec2<f32>) -> f32 {\n    // 6 vertical lines at x = (k + 0.5) / 6.\n    let bands = 6.0;\n    let nearest_x = (floor(uv.x * bands) + 0.5) / bands;\n    return select(0.0, 1.0, abs(uv.x - nearest_x) < LINE_W);\n}\n\nfn rings(uv: vec2<f32>) -> f32 {\n    // 3 concentric rings at r = 0.1, 0.2, 0.3 \u2014 legacy parity.\n    let d = distance(uv, vec2<f32>(0.5));\n    let on_ring = abs(d - 0.1) < LINE_W\n        || abs(d - 0.2) < LINE_W\n        || abs(d - 0.3) < LINE_W;\n    return select(0.0, 1.0, on_ring);\n}\n\nfn cross_shape(uv: vec2<f32>) -> f32 {\n    // Diagonal X \u2014 two bands at y = x and y = 1 - x. Legacy parity (NOT a + sign).\n    // Multiply line width by sqrt(2) because the band runs at 45\u00b0, so the\n    // perpendicular distance threshold is wider than an axis-aligned line.\n    let line_w = LINE_W * 1.41421356;\n    return select(0.0, 1.0,\n        abs(uv.y - uv.x) < line_w || abs(uv.y - (1.0 - uv.x)) < line_w);\n}\n\nfn spiral(uv: vec2<f32>) -> f32 {\n    // Archimedean spiral, 4 turns from center to r = 0.4 \u2014 legacy parity.\n    // Locus: theta + k\u00b7TAU = r \u00b7 10 \u00b7 TAU (for integer k), with r \u2264 0.4.\n    let c = uv - vec2<f32>(0.5);\n    let r = length(c);\n    if r > 0.4 || r < 0.002 { return 0.0; }\n    let theta = atan2(c.y, c.x);\n    let k = round(r * 10.0 - theta / TAU);\n    let expected_theta = r * 10.0 * TAU - k * TAU;\n    let arc_dist = r * abs(theta - expected_theta);\n    return select(0.0, 1.0, arc_dist < LINE_W);\n}\n\nfn edge_ring(uv: vec2<f32>) -> f32 {\n    // Single ring at r = 0.45 \u2014 legacy parity.\n    let d = distance(uv, vec2<f32>(0.5));\n    return select(0.0, 1.0, abs(d - 0.45) < LINE_W);\n}\n\nfn pattern_density(uv: vec2<f32>, pat: u32) -> f32 {\n    switch pat {\n        case 0u: { return cluster(uv); }\n        case 1u: { return h_lines(uv); }\n        case 2u: { return v_lines(uv); }\n        case 3u: { return rings(uv); }\n        case 4u: { return cross_shape(uv); }\n        case 5u: { return spiral(uv); }\n        case 6u: { return edge_ring(uv); }\n        default: { return cluster(uv); }\n    }\n}\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = textureDimensions(density);\n    if id.x >= dims.x || id.y >= dims.y { return; }\n    let uv = (vec2<f32>(id.xy) + vec2<f32>(0.5)) / vec2<f32>(dims);\n    let d = pattern_density(uv, u.pattern);\n    textureStore(density, vec2<i32>(id.xy), vec4<f32>(d, 0.0, 0.0, 1.0));\n}\n",
+            "wgslSource": "// @reset_gated\n// FluidSim2D seed pattern \u2014 open family.\n// Writes a single-channel density texture; node.spawn_from_image\n// performs exact placement (every bright texel \u2192 a particle, sub-texel\n// jitter for stacks). Crisp hard-edged patterns matching the legacy Unity\n// FluidSim 7-pattern set: tight cluster, 6 H-lines, 6 V-lines, 3 rings,\n// diagonal X, Archimedean spiral, edge ring.\n// Add an 8th pattern by appending a `case` to pattern_density's switch.\n\nstruct U {\n    pattern: u32,\n    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,\n};\n\n@group(0) @binding(0) var<uniform> u: U;\n@group(0) @binding(1) var density: texture_storage_2d<r32float, write>;\n\nconst TAU: f32 = 6.28318530718;\n// Half-width of every line/ring/arm in UV space. 0.0025 \u2248 5 px on a\n// 1080-tall canvas \u2014 crisp at viewing distance, wide enough that the\n// downstream compact pass finds enough texels for ~2M-particle round-robin.\nconst LINE_W: f32 = 0.0025;\n\nfn cluster(uv: vec2<f32>) -> f32 {\n    // Tight central disk. Legacy was a CLT Gaussian (spread 0.052);\n    // the disk gives the same visual stack with crisper boundary.\n    let d = distance(uv, vec2<f32>(0.5));\n    return select(0.0, 1.0, d < 0.06);\n}\n\nfn h_lines(uv: vec2<f32>) -> f32 {\n    // 6 horizontal lines at y = (k + 0.5) / 6 \u2014 legacy parity.\n    let bands = 6.0;\n    let nearest_y = (floor(uv.y * bands) + 0.5) / bands;\n    return select(0.0, 1.0, abs(uv.y - nearest_y) < LINE_W);\n}\n\nfn v_lines(uv: vec2<f32>) -> f32 {\n    // 6 vertical lines at x = (k + 0.5) / 6.\n    let bands = 6.0;\n    let nearest_x = (floor(uv.x * bands) + 0.5) / bands;\n    return select(0.0, 1.0, abs(uv.x - nearest_x) < LINE_W);\n}\n\nfn rings(uv: vec2<f32>) -> f32 {\n    // 3 concentric rings at r = 0.1, 0.2, 0.3 \u2014 legacy parity.\n    let d = distance(uv, vec2<f32>(0.5));\n    let on_ring = abs(d - 0.1) < LINE_W\n        || abs(d - 0.2) < LINE_W\n        || abs(d - 0.3) < LINE_W;\n    return select(0.0, 1.0, on_ring);\n}\n\nfn cross_shape(uv: vec2<f32>) -> f32 {\n    // Diagonal X \u2014 two bands at y = x and y = 1 - x. Legacy parity (NOT a + sign).\n    // Multiply line width by sqrt(2) because the band runs at 45\u00b0, so the\n    // perpendicular distance threshold is wider than an axis-aligned line.\n    let line_w = LINE_W * 1.41421356;\n    return select(0.0, 1.0,\n        abs(uv.y - uv.x) < line_w || abs(uv.y - (1.0 - uv.x)) < line_w);\n}\n\nfn spiral(uv: vec2<f32>) -> f32 {\n    // Archimedean spiral, 4 turns from center to r = 0.4 \u2014 legacy parity.\n    // Locus: theta + k\u00b7TAU = r \u00b7 10 \u00b7 TAU (for integer k), with r \u2264 0.4.\n    let c = uv - vec2<f32>(0.5);\n    let r = length(c);\n    if r > 0.4 || r < 0.002 { return 0.0; }\n    let theta = atan2(c.y, c.x);\n    let k = round(r * 10.0 - theta / TAU);\n    let expected_theta = r * 10.0 * TAU - k * TAU;\n    let arc_dist = r * abs(theta - expected_theta);\n    return select(0.0, 1.0, arc_dist < LINE_W);\n}\n\nfn edge_ring(uv: vec2<f32>) -> f32 {\n    // Single ring at r = 0.45 \u2014 legacy parity.\n    let d = distance(uv, vec2<f32>(0.5));\n    return select(0.0, 1.0, abs(d - 0.45) < LINE_W);\n}\n\nfn pattern_density(uv: vec2<f32>, pat: u32) -> f32 {\n    switch pat {\n        case 0u: { return cluster(uv); }\n        case 1u: { return h_lines(uv); }\n        case 2u: { return v_lines(uv); }\n        case 3u: { return rings(uv); }\n        case 4u: { return cross_shape(uv); }\n        case 5u: { return spiral(uv); }\n        case 6u: { return edge_ring(uv); }\n        default: { return cluster(uv); }\n    }\n}\n\n@compute @workgroup_size(16, 16)\nfn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n    let dims = textureDimensions(density);\n    if id.x >= dims.x || id.y >= dims.y { return; }\n    let uv = (vec2<f32>(id.xy) + vec2<f32>(0.5)) / vec2<f32>(dims);\n    let d = pattern_density(uv, u.pattern);\n    textureStore(density, vec2<i32>(id.xy), vec4<f32>(d, 0.0, 0.0, 1.0));\n}\n",
             "params": {
               "pattern": {
                 "type": "Float",
@@ -1738,7 +1738,7 @@
           },
           {
             "id": 3,
-            "typeId": "node.seed_particles_from_texture",
+            "typeId": "node.spawn_from_image",
             "handle": "seed_spawn",
             "nodeId": "seed_spawn",
             "params": {
@@ -2096,7 +2096,7 @@
           },
           {
             "id": 1,
-            "typeId": "node.scatter_particles",
+            "typeId": "node.draw_particles",
             "handle": "splat",
             "nodeId": "splat",
             "params": {
@@ -2356,7 +2356,7 @@
           },
           {
             "id": 2,
-            "typeId": "node.sample_texture_at_particles",
+            "typeId": "node.sample_image_at_particles",
             "handle": "sample_forces",
             "nodeId": "sample_forces",
             "params": {
@@ -2368,7 +2368,7 @@
           },
           {
             "id": 3,
-            "typeId": "node.simplex_noise_force_at_particles",
+            "typeId": "node.turbulence",
             "handle": "noise_force",
             "nodeId": "noise_force",
             "params": {
@@ -2412,7 +2412,7 @@
           },
           {
             "id": 5,
-            "typeId": "node.euler_step_particles",
+            "typeId": "node.move_particles",
             "handle": "euler",
             "nodeId": "euler",
             "params": {
@@ -2428,7 +2428,7 @@
           },
           {
             "id": 6,
-            "typeId": "node.wrap_particles_torus",
+            "typeId": "node.wrap_around",
             "handle": "wrap",
             "nodeId": "wrap",
             "params": {
@@ -2440,7 +2440,7 @@
           },
           {
             "id": 7,
-            "typeId": "node.apply_radial_burst_to_particles",
+            "typeId": "node.add_burst",
             "handle": "apply_inject",
             "nodeId": "apply_inject",
             "params": {

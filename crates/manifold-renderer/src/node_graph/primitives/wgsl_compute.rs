@@ -126,7 +126,7 @@ pub struct WgslCompute {
     /// Output port names that should be sized to canvas dims by the
     /// chain pre-allocator. Currently every `Array<atomic<u32>>`
     /// accumulator output gets this treatment, matching the convention
-    /// `node.scatter_particles` uses for its `accum` port. Returned
+    /// `node.draw_particles` uses for its `accum` port. Returned
     /// from `canvas_sized_array_outputs()`.
     canvas_sized_outputs: Vec<&'static str>,
     /// JSON-installed per-output-port canvas-relative size as
@@ -495,7 +495,7 @@ impl WgslCompute {
             })
             .collect();
         // Atomic-u32 accumulator outputs default to canvas-sized
-        // allocation, matching node.scatter_particles' convention. The
+        // allocation, matching node.draw_particles' convention. The
         // dynamic node has no way to express custom capacity yet —
         // when that's needed, surface it as a JSON-side hint or per-port
         // metadata. For BlackHole the canvas-sized default is exactly
@@ -1857,7 +1857,7 @@ impl EffectNode for WgslCompute {
         // re-dispatch only on its integer edges (+ first frame); between resets the
         // output (a persistent pooled resource) keeps the last pattern, which the
         // equally-gated consumer ignores until the next reset. Unwired ⇒ every frame
-        // (no behaviour change). Mirrors the gate on node.seed_particles_from_texture.
+        // (no behaviour change). Mirrors the gate on node.spawn_from_image.
         if self.reset_gated
             && let Some(ParamValue::Float(v)) = ctx.inputs.scalar(RESET_TRIGGER_PORT)
         {
@@ -1873,7 +1873,7 @@ impl EffectNode for WgslCompute {
                 // what it expects — intentional retention, NOT stale-as-bug. Harmless
                 // for a non-aliased kernel (the guard doesn't fire there anyway). The
                 // retention is real only if the aliased buffer persists between
-                // frames — pair this with `node.seed_particles seed_mode=OnceOnReset`.
+                // frames — pair this with `node.spawn_particles seed_mode=OnceOnReset`.
                 ctx.mark_gpu_accessed();
                 return;
             }

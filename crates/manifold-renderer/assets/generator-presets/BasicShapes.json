@@ -243,7 +243,7 @@
     {
       "id": 20,
       "nodeId": "shape_mux",
-      "typeId": "node.mux_texture",
+      "typeId": "node.switch_texture",
       "handle": "shape_mux",
       "params": {
         "selector": {
@@ -280,7 +280,7 @@
           {
             "id": 2,
             "nodeId": "modulus_table",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "modulus_table",
             "params": {
               "in_0": {
@@ -402,7 +402,7 @@
           {
             "id": 13,
             "nodeId": "gated_shape_idx",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "gated_shape_idx",
             "params": {
               "in_0": {
@@ -547,7 +547,7 @@
           {
             "id": 8,
             "nodeId": "target_angle_table",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "target_angle_table",
             "params": {
               "in_0": {
@@ -710,7 +710,7 @@
           {
             "id": 11,
             "nodeId": "is_wireframe_on",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "is_wireframe_on",
             "params": {
               "in_0": {
@@ -735,7 +735,7 @@
           {
             "id": 12,
             "nodeId": "off_wireframe",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "off_wireframe",
             "params": {
               "in_0": {
@@ -760,7 +760,7 @@
           {
             "id": 14,
             "nodeId": "gated_is_wireframe",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "gated_is_wireframe",
             "params": {
               "in_0": {
@@ -860,7 +860,7 @@
           {
             "id": 15,
             "nodeId": "gated_target_angle",
-            "typeId": "node.mux_scalar",
+            "typeId": "node.switch_value",
             "handle": "gated_target_angle",
             "params": {
               "in_0": {

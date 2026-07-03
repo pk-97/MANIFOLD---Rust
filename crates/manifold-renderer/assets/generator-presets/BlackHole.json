@@ -458,7 +458,7 @@
     {
       "id": 2,
       "nodeId": "seed",
-      "typeId": "node.seed_particles",
+      "typeId": "node.spawn_particles",
       "handle": "seed",
       "params": {
         "active_count": {

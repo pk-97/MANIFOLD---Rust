@@ -1,7 +1,7 @@
 {
   "version": 2,
   "name": "DigitalPlants",
-  "description": "DigitalPlants — 400×400 grid of cubes lifted onto a morphing cylinder ↔ torus surface, with simplex-noise stem displacement, FBM petal fracturing, per-instance hash rotation, neighbour smoothing, and cel-shaded cube rendering with PCF shadows. First decomposition of the topology-wrap generator family: the graph wires node.grid_uv_field → per-instance noise/math → cyl + tor wrap fields → lerp_instance_fields → rotation jitter → neighbor_smooth → digital_plants_render. Every legacy compute-shader step is reproduced as a curated primitive — node.simplex_per_instance, node.fbm_per_instance, node.array_math (with ShapePowClip / MirrorRamp / ScaleOffset ops), node.cylinder_wrap_field, node.torus_wrap_field, node.instance_position_jitter, node.instance_rotation_jitter, node.lerp_instance_fields — so the same vocabulary can be reused by future generators (stem fields, ring fields, plant variants).\n\nThe `morph` slider continuously interpolates between cylinder-stem and torus-flower topologies via node.lerp_instance_fields (NOT node.mux_array — selection vs interpolation matters here). `base_radius` is multiplied by (1 - morph) for the cylinder branch so it shrinks toward zero in flower mode, matching legacy. `instance_scale` follows `box_scale * (1 + morph * 3)` so cube size grows with petal density.\n\nCamera params are exposed in DEGREES on the outer card (cam_orbit / cam_tilt / cam_fov) and converted to RADIANS by three node.scale_offset_value nodes before reaching node.digital_plants_render. The cam_orbit_rad node adds π/2 to compensate for the orbit convention difference between the legacy compute and the new render primitive (legacy looks down +Z at orbit=0; render primitive looks down +X — adding π/2 rotates back to legacy's view).",
+  "description": "DigitalPlants — 400×400 grid of cubes lifted onto a morphing cylinder ↔ torus surface, with simplex-noise stem displacement, FBM petal fracturing, per-instance hash rotation, neighbour smoothing, and cel-shaded cube rendering with PCF shadows. First decomposition of the topology-wrap generator family: the graph wires node.grid_uv_field → per-instance noise/math → cyl + tor wrap fields → blend_copies → rotation jitter → neighbor_smooth → digital_plants_render. Every legacy compute-shader step is reproduced as a curated primitive — node.simplex_noise_per_copy, node.fractal_noise_per_copy, node.array_math (with ShapePowClip / MirrorRamp / ScaleOffset ops), node.cylinder_wrap_field, node.torus_wrap_field, node.position_jitter, node.rotation_jitter, node.blend_copies — so the same vocabulary can be reused by future generators (stem fields, ring fields, plant variants).\n\nThe `morph` slider continuously interpolates between cylinder-stem and torus-flower topologies via node.blend_copies (NOT node.switch_array — selection vs interpolation matters here). `base_radius` is multiplied by (1 - morph) for the cylinder branch so it shrinks toward zero in flower mode, matching legacy. `instance_scale` follows `box_scale * (1 + morph * 3)` so cube size grows with petal density.\n\nCamera params are exposed in DEGREES on the outer card (cam_orbit / cam_tilt / cam_fov) and converted to RADIANS by three node.scale_offset_value nodes before reaching node.digital_plants_render. The cam_orbit_rad node adds π/2 to compensate for the orbit convention difference between the legacy compute and the new render primitive (legacy looks down +Z at orbit=0; render primitive looks down +X — adding π/2 rotates back to legacy's view).",
   "presetMetadata": {
     "id": "DigitalPlants",
     "displayName": "Digital Plants",
@@ -110,7 +110,7 @@
         "op": { "type": "Enum",  "value": 2 }
       } },
 
-    { "id": 5, "typeId": "node.simplex_per_instance", "handle": "stem_noise", "nodeId": "stem_noise",
+    { "id": 5, "typeId": "node.simplex_noise_per_copy", "handle": "stem_noise", "nodeId": "stem_noise",
       "params": {
         "scale":    { "type": "Float", "value": 3.0 },
         "z":        { "type": "Float", "value": 0.0 },
@@ -141,7 +141,7 @@
         "op": { "type": "Enum",  "value": 2 }
       } },
 
-    { "id": 9, "typeId": "node.simplex_per_instance", "handle": "anim_noise", "nodeId": "anim_noise",
+    { "id": 9, "typeId": "node.simplex_noise_per_copy", "handle": "anim_noise", "nodeId": "anim_noise",
       "params": {
         "scale":    { "type": "Float", "value": 6.0 },
         "z":        { "type": "Float", "value": 0.0 },
@@ -248,7 +248,7 @@
         "instance_scale": { "type": "Float", "value": 0.025 }
       } },
 
-    { "id": 22, "typeId": "node.instance_position_jitter", "handle": "cyl_jitter", "nodeId": "cyl_jitter",
+    { "id": 22, "typeId": "node.position_jitter", "handle": "cyl_jitter", "nodeId": "cyl_jitter",
       "params": {
         "frequency":      { "type": "Float", "value": 20.0 },
         "amplitude":      { "type": "Float", "value": 0.01 },
@@ -257,7 +257,7 @@
         "axis_seed":      { "type": "Float", "value": 100.0 }
       } },
 
-    { "id": 23, "typeId": "node.fbm_per_instance", "handle": "petal_noise", "nodeId": "petal_noise",
+    { "id": 23, "typeId": "node.fractal_noise_per_copy", "handle": "petal_noise", "nodeId": "petal_noise",
       "params": {
         "scale":      { "type": "Float", "value": 2.0 },
         "z":          { "type": "Float", "value": 0.5 },
@@ -306,7 +306,7 @@
         "offset": { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 29, "typeId": "node.instance_position_jitter", "handle": "tor_jitter", "nodeId": "tor_jitter",
+    { "id": 29, "typeId": "node.position_jitter", "handle": "tor_jitter", "nodeId": "tor_jitter",
       "params": {
         "frequency":      { "type": "Float", "value": 3.0 },
         "amplitude":      { "type": "Float", "value": 0.02 },
@@ -315,12 +315,12 @@
         "axis_seed":      { "type": "Float", "value": 50.0 }
       } },
 
-    { "id": 30, "typeId": "node.lerp_instance_fields", "handle": "morph_lerp", "nodeId": "morph_lerp",
+    { "id": 30, "typeId": "node.blend_copies", "handle": "morph_lerp", "nodeId": "morph_lerp",
       "params": {
         "t": { "type": "Float", "value": 0.0 }
       } },
 
-    { "id": 31, "typeId": "node.instance_rotation_jitter", "handle": "rot_jitter", "nodeId": "rot_jitter",
+    { "id": 31, "typeId": "node.rotation_jitter", "handle": "rot_jitter", "nodeId": "rot_jitter",
       "params": {
         "amplitude": { "type": "Float", "value": 0.2 }
       } },

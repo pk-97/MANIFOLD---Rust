@@ -629,7 +629,7 @@
           {
             "id": 22,
             "nodeId": "depth_dnn",
-            "typeId": "node.depth_estimate_midas",
+            "typeId": "node.depth_map",
             "handle": "depth_dnn",
             "params": {
               "analysis_max_dim": {
@@ -800,7 +800,7 @@
           {
             "id": 30,
             "nodeId": "mask_mux",
-            "typeId": "node.mux_texture",
+            "typeId": "node.switch_texture",
             "handle": "mask_mux",
             "params": {
               "selector": {

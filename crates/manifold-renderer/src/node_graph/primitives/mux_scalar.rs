@@ -1,4 +1,4 @@
-//! `node.mux_scalar` — N-way scalar selector.
+//! `node.switch_value` — N-way scalar selector.
 //!
 //! Same shape as [`crate::node_graph::primitives::MuxTexture`] but for
 //! `Scalar(F32)` ports. Picks one of `in_0..in_7` based on the
@@ -11,7 +11,7 @@ use crate::node_graph::primitive::Primitive;
 
 crate::primitive! {
     name: MuxScalar,
-    type_id: "node.mux_scalar",
+    type_id: "node.switch_value",
     purpose: "N-way scalar selector. Routes one of in_0..in_7 (Scalar F32) to the output based on the selector input (rounded, clamped). Every input is port-shadows-param — wire dynamic sources into the ports, or set the inline `in_N` params for static option tables (curated frequency rates, side counts, gate constants). Useful for trigger-driven parameter switching.",
     inputs: {
         selector: ScalarF32 required,
@@ -51,7 +51,7 @@ crate::primitive! {
     summary: "Picks one of several incoming values and passes it through, chosen by a selector number. Use it to flip between sources live.",
     category: Routing,
     role: Filter,
-    aliases: ["switch", "mux", "selector", "Switch CHOP"],
+    aliases: ["switch", "mux", "mux scalar", "selector", "Switch CHOP"],
 }
 
 const MUX_SCALAR_INPUT_PORT_NAMES: [&str; 8] = [
@@ -160,6 +160,6 @@ mod tests {
     fn mux_scalar_registers_with_palette() {
         let prim = MuxScalar::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.mux_scalar");
+        assert_eq!(node.type_id().as_str(), "node.switch_value");
     }
 }

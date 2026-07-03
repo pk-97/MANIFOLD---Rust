@@ -38,7 +38,7 @@ struct Uniforms {
 crate::primitive! {
     name: TorusWrapField,
     type_id: "node.torus_wrap_field",
-    purpose: "Lift an Array<vec2<f32>> of UVs onto a torus surface, emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, phi = uv.y * TAU, pos = ((R + r·cos φ)·cos θ, r·sin φ, (R + r·cos φ)·sin θ). Optional Array<f32> normal_disp pushes each instance along the outward surface normal — drive from node.fbm_per_instance × petal-amplitude for flower-style petal displacement. `fold_angle` rotates the whole field around the X axis (port-shadow, drive from time for continuous animation). Generic across rings, halos, donuts, flower discs, gateways.",
+    purpose: "Lift an Array<vec2<f32>> of UVs onto a torus surface, emit Array<InstanceTransform>. For each UV: theta = uv.x * TAU, phi = uv.y * TAU, pos = ((R + r·cos φ)·cos θ, r·sin φ, (R + r·cos φ)·sin θ). Optional Array<f32> normal_disp pushes each instance along the outward surface normal — drive from node.fractal_noise_per_copy × petal-amplitude for flower-style petal displacement. `fold_angle` rotates the whole field around the X axis (port-shadow, drive from time for continuous animation). Generic across rings, halos, donuts, flower discs, gateways.",
     inputs: {
         uv: Array([f32; 2]) required,
         normal_disp: Array(f32) optional,
@@ -84,7 +84,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Output capacity follows the `uv` input. Pair upstream with node.fbm_per_instance scaled by an outer-card petal-amplitude (via node.array_math::ScaleOffset) to drive `normal_disp` for flower-petal-style fracturing. `instance_scale` is written into pos_scale.w — wire the SAME scale source into both this and node.cylinder_wrap_field when muxing across a morph so .w stays continuous. `fold_angle` is the X-axis rotation of the entire field about the origin — generic enough to be useful for any toroidal field that wants continuous rotation animation.",
+    composition_notes: "Output capacity follows the `uv` input. Pair upstream with node.fractal_noise_per_copy scaled by an outer-card petal-amplitude (via node.array_math::ScaleOffset) to drive `normal_disp` for flower-petal-style fracturing. `instance_scale` is written into pos_scale.w — wire the SAME scale source into both this and node.cylinder_wrap_field when muxing across a morph so .w stays continuous. `fold_angle` is the X-axis rotation of the entire field about the origin — generic enough to be useful for any toroidal field that wants continuous rotation animation.",
     examples: [],
     picker: { label: "Torus Wrap Field", category: Atom },
     summary: "Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface.",

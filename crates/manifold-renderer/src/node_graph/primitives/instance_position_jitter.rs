@@ -1,4 +1,4 @@
-//! `node.instance_position_jitter` — add 3-axis 3D-simplex position
+//! `node.position_jitter` — add 3-axis 3D-simplex position
 //! noise to each instance's `pos.xyz`, leave `pos.w` (scale) and
 //! `rot_pad` unchanged.
 //!
@@ -48,7 +48,7 @@ const NOISE_COMMON: &str = include_str!("../../generators/shaders/noise_common.w
 
 crate::primitive! {
     name: InstancePositionJitter,
-    type_id: "node.instance_position_jitter",
+    type_id: "node.position_jitter",
     purpose: "Add 3-axis 3D-simplex position noise to each InstanceTransform's pos.xyz, leaving scale and rotation unchanged. base = (uv.x*freq + time_uvx_drift, uv.y*freq, z_coord); pos += amp · (simplex(base), simplex(base + (seed,0,0)), simplex(base + (0,seed,0))). Generic — any instanced field that wants organic per-instance position wobble. Reproduces both legacy DigitalPlants detail- and micro-noise patterns when parameterised.",
     inputs: {
         instances: Array(InstanceTransform) required,
@@ -104,13 +104,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Output capacity follows the `instances` input. Drive `time_uvx_drift` and `z_coord` from time wires (typically `time * 0.2` and `time * 0.15` for slow drift) to animate the noise field. `axis_seed` decorrelates the three axis samples — pick any value large enough to land in a different noise cell (100 / 50 are the legacy DigitalPlants values for the detail and micro passes respectively). Pair upstream with node.grid_uv_field for the UV input. The original instance rotations are preserved verbatim — pair with node.instance_rotation_jitter downstream if rotation jitter is also wanted.",
+    composition_notes: "Output capacity follows the `instances` input. Drive `time_uvx_drift` and `z_coord` from time wires (typically `time * 0.2` and `time * 0.15` for slow drift) to animate the noise field. `axis_seed` decorrelates the three axis samples — pick any value large enough to land in a different noise cell (100 / 50 are the legacy DigitalPlants values for the detail and micro passes respectively). Pair upstream with node.grid_uv_field for the UV input. The original instance rotations are preserved verbatim — pair with node.rotation_jitter downstream if rotation jitter is also wanted.",
     examples: [],
     picker: { label: "Position Jitter", category: Atom },
     summary: "Adds a random offset to each copy's position with noise, so a perfect grid of copies looks more natural and scattered.",
     category: Particles2D,
     role: Filter,
-    aliases: ["position jitter", "offset", "scatter", "noise"],
+    aliases: ["position jitter", "instance position jitter", "offset", "scatter", "noise"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/instance_position_jitter_body.wgsl"),
     wgsl_includes: [NOISE_COMMON],
@@ -166,9 +166,9 @@ impl Primitive for InstancePositionJitter {
             // simplex3d). instance_position_jitter.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.instance_position_jitter standalone codegen"),
+                    .expect("node.position_jitter standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.instance_position_jitter",
+                "node.position_jitter",
             )
         });
 
@@ -209,7 +209,7 @@ impl Primitive for InstancePositionJitter {
                 },
             ],
             [count.div_ceil(256), 1, 1],
-            "node.instance_position_jitter",
+            "node.position_jitter",
         );
     }
 }
@@ -225,7 +225,7 @@ mod tests {
         use crate::node_graph::ports::{ArrayType, PortType, ScalarType};
         let inst_layout = ArrayType::of_known::<InstanceTransform>();
         let vec2_layout = ArrayType::of_known::<[f32; 2]>();
-        assert_eq!(InstancePositionJitter::TYPE_ID, "node.instance_position_jitter");
+        assert_eq!(InstancePositionJitter::TYPE_ID, "node.position_jitter");
 
         let inst_in = InstancePositionJitter::INPUTS
             .iter()
@@ -280,7 +280,7 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = InstancePositionJitter::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.instance_position_jitter");
+        assert_eq!(node.type_id().as_str(), "node.position_jitter");
     }
 }
 

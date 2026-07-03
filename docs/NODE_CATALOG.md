@@ -190,39 +190,39 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 
 | Node | type_id | role | summary |
 |---|---|---|---|
+| Add Burst (radial) | `node.add_burst` | Filter | Pushes particles outward from a point in a burst, like an explosion or shockwave on a hit. |
 | Anti-Clump Particles | `node.anti_clump_particles` | Filter | Nudges particles apart where they bunch up, keeping the cloud evenly spread instead of collapsing into blobs. |
-| Add Burst (radial) | `node.apply_radial_burst_to_particles` | Filter | Pushes particles outward from a point in a burst, like an explosion or shockwave on a hit. |
-| Spread Out (diffuse) | `node.array_diffuse_particles` | Filter | Gives each particle a small random kick so a tight clump slowly spreads apart. Adds a bit of life and scatter. |
-| Move Particles (Euler step) | `node.euler_step_particles` | Filter | Moves every particle one step along its velocity each frame. The basic integrator that makes a particle system actually move. |
-| Fractal Noise (per copy) | `node.fbm_per_instance` | Filter | Gives every copy its own fractal-noise value, a smooth random number per copy you can drive size, colour, or motion with. |
-| Position Jitter | `node.instance_position_jitter` | Filter | Adds a random offset to each copy's position with noise, so a perfect grid of copies looks more natural and scattered. |
-| Rotation Jitter | `node.instance_rotation_jitter` | Filter | Adds a random twist to each copy's rotation, so a field of copies face slightly different ways instead of lining up. |
-| Blend Copies | `node.lerp_instance_fields` | Filter | Blends two arrangements of copies together by an amount, so you can morph a field of copies from one layout to another. |
-| Explosion Force | `node.radial_burst_force_field` | Source | Makes a force field that pushes outward from a point, the field you feed into a particle move to drive an explosion. |
-| Sample Image for Particles | `node.sample_texture_at_particles` | Filter | Reads the image colour underneath each particle, so the particles can pick up the look of whatever they fly over. |
-| Draw Particles (scatter) | `node.scatter_particles` | Filter | Splats a cloud of particles onto a buffer, building up an image from where they land. Pair it with Resolve Scatter to read the result back. |
-| Spawn Particles | `node.seed_particles` | Source | Creates a fresh batch of particles to start a simulation, with a count you set. The first node in a particle chain. |
-| Spawn From Image | `node.seed_particles_from_texture` | Source | Creates particles placed by the bright areas of an image, so a picture or mask becomes a cloud of points. Spawn density follows the image. |
-| Turbulence (simplex) | `node.simplex_noise_force_at_particles` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
-| Simplex Noise (per copy) | `node.simplex_per_instance` | Filter | Gives every copy its own simplex-noise value, a smooth random number per copy for varying the look across a field. |
-| Wrap Around (torus) | `node.wrap_particles_torus` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
+| Blend Copies | `node.blend_copies` | Filter | Blends two arrangements of copies together by an amount, so you can morph a field of copies from one layout to another. |
+| Draw Particles (scatter) | `node.draw_particles` | Filter | Splats a cloud of particles onto a buffer, building up an image from where they land. Pair it with Resolve Scatter to read the result back. |
+| Explosion Force | `node.explosion_force` | Source | Makes a force field that pushes outward from a point, the field you feed into a particle move to drive an explosion. |
+| Fractal Noise (per copy) | `node.fractal_noise_per_copy` | Filter | Gives every copy its own fractal-noise value, a smooth random number per copy you can drive size, colour, or motion with. |
+| Move Particles (Euler step) | `node.move_particles` | Filter | Moves every particle one step along its velocity each frame. The basic integrator that makes a particle system actually move. |
+| Position Jitter | `node.position_jitter` | Filter | Adds a random offset to each copy's position with noise, so a perfect grid of copies looks more natural and scattered. |
+| Rotation Jitter | `node.rotation_jitter` | Filter | Adds a random twist to each copy's rotation, so a field of copies face slightly different ways instead of lining up. |
+| Sample Image for Particles | `node.sample_image_at_particles` | Filter | Reads the image colour underneath each particle, so the particles can pick up the look of whatever they fly over. |
+| Simplex Noise (per copy) | `node.simplex_noise_per_copy` | Filter | Gives every copy its own simplex-noise value, a smooth random number per copy for varying the look across a field. |
+| Spawn From Image | `node.spawn_from_image` | Source | Creates particles placed by the bright areas of an image, so a picture or mask becomes a cloud of points. Spawn density follows the image. |
+| Spawn Particles | `node.spawn_particles` | Source | Creates a fresh batch of particles to start a simulation, with a count you set. The first node in a particle chain. |
+| Spread Out (diffuse) | `node.spread_out` | Filter | Gives each particle a small random kick so a tight clump slowly spreads apart. Adds a bit of life and scatter. |
+| Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
+| Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
 ### Particles 3D (12)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
-| Add Burst (3D, radial) | `node.apply_radial_burst_3d_to_particles` | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
-| Keep In Box (3D) | `node.container_bounds_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
-| Push From Walls (3D) | `node.container_repel_force_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
-| Swirl Force (3D, curl) | `node.curl_slope_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
-| Spread Out (3D diffuse) | `node.diffuse_force_3d_at_particles` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
-| Move Particles (3D, Euler step) | `node.euler_step_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
+| Add Burst (3D, radial) | `node.add_burst_3d` | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
+| Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
+| Draw Particles (camera) | `node.draw_particles_camera` | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
 | — | `node.fluid_project_scatter_2d` | Filter | Projects 3D particles through a camera and splats them to 2D. The older name for Draw Particles (camera). |
-| Sample Volume for Particles (3D) | `node.sample_texture_3d_at_particles` | Filter | Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through. |
-| Draw Particles (3D scatter) | `node.scatter_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
-| Draw Particles (camera) | `node.scatter_particles_camera` | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
-| Turbulence (3D, simplex) | `node.simplex_noise_force_3d_at_particles` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
+| Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
+| Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
+| Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
+| Sample Volume for Particles (3D) | `node.sample_volume_at_particles` | Filter | Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through. |
+| Spread Out (3D diffuse) | `node.spread_out_3d` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
+| Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
+| Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
 
 ### Control (20)
 
@@ -254,19 +254,19 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Filter Detections | `node.array_filter_detections` | Filter | Drops junk detections that are too small, too stretched, or cover too much of the frame, before they reach the tracker. Stops a HUD from locking onto the horiz… |
-| Blob Tracker | `node.blob_detect_ffi` | Filter | Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals. |
-| Blob Overlay | `node.blob_overlay_render` | Filter | Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking. |
+| Blob Overlay | `node.blob_overlay` | Filter | Draws boxes around each tracked blob on top of the image, so you can see what the Blob Tracker is finding. A debug view for blob tracking. |
+| Blob Tracker | `node.blob_tracker` | Filter | Finds bright blobs in the image and tracks them frame to frame, handing back their positions and sizes as a list. The base for blob-reactive visuals. |
 | Color Sample | `node.color_sample` | Control | Reads the colour at a single point in the image and outputs its RGB and brightness. An eyedropper you can drive an effect from. |
-| Depth Map | `node.depth_estimate_midas` | Filter | Estimates a depth map from any flat image with an AI model, so nearer things read bright and far things dark. Feed it into a blur or displace to fake 3D from 2… |
+| Depth Map | `node.depth_map` | Filter | Estimates a depth map from any flat image with an AI model, so nearer things read bright and far things dark. Feed it into a blur or displace to fake 3D from 2… |
 | Draw Connections | `node.draw_connections` | Filter | Draws dashed lines linking tracked objects that are near each other, with an optional dot at the middle of each link. |
 | Draw Dots | `node.draw_dots` | Filter | Draws a small glowing dot at the centre of every tracked object. |
 | Draw Gauge | `node.draw_gauge` | Filter | Draws a small readout bar under every tracked object that fills up as the object gets bigger. |
 | Draw Markers | `node.draw_markers` | Filter | Draws a marker on every tracked object: corner brackets around it or a crosshair at its centre. The building block for tracking overlays. |
 | Draw Ticks | `node.draw_ticks` | Filter | Draws small measurement-style tick marks beside every tracked object. |
 | Luminance | `node.luminance` | Control | Measures the average brightness of the image and outputs it as a single number. Wire it into a knob to make an effect react to how bright the picture is. |
-| Optical Flow | `node.optical_flow_estimate` | Filter | Measures how the image is moving between frames and outputs that motion as a flow field. Drive a displace or advect with it to push pixels along the motion. |
+| Optical Flow | `node.optical_flow` | Filter | Measures how the image is moving between frames and outputs that motion as a flow field. Drive a displace or advect with it to push pixels along the motion. |
 | Peak | `node.peak` | Control | Measures the brightest point in the image and outputs it as a single number. Reacts to the highlights rather than the overall brightness. |
-| Person Mask | `node.person_segment` | Filter | Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them. |
+| Person Mask | `node.person_mask` | Filter | Finds people in the image with an AI model and outputs a mask that is white on the person and black elsewhere. Use it to cut someone out or key effects to them. |
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 
 ### Math & Convert (19)
@@ -298,9 +298,9 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Downsample | `node.downsample` | Filter | Shrinks the image by a whole-number factor with a box filter, trading detail for speed. Good before a heavy effect or for a blocky look. |
-| Switch (array) | `node.mux_array` | Filter | Picks one of several incoming lists and passes it through, chosen by a selector number. |
-| Switch (value) | `node.mux_scalar` | Filter | Picks one of several incoming values and passes it through, chosen by a selector number. Use it to flip between sources live. |
-| Switch (texture) | `node.mux_texture` | Filter | Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in. |
+| Switch (array) | `node.switch_array` | Filter | Picks one of several incoming lists and passes it through, chosen by a selector number. |
+| Switch (texture) | `node.switch_texture` | Filter | Picks one of several incoming images and passes it through, chosen by a selector number. The input count grows as you wire more in. |
+| Switch (value) | `node.switch_value` | Filter | Picks one of several incoming values and passes it through, chosen by a selector number. Use it to flip between sources live. |
 | WGSL Compute | `node.wgsl_compute` | Filter | A blank compute node you write your own WGSL shader into. The escape hatch for effects the built-in nodes don't cover, where the shader defines its own inputs … |
 | — | `system.final_output` | Sink | The final image leaving a chain or generator. Wired in automatically. |
 | — | `system.generator_input` | Source | The per-frame context a generator starts from, with time, beat, aspect, and trigger count. Wired in automatically. |

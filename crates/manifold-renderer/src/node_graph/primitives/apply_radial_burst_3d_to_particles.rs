@@ -1,7 +1,7 @@
-//! `node.apply_radial_burst_3d_to_particles` — per-particle 3D injection
+//! `node.add_burst_3d` — per-particle 3D injection
 //! burst around one of four hardcoded tetrahedron-vertex zones.
 //!
-//! The 3D sibling of `node.apply_radial_burst_to_particles`. Where the
+//! The 3D sibling of `node.add_burst`. Where the
 //! 2D atom pushes around a free `(point_x, point_y)`, the 3D burst
 //! selects one of four fixed tetrahedron-vertex zones via `inject_index`
 //! (-1 = off) and applies a noise-perturbed radial push plus a
@@ -9,7 +9,7 @@
 //! injection step of the legacy fused `node.fluid_simulate_3d`.
 //!
 //! `dt = delta * 60` is baked in (frame-rate-normalised like
-//! `node.euler_step_particles_3d`); time drives the noise-perturbation
+//! `node.move_particles_3d`); time drives the noise-perturbation
 //! phase. Place last in the per-particle position chain.
 
 use manifold_gpu::GpuBinding;
@@ -39,8 +39,8 @@ struct Burst3DUniforms {
 
 crate::primitive! {
     name: ApplyRadialBurst3DToParticles,
-    type_id: "node.apply_radial_burst_3d_to_particles",
-    purpose: "Per-particle 3D injection burst around one of four hardcoded tetrahedron-vertex zones. inject_index < 0 disables it; 0..3 selects a zone. Applies a noise-perturbed radial push + vortex-ring tangent (within radius 0.25, quartic falloff, attack/decay envelope from inject_phase) directly to position.xyz. The 3D sibling of node.apply_radial_burst_to_particles; decomposed from the injection step of the fused node.fluid_simulate_3d.",
+    type_id: "node.add_burst_3d",
+    purpose: "Per-particle 3D injection burst around one of four hardcoded tetrahedron-vertex zones. inject_index < 0 disables it; 0..3 selects a zone. Applies a noise-perturbed radial push + vortex-ring tangent (within radius 0.25, quartic falloff, attack/decay envelope from inject_phase) directly to position.xyz. The 3D sibling of node.add_burst; decomposed from the injection step of the fused node.fluid_simulate_3d.",
     inputs: {
         in: Array(Particle) required,
         inject_index: ScalarF32 optional,
@@ -91,7 +91,7 @@ crate::primitive! {
     summary: "Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit.",
     category: Particles3D,
     role: Filter,
-    aliases: ["add burst 3d", "explosion 3d", "inject"],
+    aliases: ["add burst 3d", "apply radial burst 3d to particles", "explosion 3d", "inject"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/apply_radial_burst_3d_to_particles_body.wgsl"),
     derived_uniforms: ["time2", "dt_scaled"],
@@ -160,9 +160,9 @@ impl Primitive for ApplyRadialBurst3DToParticles {
             // inlined). apply_radial_burst_3d_to_particles.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.apply_radial_burst_3d_to_particles standalone codegen"),
+                    .expect("node.add_burst_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.apply_radial_burst_3d_to_particles",
+                "node.add_burst_3d",
             )
         });
 
@@ -198,7 +198,7 @@ impl Primitive for ApplyRadialBurst3DToParticles {
                 },
             ],
             [active_count.div_ceil(256), 1, 1],
-            "node.apply_radial_burst_3d_to_particles",
+            "node.add_burst_3d",
         );
     }
 }
@@ -216,7 +216,7 @@ mod tests {
 
         assert_eq!(
             ApplyRadialBurst3DToParticles::TYPE_ID,
-            "node.apply_radial_burst_3d_to_particles"
+            "node.add_burst_3d"
         );
         let names: Vec<&str> = ApplyRadialBurst3DToParticles::INPUTS
             .iter()
@@ -257,7 +257,7 @@ mod tests {
         let node: &dyn EffectNode = &prim;
         assert_eq!(
             node.type_id().as_str(),
-            "node.apply_radial_burst_3d_to_particles"
+            "node.add_burst_3d"
         );
     }
 }
