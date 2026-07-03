@@ -39,6 +39,8 @@ prerequisites aren't shipped, stop.
 | SIMULATIONS_DESIGN | MATERIAL M1–M5; REALTIME_3D P1 for scene composition | full (written to standard 2026-07-03) |
 | IMPORT_DESIGN | per phase: P1–P3 need REALTIME_3D P1 + MATERIAL; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 needs VOCAB (agent half: MCP) | full (written to standard 2026-07-03) |
 | COMMERCIALIZATION_DESIGN (commerce infra: license, watermark, updater, telemetry) | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 | conformance |
+| DJ_PERFORMANCE_DESIGN | ABLETON_SHOW_SYNC; PERFORM_SURFACE P1; MEDIA_BACKEND P1 | conformance |
+| PRO_DJ_LINK_DESIGN | PERFORM_SURFACE P1; sync-source seam (timecode/Link infra) | conformance |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is IN PROGRESS (phases 0–6 done) — finish
 in flight, don't re-queue. **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -125,6 +127,11 @@ Grouped in waves; within a wave, items are independent and order is free.
     telemetry upload).
 20. First-hour pass: bundled demo project + starter presets; `.als` import is the
     first hour (BUSINESS_PLAN §7) — re-weighting, not new design.
+
+**Unranked post-v1.0 candidates (Peter ranks; prereqs are all inside v1.0):**
+- DJ_PERFORMANCE (library/crate-compile/two-deck orchestration over Ableton) and
+  PRO_DJ_LINK (native CDJ sync + track-triggered scores). Both are v1.x-eligible
+  and highly demoable — strong campaign material alongside the import funnels.
 
 **Background track (long-running, parallel to everything):**
 - VULKAN phases 1–4 = **the v1.5 release**. Start gates on v1.0 stability in the
