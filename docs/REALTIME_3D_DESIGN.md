@@ -201,11 +201,10 @@ use focused tests per the scope rule.
 
 ## 8. Deferred (with triggers)
 
-- **glTF/.glb import** — own design when scheduled (the strategic one). Scope then:
-  mesh+material+transform list → scene objects; Principled→pbr_material mapping;
-  rigid TRS animation with the **beat-retimed playhead** (`beat_ramp` scrubs the
-  animation clock — the beats-native killer); vertex-cache playback (the Houdini/sim
-  bridge, feeds the queued simulations discussion); skeletal last.
+- **glTF/.glb import** — **designed: `docs/IMPORT_DESIGN.md`** (scenes,
+  Principled→pbr_material, rigid animation with the beat-retimed playhead,
+  MDD/PC2 vertex caches, texture-set drops, TD + Resolume migration funnels);
+  skeletal stays deferred there.
 - **Hierarchy/parenting** — when import lands or when totemed set pieces demand it;
   composes transforms, no type changes (D1).
 - **Instanced objects in scenes** (`instances_n` optional input per object group) —

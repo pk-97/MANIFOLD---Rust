@@ -37,6 +37,7 @@ prerequisites aren't shipped, stop.
 | MATERIAL_SYSTEM_DESIGN | VOCAB apply (renames its renderer ids) | conformance |
 | REALTIME_3D_DESIGN | MATERIAL_SYSTEM M1–M5 (its P0); VOCAB apply | full (written to standard 2026-07-03) |
 | SIMULATIONS_DESIGN | MATERIAL M1–M5; REALTIME_3D P1 for scene composition | full (written to standard 2026-07-03) |
+| IMPORT_DESIGN | per phase: P1–P3 need REALTIME_3D P1 + MATERIAL; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 needs VOCAB (agent half: MCP) | full (written to standard 2026-07-03) |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is IN PROGRESS (phases 0–6 done) — finish
 in flight, don't re-queue. **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -52,6 +53,7 @@ PERFORM_SURFACE P1 ───→ GIG_RESILIENCE P3   (arming targets the chrome-h
 VULKAN ───────────────→ ML_NODES ONNX tier · MEDIA_BACKEND §6 (Vulkan-era handoff)
 MATERIAL_SYSTEM ──────→ REALTIME_3D  (its P0; glTF import later rides REALTIME_3D)
 REALTIME_3D P1 ───────→ SIMULATIONS  (sims render into render_scene; cloth can smoke-test earlier)
+REALTIME_3D P1 ───────→ IMPORT P1–P3 · SESSION_MODE + MEDIA_BACKEND P2 → IMPORT P5 (Resolume) · MCP → IMPORT P6 agent half
 ```
 
 Everything else is edge-free and orders by judgment only.
@@ -114,12 +116,12 @@ Grouped in waves; within a wave, items are independent and order is free.
 The hold on MATERIAL_SYSTEM is resolved: the 3D-scene discussion produced
 `docs/REALTIME_3D_DESIGN.md`, which consumes the material contract unchanged.
 Sequence within the track: MATERIAL M1–M5 → REALTIME_3D P1–P7 →
-SIMULATIONS P1–P4 (`docs/SIMULATIONS_DESIGN.md` — XPBD cloth/liquids; its lane-1
-baked playback lives in the future import design). The track is independent of
-waves 0–3 (renderer-internal) and can run parallel to them once VOCAB apply has
-landed; Peter ranks when it starts. glTF/Blender import (strategic, per Peter)
-gets its own design when scheduled and lands on top of REALTIME_3D +
-SIMULATIONS lane 1.
+SIMULATIONS P1–P4 (`docs/SIMULATIONS_DESIGN.md` — XPBD cloth/liquids) →
+IMPORT P1–P4 (`docs/IMPORT_DESIGN.md` — glTF scenes, beat-retimed animation,
+MDD/PC2 caches = SIMULATIONS lane 1, texture sets). IMPORT P5 (Resolume funnel)
+and P6 (TD funnel) hang off the main waves instead (session mode / MCP). The
+track is independent of waves 0–3 (renderer-internal) and can run parallel to
+them once VOCAB apply has landed; Peter ranks when it starts.
 
 ## 5. Maintenance
 

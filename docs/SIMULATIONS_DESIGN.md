@@ -38,9 +38,8 @@ this doc and execution.
 - **D1 — Three lanes, ordered 1→2→3 (Peter approved).**
   **Lane 1 — baked playback:** Houdini/Blender-quality sims (incl. photoreal FLIP
   water) baked to per-frame vertex caches, streamed as mesh sequences, **beat-retimed**
-  (`beat_ramp` scrubs the playhead; loop a bar; freeze on a trigger). Lives in the
-  future glTF/baked-content import design (REALTIME_3D §8) — this doc pins direction
-  only. **Lane 2 — live XPBD (this doc's body).** **Lane 3 — volume rendering**
+  (`beat_ramp` scrubs the playhead; loop a bar; freeze on a trigger). Designed:
+  `docs/IMPORT_DESIGN.md` P3 (MDD/PC2 streaming + `node.mesh_sequence`). **Lane 2 — live XPBD (this doc's body).** **Lane 3 — volume rendering**
   (raymarched smoke/pyro + baked VDB) — deferred §8; baked VDB may cover most stage
   needs first.
 - **D2 — One solver, families as constraint recipes. No monoliths.** XPBD
