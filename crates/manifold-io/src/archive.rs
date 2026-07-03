@@ -97,8 +97,47 @@ pub fn save_v2_archive(
 
     let mut manifest = manifest.unwrap_or_default();
 
-    // Write to temp file, then rename for atomic save (Unity line 200)
-    let temp_path = format!("{}.tmp", path);
+    // Update the manifest BEFORE writing the zip: insert the current save,
+    // apply the auto-save cap, and derive the set of history hashes that
+    // survive. The copy below drops blobs for pruned entries, so the manifest
+    // cap and the stored bytes stay in lockstep — without this, autosave
+    // journaling would grow the archive unboundedly while the manifest lied
+    // about it.
+    let now = chrono_now_iso8601();
+    manifest.format_version = 2;
+    manifest.name = project_name.to_string();
+    manifest.current_hash = hash.clone();
+    manifest.saved_at = now.clone();
+
+    // Add current save to history (Unity line 209)
+    manifest.history.insert(
+        0,
+        SnapshotEntry {
+            hash: hash.clone(),
+            timestamp: now,
+            label: label.map(|l| l.to_string()),
+            is_auto,
+        },
+    );
+
+    // Prune auto-saves (Unity line 218)
+    prune_history_list(&mut manifest.history, DEFAULT_MAX_AUTO_SAVES);
+
+    let live_hashes: HashSet<String> = manifest.history.iter().map(|e| e.hash.clone()).collect();
+
+    // Write to temp file, then rename for atomic save (Unity line 200).
+    // The temp name is unique per writer (pid + nanos) so a background
+    // autosave and a manual save hitting the same archive concurrently can
+    // never collide on the temp file — each rename stays atomic on its own.
+    let temp_path = format!(
+        "{}.tmp.{}.{}",
+        path,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or_default()
+    );
 
     let write_result = (|| -> Result<(), String> {
         let file = std::fs::File::create(&temp_path)
@@ -108,17 +147,21 @@ pub fn save_v2_archive(
         let options_no_compress =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
-        // Copy existing history entries from old archive (Unity lines 186-190)
+        // Copy existing history entries from old archive (Unity lines 186-190).
+        // Entries pruned out of the manifest above are dropped here, keeping
+        // the archive's byte size bounded by the auto-save cap.
         let copied_entries = if Path::new(path).exists() && is_v2_archive(path) {
-            copy_history_entries(path, &mut zip)?
+            copy_history_entries(path, &mut zip, &live_hashes)?
         } else {
             HashSet::new()
         };
 
-        // Push previous state to history (Unity lines 192-196)
-        // Skip if already copied from the existing archive to avoid duplicate entries
+        // Push previous state to history (Unity lines 192-196).
+        // Skip if already copied from the existing archive (duplicate entry)
+        // or if the previous save was itself just pruned out of the manifest.
         if let (Some(prev_bytes), Some(prev_hash)) = (&previous_project_bytes, &previous_hash)
             && !prev_hash.is_empty()
+            && live_hashes.contains(prev_hash.as_str())
         {
             let entry_name = format!("{}{}.json.gz", HISTORY_FOLDER, prev_hash);
             if !copied_entries.contains(&entry_name) {
@@ -131,27 +174,6 @@ pub fn save_v2_archive(
             .map_err(|e| format!("Failed to start project entry: {e}"))?;
         zip.write_all(project_bytes)
             .map_err(|e| format!("Failed to write project entry: {e}"))?;
-
-        // Update manifest (Unity lines 202-215)
-        let now = chrono_now_iso8601();
-        manifest.format_version = 2;
-        manifest.name = project_name.to_string();
-        manifest.current_hash = hash.clone();
-        manifest.saved_at = now.clone();
-
-        // Add current save to history (Unity line 209)
-        manifest.history.insert(
-            0,
-            SnapshotEntry {
-                hash: hash.clone(),
-                timestamp: now,
-                label: label.map(|l| l.to_string()),
-                is_auto,
-            },
-        );
-
-        // Prune auto-saves (Unity line 218)
-        prune_history_list(&mut manifest.history, DEFAULT_MAX_AUTO_SAVES);
 
         // Write manifest.json (Unity lines 220-223)
         let manifest_json = serde_json::to_string_pretty(&manifest)
@@ -210,6 +232,26 @@ pub fn read_manifest(path: &str) -> Option<ProjectManifest> {
     let mut json = String::new();
     entry.read_to_string(&mut json).ok()?;
     serde_json::from_str(&json).ok()
+}
+
+/// Read one history snapshot's project JSON out of a V2 archive by its
+/// manifest hash. History entries are stored gzip-compressed at
+/// `history/<hash>.json.gz` (see `save_v2_archive`); this gunzips and
+/// returns the raw project JSON, ready for `loader::load_project_from_json`.
+pub fn read_history_snapshot(path: &str, hash: &str) -> Result<String, String> {
+    if hash.is_empty() {
+        return Err("Snapshot hash cannot be empty".to_string());
+    }
+    let entry_name = format!("{}{}.json.gz", HISTORY_FOLDER, hash);
+    let compressed = read_entry_bytes(path, &entry_name)
+        .ok_or_else(|| format!("Snapshot {hash} not found in {path}"))?;
+
+    let mut decoder = flate2::read::GzDecoder::new(Cursor::new(compressed));
+    let mut json = String::new();
+    decoder
+        .read_to_string(&mut json)
+        .map_err(|e| format!("Failed to gunzip snapshot {hash}: {e}"))?;
+    Ok(json)
 }
 
 /// Check if a file is a valid V2 project file. Fast — reads manifest only.
@@ -289,12 +331,15 @@ fn read_entry_bytes(archive_path: &str, entry_name: &str) -> Option<Vec<u8>> {
     Some(data)
 }
 
-/// Copy all history/ entries from source archive to destination zip writer.
+/// Copy history/ entries from source archive to destination zip writer,
+/// skipping entries whose hash is no longer in the (already-pruned) manifest —
+/// pruned snapshots lose their blob, keeping archive size bounded.
 /// Returns the set of entry names that were copied (used to avoid duplicates).
 /// Port of C# ProjectArchive.CopyHistoryEntries (lines 547-564).
 fn copy_history_entries<W: Write + std::io::Seek>(
     source_path: &str,
     dest_zip: &mut ZipWriter<W>,
+    live_hashes: &HashSet<String>,
 ) -> Result<HashSet<String>, String> {
     let file_bytes =
         std::fs::read(source_path).map_err(|e| format!("Failed to read source archive: {e}"))?;
@@ -313,6 +358,17 @@ fn copy_history_entries<W: Write + std::io::Seek>(
         let name = entry.name().to_string();
 
         if !name.starts_with(HISTORY_FOLDER) {
+            continue;
+        }
+
+        // Drop blobs for entries pruned out of the manifest. Entry names are
+        // `history/<hash>.json.gz` (see save); anything unparseable is kept —
+        // never silently discard bytes we don't understand.
+        if let Some(entry_hash) = name
+            .strip_prefix(HISTORY_FOLDER)
+            .and_then(|s| s.strip_suffix(".json.gz"))
+            && !live_hashes.contains(entry_hash)
+        {
             continue;
         }
 
@@ -335,25 +391,31 @@ fn copy_history_entries<W: Write + std::io::Seek>(
 }
 
 /// Prune auto-save entries from the history list (in-place).
-/// Keeps all manual saves and up to `max_auto_saves` auto-saves.
+/// Keeps all manual saves and the `max_auto_saves` MOST RECENT auto-saves.
 /// Returns the number of entries removed.
-/// Port of C# ProjectArchive.PruneHistoryList (lines 571-590).
+///
+/// Port of C# ProjectArchive.PruneHistoryList (lines 571-590) — with the
+/// iteration direction corrected for this struct's ordering. `history` is
+/// newest-first (`save_v2_archive` inserts at index 0); the Unity port
+/// counted autos from the END of the list, which on a newest-first list
+/// kept the OLDEST autos and discarded the newest. Dead code until autosave
+/// started writing `is_auto = true` entries; fixed when it went live.
 fn prune_history_list(history: &mut Vec<SnapshotEntry>, max_auto_saves: usize) -> usize {
     let mut auto_count: usize = 0;
     let mut removed: usize = 0;
 
-    // Iterate from end to beginning (oldest first), matching Unity
-    let mut i = history.len();
-    while i > 0 {
-        i -= 1;
-        if !history[i].is_auto {
-            continue;
+    // Walk newest → oldest; keep the first `max_auto_saves` autos we meet.
+    let mut i = 0;
+    while i < history.len() {
+        if history[i].is_auto {
+            auto_count += 1;
+            if auto_count > max_auto_saves {
+                history.remove(i);
+                removed += 1;
+                continue; // index now points at the next entry
+            }
         }
-        auto_count += 1;
-        if auto_count > max_auto_saves {
-            history.remove(i);
-            removed += 1;
-        }
+        i += 1;
     }
 
     removed

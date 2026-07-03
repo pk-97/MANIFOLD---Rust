@@ -61,6 +61,34 @@ pub fn load_project(path: &Path) -> Result<Project, LoadError> {
     Ok(project)
 }
 
+/// Load a history snapshot out of a V2 archive by its manifest hash.
+///
+/// Runs the exact same pipeline as [`load_project`]'s V2 path — migration,
+/// deserialize, path resolution against the archive's directory, and full
+/// post-load validation — so a restored snapshot behaves identically to an
+/// opened project. Snapshot hashes come from the archive manifest
+/// (`crate::archive::read_manifest`).
+pub fn load_project_snapshot(archive_path: &Path, hash: &str) -> Result<Project, LoadError> {
+    let path_str = archive_path.to_string_lossy().to_string();
+    let json =
+        crate::archive::read_history_snapshot(&path_str, hash).map_err(LoadError::Io)?;
+
+    let mut project = load_project_from_json(&json)?;
+    log::info!(
+        "[Loader] Loaded history snapshot {hash} from {}",
+        archive_path.display()
+    );
+
+    // Resolve media paths relative to the archive location, same as a normal
+    // V2 open (the snapshot was saved from this same archive directory).
+    project.last_saved_path = path_str.clone();
+    PathResolver::resolve_all(&mut project, &path_str);
+
+    run_post_load_validation(&mut project);
+
+    Ok(project)
+}
+
 /// Extract `project.json` from a V2 ZIP archive.
 fn extract_json_from_zip(bytes: &[u8]) -> Result<String, LoadError> {
     let cursor = std::io::Cursor::new(bytes);

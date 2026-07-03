@@ -639,6 +639,28 @@ impl Application {
             }
         }
 
+        // 1a. Debounced background autosave (GIG_RESILIENCE_DESIGN §6). Runs
+        // after the drain so it sees the latest data_version + dirty flag;
+        // never reached in perform mode (early return above) — that IS the
+        // D5 "autosave timer parks" behavior.
+        self.tick_autosave();
+
+        // 1a2. One-shot crash notice (G10): the previous session exited
+        // uncleanly. Shown after the first frames have painted so the dialog
+        // sits over a real window, never on a perform surface.
+        if self.show_crash_notice && self.frame_count >= 2 {
+            self.show_crash_notice = false;
+            let log_dir = std::env::var_os("HOME")
+                .map(|h| format!("{}/Library/Logs/com.latentspace.manifold", h.to_string_lossy()))
+                .unwrap_or_default();
+            crate::alerts::info(
+                "MANIFOLD crashed last session",
+                &format!(
+                    "Crash log + last autosave available.\n\nCrash logs: {log_dir}\nSnapshots: File → Revert to Snapshot"
+                ),
+            );
+        }
+
         // 1b2. Drive per-clip audio-layer waveform decode/cache: gather the live
         // audio clips and let the cache background-decode any new ones, drain
         // finished peaks, and evict departed clips. The peaks are attached to
@@ -801,6 +823,19 @@ impl Application {
                 }
                 M::Save => actions.push(P::SaveProject),
                 M::SaveAs => actions.push(P::SaveProjectAs),
+                M::RestoreSnapshot(hash) => {
+                    if crate::alerts::confirm(
+                        "Restore snapshot",
+                        "Replace the current project state with this snapshot?\n\n\
+                         The file on disk is untouched until the next save, and \
+                         the replaced state is journaled to history on that save.",
+                    ) {
+                        self.restore_history_snapshot(&hash);
+                    }
+                }
+                M::OpenSnapshotCopy(hash) => {
+                    self.open_history_snapshot_copy(&hash);
+                }
                 M::ExportVideo => actions.push(P::ExportVideo),
                 M::ExportFrame => actions.push(P::ExportFrame),
                 M::Perform => actions.push(P::EnterPerformMode),

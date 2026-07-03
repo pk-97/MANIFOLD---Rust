@@ -321,7 +321,12 @@ impl ProjectIOService {
                 }
             }
             Err(e) => {
+                // G4: load failures were log-only — surface them.
                 log::error!("[ProjectIO] Failed to open project: {e}");
+                crate::alerts::error(
+                    "Couldn't Open Project",
+                    &format!("MANIFOLD couldn't open\n{}\n\n{e}", path.display()),
+                );
                 ProjectIOAction::default()
             }
         }
@@ -432,7 +437,17 @@ impl ProjectIOService {
                     }
                 }
                 Err(e) => {
+                    // G4: a silent Save As failure means believing work is
+                    // on disk when it isn't. Log AND surface it.
                     log::error!("[ProjectIO] Save failed: {e}");
+                    crate::alerts::error(
+                        "Save Failed",
+                        &format!(
+                            "MANIFOLD couldn't save to\n{}\n\n{e}\n\n\
+                             Your work is NOT on disk — check free space and try again.",
+                            path.display()
+                        ),
+                    );
                     ProjectIOAction::default()
                 }
             }
