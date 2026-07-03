@@ -1,7 +1,9 @@
 # Import — Blender/glTF Scenes, Baked Caches, Texture Sets, TD & Resolume Funnels
 
 **Status: APPROVED design, not built · 2026-07-03 · Fable**
-**Prerequisites (per phase): P1–P2 need REALTIME_3D P1 + MATERIAL M1–M5. P3 pairs with
+**Prerequisites (per phase): P1–P2 need REALTIME_3D P1 + MATERIAL M1–M5 **and M6**
+(albedo/metallic maps + alpha cutout — MATERIAL §11; without M6 a textured glTF
+imports colourless and foliage renders as opaque cards; see §8 addendum). P3 pairs with
 MEDIA_BACKEND streaming discipline. P4 needs only MATERIAL. P5 needs SESSION_MODE +
 MEDIA_BACKEND P2 (DXV). P6 needs VOCAB apply; its agent half needs MCP_INTERFACE.**
 **Execution contract: read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting
@@ -181,3 +183,31 @@ P2–P6 focused per the scope rule.
 - **Resolume advanced (dashboards, autopilot sequences)** — demand-driven.
 - **Import in reverse (export .glb of MANIFOLD scenes)** — different product
   question; not queued.
+
+## 8. Addendum 2026-07-04 — material-mapping corrections + fixtures (pre-execution)
+
+Verified against the shipped Material system (as-built record: MATERIAL §11.1).
+Corrections to this doc's §1 audit and P1 scope:
+
+- **§1 audit row "PBR texture inputs" was design-stage optimism.** As-built,
+  `node.render_mesh` has `envmap` / `normal_map` / `roughness_map` only
+  (`render_3d_mesh.rs:67–75`) — no `base_color_map`, no `metallic_map`. **MATERIAL
+  M6 is therefore a hard P1 prerequisite** (now in the header and
+  DESIGN_BUILD_ORDER).
+- **glTF `alphaMode` mapping (P1):** `OPAQUE` → `Opaque`; `MASK` → `Mask` +
+  `alphaCutoff` → `alpha_cutoff`; `BLEND` → `Mask` (cutoff 0.5) **with an
+  import-report warning** (MATERIAL M6-D3 — smooth transparency deferred).
+  `doubleSided` imports as a no-op with a report note: the engine rasterizes both
+  faces already and back-face lighting is corrected by M6-D4.
+- **glTF normal maps are tangent-space; the engine's `normal_map` is world-space**
+  (MATERIAL M6-D5). P1 skips them — each skip is a report line (D9), not a silent
+  drop. Revive per M6-D5's trigger.
+- **Fixtures live in `tests/fixtures/gltf/`** (sibling of the `.manifold` fixtures).
+  Two tiers: (a) Khronos glTF sample models for conformance, per the P1 brief;
+  (b) the **canonical real-world fixture**: the CC0 Stewartia monadelpha photoscan
+  (sketchfab.com/3d-models/cc0-himesyara-stewartia-monadelpha-cae7436738674d3586930c206f51073b)
+  — multi-material, alpha-masked foliage, real photoscan vertex counts; exactly the
+  asset class the wave exists for. CC0 = committable. **Sketchfab downloads need an
+  account login, so Peter downloads it by hand** (glTF format) into that directory
+  before P1 starts; P1's gate renders it and eyeballs against Sketchfab's own
+  preview (per the visual-question oracle: a PNG, not a green test).

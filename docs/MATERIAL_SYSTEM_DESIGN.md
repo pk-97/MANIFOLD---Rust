@@ -1,6 +1,6 @@
 # Material System — Design Doc
 
-**Status:** Design accepted 2026-05-27, awaiting implementation — **un-held 2026-07-03**: the realtime 3D-scene design landed as `docs/REALTIME_3D_DESIGN.md` and consumes this contract unchanged (its P0 = tranches M1–M5 here; its multi-light/shadow phases exercise §7's extension points). This doc executes first.
+**Status:** Tranches **M1–M5 SHIPPED** (verified in-repo 2026-07-04: `material.rs` + all four atoms + renderer integration + MetallicGlass/NestedCubes migrated — see §11 for the as-built record and where it deviates from §5). **Tranche M6 (§11) is APPROVED, not built** — surface-texture completion + alpha cutout for imported assets, added 2026-07-04 for the glTF wave. Design accepted 2026-05-27; un-held 2026-07-03 by `docs/REALTIME_3D_DESIGN.md`, which consumes this contract unchanged.
 
 **Companion docs:** [`NODE_CATALOG.md`](NODE_CATALOG.md), [`DECOMPOSING_GENERATORS.md`](DECOMPOSING_GENERATORS.md), [`ADDING_PRIMITIVES.md`](ADDING_PRIMITIVES.md).
 **Execution contract:** read `docs/DESIGN_DOC_STANDARD.md` §5–§6 and §8 before starting any phase. Conformance-hardened: written 2026-05-27, the oldest active design — `render_3d_mesh`/`render_instanced_3d_mesh` are renamed to `node.render_mesh`/`node.render_copies` by the vocab-audit apply; run the §8.3 pre-flight and read the migration table before touching any node id in this doc.
@@ -453,6 +453,101 @@ Atoms ship as `node.{kind}_material` — `node.unlit_material`, `node.phong_mate
 The `Material` port type is `node_graph::Material` (struct) + `PortType::Material` (variant). Material kinds are `MaterialKind::Unlit / Phong / Pbr / Cel`.
 
 WGSL shaders are `shaders/material_{kind}.wgsl` (prefix grouping in the shaders directory).
+
+---
+
+## 11. Addendum 2026-07-04 — as-built record + Tranche M6 (surface completion for imported assets)
+
+Written for the glTF import wave (`docs/IMPORT_DESIGN.md` P1 hard-depends on M6 —
+a glTF material without its albedo texture is not that material, and foliage
+without alpha cutout renders as opaque rectangles).
+
+### 11.1 As-built record (verified 2026-07-04)
+
+Where the shipped implementation deviates from §5, the repo is authoritative:
+
+| §5 said | As-built | Anchor |
+|---|---|---|
+| Four shader files `material_{kind}.wgsl` | ONE file with per-kind fragment entry points `fs_unlit` / `fs_phong` / `fs_pbr` / `fs_cel` (+ `fs_world_pos` / `fs_world_normal`), pipeline-per-kind selects the entry point | `primitives/shaders/render_3d_mesh.wgsl:150,157,174,232,250,256` |
+| Renderer texture inputs incl. `base_color_map`, `metallic_map` | Shipped WITHOUT them. Inputs are: `envmap`, `normal_map`, `roughness_map` only | `primitives/render_3d_mesh.rs:67–75` |
+| `normal_map` = tangent-space perturbation | As-built contract is a **world-space signed normal** (fits the procedural heightfield chain it was built for; does NOT fit glTF's tangent-space maps) | `render_3d_mesh.rs:66` (purpose), `render_3d_mesh.wgsl:124` |
+| — | Optional texture sampling is gated by a `texture_flags` vec4 uniform (x = normal_map, roughness gate in `resolve_normal`/`resolve_roughness`); unwired maps bind a 1×1 dummy | `render_3d_mesh.wgsl:75–100,125,136` |
+| — | **No cull-mode configuration exists anywhere in `manifold-gpu`** (`rg -i cull crates/manifold-gpu/src` → zero hits). Metal's default is `MTLCullModeNone`, so all meshes already rasterize both faces — de-facto double-sided, but back faces are lit with the front normal (wrong) | `manifold-gpu` (negative search, 2026-07-04) |
+
+Post-vocab ids in play: `node.render_mesh`, `node.render_copies`,
+`node.bake_environment` (`bake_equirect_envmap.rs:30`), `node.orbit_camera`,
+`node.spawn_from_image` (`seed_particles_from_texture.rs:55`).
+
+### 11.2 M6 decisions
+
+- **M6-D1 — `base_color_map` + `metallic_map` land on both renderers.** Optional
+  `Texture2D` inputs on `node.render_mesh` and `node.render_copies`, gated through
+  the existing `texture_flags` pattern (`.z` = base_color_map, `.w` = metallic_map).
+  `base_color_map.rgb × material.base_color.rgb` = surface albedo;
+  `base_color_map.a × material.base_color.a` = surface opacity (the cutout source);
+  `metallic_map.r` replaces scalar `metallic` (same shape as `roughness_map.r`).
+  Sampled in ALL lit entry points and `fs_unlit` (albedo + opacity apply to unlit
+  too — foliage cards are often unlit). ⚠ VERIFY-AT-IMPL: colour space — whether
+  image decode delivers sRGB-decoded or raw values; read the texture-import path in
+  `manifold-media` (`image_renderer.rs`) before choosing sample-time conversion.
+- **M6-D2 — Alpha cutout is a Material property, not a renderer param.** The
+  `Material` struct (`node_graph/material.rs`) gains `alpha_mode: AlphaMode`
+  (`Opaque | Mask`) + `alpha_cutoff: f32` (default 0.5) — the §7 "new fields,
+  defaulted, no version-break" seam, exercised as designed. All four material atoms
+  gain the two outer-card params (enum + float, port-shadowed). Every fragment entry
+  point applies: `if alpha_mode == Mask && resolved_alpha < alpha_cutoff { discard; }`.
+  Rejected: a renderer-side cutout param — glTF puts `alphaMode`/`alphaCutoff` on the
+  material, and so do we; one import mapping, no impedance.
+- **M6-D3 — Blend (smooth transparency) stays DEFERRED.** Real transparency needs
+  draw-order/OIT design; Mask covers foliage, decals, and cutout UI. glTF `BLEND`
+  materials import as Mask (cutoff 0.5) with an import-report warning
+  (IMPORT_DESIGN D9). Trigger to revive: a hero asset that genuinely reads wrong as
+  cutout.
+- **M6-D4 — Double-sided stays the only mode; back-face lighting gets fixed.** No
+  cull-mode API is added (nothing needs single-sided today; revisit only if the perf
+  HUD ever shows overdraw pain). The lit entry points take `@builtin(front_facing)`
+  and negate the resolved normal on back faces, so a leaf's underside shades
+  correctly instead of going black. Rejected: adding a `double_sided` material flag
+  now — it would be a no-op flag on top of an engine that can't cull; flags that
+  defer decisions are a named anti-pattern.
+- **M6-D5 — Tangent-space normal maps stay out.** `MeshVertex` carries no tangents
+  and the as-built `normal_map` contract is world-space (§11.1). glTF import P1
+  skips tangent-space normal maps and lists each skip in the import report.
+  Trigger: a hero import that visibly needs them → tangent generation at import
+  time + a `normal_space` mode on the renderer, as its own designed slice.
+
+### 11.3 Tranche M6 brief (one session)
+
+- **Entry state:** M1–M5 anchors above re-verified (`rg -n 'type_id' primitives/pbr_material.rs`
+  → `node.pbr_material`; `rg -n 'fn fs_' primitives/shaders/render_3d_mesh.wgsl` → six
+  entry points; `rg -in cull crates/manifold-gpu/src` → zero hits).
+- **Read-back:** this addendum whole, §5 + §7 of this doc,
+  `docs/MANIFOLD_GPU_ARCHITECTURE.md` uniform-alignment rules (the uniform block
+  grows: `alpha_cutoff: f32` + an `alpha_mode: u32` — mind 16-byte alignment),
+  `render_3d_mesh.rs` + its wgsl end-to-end, the alpha-standardisation memory
+  (compositor expects premultiplied; producers aren't — cutout discards instead of
+  blending, so no premultiply question arises; do NOT premultiply in the shader).
+- **Deliverables:** `AlphaMode` enum + 2 struct fields + defaults (`material.rs`);
+  2 params × 4 atoms; 2 inputs × 2 renderers + `texture_flags.zw` + uniform fields;
+  discard + front-facing-flip in `render_3d_mesh.wgsl` and
+  `render_instanced_3d_mesh.wgsl`; gpu_tests.
+- **Gate (positive):** gpu_test — checkerboard-alpha `base_color_map` on a quad,
+  Mask mode: transparent texels leave clear-colour, opaque texels shade (value-level
+  readback both sides of the cutoff). gpu_test — `base_color_map` modulation: known
+  texel × known base_color = expected RGB. gpu_test — camera behind a single
+  triangle: back face is LIT (front-facing flip proof), not silhouette-black.
+  Existing bundled 3D presets: zero PNG diffs (all new inputs optional, all new
+  params defaulted to Opaque).
+- **Gate (negative):** `rg -i cull crates/manifold-gpu/src` still zero hits;
+  `rg 'premultipl' primitives/shaders/render_3d_mesh.wgsl` zero hits;
+  `cargo run -p manifold-renderer --bin check-presets` clean.
+- **Forbidden moves:** adding a blend pipeline "while at it" (M6-D3) · premultiplying
+  alpha in the mesh shader · a `double_sided`/cull param (M6-D4) · synthesizing the
+  uniform layout from memory instead of reading the existing block · touching
+  `render_lines`.
+- **Test scope:** full workspace sweep at end of tranche — the `Material` struct
+  rides a port type; struct-on-the-wire changes are infrastructure per the scope
+  rule.
 
 ---
 

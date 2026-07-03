@@ -138,7 +138,11 @@ design) · `Arc<Mutex>` anywhere · viewport/gizmo state in `manifold-core` (it'
 editor state) · gizmo writes bypassing `EditingService` · shadow/fog work when the
 feature is unwired (unwired = zero cost, checked, not assumed).
 
-- **P0 — MATERIAL_SYSTEM M1–M5** (its own doc, un-held; run its tranches as written).
+- **P0 — MATERIAL_SYSTEM M1–M5** ✅ SHIPPED (verified in-repo 2026-07-04; as-built
+  record in MATERIAL §11.1 — note the single-wgsl entry-point layout, which
+  `render_scene`'s per-kind pipelines should reuse, not re-file). **MATERIAL M6**
+  (albedo/metallic maps + alpha cutout + back-face fix, MATERIAL §11) slots before
+  or parallel to P1 — P1 does not depend on it, IMPORT P1 does.
 - **P1 — `render_scene` + multi-light (no shadows).** The dynamic node, object
   groups, shared depth, `light_0..3` accumulation in the lit material shaders
   (MATERIAL §7 multi-light extension point). Read-back: this doc whole, MATERIAL §5/§7,
@@ -214,3 +218,37 @@ use focused tests per the scope rule.
 - **Spot lights / cubemap point shadows** — LightMode extension, v2.
 - **Hierarchy panel / in-viewport mesh editing** — Blender territory; MANIFOLD is the
   stage, not the modeler. Revisit only with strong user pull.
+
+## 9. Addendum 2026-07-04 — `node.spawn_from_mesh` (mesh-explode vocabulary)
+
+Added for the glTF wave: seed particles from a mesh's geometry so an imported model
+can dissolve/explode into the existing 3D particle stack
+(`node.spawn_from_image` → this, but sourced from `Array(MeshVertex)` instead of a
+texture). **No dependency on `render_scene` or on import** — `Array(MeshVertex)` and
+`Array(Particle)` both exist today; this atom can land in any session, including
+before P1.
+
+- **Precedent (shape this like):** `seed_particles_from_texture.rs`
+  (`node.spawn_from_image`, `seed_particles_from_texture.rs:55`) — same
+  `max_capacity` param, same optional `active_count` / `frame_seed`, same
+  recompute-on-integer-edge gate input, same `particles: Array(Particle)` output
+  (the shared type the 3D steppers consume — `euler_step_particles_3d.rs:37`).
+- **Inputs:** `vertices: Array(MeshVertex) required` + the precedent's optional
+  scalars. **Params:** `max_capacity` (same range as precedent); `mode` enum —
+  `vertices` (one particle per vertex, exact silhouette) | `surface`
+  (area-weighted random triangle sampling, uniform density regardless of
+  triangulation). **Output:** `particles: Array(Particle)`, positions in the mesh's
+  local space (transform upstream of the renderer applies, same as the mesh itself).
+- **The stage composition it exists for:** `mesh → spawn_from_mesh →
+  apply_radial_burst_3d_to_particles → euler_step_particles_3d → render` alongside
+  the intact mesh — crossfade mesh-out/particles-in on the drop.
+- **§2.5 audit at impl** (expect: genuinely new; `scatter_particles_3d` scatters in
+  a volume, `spawn_from_image` samples a texture — neither reads geometry).
+- **Gate (positive):** unit/gpu test — a known single triangle in `surface` mode
+  yields particles whose positions all satisfy the triangle's plane equation +
+  barycentric bounds (value-level); `vertices` mode on a cube yields exactly 8
+  distinct positions (dedup-free count ≤ capacity). **Gate (negative):**
+  `rg 'Arc<Mutex' ` on the new file → zero. **Test scope:** focused
+  (`-p manifold-renderer --lib`).
+- **Forbidden:** CPU-side per-frame reseeding (respect the recompute gate — seeding
+  is per-trigger, not per-frame) · inventing a new particle struct.

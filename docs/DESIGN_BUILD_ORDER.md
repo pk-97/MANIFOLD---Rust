@@ -33,10 +33,10 @@ prerequisites aren't shipped, stop.
 | MCP_INTERFACE_DESIGN | VOCAB apply; wants COMPONENT_LIBRARY (its authoring surface) | conformance |
 | ML_NODES_DESIGN | none for Vision/CoreML tier; ONNX tier needs VULKAN | conformance |
 | VULKAN_BACKEND_DESIGN | none (Phase 0 scaffold shipped 0c5dde17) | conformance |
-| MATERIAL_SYSTEM_DESIGN | VOCAB apply (renames its renderer ids) | conformance |
-| REALTIME_3D_DESIGN | MATERIAL_SYSTEM M1–M5 (its P0); VOCAB apply | full (written to standard 2026-07-03) |
-| SIMULATIONS_DESIGN | MATERIAL M1–M5; REALTIME_3D P1 for scene composition | full (written to standard 2026-07-03) |
-| IMPORT_DESIGN | per phase: P1–P3 need REALTIME_3D P1 + MATERIAL; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 needs VOCAB (agent half: MCP) | full (written to standard 2026-07-03) |
+| MATERIAL_SYSTEM_DESIGN (**M1–M5 SHIPPED**, verified 2026-07-04; M6 addendum §11 remains) | none (VOCAB ✅) | conformance + §11 addendum |
+| REALTIME_3D_DESIGN (P0 ✅ = MATERIAL M1–M5) | none remaining (VOCAB ✅) | full (written to standard 2026-07-03) |
+| SIMULATIONS_DESIGN | REALTIME_3D P1 for scene composition | full (written to standard 2026-07-03) |
+| IMPORT_DESIGN | per phase: P1–P3 need REALTIME_3D P1 + **MATERIAL M6**; P5 needs SESSION_MODE + MEDIA_BACKEND P2; P6 needs VOCAB ✅ (agent half: MCP) | full (written to standard 2026-07-03; §8 addendum 2026-07-04) |
 | COMMERCIALIZATION_DESIGN (commerce infra: license, watermark, updater, telemetry) | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 | conformance |
 | DJ_PERFORMANCE_DESIGN | ABLETON_SHOW_SYNC; PERFORM_SURFACE P1; MEDIA_BACKEND P1 | conformance |
 | PRO_DJ_LINK_DESIGN | PERFORM_SURFACE P1; sync-source seam (timecode/Link infra) | conformance |
@@ -54,7 +54,8 @@ MULTI_DISPLAY P1–P3 ──→ LED_STRIPS P2   (LED P1 is free)
 SESSION_MODE ─────────→ PERFORM_SURFACE P2  (P1 is free)
 PERFORM_SURFACE P1 ───→ GIG_RESILIENCE P3   (arming targets the chrome-hosted mode)
 VULKAN ───────────────→ ML_NODES ONNX tier · MEDIA_BACKEND §6 (Vulkan-era handoff)
-MATERIAL_SYSTEM ──────→ REALTIME_3D  (its P0; glTF import later rides REALTIME_3D)
+MATERIAL_SYSTEM ✅ ────→ REALTIME_3D  (its P0 — satisfied 2026-07-04)
+MATERIAL M6 ──────────→ IMPORT P1  (albedo/metallic maps + alpha cutout; MATERIAL §11)
 REALTIME_3D P1 ───────→ SIMULATIONS  (sims render into render_scene; cloth can smoke-test earlier)
 REALTIME_3D P1 ───────→ IMPORT P1–P3 · SESSION_MODE + MEDIA_BACKEND P2 → IMPORT P5 (Resolume) · MCP → IMPORT P6 agent half
 ```
@@ -146,19 +147,50 @@ Grouped in waves; within a wave, items are independent and order is free.
   scripted integration flows instead of hand-verification, so earlier is
   strictly better. P3–P4 (live door) whenever the live loop is wanted.
 
-## 4. The 3D track (added 2026-07-03)
+## 4. The 3D track (added 2026-07-03 · re-ranked 2026-07-04)
 
-The hold on MATERIAL_SYSTEM is resolved: the 3D-scene discussion produced
-`docs/REALTIME_3D_DESIGN.md`, which consumes the material contract unchanged.
-Sequence within the track: MATERIAL M1–M5 → REALTIME_3D P1–P7 →
-SIMULATIONS P1–P4 (`docs/SIMULATIONS_DESIGN.md` — XPBD cloth/liquids) →
-IMPORT P1–P4 (`docs/IMPORT_DESIGN.md` — glTF scenes, beat-retimed animation,
-MDD/PC2 caches = SIMULATIONS lane 1, texture sets). IMPORT P5 (Resolume funnel)
-and P6 (TD funnel) hang off the main waves instead (session mode / MCP) — they
-ship as v1.x campaigns, before this track. The track is independent of waves 0–3
-(renderer-internal) and can run parallel to them once VOCAB apply has landed;
-per the version map it is **the paid v2.0 upgrade**, so it starts after v1.0
-ships unless Peter re-ranks.
+MATERIAL M1–M5 shipped (verified 2026-07-04). **Peter greenlit the import wave
+2026-07-04** (the stewartia conversation — get CC0/Blender models rendering with
+full materials, relightable, in HDRI-lit multi-object scenes with movable cameras
+and mesh-explode particles): the track's first arc starts now, parallel to the
+release-content push, rather than waiting for v2.0. The version map's "3D track =
+paid v2.0 upgrade" still holds for the REMAINDER (simulations, viewport tiers,
+full polish) — this wave builds the track's foundation early because it is also
+release-content authoring capability.
+
+**The greenlit wave, in dependency order (~5–6 sessions):**
+
+0. **Wave-0 verification (first session, before any new code):** runtime-verify
+   MATERIAL M1–M5 — load MetallicGlass, headless-render to PNG, look at it. The
+   tranche checkmarks are static; nobody has confirmed a shipped PBR frame.
+   Then MATERIAL §11.3 entry-state checks.
+1. **MATERIAL M6** (§11 — albedo/metallic maps, alpha cutout, back-face fix).
+   One session. No dependents inside REALTIME_3D P1, so it may also run parallel
+   to (2).
+2. **REALTIME_3D P1 — `render_scene` + multi-light.** 1–2 sessions (workspace-sweep
+   gated).
+3. **IMPORT P1 — glTF door.** 1–2 sessions. Needs (1) + (2). **Peter-hands
+   prerequisite:** download the stewartia .glb into `tests/fixtures/gltf/`
+   (Sketchfab needs a login — IMPORT §8 addendum).
+4. **REALTIME_3D P4 — camera atoms** (free_camera / look_at_camera). One session;
+   only needs P1.
+5. **IMPORT P4 — texture-set auto-wire + HDRI drop.** One session; needs M6 only.
+6. **`node.spawn_from_mesh`** (REALTIME_3D §9 addendum). Small; no prerequisites
+   at all — a filler task for any session with slack.
+
+Then, still greenlit but second arc (order by judgment): REALTIME_3D P2 shadows →
+P3 atmosphere → P5 viewport navigate → P6 gizmos → P7 starter preset. Early
+placement before P5/P6 is inspector sliders + agent-edited preset JSON verified
+by headless PNG — workable, per Peter.
+
+IMPORT P5 (Resolume) and P6 (TD) still hang off the main waves (session mode /
+MCP) as v1.x campaigns. SIMULATIONS still waits (v2.0).
+
+**Orchestration notes (for the layer running this):** read
+`project_agent_execution_playbook` hazards before starting · every phase brief's
+read-back + entry-state checks are mandatory, including re-running §11.1/§8
+anchors · phases gate on rendered PNGs where stated, not green tests alone ·
+branch per phase off the integration branch, commit by path (never `add -A`).
 
 ## 5. Maintenance
 
