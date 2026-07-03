@@ -85,6 +85,20 @@ Dependencies: `core` and `gpu` have none. `editing`/`playback`/`ui`/`io` depend 
 
 No per-frame allocations on hot paths (engine tick, sync, rendering). Use pre-allocated scratch buffers, `AHashMap` for ID lookups, and dirty-checking via `DataVersion`. GPU-side constraints (uniform alignment, texture filterability, workgroup sizes) live in `docs/MANIFOLD_GPU_ARCHITECTURE.md` — read it before touching shaders or uniforms.
 
+## Choosing your next move — oracle discipline
+
+Every question in a session has several possible oracles: guess, read, search, compute, run, ask git, ask the user. Pick the cheapest one that is *reliable for that question's class* — and notice that familiar is not the same as reliable. Reading and grepping always return something, which is exactly why they get overused.
+
+- Text question ("where does this string appear") → `rg`. Meaning question ("who calls this, what implements this") → LSP. Tell: if renaming the symbol would break your search, wrong oracle.
+- Behavior question ("what actually happens, in what order") → run it with printlns and read the logs. If you can observe instead of deduce, observe.
+- History question ("why is it like this, when did it break") → `git log -S`, blame, read the diff that introduced it. Git is a debugger, not just a save button.
+- Visual question ("does it look right") → headless render to PNG and look at it. A green test is not a look.
+- Computable question (counts, offsets, alignment, "how many presets use X") → write the three-line script. Never eyeball arithmetic a machine can do exactly.
+- Mechanism question (behavior governed by a hook, registry, config, codegen) → read the mechanism itself, never infer it from examples of its output.
+- Negative claim ("there is no X") → run the search that would find X before asserting it. Absence is a claim like any other, and the most commonly botched one.
+
+Above tool choice: verify one level closer to the stage than where you changed things — compiles ≠ correct ≠ looks right in the show. Scale verification with the cost of being wrong, not the size of the diff; one line in `sync_clips_to_time` outranks 200 lines of dev tooling. And "I don't know" is half an answer — the other half is naming the oracle that would resolve it.
+
 ## Tooling
 
 - Search with `rg` not `grep`, `fd` not `find`, `ast-grep` for code-shape queries (signatures, impl blocks, macro invocations). For symbol-level questions on Rust code — "where is this defined", "what calls this", "what implements this trait" — prefer the LSP tool (`goToDefinition`, `findReferences`, `incomingCalls`, `goToImplementation`) over `rg`; it catches trait dispatch and qualified paths that text search misses.
