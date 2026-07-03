@@ -25,7 +25,7 @@ crate::primitive! {
         out: Texture2D,
     },
     params: [],
-    composition_notes: "BA of the input are ignored; output BA is forced to (0, 1). Chain order for the oily-fluid curl-force pattern: `node.gradient_central_diff → node.normalize → (sum two of these) → node.exposure → node.rotate_vec2_by_angle`.",
+    composition_notes: "BA of the input are ignored; output BA is forced to (0, 1). Chain order for the oily-fluid curl-force pattern: `node.edge_slope → node.normalize → (sum two of these) → node.exposure → node.rotate_vector`.",
     examples: [],
     picker: { label: "Normalize", category: Atom },
     summary: "Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude.",

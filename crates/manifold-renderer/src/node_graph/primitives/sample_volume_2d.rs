@@ -1,4 +1,4 @@
-//! `node.sample_volume_2d` — sample a `Texture3D` at a fixed Z
+//! `node.slice_volume` — sample a `Texture3D` at a fixed Z
 //! slice (with optional UV transform) to produce a `Texture2D`.
 //!
 //! New WGSL — the existing `mri_slice_compute.wgsl` samples
@@ -28,7 +28,7 @@ struct SampleVolumeUniforms {
 
 crate::primitive! {
     name: SampleVolume2D,
-    type_id: "node.sample_volume_2d",
+    type_id: "node.slice_volume",
     purpose: "Sample a Texture3D at a fixed Z slice to produce a Texture2D. UV scale + center re-frame the slice into the output texture. Drives \"peel a 2D plane out of a volume\" use cases: MRI-style display, debug visualisation of volumetric fluid density, or any future Phase D volume rendering.",
     inputs: {
         in: Texture3D required,
@@ -72,11 +72,11 @@ crate::primitive! {
     ],
     composition_notes: "slice_z is clamped to [0, 1] in-shader; values outside the volume's Z range produce the boundary texel (sampler clamp). Bilinear filtering across X/Y/Z; the slice is interpolated between adjacent Z layers so smooth slice_z drives produce smooth animation. Output is Rgba16Float — the shader passes through whatever channels the volume has.",
     examples: [],
-    picker: { label: "Sample Volume 2D", category: Atom },
+    picker: { label: "Slice Volume", category: Atom },
     summary: "Takes a flat slice through a 3D volume to get a normal 2D image. The way to look inside a fluid or density field.",
     category: FieldsAndCoordinates,
     role: Filter,
-    aliases: ["sample volume", "slice", "3d to 2d"],
+    aliases: ["sample volume 2d", "sample volume", "slice", "3d to 2d"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/sample_volume_2d_body.wgsl"),
     input_access: [Gather],
@@ -120,9 +120,9 @@ impl Primitive for SampleVolume2D {
             // samp(2)/dst(3). sample_volume_2d.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.sample_volume_2d standalone codegen"),
+                    .expect("node.slice_volume standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.sample_volume_2d",
+                "node.slice_volume",
             )
         });
         let sampler = self
@@ -157,7 +157,7 @@ impl Primitive for SampleVolume2D {
                 },
             ],
             [width.div_ceil(16), height.div_ceil(16), 1],
-            "node.sample_volume_2d",
+            "node.slice_volume",
         );
     }
 }
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn sample_volume_declares_texture_3d_in_and_texture_2d_out() {
         use crate::node_graph::ports::PortType;
-        assert_eq!(SampleVolume2D::TYPE_ID, "node.sample_volume_2d");
+        assert_eq!(SampleVolume2D::TYPE_ID, "node.slice_volume");
         assert_eq!(SampleVolume2D::INPUTS.len(), 1);
         assert_eq!(SampleVolume2D::INPUTS[0].name, "in");
         assert_eq!(SampleVolume2D::INPUTS[0].ty, PortType::Texture3D);
@@ -190,6 +190,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = SampleVolume2D::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.sample_volume_2d");
+        assert_eq!(node.type_id().as_str(), "node.slice_volume");
     }
 }

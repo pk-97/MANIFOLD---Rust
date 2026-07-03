@@ -317,11 +317,11 @@ mod tests {
     fn field_node_descriptor_picks_vector() {
         // gradient_central_diff / rotate_vec2_by_angle are FieldsAndCoordinates.
         assert_eq!(
-            PreviewEncoding::derive("node.gradient_central_diff", "out"),
+            PreviewEncoding::derive("node.edge_slope", "out"),
             PreviewEncoding::VectorField
         );
         assert_eq!(
-            PreviewEncoding::derive("node.rotate_vec2_by_angle", "out"),
+            PreviewEncoding::derive("node.rotate_vector", "out"),
             PreviewEncoding::VectorField
         );
     }
@@ -411,7 +411,7 @@ mod tests {
         // Selecting either blur should preview as a vector field.
         let d = def(
             vec![
-                node(0, "field", "node.gradient_central_diff"),
+                node(0, "field", "node.edge_slope"),
                 node(1, "blur", "node.gaussian_blur"),
                 node(2, "blur2", "node.gaussian_blur"),
             ],

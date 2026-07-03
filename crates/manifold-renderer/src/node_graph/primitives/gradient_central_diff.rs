@@ -1,4 +1,4 @@
-//! `node.gradient_central_diff` — per-pixel central-difference
+//! `node.edge_slope` — per-pixel central-difference
 //! gradient of one channel of an input texture.
 //!
 //! Outputs (dx, dy, 0, 1) in RGBA, where dx = (right − left) / 2 and
@@ -40,7 +40,7 @@ struct GradientUniforms {
 
 crate::primitive! {
     name: GradientCentralDiff,
-    type_id: "node.gradient_central_diff",
+    type_id: "node.edge_slope",
     purpose: "Per-pixel central-difference gradient of a single input channel. Output: (dx, dy, 0, 1) in RGBA. `scale_mode` selects Texel-space (`(R - L) * 0.5` — default, matches oily-fluid / heightmap-to-normal usage) or UV-space (`(R - L) * W * 0.5` per-axis — multiplies by the dimension halves so output is in per-UV-unit space, what fluid-sim gradient-rotate needs). `wrap_mode` selects Clamp (default, bilinear-clamp sampler) or Repeat (toroidal sampler for cyclic fluid sims). The standard vec2 gradient atom: feeds Sobel edge detectors, fluid-sim curl-from-color extraction, heightmap→normal pipelines, reaction-diffusion flow seeding.",
     inputs: {
         in: Texture2D required,
@@ -74,13 +74,13 @@ crate::primitive! {
             enum_values: GRADIENT_WRAP_MODES,
         },
     ],
-    composition_notes: "Output is a SIGNED vec2 field. Pair with `node.normalize` for direction-only gradients (used in fluid-sim curl forcing), or feed directly into `node.rotate_vec2_by_angle` for arbitrary-angle curl flow. For a per-channel gradient of an RG texture (oily-fluid pattern), instance this primitive twice with channel=R and channel=G and combine downstream. Defaults (Texel + Clamp) preserve legacy oily-fluid / heightmap behaviour. Use scale_mode=UV + wrap_mode=Repeat to compose with `scale_offset_texture` + `rotate_vec2_by_angle` as the decomposed `fluid_gradient_rotate` pipeline.",
+    composition_notes: "Output is a SIGNED vec2 field. Pair with `node.normalize` for direction-only gradients (used in fluid-sim curl forcing), or feed directly into `node.rotate_vector` for arbitrary-angle curl flow. For a per-channel gradient of an RG texture (oily-fluid pattern), instance this primitive twice with channel=R and channel=G and combine downstream. Defaults (Texel + Clamp) preserve legacy oily-fluid / heightmap behaviour. Use scale_mode=UV + wrap_mode=Repeat to compose with `scale_offset_texture` + `rotate_vec2_by_angle` as the decomposed `fluid_gradient_rotate` pipeline.",
     examples: [],
     picker: { label: "Edge Slope", category: Atom },
     summary: "Measures how fast a value changes across the image, giving the direction and steepness of edges. The base for normal maps and edge effects.",
     category: FieldsAndCoordinates,
     role: Filter,
-    aliases: ["gradient", "edge slope", "derivative", "sobel"],
+    aliases: ["gradient", "edge slope", "gradient central diff", "derivative", "sobel"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/gradient_central_diff_body.wgsl"),
     input_access: [Gather],
@@ -177,9 +177,9 @@ impl Primitive for GradientCentralDiff {
             // gradient_central_diff.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
-                    .expect("node.gradient_central_diff standalone codegen"),
+                    .expect("node.edge_slope standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.gradient_central_diff",
+                "node.edge_slope",
             )
         });
         let clamp_sampler = self
@@ -227,7 +227,7 @@ impl Primitive for GradientCentralDiff {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.gradient_central_diff",
+            "node.edge_slope",
         );
     }
 }

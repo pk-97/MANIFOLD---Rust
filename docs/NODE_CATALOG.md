@@ -313,20 +313,20 @@ _Generated from the node registry. Do not hand-edit. 212 nodes registered, group
 | Block Displace Field | `node.block_displace_field` | Source | Outputs a grid of random block offsets, the displacement map behind datamosh and block-glitch looks. Feed it into Remap. |
 | Centered UV | `node.centered_uv` | Source | Outputs each pixel's position measured from a centre point, so the middle reads zero and the edges spread out. The base for radial and zoom effects. |
 | Distance to Point | `node.distance_to_point` | Source | Outputs how far each pixel is from a chosen point, bright far away and dark near it. A radial gradient you build circle masks and ripples from. |
+| Edge Slope | `node.edge_slope` | Filter | Measures how fast a value changes across the image, giving the direction and steepness of edges. The base for normal maps and edge effects. |
+| Edge Slope (3D) | `node.edge_slope_3d` | Filter | Measures how fast a value changes through a 3D volume, giving a direction at every point. Used to find flow and forces inside a fluid sim. |
 | Field Combine | `node.field_combine` | Map | Mixes the channels of a coordinate field into one value with weights and an offset. The math step that turns coordinates into a custom gradient. |
-| Edge Slope | `node.gradient_central_diff` | Filter | Measures how fast a value changes across the image, giving the direction and steepness of edges. The base for normal maps and edge effects. |
-| Edge Slope (3D) | `node.gradient_central_diff_3d` | Filter | Measures how fast a value changes through a 3D volume, giving a direction at every point. Used to find flow and forces inside a fluid sim. |
+| Flow Lines (LIC) | `node.flow_lines` | Filter | Smears noise along a flow field to reveal its streamlines, turning a vector field into a visible flow texture. |
 | Grid UV Field | `node.grid_uv_field` | Source | Outputs a grid of sample points across the frame as a list, used to drive instanced shapes or sample a field at regular spots. |
 | Hash Field by Seed | `node.hash_field_by_seed` | Map | Scrambles a coordinate field by a seed so the same input gives a different but stable random offset per seed. Used to re-randomise a pattern on a trigger. |
-| Flow Lines (LIC) | `node.lic_integrate` | Filter | Smears noise along a flow field to reveal its streamlines, turning a vector field into a visible flow texture. |
 | Smooth (neighbors) | `node.neighbor_smooth` | Filter | Averages each point with its neighbours on a grid, smoothing out a bumpy field of values or positions. |
 | Polar Field | `node.polar_field` | Source | Outputs each pixel's angle and distance from a centre instead of its X and Y. The base for spirals, tunnels, and kaleidoscopes. |
-| Rotate | `node.rotate_2d` | Map | Rotates a coordinate field around the centre. This spins the coordinates used to build a warp, not the image itself. For the picture, use Flip or a transform. |
+| Rotate Coordinates | `node.rotate_coordinates` | Map | Rotates a coordinate field around the centre. This spins the coordinates used to build a warp, not the image itself. For the picture, use Flip or a transform. |
 | — | `node.rotate_vec2_90` | Map | Rotates a 2D vector field by 90 degrees. The fixed-angle older version of Rotate Vector. |
-| Rotate Vector | `node.rotate_vec2_by_angle` | Map | Rotates a 2D vector field by an angle, turning every arrow in a flow or gradient field by the same amount. |
-| Sample Volume 2D | `node.sample_volume_2d` | Filter | Takes a flat slice through a 3D volume to get a normal 2D image. The way to look inside a fluid or density field. |
+| Rotate Vector | `node.rotate_vector` | Map | Rotates a 2D vector field by an angle, turning every arrow in a flow or gradient field by the same amount. |
 | Scanline Jitter Field | `node.scanline_jitter_field` | Source | Per-row horizontal offset for sideways glitch. Tear = gated VHS jolt; Slide = smooth organic per-band drift. Set Bands for chunky strips, feed it into Remap. |
-| Sine Wave (projected) | `node.sin_term` | Map | Mixes a coordinate field into a moving sine wave in one step, the core ingredient of plasma and interference patterns. |
+| Sine Wave (projected) | `node.sine_wave` | Map | Mixes a coordinate field into a moving sine wave in one step, the core ingredient of plasma and interference patterns. |
+| Slice Volume | `node.slice_volume` | Filter | Takes a flat slice through a 3D volume to get a normal 2D image. The way to look inside a fluid or density field. |
 | Slope Displace | `node.slope_displace` | Filter | Pushes pixels along the slope of an embossed version of the image, an emboss-driven warp for liquid and paint looks. |
 | Texture Advect | `node.texture_advect` | Filter | Drags a texture along a velocity field, carrying the pixels with the flow. The transport step in a fluid simulation. |
 | UV Displace by Flow | `node.uv_displace_by_flow` | Filter | Samples the image at positions pushed by a flow field, so the picture smears along the motion. The consumer for an optical-flow or noise flow field. |

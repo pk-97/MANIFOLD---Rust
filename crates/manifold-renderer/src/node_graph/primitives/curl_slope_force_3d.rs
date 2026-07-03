@@ -3,7 +3,7 @@
 //! plus slope (gradient scaled).
 //!
 //! Reads a vec3 gradient volume (typically from
-//! `node.gradient_central_diff_3d`), crosses it with a curl-noise
+//! `node.edge_slope_3d`), crosses it with a curl-noise
 //! reference axis to produce swirl (tangential orbit around density
 //! peaks), and combines that with the gradient scaled by slope (radial
 //! push/pull):
@@ -50,7 +50,7 @@ struct CurlSlope3DUniforms {
 crate::primitive! {
     name: CurlSlopeForce3D,
     type_id: "node.curl_slope_force_3d",
-    purpose: "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a curl-noise reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). axis = normalize(ref_axis + smooth spatial wobble of the voxel position); force = cross(gradient, axis) * curl_strength + gradient * slope_strength. Writes a vec3 force Texture3D. The per-voxel axis wobble keeps the swirl even across the volume instead of pooling in one octant. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.gradient_central_diff_3d.",
+    purpose: "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a curl-noise reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). axis = normalize(ref_axis + smooth spatial wobble of the voxel position); force = cross(gradient, axis) * curl_strength + gradient * slope_strength. Writes a vec3 force Texture3D. The per-voxel axis wobble keeps the swirl even across the volume instead of pooling in one octant. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.edge_slope_3d.",
     inputs: {
         gradient: Texture3D required,
         curl_strength: ScalarF32 optional,
@@ -120,7 +120,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Output Texture3D dims follow vol_res / vol_depth. FluidSim3D computes curl_strength = flow * 500 * sin(curl_angle) and slope_strength = flow * 500 * cos(curl_angle) in graph Math nodes, with ref_axis = a rotating vector (sin/cos of time × 0.3). The primitive normalizes ref_axis internally, then adds a smooth low-frequency wobble keyed on the voxel position so the cross-product swirl has no single global dead direction (a fixed axis pools curl energy in one octant — the swirl vanishes where gradient ∥ axis). Graph wires can emit raw sin/cos components without worrying about unit length (zero-length falls back to (0,1,0) so the cross stays well-defined). Pair upstream with node.gradient_central_diff_3d.",
+    composition_notes: "Output Texture3D dims follow vol_res / vol_depth. FluidSim3D computes curl_strength = flow * 500 * sin(curl_angle) and slope_strength = flow * 500 * cos(curl_angle) in graph Math nodes, with ref_axis = a rotating vector (sin/cos of time × 0.3). The primitive normalizes ref_axis internally, then adds a smooth low-frequency wobble keyed on the voxel position so the cross-product swirl has no single global dead direction (a fixed axis pools curl energy in one octant — the swirl vanishes where gradient ∥ axis). Graph wires can emit raw sin/cos components without worrying about unit length (zero-length falls back to (0,1,0) so the cross stays well-defined). Pair upstream with node.edge_slope_3d.",
     examples: ["FluidSimulation3D"],
     picker: { label: "Swirl Force (3D, curl)", category: Atom },
     summary: "Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies.",

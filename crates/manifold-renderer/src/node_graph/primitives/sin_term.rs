@@ -1,4 +1,4 @@
-//! `node.sin_term` — fused linear-projection + sin term.
+//! `node.sine_wave` — fused linear-projection + sin term.
 //!
 //! `out = sin((a * field.r + b * field.g + c) * freq * freq_scale + time * time_scale)`
 //!
@@ -31,7 +31,7 @@ struct SinTermUniforms {
 
 crate::primitive! {
     name: SinTerm,
-    type_id: "node.sin_term",
+    type_id: "node.sine_wave",
     purpose: "Fused linear-projection + sin term: out = sin((a*field.r + b*field.g + c) * freq * freq_scale + time * time_scale). One node per term of any sum-of-sines pattern (Plasma, moiré, standing waves). For a linear projection of UV channels set (a, b) to pick the projection; for a pre-computed scalar field (distance, noise) leave defaults (a=1, b=0, c=0) so it reads the broadcast R channel.",
     inputs: {
         // Field texture — coordinate texture (R = x, G = y) for linear
@@ -104,7 +104,7 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "Pick (a, b, c) to choose the field projection: (1,0,0)=along X, (0,1,0)=along Y, (1,1,0)=diagonal X+Y. Pair with `node.rotate_2d` upstream for rotated projections — feed the rotated UV in and keep (a, b) = (1, 0). Wire `freq` from a shared value node and `time` from system.generator_input.time so all five terms in a Plasma-style sum stay phase-coherent.",
+    composition_notes: "Pick (a, b, c) to choose the field projection: (1,0,0)=along X, (0,1,0)=along Y, (1,1,0)=diagonal X+Y. Pair with `node.rotate_coordinates` upstream for rotated projections — feed the rotated UV in and keep (a, b) = (1, 0). Wire `freq` from a shared value node and `time` from system.generator_input.time so all five terms in a Plasma-style sum stay phase-coherent.",
     examples: [],
     picker: { label: "Sine Wave (projected)", category: Atom },
     summary: "Mixes a coordinate field into a moving sine wave in one step, the core ingredient of plasma and interference patterns.",
@@ -151,7 +151,7 @@ impl Primitive for SinTerm {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/sin_term.wgsl"),
                 "cs_main",
-                "node.sin_term",
+                "node.sine_wave",
             )
         });
         let sampler = self
@@ -190,7 +190,7 @@ impl Primitive for SinTerm {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.sin_term",
+            "node.sine_wave",
         );
     }
 }
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn sin_term_declares_field_required_freq_time_optional() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(SinTerm::TYPE_ID, "node.sin_term");
+        assert_eq!(SinTerm::TYPE_ID, "node.sine_wave");
         let ins = SinTerm::INPUTS;
         assert_eq!(ins.len(), 3);
         assert_eq!(ins[0].name, "field");
@@ -232,6 +232,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = SinTerm::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.sin_term");
+        assert_eq!(node.type_id().as_str(), "node.sine_wave");
     }
 }

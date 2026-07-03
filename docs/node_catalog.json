@@ -3471,7 +3471,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a curl-noise reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). axis = normalize(ref_axis + smooth spatial wobble of the voxel position); force = cross(gradient, axis) * curl_strength + gradient * slope_strength. Writes a vec3 force Texture3D. The per-voxel axis wobble keeps the swirl even across the volume instead of pooling in one octant. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.gradient_central_diff_3d.",
+      "purpose": "Combine a vec3 gradient Texture3D into a force field: cross the gradient with a curl-noise reference axis for swirl (tangential orbit around density peaks) and add the gradient scaled by slope (radial push/pull). axis = normalize(ref_axis + smooth spatial wobble of the voxel position); force = cross(gradient, axis) * curl_strength + gradient * slope_strength. Writes a vec3 force Texture3D. The per-voxel axis wobble keeps the swirl even across the volume instead of pooling in one octant. The curl+slope half of the decomposed node.fluid_gradient_curl_3d; pair downstream of node.edge_slope_3d.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies.",
@@ -5187,6 +5187,128 @@
     },
     {
       "aliases": [
+        "gradient",
+        "edge slope",
+        "gradient central diff",
+        "derivative",
+        "sobel"
+      ],
+      "category": "Fields & Coordinates",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        }
+      ],
+      "label": "Edge Slope",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "enum_values": [
+            "R",
+            "G",
+            "B",
+            "A"
+          ],
+          "label": "Channel",
+          "name": "channel",
+          "tooltip": "Which colour channel the slope is measured from, R, G, B, or A. Use R for a greyscale height field.",
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Texel",
+            "UV"
+          ],
+          "label": "Scale Mode",
+          "name": "scale_mode",
+          "tooltip": "How the slope is scaled. Texel measures the raw pixel-to-pixel difference and suits normal maps and heightfields. UV scales by the image size so the result is in per-UV-unit space, which fluid-sim flow needs.",
+          "type": "enum"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Clamp",
+            "Repeat"
+          ],
+          "label": "Wrap Mode",
+          "name": "wrap_mode",
+          "tooltip": "How edge pixels read their neighbours. Clamp holds the edge for normal images. Repeat wraps around to the far side, which you want for a tiling or cyclic fluid field.",
+          "type": "enum"
+        }
+      ],
+      "purpose": "Per-pixel central-difference gradient of a single input channel. Output: (dx, dy, 0, 1) in RGBA. `scale_mode` selects Texel-space (`(R - L) * 0.5` — default, matches oily-fluid / heightmap-to-normal usage) or UV-space (`(R - L) * W * 0.5` per-axis — multiplies by the dimension halves so output is in per-UV-unit space, what fluid-sim gradient-rotate needs). `wrap_mode` selects Clamp (default, bilinear-clamp sampler) or Repeat (toroidal sampler for cyclic fluid sims). The standard vec2 gradient atom: feeds Sobel edge detectors, fluid-sim curl-from-color extraction, heightmap→normal pipelines, reaction-diffusion flow seeding.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Measures how fast a value changes across the image, giving the direction and steepness of edges. The base for normal maps and edge effects.",
+      "type_id": "node.edge_slope"
+    },
+    {
+      "aliases": [
+        "gradient 3d",
+        "edge slope",
+        "gradient central diff 3d",
+        "volume gradient"
+      ],
+      "category": "Fields & Coordinates",
+      "examples": [
+        "FluidSimulation3D"
+      ],
+      "inputs": [
+        {
+          "name": "density",
+          "required": true,
+          "type": "Texture3D"
+        }
+      ],
+      "label": "Edge Slope (3D)",
+      "outputs": [
+        {
+          "name": "gradient",
+          "type": "Texture3D"
+        }
+      ],
+      "params": [
+        {
+          "default": "128",
+          "label": "Volume Resolution",
+          "name": "vol_res",
+          "range": [
+            "16",
+            "512"
+          ],
+          "tooltip": "The width and height of the volume in voxels, from 16 to 512. Match it to the density volume you are feeding in.",
+          "type": "int"
+        },
+        {
+          "default": "128",
+          "label": "Volume Depth",
+          "name": "vol_depth",
+          "range": [
+            "16",
+            "512"
+          ],
+          "tooltip": "How many slices deep the volume is, from 16 to 512. Match it to the density volume you are feeding in.",
+          "type": "int"
+        }
+      ],
+      "purpose": "6-tap central-difference gradient of a scalar density Texture3D, written as a vec3 Texture3D. Toroidal wrap (XY use vol_res, Z uses vol_depth); gradient = float3(dx, dy, dz) * 0.5 in integer voxel space. 3D sibling of node.edge_slope. Decomposed from the gradient half of the legacy fused node.fluid_gradient_curl_3d; pair with node.curl_slope_force_3d for the FluidSim3D force field.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Measures how fast a value changes through a 3D volume, giving a direction at every point. Used to find flow and forces inside a fluid sim.",
+      "type_id": "node.edge_slope_3d"
+    },
+    {
+      "aliases": [
         "edge stretch",
         "strip clamp",
         "slit scan",
@@ -6277,6 +6399,75 @@
     },
     {
       "aliases": [
+        "flow lines",
+        "lic",
+        "lic integrate",
+        "streamlines",
+        "flow viz"
+      ],
+      "category": "Fields & Coordinates",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "source",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "velocity",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "steps",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "dt",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Flow Lines (LIC)",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "16",
+          "label": "Steps",
+          "name": "steps",
+          "range": [
+            "1",
+            "64"
+          ],
+          "tooltip": "How many samples to walk along the flow in each direction. More steps draw longer smears, up to a limit of 64.",
+          "type": "int"
+        },
+        {
+          "default": "2",
+          "label": "Δt (pixels/step)",
+          "name": "dt",
+          "range": [
+            "0.1",
+            "16"
+          ],
+          "tooltip": "How far each step travels, in pixels. Steps times this sets the total streak length.",
+          "type": "float"
+        }
+      ],
+      "purpose": "Line Integral Convolution. For each pixel, walks N steps forward and N steps backward along the normalised velocity field, weighted-accumulating `source.r` along the path. Output = weighted_sum / total_weight in R; GBA = (0, 0, 1). Steps capped at 64. The classic flow-visualisation atom: pair `source` with a hash-noise texture for streamlines (oily-fluid Lines), or with a derived heightmap for flow-aligned intensity (oily-fluid Flow Field).",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Smears noise along a flow field to reveal its streamlines, turning a vector field into a visible flow texture.",
+      "type_id": "node.flow_lines"
+    },
+    {
+      "aliases": [
         "draw particles camera",
         "project scatter"
       ],
@@ -7068,126 +7259,6 @@
       "stratum": "atom",
       "summary": "Builds a colour gradient as a strip you can use as a lookup table or feed into Gradient Map. Add as many colour stops as you like.",
       "type_id": "node.gradient"
-    },
-    {
-      "aliases": [
-        "gradient",
-        "edge slope",
-        "derivative",
-        "sobel"
-      ],
-      "category": "Fields & Coordinates",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        }
-      ],
-      "label": "Edge Slope",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "enum_values": [
-            "R",
-            "G",
-            "B",
-            "A"
-          ],
-          "label": "Channel",
-          "name": "channel",
-          "tooltip": "Which colour channel the slope is measured from, R, G, B, or A. Use R for a greyscale height field.",
-          "type": "enum"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "Texel",
-            "UV"
-          ],
-          "label": "Scale Mode",
-          "name": "scale_mode",
-          "tooltip": "How the slope is scaled. Texel measures the raw pixel-to-pixel difference and suits normal maps and heightfields. UV scales by the image size so the result is in per-UV-unit space, which fluid-sim flow needs.",
-          "type": "enum"
-        },
-        {
-          "default": "0",
-          "enum_values": [
-            "Clamp",
-            "Repeat"
-          ],
-          "label": "Wrap Mode",
-          "name": "wrap_mode",
-          "tooltip": "How edge pixels read their neighbours. Clamp holds the edge for normal images. Repeat wraps around to the far side, which you want for a tiling or cyclic fluid field.",
-          "type": "enum"
-        }
-      ],
-      "purpose": "Per-pixel central-difference gradient of a single input channel. Output: (dx, dy, 0, 1) in RGBA. `scale_mode` selects Texel-space (`(R - L) * 0.5` — default, matches oily-fluid / heightmap-to-normal usage) or UV-space (`(R - L) * W * 0.5` per-axis — multiplies by the dimension halves so output is in per-UV-unit space, what fluid-sim gradient-rotate needs). `wrap_mode` selects Clamp (default, bilinear-clamp sampler) or Repeat (toroidal sampler for cyclic fluid sims). The standard vec2 gradient atom: feeds Sobel edge detectors, fluid-sim curl-from-color extraction, heightmap→normal pipelines, reaction-diffusion flow seeding.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Measures how fast a value changes across the image, giving the direction and steepness of edges. The base for normal maps and edge effects.",
-      "type_id": "node.gradient_central_diff"
-    },
-    {
-      "aliases": [
-        "gradient 3d",
-        "edge slope",
-        "volume gradient"
-      ],
-      "category": "Fields & Coordinates",
-      "examples": [
-        "FluidSimulation3D"
-      ],
-      "inputs": [
-        {
-          "name": "density",
-          "required": true,
-          "type": "Texture3D"
-        }
-      ],
-      "label": "Edge Slope (3D)",
-      "outputs": [
-        {
-          "name": "gradient",
-          "type": "Texture3D"
-        }
-      ],
-      "params": [
-        {
-          "default": "128",
-          "label": "Volume Resolution",
-          "name": "vol_res",
-          "range": [
-            "16",
-            "512"
-          ],
-          "tooltip": "The width and height of the volume in voxels, from 16 to 512. Match it to the density volume you are feeding in.",
-          "type": "int"
-        },
-        {
-          "default": "128",
-          "label": "Volume Depth",
-          "name": "vol_depth",
-          "range": [
-            "16",
-            "512"
-          ],
-          "tooltip": "How many slices deep the volume is, from 16 to 512. Match it to the density volume you are feeding in.",
-          "type": "int"
-        }
-      ],
-      "purpose": "6-tap central-difference gradient of a scalar density Texture3D, written as a vec3 Texture3D. Toroidal wrap (XY use vol_res, Z uses vol_depth); gradient = float3(dx, dy, dz) * 0.5 in integer voxel space. 3D sibling of node.gradient_central_diff. Decomposed from the gradient half of the legacy fused node.fluid_gradient_curl_3d; pair with node.curl_slope_force_3d for the FluidSim3D force field.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Measures how fast a value changes through a 3D volume, giving a direction at every point. Used to find flow and forces inside a fluid sim.",
-      "type_id": "node.gradient_central_diff_3d"
     },
     {
       "aliases": [
@@ -8529,74 +8600,6 @@
       "stratum": "driver",
       "summary": "A smoothly cycling value you wire into any knob to make it move on its own. Pick a waveform like sine or saw, and lock it to the tempo or let it run free.",
       "type_id": "node.lfo"
-    },
-    {
-      "aliases": [
-        "flow lines",
-        "lic",
-        "streamlines",
-        "flow viz"
-      ],
-      "category": "Fields & Coordinates",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "source",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "velocity",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "steps",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "dt",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Flow Lines (LIC)",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "16",
-          "label": "Steps",
-          "name": "steps",
-          "range": [
-            "1",
-            "64"
-          ],
-          "tooltip": "How many samples to walk along the flow in each direction. More steps draw longer smears, up to a limit of 64.",
-          "type": "int"
-        },
-        {
-          "default": "2",
-          "label": "Δt (pixels/step)",
-          "name": "dt",
-          "range": [
-            "0.1",
-            "16"
-          ],
-          "tooltip": "How far each step travels, in pixels. Steps times this sets the total streak length.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Line Integral Convolution. For each pixel, walks N steps forward and N steps backward along the normalised velocity field, weighted-accumulating `source.r` along the path. Output = weighted_sum / total_weight in R; GBA = (0, 0, 1). Steps capped at 64. The classic flow-visualisation atom: pair `source` with a hash-noise texture for streamlines (oily-fluid Lines), or with a derived heightmap for flow-aligned intensity (oily-fluid Flow Field).",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Smears noise along a flow field to reveal its streamlines, turning a vector field into a visible flow texture.",
-      "type_id": "node.lic_integrate"
     },
     {
       "aliases": [
@@ -12239,52 +12242,6 @@
     },
     {
       "aliases": [
-        "rotate coordinates",
-        "rotate field",
-        "spin"
-      ],
-      "category": "Fields & Coordinates",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "angle",
-          "required": false,
-          "type": "f32"
-        }
-      ],
-      "label": "Rotate",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0",
-          "label": "Angle",
-          "name": "angle",
-          "range": [
-            "-6.2831855",
-            "6.2831855"
-          ],
-          "tooltip": "How far to spin the coordinate field around the centre, in degrees. A positive angle turns the +X direction toward +Y. This rotates the coordinates used for a warp, not the picture itself.",
-          "type": "angle"
-        }
-      ],
-      "purpose": "Rotate a 2D coordinate field around the origin by `angle` (radians). Reads (x, y) from input R/G, writes rotated (x', y') back to R/G. Collapses the `angle → cos / sin / neg_sin → field_combine(cos, -sin)` chain that any rotated-projection effect would otherwise need.",
-      "role": "Map",
-      "stratum": "atom",
-      "summary": "Rotates a coordinate field around the centre. This spins the coordinates used to build a warp, not the image itself. For the picture, use Flip or a transform.",
-      "type_id": "node.rotate_2d"
-    },
-    {
-      "aliases": [
         "rotate 3d",
         "spin",
         "tumble",
@@ -12442,6 +12399,53 @@
     },
     {
       "aliases": [
+        "rotate coordinates",
+        "rotate 2d",
+        "rotate field",
+        "spin"
+      ],
+      "category": "Fields & Coordinates",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "angle",
+          "required": false,
+          "type": "f32"
+        }
+      ],
+      "label": "Rotate Coordinates",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "0",
+          "label": "Angle",
+          "name": "angle",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "How far to spin the coordinate field around the centre, in degrees. A positive angle turns the +X direction toward +Y. This rotates the coordinates used for a warp, not the picture itself.",
+          "type": "angle"
+        }
+      ],
+      "purpose": "Rotate a 2D coordinate field around the origin by `angle` (radians). Reads (x, y) from input R/G, writes rotated (x', y') back to R/G. Collapses the `angle → cos / sin / neg_sin → field_combine(cos, -sin)` chain that any rotated-projection effect would otherwise need.",
+      "role": "Map",
+      "stratum": "atom",
+      "summary": "Rotates a coordinate field around the centre. This spins the coordinates used to build a warp, not the image itself. For the picture, use Flip or a transform.",
+      "type_id": "node.rotate_coordinates"
+    },
+    {
+      "aliases": [
         "rotate vector",
         "90 degrees",
         "turn"
@@ -12479,7 +12483,7 @@
           "type": "angle"
         }
       ],
-      "purpose": "Rotate the RG vec2 field by 90 degrees. Legacy type-ID alias of node.rotate_vec2_by_angle (which generalises to an arbitrary angle), retained so older presets load.",
+      "purpose": "Rotate the RG vec2 field by 90 degrees. Legacy type-ID alias of node.rotate_vector (which generalises to an arbitrary angle), retained so older presets load.",
       "role": "Map",
       "stratum": "unlisted",
       "summary": "Rotates a 2D vector field by 90 degrees. The fixed-angle older version of Rotate Vector.",
@@ -12488,6 +12492,7 @@
     {
       "aliases": [
         "rotate vector",
+        "rotate vec2 by angle",
         "turn",
         "rotate flow"
       ],
@@ -12529,7 +12534,7 @@
       "role": "Map",
       "stratum": "atom",
       "summary": "Rotates a 2D vector field by an angle, turning every arrow in a flow or gradient field by the same amount.",
-      "type_id": "node.rotate_vec2_by_angle"
+      "type_id": "node.rotate_vector"
     },
     {
       "aliases": [
@@ -12669,80 +12674,6 @@
       "stratum": "atom",
       "summary": "Reads the image colour underneath each particle, so the particles can pick up the look of whatever they fly over.",
       "type_id": "node.sample_texture_at_particles"
-    },
-    {
-      "aliases": [
-        "sample volume",
-        "slice",
-        "3d to 2d"
-      ],
-      "category": "Fields & Coordinates",
-      "examples": [],
-      "inputs": [
-        {
-          "name": "in",
-          "required": true,
-          "type": "Texture3D"
-        }
-      ],
-      "label": "Sample Volume 2D",
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Texture2D"
-        }
-      ],
-      "params": [
-        {
-          "default": "0.5",
-          "label": "Slice Z",
-          "name": "slice_z",
-          "range": [
-            "0",
-            "1"
-          ],
-          "tooltip": "How deep into the volume to cut the slice, from the front at 0 to the back at 1. Sweep it smoothly to animate through the volume.",
-          "type": "float"
-        },
-        {
-          "default": "1",
-          "label": "UV Scale",
-          "name": "uv_scale",
-          "range": [
-            "0.05",
-            "10"
-          ],
-          "tooltip": "Zooms the slice into the output frame. 1 fills it normally, higher crops in tighter, lower pulls back.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Center X Offset",
-          "name": "center_x",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "Shifts which part of the slice you see along X, from -1 to 1. Use it to pan across the volume when zoomed in.",
-          "type": "float"
-        },
-        {
-          "default": "0",
-          "label": "Center Y Offset",
-          "name": "center_y",
-          "range": [
-            "-1",
-            "1"
-          ],
-          "tooltip": "Shifts which part of the slice you see along Y, from -1 to 1. Use it to pan across the volume when zoomed in.",
-          "type": "float"
-        }
-      ],
-      "purpose": "Sample a Texture3D at a fixed Z slice to produce a Texture2D. UV scale + center re-frame the slice into the output texture. Drives \"peel a 2D plane out of a volume\" use cases: MRI-style display, debug visualisation of volumetric fluid density, or any future Phase D volume rendering.",
-      "role": "Filter",
-      "stratum": "atom",
-      "summary": "Takes a flat slice through a 3D volume to get a normal 2D image. The way to look inside a fluid or density field.",
-      "type_id": "node.sample_volume_2d"
     },
     {
       "aliases": [],
@@ -14097,6 +14028,97 @@
     },
     {
       "aliases": [
+        "sine",
+        "cosine",
+        "trig texture",
+        "sin",
+        "cos",
+        "wave"
+      ],
+      "category": "Math & Convert",
+      "examples": [],
+      "inputs": [
+        {
+          "name": "in",
+          "required": true,
+          "type": "Texture2D"
+        },
+        {
+          "name": "freq",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "phase",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "freq_tex",
+          "required": false,
+          "type": "Texture2D"
+        },
+        {
+          "name": "phase_tex",
+          "required": false,
+          "type": "Texture2D"
+        }
+      ],
+      "label": "Sine / Cosine",
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Texture2D"
+        }
+      ],
+      "params": [
+        {
+          "default": "6.2831855",
+          "label": "Frequency",
+          "name": "freq",
+          "range": [
+            "0",
+            "100"
+          ],
+          "tooltip": "Scales the input before the wave is applied, setting how many cycles fit across the range. The default of about 6.28 fits one full cycle across a 0 to 1 input.",
+          "type": "float"
+        },
+        {
+          "default": "0",
+          "label": "Phase",
+          "name": "phase",
+          "range": [
+            "-6.2831855",
+            "6.2831855"
+          ],
+          "tooltip": "Shifts the wave along, in degrees, so you can slide the ripples or animate them by sweeping this value.",
+          "type": "angle"
+        },
+        {
+          "default": "0",
+          "enum_values": [
+            "Sin",
+            "Cos",
+            "Tan"
+          ],
+          "label": "Mode",
+          "name": "mode",
+          "range": [
+            "0",
+            "2"
+          ],
+          "tooltip": "Picks the wave shape from Sin, Cos, or Tan. Sin and Cos stay in the minus one to one range, Tan is clamped to keep the output stable.",
+          "type": "enum"
+        }
+      ],
+      "purpose": "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free. `freq` and `phase` can ALSO be driven per-pixel from optional texture inputs (`freq_tex` / `phase_tex` — R channel) — unlocks per-cell unique trig patterns (per-star twinkle, cellular flicker, etc.) when fed from a per-cell hash source like `node.voronoi_2d` (A channel) routed through `node.channel_mixer`.",
+      "role": "Filter",
+      "stratum": "atom",
+      "summary": "Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient.",
+      "type_id": "node.sine_cosine"
+    },
+    {
+      "aliases": [
         "sine wave",
         "sin term",
         "plasma",
@@ -14211,47 +14233,25 @@
       "role": "Map",
       "stratum": "atom",
       "summary": "Mixes a coordinate field into a moving sine wave in one step, the core ingredient of plasma and interference patterns.",
-      "type_id": "node.sin_term"
+      "type_id": "node.sine_wave"
     },
     {
       "aliases": [
-        "sine",
-        "cosine",
-        "trig texture",
-        "sin",
-        "cos",
-        "wave"
+        "sample volume 2d",
+        "sample volume",
+        "slice",
+        "3d to 2d"
       ],
-      "category": "Math & Convert",
+      "category": "Fields & Coordinates",
       "examples": [],
       "inputs": [
         {
           "name": "in",
           "required": true,
-          "type": "Texture2D"
-        },
-        {
-          "name": "freq",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "phase",
-          "required": false,
-          "type": "f32"
-        },
-        {
-          "name": "freq_tex",
-          "required": false,
-          "type": "Texture2D"
-        },
-        {
-          "name": "phase_tex",
-          "required": false,
-          "type": "Texture2D"
+          "type": "Texture3D"
         }
       ],
-      "label": "Sine / Cosine",
+      "label": "Slice Volume",
       "outputs": [
         {
           "name": "out",
@@ -14260,49 +14260,55 @@
       ],
       "params": [
         {
-          "default": "6.2831855",
-          "label": "Frequency",
-          "name": "freq",
+          "default": "0.5",
+          "label": "Slice Z",
+          "name": "slice_z",
           "range": [
             "0",
-            "100"
+            "1"
           ],
-          "tooltip": "Scales the input before the wave is applied, setting how many cycles fit across the range. The default of about 6.28 fits one full cycle across a 0 to 1 input.",
+          "tooltip": "How deep into the volume to cut the slice, from the front at 0 to the back at 1. Sweep it smoothly to animate through the volume.",
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "UV Scale",
+          "name": "uv_scale",
+          "range": [
+            "0.05",
+            "10"
+          ],
+          "tooltip": "Zooms the slice into the output frame. 1 fills it normally, higher crops in tighter, lower pulls back.",
           "type": "float"
         },
         {
           "default": "0",
-          "label": "Phase",
-          "name": "phase",
+          "label": "Center X Offset",
+          "name": "center_x",
           "range": [
-            "-6.2831855",
-            "6.2831855"
+            "-1",
+            "1"
           ],
-          "tooltip": "Shifts the wave along, in degrees, so you can slide the ripples or animate them by sweeping this value.",
-          "type": "angle"
+          "tooltip": "Shifts which part of the slice you see along X, from -1 to 1. Use it to pan across the volume when zoomed in.",
+          "type": "float"
         },
         {
           "default": "0",
-          "enum_values": [
-            "Sin",
-            "Cos",
-            "Tan"
-          ],
-          "label": "Mode",
-          "name": "mode",
+          "label": "Center Y Offset",
+          "name": "center_y",
           "range": [
-            "0",
-            "2"
+            "-1",
+            "1"
           ],
-          "tooltip": "Picks the wave shape from Sin, Cos, or Tan. Sin and Cos stay in the minus one to one range, Tan is clamped to keep the output stable.",
-          "type": "enum"
+          "tooltip": "Shifts which part of the slice you see along Y, from -1 to 1. Use it to pan across the volume when zoomed in.",
+          "type": "float"
         }
       ],
-      "purpose": "Per-pixel trigonometric remap: out = trig_mode(input.rgb * freq + phase). Mode picks Sin / Cos / Tan; the rest of the wiring is identical so switching variants is one click. Tan output is clamped to ±32 to keep downstream shaders NaN/Inf-free. `freq` and `phase` can ALSO be driven per-pixel from optional texture inputs (`freq_tex` / `phase_tex` — R channel) — unlocks per-cell unique trig patterns (per-star twinkle, cellular flicker, etc.) when fed from a per-cell hash source like `node.voronoi_2d` (A channel) routed through `node.channel_mixer`.",
+      "purpose": "Sample a Texture3D at a fixed Z slice to produce a Texture2D. UV scale + center re-frame the slice into the output texture. Drives \"peel a 2D plane out of a volume\" use cases: MRI-style display, debug visualisation of volumetric fluid density, or any future Phase D volume rendering.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Runs each value through sine, cosine, or tangent after scaling it. The building block for ripples and wave patterns out of a gradient.",
-      "type_id": "node.sine_cosine"
+      "summary": "Takes a flat slice through a 3D volume to get a normal 2D image. The way to look inside a fluid or density field.",
+      "type_id": "node.slice_volume"
     },
     {
       "aliases": [

@@ -822,13 +822,13 @@ crate::param_tooltips!("node.field_combine", {
     "c" => "A constant added to the result, useful for shifting the whole field up or down to centre it where you want.",
 });
 
-crate::param_tooltips!("node.gradient_central_diff", {
+crate::param_tooltips!("node.edge_slope", {
     "channel" => "Which colour channel the slope is measured from, R, G, B, or A. Use R for a greyscale height field.",
     "scale_mode" => "How the slope is scaled. Texel measures the raw pixel-to-pixel difference and suits normal maps and heightfields. UV scales by the image size so the result is in per-UV-unit space, which fluid-sim flow needs.",
     "wrap_mode" => "How edge pixels read their neighbours. Clamp holds the edge for normal images. Repeat wraps around to the far side, which you want for a tiling or cyclic fluid field.",
 });
 
-crate::param_tooltips!("node.gradient_central_diff_3d", {
+crate::param_tooltips!("node.edge_slope_3d", {
     "vol_res" => "The width and height of the volume in voxels, from 16 to 512. Match it to the density volume you are feeding in.",
     "vol_depth" => "How many slices deep the volume is, from 16 to 512. Match it to the density volume you are feeding in.",
 });
@@ -844,7 +844,7 @@ crate::param_tooltips!("node.hash_field_by_seed", {
     "mode" => "Hash2 returns a random pair in the red and green channels, good for 2D offsets. Hash1 returns a single random value across red, green, and blue.",
 });
 
-crate::param_tooltips!("node.lic_integrate", {
+crate::param_tooltips!("node.flow_lines", {
     "steps" => "How many samples to walk along the flow in each direction. More steps draw longer smears, up to a limit of 64.",
     "dt" => "How far each step travels, in pixels. Steps times this sets the total streak length.",
 });
@@ -859,15 +859,15 @@ crate::param_tooltips!("node.polar_field", {
     "cy" => "The vertical centre that angle and distance are measured from, where 0.5 is the middle of the frame.",
 });
 
-crate::param_tooltips!("node.rotate_2d", {
+crate::param_tooltips!("node.rotate_coordinates", {
     "angle" => "How far to spin the coordinate field around the centre, in degrees. A positive angle turns the +X direction toward +Y. This rotates the coordinates used for a warp, not the picture itself.",
 });
 
-crate::param_tooltips!("node.rotate_vec2_by_angle", {
+crate::param_tooltips!("node.rotate_vector", {
     "angle" => "Turns every vector in the field by this amount, in degrees. The default 90 gives the perpendicular curl flow used for fluid sims.",
 });
 
-crate::param_tooltips!("node.sample_volume_2d", {
+crate::param_tooltips!("node.slice_volume", {
     "slice_z" => "How deep into the volume to cut the slice, from the front at 0 to the back at 1. Sweep it smoothly to animate through the volume.",
     "uv_scale" => "Zooms the slice into the output frame. 1 fills it normally, higher crops in tighter, lower pulls back.",
     "center_x" => "Shifts which part of the slice you see along X, from -1 to 1. Use it to pan across the volume when zoomed in.",
@@ -880,7 +880,7 @@ crate::param_tooltips!("node.scanline_jitter_field", {
     "speed" => "How fast the tearing pattern reshuffles over time, from 0.1 for a slow drift up to 10 for a fast jitter.",
 });
 
-crate::param_tooltips!("node.sin_term", {
+crate::param_tooltips!("node.sine_wave", {
     "a" => "How much the field's red channel feeds the wave, usually the X coordinate. Set a and b together to aim the wave along X, Y, or a diagonal.",
     "b" => "How much the field's green channel feeds the wave, usually the Y coordinate. Leave it at 0 to read only the red channel from a scalar field.",
     "c" => "A constant added to the projection before the wave, which shifts its phase.",

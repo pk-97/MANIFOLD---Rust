@@ -1,7 +1,7 @@
-//! `node.gradient_central_diff_3d` — 6-tap central-difference gradient
+//! `node.edge_slope_3d` — 6-tap central-difference gradient
 //! of a scalar density `Texture3D`, written as a vec3 `Texture3D`.
 //!
-//! The 3D sibling of `node.gradient_central_diff` (the 2D atom). Reads
+//! The 3D sibling of `node.edge_slope` (the 2D atom). Reads
 //! a scalar density volume, computes a 6-tap central-difference gradient
 //! with toroidal wrap (XY use `vol_res`, Z uses `vol_depth`), scales by
 //! 0.5 (integer voxel-space central difference), and writes the vec3
@@ -30,8 +30,8 @@ struct Gradient3DUniforms {
 
 crate::primitive! {
     name: GradientCentralDiff3D,
-    type_id: "node.gradient_central_diff_3d",
-    purpose: "6-tap central-difference gradient of a scalar density Texture3D, written as a vec3 Texture3D. Toroidal wrap (XY use vol_res, Z uses vol_depth); gradient = float3(dx, dy, dz) * 0.5 in integer voxel space. 3D sibling of node.gradient_central_diff. Decomposed from the gradient half of the legacy fused node.fluid_gradient_curl_3d; pair with node.curl_slope_force_3d for the FluidSim3D force field.",
+    type_id: "node.edge_slope_3d",
+    purpose: "6-tap central-difference gradient of a scalar density Texture3D, written as a vec3 Texture3D. Toroidal wrap (XY use vol_res, Z uses vol_depth); gradient = float3(dx, dy, dz) * 0.5 in integer voxel space. 3D sibling of node.edge_slope. Decomposed from the gradient half of the legacy fused node.fluid_gradient_curl_3d; pair with node.curl_slope_force_3d for the FluidSim3D force field.",
     inputs: {
         density: Texture3D required,
     },
@@ -62,7 +62,7 @@ crate::primitive! {
     summary: "Measures how fast a value changes through a 3D volume, giving a direction at every point. Used to find flow and forces inside a fluid sim.",
     category: FieldsAndCoordinates,
     role: Filter,
-    aliases: ["gradient 3d", "edge slope", "volume gradient"],
+    aliases: ["gradient 3d", "edge slope", "gradient central diff 3d", "volume gradient"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/gradient_central_diff_3d_body.wgsl"),
     input_access: [GatherTexel],
@@ -94,9 +94,9 @@ impl Primitive for GradientCentralDiff3D {
             // is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.gradient_central_diff_3d standalone codegen"),
+                    .expect("node.edge_slope_3d standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.gradient_central_diff_3d",
+                "node.edge_slope_3d",
             )
         });
 
@@ -124,7 +124,7 @@ impl Primitive for GradientCentralDiff3D {
                 },
             ],
             [vol_res.div_ceil(8), vol_res.div_ceil(8), vol_depth.div_ceil(8)],
-            "node.gradient_central_diff_3d",
+            "node.edge_slope_3d",
         );
     }
 }
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn declares_texture_3d_in_and_out() {
         use crate::node_graph::ports::PortType;
-        assert_eq!(GradientCentralDiff3D::TYPE_ID, "node.gradient_central_diff_3d");
+        assert_eq!(GradientCentralDiff3D::TYPE_ID, "node.edge_slope_3d");
         assert_eq!(GradientCentralDiff3D::INPUTS.len(), 1);
         assert_eq!(GradientCentralDiff3D::INPUTS[0].name, "density");
         assert_eq!(GradientCentralDiff3D::INPUTS[0].ty, PortType::Texture3D);
@@ -157,6 +157,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = GradientCentralDiff3D::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.gradient_central_diff_3d");
+        assert_eq!(node.type_id().as_str(), "node.edge_slope_3d");
     }
 }

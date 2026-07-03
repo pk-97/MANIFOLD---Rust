@@ -1,4 +1,4 @@
-//! `node.lic_integrate` — Line Integral Convolution: walk N steps both
+//! `node.flow_lines` — Line Integral Convolution: walk N steps both
 //! directions along a normalised velocity field, weighted-accumulate
 //! `source.r` along the path. Classic flow visualisation atom.
 //!
@@ -24,7 +24,7 @@ struct LicUniforms {
 
 crate::primitive! {
     name: LicIntegrate,
-    type_id: "node.lic_integrate",
+    type_id: "node.flow_lines",
     purpose: "Line Integral Convolution. For each pixel, walks N steps forward and N steps backward along the normalised velocity field, weighted-accumulating `source.r` along the path. Output = weighted_sum / total_weight in R; GBA = (0, 0, 1). Steps capped at 64. The classic flow-visualisation atom: pair `source` with a hash-noise texture for streamlines (oily-fluid Lines), or with a derived heightmap for flow-aligned intensity (oily-fluid Flow Field).",
     inputs: {
         source: Texture2D required,
@@ -59,7 +59,7 @@ crate::primitive! {
     summary: "Smears noise along a flow field to reveal its streamlines, turning a vector field into a visible flow texture.",
     category: FieldsAndCoordinates,
     role: Filter,
-    aliases: ["flow lines", "lic", "streamlines", "flow viz"],
+    aliases: ["flow lines", "lic", "lic integrate", "streamlines", "flow viz"],
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/lic_integrate_body.wgsl"),
     input_access: [Gather, Gather],
@@ -104,9 +104,9 @@ impl Primitive for LicIntegrate {
             // velocity(2)/samp(3)/dst(4). lic_integrate.wgsl is the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec::<Self>()
-                    .expect("node.lic_integrate standalone codegen"),
+                    .expect("node.flow_lines standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.lic_integrate",
+                "node.flow_lines",
             )
         });
         let sampler = self
@@ -145,7 +145,7 @@ impl Primitive for LicIntegrate {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.lic_integrate",
+            "node.flow_lines",
         );
     }
 }

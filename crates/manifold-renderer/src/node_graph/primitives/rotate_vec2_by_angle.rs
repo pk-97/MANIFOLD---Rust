@@ -1,4 +1,4 @@
-//! `node.rotate_vec2_by_angle` — rotate the RG vec2 field by an
+//! `node.rotate_vector` — rotate the RG vec2 field by an
 //! arbitrary angle (radians).
 //!
 //! Generalisation of the older `node.rotate_vec2_90` (now a type-ID
@@ -32,7 +32,7 @@ struct RotateUniforms {
 
 crate::primitive! {
     name: RotateVec2ByAngle,
-    type_id: "node.rotate_vec2_by_angle",
+    type_id: "node.rotate_vector",
     purpose: "Rotate the input's RG vec2 field by an arbitrary angle (radians) per pixel. `out.x = v.x*cos - v.y*sin`, `out.y = v.x*sin + v.y*cos`. The general curl-from-gradient atom — defaults to angle = PI/2 (+90° CCW, the divergence-free curl-flow case) but the angle is port-shadow-param so a control wire (LFO, driver, manual slider, clip-trigger envelope) can sweep it continuously. Sweeping the angle is how FluidSim2D's `rotation_angle` knob biases the flow off the pure-curl axis.",
     inputs: {
         in: Texture2D required,
@@ -51,13 +51,13 @@ crate::primitive! {
             enum_values: &[],
         },
     ],
-    composition_notes: "BA of the input are ignored; output BA = (0, 1). Chain order for fluid-sim curl: `gradient_central_diff(scale_mode=UV, wrap_mode=Repeat) → scale_offset_texture(slope_strength * area_scale) → rotate_vec2_by_angle(angle)` — the decomposed shape of the legacy `fluid_gradient_rotate` bundle. For the oily-fluid divergence-free curl pattern, leave angle at the default PI/2 and wire a normalized gradient into `in`. For larger rotations of a UV-space transform use `node.rotate_2d` (different operation — that's a UV-space coordinate transform, not a per-pixel vec2 rotation). Legacy type-ID `node.rotate_vec2_90` aliases to this primitive; saved projects keep working with the default PI/2 angle.",
+    composition_notes: "BA of the input are ignored; output BA = (0, 1). Chain order for fluid-sim curl: `gradient_central_diff(scale_mode=UV, wrap_mode=Repeat) → scale_offset_texture(slope_strength * area_scale) → rotate_vec2_by_angle(angle)` — the decomposed shape of the legacy `fluid_gradient_rotate` bundle. For the oily-fluid divergence-free curl pattern, leave angle at the default PI/2 and wire a normalized gradient into `in`. For larger rotations of a UV-space transform use `node.rotate_coordinates` (different operation — that's a UV-space coordinate transform, not a per-pixel vec2 rotation). Legacy type-ID `node.rotate_vec2_90` aliases to this primitive; saved projects keep working with the default PI/2 angle.",
     examples: [],
     picker: { label: "Rotate Vector", category: Atom },
     summary: "Rotates a 2D vector field by an angle, turning every arrow in a flow or gradient field by the same amount.",
     category: FieldsAndCoordinates,
     role: Map,
-    aliases: ["rotate vector", "turn", "rotate flow"],
+    aliases: ["rotate vector", "rotate vec2 by angle", "turn", "rotate flow"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/rotate_vec2_by_angle_body.wgsl"),
     extra_fields: {
@@ -71,7 +71,7 @@ crate::primitive! {
 // `node.rotate_vec2_90` keep working. The new primitive's default
 // angle (PI/2 = +90° CCW) matches the legacy direction=0 default. The
 // alias hides from the palette (picker: None) — new graphs pick the
-// canonical `node.rotate_vec2_by_angle` name from the picker.
+// canonical `node.rotate_vector` name from the picker.
 inventory::submit! {
     crate::node_graph::persistence::PrimitiveFactory {
         type_id: "node.rotate_vec2_90",
@@ -119,9 +119,9 @@ impl Primitive for RotateVec2ByAngle {
             // the parity oracle.
             gpu.device.create_compute_pipeline(
                 &crate::node_graph::freeze::codegen::standalone_for_spec_fmt::<Self>(out_fmt)
-                    .expect("node.rotate_vec2_by_angle standalone codegen"),
+                    .expect("node.rotate_vector standalone codegen"),
                 crate::node_graph::freeze::codegen::ENTRY,
-                "node.rotate_vec2_by_angle",
+                "node.rotate_vector",
             )
         });
         let sampler = self
@@ -156,7 +156,7 @@ impl Primitive for RotateVec2ByAngle {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.rotate_vec2_by_angle",
+            "node.rotate_vector",
         );
     }
 }

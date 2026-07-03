@@ -1878,7 +1878,7 @@
           },
           {
             "id": 1,
-            "typeId": "node.gradient_central_diff",
+            "typeId": "node.edge_slope",
             "handle": "grad",
             "nodeId": "grad",
             "params": {
@@ -1914,7 +1914,7 @@
           },
           {
             "id": 3,
-            "typeId": "node.rotate_vec2_by_angle",
+            "typeId": "node.rotate_vector",
             "handle": "grad_rotate",
             "nodeId": "grad_rotate",
             "params": {

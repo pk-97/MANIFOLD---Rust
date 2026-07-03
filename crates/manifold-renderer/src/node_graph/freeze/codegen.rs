@@ -3968,7 +3968,7 @@ mod gpu_tests {
         let cases: &[(&str, &str, &[u8])] = &[
             ("node.sharpen", "sharpen.wgsl", sharpen_bytes.as_slice()),
             ("node.edge_detect", "edge_detect.wgsl", edge_bytes.as_slice()),
-            ("node.gradient_central_diff", "gradient_central_diff.wgsl", grad_bytes.as_slice()),
+            ("node.edge_slope", "gradient_central_diff.wgsl", grad_bytes.as_slice()),
             ("node.custom_convolution", "convolution_2d_9tap.wgsl", conv_bytes.as_slice()),
             ("node.flip", "mirror_axis.wgsl", mirror_bytes.as_slice()),
             ("node.heightmap_to_normal", "heightmap_to_normal.wgsl", heightmap_bytes.as_slice()),
@@ -4586,7 +4586,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         halves.to_vec()
     }
 
-    /// 3D GatherTexel parity: node.gradient_central_diff_3d reads its density
+    /// 3D GatherTexel parity: node.edge_slope_3d reads its density
     /// volume via integer textureLoad (6-tap central difference, toroidal wrap, NO
     /// sampler). The generated kernel binds uniform(0)/tex(1)/dst(2) — identical to
     /// the hand layout (GatherTexel emits no sampler) — so one uniform drives both.
@@ -4597,7 +4597,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         let n = 32u32;
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
 
-        let node = registry.construct("node.gradient_central_diff_3d").unwrap();
+        let node = registry.construct("node.edge_slope_3d").unwrap();
         let generated = generate_standalone(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),
@@ -4816,7 +4816,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         }
 
         // rotate_vec2_by_angle: dual-packed (hand cos/sin vs generated angle).
-        let node = registry.construct("node.rotate_vec2_by_angle").unwrap();
+        let node = registry.construct("node.rotate_vector").unwrap();
         let generated = generate_standalone(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),
@@ -5135,7 +5135,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
         let differ = TextureDiff::new(&device);
 
-        let node = registry.construct("node.lic_integrate").unwrap();
+        let node = registry.construct("node.flow_lines").unwrap();
         let generated = generate_standalone(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),
@@ -5167,7 +5167,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         );
     }
 
-    /// MIXED-DIM parity: node.sample_volume_2d gathers a Texture3D `in` at a slice
+    /// MIXED-DIM parity: node.slice_volume gathers a Texture3D `in` at a slice
     /// coord and writes a Texture2D `out`. The generated kernel must bind tex_in as
     /// texture_3d (per-input dim) while the wrapper stays 2D (output dim). Fill a
     /// 32^3 volume, sample it into a 2D output; both kernels share uniform(0)/
@@ -5180,7 +5180,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {\n\
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
         let differ = TextureDiff::new(&device);
 
-        let node = registry.construct("node.sample_volume_2d").unwrap();
+        let node = registry.construct("node.slice_volume").unwrap();
         let generated = generate_standalone(
             node.fusion_kind(),
             node.wgsl_body().unwrap(),

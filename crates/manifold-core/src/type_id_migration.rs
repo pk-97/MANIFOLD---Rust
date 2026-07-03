@@ -97,6 +97,14 @@ pub static TYPE_ID_MIGRATIONS: &[(&str, &str)] = &[
     ("node.resolve_accumulator", "node.resolve_scatter"),
     ("node.resolve_3d_accumulator", "node.resolve_scatter_3d"),
     ("node.texture_dimensions", "node.texture_size"),
+    // --- VOCAB P2 5/8: Fields & Coordinates (docs/NODE_VOCABULARY_AUDIT.md §4) ---
+    ("node.gradient_central_diff", "node.edge_slope"),
+    ("node.gradient_central_diff_3d", "node.edge_slope_3d"),
+    ("node.lic_integrate", "node.flow_lines"),
+    ("node.rotate_2d", "node.rotate_coordinates"),
+    ("node.rotate_vec2_by_angle", "node.rotate_vector"),
+    ("node.sin_term", "node.sine_wave"),
+    ("node.sample_volume_2d", "node.slice_volume"),
 ];
 
 /// One legacy-fold entry: `(old_id, new_id, seed_params)` — the params to

@@ -2395,7 +2395,7 @@
           {
             "id": 111,
             "nodeId": "grad_3d",
-            "typeId": "node.gradient_central_diff_3d",
+            "typeId": "node.edge_slope_3d",
             "handle": "grad_3d",
             "params": {
               "vol_depth": {

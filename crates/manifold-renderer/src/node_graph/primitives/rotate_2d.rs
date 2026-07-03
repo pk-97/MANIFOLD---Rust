@@ -1,4 +1,4 @@
-//! `node.rotate_2d` — rotate a coordinate field by an angle.
+//! `node.rotate_coordinates` — rotate a coordinate field by an angle.
 //!
 //! Reads (x, y) from the input's R/G channels and writes the rotated
 //! (x', y') back to R/G:
@@ -31,7 +31,7 @@ struct Rotate2DUniforms {
 
 crate::primitive! {
     name: Rotate2D,
-    type_id: "node.rotate_2d",
+    type_id: "node.rotate_coordinates",
     purpose: "Rotate a 2D coordinate field around the origin by `angle` (radians). Reads (x, y) from input R/G, writes rotated (x', y') back to R/G. Collapses the `angle → cos / sin / neg_sin → field_combine(cos, -sin)` chain that any rotated-projection effect would otherwise need.",
     inputs: {
         in: Texture2D required,
@@ -54,11 +54,11 @@ crate::primitive! {
     ],
     composition_notes: "Use upstream of node.field_combine to extract a rotated coordinate channel as a scalar field (Plasma's v5 rotated-X term). Counter-clockwise: positive angle rotates +X toward +Y. Input must be a coordinate texture (centered_uv, uv_field, etc.) — the primitive does not resample image content.",
     examples: [],
-    picker: { label: "Rotate", category: Atom },
+    picker: { label: "Rotate Coordinates", category: Atom },
     summary: "Rotates a coordinate field around the centre. This spins the coordinates used to build a warp, not the image itself. For the picture, use Flip or a transform.",
     category: FieldsAndCoordinates,
     role: Map,
-    aliases: ["rotate coordinates", "rotate field", "spin"],
+    aliases: ["rotate coordinates", "rotate 2d", "rotate field", "spin"],
 }
 
 impl Primitive for Rotate2D {
@@ -87,7 +87,7 @@ impl Primitive for Rotate2D {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/rotate_2d.wgsl"),
                 "cs_main",
-                "node.rotate_2d",
+                "node.rotate_coordinates",
             )
         });
         let sampler = self
@@ -122,7 +122,7 @@ impl Primitive for Rotate2D {
                 },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
-            "node.rotate_2d",
+            "node.rotate_coordinates",
         );
     }
 }
@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn rotate_2d_declares_required_in_and_optional_angle() {
         use crate::node_graph::ports::{PortType, ScalarType};
-        assert_eq!(Rotate2D::TYPE_ID, "node.rotate_2d");
+        assert_eq!(Rotate2D::TYPE_ID, "node.rotate_coordinates");
         let ins = Rotate2D::INPUTS;
         assert_eq!(ins.len(), 2);
         assert_eq!(ins[0].name, "in");
@@ -159,6 +159,6 @@ mod tests {
     fn primitive_registers_as_palette_atom() {
         let prim = Rotate2D::new();
         let node: &dyn EffectNode = &prim;
-        assert_eq!(node.type_id().as_str(), "node.rotate_2d");
+        assert_eq!(node.type_id().as_str(), "node.rotate_coordinates");
     }
 }

@@ -910,7 +910,7 @@
           {
             "id": 87,
             "nodeId": "grad",
-            "typeId": "node.gradient_central_diff",
+            "typeId": "node.edge_slope",
             "handle": "grad",
             "params": {
               "channel": {
@@ -948,7 +948,7 @@
           {
             "id": 89,
             "nodeId": "grad_rotate",
-            "typeId": "node.rotate_vec2_by_angle",
+            "typeId": "node.rotate_vector",
             "handle": "grad_rotate",
             "params": {
               "angle": {
@@ -1191,7 +1191,7 @@
           {
             "id": 203,
             "nodeId": "text_grad",
-            "typeId": "node.gradient_central_diff",
+            "typeId": "node.edge_slope",
             "handle": "text_grad",
             "params": {
               "channel": {
@@ -1212,7 +1212,7 @@
           {
             "id": 204,
             "nodeId": "text_curl",
-            "typeId": "node.rotate_vec2_by_angle",
+            "typeId": "node.rotate_vector",
             "handle": "text_curl",
             "params": {
               "angle": {

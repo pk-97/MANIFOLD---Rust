@@ -385,7 +385,7 @@ hand_descriptor!(
 // Vector field (rotate_vec2_by_angle.rs — legacy alias)
 hand_descriptor!(
     "node.rotate_vec2_90",
-    "Rotate the RG vec2 field by 90 degrees. Legacy type-ID alias of node.rotate_vec2_by_angle (which generalises to an arbitrary angle), retained so older presets load.",
+    "Rotate the RG vec2 field by 90 degrees. Legacy type-ID alias of node.rotate_vector (which generalises to an arbitrary angle), retained so older presets load.",
     summary: "Rotates a 2D vector field by 90 degrees. The fixed-angle older version of Rotate Vector.",
     category: FieldsAndCoordinates,
     role: Map,

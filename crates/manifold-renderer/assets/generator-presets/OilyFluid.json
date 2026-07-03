@@ -429,7 +429,7 @@
           },
           {
             "id": 2,
-            "typeId": "node.gradient_central_diff",
+            "typeId": "node.edge_slope",
             "handle": "grad_r",
             "nodeId": "grad_r",
             "params": {
@@ -441,7 +441,7 @@
           },
           {
             "id": 3,
-            "typeId": "node.gradient_central_diff",
+            "typeId": "node.edge_slope",
             "handle": "grad_g",
             "nodeId": "grad_g",
             "params": {
@@ -493,7 +493,7 @@
           },
           {
             "id": 8,
-            "typeId": "node.rotate_vec2_by_angle",
+            "typeId": "node.rotate_vector",
             "handle": "curl_rotate",
             "nodeId": "curl_rotate",
             "params": {
@@ -1241,7 +1241,7 @@
           },
           {
             "id": 3,
-            "typeId": "node.lic_integrate",
+            "typeId": "node.flow_lines",
             "handle": "flow_lic",
             "nodeId": "flow_lic",
             "params": {
@@ -1706,7 +1706,7 @@
                 },
                 {
                   "id": 2,
-                  "typeId": "node.lic_integrate",
+                  "typeId": "node.flow_lines",
                   "handle": "lines_lic",
                   "nodeId": "lines_lic",
                   "params": {
