@@ -13,5 +13,6 @@ pub mod layer;
 pub mod marker;
 pub mod preset;
 pub mod selection;
+pub mod session_commands;
 pub mod settings;
 pub mod stage;

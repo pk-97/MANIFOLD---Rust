@@ -15,7 +15,12 @@ use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::commands::effects::*;
 use manifold_editing::commands::envelopes::*;
 use manifold_editing::commands::layer::*;
+use manifold_editing::commands::session_commands::*;
 use manifold_editing::commands::settings::*;
+use manifold_editing::service::EditingService;
+use manifold_core::marker::TimelineMarker;
+use manifold_core::session::{ClipSequence, Scene, SessionSlot};
+use manifold_core::SceneId;
 
 // Test-only inventory submissions — manifold-renderer isn't linked in editing tests.
 use manifold_core::effect_registration::EffectMetadata;
@@ -1978,4 +1983,366 @@ fn unexpose_prunes_orphan_envelopes_and_undo_restores_them() {
         envs.iter().any(|e| e.param_id == "user.uv_transform.translate.1"),
         "undo must reinstate the pruned envelope",
     );
+}
+
+// ─── Session Commands (P3) ───
+// docs/SESSION_MODE_DESIGN.md §7 — grid editing + timeline<->session capture/paste.
+
+fn make_session_test_project() -> Project {
+    let mut project = Project::default();
+    project.settings.bpm = manifold_core::units::Bpm(120.0);
+    project.settings.time_signature_numerator = 4;
+
+    project
+        .timeline
+        .insert_layer(0, Layer::new("Video Layer".into(), LayerType::Video, 0));
+    project
+        .timeline
+        .insert_layer(1, Layer::new("Gen Layer".into(), LayerType::Generator, 1));
+
+    // A video clip spanning [0, 8) beats, in_point offset so head-trim math
+    // is observable (advancing in_point off zero is the failure-prone case).
+    let video_clip = TimelineClip {
+        video_clip_id: "vid1".into(),
+        start_beat: Beats(0.0),
+        duration_beats: Beats(8.0),
+        in_point: Seconds(1.0),
+        ..Default::default()
+    };
+    project.timeline.layers[0].restore_clip(video_clip);
+
+    project.timeline.rebuild_clip_lookup();
+    project
+}
+
+#[test]
+fn add_scene_undo_roundtrip() {
+    let mut project = make_session_test_project();
+    let scene = Scene {
+        id: SceneId::new("scene-1"),
+        name: "Intro".into(),
+        color: None,
+    };
+    let mut cmd = AddSceneCommand::new(scene.clone(), 0);
+
+    cmd.execute(&mut project);
+    assert_eq!(project.session.scenes.len(), 1);
+    assert_eq!(project.session.scenes[0].name, "Intro");
+
+    cmd.undo(&mut project);
+    assert!(project.session.scenes.is_empty());
+}
+
+#[test]
+fn remove_scene_removes_its_slots_and_undo_restores_both() {
+    let mut project = make_session_test_project();
+    let scene_id = SceneId::new("scene-1");
+    project.session.scenes.push(Scene {
+        id: scene_id.clone(),
+        name: "Drop".into(),
+        color: None,
+    });
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    project.session.slots.push(SessionSlot {
+        layer_id: layer_id.clone(),
+        scene_id: scene_id.clone(),
+        sequence: ClipSequence::default(),
+        name: String::new(),
+        color: None,
+    });
+
+    let mut cmd = RemoveSceneCommand::new(scene_id.clone());
+    cmd.execute(&mut project);
+    assert!(project.session.scenes.is_empty());
+    assert!(project.session.slots.is_empty());
+
+    cmd.undo(&mut project);
+    assert_eq!(project.session.scenes.len(), 1);
+    assert_eq!(project.session.slots.len(), 1);
+    assert_eq!(project.session.slots[0].scene_id, scene_id);
+}
+
+#[test]
+fn rename_scene_undo_roundtrip() {
+    let mut project = make_session_test_project();
+    let scene_id = SceneId::new("scene-1");
+    project.session.scenes.push(Scene {
+        id: scene_id.clone(),
+        name: "Old".into(),
+        color: None,
+    });
+
+    let mut cmd = RenameSceneCommand::new(scene_id.clone(), "Old".into(), "New".into());
+    cmd.execute(&mut project);
+    assert_eq!(project.session.scenes[0].name, "New");
+
+    cmd.undo(&mut project);
+    assert_eq!(project.session.scenes[0].name, "Old");
+}
+
+#[test]
+fn reorder_scene_undo_roundtrip() {
+    let mut project = make_session_test_project();
+    let a = Scene {
+        id: SceneId::new("a"),
+        name: "A".into(),
+        color: None,
+    };
+    let b = Scene {
+        id: SceneId::new("b"),
+        name: "B".into(),
+        color: None,
+    };
+    project.session.scenes = vec![a.clone(), b.clone()];
+
+    let old_order = project.session.scenes.clone();
+    let new_order = vec![b.clone(), a.clone()];
+    let mut cmd = ReorderSceneCommand::new(old_order, new_order);
+
+    cmd.execute(&mut project);
+    assert_eq!(project.session.scenes[0].id, b.id);
+
+    cmd.undo(&mut project);
+    assert_eq!(project.session.scenes[0].id, a.id);
+}
+
+#[test]
+fn set_slot_command_set_replace_clear_undo_roundtrip() {
+    let mut project = make_session_test_project();
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let scene_id = SceneId::new("scene-1");
+
+    let slot_a = SessionSlot {
+        layer_id: layer_id.clone(),
+        scene_id: scene_id.clone(),
+        sequence: ClipSequence {
+            length_beats: Beats(4.0),
+            clips: Vec::new(),
+        },
+        name: "A".into(),
+        color: None,
+    };
+
+    // Set on an empty cell.
+    let mut set_cmd = SetSlotCommand::new(layer_id.clone(), scene_id.clone(), Some(slot_a.clone()));
+    set_cmd.execute(&mut project);
+    assert_eq!(project.session.slots.len(), 1);
+    assert_eq!(project.session.slots[0].name, "A");
+
+    set_cmd.undo(&mut project);
+    assert!(project.session.slots.is_empty());
+
+    // Replace.
+    set_cmd.execute(&mut project);
+    let slot_b = SessionSlot {
+        name: "B".into(),
+        ..slot_a.clone()
+    };
+    let mut replace_cmd = SetSlotCommand::new(layer_id.clone(), scene_id.clone(), Some(slot_b));
+    replace_cmd.execute(&mut project);
+    assert_eq!(project.session.slots.len(), 1);
+    assert_eq!(project.session.slots[0].name, "B");
+
+    replace_cmd.undo(&mut project);
+    assert_eq!(project.session.slots.len(), 1);
+    assert_eq!(project.session.slots[0].name, "A");
+
+    // Clear.
+    let mut clear_cmd = SetSlotCommand::new(layer_id.clone(), scene_id.clone(), None);
+    clear_cmd.execute(&mut project);
+    assert!(project.session.slots.is_empty());
+
+    clear_cmd.undo(&mut project);
+    assert_eq!(project.session.slots.len(), 1);
+    assert_eq!(project.session.slots[0].name, "A");
+}
+
+#[test]
+fn capture_range_creates_scene_and_slot_undo_roundtrip() {
+    let mut project = make_session_test_project();
+
+    let mut cmd = CaptureRangeToSceneCommand::new(Beats(2.0), Beats(6.0), None);
+    cmd.execute(&mut project);
+
+    assert_eq!(project.session.scenes.len(), 1);
+    assert_eq!(project.session.scenes[0].name, "Scene 1");
+    // Only the video layer has a clip in range; the (empty) generator layer
+    // gets no slot.
+    assert_eq!(project.session.slots.len(), 1);
+    let slot = &project.session.slots[0];
+    assert_eq!(slot.sequence.length_beats, Beats(4.0));
+    assert_eq!(slot.sequence.clips.len(), 1);
+    assert_eq!(slot.sequence.clips[0].start_beat, Beats(0.0)); // rebased to sequence-relative
+    assert_eq!(slot.sequence.clips[0].duration_beats, Beats(4.0));
+
+    cmd.undo(&mut project);
+    assert!(project.session.scenes.is_empty());
+    assert!(project.session.slots.is_empty());
+}
+
+#[test]
+fn capture_range_names_scene_from_nearest_marker_at_or_before() {
+    let mut project = make_session_test_project();
+    let mut early = TimelineMarker::new(Beats(0.0));
+    early.name = "Verse".into();
+    project.timeline.markers.push(early);
+    let mut late = TimelineMarker::new(Beats(10.0));
+    late.name = "Should Not Match".into();
+    project.timeline.markers.push(late);
+
+    let mut cmd = CaptureRangeToSceneCommand::new(Beats(2.0), Beats(6.0), None);
+    cmd.execute(&mut project);
+
+    assert_eq!(project.session.scenes[0].name, "Verse");
+}
+
+/// The load-bearing parity check (§7 + P3 gate): `CaptureRangeToSceneCommand`
+/// must reuse the existing split path's head-trim math, not reimplement it.
+/// This runs the REAL `SplitClipCommand` (via
+/// `EditingService::split_clip_at_beat`) on one project and the REAL
+/// `CaptureRangeToSceneCommand` on an identical project, then compares the
+/// resulting `in_point` values byte-for-byte — not a reimplementation of the
+/// formula in the test, an execution of both commands.
+#[test]
+fn capture_range_trim_matches_split_command_in_point_math() {
+    let mut split_project = make_session_test_project();
+    let clip_id = split_project.timeline.layers[0].clips[0].id.clone();
+    let spb = split_project.settings.seconds_per_beat();
+
+    let mut split_cmd =
+        EditingService::split_clip_at_beat(&split_project, clip_id.as_str(), Beats(2.0), spb)
+            .expect("split at beat 2.0 should be valid (strictly inside the clip)");
+    let tail_id = split_cmd.tail_clip_id().clone();
+    split_cmd.execute(&mut split_project);
+    let split_tail_in_point = split_project
+        .timeline
+        .find_clip_by_id_mut(tail_id.as_str())
+        .expect("tail clip exists after split executes")
+        .in_point;
+
+    let mut capture_project = make_session_test_project();
+    let mut capture_cmd = CaptureRangeToSceneCommand::new(Beats(2.0), Beats(6.0), None);
+    capture_cmd.execute(&mut capture_project);
+    let captured_in_point = capture_project.session.slots[0].sequence.clips[0].in_point;
+
+    assert!(
+        (captured_in_point - split_tail_in_point).abs() < Seconds(1e-9),
+        "capture trim in_point {captured_in_point:?} != split command's tail in_point {split_tail_in_point:?} — \
+         the capture path must reuse the split path's head-trim math exactly",
+    );
+}
+
+#[test]
+fn paste_slot_to_timeline_undo_roundtrip() {
+    let mut project = make_session_test_project();
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let scene_id = SceneId::new("scene-1");
+
+    let seq_clip = TimelineClip {
+        video_clip_id: "seq-vid".into(),
+        start_beat: Beats(0.0),
+        duration_beats: Beats(2.0),
+        ..Default::default()
+    };
+    project.session.slots.push(SessionSlot {
+        layer_id: layer_id.clone(),
+        scene_id: scene_id.clone(),
+        sequence: ClipSequence {
+            length_beats: Beats(2.0),
+            clips: vec![seq_clip],
+        },
+        name: String::new(),
+        color: None,
+    });
+
+    let initial_clip_count = project.timeline.layers[0].clips.len();
+    let mut cmd = PasteSlotToTimelineCommand::new(layer_id.clone(), scene_id.clone(), Beats(20.0));
+    cmd.execute(&mut project);
+
+    assert_eq!(project.timeline.layers[0].clips.len(), initial_clip_count + 1);
+    let pasted = project.timeline.layers[0]
+        .clips
+        .iter()
+        .find(|c| c.video_clip_id == "seq-vid")
+        .expect("pasted clip present");
+    assert_eq!(pasted.start_beat, Beats(20.0));
+    // Fresh id both directions — never shares a ClipId with the slot's stored sequence.
+    assert_ne!(pasted.id, project.session.slots[0].sequence.clips[0].id);
+
+    cmd.undo(&mut project);
+    assert_eq!(project.timeline.layers[0].clips.len(), initial_clip_count);
+}
+
+#[test]
+fn paste_slot_to_timeline_handles_collision_and_undo_restores_original() {
+    let mut project = make_session_test_project();
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let scene_id = SceneId::new("scene-1");
+
+    let seq_clip = TimelineClip {
+        video_clip_id: "seq-vid".into(),
+        start_beat: Beats(0.0),
+        duration_beats: Beats(2.0),
+        ..Default::default()
+    };
+    project.session.slots.push(SessionSlot {
+        layer_id: layer_id.clone(),
+        scene_id: scene_id.clone(),
+        sequence: ClipSequence {
+            length_beats: Beats(2.0),
+            clips: vec![seq_clip],
+        },
+        name: String::new(),
+        color: None,
+    });
+
+    // The existing "vid1" clip occupies [0, 8). Pasting at beat 0 collides
+    // head-on; `enforce_non_overlap_for` (via `Layer::add_clip`) must trim it.
+    let mut cmd = PasteSlotToTimelineCommand::new(layer_id.clone(), scene_id.clone(), Beats(0.0));
+    cmd.execute(&mut project);
+
+    let existing = project.timeline.layers[0]
+        .clips
+        .iter()
+        .find(|c| c.video_clip_id == "vid1")
+        .expect("original clip still present, trimmed");
+    assert_eq!(existing.start_beat, Beats(2.0));
+
+    cmd.undo(&mut project);
+    let restored = project.timeline.layers[0]
+        .clips
+        .iter()
+        .find(|c| c.video_clip_id == "vid1")
+        .expect("original clip restored");
+    assert_eq!(restored.start_beat, Beats(0.0));
+    assert_eq!(restored.duration_beats, Beats(8.0));
+}
+
+#[test]
+fn delete_layer_removes_its_session_slots_and_undo_restores() {
+    let mut project = make_session_test_project();
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let scene_id = SceneId::new("scene-1");
+    project.session.scenes.push(Scene {
+        id: scene_id.clone(),
+        name: "Drop".into(),
+        color: None,
+    });
+    project.session.slots.push(SessionSlot {
+        layer_id: layer_id.clone(),
+        scene_id: scene_id.clone(),
+        sequence: ClipSequence::default(),
+        name: String::new(),
+        color: None,
+    });
+
+    let layer = project.timeline.layers[0].clone();
+    let mut cmd = DeleteLayerCommand::new(layer);
+    cmd.execute(&mut project);
+
+    assert!(project.session.slots.is_empty());
+
+    cmd.undo(&mut project);
+    assert_eq!(project.session.slots.len(), 1);
+    assert_eq!(project.session.slots[0].layer_id, layer_id);
 }
