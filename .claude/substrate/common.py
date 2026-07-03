@@ -1,0 +1,277 @@
+"""Shared windowing + classifier-call code for the substrate observer.
+
+Used by both replay.py (offline harness) and observer.py (live daemon, built
+in a later step) so the two never drift apart — DESIGN.md §4 requires replay
+to "reuse the exact windowing the daemon will use." Nothing in here is
+specific to historical replay; session-specific concerns (marker matching,
+truncation, gate math) live in replay.py.
+"""
+
+import json
+import re
+import subprocess
+import tempfile
+from datetime import datetime
+
+CADENCE_EVENTS = 8
+CADENCE_SECONDS = 90
+MODEL = "claude-haiku-4-5-20251001"
+
+# The classifier subprocess must never run with cwd inside this (or any)
+# project: Claude Code auto-discovers CLAUDE.md + auto-memory from cwd
+# regardless of --system-prompt/--setting-sources, which both pollutes the
+# classifier with irrelevant project context and multiplies token cost
+# roughly 3x (observed ~9.3k vs ~3.2k input tokens per call).
+NEUTRAL_CWD = tempfile.gettempdir()
+
+REJECTION_PREFIX = "The user doesn't want to proceed with this tool use"
+
+TARGET_KEYS = ("file_path", "path", "notebook_path", "command", "pattern", "url", "query", "prompt")
+
+
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def strip_preamble(text):
+    """Drop the authorship/template note before the first '---' separator."""
+    parts = text.split("\n---\n", 1)
+    return parts[1] if len(parts) == 2 else text
+
+
+def parse_moves(text):
+    """Parse moves.md into {move_id: {"signature": str, "cooldown": str, "payload": str}}."""
+    moves = {}
+    for block in re.split(r"(?m)^## ", text)[1:]:
+        lines = block.splitlines()
+        move_id = lines[0].strip()
+        body = "\n".join(lines[1:])
+        sig_m = re.search(r"-\s*\*\*signature:\*\*\s*(.*?)(?=\n-\s*\*\*cooldown:\*\*)", body, re.DOTALL)
+        cd_m = re.search(r"-\s*\*\*cooldown:\*\*\s*(\S+)", body)
+        pl_m = re.search(r"-\s*\*\*payload:\*\*\s*\n(.*)", body, re.DOTALL)
+        signature = re.sub(r"\s+", " ", sig_m.group(1)).strip() if sig_m else ""
+        cooldown = cd_m.group(1).strip() if cd_m else "standard"
+        payload = pl_m.group(1).strip() if pl_m else ""
+        # payload lines are blockquoted with "> " — strip that for the injected text
+        payload = "\n".join(l[2:] if l.startswith("> ") else l for l in payload.splitlines()).strip()
+        moves[move_id] = {"signature": signature, "cooldown": cooldown, "payload": payload}
+    return moves
+
+
+def build_signature_catalog(moves):
+    lines = []
+    for mid in sorted(moves):
+        if mid.startswith("escalate/"):
+            continue  # daemon-selected, never offered to the classifier
+        lines.append(f"### {mid}\n{moves[mid]['signature']}\n")
+    return "\n".join(lines)
+
+
+def build_system_prompt(rubric_text, moves):
+    rubric_body = strip_preamble(rubric_text)
+    return rubric_body.replace("{{SIGNATURES}}", build_signature_catalog(moves))
+
+
+def tool_target(input_):
+    if not isinstance(input_, dict):
+        return ""
+    for key in TARGET_KEYS:
+        v = input_.get(key)
+        if isinstance(v, str):
+            return _truncate(v)
+    for v in input_.values():
+        if isinstance(v, str):
+            return _truncate(v)
+    return ""
+
+
+def _truncate(s, n=100):
+    s = s.replace("\n", " ")
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _flatten_content_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text")
+    return ""
+
+
+def tool_result_status(block):
+    if block.get("is_error"):
+        return "err"
+    if _flatten_content_text(block.get("content")).startswith(REJECTION_PREFIX):
+        return "err"
+    return "ok"
+
+
+def format_window(task, ledger, recent):
+    task_str = task if task else "(no task statement yet)"
+    ledger_str = " · ".join(ledger) if ledger else "(no tool events)"
+    recent_str = "\n---\n".join(t.strip() for t in recent) if recent else "(no assistant text yet)"
+    return f'TASK: "{task_str}"\n\nLEDGER: `{ledger_str}`\n\nRECENT:\n{recent_str}'
+
+
+def parse_ts(ts_raw):
+    if not ts_raw:
+        return None
+    try:
+        return datetime.fromisoformat(ts_raw.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+class WindowState:
+    """Stateful windowing — the exact per-event state machine the live daemon
+    uses. Feed assistant content on assistant turns, user content (with a
+    timestamp) on user turns; a closed window is returned the moment cadence
+    triggers. The caller owns session-specific concerns (marker matching,
+    truncation) and only sees closed windows + raw human text.
+    """
+
+    def __init__(self):
+        self.current_task = None
+        self.recent_texts = []
+        self.ledger_buffer = []
+        self.tool_event_count_since_window = 0
+        self.total_tool_event_count = 0
+        self.last_window_ts = None
+        self.pending = {}
+
+    def feed_assistant_content(self, content):
+        for c in content:
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "text":
+                text = c.get("text", "")
+                if text.strip():
+                    self.recent_texts.append(text)
+                    self.recent_texts[:] = self.recent_texts[-2:]
+            elif c.get("type") == "tool_use":
+                self.pending[c.get("id")] = (c.get("name", "?"), c.get("input", {}) or {})
+
+    def feed_user_content(self, content, ts):
+        """Returns (closed_window_or_None, list_of_human_text_seen).
+        `content` is a raw string for a plain typed message with no
+        attachments, or a list of content blocks otherwise — both occur
+        routinely in real transcripts."""
+        closed = None
+        human_texts = []
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        for c in content:
+            if not isinstance(c, dict):
+                continue
+            ctype = c.get("type")
+            if ctype == "tool_result":
+                name, input_ = self.pending.pop(c.get("tool_use_id"), ("?", {}))
+                self.ledger_buffer.append(f"{name} {tool_target(input_)} {tool_result_status(c)}".strip())
+                self.tool_event_count_since_window += 1
+                self.total_tool_event_count += 1
+
+                fire = self.tool_event_count_since_window >= CADENCE_EVENTS
+                if not fire and self.last_window_ts is not None and ts is not None:
+                    fire = (ts - self.last_window_ts) >= CADENCE_SECONDS
+                if fire and self.ledger_buffer:
+                    closed = {
+                        "end_event_count": self.total_tool_event_count,
+                        "end_ts": ts,
+                        "text": format_window(self.current_task, self.ledger_buffer, self.recent_texts),
+                    }
+                    self.ledger_buffer = []
+                    self.tool_event_count_since_window = 0
+                    self.last_window_ts = ts
+            elif ctype == "text":
+                text = c.get("text", "")
+                stripped = text.strip()
+                if stripped:
+                    human_texts.append(stripped)
+                    if len(stripped) >= 8:
+                        self.current_task = stripped
+        return closed, human_texts
+
+
+def extract_json(text):
+    text = text.strip()
+    m = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
+    if m:
+        text = m.group(1).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def call_classifier(system_prompt, window_text, model=MODEL, timeout=60, cwd=None):
+    """Invoke `claude -p` as the classifier. Same invocation shape the live
+    daemon uses. Returns a verdict dict, or {"error": "..."} on any failure —
+    callers must treat an error verdict as "no flag" (fail open).
+
+    `cwd` defaults to NEUTRAL_CWD (never the project) — see the module-level
+    comment. Pass an explicit `cwd` only for tests that want to observe that
+    behavior."""
+    cmd = [
+        "claude", "-p",
+        "--model", model,
+        "--system-prompt", system_prompt,
+        "--tools", "",
+        "--setting-sources", "",
+        "--output-format", "json",
+        "--no-session-persistence",
+        window_text,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd or NEUTRAL_CWD
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": "timeout"}
+    except OSError as e:
+        return {"error": f"spawn failed: {e}"}
+    if proc.returncode != 0:
+        # error detail can land on either stream; stderr is often empty
+        detail = (proc.stderr.strip() or proc.stdout.strip())[:200]
+        return {"error": f"exit {proc.returncode}: {detail}"}
+    try:
+        outer = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {"error": "bad outer json", "raw": proc.stdout[:200]}
+    if outer.get("is_error"):
+        return {"error": f"api error: {outer.get('result', '')[:200]}"}
+    verdict = extract_json(outer.get("result", ""))
+    if verdict is None:
+        return {"error": "unparseable verdict", "raw": outer.get("result", "")[:200]}
+    return verdict
+
+
+COOLDOWN_EVENTS = {"standard": 20, "slow": 40}  # "once" handled separately (fire-at-most-once)
+
+
+def apply_cooldowns(fires, move_cooldowns):
+    """fires: list of (event_count, move_id, window) in chronological order.
+    Returns the subset that would actually reach the model after daemon-side
+    cooldown suppression (DESIGN.md §1)."""
+    last_fire_event = {}
+    effective = []
+    for event_count, move_id, window in fires:
+        cd_class = move_cooldowns.get(move_id, "standard")
+        if cd_class == "once":
+            if move_id in last_fire_event:
+                continue
+        else:
+            limit = COOLDOWN_EVENTS.get(cd_class, 20)
+            prev = last_fire_event.get(move_id)
+            if prev is not None and (event_count - prev) < limit:
+                continue
+        last_fire_event[move_id] = event_count
+        effective.append((event_count, move_id, window))
+    return effective
