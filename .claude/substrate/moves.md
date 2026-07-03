@@ -173,6 +173,18 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
 > evidence it rests on. If you can't point to the line, the output was skimmed,
 > not read — go back for the line.
 
+## anchor/destructive-isolation
+- **signature:** During debugging, actions are converging on discarding state to
+  make the problem tractable — `git checkout --`, revert, stash, or deleting
+  recent uncommitted work — where the stated goal is isolating a bug rather than
+  the user asking for removal.
+- **cooldown:** standard
+- **payload:**
+> You're about to destroy work to isolate a bug. Stop — uncommitted work is
+> evidence, and the bug will still be here after you've read it. Isolate by
+> observation instead: commit the work to a branch first, or reproduce the bug in
+> a test. Discarding state is the one debugging move you can't undo.
+
 ---
 
 ## escalate/checkpoint
