@@ -41,6 +41,7 @@ prerequisites aren't shipped, stop.
 | COMMERCIALIZATION_DESIGN (commerce infra: license, watermark, updater, telemetry) | none hard; P4 telemetry rides GIG_RESILIENCE P1–P2 | conformance |
 | DJ_PERFORMANCE_DESIGN | ABLETON_SHOW_SYNC; PERFORM_SURFACE P1; MEDIA_BACKEND P1 | conformance |
 | PRO_DJ_LINK_DESIGN | PERFORM_SURFACE P1; sync-source seam (timecode/Link infra) | conformance |
+| UI_AUTOMATION_DESIGN | none (dev infra; P1–P2 full, P3–P4 conformance) | full (P1–P2) / conformance (P3–P4) |
 
 Not in the queue: **LIVE_AUDIO_TRIGGERS** is SHIPPED (phases 0–7, proven live,
 branch merged). **COMPETITIVE_STEAL_PASS** is a closed record.
@@ -136,6 +137,13 @@ Grouped in waves; within a wave, items are independent and order is free.
 - VULKAN phases 1–4 = **the v1.5 release**. Start gates on v1.0 stability in the
   field; nothing in waves 0–3 waits on it, and its two dependents (ML ONNX,
   MEDIA_BACKEND §6) land with it.
+
+**Dev-infra track (not a product feature; slot by judgment, recommended early):**
+- UI_AUTOMATION P1–P2 (selector dump + headless script driver) — zero hard
+  edges, extends the shipped ui-snap harness. Its value compounds: every UI
+  phase built after it (perform surface, session grid, projection UX) gets
+  scripted integration flows instead of hand-verification, so earlier is
+  strictly better. P3–P4 (live door) whenever the live loop is wanted.
 
 ## 4. The 3D track (added 2026-07-03)
 
