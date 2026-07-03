@@ -100,7 +100,7 @@ Grouped in waves; within a wave, items are independent and order is free.
 4. MULTI_DISPLAY P1–P3 (core model → island rendering → multi-output present) — the
    widest unblock in the corpus: projection mapping, LED P2, and the rig work all
    ride it. **P1 ✅ merged (`0cb5114f`); P2 ⏸ BLOCKED pending §6.1 seam-hardening — `docs/DESIGN_HARDENING_QUEUE.md` item 2.**
-5. SESSION_MODE — second performance surface; unblocks session perform. **P1 ✅ merged (`4f072100`); P2 (SessionRuntime, the risk-concentration phase) IN FLIGHT.**
+5. SESSION_MODE — second performance surface; unblocks session perform. **P1 ✅ merged (`4f072100`); P2 ✅ merged (`f852d2bc`, the risk-concentration phase — single authority kept, wrap-restart tested); P3 (grid commands) next.**
 6. MEDIA_BACKEND P1–P3 (Metal era) — decode/encode traits; independent of everything.
    **P1 ⏸ PARKED 2026-07-03: committed §3 trait can't wrap the shipped thread-split +
    zero-alloc reuse-pool decode — needs a §3 addendum before code
