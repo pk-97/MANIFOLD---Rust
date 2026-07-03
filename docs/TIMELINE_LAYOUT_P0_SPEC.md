@@ -66,13 +66,20 @@ the mechanism of this bug class; the fix is that no second copy exists.
 - **D3 — clamp at rebuild.** `rebuild_mapper_layout` re-clamps the shared
   scroll offset against the new `total_content_height` immediately, so a
   collapse/delete that shrinks content moves both columns in the same frame.
-- **D4 — audio cards obey the height rule.** Collapsed audio shows collapsed
-  chrome exactly like every other type (drop the never-collapse exception);
-  expanded audio's rows must fit inside `TrackHeight::Normal` — if they
-  currently don't, rework `compute_audio_row`'s layout to fit, not the height
-  rule. (The state-only height doctrine stands; if the executor believes audio
-  genuinely needs a taller row, that is a must-escalate design question, not an
-  adaptation.)
+- **D4 — audio cards obey the height rule.** Confirmed in-app (Peter,
+  2026-07-04): the gain slider + dB label overflow into the next card and the
+  Send dropdown lands invisibly below it. `compute_audio_row`
+  (`panels/layer_header.rs:576-607`) stacks name / M|S|A / Gain / Send — four
+  rows in a `TrackHeight::Normal` card that fits three — with no height check
+  and no per-card clip. Fix: collapsed audio shows collapsed chrome exactly
+  like every other type (drop the never-collapse exception at `:575`), and the
+  expanded card goes three rows — the Gain slider joins the M|S|A button row
+  (the slot video cards give BLEND), Send keeps the third row. The state-only
+  height doctrine stands; if that layout genuinely can't fit, taller-audio-row
+  is a must-escalate question, not an adaptation. Additionally: card content
+  must be clipped to the card rect (per `subregion-scissor-invariant`) so a
+  future overflow is a visible truncation inside its own card, never a bleed
+  into the neighbor.
 
 ## Phases
 
