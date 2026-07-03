@@ -81,6 +81,10 @@ def build_block(flag):
     return (
         f'<substrate move="{move_id}" unvalidated="true" confidence="{flag.get("confidence")}">\n'
         f"{payload}\n"
+        f"\n"
+        f"(Supervised mode: briefly acknowledge this note out loud in your next "
+        f'message — one sentence, e.g. "substrate nudged me about {move_id} — '
+        f'checking" — so Peter can judge whether the nudge was right.)\n'
         f"</substrate>"
     )
 
