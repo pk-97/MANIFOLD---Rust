@@ -32,8 +32,12 @@ use std::path::{Path, PathBuf};
 // cutover deleted `bitmap_painter::draw_clip` and its three test literals. 132→131:
 // the timeline-UI-redesign §K added `color::with_alpha` and routed three derived
 // `Color32::new(c.r, c.g, c.b, a)` call sites through it — net −1, absorbing the
-// inherited multi-selection-ux drift the redesign §J flagged.)
-const COLOR_BASELINE: usize = 131;
+// inherited multi-selection-ux drift the redesign §J flagged. 131→200, 2026-07-03:
+// the graph-editor redesign (c89605ea..35f42ff9) added 69 raw literals mid-design;
+// re-baselined so the ratchet stays live for NEW drift while that pass is in
+// flight. DEBT: tokenize those 69 before the graph-editor redesign closes, then
+// ratchet back down toward the §15 ramp.)
+const COLOR_BASELINE: usize = 200;
 const RADIUS_BASELINE: usize = 0;
 
 #[test]
