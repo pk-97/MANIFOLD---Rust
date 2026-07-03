@@ -42,18 +42,28 @@ versioned. History on the substrate is non-negotiable — the sleep pass edits i
 - **Windowing.** Each analysis window contains: (a) the current task statement —
   the most recent user message that reads as a task, kept verbatim; (b) a
   compressed event ledger since the last window (tool name + target + ok/err, one
-  line each); (c) the last two assistant texts verbatim. Target ≤ 4k tokens.
-  The task statement must always be present — phase and drift are only measurable
-  as divergence from the goal.
+  line each); (c) the last two assistant texts verbatim; (d) a `task_addressed`
+  bit carried forward across windows — set once an assistant text answers TASK,
+  so a stale-but-answered TASK stops matching scope-drift after the answering
+  text scrolls out of RECENT (replay round 2: `573a3584` false-fired 3 windows
+  in a row for exactly this). Target ≤ 4k tokens. The task statement must always
+  be present — phase and drift are only measurable as divergence from the goal.
 - **Cadence.** Analyze every 8 tool events or 90 s since last analysis, whichever
-  comes first, and only if new events exist. Long autonomous turns therefore get
-  continuous coverage without any hook firing.
+  comes first, and only if new events exist. **Additionally, analyze immediately
+  on every assistant text event** — drift markers *are* assistant texts, and in
+  replay rounds 1–2 the dominant miss cluster was evidence landing in the 1–3
+  events after the last cadence window closed. Long autonomous turns therefore
+  get continuous coverage without any hook firing.
 - **Classifier call.** `claude -p --model claude-haiku-4-5-20251001` with
   `rubric.md` as the system prompt and the window as input, JSON output. The
   rubric is calibrated for precision: default verdict is "clear", at most one
   flag per window, verbatim evidence required.
 - **Verdict file.** Atomic write to `verdicts/<session-id>.json`:
   `{ts, window_range, phase, flag: null | {move_id, evidence, confidence}}`.
+  The daemon validates `move_id` against the moves.md catalog before writing —
+  an unknown id is treated as clear and logged (replay round 2 saw Haiku emit a
+  nonexistent `coaching/scope-drift`, which slipped through cooldown logic
+  under a default cooldown class).
 - **Cooldown & escalation** (daemon-side, not Haiku's job): after a move fires,
   that move is suppressed for 20 tool events. If the *same* drift move is flagged
   again after two injections in one session, escalate: replace it with the
@@ -100,6 +110,19 @@ classifier over historical transcripts offline and reports what would have fired
 A wrong whisper erodes trust in all whispers; when precision and recall trade off,
 buy precision.
 
+**Amendment 2026-07-03 (Peter's call, Fable concurring):** the offline replay
+gate is waived in favor of a supervised live rollout. Replay rounds 1–2 ran
+honestly (recall 8%→42%, noise 2.0/clean session — commit `790e0d58` has the
+diagnosis); the remaining fixes are structural and are now folded into this
+spec (assistant-text cadence, `task_addressed` state, verify-claim reword,
+move-id validation). Rather than paying for a third offline run, the system
+goes live in **supervised mode**: whispers are injected but carry an explicit
+`unvalidated` marker in the `<substrate>` tag and are surfaced to Peter, every
+injection is logged, and §4b outcome scoring + auto-mute are active from day
+one. The gates above still stand — they are now scored from live telemetry by
+the sleep pass instead of from replay. `replay.py` stays as the offline
+scoring harness for future rubric changes.
+
 ## 4b. Live outcome scoring + auto-mute
 
 The daemon scores each injection mechanically, in-session, and appends the score
@@ -144,11 +167,21 @@ fossilizes into a museum of 2026 failure modes.
 5. **Payloads and rubric are versioned; edits happen in sleep passes or by hand,**
    never by the daemon at runtime.
 
-## Build order (next sessions, any model)
+## Build order (next sessions, any model — updated 2026-07-03 per §4 amendment)
 
-1. `replay.py` windowing + classifier call — the same code the daemon will use;
-   build it first and tune the rubric against history until the gates pass.
-2. `observer.py` — wrap the same windowing in the tail/cadence/verdict loop.
-3. Valve hooks + `settings.json` wiring, with the fail-open checks.
-4. One supervised live week: injections logged but ALSO surfaced to Peter.
-5. Schedule the sleep pass; hand the first two to Fable (budget reserved).
+1. `replay.py` windowing + classifier call — DONE (rounds 1–2 run; harness kept
+   for offline scoring of future rubric changes).
+2. Structural fixes in the shared windowing code (`common.py`), per §1 as
+   amended: analyze on every assistant text event; `task_addressed` window
+   state; validate move ids against the catalog. (The verify-claim signature
+   reword is already in `moves.md`.)
+3. `observer.py` — wrap the same windowing in the tail/cadence/verdict loop.
+4. Valve hooks + `settings.json` wiring, with the fail-open checks. Whispers
+   carry the `unvalidated` marker until the sleep pass clears the gates from
+   live telemetry.
+5. Supervised live period: injections logged AND surfaced to Peter; §4b
+   scoring + auto-mute active.
+6. Schedule the sleep pass; hand the first two to Fable (budget reserved).
+   First sleep pass also owes: score the §4 gates from telemetry, and author a
+   new move for the `735b0dc6` family (confident wrong system description,
+   never grounded in code) — Fable-only work.

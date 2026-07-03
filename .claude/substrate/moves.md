@@ -128,7 +128,11 @@ Cooldown classes: `standard` = 20 tool events; `slow` = 40; `once` = once per se
   build/test/clippy passing, or one sub-part being genuinely exercised, is used
   as evidence for a different sub-part (a new integration path, a specific
   visual result, a specific data flow) that was never itself run, rendered, or
-  exercised. A green build is not evidence for a claim it didn't check.
+  exercised. Match each claim to its own evidence before flagging: a claim whose
+  cited check exercises that same claim ("clean under -D warnings" citing a
+  clippy run, "tests pass" citing a test run) is verified — never flag it. Flag
+  only when the evidence offered checks a different thing than the claim it is
+  used to back. A green build is not evidence for a claim it didn't check.
 - **cooldown:** standard
 - **payload:**
 > That claim hasn't been checked yet. Run the verification in the medium where
