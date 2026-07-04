@@ -77,10 +77,14 @@ allowed), merge/switch variants, `checkout -- path` unchanged.
 
 Local prune DONE (47 merged branches deleted; main ff'd to trunk tip). Remaining:
 
-1. **Stuck worker repoint** — owner: the Opus orchestration session. Its
-   worker's worktree branched off stale origin/main (March). Worktree is
-   clean: `git reset --hard feat/timeline-ui-redesign` inside it, resume the
-   worker. THEN delete local `feat/timeline-ui-redesign` (kept only for this).
+1. **Stuck worker repoint** — owner: the Opus orchestration session if still
+   live; otherwise the NEXT orchestration session. A worker worktree
+   (auto-named `worktree-agent-…`) branched off stale origin/main (March).
+   If the original session is live: `git reset --hard
+   feat/timeline-ui-redesign` inside it (clean tree), resume the worker.
+   If not: delete that worktree (`git worktree remove …`) and spawn a fresh
+   worker off the verified tip per the manual-worktree rule. THEN delete
+   local `feat/timeline-ui-redesign` (kept only for this).
 2. **Remote branch prune** — trigger: any quiet session. Delete origin
    branches whose tips are ancestors of origin/main
    (`git branch -r --merged origin/main`, then `git push origin --delete …`).
