@@ -136,11 +136,15 @@ the smaller models this layer exists to lift, and their documented failure modes
   constant); turn on only after sleep pass 1 validates the moves on
   main-session telemetry — worker whispers are invisible to supervision, only
   telemetry scoring can validate them. Telemetry records must carry agent_id.
-- **ENABLE RULE (Fable, 2026-07-04 — data-gated, not date-gated):** flip the
-  flag when live main-session grading (RUNBOOK.md step 2) reaches ≥10 graded
-  injections with precision ≥80%. First worker week runs with the supervised
-  acknowledgment sentence so worker transcripts are gradeable the same way.
-  Any sleep pass may execute this rule; none may loosen it without Peter.
+- **ENABLED 2026-07-04, Peter's call, ahead of the data rule** (his judgment:
+  workers are where the value is, and enabling is also the fastest source of
+  gradeable worker data; the step-0 probe had already passed). Conditions
+  kept: the supervised acknowledgment sentence stays on for workers, and §4b
+  scoring is session-only, so worker fires are graded MANUALLY from worker
+  transcripts (RUNBOOK step 2) every pass. The superseded data rule (≥10
+  graded fires, ≥80% precision) becomes the DISABLE rule inverted: if worker
+  grading shows precision below ~60% at any pass, pull the flag and return
+  here.
 - Cost sanity: classifier spend scales with agent count (~a few dollars per
   six-worker wave) — acceptable; per-agent cooldowns prevent whisper spam.
 
