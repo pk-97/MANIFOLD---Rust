@@ -416,6 +416,7 @@ class Daemon:
                     self.recent_events.append((event_count, _tool_class(label), status, target))
                     if classify:
                         self._check_stopgap(name, input_, event_count, logf)
+                        self._check_git_landing(name, input_, event_count, logf)
         if closed and classify:
             self._handle_window(closed, logf)
 
@@ -459,6 +460,29 @@ class Daemon:
         }
         _atomic_write_json(mb.verdict_path, record)
         _log(logf, f"mechanical/confessed-stopgap fired: {name} {common.tool_target(input_)} hits={hits}")
+
+    def _check_git_landing(self, name, input_, event_count, logf, mailbox=None):
+        """Deterministic, never the classifier: a Bash cherry-pick or
+        branch-delete fires mechanical/git-landing through the normal
+        mailbox/cooldown path (`_resolve_fire`) — the two twin-commit-prone
+        operations .claude/GIT_TREE_DISCIPLINE.md §2's push/merge hook guard
+        doesn't cover. Peter's own suggestion, 2026-07-04."""
+        hits = common.detect_git_landing_signal(name, input_)
+        if not hits:
+            return
+        mb = mailbox if mailbox is not None else self
+        verdict = {"evidence": f"{name}: {', '.join(hits)}", "confidence": 1.0}
+        flag_out = self._resolve_fire(event_count, "mechanical/git-landing", verdict, logf, mailbox=mailbox)
+        if not flag_out:
+            return
+        record = {
+            "ts": time.time(),
+            "phase": mb.phase,
+            "window_version": common.WINDOW_VERSION,
+            "flag": flag_out,
+        }
+        _atomic_write_json(mb.verdict_path, record)
+        _log(logf, f"mechanical/git-landing fired: {name} {common.tool_target(input_)} hits={hits}")
 
     # ---- classification + verdict mailbox ----
 

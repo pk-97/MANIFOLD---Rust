@@ -223,6 +223,36 @@ def detect_stopgap_markers(name, input_):
     return sorted(hits)
 
 
+# .claude/GIT_TREE_DISCIPLINE.md §2 (2026-07-04): the ff-only "main = pointer"
+# model produced twin commits under concurrent orchestrators — the same
+# content merged onto main once and re-committed onto a live branch again
+# under different SHAs. The landing protocol's two twin-killers name the
+# operations that create or hide a twin: cherry-picking content that already
+# exists as commits on a live branch, and deleting a branch before its
+# content is confirmed on main. preToolUseBash.py's §1b guard deterministically
+# gates the exact push/merge-to-main commands; this table covers the two
+# operations that guard doesn't (cherry-pick isn't main-checkout-scoped by
+# nature, and branch deletion has no "target" to detect at all) — added at
+# Peter's suggestion the same session the incident was diagnosed.
+GIT_LANDING_MARKERS = {
+    "cherry-pick": re.compile(r"\bgit\s+cherry-pick\b"),
+    "branch-delete": re.compile(
+        r"\bgit\s+branch\s+(?:-d|-D|--delete)\b|\bgit\s+push\b[^\n]*--delete\b"
+    ),
+}
+
+
+def detect_git_landing_signal(name, input_):
+    """Bash commands running the two twin-commit-prone git operations
+    (mechanical/git-landing signature in moves.md). Deterministic regex over
+    the raw command text; never raises. Returns a sorted list of category
+    names (possibly empty)."""
+    if name != "Bash" or not isinstance(input_, dict):
+        return []
+    cmd = input_.get("command") or ""
+    return sorted(cat for cat, pat in GIT_LANDING_MARKERS.items() if pat.search(cmd))
+
+
 # DESIGN.md §2c-ask: a distinct vocabulary from STOPGAP_MARKERS above — that
 # set screens code diffs for confessed hacks; this one screens an
 # AskUserQuestion's own option text for the shortcut-recommended-over-

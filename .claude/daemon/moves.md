@@ -372,6 +372,28 @@ move it compiles: format output for the user's next action, not for reading.
 > blocker, and where the real fix is tracked. An unjustified "for now" is
 > permanent.
 
+## mechanical/git-landing
+- **signature:** Deterministic, valve-selected — never the classifier: a Bash
+  command runs `git cherry-pick` (anywhere) or deletes a branch (`git branch
+  -d/-D/--delete`, `git push ... --delete`). These are the two twin-commit-
+  prone operations .claude/GIT_TREE_DISCIPLINE.md §2's landing protocol
+  singles out: cherry-picking content that already exists as commits on a
+  live branch recreates the twin-SHA problem the 2026-07-04 incident
+  produced, and deleting a branch before its content is confirmed on main can
+  lose the only copy of unmerged work. The push/merge-to-main hook guard in
+  preToolUseBash.py doesn't cover either case (cherry-pick has no "target"
+  the way a push does; branch deletion has no target at all). Added at
+  Peter's own suggestion the session the incident was diagnosed.
+- **cooldown:** standard
+- **payload:**
+> Cherry-pick or branch-delete detected. Two rules from
+> .claude/GIT_TREE_DISCIPLINE.md §2: never cherry-pick or re-commit content
+> that already exists as commits on a live branch — merge the branch instead,
+> so SHAs stay shared (the one sanctioned exception is lifting a branch's
+> final content right before retiring it for good). And never delete a
+> branch until `git merge-base --is-ancestor <tip> origin/main` confirms its
+> commits are actually on main.
+
 ## escalate/checkpoint
 - **signature:** Selected by the daemon, not the rubric: the same drift anchor has
   fired twice this session and the drift persists.

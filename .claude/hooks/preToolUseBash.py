@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook for Bash. Three jobs, evaluated in this order:
+PreToolUse hook for Bash. Four jobs, evaluated in this order:
 
   0. ASK, instead of auto-allowing, a branch-switch git command (checkout/
      switch/merge) that targets the MAIN checkout while another session's
@@ -9,6 +9,16 @@ PreToolUse hook for Bash. Three jobs, evaluated in this order:
      sessions and worktree-targeted commands (`git -C .claude/worktrees/...`)
      are unaffected; `checkout -- <paths>` (file restore, not a branch
      switch) is unaffected. Any failure in this check falls back to no-guard.
+
+  0b. Landing-protocol guard (§1b): main is a merge-based trunk now, not a
+     fast-forward pointer (GIT_TREE_DISCIPLINE.md §2 — the ff-only model
+     produced twin commits under concurrent orchestrators, see the incident
+     log). In the main checkout only: `git branch -f main ...` and any
+     force-push targeting main ASK unconditionally (no foreign-session
+     check — these are wrong regardless of concurrency, they drop commits
+     under the merge model). A non-force push or merge that lands on main
+     gets the normal allow with a short reminder of the landing protocol
+     attached as additionalContext. See `landing_protocol_guard`.
 
   1. ALLOW pre-approved commands outright — even compound ones (pipes,
      `;` chains, `for`/`while` loops, `$(...)` substitutions) that the
@@ -54,6 +64,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -515,6 +526,142 @@ def shared_checkout_guard(cmd, session_id, cwd):
 
 
 # ---------------------------------------------------------------------------
+# Landing-protocol guard (.claude/GIT_TREE_DISCIPLINE.md §1b / §2)
+#
+# The ff-only "main = last-known-good pointer" model (old §2) assumed one
+# integrator lands at a time. Under concurrent orchestrator sessions a clean
+# fast-forward was never actually possible, so every finishing session
+# improvised its own landing — producing twin commits (same content, two
+# lineages, different SHAs; see the incident log in GIT_TREE_DISCIPLINE.md
+# and the `git-landing-protocol` memory). Main is now a merge-based trunk:
+# land via fetch -> merge origin/main -> gate -> merge --no-ff -> push. This
+# guard (a) unconditionally asks before a force-rewrite of main, since that's
+# simply wrong now, not just concurrency-unsafe, and (b) attaches a
+# deterministic reminder of the protocol to an otherwise-normal push/merge
+# that lands on main. Scoped to the main checkout only, same as §1.
+# ---------------------------------------------------------------------------
+
+_MAIN_REF_TOKENS = ("main", "refs/heads/main")
+_FORCE_PUSH_FLAGS_EXACT = {"--force", "-f", "--force-if-includes"}
+
+
+def _current_branch(cwd):
+    """Best-effort current branch name in `cwd`, or None on any failure."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _in_main_checkout(target_dir):
+    try:
+        resolved = target_dir.resolve()
+    except OSError:
+        return False
+    in_main = resolved == _PROJECT_DIR or _PROJECT_DIR in resolved.parents
+    in_worktrees = resolved == _WORKTREES_DIR or _WORKTREES_DIR in resolved.parents
+    return in_main and not in_worktrees
+
+
+def _push_targets_main(rest_toks, target_dir):
+    """True if a `git push ...` with these post-subcommand tokens lands on
+    main — either an explicit refspec naming main, or no refspec at all
+    (0 or 1 positional args: bare push / push-with-remote-only), in which
+    case it depends on the current branch."""
+    positional = [t for t in rest_toks if not t.startswith("-")]
+    if len(positional) >= 2:
+        refspec = positional[-1]
+        remote_part = refspec.split(":", 1)[-1] if ":" in refspec else refspec
+        return remote_part in _MAIN_REF_TOKENS
+    return _current_branch(target_dir) == "main"
+
+
+def _push_has_force_flag(rest_toks):
+    for t in rest_toks:
+        if t in _FORCE_PUSH_FLAGS_EXACT or t.startswith("--force-with-lease"):
+            return True
+    return False
+
+
+def _branch_force_targets_main(rest_toks):
+    """True for `git branch -f/-F/--force main ...` (force-moves main)."""
+    has_force = any(t in ("-f", "-F", "--force") for t in rest_toks)
+    if not has_force:
+        return False
+    positional = [t for t in rest_toks if not t.startswith("-")]
+    return bool(positional) and positional[0] == "main"
+
+
+LANDING_PROTOCOL_REMINDER = (
+    "Landing on main. Protocol (.claude/GIT_TREE_DISCIPLINE.md §2): fetch, "
+    "merge current origin/main into your branch, rerun the gate (clippy + "
+    "focused tests, full workspace sweep if blast radius says so), `git merge "
+    "--no-ff` into main, push — if rejected because someone landed first, "
+    "repeat. Twin-killers: never cherry-pick/re-commit content that already "
+    "exists as commits on a live branch (merge it instead, so SHAs stay "
+    "shared); never delete a branch until `git merge-base --is-ancestor <tip> "
+    "origin/main` confirms its commits are on main."
+)
+
+
+def landing_protocol_guard(cmd, cwd):
+    """Return (ask_reason, allow_context) for a git command in `cmd`.
+    `ask_reason` is set — unconditionally, no foreign-session check, unlike
+    `shared_checkout_guard` — for a force-rewrite of main (branch -f main,
+    or a force-push landing on main): wrong under the merge-trunk model
+    regardless of concurrency. `allow_context` is a landing-protocol
+    reminder for an otherwise-normal non-force push/merge that lands on
+    main. At most one of the two is ever set. Never raises; any failure
+    yields (None, None)."""
+    try:
+        for toks in _shlex_segments(cmd):
+            toks = _strip_leading_keywords(toks)
+            if not toks or toks[0] != "git":
+                continue
+            target_dir, sub, rest = _git_checkout_dir(toks, cwd)
+            if target_dir is None or not _in_main_checkout(target_dir):
+                continue
+
+            if sub == "branch" and _branch_force_targets_main(rest):
+                return (
+                    "`git branch -f main ...` force-moves the main pointer. "
+                    "Main is a merge-based trunk now, not a fast-forward "
+                    "target (.claude/GIT_TREE_DISCIPLINE.md §2) — this "
+                    "can drop commits that aren't ancestors of <tip>. Land "
+                    "via the merge protocol instead.",
+                    None,
+                )
+
+            if sub == "push":
+                if _push_has_force_flag(rest) and _push_targets_main(rest, target_dir):
+                    return (
+                        "Force-push targeting main. Main is a merge-based "
+                        "trunk now (.claude/GIT_TREE_DISCIPLINE.md §2) — "
+                        "a force-push can drop commits another session "
+                        "landed. Use the merge protocol (fetch, merge "
+                        "origin/main, gate, merge --no-ff, push) instead.",
+                        None,
+                    )
+                if _push_targets_main(rest, target_dir):
+                    return None, LANDING_PROTOCOL_REMINDER
+
+            if sub == "merge" and _current_branch(target_dir) == "main":
+                return None, LANDING_PROTOCOL_REMINDER
+
+        return None, None
+    except Exception:
+        return None, None
+
+
+# ---------------------------------------------------------------------------
 # Deny messages (unchanged policy for non-pre-approved compounds)
 # ---------------------------------------------------------------------------
 
@@ -533,14 +680,17 @@ CD_REASON = (
 )
 
 
-def build_allow() -> dict:
-    return {
+def build_allow(additional_context: str | None = None) -> dict:
+    out = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
             "permissionDecisionReason": "Pre-approved command (read-only or git/cargo workflow; auto-approved by preToolUseBash hook).",
         }
     }
+    if additional_context:
+        out["hookSpecificOutput"]["additionalContext"] = additional_context
+    return out
 
 
 def build_ask(reason: str) -> dict:
@@ -573,16 +723,25 @@ def main() -> int:
     if not cmd:
         return 0
 
+    cwd = data.get("cwd") or os.getcwd()
+
     # 0. Shared-checkout guard: a branch switch in the main tree while
     # another session's daemon is live asks instead of auto-allowing.
-    ask_reason = shared_checkout_guard(cmd, data.get("session_id"), data.get("cwd") or os.getcwd())
+    ask_reason = shared_checkout_guard(cmd, data.get("session_id"), cwd)
     if ask_reason:
         json.dump(build_ask(ask_reason), sys.stdout)
         return 0
 
+    # 0b. Landing-protocol guard: a force-rewrite of main asks unconditionally;
+    # a normal push/merge landing on main gets an allow + reminder below.
+    landing_ask, landing_context = landing_protocol_guard(cmd, cwd)
+    if landing_ask:
+        json.dump(build_ask(landing_ask), sys.stdout)
+        return 0
+
     # 1. Pre-approved? Allow outright, pipes and loops included.
     if is_preapproved_command(cmd):
-        json.dump(build_allow(), sys.stdout)
+        json.dump(build_allow(landing_context), sys.stdout)
         return 0
 
     # 2. Not pre-approved: enforce the no-pipe / no-cd-prefix rewrite policy.

@@ -155,6 +155,88 @@ def test_solo_still_reaches_allow_path():
     with_verdicts_dir(run)
 
 
+def test_branch_force_main_asks():
+    reason, context = hook.landing_protocol_guard("git branch -f main abc123", MAIN_CWD)
+    check("branch -f main -> ask", reason is not None, reason)
+    check("branch -f main -> no context", context is None, context)
+
+
+def test_branch_force_main_worktree_unaffected():
+    cmd = f'git -C "{WORKTREE_CWD}" branch -f main abc123'
+    reason, context = hook.landing_protocol_guard(cmd, MAIN_CWD)
+    check("branch -f main in worktree -> unaffected", reason is None and context is None, (reason, context))
+
+
+def test_branch_force_non_main_unaffected():
+    reason, context = hook.landing_protocol_guard("git branch -f other-branch abc123", MAIN_CWD)
+    check("branch -f other-branch -> unaffected", reason is None and context is None, (reason, context))
+
+
+def test_force_push_explicit_main_asks():
+    reason, context = hook.landing_protocol_guard("git push --force origin main", MAIN_CWD)
+    check("push --force origin main -> ask", reason is not None, reason)
+    check("push --force origin main -> no context", context is None, context)
+
+
+def test_force_push_refspec_main_asks():
+    reason, context = hook.landing_protocol_guard("git push -f origin abc123:main", MAIN_CWD)
+    check("push -f origin <sha>:main -> ask", reason is not None, reason)
+
+
+def test_force_push_non_main_unaffected():
+    reason, context = hook.landing_protocol_guard("git push --force origin some-branch", MAIN_CWD)
+    check("push --force origin some-branch -> unaffected", reason is None and context is None, (reason, context))
+
+
+def test_nonforce_push_explicit_main_reminds():
+    reason, context = hook.landing_protocol_guard("git push origin main", MAIN_CWD)
+    check("push origin main (no force) -> no ask", reason is None, reason)
+    check("push origin main (no force) -> reminder attached", context is not None, context)
+
+
+def test_nonforce_push_non_main_unaffected():
+    reason, context = hook.landing_protocol_guard("git push origin some-branch", MAIN_CWD)
+    check("push origin some-branch -> unaffected", reason is None and context is None, (reason, context))
+
+
+def test_push_worktree_unaffected():
+    cmd = f'git -C "{WORKTREE_CWD}" push --force origin main'
+    reason, context = hook.landing_protocol_guard(cmd, MAIN_CWD)
+    check("force-push-to-main from a worktree cwd -> unaffected", reason is None and context is None, (reason, context))
+
+
+def test_merge_while_on_main_reminds():
+    orig = hook._current_branch
+    hook._current_branch = lambda cwd: "main"
+    try:
+        reason, context = hook.landing_protocol_guard("git merge feature-branch", MAIN_CWD)
+        check("merge while on main -> no ask", reason is None, reason)
+        check("merge while on main -> reminder attached", context is not None, context)
+    finally:
+        hook._current_branch = orig
+
+
+def test_merge_while_on_other_branch_unaffected():
+    orig = hook._current_branch
+    hook._current_branch = lambda cwd: "feature-branch"
+    try:
+        reason, context = hook.landing_protocol_guard("git merge other-thing", MAIN_CWD)
+        check("merge while on non-main branch -> unaffected", reason is None and context is None, (reason, context))
+    finally:
+        hook._current_branch = orig
+
+
+def test_bare_push_on_main_branch_reminds():
+    """No explicit refspec at all: falls back to checking the current branch."""
+    orig = hook._current_branch
+    hook._current_branch = lambda cwd: "main"
+    try:
+        reason, context = hook.landing_protocol_guard("git push", MAIN_CWD)
+        check("bare push while on main -> reminder attached", context is not None, context)
+    finally:
+        hook._current_branch = orig
+
+
 def main():
     test_bare_checkout_foreign_live()
     test_bare_checkout_only_own_session()
@@ -167,6 +249,18 @@ def main():
     test_checkout_bare_new_branch()
     test_checkout_dashdash_paths_unchanged()
     test_solo_still_reaches_allow_path()
+    test_branch_force_main_asks()
+    test_branch_force_main_worktree_unaffected()
+    test_branch_force_non_main_unaffected()
+    test_force_push_explicit_main_asks()
+    test_force_push_refspec_main_asks()
+    test_force_push_non_main_unaffected()
+    test_nonforce_push_explicit_main_reminds()
+    test_nonforce_push_non_main_unaffected()
+    test_push_worktree_unaffected()
+    test_merge_while_on_main_reminds()
+    test_merge_while_on_other_branch_unaffected()
+    test_bare_push_on_main_branch_reminds()
 
     for name in PASS:
         print(f"PASS: {name}")

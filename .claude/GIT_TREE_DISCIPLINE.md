@@ -1,100 +1,166 @@
 # Git tree discipline — build spec
 
-Status: §1 hook guard BUILT 2026-07-04 (`6737cfe6`); §2 conventions in force (also in CLAUDE.md hard rules).
-Origin: two live sessions shared the main checkout; one switched branches and
+Status: §1 shared-checkout guard BUILT 2026-07-04 (`6737cfe6`); §1b
+landing-protocol guard IN PROGRESS 2026-07-04 (this session); §2 ff-only
+model RETIRED 2026-07-04, replaced by the merge-trunk landing protocol below.
+
+## Incident 1 (§1's origin)
+
+Two live sessions shared the main checkout; one switched branches and
 fast-forward merged while the other had uncommitted file moves in flight. The
 merge resurrected the moved files' old paths and the second session's commit
 landed on a branch it never chose. Full incident: `88257631` commit message +
 the hazards section of the `agent-execution-playbook` memory.
 
-Root cause: N concurrent sessions, one HEAD. The fix makes main-checkout branch
-state owned and enforced, not remembered.
+Root cause: N concurrent sessions, one HEAD. The fix (§1) makes main-checkout
+branch state owned and enforced, not remembered.
 
-## 1. Hook enforcement (the code change)
+## Incident 2 (§2's origin — the ff-only model itself was unsatisfiable)
 
-File: `.claude/hooks/preToolUseBash.py`. Today it auto-allows `git checkout`,
-`switch`, and `merge` as normal workflow writes. Change: when BOTH of these
-hold, those commands (plus `rebase` and `reset`, which already prompt — keep
-them prompting) must NOT be auto-allowed and must fall through to the normal
-permission prompt, with a reason string naming the other live session:
+The original §2 said main is fast-forward-only: a workstream lands with
+`git branch -f main <tip> && git push origin <tip>:main`. That assumed one
+integrator lands at a time. It broke under N orchestrator sessions finishing
+at different times (plus daemon/docs commits landing on main directly between
+them) — a clean fast-forward was never actually possible, so every finishing
+session improvised its own landing. The observed result was **twin commits**:
+the same content merged onto main once and onto `feat/timeline-ui-redesign`
+again, under different SHAs.
 
-- The command targets the MAIN checkout. Bare `git ...` counts (cd-prefixes are
-  already banned, so bare = main tree). `git -C <path> ...` counts only if
-  <path> resolves inside the main checkout and not under `.claude/worktrees/`.
-  Commands into worktrees stay auto-allowed unchanged.
-- Another session is live: any `.claude/daemon/verdicts/*.pid` whose pid passes
-  a signal-0 check and whose session id differs from this hook invocation's
-  `session_id` (hook stdin JSON). The observer idle-exits after 10 minutes, so
-  a session with no live daemon has been quiet that long and is safe to treat
-  as absent. No lock files, nothing to go stale.
+- Motion P1: `c6e2bd5f`/`90e3034b` (on feat) vs. `bfc1ebd4`/`18b82ab4` (on
+  origin/main) — same content, two lineages.
+- Automation P1–P3: `b1631a2f` ("local integration" merge, on main) vs.
+  `2a51fb29` (on feat) — same content, two lineages.
+- Automation P4 (feat-only, main's one genuine gap) sits on top of feat's
+  twins, so a plain feat→main merge conflicts with its own doppelgänger.
+
+Root cause: a single-integrator model applied to a multi-integrator reality.
+Full diagnosis + the P4 cleanup brief: the `git-landing-protocol` memory.
+Decided with Peter 2026-07-04, replacing §2 below.
+
+## §1. Shared-checkout guard (built, `6737cfe6`)
+
+File: `.claude/hooks/preToolUseBash.py`. `git checkout`, `switch`, and `merge`
+are normally auto-allowed as workflow writes. When BOTH of these hold, they
+fall through to a normal permission prompt instead, naming the other live
+session:
+
+- The command targets the MAIN checkout. Bare `git ...` counts (cd-prefixes
+  are already banned, so bare = main tree). `git -C <path> ...` counts only
+  if `<path>` resolves inside the main checkout and not under
+  `.claude/worktrees/`. Commands into worktrees stay auto-allowed unchanged.
+- Another session is live: any `.claude/daemon/verdicts/*.pid` whose pid
+  passes a signal-0 check and whose session id differs from this hook
+  invocation's `session_id` (hook stdin JSON). The observer idle-exits after
+  10 minutes, so a session with no live daemon has been quiet that long and
+  is safe to treat as absent. No lock files, nothing to go stale.
 
 Semantics: never hard-deny; the point is that Peter gets ASKED instead of the
 switch happening silently. Solo (no other live daemon) behavior is unchanged.
-Branch-switch detection must include `checkout <branch>`, `checkout -b/-B`,
+Branch-switch detection includes `checkout <branch>`, `checkout -b/-B`,
 `switch`, `merge`, and bare `checkout` with no `--`-separated paths; plain
 `git checkout -- <paths>` (file restore) is destructive-to-worktree, not a
-branch switch — leave its current treatment alone.
+branch switch — left alone.
 
-Failure posture: any exception inside the new check falls back to the hook's
-existing behavior for that command (fail toward today's status quo, never
-toward blocking everything).
+Failure posture: any exception inside the check falls back to the hook's
+existing behavior for that command (fail toward status quo, never toward
+blocking everything).
 
-Tests: extend the hook's existing test setup if one exists; otherwise add a
-small runner invoking the hook with synthetic stdin JSON. Cases: bare checkout
-with a fake live foreign pidfile (prompts), same with only own-session pidfile
-(auto-allowed), `git -C .claude/worktrees/x checkout` with foreign pidfile
-(auto-allowed), dead-pid pidfile (auto-allowed), malformed pidfile (auto-
-allowed), merge/switch variants, `checkout -- path` unchanged.
+## §1b. Landing-protocol guard (spec — implementing this session)
 
-## 2. Worktree-per-workstream convention (doc change, no code)
+File: `.claude/hooks/preToolUseBash.py`. Two new behaviors, both scoped to
+the MAIN checkout only (same `in_main` resolution as §1; worktree-targeted
+commands are unaffected):
 
-- **`main` = last known-good.** Never developed on; fast-forwarded to the
-  verified tip whenever a workstream lands clean, without touching any
-  checkout: `git branch -f main <tip> && git push origin <tip>:main`.
-  Rationale: everything that bases off the default branch (fresh clones,
-  the Agent tool's `isolation: "worktree"`) reads main; a stale main hands
-  agents months-old code (2026-07-04 incident: a worker got a March
-  checkout predating the node-graph system). For the same reason, never
-  use `isolation: "worktree"` for repo work — manual `git worktree add`
-  off the verified tip only, with the step-0 base-verification guard in
-  the brief.
+1. **Always ask** (regardless of foreign-session liveness — this is now
+   simply wrong under the merge-trunk model, not just concurrency-unsafe):
+   - `git branch -f main ...` / `git branch -F main ...` (force-moves the
+     main pointer, dropping whatever commits aren't its ancestors).
+   - `git push` carrying a force flag (`--force`, `-f`,
+     `--force-with-lease`, `--force-if-includes`) whose target is `main` —
+     either an explicit `main` / `HEAD:main` / `refs/heads/main` token, or a
+     bare/no-branch-arg push while the current branch (resolved via
+     `git rev-parse --abbrev-ref HEAD` in the target dir) is `main`.
+   Reason string: names the merge-trunk model and points at the landing
+   protocol below instead.
+2. **Allow + reminder** (deterministic nudge, not a permission gate): a
+   non-force `git push` or `git merge` that lands on main (same target
+   detection as above, minus the force-flag requirement) gets the normal
+   allow plus a short `additionalContext` reminder of the landing-protocol
+   loop (fetch → merge origin/main → gate → merge --no-ff → push → retry on
+   rejection) and the two twin-killers (§2 below).
 
-- A session doing sustained code work gets a LONG-LIVED worktree at
+Failure posture: same as §1 — any exception falls back to today's behavior
+for that command.
+
+Tests: extend the hook's existing test setup. Cases: `branch -f main <tip>`
+in main tree (asks) vs. in a worktree (unaffected); `push --force origin
+main` (asks); bare `git push` on branch main with a force flag set via
+config alias — out of scope, flag detection is argv-only; non-force `push
+origin main` (allow + reminder present); `merge <branch>` while on main
+(allow + reminder); same commands with target dir under
+`.claude/worktrees/` (unaffected, no reminder, no ask).
+
+## §2. Landing protocol (replaces the retired ff-only convention)
+
+- **Main is the merge-based trunk.** No separate integration branch — the
+  branch that accidentally became one (`feat/timeline-ui-redesign`) is
+  exactly the failure mode: two landing spots is what produced the twins.
+  "Last-known-good" is now a property of the gate (clippy + tests before any
+  merge), not of linearity.
+- **To land a workstream:** fetch → merge current `origin/main` into your
+  branch → rerun the gate (clippy + focused tests; full workspace sweep when
+  blast radius says so) → `git merge --no-ff` into main → push → if the push
+  is rejected because someone landed first, repeat.
+- **Twin-killer 1:** never cherry-pick or re-commit content that already
+  exists as commits on a live branch — merge the branch so SHAs stay shared.
+  The one sanctioned exception: landing the final content of a branch that
+  is being retired immediately afterward (the P4 cleanup below is the
+  precedent — feat's lineage is being fully retired, so lifting its last
+  unique commits by cherry-pick and then deleting the branch doesn't create
+  a new twin).
+- **Twin-killer 2:** never delete a branch until `git merge-base
+  --is-ancestor <tip> origin/main` confirms its commits are on main.
+- `git branch -f main <tip>` and force-pushes to main are anti-patterns now
+  (§1b asks before either).
+- A session doing sustained code work still gets a LONG-LIVED worktree at
   `.claude/worktrees/<branch>`, created off a verified tip (the playbook's
   step-0 base-verification guard) with gitignored fixtures copied in. It
   persists across sessions until the branch merges; per-session worktrees pay
   the cargo cold-build tax and are not the pattern.
-- The main checkout is the integration tree. Sessions in worktrees never
-  run bare git/cargo (always `-C` / `--manifest-path`, absolute, quoted —
-  the repo path contains a space).
-- Merges/integration happen only in the main tree, and only while it isn't
-  contested (the hook above turns contested attempts into a prompt).
-- Update the CLAUDE.md hard-rules bullet that describes preToolUseBash.py so
-  it mentions the shared-tree guard, and add one line to the
-  `agent-execution-playbook` memory hazards pointing at this doc.
+- The main checkout is the only place merges to main happen. Sessions in
+  worktrees never run bare git/cargo (always `-C` / `--manifest-path`,
+  absolute, quoted — the repo path contains a space).
+- **Workers never land.** Only the orchestrating session (or Peter) merges
+  into main.
+- **Never use the Agent tool's built-in `isolation: "worktree"` for repo
+  work** — it bases the worktree off the default branch, not your tip.
+  Manual `git worktree add` off the verified tip only, with the step-0
+  base-verification guard in the brief.
 
-## 2b. Pending cleanup (2026-07-04 hygiene pass — do when trigger fires)
+## §2b. Pending cleanup (2026-07-04 twin-commit remediation)
 
-Local prune DONE (47 merged branches deleted; main ff'd to trunk tip). Remaining:
+1. **Land automation P4** — the only content genuinely missing from main.
+   Cherry-pick the six P4 commits from `feat/timeline-ui-redesign` (`f03c8a31`,
+   `05b48436`, `ed252abd`, `3b851c61`, `51a5cb52`, `ebbf5f1d`) in a fresh
+   worktree off current origin/main; evaluate whether the `983a3837`
+   design-token-guard fixup is still needed against main's own motion
+   copies. Conflicts against main's motion twins (`bfc1ebd4`/`18b82ab4`) are
+   expected and bounded. Full workspace sweep (P4 touches manifold-ui +
+   renderer broadly), then merge to main, push. This is twin-killer 1's
+   sanctioned exception (see §2) — feat is being retired right after.
+2. **Prune retired branches** — after `is-ancestor` confirms content is on
+   main: delete `feat/timeline-ui-redesign`, `lane/automation-lanes`,
+   `lane/timeline-p0`, `lane/ui-motion` (local + remote + their
+   `.claude/worktrees/` dirs if any remain).
+3. **Lower-priority remote sweep** (not blocking, do when a session is
+   quiet): several remote-only branches under `origin/` (`gig-resilience-p1/2`,
+   `session-mode-p1/2/3`, `multi-display-p1`, `vocab-apply`,
+   `feat/multi-selection-ux`, `feat/ui-design-system-plan`,
+   `feat/input-widget-identity`, `feat/effect-digital-drift`, several
+   `wave/*`) look stale relative to current main. Verify each with
+   `is-ancestor` before deleting — don't assume from the name.
 
-1. **Stuck worker repoint** — owner: the Opus orchestration session if still
-   live; otherwise the NEXT orchestration session. A worker worktree
-   (auto-named `worktree-agent-…`) branched off stale origin/main (March).
-   If the original session is live: `git reset --hard
-   feat/timeline-ui-redesign` inside it (clean tree), resume the worker.
-   If not: delete that worktree (`git worktree remove …`) and spawn a fresh
-   worker off the verified tip per the manual-worktree rule. THEN delete
-   local `feat/timeline-ui-redesign` (kept only for this).
-2. **Remote branch prune** — trigger: any quiet session. Delete origin
-   branches whose tips are ancestors of origin/main
-   (`git branch -r --merged origin/main`, then `git push origin --delete …`).
-   `origin/feat/timeline-ui-redesign` is a stale divergent push (unique
-   content = the deliberately-reverted build-order block, `fe7622ee`) —
-   delete it too once item 1 is done.
-3. **Lane branches** — trigger: lanes A/B (automation, timeline-p0) land.
-   Merge to trunk, ff main, delete lane branches + worktrees.
-
-## 3. Already in force (no work)
+## §3. Already in force (no work)
 
 Commit fast — never sit on uncommitted renames/deletions while other sessions
 or agents run; read the branch off the commit OUTPUT, not session start; diff
@@ -103,7 +169,8 @@ not an agent, may have restored them).
 
 ## Acceptance
 
-All test cases above pass; a manual bare `git checkout main` in the main tree
-with a second session live produces a permission prompt whose message names
-the other session id; the same command with no other session live is silent;
-clippy-clean is N/A (hook is Python); commit by path and push.
+§1 test cases (unchanged) pass. §1b: `branch -f main` and force-push-to-main
+ask unconditionally in the main tree, are unaffected in a worktree; a
+non-force push/merge landing on main carries the reminder; all cases fail
+open on exception. Clippy-clean is N/A (hook is Python). Commit by path and
+push.
