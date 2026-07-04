@@ -86,8 +86,6 @@ pub struct MidiInputController {
     registered_devices: Vec<MidiDevice>,
     device_filter: Option<String>,
     native_clock_path_active_last_frame: bool,
-    #[allow(dead_code)]
-    logged_minis_clock_fallback_warning: bool,
     last_dropped_native_note_events: i32,
     /// Pre-allocated drain buffer (replaces Unity's List<MidiNoteEvent>(512)).
     native_event_buffer: Vec<MidiNoteEvent>,
@@ -123,7 +121,6 @@ impl MidiInputController {
             registered_devices: Vec::new(),
             device_filter: None,
             native_clock_path_active_last_frame: false,
-            logged_minis_clock_fallback_warning: false,
             last_dropped_native_note_events: 0,
             native_event_buffer: Vec::with_capacity(MAX_NATIVE_CLOCK_EVENTS_PER_FRAME),
             event_tx,
@@ -242,7 +239,6 @@ impl MidiInputController {
     pub fn stop(&mut self) {
         self.unregister_all_devices();
         self.native_clock_path_active_last_frame = false;
-        self.logged_minis_clock_fallback_warning = false;
         self.native_clock_path_active = false;
         self.native_clock_events_processed_last_frame = 0;
         self.native_clock_events_processed_total = 0;
@@ -283,7 +279,6 @@ impl MidiInputController {
             self.last_dropped_native_note_events = 0;
             self.native_clock_events_processed_total = 0;
             self.native_clock_same_tick_reorders_total = 0;
-            self.logged_minis_clock_fallback_warning = false;
 
             if self.show_debug_logs {
                 log::debug!("[MidiInputController] Native CLK note path: active");

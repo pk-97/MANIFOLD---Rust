@@ -47,15 +47,10 @@ struct NoteOffTracking {
     layer_index: i32,
     clip_id: ClipId,
     source_channel: i32,
-    #[allow(dead_code)]
-    source_device_id: i32,
     /// Time.realtimeSinceStartup at NoteOn — guards against stale NoteOff.
     creation_time: f64,
     /// Native queue sequence for deterministic stale-event filtering.
     creation_sequence: u32,
-    /// Native absolute tick captured at NoteOn.
-    #[allow(dead_code)]
-    creation_absolute_tick: i32,
 }
 
 impl ClipLauncher {
@@ -178,10 +173,8 @@ impl ClipLauncher {
                 layer_index,
                 clip_id: clip.id.clone(),
                 source_channel: midi_channel,
-                source_device_id: device_id,
                 creation_time: realtime_now,
                 creation_sequence: event_sequence,
-                creation_absolute_tick: event_absolute_tick,
             },
         );
 
@@ -398,10 +391,8 @@ impl ClipLauncher {
                     layer_index,
                     clip_id: gen_clip.id.clone(),
                     source_channel: midi_channel,
-                    source_device_id: device_id,
                     creation_time: realtime_now,
                     creation_sequence: event_sequence,
-                    creation_absolute_tick: event_absolute_tick,
                 },
             );
 
@@ -502,10 +493,8 @@ impl ClipLauncher {
                 layer_index,
                 clip_id: clip.id.clone(),
                 source_channel: midi_channel,
-                source_device_id: device_id,
                 creation_time: realtime_now,
                 creation_sequence: event_sequence,
-                creation_absolute_tick: event_absolute_tick,
             },
         );
 

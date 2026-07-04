@@ -43,8 +43,6 @@ struct PendingLiveLaunch {
     layer_index: i32,
     layer_id: LayerId,
     target_tick: i32,
-    #[allow(dead_code)]
-    midi_note: i32,
 }
 
 /// 5ms timing guard threshold (seconds). Reject NoteOff within this window of NoteOn.
@@ -87,11 +85,7 @@ pub(crate) fn resolve_layer_live_content(project: &Project, layer_index: i32) ->
 
 /// Start-of-clip recording provenance snapshot.
 /// Port of C# TempoRecorder.RecordingClipStartInfo (lines 254-265).
-#[allow(dead_code)]
 struct RecordingClipStartInfo {
-    clip_id: ClipId,
-    video_clip_id: String,
-    layer_index: i32,
     midi_note: i32,
     start_time_seconds: Seconds,
     start_beat: Beats,
@@ -568,7 +562,6 @@ impl LiveClipManager {
                 layer_index,
                 layer_id,
                 target_tick,
-                midi_note,
             };
             self.queue_pending(clip.id.clone(), launch);
         } else {
@@ -649,7 +642,6 @@ impl LiveClipManager {
                 layer_index,
                 layer_id,
                 target_tick,
-                midi_note,
             };
             self.queue_pending(clip.id.clone(), launch);
         } else {
@@ -1035,16 +1027,9 @@ impl LiveClipManager {
             (start_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32).round() as i32
         };
 
-        let clip_layer_idx = project
-            .timeline
-            .layer_index_for_id(&clip.layer_id)
-            .unwrap_or(0) as i32;
         self.clip_starts.insert(
             clip.id.clone(),
             RecordingClipStartInfo {
-                clip_id: clip.id.clone(),
-                video_clip_id: clip.video_clip_id.clone(),
-                layer_index: clip_layer_idx,
                 midi_note,
                 start_time_seconds: host.beat_to_timeline_time(start_beat),
                 start_beat,
