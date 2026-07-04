@@ -153,14 +153,20 @@ impl GraphCanvas {
         }
 
         // Live rubber-band rectangle while marquee-selecting — over the nodes.
-        if let DragMode::Marquee { origin_screen } = &self.drag_mode {
-            let (ox, oy) = *origin_screen;
-            let (cx, cy) = self.cursor;
-            let x = ox.min(cx);
-            let y = oy.min(cy);
-            let w = (cx - ox).abs();
-            let h = (cy - oy).abs();
-            ui.draw_bordered_rect(x, y, w, h, MARQUEE_FILL, 0.0, 1.0, MARQUEE_BORDER);
+        // D17 "marquee fade in/out": `marquee_alpha` eases 0..1 (see
+        // `GraphCanvas::tick`), so the rect fades in on press and fades out
+        // after release instead of popping/vanishing instantly.
+        // `marquee_last_rect` is what keeps the geometry available for the
+        // fade-OUT frames, after `drag_mode` has already reset to `None`.
+        let alpha = self.marquee_alpha.value();
+        if alpha > 0.001
+            && let Some((x, y, w, h)) = self.marquee_last_rect
+        {
+            // Scale each color's OWN baked-in alpha by the fraction — not
+            // replace it — so the fully-faded-in state matches the original
+            // (already-subtle) fill/border alpha exactly, not full opacity.
+            let scale = |c: Color32| color::with_alpha(c, (c.a as f32 * alpha).round() as u8);
+            ui.draw_bordered_rect(x, y, w, h, scale(MARQUEE_FILL), 0.0, 1.0, scale(MARQUEE_BORDER));
         }
 
         ui.pop_depth();
@@ -172,6 +178,15 @@ impl GraphCanvas {
         if matches!(self.drag_mode, DragMode::None) && !self.mapping_popover.is_open() {
             ui.push_depth(Depth::TOOLTIP);
             self.draw_hover_tooltip(ui, viewport, canvas);
+            ui.pop_depth();
+        }
+
+        // D17 connect-pop / error-shake — drawn at TOOLTIP depth so they
+        // read above nodes/wires regardless of where the drop landed.
+        if self.connect_pop.progress().is_some() || self.error_shake.progress().is_some() {
+            ui.push_depth(Depth::TOOLTIP);
+            self.draw_connect_pop(ui);
+            self.draw_error_shake(ui);
             ui.pop_depth();
         }
 
@@ -197,6 +212,45 @@ impl GraphCanvas {
         }
 
         ui.pop_immediate_clip();
+    }
+
+    /// D17 "wire→port ... pop" (partial — see `GraphCanvas::tick`'s doc
+    /// comment for what's scoped out). A brief expanding, fading ring at the
+    /// drop point on a successful `ConnectPorts` commit.
+    fn draw_connect_pop(&self, ui: &mut dyn Painter) {
+        let Some(p) = self.connect_pop.progress() else {
+            return;
+        };
+        let (cx, cy) = self.connect_pop_pos;
+        let radius = 4.0 + 10.0 * p;
+        let alpha = ((1.0 - p) * 255.0).round() as u8;
+        let ring = color::with_alpha(color::ACCENT_BLUE_C32, alpha);
+        ui.draw_bordered_rect(
+            cx - radius,
+            cy - radius,
+            radius * 2.0,
+            radius * 2.0,
+            Color32::TRANSPARENT,
+            radius,
+            2.0,
+            ring,
+        );
+    }
+
+    /// D17 error shake — a small red X at the drop point, with a decaying
+    /// horizontal jitter (a couple of oscillations, settled by the end of
+    /// the transient) when a wire is dropped somewhere invalid.
+    fn draw_error_shake(&self, ui: &mut dyn Painter) {
+        let Some(p) = self.error_shake.progress() else {
+            return;
+        };
+        let (cx, cy) = self.error_shake_pos;
+        let shake_x = (p * std::f32::consts::PI * 4.0).sin() * 3.0 * (1.0 - p);
+        let alpha = ((1.0 - p) * 255.0).round() as u8;
+        let mark = color::with_alpha(color::RED_BASE, alpha);
+        let r = 6.0;
+        ui.draw_line(cx - r + shake_x, cy - r, cx + r + shake_x, cy + r, 2.0, mark);
+        ui.draw_line(cx - r + shake_x, cy + r, cx + r + shake_x, cy - r, 2.0, mark);
     }
 
     /// Floating help card near the cursor: a param's help line when the

@@ -713,6 +713,14 @@ impl Application {
             if let Some(aspect) = preview_aspect {
                 canvas.set_preview_aspect(aspect);
             }
+            // P2 motion (`UI_CRAFT_AND_MOTION_PLAN.md` D17): the one per-frame
+            // tick for the canvas's marquee-fade/connect-pop/error-shake
+            // tweens — no seam existed for this before (graph_canvas had no
+            // `tick`/`update` method at all); this is the natural insertion
+            // point, right beside the `set_snapshot`/`apply_live_values`
+            // calls that already run every frame the editor window is open,
+            // using the `dt` this function already computed above.
+            canvas.tick((dt * 1000.0) as f32);
             canvas.set_snapshot(&ui_snap);
             // Overlay this frame's live (modulated) node values on top of the
             // just-pushed structural snapshot, so a driver / Ableton / envelope /
