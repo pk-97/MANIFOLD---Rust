@@ -1302,6 +1302,14 @@ pub(crate) fn build_param_row(
     // editor card (Author context) passes `Some(param_index << 8)`; the perform
     // inspector passes `None` and is unchanged. See `docs/INPUT_IDENTITY_UNIFICATION.md`.
     row_key_base: Option<u64>,
+    // P1 drawer open/close tween (`UI_CRAFT_AND_MOTION_PLAN.md`): while a reveal
+    // height is supplied, the modulation-drawer block builds under a clip region
+    // sized to that height and the row reserves exactly that height, so the drawer
+    // grows/shrinks and everything below reflows in lockstep. `None` = settled /
+    // no animation → the drawer builds directly under `parent` and reserves its
+    // natural height, byte-identical to the pre-motion layout (so the golden card
+    // tests, which build settled, are unaffected).
+    drawer_reveal: Option<f32>,
 ) -> ParamRowIds {
     let mut ids = ParamRowIds {
         // Overwritten with the real row-catcher node below before any read.
@@ -1523,6 +1531,31 @@ pub(crate) fn build_param_row(
 
     cy += ROW_HEIGHT + ROW_SPACING;
 
+    // P1 drawer tween: top of the modulation-drawer block. When a reveal height is
+    // supplied AND this row actually has a drawer, the whole block builds under a
+    // clip region of that height (revealing top-down as it grows) and `new_cy`
+    // reserves exactly that height so content below reflows with it. Otherwise the
+    // block builds under `parent` and reserves its natural height as before.
+    let drawer_top = cy;
+    // A reveal height only matters when this row actually has a drawer (active
+    // config); a row with no active config stays on the natural path.
+    let animate_drawer = drawer_reveal.is_some() && !active_tabs.is_empty();
+    // When animating, every drawer node parents to a clip region of the reveal
+    // height (revealing top-down); otherwise they parent to `parent` unchanged.
+    let drawer_parent: Option<NodeId> = if animate_drawer {
+        let reveal = drawer_reveal.unwrap_or(0.0).max(0.0);
+        Some(tree.add_node(
+            parent,
+            Rect::new(x, drawer_top, (row_right - x).max(1.0), reveal),
+            UINodeType::ClipRegion,
+            UIStyle::default(),
+            None,
+            UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
+        ))
+    } else {
+        parent
+    };
+
     // Drawer geometry: a slight left inset from the row's label edge so the config
     // rows read as sub-controls under the slider, right edge at the mod-button
     // column's right edge. The drawer's rows render ON the one mod card drawn above
@@ -1539,7 +1572,7 @@ pub(crate) fn build_param_row(
     // resolved up top (the mod card needed them).
     if active_tabs.len() >= 2 {
         ids.mod_tabs =
-            build_mod_tab_strip(tree, parent, drawer_x, cy, drawer_w, &active_tabs, shown_tab);
+            build_mod_tab_strip(tree, drawer_parent, drawer_x, cy, drawer_w, &active_tabs, shown_tab);
         cy += MOD_TAB_STRIP_H;
     }
 
@@ -1547,7 +1580,7 @@ pub(crate) fn build_param_row(
     // handle on the track above; this is how fast the value falls back.
     if shown_tab == Some(ModTab::Envelope) {
         ids.envelope_config = Some(build_envelope_config(
-            tree, parent, drawer_x, cy, drawer_w, mod_state, i,
+            tree, drawer_parent, drawer_x, cy, drawer_w, mod_state, i,
         ));
         cy += ENV_CONFIG_HEIGHT;
     }
@@ -1556,7 +1589,7 @@ pub(crate) fn build_param_row(
     if shown_tab == Some(ModTab::Driver) {
         ids.driver_config = Some(build_driver_config(
             tree,
-            parent,
+            drawer_parent,
             drawer_x,
             cy,
             drawer_w,
@@ -1572,7 +1605,7 @@ pub(crate) fn build_param_row(
     if shown_tab == Some(ModTab::Ableton)
         && let Some(ref display) = info.ableton_display
     {
-        ids.ableton_config = Some(build_ableton_config(tree, parent, drawer_x, cy, drawer_w, display));
+        ids.ableton_config = Some(build_ableton_config(tree, drawer_parent, drawer_x, cy, drawer_w, display));
         cy += ABL_CONFIG_HEIGHT;
     }
 
@@ -1662,14 +1695,19 @@ pub(crate) fn build_param_row(
             slider_font_size: FONT_SIZE,
             theme: Theme::INSPECTOR.with_accent(AUDIO_MOD_ACTIVE_C32).tinted(),
         };
-        let dids = drawer::build(tree, parent, drawer_x, cy, drawer_w, &spec);
+        let dids = drawer::build(tree, drawer_parent, drawer_x, cy, drawer_w, &spec);
         cy += dids.height;
         ids.audio_config = Some((dids, send_count));
     }
 
-    // Clear break after an expanded drawer so the next slider reads as a separate
-    // row (the slider above hugs its own drawer). Mirrored in `row_drawer_height`.
-    if !active_tabs.is_empty() {
+    // Reserve height for the content below. When animating, reserve exactly the
+    // reveal height (which the tween eases toward `row_drawer_height`, gap
+    // included), so the drawer's clipped reveal and the reflow below move in
+    // lockstep. Otherwise advance the natural cy plus the post-drawer break —
+    // byte-identical to before, and mirrored in `row_drawer_height`.
+    if animate_drawer {
+        cy = drawer_top + drawer_reveal.unwrap_or(0.0).max(0.0);
+    } else if !active_tabs.is_empty() {
         cy += DRAWER_BOTTOM_GAP;
     }
 

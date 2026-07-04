@@ -2675,6 +2675,17 @@ impl Application {
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
         self.ws.ui_root.update();
 
+        // 6·motion. P1 drawer open/close tween: while any inspector drawer-height
+        // tween is in flight, force a rebuild each frame so the interpolated height
+        // re-lays-out and the content below reflows. Mirrors the is_dragging()
+        // rebuild poll above (a panel bool read after update → needs_rebuild). The
+        // forced rebuild's own invalidate_all repaints the inspector, so no
+        // separate invalidate is needed here. Reduced motion settles instantly, so
+        // this is false at once — no per-frame rebuild churn.
+        if self.ws.ui_root.inspector.drawer_anim_active() {
+            self.needs_rebuild = true;
+        }
+
         // 6·audio. Live per-send level meters in the Audio Setup modal — in-place
         // node resize from the latest content-state levels, no rebuild.
         if self.ws.ui_root.audio_setup_panel.is_open() {
