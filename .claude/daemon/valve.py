@@ -90,9 +90,22 @@ def build_block(flag):
     # No unvalidated/confidence attributes in the model-facing tag: both are
     # licenses to discount the anchor (Peter's call, 2026-07-04). Confidence
     # stays in the verdict file for grading.
+    #
+    # DESIGN.md §4c-2: habit memory. Template wording is frozen (invariant-5
+    # amendment) — only the ordinal varies, and it's mechanically computed by
+    # the observer's weekly rollup (see observer.py _rollup_weekly_fires),
+    # never composed here. weekly_count is None for fires this feature
+    # doesn't cover yet (worker-nudges mailboxes) — no line in that case.
+    weekly_count = flag.get("weekly_count")
+    habit_note = ""
+    if isinstance(weekly_count, int) and weekly_count > 0:
+        import common
+
+        habit_note = f"\n\n({common.ordinal(weekly_count)} fire of this move across sessions this week.)"
     return (
         f'<daemon move="{move_id}">\n'
-        f"{payload}\n"
+        f"{payload}"
+        f"{habit_note}\n"
         f"\n"
         f"(Supervised mode: briefly acknowledge this note out loud in your next "
         f'message — one sentence, e.g. "daemon nudged me about {move_id} — '
