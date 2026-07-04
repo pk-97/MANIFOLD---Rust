@@ -139,6 +139,89 @@ impl Camera {
         }
     }
 
+    /// Build a free-look perspective camera from world-space `pos` and Euler
+    /// angles (radians): `yaw` about world up (Y), `pitch` about the camera's
+    /// right axis, `roll` about `fwd`. This is the gizmo- and import-friendly
+    /// authoring mode — position + orientation directly, no orbit target.
+    ///
+    /// `fwd` is derived from yaw/pitch against world +Z (yaw=pitch=roll=0 looks
+    /// down `-Z`, matching `look_at_rh`'s eye/target convention where `fwd =
+    /// normalize(target - eye)` and `default_perspective`'s eye-at-`-Z`-looking-
+    /// at-origin setup). `right`/`up` are derived via cross products with world
+    /// up, then `roll` rotates them around `fwd` — bit-for-bit the same
+    /// roll-around-fwd rotation `orbit_perspective` uses.
+    pub fn from_pos_euler(
+        pos: [f32; 3],
+        yaw: f32,
+        pitch: f32,
+        roll: f32,
+        fov_y: f32,
+        near: f32,
+        far: f32,
+    ) -> Self {
+        let world_up = [0.0, 1.0, 0.0];
+        // Yaw rotates -Z around Y; pitch tilts that up/down around the
+        // resulting right axis. Standard spherical-to-Cartesian derivation.
+        let fwd = normalize3([
+            -yaw.sin() * pitch.cos(),
+            pitch.sin(),
+            -yaw.cos() * pitch.cos(),
+        ]);
+        let right0 = normalize3(cross3(fwd, world_up));
+        let up0 = normalize3(cross3(right0, fwd));
+        // Roll around the fwd axis. Rotate (right, up) by `roll` — same
+        // formula as `orbit_perspective`.
+        let (s, c) = (roll.sin(), roll.cos());
+        let right = normalize3([
+            right0[0] * c + up0[0] * s,
+            right0[1] * c + up0[1] * s,
+            right0[2] * c + up0[2] * s,
+        ]);
+        let up = normalize3([
+            -right0[0] * s + up0[0] * c,
+            -right0[1] * s + up0[1] * c,
+            -right0[2] * s + up0[2] * c,
+        ]);
+        let view = look_at_rh(pos, [pos[0] + fwd[0], pos[1] + fwd[1], pos[2] + fwd[2]], up);
+        Self {
+            pos,
+            fwd,
+            right,
+            up,
+            near,
+            far,
+            mode: CameraMode::Perspective { fov_y },
+            view,
+        }
+    }
+
+    /// Build a look-at perspective camera from world-space `pos`/`target` and
+    /// an approximate `up` hint (orthonormalized against `fwd`, same as every
+    /// other builder in this file). `fwd` points from `pos` toward `target`.
+    pub fn look_at(
+        pos: [f32; 3],
+        target: [f32; 3],
+        up: [f32; 3],
+        fov_y: f32,
+        near: f32,
+        far: f32,
+    ) -> Self {
+        let fwd = normalize3(sub3(target, pos));
+        let right = normalize3(cross3(fwd, up));
+        let up_corrected = normalize3(cross3(right, fwd));
+        let view = look_at_rh(pos, target, up_corrected);
+        Self {
+            pos,
+            fwd,
+            right,
+            up: up_corrected,
+            near,
+            far,
+            mode: CameraMode::Perspective { fov_y },
+            view,
+        }
+    }
+
     /// Projection matrix for the given consumer-supplied aspect ratio
     /// (`width / height` of the consumer's render target). Aspect lives here
     /// rather than on the struct because the camera primitive doesn't know
@@ -279,6 +362,60 @@ mod tests {
         let cam = Camera::default_perspective();
         assert_eq!(cam.pos, [0.0, 0.0, -3.0]);
         assert!(matches!(cam.mode, CameraMode::Perspective { .. }));
+    }
+
+    #[test]
+    fn from_pos_euler_zero_angles_looks_down_negative_z() {
+        let cam = Camera::from_pos_euler([1.0, 2.0, 3.0], 0.0, 0.0, 0.0, 0.9, 0.05, 200.0);
+        assert!((cam.fwd[0] - 0.0).abs() < 1e-6);
+        assert!((cam.fwd[1] - 0.0).abs() < 1e-6);
+        assert!((cam.fwd[2] - -1.0).abs() < 1e-6, "expected -Z forward, got {:?}", cam.fwd);
+        assert_eq!(cam.pos, [1.0, 2.0, 3.0]);
+        assert!(matches!(cam.mode, CameraMode::Perspective { fov_y } if (fov_y - 0.9).abs() < 1e-6));
+    }
+
+    #[test]
+    fn from_pos_euler_basis_is_orthonormal_with_and_without_roll() {
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        for roll in [0.0_f32, 0.4, 1.7] {
+            let cam = Camera::from_pos_euler([0.0, 0.0, 0.0], 0.6, 0.3, roll, 1.0, 0.1, 100.0);
+            assert!((dot(cam.fwd, cam.fwd) - 1.0).abs() < 1e-5);
+            assert!((dot(cam.right, cam.right) - 1.0).abs() < 1e-5);
+            assert!((dot(cam.up, cam.up) - 1.0).abs() < 1e-5);
+            assert!(dot(cam.fwd, cam.right).abs() < 1e-5);
+            assert!(dot(cam.fwd, cam.up).abs() < 1e-5);
+            assert!(dot(cam.right, cam.up).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn look_at_fwd_points_from_pos_toward_target() {
+        let pos = [2.0, 1.0, 0.0];
+        let target = [2.0, 1.0, 5.0];
+        let cam = Camera::look_at(pos, target, [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
+        let expected_fwd = normalize3(sub3(target, pos));
+        for axis in 0..3 {
+            assert!(
+                (cam.fwd[axis] - expected_fwd[axis]).abs() < 1e-6,
+                "axis {axis}: got {} expected {}",
+                cam.fwd[axis],
+                expected_fwd[axis],
+            );
+        }
+        assert_eq!(cam.pos, pos);
+        assert!(matches!(cam.mode, CameraMode::Perspective { .. }));
+    }
+
+    #[test]
+    fn look_at_basis_is_orthonormal() {
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let cam = Camera::look_at([1.0, 2.0, 3.0], [-4.0, 0.5, 2.0], [0.0, 1.0, 0.0], 1.0, 0.1, 100.0);
+        assert!((dot(cam.fwd, cam.fwd) - 1.0).abs() < 1e-5);
+        assert!((dot(cam.right, cam.right) - 1.0).abs() < 1e-5);
+        assert!((dot(cam.up, cam.up) - 1.0).abs() < 1e-5);
+        assert!(dot(cam.fwd, cam.right).abs() < 1e-5);
+        assert!(dot(cam.fwd, cam.up).abs() < 1e-5);
+        assert!(dot(cam.right, cam.up).abs() < 1e-5);
     }
 
     #[test]
