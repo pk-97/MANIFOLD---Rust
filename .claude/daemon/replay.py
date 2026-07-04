@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline replay harness for the substrate observer classifier.
+"""Offline replay harness for the daemon observer classifier.
 
 Replays historical session transcripts through the same windowing the live
 daemon will use (common.WindowState), calls the Haiku classifier over each
@@ -35,10 +35,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common  # noqa: E402
 
-SUBSTRATE_DIR = os.path.dirname(os.path.abspath(__file__))
-MOVES_PATH = os.path.join(SUBSTRATE_DIR, "moves.md")
-RUBRIC_PATH = os.path.join(SUBSTRATE_DIR, "rubric.md")
-LABELS_PATH = os.path.join(SUBSTRATE_DIR, "eval", "labels.jsonl")
+DAEMON_DIR = os.path.dirname(os.path.abspath(__file__))
+MOVES_PATH = os.path.join(DAEMON_DIR, "moves.md")
+RUBRIC_PATH = os.path.join(DAEMON_DIR, "rubric.md")
+LABELS_PATH = os.path.join(DAEMON_DIR, "eval", "labels.jsonl")
 SESSIONS_DIR = os.path.expanduser("~/.claude/projects/-Users-peterkiemann-MANIFOLD---Rust")
 
 EST_COST_PER_CALL = 0.007  # observed on claude-haiku-4-5-20251001 with NEUTRAL_CWD, see commit note
@@ -204,7 +204,7 @@ def cmd_run(args):
     # Content-addressed cache: identical (rubric, window) pairs are never
     # re-bought, across runs and across sessions. Rubric edits change the key,
     # so stale answers can't leak through.
-    cache = common.VerdictCache(os.path.join(SUBSTRATE_DIR, "eval", "verdict_cache.jsonl"))
+    cache = common.VerdictCache(os.path.join(DAEMON_DIR, "eval", "verdict_cache.jsonl"))
     cache_hits = 0
     for session, data in sessions_out.items():
         for w in data["windows"]:

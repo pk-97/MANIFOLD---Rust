@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Substrate observer daemon — DESIGN.md §1.
+"""Daemon observer — DESIGN.md §1.
 
 Tails one session's transcript, closes windows with common.WindowState (the
 same windowing replay.py uses — they must never drift apart), classifies
@@ -23,13 +23,13 @@ import sys
 import time
 import traceback
 
-SUBSTRATE_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, SUBSTRATE_DIR)
+DAEMON_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, DAEMON_DIR)
 import common  # noqa: E402
 
-VERDICTS_DIR = os.path.join(SUBSTRATE_DIR, "verdicts")
-MOVES_PATH = os.path.join(SUBSTRATE_DIR, "moves.md")
-RUBRIC_PATH = os.path.join(SUBSTRATE_DIR, "rubric.md")
+VERDICTS_DIR = os.path.join(DAEMON_DIR, "verdicts")
+MOVES_PATH = os.path.join(DAEMON_DIR, "moves.md")
+RUBRIC_PATH = os.path.join(DAEMON_DIR, "rubric.md")
 
 POLL_SECONDS = 3
 IDLE_TIMEOUT_S = 600  # DESIGN.md §1: idle > 10 min ends the daemon

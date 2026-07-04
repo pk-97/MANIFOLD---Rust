@@ -20,8 +20,8 @@ import subprocess
 import sys
 
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
-SUBSTRATE_DIR = os.path.normpath(os.path.join(HOOKS_DIR, "..", "substrate"))
-VERDICTS_DIR = os.path.join(SUBSTRATE_DIR, "verdicts")
+DAEMON_DIR = os.path.normpath(os.path.join(HOOKS_DIR, "..", "daemon"))
+VERDICTS_DIR = os.path.join(DAEMON_DIR, "verdicts")
 
 
 def main():

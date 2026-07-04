@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook: the substrate's turn-start valve.
+"""UserPromptSubmit hook: the daemon's turn-start valve.
 
 A second delivery point alongside PostToolUse (DESIGN.md §2), for a flag
 raised right as a turn ends with no further tool call to carry it — e.g.
@@ -16,8 +16,8 @@ import sys
 import time
 
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
-SUBSTRATE_DIR = os.path.normpath(os.path.join(HOOKS_DIR, "..", "substrate"))
-sys.path.insert(0, SUBSTRATE_DIR)
+DAEMON_DIR = os.path.normpath(os.path.join(HOOKS_DIR, "..", "daemon"))
+sys.path.insert(0, DAEMON_DIR)
 
 
 def main():

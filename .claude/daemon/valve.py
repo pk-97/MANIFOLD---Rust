@@ -1,4 +1,4 @@
-"""Shared mailbox logic for the substrate valve hooks (PostToolUse,
+"""Shared mailbox logic for the daemon valve hooks (PostToolUse,
 UserPromptSubmit). Both hooks check the same verdict file and the same
 consumed-seq marker per session — whichever fires first delivers a pending
 flag and bumps the marker; the other sees it already consumed and is a
@@ -6,17 +6,17 @@ no-op. That shared marker is what gives "one whisper at a time" (DESIGN.md
 invariant 3) without any file locking.
 
 Every function here fails open (returns None/False, never raises) — a
-substrate bug must never surface as a blocked or slowed session.
+daemon bug must never surface as a blocked or slowed session.
 """
 
 import json
 import os
 import time
 
-SUBSTRATE_DIR = os.path.dirname(os.path.abspath(__file__))
-VERDICTS_DIR = os.path.join(SUBSTRATE_DIR, "verdicts")
-MOVES_PATH = os.path.join(SUBSTRATE_DIR, "moves.md")
-TELEMETRY_PATH = os.path.join(SUBSTRATE_DIR, "telemetry.jsonl")
+DAEMON_DIR = os.path.dirname(os.path.abspath(__file__))
+VERDICTS_DIR = os.path.join(DAEMON_DIR, "verdicts")
+MOVES_PATH = os.path.join(DAEMON_DIR, "moves.md")
+TELEMETRY_PATH = os.path.join(DAEMON_DIR, "telemetry.jsonl")
 
 VERDICT_MAX_AGE = 300  # 5 min — DESIGN.md invariant 1: a stale verdict is treated as absent
 
@@ -28,7 +28,7 @@ def _payloads():
     if _PAYLOAD_CACHE is None:
         import sys
 
-        sys.path.insert(0, SUBSTRATE_DIR)
+        sys.path.insert(0, DAEMON_DIR)
         import common
 
         _PAYLOAD_CACHE = common.parse_moves(common.read(MOVES_PATH))
@@ -79,13 +79,13 @@ def build_block(flag):
     if not payload:
         return None
     return (
-        f'<substrate move="{move_id}" unvalidated="true" confidence="{flag.get("confidence")}">\n'
+        f'<daemon move="{move_id}" unvalidated="true" confidence="{flag.get("confidence")}">\n'
         f"{payload}\n"
         f"\n"
         f"(Supervised mode: briefly acknowledge this note out loud in your next "
-        f'message — one sentence, e.g. "substrate nudged me about {move_id} — '
+        f'message — one sentence, e.g. "daemon nudged me about {move_id} — '
         f'checking" — so Peter can judge whether the nudge was right.)\n'
-        f"</substrate>"
+        f"</daemon>"
     )
 
 
@@ -120,7 +120,7 @@ def ensure_observer(session_id, transcript_path):
             return
         if observer_alive(session_id):
             return
-        observer = os.path.join(SUBSTRATE_DIR, "observer.py")
+        observer = os.path.join(DAEMON_DIR, "observer.py")
         if not os.path.exists(observer):
             return
         import subprocess
@@ -130,12 +130,12 @@ def ensure_observer(session_id, transcript_path):
         log_path = os.path.join(VERDICTS_DIR, f"{session_id}.log")
         with open(log_path, "a", encoding="utf-8") as log:
             subprocess.Popen(
-                [sys.executable, os.path.join(SUBSTRATE_DIR, "observer.py"), "--session-id", session_id, "--transcript", transcript_path],
+                [sys.executable, os.path.join(DAEMON_DIR, "observer.py"), "--session-id", session_id, "--transcript", transcript_path],
                 stdout=log,
                 stderr=log,
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
-                cwd=SUBSTRATE_DIR,
+                cwd=DAEMON_DIR,
             )
         append_telemetry({"ts": time.time(), "session_id": session_id, "event": "observer_spawn"})
     except Exception:

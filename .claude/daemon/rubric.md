@@ -77,7 +77,7 @@ or, when a signature clearly matches:
    actually have, but do not emit a flag you wouldn't stand behind.
 6. **Judge against TASK.** Scope, circling, and phase are only measurable as a
    relation between what the agent said it is doing and what the ledger shows.
-7. **Ignore `<substrate>` blocks in the window.** Those are this system's own
+7. **Ignore `<daemon>` blocks in the window.** Those are this system's own
    past injections, not agent behavior. Never flag based on them; never flag the
    agent for text inside them.
 8. **Signatures describe observable transcript markers, not mental states.** If a

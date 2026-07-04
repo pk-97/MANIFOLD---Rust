@@ -1,18 +1,18 @@
-# The Substrate — design
+# The Daemon — design
 
 A subconscious layer for the models working this repo. The language model is the
 narrative layer — the voice in the head. Competence mostly doesn't live there: in
-skilled systems it lives in a substrate that runs without deliberation and delivers
+skilled systems it lives in a daemon that runs without deliberation and delivers
 its products *into* deliberation as things that simply occur to you. This system
-supplies that substrate externally: a continuous observer that follows the session,
+supplies that daemon externally: a continuous observer that follows the session,
 classifies what phase of work the model is in and whether it is drifting, and
 injects pre-authored reasoning moves and anchors at the moment they apply.
 
 Design thesis: move work out of the layer where model size matters into a layer
 where it doesn't. Detection is cheap and runs on Haiku. Prescription is expensive
 and was authored once by the largest model available (Fable, 2026-07), stored as
-fixed payloads. The daily model executes; the substrate steers; a weekly
-consolidation pass keeps the substrate alive.
+fixed payloads. The daily model executes; the daemon steers; a weekly
+consolidation pass keeps the daemon alive.
 
 Authored by Claude Fable 5 with Peter, 2026-07-03. The payloads and rubric are the
 judgment-bearing artifacts; this doc is the build spec for the plumbing.
@@ -20,7 +20,7 @@ judgment-bearing artifacts; this doc is the build spec for the plumbing.
 ## Components
 
 ```
-.claude/substrate/
+.claude/daemon/
   DESIGN.md      this file
   moves.md       payload library: reasoning moves + drift anchors (Fable-authored)
   rubric.md      classifier prompt for the observer (Fable-authored)
@@ -31,7 +31,7 @@ judgment-bearing artifacts; this doc is the build spec for the plumbing.
 ```
 
 Runtime files (`telemetry.jsonl`, `verdicts/`) are gitignored; everything else is
-versioned. History on the substrate is non-negotiable — the sleep pass edits it.
+versioned. History on the daemon is non-negotiable — the sleep pass edits it.
 
 ## 1. Observer daemon (`observer.py`)
 
@@ -80,7 +80,7 @@ versioned. History on the substrate is non-negotiable — the sleep pass edits i
   injection at turn start.
 - **Stop** — bookend: signals the daemon (final verdict, cleanup). Also where the
   existing per-turn machinery stays.
-- Payloads are injected verbatim inside `<substrate>` tags. Fixed wording — the
+- Payloads are injected verbatim inside `<daemon>` tags. Fixed wording — the
   model habituates to a recognizable anchor instead of parsing novel text.
 - **Subagent rule (2026-07-04, verified by live probe):** PostToolUse also fires
   for tool calls made *inside* subagents, carrying the MAIN session's id and
@@ -154,7 +154,7 @@ diagnosis); the remaining fixes are structural and are now folded into this
 spec (assistant-text cadence, `task_addressed` state, verify-claim reword,
 move-id validation). Rather than paying for a third offline run, the system
 goes live in **supervised mode**: whispers are injected but carry an explicit
-`unvalidated` marker in the `<substrate>` tag and are surfaced to Peter, every
+`unvalidated` marker in the `<daemon>` tag and are surfaced to Peter, every
 injection is logged, and §4b outcome scoring + auto-mute are active from day
 one. The gates above still stand — they are now scored from live telemetry by
 the sleep pass instead of from replay. `replay.py` stays as the offline
@@ -185,15 +185,15 @@ Weekly scheduled routine on the largest available model. Input: `telemetry.jsonl
 joined with the transcripts it points into, plus session digests. The question for
 every injection: did behavior change after the whisper — different action, claim
 verified, circling stopped? Output: revisions to `rubric.md` and `moves.md`
-(committed, so drift of the substrate itself is diffable), retirement of moves that
+(committed, so drift of the daemon itself is diffable), retirement of moves that
 fire without effect, new tells from failures the rubric missed. This loop is what
-keeps the substrate learning after its author is gone; without it the system
+keeps the daemon learning after its author is gone; without it the system
 fossilizes into a museum of 2026 failure modes.
 
 ## Invariants
 
 1. **Fail open, always.** Daemon dead, verdict stale (> 5 min), file unparseable →
-   valves do nothing. The substrate is additive-only; it must never be able to
+   valves do nothing. The daemon is additive-only; it must never be able to
    block or slow the session. No exceptions — a safety layer that can break the
    show is worse than none.
 2. **Haiku detects, never prescribes.** Nothing Haiku writes is ever shown to the

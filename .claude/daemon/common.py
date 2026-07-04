@@ -1,4 +1,4 @@
-"""Shared windowing + classifier-call code for the substrate observer.
+"""Shared windowing + classifier-call code for the daemon observer.
 
 Used by both replay.py (offline harness) and observer.py (live daemon, built
 in a later step) so the two never drift apart — DESIGN.md §4 requires replay

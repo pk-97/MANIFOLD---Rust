@@ -7,7 +7,7 @@ in `labels.jsonl`, one JSON object per line.
 the assistant's working behavior. The user's correction message is the marker; the
 test is counterfactual: replaying the transcript through the observer, a flag of
 the expected family must fire *before* the marker message. That is the whole
-point of the system — the substrate catches what the user otherwise catches.
+point of the system — the daemon catches what the user otherwise catches.
 
 ```json
 {"session": "<uuid>.jsonl", "kind": "incident",

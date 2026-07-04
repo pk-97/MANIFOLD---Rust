@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""PostToolUse hook: the substrate's mid-turn valve.
+"""PostToolUse hook: the daemon's mid-turn valve.
 
 Fires on every tool call — the main delivery point in autonomous runs
 (DESIGN.md §2). Reads the observer daemon's verdict file (cheap: one stat +
 one small JSON read, no model call); if a flag is pending and undelivered,
-injects it as additional context tagged <substrate unvalidated> per the
+injects it as additional context tagged <daemon unvalidated> per the
 2026-07-03 supervised go-live amendment, logs the injection to
 telemetry.jsonl, and marks it consumed. Fails open on any error.
 """
@@ -14,8 +14,8 @@ import sys
 import time
 
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
-SUBSTRATE_DIR = os.path.normpath(os.path.join(HOOKS_DIR, "..", "substrate"))
-sys.path.insert(0, SUBSTRATE_DIR)
+DAEMON_DIR = os.path.normpath(os.path.join(HOOKS_DIR, "..", "daemon"))
+sys.path.insert(0, DAEMON_DIR)
 
 
 def main():

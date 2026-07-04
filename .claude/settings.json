@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/substrate-session-start.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/daemon-session-start.py\""
           }
         ]
       }
@@ -61,7 +61,7 @@
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/substrate-userpromptsubmit.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/daemon-userpromptsubmit.py\""
           }
         ]
       }
@@ -87,7 +87,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/substrate-posttooluse.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/daemon-posttooluse.py\""
           }
         ]
       }
@@ -99,7 +99,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/substrate-session-end.py\""
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/daemon-session-end.py\""
           }
         ]
       }
