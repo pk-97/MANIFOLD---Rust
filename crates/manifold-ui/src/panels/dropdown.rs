@@ -13,6 +13,7 @@
 use super::overlay::{Anchor, Modality, Overlay, OverlayPlacement, OverlayResponse};
 use super::popup_shell;
 use super::PanelAction;
+use crate::anim::AnimF32;
 use crate::color;
 use crate::input::UIEvent;
 use crate::node::*;
@@ -138,6 +139,16 @@ pub struct DropdownPanel {
     /// driver. Selection lowering (`DropdownContext` → `PanelAction`) needs
     /// `UIRoot`'s cached device/resolution lists, so it stays app-side.
     pending_action: Option<DropdownAction>,
+    /// D17 "modal/dropdown enter" (`UI_CRAFT_AND_MOTION_PLAN.md` P2) — a 0..1
+    /// entrance progress: `0.0` the instant `open_at` fires (small + faded),
+    /// `1.0` once settled (full size + opaque). Scale and fade are both
+    /// derived from this single value (see `build_nodes`'s use of it) rather
+    /// than two separate tweens. `AnimF32::new(1.0, ..)`'s default means a
+    /// dropdown that's never actually been opened reads as already-settled.
+    enter_anim: AnimF32,
+    /// Wall-clock timestamp `update()` last ticked from — same self-
+    /// contained-dt pattern as `ToastPanel::last_tick`.
+    last_tick: Option<std::time::Instant>,
 }
 
 impl DropdownPanel {
@@ -164,7 +175,45 @@ impl DropdownPanel {
             color_grid_cols: 0,
             color_swatch_ids: Vec::new(),
             pending_action: None,
+            enter_anim: AnimF32::new(1.0, color::MOTION_FAST_MS),
+            last_tick: None,
         }
+    }
+
+    /// Advance the entrance tween by real elapsed wall-clock time and, while
+    /// still animating, rebuild the popup at the current (still-settling)
+    /// scale — this is the one place a P2 "spawn"-style effect rebuilds
+    /// nodes every animating frame rather than restyling in place (unlike
+    /// `ToastPanel::update`): the container's scale changes ITEM positions
+    /// too (they're laid out relative to `container_bounds`), and a fresh
+    /// `open()` is cheap for a dropdown's typical item count. Call every
+    /// frame from `UIRoot::update()` while `is_open()` — a no-op once
+    /// settled. D17 "modal/dropdown enter" (`UI_CRAFT_AND_MOTION_PLAN.md` P2).
+    pub fn update(&mut self, tree: &mut UITree) {
+        if !self.is_open || !self.enter_anim.is_animating() {
+            self.last_tick = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        let dt_ms = self
+            .last_tick
+            .map(|t| (now - t).as_secs_f32() * 1000.0)
+            .unwrap_or(0.0)
+            .min(100.0);
+        self.last_tick = Some(now);
+        // Rebuild unconditionally, even on the settling frame where
+        // `tick_enter` returns `false` — that frame's rebuild is what paints
+        // the final (exactly 1.0 scale/alpha) settled state; skipping it
+        // would leave the popup one frame short of full size/opacity.
+        self.tick_enter(dt_ms);
+        self.build_nodes(tree);
+    }
+
+    /// Advance the underlying entrance tween by `dt_ms`. Split out from
+    /// `update` so unit tests can drive timing without building a `UITree`
+    /// (mirrors `ToastPanel::tick`). Returns `true` while still animating.
+    pub fn tick_enter(&mut self, dt_ms: f32) -> bool {
+        self.enter_anim.tick(dt_ms)
     }
 
     /// Drain the action captured since the last call (set by `Overlay::on_event`).
@@ -253,6 +302,12 @@ impl DropdownPanel {
         self.hovered_index = -1;
         self.scroll_offset = 0.0;
         self.is_open = true;
+        // D17 "modal/dropdown enter": restart the entrance tween on every
+        // genuine open (not just the first) — a dropdown re-opened a moment
+        // after closing pops in fresh each time, same as a toast re-firing.
+        self.enter_anim = AnimF32::new(0.0, color::MOTION_FAST_MS);
+        self.enter_anim.set_target(1.0);
+        self.last_tick = None;
 
         // Compute content dimensions.
         let content_width = self.compute_content_width();
@@ -341,7 +396,26 @@ impl DropdownPanel {
         self.separator_ids.clear();
         self.color_swatch_ids.clear();
 
-        let bounds = self.container_bounds;
+        // D17 "modal/dropdown enter": scale the CONTAINER (never the
+        // full-screen scrim, which stays fixed) about its own center, 0.98→1
+        // over the entrance progress. Items below are laid out relative to
+        // this same (possibly still-shrunk) `bounds`, so they scale with it
+        // for free — no separate per-item transform.
+        let t = self.enter_anim.value().clamp(0.0, 1.0);
+        let scale = 0.98 + 0.02 * t;
+        let bounds = if (scale - 1.0).abs() > 0.0005 {
+            let full = self.container_bounds;
+            let cx = full.x + full.width * 0.5;
+            let cy = full.y + full.height * 0.5;
+            Rect::new(
+                cx - full.width * 0.5 * scale,
+                cy - full.height * 0.5 * scale,
+                full.width * scale,
+                full.height * scale,
+            )
+        } else {
+            self.container_bounds
+        };
 
         // Scrim + bordered container via the shared shell. The §17 overlay loop
         // lifts the container with a soft drop-shadow (it skips the scrim).
@@ -353,6 +427,15 @@ impl DropdownPanel {
         );
         self.backdrop_id = Some(shell.backdrop);
         self.root_id = Some(shell.container);
+        // Fade the container's own fill/border alpha by the same progress —
+        // items build at full opacity (a 90ms MOTION_FAST fade on the small
+        // item text is imperceptible; the container's fade is what reads).
+        if t < 0.999 {
+            let mut cs = tree.get_node(shell.container).style;
+            cs.bg_color = color::with_alpha(cs.bg_color, (cs.bg_color.a as f32 * t) as u8);
+            cs.border_color = color::with_alpha(cs.border_color, (cs.border_color.a as f32 * t) as u8);
+            tree.set_style(shell.container, cs);
+        }
 
         // Build items — positions offset by scroll. Items outside the
         // viewport are created but hidden to preserve stable item_ids indices.
@@ -810,6 +893,36 @@ mod tests {
         // 1 backdrop + 1 root + 4 items + 1 separator = 7 nodes
         assert_eq!(dd.node_count(), 7);
         assert!(tree.count() >= 7);
+    }
+
+    #[test]
+    fn opening_starts_the_enter_tween_faded_and_settles_to_full_opacity() {
+        let mut tree = UITree::new();
+        let mut dd = DropdownPanel::new();
+        dd.set_screen_size(1920.0, 1080.0);
+
+        dd.open_context(make_items(), Vec2::new(100.0, 200.0), &mut tree);
+        assert!(dd.enter_anim.is_animating(), "entrance tween starts mid-flight");
+        let container = tree.get_node(dd.root_id.unwrap());
+        assert!(
+            container.style.bg_color.a < popup_shell::PopupStyle::DROPDOWN.bg.a,
+            "container starts faded: {} vs full {}",
+            container.style.bg_color.a,
+            popup_shell::PopupStyle::DROPDOWN.bg.a
+        );
+
+        // Drive the tween directly with an explicit dt (deterministic, no
+        // wall-clock sleep) — `tick_enter` is split out from `update`
+        // exactly for this, mirroring `ToastPanel::tick`.
+        dd.tick_enter(color::MOTION_FAST_MS);
+        dd.build_nodes(&mut tree);
+        assert!(!dd.enter_anim.is_animating(), "settles after a full MOTION_FAST window");
+        let container = tree.get_node(dd.root_id.unwrap());
+        assert_eq!(
+            container.style.bg_color.a,
+            popup_shell::PopupStyle::DROPDOWN.bg.a,
+            "settled container is back at full opacity"
+        );
     }
 
     #[test]

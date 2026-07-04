@@ -2216,6 +2216,9 @@ impl UIRoot {
         // in place while showing; a no-op once idle. Runs every frame like the
         // panels above it, not gated on anything overlay-specific.
         self.toast.update(&mut self.tree);
+        // D17 "modal/dropdown enter": a no-op once settled or closed (see
+        // `DropdownPanel::update`'s own guard) — cheap to call unconditionally.
+        self.dropdown.update(&mut self.tree);
     }
 
     /// Resize the Audio Setup level meters from live per-send levels. Cheap
