@@ -164,6 +164,7 @@ fn spawn_autosave(
             // and content threads never pay for serialization (§6).
             let mut project = (*snapshot).clone();
             stamp.apply(&mut project);
+            crate::project_io::snapshot_and_prune_embedded_presets(&mut project);
             let result = manifold_io::saver::save_project(&mut project, &path, None, true)
                 .map_err(|e| e.to_string());
             // Receiver gone = app shutting down; nothing to report to.
