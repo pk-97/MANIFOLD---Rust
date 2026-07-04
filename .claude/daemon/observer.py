@@ -312,7 +312,17 @@ class Daemon:
                 closed = worker.state.feed_assistant_content(content, ts, model=d.get("message", {}).get("model"))
         else:
             if content is not None and not (isinstance(content, list) and not content):
+                # Mirrors _feed_line's peek: no recent_events/outcome-scoring
+                # ledger for workers (§4b stays session-only), but stopgap
+                # detection (§2c) is deterministic per-event and applies here
+                # too — bandaids concentrate in worker edits, per the
+                # migration-shortcut precedent this feature exists to catch.
+                count_before = worker.state.total_tool_event_count
+                peeked = self._peek_tool_events(worker.state, content)
                 closed, _human = worker.state.feed_user_content(content, ts)
+                if classify:
+                    for idx, (name, input_, _status) in enumerate(peeked):
+                        self._check_stopgap(name, input_, count_before + idx + 1, logf, mailbox=worker)
         if closed and classify:
             self._handle_window(closed, logf, mailbox=worker)
 
@@ -379,27 +389,58 @@ class Daemon:
                 # (§4b) can see what ran without duplicating WindowState's
                 # own bookkeeping.
                 count_before = self.state.total_tool_event_count
-                peeked = self._peek_tool_events(content)
+                peeked = self._peek_tool_events(self.state, content)
                 closed, _human = self.state.feed_user_content(content, ts)
                 for idx, (name, input_, status) in enumerate(peeked):
                     label = common.tool_label(name, input_, self.state.session_model)
                     target = common.tool_target(input_)
-                    self.recent_events.append((count_before + idx + 1, _tool_class(label), status, target))
+                    event_count = count_before + idx + 1
+                    self.recent_events.append((event_count, _tool_class(label), status, target))
+                    if classify:
+                        self._check_stopgap(name, input_, event_count, logf)
         if closed and classify:
             self._handle_window(closed, logf)
 
-    def _peek_tool_events(self, content):
+    def _peek_tool_events(self, state, content):
         """Read-only pass over tool_result blocks -> [(name, input, status)],
         in the same order common.WindowState.feed_user_content will consume
-        them. Must run BEFORE that call, which pops state.pending."""
+        them. Must run BEFORE that call, which pops state.pending. Takes an
+        explicit `state` so the same helper serves both the session's own
+        WindowState and a worker's (§2b)."""
         events = []
         if not isinstance(content, list):
             return events
         for c in content:
             if isinstance(c, dict) and c.get("type") == "tool_result":
-                name, input_ = self.state.pending.get(c.get("tool_use_id"), ("?", {}))
+                name, input_ = state.pending.get(c.get("tool_use_id"), ("?", {}))
                 events.append((name, input_, common.tool_result_status(c)))
         return events
+
+    # ---- stopgap detection (DESIGN.md §2c tier 1) ----
+
+    def _check_stopgap(self, name, input_, event_count, logf, mailbox=None):
+        """Deterministic, never the classifier: a live-tailed Edit/Write/
+        MultiEdit that adds a confession marker fires mechanical/confessed-
+        stopgap through the normal mailbox/cooldown path (`_resolve_fire`),
+        exactly like any other flag — just selected by regex instead of
+        Haiku. Never runs during catchup (`classify=False` callers never
+        reach this)."""
+        hits = common.detect_stopgap_markers(name, input_)
+        if not hits:
+            return
+        mb = mailbox if mailbox is not None else self
+        verdict = {"evidence": f"{name} adds: {', '.join(hits)}", "confidence": 1.0}
+        flag_out = self._resolve_fire(event_count, "mechanical/confessed-stopgap", verdict, logf, mailbox=mailbox)
+        if not flag_out:
+            return
+        record = {
+            "ts": time.time(),
+            "phase": mb.phase,
+            "window_version": common.WINDOW_VERSION,
+            "flag": flag_out,
+        }
+        _atomic_write_json(mb.verdict_path, record)
+        _log(logf, f"mechanical/confessed-stopgap fired: {name} {common.tool_target(input_)} hits={hits}")
 
     # ---- classification + verdict mailbox ----
 

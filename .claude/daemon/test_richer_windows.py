@@ -103,7 +103,10 @@ def test_events_since_task_appears_in_window_text():
 
 
 def test_window_version_on_verdict_record():
-    check("WINDOW_VERSION is 2", common.WINDOW_VERSION == 2)
+    # Bumped to 3 by DESIGN.md §2c tier 3 (stopgap ledger annotations) —
+    # this test only cares that the record carries whatever the current
+    # constant is, not a hardcoded historical value.
+    check("WINDOW_VERSION is current", common.WINDOW_VERSION >= 3, common.WINDOW_VERSION)
     with tempfile.TemporaryDirectory() as td:
         orig_verdicts = observer.VERDICTS_DIR
         observer.VERDICTS_DIR = td
@@ -120,7 +123,7 @@ def test_window_version_on_verdict_record():
                 d._handle_window({"end_event_count": 1, "end_ts": 1.0, "text": "TASK: x"}, logf)
                 with open(d.verdict_path, encoding="utf-8") as f:
                     record = json.load(f)
-                check("verdict record carries window_version", record.get("window_version") == 2, record)
+                check("verdict record carries window_version", record.get("window_version") == common.WINDOW_VERSION, record)
             finally:
                 observer.common.call_classifier = orig
         finally:

@@ -21,7 +21,9 @@ MODEL = "claude-haiku-4-5-20251001"
 
 # DESIGN.md §4c-1: bumped whenever WindowState's ledger/verdict shape changes,
 # so §4b/sleep-pass scoring never silently mixes pre- and post-change regimes.
-WINDOW_VERSION = 2
+# v3 (§2c tier 3): Edit/Write/MultiEdit ledger lines gain an "(adds: ...)"
+# annotation from STOPGAP_MARKERS.
+WINDOW_VERSION = 3
 
 # Tool names whose repeated targets get a "(Nth touch this session)" ledger
 # annotation (§4c-1). Deliberately narrow to what the spec names — Read/Edit
@@ -133,6 +135,74 @@ def tool_label(name, input_, session_model=None):
     return f"{name}[{agent_type}@{model_str}]" if agent_type else f"{name}[@{model_str}]"
 
 
+# DESIGN.md §2c: agents narrate their hacks, which makes the highest-precision
+# detector a regex over what an edit ADDS, not a classifier call. Categories
+# match moves.md's mechanical/confessed-stopgap signature verbatim.
+STOPGAP_MARKERS = {
+    "hack-word": re.compile(r"\b(?:HACK|XXX|kludge)\b", re.IGNORECASE),
+    "workaround": re.compile(r"\bworkaround\b", re.IGNORECASE),
+    "for-now": re.compile(
+        r"\bfor now\b|\btemporar(?:y|ily)\b|\bquick fix\b|\bstopgap\b|\bband-?aid\b",
+        re.IGNORECASE,
+    ),
+    "deferral": re.compile(
+        r"\bFIXME\b|\bTODO\b.{0,40}?\b(?:proper|real fix|later|revisit)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    "lint-suppression": re.compile(r"#\[allow\("),
+    "race-sleep": re.compile(r"\bthread::sleep\s*\(|\bsleep\s*\("),
+}
+
+# Markdown and the daemon's own internals are excluded from the scan entirely
+# (DESIGN.md §2c) — the daemon narrating its own build in prose isn't a hack.
+STOPGAP_EXCLUDED_PATH_RE = re.compile(r"(^|/)\.claude/|\.md$", re.IGNORECASE)
+
+# race-sleep only fires outside test code (§2c) — a real thread::sleep/sleep()
+# call in a test file is normal test scaffolding, not a race workaround.
+STOPGAP_TEST_PATH_RE = re.compile(
+    r"(^|/)tests?/|(^|/)test_[^/]+\.\w+$|_test\.\w+$", re.IGNORECASE
+)
+
+
+def _stopgap_hits(text):
+    return {cat for cat, pat in STOPGAP_MARKERS.items() if pat.search(text or "")}
+
+
+def detect_stopgap_markers(name, input_):
+    """Confession-marker categories an Edit/Write/MultiEdit ADDS to a file,
+    absent from whatever it replaces — DESIGN.md §2c tiers 1/3. Removing a
+    hack must never fire: only `new_string`/`content` counts as "added";
+    `old_string` is the baseline subtracted out, per edit pair for MultiEdit.
+    Returns a sorted list of category names (possibly empty); never raises."""
+    if name not in ("Edit", "Write", "MultiEdit") or not isinstance(input_, dict):
+        return []
+    path = input_.get("file_path") or ""
+    if STOPGAP_EXCLUDED_PATH_RE.search(path):
+        return []
+
+    if name == "Write":
+        pairs = [(input_.get("content") or "", "")]
+    elif name == "Edit":
+        pairs = [(input_.get("new_string") or "", input_.get("old_string") or "")]
+    else:  # MultiEdit
+        edits = input_.get("edits")
+        if not isinstance(edits, list):
+            return []
+        pairs = [
+            (e.get("new_string") or "", e.get("old_string") or "")
+            for e in edits
+            if isinstance(e, dict)
+        ]
+
+    hits = set()
+    for added, removed in pairs:
+        hits |= _stopgap_hits(added) - _stopgap_hits(removed)
+
+    if "race-sleep" in hits and STOPGAP_TEST_PATH_RE.search(path):
+        hits.discard("race-sleep")
+    return sorted(hits)
+
+
 def tool_target(input_):
     if not isinstance(input_, dict):
         return ""
@@ -224,10 +294,13 @@ class WindowState:
         self.consecutive_failures = 0  # current err streak, across all tools
         self.events_since_task = 0  # tool events since current_task was last set
 
-    def _annotate_ledger(self, name, target, status):
+    def _annotate_ledger(self, name, target, status, stopgap_hits=None):
         """Returns a "(...)" suffix or "" — the repeat-touch and failure-streak
-        tells from §4c-1. Only fires on a repeat (n>=2) / a streak (n>=2): a
-        first touch or a lone failure isn't a pattern worth flagging."""
+        tells from §4c-1, plus (§2c tier 3) confession-marker categories an
+        Edit/Write/MultiEdit just added. Only fires on a repeat (n>=2) / a
+        streak (n>=2): a first touch or a lone failure isn't a pattern worth
+        flagging; a marker hit always annotates (it's already a discrete
+        event, not a running count)."""
         notes = []
         if name in REPEAT_TARGET_TOOLS and target:
             key = f"{name}:{target}"
@@ -241,6 +314,8 @@ class WindowState:
                 notes.append(f"({ordinal(self.consecutive_failures)} consecutive failure)")
         else:
             self.consecutive_failures = 0
+        if stopgap_hits:
+            notes.append(f"(adds: {', '.join(stopgap_hits)})")
         return " ".join(notes)
 
     def _close_window(self, ts):
@@ -304,7 +379,8 @@ class WindowState:
                 label = tool_label(name, input_, self.session_model)
                 target = tool_target(input_)
                 status = tool_result_status(c)
-                note = self._annotate_ledger(name, target, status)
+                stopgap_hits = detect_stopgap_markers(name, input_)
+                note = self._annotate_ledger(name, target, status, stopgap_hits)
                 line = f"{label} {target} {status}".strip()
                 if note:
                     line += f" {note}"
