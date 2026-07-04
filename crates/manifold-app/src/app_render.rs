@@ -3897,9 +3897,13 @@ impl Application {
                 }
 
                 let tracks = self.ws.ui_root.viewport.get_tracks_rect();
-                ui.push_immediate_clip(tracks.x, tracks.y, tracks.width, tracks.height);
-                manifold_renderer::clip_draw::emit_clips(ui, &self.clip_body_scratch);
-                ui.pop_immediate_clip();
+                {
+                    // D7 lane-content choke point — see
+                    // `docs/TIMELINE_INTERACTION_P1_SPEC.md` and
+                    // `UIRenderer::lane_content_scissor`'s doc comment.
+                    let mut scissor = ui.lane_content_scissor(tracks);
+                    manifold_renderer::clip_draw::emit_clips(&mut scissor, &self.clip_body_scratch);
+                }
                 if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
                     ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
                 }
@@ -4150,22 +4154,21 @@ impl Application {
             // Region / cursor / markers, scissored to the tracks rect, UNDER the
             // clip names (bottom→top: region, cursor, markers — matches the old
             // bitmap paint order). All sit on top of the clip bodies + waveforms.
-            ui.push_immediate_clip(
-                overlay_tracks.x,
-                overlay_tracks.y,
-                overlay_tracks.width,
-                overlay_tracks.height,
-            );
-            if let Some((r, c)) = timeline_overlays.region {
-                ui.draw_rect(r.x, r.y, r.width, r.height, c);
+            // D7 lane-content choke point — see
+            // `docs/TIMELINE_INTERACTION_P1_SPEC.md` and
+            // `UIRenderer::lane_content_scissor`'s doc comment.
+            {
+                let mut scissor = ui.lane_content_scissor(overlay_tracks);
+                if let Some((r, c)) = timeline_overlays.region {
+                    scissor.draw_rect(r.x, r.y, r.width, r.height, c);
+                }
+                if let Some((r, c)) = timeline_overlays.cursor {
+                    scissor.draw_rect(r.x, r.y, r.width, r.height, c);
+                }
+                for (x, c) in &self.timeline_marker_scratch {
+                    scissor.draw_rect(*x, overlay_tracks.y, 1.0, overlay_tracks.height, *c);
+                }
             }
-            if let Some((r, c)) = timeline_overlays.cursor {
-                ui.draw_rect(r.x, r.y, r.width, r.height, c);
-            }
-            for (x, c) in &self.timeline_marker_scratch {
-                ui.draw_rect(*x, overlay_tracks.y, 1.0, overlay_tracks.height, *c);
-            }
-            ui.pop_immediate_clip();
 
             // Clip name labels (§24 5b) — on top of the bodies + waveforms, at
             // BASE depth (under the dropdown/modal overlays). Reuses the visible

@@ -271,6 +271,34 @@ const INITIAL_INDEX_CAPACITY: usize = 1536;
 /// flight, 32 slots guarantees no aliasing with in-flight GPU work.
 const BUF_RING_SIZE: usize = 32;
 
+/// RAII guard for [`UIRenderer::lane_content_scissor`] (D7). Holds the
+/// timeline's lane-content scissor open; `Drop` issues the matching
+/// `pop_immediate_clip` so the clip cannot leak past this scope even on an
+/// early return. `Deref`/`DerefMut` to `UIRenderer` so a call site draws
+/// through the guard exactly like it would through `ui` directly.
+pub struct LaneContentScissor<'a> {
+    ui: &'a mut UIRenderer,
+}
+
+impl std::ops::Deref for LaneContentScissor<'_> {
+    type Target = UIRenderer;
+    fn deref(&self) -> &UIRenderer {
+        self.ui
+    }
+}
+
+impl std::ops::DerefMut for LaneContentScissor<'_> {
+    fn deref_mut(&mut self) -> &mut UIRenderer {
+        self.ui
+    }
+}
+
+impl Drop for LaneContentScissor<'_> {
+    fn drop(&mut self) {
+        self.ui.pop_immediate_clip();
+    }
+}
+
 /// Simple batched 2D UI renderer using native Metal via manifold-gpu.
 pub struct UIRenderer {
     pipeline: GpuRenderPipeline,
@@ -454,6 +482,20 @@ impl UIRenderer {
         self.flush_immediate_run();
         self.immediate_clip_stack.pop();
         self.immediate_clip = self.immediate_clip_stack.last().copied();
+    }
+
+    /// Open the timeline's lane-content scissor (`docs/TIMELINE_INTERACTION_
+    /// P1_SPEC.md` D7): clip bodies, the region/cursor/marker overlay, and any
+    /// future drag chrome all draw through this, never a raw
+    /// `push_immediate_clip` of their own. Returns an RAII guard so the clip
+    /// closes on drop — including on an early return — instead of relying on
+    /// a call site remembering the matching `pop_immediate_clip`. This is the
+    /// structural half of D7; the two GPU content passes (clip waveforms,
+    /// clip thumbnails) already can't opt out a different way — `tracks_rect`
+    /// is a required parameter of their `render()`, not an optional one.
+    pub fn lane_content_scissor(&mut self, tracks: Rect) -> LaneContentScissor<'_> {
+        self.push_immediate_clip(tracks.x, tracks.y, tracks.width, tracks.height);
+        LaneContentScissor { ui: self }
     }
 
     // ── Depth ───────────────────────────────────────────────────────

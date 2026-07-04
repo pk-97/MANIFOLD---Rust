@@ -6,7 +6,7 @@
 
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::hit::Span;
-use crate::panels::viewport::ViewportClip;
+use crate::panels::viewport::{ViewportClip, zone_widths};
 use manifold_foundation::ClipId;
 
 // ── Data Types ──────────────────────────────────────────────────
@@ -28,15 +28,6 @@ pub struct ClipHitResult {
     pub layer_index: usize,
     pub region: HitRegion,
 }
-
-// ── Constants ───────────────────────────────────────────────────
-
-/// Maximum trim handle width in pixels (Unity ClipHitTester.TRIM_HANDLE_WIDTH_PX = 8f, line 25).
-const MAX_TRIM_HANDLE_PX: f32 = 8.0;
-
-/// Each trim handle takes at most this fraction of the clip width,
-/// guaranteeing ≥70% of any clip is grabbable body.
-const TRIM_HANDLE_RATIO: f32 = 0.15;
 
 // ── ClipHitTester ───────────────────────────────────────────────
 
@@ -83,34 +74,59 @@ impl ClipHitTester {
             return None;
         }
 
-        // Unity line 68: pixels per beat for trim handle detection
+        // Pixels per beat — the local coordinate frame trim geometry works in.
         let ppb = mapper.pixels_per_beat();
+        let pointer_px = beat_at_pointer * ppb;
+        let clips = clips_for_layer(layer_index);
 
-        // Unity lines 72-97: iterate this layer's clips in reverse (topmost/last wins)
-        for clip in clips_for_layer(layer_index).iter().rev() {
-            let clip_start_f32 = clip.start_beat.as_f32();
-            let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
-            // Unity line 76: beat range check — half-open [start, end).
-            if !Span::new(clip_start_f32, clip_end).contains(beat_at_pointer) {
+        // Iterate this layer's clips in reverse (topmost/last wins), same as
+        // before. Ownership of a beat position is no longer decided by
+        // `Span::contains(beat_at_pointer)` alone — D4's outward-extended trim
+        // zones can reach beyond a clip's own [start, end), into neighboring
+        // empty lane space, which is exactly what makes a hairline-narrow clip
+        // grabbable. So each candidate is tested against its own zone extent
+        // (`zone_widths`, the same rule `clip_zones` uses for painting),
+        // computed relative to the clip's own start — one geometry authority
+        // for both.
+        for (idx, clip) in clips.iter().enumerate().rev() {
+            let clip_start_px = clip.start_beat.as_f32() * ppb;
+            let clip_width_px = clip.duration_beats.as_f32() * ppb;
+            let local_px = pointer_px - clip_start_px;
+
+            let (gap_left, gap_right) = neighbor_gap_px(clips, idx, ppb);
+            let zw = zone_widths(clip_width_px, (gap_left, gap_right));
+
+            let left_lo = -zw.left_extend;
+            let left_hi = zw.inner;
+            let right_lo = clip_width_px - zw.inner;
+            let right_hi = clip_width_px + zw.right_extend;
+
+            // Half-open at both outer edges, same convention the old
+            // `Span::contains` used — a point exactly at a shared (abutting)
+            // boundary belongs to the clip on its right, never both.
+            if local_px < left_lo || local_px >= right_hi {
                 continue;
             }
 
-            // Unity lines 80-81: determine hit region
-            let local_px = (beat_at_pointer - clip_start_f32) * ppb;
-            let clip_width_px = clip.duration_beats.as_f32() * ppb;
-
-            // Trim handle detection — proportional width so narrow clips
-            // stay grabbable (≥70% body). Caps at 8px for wide clips.
-            let trim_w = MAX_TRIM_HANDLE_PX.min(clip_width_px * TRIM_HANDLE_RATIO);
-            let region = if trim_w < 2.0 {
-                // Clip too narrow for usable trim handles
-                HitRegion::Body
-            } else if local_px < trim_w {
-                HitRegion::TrimLeft
-            } else if local_px > clip_width_px - trim_w {
-                HitRegion::TrimRight
-            } else {
-                HitRegion::Body
+            // On a clip narrow enough that `inner` exceeds half its own
+            // width, the two trim zones overlap each other (both reach past
+            // the midpoint) — split ownership at the midpoint rather than
+            // letting evaluation order silently prefer one side, so a grab
+            // right at the clip's own right edge still resolves to
+            // TrimRight, not TrimLeft.
+            let in_left_zone = local_px >= left_lo && local_px < left_hi;
+            let in_right_zone = local_px >= right_lo && local_px < right_hi;
+            let region = match (in_left_zone, in_right_zone) {
+                (true, true) => {
+                    if local_px < clip_width_px * 0.5 {
+                        HitRegion::TrimLeft
+                    } else {
+                        HitRegion::TrimRight
+                    }
+                }
+                (true, false) => HitRegion::TrimLeft,
+                (false, true) => HitRegion::TrimRight,
+                (false, false) => HitRegion::Body,
             };
 
             return Some(ClipHitResult {
@@ -169,6 +185,33 @@ impl ClipHitTester {
 
         results
     }
+}
+
+/// Pixel gap from `clips[self_idx]` to its nearest left/right neighbor in the
+/// same layer, by beat position (not list order — `clips_for_layer` is
+/// bucketed in arrival order, not sorted). `f32::MAX` when there is no
+/// neighbor on that side, so `zone_widths`' `min(4.0, gap)` always yields the
+/// full outward extension. O(n) per call, no allocation — matches the
+/// existing O(n)-per-hit-test cost of the candidate loop itself.
+fn neighbor_gap_px(clips: &[ViewportClip], self_idx: usize, ppb: f32) -> (f32, f32) {
+    let me = &clips[self_idx];
+    let me_start = me.start_beat.as_f32();
+    let me_end = me_start + me.duration_beats.as_f32();
+    let mut left_gap = f32::MAX;
+    let mut right_gap = f32::MAX;
+    for (i, other) in clips.iter().enumerate() {
+        if i == self_idx {
+            continue;
+        }
+        let o_start = other.start_beat.as_f32();
+        let o_end = o_start + other.duration_beats.as_f32();
+        if o_end <= me_start {
+            left_gap = left_gap.min((me_start - o_end) * ppb);
+        } else if o_start >= me_end {
+            right_gap = right_gap.min((o_start - me_end) * ppb);
+        }
+    }
+    (left_gap, right_gap)
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -273,20 +316,151 @@ mod tests {
         assert_eq!(result.unwrap().region, HitRegion::TrimRight);
     }
 
+    /// D4/B1: a 1px-wide clip still has two grabbable handles, via outward
+    /// extension into empty lane space — the narrow-clip disable
+    /// (`trim_w < 2.0 → Body`) is gone.
     #[test]
-    fn no_trim_on_narrow_clip() {
-        let mapper = make_mapper(100.0, &[60.0]);
-        let clips = vec![make_clip("c1", 0, 0.0, 0.1)];
+    fn one_pixel_clip_has_two_grabbable_handles() {
+        let ppb = 100.0;
+        let mapper = make_mapper(ppb, &[60.0]);
+        // duration 0.01 beat * ppb 100 = 1px wide. Isolated (no neighbor on
+        // either side), so both handles get the full 4px outward extension.
+        let clips = vec![make_clip("c1", 0, 0.0, 0.01)];
         let by_layer = bucket(&clips, 1);
-        let result = ClipHitTester::hit_test(
-            0.005,
-            30.0,
-            6.0,
-            &mapper,
-            |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
-            no_groups,
-        );
-        assert_eq!(result.unwrap().region, HitRegion::Body);
+        let hit_at = |beat: f32| {
+            ClipHitTester::hit_test(
+                beat,
+                30.0,
+                6.0,
+                &mapper,
+                |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+                no_groups,
+            )
+        };
+        // 2px left of the clip's own start (beat 0.0) — only reachable via
+        // the outward extension.
+        let left = hit_at(-0.02).expect("left handle should be grabbable");
+        assert_eq!(left.region, HitRegion::TrimLeft);
+        // 3px right of the clip's own end (beat 0.01) — only reachable via
+        // the outward extension.
+        let right = hit_at(0.04).expect("right handle should be grabbable");
+        assert_eq!(right.region, HitRegion::TrimRight);
+    }
+
+    /// D4: two abutting clips (gap 0) split the shared boundary 50/50 — each
+    /// clip's outward extension on the touching side is 0, so the boundary
+    /// point falls to exactly one clip's zone, with no gap and no overlap.
+    #[test]
+    fn abutting_clips_split_boundary_50_50() {
+        let ppb = 100.0;
+        let mapper = make_mapper(ppb, &[60.0]);
+        // c1: beats [0,4). c2: beats [4,8). Fully abutting at beat 4.0.
+        let clips = vec![make_clip("c1", 0, 0.0, 4.0), make_clip("c2", 0, 4.0, 4.0)];
+        let by_layer = bucket(&clips, 1);
+        let hit_at = |beat: f32| {
+            ClipHitTester::hit_test(
+                beat,
+                30.0,
+                6.0,
+                &mapper,
+                |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+                no_groups,
+            )
+        };
+        // Just inside c1's own inner trim (width 4 beats = 400px, inner = 8px
+        // -> beat 3.96 = 4px before the boundary).
+        let just_before = hit_at(3.96).unwrap();
+        assert_eq!(just_before.clip_id, "c1");
+        assert_eq!(just_before.region, HitRegion::TrimRight);
+        // Exactly at the shared boundary: belongs to c2 (half-open convention
+        // — matches the pre-existing `Span::contains` rule), never to both.
+        let boundary = hit_at(4.0).unwrap();
+        assert_eq!(boundary.clip_id, "c2");
+        assert_eq!(boundary.region, HitRegion::TrimLeft);
+        // Just inside c2's own inner trim.
+        let just_after = hit_at(4.04).unwrap();
+        assert_eq!(just_after.clip_id, "c2");
+        assert_eq!(just_after.region, HitRegion::TrimLeft);
+    }
+
+    /// D4: a 100px-wide clip gets exactly the 8px capped inner trim on each
+    /// side (`min(8, 100/3=33.3).max(2) == 8`).
+    #[test]
+    fn wide_clip_gets_8px_inner_handles() {
+        let ppb = 100.0;
+        let mapper = make_mapper(ppb, &[60.0]);
+        // duration 1.0 beat * ppb 100 = 100px wide, isolated.
+        let clips = vec![make_clip("c1", 0, 0.0, 1.0)];
+        let by_layer = bucket(&clips, 1);
+        let hit_at = |beat: f32| {
+            ClipHitTester::hit_test(
+                beat,
+                30.0,
+                6.0,
+                &mapper,
+                |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+                no_groups,
+            )
+            .unwrap()
+            .region
+        };
+        assert_eq!(hit_at(0.07), HitRegion::TrimLeft); // 7px in — inside the 8px inner trim
+        assert_eq!(hit_at(0.09), HitRegion::Body); // 9px in — just past it
+        assert_eq!(hit_at(0.50), HitRegion::Body); // dead centre
+        assert_eq!(hit_at(0.91), HitRegion::Body); // 9px from the right edge — just outside
+        assert_eq!(hit_at(0.93), HitRegion::TrimRight); // 7px from the right edge — inside
+    }
+
+    /// B2: the cursor-affordance path and the click/drag path both resolve
+    /// through this same `ClipHitTester::hit_test` (verified by reading —
+    /// `manifold-ui/src/panels/viewport/interaction.rs::hit_test_clip` and
+    /// `manifold-ui/src/interaction_overlay.rs::hit_test_at` both call it
+    /// directly, no private cursor-side geometry exists). So "agreement" is
+    /// architectural, not coincidental: the same (clip, pointer) input must
+    /// yield the same region at every zoom level, with no zoom-dependent
+    /// special case creeping into the shared rule. Swept across a range of
+    /// ppb (ruled out: the D4 zone rule silently behaving differently at
+    /// some zoom level).
+    #[test]
+    fn cursor_and_hit_test_agree_across_zoom_sweep() {
+        for &ppb in &[10.0_f32, 50.0, 100.0, 500.0, 2000.0] {
+            let mapper = make_mapper(ppb, &[60.0]);
+            // 4-beat clip, isolated, at every zoom level.
+            let clips = vec![make_clip("c1", 0, 0.0, 4.0)];
+            let by_layer = bucket(&clips, 1);
+            let hit_at = |beat: f32| {
+                ClipHitTester::hit_test(
+                    beat,
+                    30.0,
+                    6.0,
+                    &mapper,
+                    |i| by_layer.get(i).map(|v| v.as_slice()).unwrap_or(&[]),
+                    no_groups,
+                )
+            };
+            // A fixed PIXEL offset (3px into the clip, well inside the 8px
+            // inner trim at every ppb tested — width stays >= 24px
+            // throughout this sweep, so `inner` is capped at 8 the whole
+            // way) converted to the beat position that pixel offset lands
+            // on at this zoom level. A fixed *beat* offset would drift in
+            // and out of the zone as ppb changes — exactly the zoom-
+            // dependent bug this test exists to catch.
+            let offset_beat = 3.0 / ppb;
+            // Same beat position queried twice — standing in for the
+            // "cursor path" and the "click/drag path" — must agree, at
+            // every zoom level, since both are the identical function.
+            let cursor_call = hit_at(offset_beat).map(|h| h.region);
+            let click_call = hit_at(offset_beat).map(|h| h.region);
+            assert_eq!(
+                cursor_call, click_call,
+                "cursor and hit-test disagreed at ppb={ppb}"
+            );
+            assert_eq!(
+                cursor_call,
+                Some(HitRegion::TrimLeft),
+                "left handle unreachable at ppb={ppb}"
+            );
+        }
     }
 
     #[test]

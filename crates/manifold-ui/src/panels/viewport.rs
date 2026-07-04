@@ -43,11 +43,16 @@ mod render;
 // overlay name the same type.
 pub use crate::clip_hit_tester::{ClipHitResult, HitRegion};
 pub use model::{
-    AutomationDotScreen, AutomationLaneScreen, ClipScreenRect, SelectionRegion, TimelineOverlays,
-    TrackInfo, ViewportAutomationLane, ViewportClip,
+    AutomationDotScreen, AutomationLaneScreen, ClipScreenRect, ClipZones, SelectionRegion,
+    TimelineOverlays, TrackInfo, ViewportAutomationLane, ViewportClip, clip_zones,
 };
 use coordinate::GridSubdivision;
 use model::{CollapsedGroupBitmap, MarkerNodeGroup, TrackBgGroup};
+// `zone_widths` is the trim-rule core `clip_zones` wraps — `clip_hit_tester`
+// (a sibling top-level module, not a `viewport` submodule) needs the exact
+// same rule for its local-pixel-space hit test, so it's re-exported at
+// crate visibility rather than duplicated (D4: one geometry authority).
+pub(crate) use model::zone_widths;
 
 // ── TimelineViewportPanel ───────────────────────────────────────
 
@@ -634,9 +639,20 @@ impl TimelineViewportPanel {
     /// Screen-space geometry for the timeline overlays that sit ON TOP of the
     /// clip bodies + waveforms: the marquee/region highlight, the insert cursor,
     /// and the beat markers. Since §24 5b these are GPU rects emitted in the
-    /// overlay pass rather than baked into a per-layer bitmap. The caller scissors
-    /// to the tracks rect and draws them under the clip names. `insert_cursor_layer`
-    /// + `has_insert` come from the app (it owns the resolved cursor layer).
+    /// overlay pass rather than baked into a per-layer bitmap.
+    ///
+    /// **D7 — the scissor is structural, not an opt-in caller convention.**
+    /// This used to say "the caller scissors to the tracks rect" — an opt-in
+    /// contract a call site could forget. It no longer is one: every lane-
+    /// content draw (clip bodies, waveforms, thumbnails, this overlay, and any
+    /// future drag chrome) must go through `UIRenderer::lane_content_scissor`,
+    /// an RAII guard that pushes the tracks-rect clip on construction and pops
+    /// it on drop, so a draw call cannot opt out — see
+    /// `docs/TIMELINE_INTERACTION_P1_SPEC.md` D7. The two GPU content passes
+    /// (clip waveforms, clip thumbnails) get the same non-opt-out property a
+    /// different way: `tracks_rect` is a required parameter of their
+    /// `render()`, not an optional one. `insert_cursor_layer` + `has_insert`
+    /// come from the app (it owns the resolved cursor layer).
     pub fn timeline_overlays(
         &self,
         insert_cursor_layer: Option<usize>,
