@@ -237,6 +237,12 @@ impl Command for ReorderLayerCommand {
 pub struct GroupLayersCommand {
     selected_layer_ids: Vec<LayerId>,
     group_layer: Option<Layer>,
+    // Stored but not read by `undo()`, unlike the identical field on
+    // `UngroupLayersCommand` (which restores it via `replace_layer_order`).
+    // `undo()` here only restores `original_parent_ids` + `enforce_tree_order()`,
+    // which may not reproduce the exact prior sibling order. Flagged as a
+    // suspected undo-fidelity gap, not removed, pending a call on whether to
+    // wire it in the same way.
     #[allow(dead_code)]
     original_order: Vec<Layer>,
     original_parent_ids: HashMap<LayerId, Option<LayerId>>,
