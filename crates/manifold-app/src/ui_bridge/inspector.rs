@@ -1158,6 +1158,31 @@ pub(super) fn dispatch_inspector(
                     })
                     .flatten();
                 if let Some(old) = changed {
+                    // P2 "value snap-back" (D15): the data above already
+                    // snapped instantly (`set_base_param`) — this only starts
+                    // the card's own `AnimF32` so the slider FILL eases
+                    // `old` -> `default_val` instead of jumping. Perform-
+                    // context inspector cards only: when the graph editor
+                    // drives this (`editor_target.is_some()`), the row that
+                    // fired the gesture lives in `graph_editor.rs`'s own
+                    // separate `ParamCardPanel` instance, not `ui.inspector`,
+                    // and `effective_tab`/`idx` here address the *inspector's*
+                    // current tab — reaching into the wrong card would
+                    // animate an unrelated row, so skip rather than guess.
+                    if editor_target.is_none() {
+                        match gpt {
+                            GraphParamTarget::Effect(idx) => {
+                                if let Some(card) = ui.inspector.effect_card_mut(effective_tab, *idx) {
+                                    card.begin_value_snapback(param_id, old, *default_val);
+                                }
+                            }
+                            GraphParamTarget::Generator => {
+                                if let Some(card) = ui.inspector.gen_params_mut() {
+                                    card.begin_value_snapback(param_id, old, *default_val);
+                                }
+                            }
+                        }
+                    }
                     let cmd = ChangeGraphParamCommand::new(
                         target,
                         param_id.clone(),

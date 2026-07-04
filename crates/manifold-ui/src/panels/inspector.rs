@@ -692,6 +692,19 @@ impl InspectorCompositePanel {
     pub fn layer_effect_mut(&mut self, idx: usize) -> Option<&mut ParamCardPanel> {
         self.layer_effects.get_mut(idx)
     }
+    /// `master_effect_mut`/`layer_effect_mut`, picked by `tab` — mirrors
+    /// `is_effect_ableton_mapped`'s Master vs Layer|Group|Clip split. The one
+    /// accessor a `GraphParamTarget::Effect(idx)` dispatch arm needs when it
+    /// wants to reach into the specific card's own UI-only state (e.g. P2
+    /// `begin_value_snapback`) rather than just mutate the model.
+    pub fn effect_card_mut(&mut self, tab: InspectorTab, idx: usize) -> Option<&mut ParamCardPanel> {
+        match tab {
+            InspectorTab::Master => self.master_effects.get_mut(idx),
+            InspectorTab::Layer | InspectorTab::Group | InspectorTab::Clip => {
+                self.layer_effects.get_mut(idx)
+            }
+        }
+    }
     pub fn viewport_rect(&self) -> Rect {
         self.viewport_rect
     }

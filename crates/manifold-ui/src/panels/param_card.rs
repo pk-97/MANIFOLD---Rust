@@ -23,6 +23,7 @@ use crate::chrome::{Align, ChromeHost, Pad, Sizing, View};
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
+use crate::transform2d::Affine2;
 use crate::tree::UITree;
 use manifold_foundation::{EffectId, LayerId};
 
@@ -557,6 +558,17 @@ pub struct ParamCardPanel {
     /// normal once `progress()` returns `None`.
     value_flash: Vec<Transient>,
 
+    /// P2 "value snap-back" (D15) — per-param `AnimF32` (`Curve::Snap`) that
+    /// eases the slider FILL from its pre-reset position to the default after
+    /// the RIGHT-CLICK reset gesture (`begin_value_snapback`, called by the
+    /// app-side `PanelAction::ParamRightClick` handler once the model has
+    /// already snapped instantly — D15: data first, visual follows). Settled
+    /// (not animating) for every row until a reset targets it. Ticked in
+    /// `tick_value_flash` alongside the flash, which also repaints the fill
+    /// every frame it's mid-flight (the value-dirty-check in `sync_values`
+    /// only fires once, the frame the model value actually changes).
+    value_snapback: Vec<AnimF32>,
+
     /// D17 "spawn pop" — a brand-new card (no existing panel matched in
     /// `InspectorCompositePanel::reconcile_cards`) enters at scale 0.94→1
     /// eased with `Curve::Snap`. A reused card stays settled at `1.0`
@@ -670,6 +682,7 @@ impl ParamCardPanel {
             toggle_cache: Vec::new(),
             label_cache: Vec::new(),
             value_flash: Vec::new(),
+            value_snapback: Vec::new(),
             spawn_scale: AnimF32::new(1.0, color::MOTION_MED_MS),
             delete_fade: None,
             first_node: 0,
@@ -792,6 +805,9 @@ impl ParamCardPanel {
         self.label_cache = vec![None; n];
         self.value_flash.resize_with(n, Transient::default);
         self.value_flash.truncate(n);
+        self.value_snapback
+            .resize_with(n, || AnimF32::new(0.0, color::MOTION_MED_MS).with_curve(crate::anim::Curve::Snap));
+        self.value_snapback.truncate(n);
     }
 
     // ── Accessors ─────────────────────────────────────────────────
@@ -960,6 +976,17 @@ impl ParamCardPanel {
         self.collapse_anim.value().clamp(0.0, 1.0)
     }
 
+    /// P2 "caret rotate" — maps `collapse_frac()` (reusing `collapse_anim`,
+    /// NOT a second animation clock) onto the down-pointing chevron glyph's
+    /// rotation: expanded (`frac == 1.0`) sits at 0° (▼), collapsed
+    /// (`frac == 0.0`) rotates to -90° (▶, "closing"). Applied via
+    /// `UIStyle.transform` (`docs/UI_TRANSFORM_STACK_DESIGN.md`), which
+    /// pivots about the chevron node's own rect center — no manual pivot
+    /// math here, no glyph swap.
+    fn chevron_angle(&self) -> f32 {
+        (self.collapse_frac() - 1.0) * std::f32::consts::FRAC_PI_2
+    }
+
     /// D17 "spawn pop" — call once, right after the first `configure()` on a
     /// truly new panel (`InspectorCompositePanel::reconcile_cards`, the only
     /// caller). Restarts `spawn_scale` from 0.94 easing to 1.0 with the
@@ -993,6 +1020,28 @@ impl ParamCardPanel {
             .as_ref()
             .is_some_and(|f| f.progress().is_none())
             && !self.collapse_anim.is_animating()
+    }
+
+    /// P2 "value snap-back" (D15): called by the app-side dispatch the instant
+    /// the RIGHT-CLICK reset-to-default gesture (`PanelAction::ParamRightClick`)
+    /// commits — the model has ALREADY snapped to `to` (raw param value) by
+    /// the time this runs; this only retargets the row's `value_snapback`
+    /// `AnimF32` (Curve::Snap) so the slider FILL eases from `from` to `to`
+    /// instead of jumping — the data is never delayed behind this. A no-op
+    /// if `param_id` isn't one of this card's rows (stale/mismatched target).
+    pub fn begin_value_snapback(&mut self, param_id: &manifold_foundation::ParamId, from: f32, to: f32) {
+        let Some(pi) = self.param_info.iter().position(|p| &p.param_id == param_id) else {
+            return;
+        };
+        let Some(info) = self.param_info.get(pi) else {
+            return;
+        };
+        let from_norm = BitmapSlider::value_to_normalized(from, info.min, info.max);
+        let to_norm = BitmapSlider::value_to_normalized(to, info.min, info.max);
+        if let Some(anim) = self.value_snapback.get_mut(pi) {
+            anim.snap(from_norm);
+            anim.set_target(to_norm);
+        }
     }
 
     /// The header collapse-chevron node id, resolved during `build` (`None`
@@ -1342,13 +1391,22 @@ impl ParamCardPanel {
         any
     }
 
-    /// P2 value-change flash: advance every param's one-shot `Transient` and
-    /// paint the value-text color accordingly — an accent while `progress()`
-    /// is `Some`, reverted to the normal slider text color the instant it
-    /// finishes. A plain style write to an already-built node (no layout
-    /// change), so unlike `tick_drawers` this never needs the app's
-    /// forced-rebuild poll; it just needs to run every frame, which it already
-    /// does from the same `InspectorCompositePanel::update()` call site.
+    /// P2 value-change flash + value snap-back: advance every param's
+    /// one-shot `Transient` and paint the value-text color accordingly — an
+    /// accent while `progress()` is `Some`, reverted to the normal slider
+    /// text color the instant it finishes. A plain style write to an
+    /// already-built node (no layout change), so unlike `tick_drawers` this
+    /// never needs the app's forced-rebuild poll; it just needs to run every
+    /// frame, which it already does from the same
+    /// `InspectorCompositePanel::update()` call site.
+    ///
+    /// Also drives P2 "value snap-back" (D15, `value_snapback`/
+    /// `begin_value_snapback`): `sync_values`'s dirty-check only calls
+    /// `BitmapSlider::update_value` the ONE frame the model value actually
+    /// changes, so a settling fill needs its own per-frame repaint here for
+    /// every frame after that — `tick`ing `value_snapback[i]` and
+    /// re-positioning just the fill/thumb (never the text, which is already
+    /// correct — the data snapped instantly) at the eased normalized value.
     pub fn tick_value_flash(&mut self, tree: &mut UITree, dt_ms: f32) -> bool {
         let mut any = false;
         for (i, flash) in self.value_flash.iter_mut().enumerate() {
@@ -1372,6 +1430,20 @@ impl ParamCardPanel {
                 color::SLIDER_TEXT_C32
             };
             tree.set_style(ids.value_text, style);
+        }
+        for (i, anim) in self.value_snapback.iter_mut().enumerate() {
+            if !anim.is_animating() {
+                continue;
+            }
+            any |= anim.tick(dt_ms);
+            let Some(ref ids) = self.slider_ids[i] else {
+                continue;
+            };
+            // Re-derive the (already-settled) value text rather than touch
+            // it — only the fill/thumb position eases; `update_value` writes
+            // all three, so pass the unchanged text back through unmodified.
+            let text = tree.get_node(ids.value_text).text.clone().unwrap_or_default();
+            BitmapSlider::update_value(tree, ids, anim.value(), &text);
         }
         any
     }
@@ -1496,13 +1568,18 @@ impl ParamCardPanel {
             .child(gap())
             .child(cog)
             .child(
-                View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
+                // P2 "caret rotate": same single-glyph + rotation technique as
+                // the effect header's chevron (`chevron_angle`'s doc comment) —
+                // generator cards' `collapse_anim` always snaps rather than
+                // eases, so this reads as an instant flip here, same as before.
+                View::button("\u{25BC}")
                     .w(Sizing::Fixed(CHEVRON_W))
                     .fill_h()
                     .style(UIStyle {
                         text_color: color::TEXT_DIMMED_C32,
                         font_size: FONT_SIZE,
                         text_align: TextAlign::Center,
+                        transform: Some(Affine2::rotate(self.chevron_angle())),
                         ..UIStyle::default()
                     })
                     .inert()
@@ -1640,12 +1717,16 @@ impl ParamCardPanel {
         // Cog (or a reserved slot in Author) sits LEFT of the chevron so the
         // expand chevron is always the rightmost control — same trailing order as
         // the generator header (… · cog · ▾).
-        let chevron = View::button(if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" })
+        // P2 "caret rotate": one down-pointing glyph (▼), rotated to ▶ via
+        // `chevron_angle()`/`UIStyle.transform` instead of swapping glyphs —
+        // see `chevron_angle`'s doc comment.
+        let chevron = View::button("\u{25BC}")
             .fixed(CHEVRON_W, 16.0)
             .style(UIStyle {
                 text_color: color::CHEVRON_COLOR,
                 font_size: FONT_SIZE,
                 text_align: TextAlign::Center,
+                transform: Some(Affine2::rotate(self.chevron_angle())),
                 ..transparent_btn(color::HOVER_OVERLAY, color::PRESS_OVERLAY)
             })
             .inert()
@@ -2511,7 +2592,21 @@ impl ParamCardPanel {
                         info.is_angle,
                         info.value_labels.as_deref(),
                     );
-                    BitmapSlider::update_value(tree, ids, norm, &text);
+                    // P2 value snap-back (D15): a reset just retargeted this
+                    // row's `value_snapback` (`begin_value_snapback`, same
+                    // frame, before this poll) — draw the fill at its
+                    // just-`snap()`ped starting point instead of jumping
+                    // straight to `norm`; `tick_value_flash` eases it forward
+                    // every frame after. Any other value change (drag commit,
+                    // automation, undo) has no animating snapback here and
+                    // draws `norm` exactly as before.
+                    let display_norm = self
+                        .value_snapback
+                        .get(i)
+                        .filter(|a| a.is_animating())
+                        .map(|a| a.value())
+                        .unwrap_or(norm);
+                    BitmapSlider::update_value(tree, ids, display_norm, &text);
                 }
             }
         }
@@ -2579,7 +2674,21 @@ impl ParamCardPanel {
                         info.is_angle,
                         info.value_labels.as_deref(),
                     );
-                    BitmapSlider::update_value(tree, ids, norm, &text);
+                    // P2 value snap-back (D15): a reset just retargeted this
+                    // row's `value_snapback` (`begin_value_snapback`, same
+                    // frame, before this poll) — draw the fill at its
+                    // just-`snap()`ped starting point instead of jumping
+                    // straight to `norm`; `tick_value_flash` eases it forward
+                    // every frame after. Any other value change (drag commit,
+                    // automation, undo) has no animating snapback here and
+                    // draws `norm` exactly as before.
+                    let display_norm = self
+                        .value_snapback
+                        .get(i)
+                        .filter(|a| a.is_animating())
+                        .map(|a| a.value())
+                        .unwrap_or(norm);
+                    BitmapSlider::update_value(tree, ids, display_norm, &text);
                 }
             }
         }
@@ -3982,6 +4091,60 @@ mod tests {
     }
 
     #[test]
+    fn value_snapback_eases_fill_from_old_to_default_after_reset() {
+        // P2 "value snap-back" (D15), end to end: `begin_value_snapback` is
+        // called the instant the RIGHT-CLICK reset commits (data already
+        // snapped by that point, per the app-side dispatch handler) —
+        // `sync_values`'s next poll (simulating the model now reading the
+        // new default) must draw the fill at the EASED position, not jump
+        // straight to the final one, and it must reach the final width once
+        // the tween settles.
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config());
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        use crate::view::UiParamSlot as ParamSlot;
+        // Row 0 is "radius", min 0 / max 100 / default 10.
+        panel.sync_values(&mut tree, &[ParamSlot::exposed(50.0), ParamSlot::exposed(0.8)]);
+        let fill_id = panel.slider_ids[0].as_ref().unwrap().fill;
+        let width_at_50 = tree.get_bounds(fill_id).width;
+
+        // The reset gesture: data goes 50 -> 10 instantly; this only starts
+        // the visual ease.
+        panel.begin_value_snapback(&std::borrow::Cow::Borrowed("radius"), 50.0, 10.0);
+        assert!(panel.value_snapback[0].is_animating(), "reset starts the row's own tween");
+
+        // The next poll sees the model already at the new default (10.0).
+        panel.sync_values(&mut tree, &[ParamSlot::exposed(10.0), ParamSlot::exposed(0.8)]);
+        let width_just_after = tree.get_bounds(fill_id).width;
+        assert!(
+            (width_just_after - width_at_50).abs() < 0.5,
+            "the fill must NOT jump to the final width the instant the model value \
+             changes — it starts from wherever it was: {width_just_after} vs {width_at_50}"
+        );
+
+        // Tick forward: `tick_value_flash` (the only per-frame driver of
+        // `value_snapback`, since `sync_values` no longer sees a dirty value)
+        // must keep repainting the fill every frame until it settles at the
+        // final (smaller — 10 < 50) width.
+        for _ in 0..30 {
+            panel.tick_value_flash(&mut tree, color::MOTION_MED_MS / 20.0);
+        }
+        assert!(!panel.value_snapback[0].is_animating(), "tween settles");
+        let width_settled = tree.get_bounds(fill_id).width;
+        assert!(
+            width_settled < width_just_after,
+            "settled fill reflects the smaller default value: {width_settled} vs {width_just_after}"
+        );
+
+        // A reset that's a no-op (already-at-default) `begin_value_snapback`
+        // targeting the SAME value must not start an animation.
+        panel.begin_value_snapback(&std::borrow::Cow::Borrowed("radius"), 10.0, 10.0);
+        assert!(!panel.value_snapback[0].is_animating(), "same-value retarget is a no-op");
+    }
+
+    #[test]
     fn value_change_flash_suppressed_while_dragging() {
         // The drag itself is the feedback for the row being dragged — a flash
         // on top would be noise re-triggering every frame of the drag.
@@ -4066,6 +4229,56 @@ mod tests {
             .filter(|n| n.node_type == UINodeType::ClipRegion)
             .count();
         assert_eq!(clips_settled, 0, "settled collapsed card has no leftover clip region");
+    }
+
+    #[test]
+    fn chevron_angle_matches_expanded_and_collapsed_endpoints() {
+        // P2 "caret rotate": expanded (`collapse_frac() == 1.0`) sits at 0°;
+        // fully collapsed (`collapse_frac() == 0.0`) rotates to -90°.
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config()); // expanded, first configure snaps
+        assert_eq!(panel.chevron_angle(), 0.0, "expanded caret has no rotation");
+
+        panel.set_collapsed(true); // snaps collapse_anim to 0.0 directly
+        assert!(
+            (panel.chevron_angle() - (-std::f32::consts::FRAC_PI_2)).abs() < 1e-6,
+            "collapsed caret rotates -90 degrees, got {}",
+            panel.chevron_angle()
+        );
+    }
+
+    #[test]
+    fn chevron_angle_tracks_collapse_anim_mid_flight_not_a_second_clock() {
+        // The caret must ride the EXISTING `collapse_anim` tween, not a
+        // separate animation — driving the tween partway must move the
+        // angle partway between the two endpoints, and the built chevron
+        // node's `UIStyle.transform` must reflect the same value `build()`
+        // read at that moment.
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&effect_config()); // expanded; anim snapped to 1.0
+
+        let mut collapsed_cfg = effect_config();
+        collapsed_cfg.collapsed = true;
+        panel.configure(&collapsed_cfg); // Perform context, already configured once → eases
+        assert!(panel.collapse_anim.is_animating());
+
+        panel.tick_drawers(color::MOTION_MED_MS * 0.5);
+        let mid_angle = panel.chevron_angle();
+        assert!(
+            mid_angle < 0.0 && mid_angle > -std::f32::consts::FRAC_PI_2,
+            "mid-flight caret angle sits strictly between the endpoints: {mid_angle}"
+        );
+
+        let mut tree = UITree::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
+        let chevron_id = panel.chevron_node_id().expect("chevron built");
+        let transform = tree.get_node(chevron_id).style.transform.expect("chevron carries a transform");
+        // `Affine2::rotate` populates `b = sin(theta)`; recover theta and
+        // compare against the panel's own mid-flight angle.
+        assert!(
+            (transform.b.asin() - mid_angle).abs() < 1e-4,
+            "built chevron transform must match chevron_angle() at build time: {transform:?} vs {mid_angle}"
+        );
     }
 
     #[test]
